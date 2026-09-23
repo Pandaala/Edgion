@@ -4255,6 +4255,12 @@ mod header_modifier_validation_tests {
     #[tokio::test]
     async fn header_modifier_invalid_native_lists_seal_all_four_constructors() {
         for filters in [
+            json!([{"type": "ResponseHeaderModifier", "responseHeaderModifier": {
+                "set": [{"name": "Content-Length", "value": "123"}]
+            }}]),
+            json!([{"type": "ResponseHeaderModifier", "responseHeaderModifier": {
+                "remove": ["Proxy-Connection"]
+            }}]),
             json!([{"type": "RequestHeaderModifier"}]),
             json!([{"type": "ResponseHeaderModifier"}]),
             json!([{"type": "RequestHeaderModifier", "requestHeaderModifier": {
@@ -4286,6 +4292,23 @@ mod header_modifier_validation_tests {
             ] {
                 assert_rejected(&runtime).await;
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn response_header_policy_schema_and_gateway_reject_the_same_plugin() {
+        for name in ["Content-Length", "Proxy-Connection", "Connection"] {
+            let plugin: EdgionPlugin = serde_json::from_value(json!({
+                "type": "ResponseHeaderModifier", "config": {"remove": [name]}
+            }))
+            .unwrap();
+            assert!(plugin.validation_error().is_some());
+            let mut runtime = PluginRuntime::new();
+            let errors =
+                runtime.add_from_upstream_response_filters(&[UpstreamResponseFilterEntry::new(plugin)], "default");
+            assert!(!errors.is_empty());
+            runtime.seal_fail_closed();
+            assert_rejected(&runtime).await;
         }
     }
 

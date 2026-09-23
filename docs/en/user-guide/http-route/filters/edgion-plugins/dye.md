@@ -214,3 +214,9 @@ a fixed literal instead of the plugin-recorded diagnostic string.
 - [Filters Overview](../overview.md)
 - Design record: [`entry-level-dye.md`](../../../../../../skills/01-architecture/02-gateway/entry-level-dye.md)
   (full mechanism, validation, and runtime rendering detail).
+
+## Response header policy
+
+Response destinations follow the shared policy in addition to dye-specific exclusions; request dye keeps its separate rules.
+
+[Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).

@@ -531,3 +531,9 @@ impl Context for AuthPlugin {
 
 - [ExtProc 插件](./ext-proc.md)——gRPC 推模式方案（见 [callout 与 ExtProc 的分工](#callout-与-extproc-的分工)）
 - [Filters 总览](../README.md)
+
+## 响应头策略
+
+响应 map 操作及本地回复头遵循此策略。整体替换仅替换可编辑字段，保留受保护字段；允许的重复 `Set-Cookie` 值仍分别保留。被拒绝的操作沿用现有尽力执行方式。
+
+[响应头策略](../gateway-api/response-header-modifier.md#response-header-policy).

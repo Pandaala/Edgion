@@ -224,3 +224,9 @@ spec:
 
 - [Filters overview](../README.md)
 - [CORS Plugin](./cors.md)
+
+## Response header policy
+
+Configured `headers` follow the shared policy; `Content-Type` must still use `contentType`.
+
+[Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).

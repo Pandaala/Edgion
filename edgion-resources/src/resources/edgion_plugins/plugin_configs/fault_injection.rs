@@ -1,4 +1,5 @@
 use crate::gwapi_types::is_valid_header_token;
+use crate::response_header_policy::validate_response_header_mutation;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -164,12 +165,7 @@ impl AbortConfig {
         }
         if let Some(hs) = &self.headers {
             for h in hs {
-                if h.name.eq_ignore_ascii_case("content-length") {
-                    return Err(format!(
-                        "abort.headers must not contain Content-Length (runtime overrides it): '{}'",
-                        h.name
-                    ));
-                }
+                validate_response_header_mutation(&h.name).map_err(str::to_owned)?;
                 if !is_valid_header_token(&h.name) {
                     return Err(format!(
                         "invalid abort.headers name '{}': invalid header name token",
@@ -417,6 +413,6 @@ mod tests {
             value: "10".to_string(),
         }]);
         let err = cfg.validate().unwrap_err();
-        assert!(err.to_lowercase().contains("content-length"), "got: {err}");
+        assert_eq!(err, "response header mutation targets a protected protocol field");
     }
 }

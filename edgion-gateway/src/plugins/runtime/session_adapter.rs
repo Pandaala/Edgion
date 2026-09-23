@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bytes::Bytes;
+use edgion_resources::response_header_policy::validate_response_header_mutation;
 use http::Uri;
 use pingora_core::protocols::http::RequestBodyBuffer;
 use pingora_http::{RequestHeader, ResponseHeader};
@@ -1059,6 +1060,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
+        validate_response_header_mutation(name)?;
         let value = match http::HeaderValue::from_str(value) {
             Ok(value) => value,
             // Queued malformed values historically disappeared during reply construction.
@@ -1069,6 +1071,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
+        validate_response_header_mutation(name)?;
         if let Some(resp) = &mut self.response_header {
             resp.insert_header(name.to_string(), value)
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
@@ -1082,6 +1085,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn append_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
+        validate_response_header_mutation(name)?;
         let value = match http::HeaderValue::from_str(value) {
             Ok(value) => value,
             Err(_) if self.response_header.is_none() => return Ok(()),
@@ -1091,6 +1095,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn append_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
+        validate_response_header_mutation(name)?;
         if let Some(resp) = &mut self.response_header {
             resp.append_header(name.to_string(), value)
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
@@ -1104,6 +1109,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()> {
+        validate_response_header_mutation(name)?;
         if let Some(resp) = &mut self.response_header {
             resp.remove_header(name);
         } else {
@@ -2031,6 +2037,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn queue_local_reply_header_op(&mut self, op: PendingHeaderOp) -> PluginSessionResult<()> {
+        validate_response_header_mutation(op.name())?;
         self.ctx.queue_pending_response_header_op(op);
         Ok(())
     }
@@ -2300,7 +2307,7 @@ mod local_reply_tests {
         });
         assert!(build_response_local_reply(&mut ctx, 502, Some("{}".into()), false));
         let (h, _) = ctx.take_pending_response_local_reply().unwrap();
-        // queued content-type wins; queued content-length is overridden by the framing re-assert.
+        // Ordinary content-type survives; the rejected length cannot override body-owned framing.
         assert_eq!(
             h.headers.get("content-type").unwrap().to_str().unwrap(),
             "application/json"
@@ -3149,6 +3156,109 @@ pub(crate) mod record_outcome_tests {
         assert_eq!(values[0], "first");
         assert_eq!(values[1].as_bytes(), b"\xffidentity");
         assert!(values[1].is_sensitive());
+    }
+
+    #[tokio::test]
+    async fn response_policy_protects_bound_and_queued_headers_without_blocking_application_fields() {
+        let mut session = test_session().await;
+        for bound in [false, true] {
+            let mut ctx = EdgionHttpContext::default();
+            let mut response = ResponseHeader::build(101, None).unwrap();
+            response.insert_header("content-length", "42").unwrap();
+            response.insert_header("connection", "upgrade").unwrap();
+            response.insert_header("upgrade", "websocket").unwrap();
+            {
+                let mut adapter = if bound {
+                    PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response)
+                } else {
+                    PingoraSessionAdapter::new(&mut session, &mut ctx)
+                };
+                for name in [
+                    "Content-Length",
+                    "TRANSFER-Encoding",
+                    "Connection",
+                    "Keep-Alive",
+                    "Proxy-Connection",
+                    "TE",
+                    "Trailer",
+                    "Upgrade",
+                    "Proxy-Authenticate",
+                    "Proxy-Authorization",
+                    ":status",
+                ] {
+                    assert!(adapter.set_response_header(name, "1").is_err(), "{name}");
+                    assert!(adapter.append_response_header(name, "1").is_err(), "{name}");
+                    assert!(adapter
+                        .set_response_header_value(name, http::HeaderValue::from_static("1"))
+                        .is_err());
+                    assert!(adapter
+                        .append_response_header_value(name, http::HeaderValue::from_static("1"))
+                        .is_err());
+                    assert!(adapter.remove_response_header(name).is_err());
+                    assert!(adapter
+                        .queue_local_reply_header_op(PendingHeaderOp::Remove { name: name.into() })
+                        .is_err());
+                }
+                for name in [
+                    "Content-Type",
+                    "Content-Encoding",
+                    "Cache-Control",
+                    "WWW-Authenticate",
+                    "grpc-status",
+                ] {
+                    adapter.set_response_header(name, "application-value").unwrap();
+                }
+                adapter.set_response_header("Set-Cookie", "a=1").unwrap();
+                adapter.append_response_header("set-cookie", "b=2").unwrap();
+            }
+            ctx.drain_pending_response_header_ops(&mut response);
+            assert_eq!(response.headers["content-length"], "42");
+            assert_eq!(response.headers["connection"], "upgrade");
+            assert_eq!(response.headers["upgrade"], "websocket");
+            assert_eq!(response.headers["content-encoding"], "application-value");
+            assert_eq!(response.headers.get_all("set-cookie").iter().count(), 2);
+        }
+    }
+
+    #[test]
+    fn direct_pending_operations_cannot_modify_framing() {
+        let value = http::HeaderValue::from_static("999");
+        for op in [
+            PendingHeaderOp::Set {
+                name: "Content-Length".into(),
+                value: value.clone(),
+            },
+            PendingHeaderOp::Append {
+                name: "Content-Length".into(),
+                value: value.clone(),
+            },
+            PendingHeaderOp::AddIfAbsent {
+                name: "Content-Length".into(),
+                value: value.clone(),
+            },
+            PendingHeaderOp::OverwriteIfExists {
+                name: "Content-Length".into(),
+                value,
+            },
+            PendingHeaderOp::Remove {
+                name: "Content-Length".into(),
+            },
+        ] {
+            for present in [false, true] {
+                let mut ctx = EdgionHttpContext::default();
+                let mut response = ResponseHeader::build(200, None).unwrap();
+                if present {
+                    response.insert_header("content-length", "2").unwrap();
+                }
+                ctx.queue_pending_response_header_op(op.clone());
+                assert!(!ctx.has_pending_response_header_ops());
+                op.clone().apply(&mut response);
+                assert_eq!(
+                    response.headers.get("content-length").map(|v| v.to_str().unwrap()),
+                    present.then_some("2")
+                );
+            }
+        }
     }
 
     #[tokio::test]

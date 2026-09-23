@@ -683,3 +683,15 @@ Other references:
 - [13-stream-plugin-dev.md](13-stream-plugin-dev.md)
 - [14-link-sys-dev.md](14-link-sys-dev.md)
 - [../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)
+
+## Ordinary response header mutations
+
+Use `edgion_resources::response_header_policy` for configured response names and
+`PluginSession` for ordinary dynamic mutations. Set, append, conditional writes,
+remove and both rename names share the same protection; direct PendingHeaderOp
+queuing does not confer framing authority. Request-header policies remain separate.
+Body/transport owners use their private ResponseHeader path for exact local-body
+length, stream length removal, compression, GrpcWeb and upgrade handshakes.
+Do not route those legitimate framing changes through generic plugin setters.
+The [producer/operation/protocol matrix](../../04-review/plugin-runtime/regression-guards/response-header-mutation-policy.md)
+records enforcement boundaries and regression evidence.

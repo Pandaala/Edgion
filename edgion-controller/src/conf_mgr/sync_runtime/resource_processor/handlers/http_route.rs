@@ -3053,6 +3053,31 @@ spec:
     }
 
     #[test]
+    fn response_header_policy_status_recovers_without_restricting_request_headers() {
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+            "metadata": {"name": "response-policy", "namespace": "default"},
+            "spec": {"parentRefs": [{"name": "gw"}], "rules": [
+                {"filters": [{"type": "ResponseHeaderModifier", "responseHeaderModifier": {
+                    "set": [{"name": "CoNtEnT-LeNgTh", "value": "123"}]
+                }}]},
+                {"filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                    "set": [{"name": "Content-Length", "value": "123"}]
+                }}]}
+            ]}
+        }))
+        .unwrap();
+        let handler = HttpRouteHandler::default();
+        let ctx = make_ctx();
+        handler.update_status(&mut route, &ctx, &[]);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0][..]));
+        let filter = &mut route.spec.rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0];
+        filter.response_header_modifier.as_mut().unwrap().set.as_mut().unwrap()[0].name = "Content-Type".into();
+        handler.update_status(&mut route, &ctx, &[]);
+        assert!(route.spec.invalid_rule_indices.is_none());
+    }
+
+    #[test]
     fn header_modifier_status_preserves_siblings_rejects_empty_route_and_recovers() {
         let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
             "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",

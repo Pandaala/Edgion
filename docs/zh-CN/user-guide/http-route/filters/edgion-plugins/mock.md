@@ -224,3 +224,9 @@ spec:
 
 - [过滤器目录](../README.md)
 - [CORS 插件](./cors.md)
+
+## 响应头策略
+
+配置的 `headers` 遵循共享策略；`Content-Type` 仍须通过 `contentType` 设置。
+
+[响应头策略](../gateway-api/response-header-modifier.md#response-header-policy).

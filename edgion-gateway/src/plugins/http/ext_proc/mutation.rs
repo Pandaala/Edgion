@@ -24,7 +24,7 @@ pub fn is_pseudo_header(name: &str) -> bool {
 /// response smuggling (`Content-Length` / `Transfer-Encoding` desync) and
 /// connection-pool corruption (`Connection` / `Keep-Alive` / `Upgrade`).
 /// Mirrors Envoy ext_proc's default `disallow_system_headers` posture.
-fn is_proxy_managed_header(name: &str) -> bool {
+fn is_request_proxy_managed_header(name: &str) -> bool {
     const MANAGED: [&str; 8] = [
         "connection",
         "keep-alive",
@@ -39,7 +39,7 @@ fn is_proxy_managed_header(name: &str) -> bool {
 }
 
 pub(super) fn is_protected_header(name: &str) -> bool {
-    is_pseudo_header(name) || is_proxy_managed_header(name)
+    edgion_resources::response_header_policy::is_protected_response_header(name)
 }
 
 /// Decode a processor-supplied header value, preferring the modern `raw_value`
@@ -119,7 +119,7 @@ pub fn apply_to_request(session: &mut dyn PluginSession, mutation: &HeaderMutati
     let mut applied = 0;
     for opt in &mutation.set_headers {
         let Some(hv) = opt.header.as_ref() else { continue };
-        if reject_protected(&hv.key, log) {
+        if reject_protected_request(&hv.key, log) {
             continue;
         }
         let Some(value) = decoded_value(opt, hv, log) else {
@@ -144,7 +144,7 @@ pub fn apply_to_request(session: &mut dyn PluginSession, mutation: &HeaderMutati
         }
     }
     for name in &mutation.remove_headers {
-        if reject_protected(name, log) {
+        if reject_protected_request(name, log) {
             continue;
         }
         if session.remove_request_header(name).is_ok() {
@@ -262,7 +262,20 @@ pub(super) fn reject_protected(name: &str, log: &mut PluginLog) -> bool {
     if is_pseudo_header(name) {
         log.push_err("pseudo header mutation rejected");
         true
-    } else if is_proxy_managed_header(name) {
+    } else if is_protected_header(name) {
+        log.push_err("protected header mutation rejected");
+        true
+    } else {
+        false
+    }
+}
+
+/// Request mutation keeps its existing policy; response policy must not tighten it.
+fn reject_protected_request(name: &str, log: &mut PluginLog) -> bool {
+    if is_pseudo_header(name) {
+        log.push_err("pseudo header mutation rejected");
+        true
+    } else if is_request_proxy_managed_header(name) {
         log.push_err("protected header mutation rejected");
         true
     } else {
@@ -307,6 +320,41 @@ mod tests {
     fn assert_raw_values(map: &http::HeaderMap, key: &str, expected: &[&[u8]]) {
         let values: Vec<_> = map.get_all(key).iter().map(|value| value.as_bytes()).collect();
         assert_eq!(values, expected, "header {key}");
+    }
+
+    #[tokio::test]
+    async fn response_policy_covers_conditional_and_local_reply_ops_without_changing_requests() {
+        let mut session = test_session().await;
+        for name in ["Proxy-Authenticate", "Proxy-Authorization"] {
+            for action in [
+                HeaderAppendAction::AppendIfExistsOrAdd,
+                HeaderAppendAction::OverwriteIfExistsOrAdd,
+                HeaderAppendAction::AddIfAbsent,
+                HeaderAppendAction::OverwriteIfExists,
+            ] {
+                let mut ctx = EdgionHttpContext::default();
+                let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+                response.insert_header(name, "origin").unwrap();
+                session.req_header_mut().insert_header(name, "request").unwrap();
+                let mutation = HeaderMutation {
+                    set_headers: vec![set_header_opt(name, "extension", action)],
+                    remove_headers: vec![name.to_string()],
+                };
+                {
+                    let mut adapter =
+                        PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response);
+                    let mut log = PluginLog::new("ExtProc");
+                    assert_eq!(apply_to_response(&mut adapter, &mutation, &mut log), 0);
+                    assert_eq!(queue_for_local_reply(&mut adapter, &mutation, &mut log), 0);
+                    assert!(local_reply_ops(&mutation, &mut log).is_empty());
+                    assert!(apply_to_request(&mut adapter, &mutation, &mut log) >= 1);
+                    assert!(log.contains("protected header mutation rejected"));
+                }
+                assert_eq!(response.headers[name], "origin");
+                assert!(!session.req_header().headers.contains_key(name));
+                assert!(!ctx.has_pending_response_header_ops());
+            }
+        }
     }
 
     #[tokio::test]

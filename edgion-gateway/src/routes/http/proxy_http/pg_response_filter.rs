@@ -69,6 +69,9 @@ fn sanitize_forwarded_response_headers(response: &mut ResponseHeader) -> pingora
     for name in HOP_BY_HOP_HEADERS {
         response.remove_header(*name);
     }
+    // Legacy proxy metadata is response-hop scoped too. Keep the canonical
+    // request header policy unchanged.
+    response.remove_header("proxy-connection");
 
     Ok(had_transfer_encoding)
 }
@@ -468,6 +471,12 @@ mod tests {
                         let response = response.await.expect("local reply headers arrive without reset");
                         assert_eq!(response.status(), http::StatusCode::BAD_GATEWAY);
                         assert_eq!(response.headers()["x-queued"], "retained");
+                        if let Some(length) = response.headers().get("content-length") {
+                            assert_eq!(length, "0");
+                        }
+                        for name in ["connection", "transfer-encoding", "proxy-connection"] {
+                            assert!(!response.headers().contains_key(name));
+                        }
                         assert!(!response.headers().contains_key("x-upstream-private"));
                         assert!(!response.headers().contains_key("x-bound"));
                         assert!(!response.headers().contains_key("x-after-terminate"));
@@ -517,6 +526,12 @@ mod tests {
                     let errors = runtime.add_from_upstream_response_filters(&entries, "test");
                     assert!(errors.is_empty(), "{errors:?}");
                     let mut ctx = EdgionHttpContext::default();
+                    for name in ["Content-Length", "Connection", "Transfer-Encoding", "Proxy-Connection"] {
+                        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+                            name: name.to_string(),
+                            value: http::HeaderValue::from_static("999"),
+                        });
+                    }
                     ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
                         name: "x-queued".to_string(),
                         value: http::HeaderValue::from_static("retained"),
@@ -563,6 +578,7 @@ mod tests {
     #[test]
     fn response_sanitizer_removes_static_and_repeated_dynamic_fields() {
         let mut response = response(Some("128"));
+        response.insert_header("Proxy-Connection", "keep-alive").unwrap();
         for name in super::HOP_BY_HOP_HEADERS {
             response.append_header(*name, "present").unwrap();
         }
@@ -584,6 +600,7 @@ mod tests {
             assert!(!response.headers.contains_key(*name), "{name}");
         }
         assert!(!response.headers.contains_key("x-origin-one"));
+        assert!(!response.headers.contains_key("proxy-connection"));
         assert!(!response.headers.contains_key("x-origin-two"));
         assert!(!response.headers.contains_key("content-length"));
         assert_eq!(response.headers.get_all("set-cookie").iter().count(), 2);

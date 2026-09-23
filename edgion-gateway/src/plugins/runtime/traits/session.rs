@@ -306,7 +306,9 @@ pub trait PluginSession: Send + Sync {
         end_of_stream: bool,
     ) -> PluginSessionResult<()>;
 
-    /// Set a response header (will be added when write_response_header is called)
+    /// Set an ordinary response header (deferred until a response exists).
+    /// All response mutation methods reject the shared protected-field policy;
+    /// body/transport owners maintain framing directly on their own response.
     fn set_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 
     /// Replace response field lines, preserving raw bytes and sensitivity through deferred replies.
@@ -322,7 +324,7 @@ pub trait PluginSession: Send + Sync {
     /// Returns false before a response is bound; pending operations are not a live response.
     fn has_response_header(&self, name: &str) -> bool;
 
-    /// Remove a response header (for ResponseHeaderModifier)
+    /// Remove an ordinary response header, subject to the same policy as writes.
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()>;
 
     /// Get a response header value by name (for ResponseRewrite)

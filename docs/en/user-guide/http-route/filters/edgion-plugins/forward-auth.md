@@ -58,3 +58,9 @@ spec:
 - [ForwardAuth Full Documentation (all configuration parameters)](../../../edgion-plugins/forward-auth.md)
 - [Plugin Composition and References](../plugin-composition.md)
 - [Filters Overview](../overview.md)
+
+## Response header policy
+
+`decision.clientHeaders` rejects protected or invalid names during configuration validation. Denial responses filter all fields nominated by every received `Connection` value, including automatically copied `Content-Type`. A non-text `Connection` value suppresses remote header copying, while the bounded denial body is still relayed. Allowed repeated fields, including `Set-Cookie` and `WWW-Authenticate`, retain their values.
+
+[Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).

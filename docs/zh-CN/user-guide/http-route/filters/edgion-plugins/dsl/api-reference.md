@@ -2295,3 +2295,9 @@ if sig == nil {
 - [沙盒安全模型](./sandbox-security.md)
 - [实战示例集](./examples.md)
 - [字节码指南](./bytecode.md)
+
+## 响应头策略
+
+`resp.set_header`、`resp.append_header` 和 `resp.remove_header` 按共享策略检查动态名称，保留原有错误语义。
+
+[响应头策略](../../gateway-api/response-header-modifier.md#response-header-policy).

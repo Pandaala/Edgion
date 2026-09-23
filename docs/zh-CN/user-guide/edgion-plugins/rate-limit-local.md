@@ -546,3 +546,9 @@ requestPlugins:
 为本地条目设置 alias，并让后续 Redis 条目通过 `conditions.run` 的
 `rateLimitExceeded` 引用它，可以仅在超额时消耗 Redis 补充额度。
 参见[完整配置](../http-route/filters/edgion-plugins/rate-limit-redis.md#本地额度与-redis-补充准入)。
+
+## 响应头策略
+
+配置的响应头目标遵循共享响应头限制。
+
+[响应头策略](../http-route/filters/gateway-api/response-header-modifier.md#response-header-policy).

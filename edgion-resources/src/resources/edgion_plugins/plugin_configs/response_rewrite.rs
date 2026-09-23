@@ -8,27 +8,21 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::gwapi_types::{is_valid_header_token, HEADER_NAME_MAX_LEN};
+use crate::response_header_policy::validate_response_header_mutation;
 
 const INVALID_STATUS_CODE: &str = "statusCode must be between 200 and 599";
 const INVALID_SET_NAME: &str = "headers.set name must be a valid HTTP header name of at most 256 bytes";
 const INVALID_SET_VALUE: &str = "headers.set value must be a valid HTTP header value";
-const INVALID_SET_FRAMING: &str = "headers.set must not target content-length or transfer-encoding";
 const INVALID_ADD_NAME: &str = "headers.add name must be a valid HTTP header name of at most 256 bytes";
 const INVALID_ADD_VALUE: &str = "headers.add value must be a valid HTTP header value";
-const INVALID_ADD_FRAMING: &str = "headers.add must not target content-length or transfer-encoding";
 const INVALID_REMOVE_NAME: &str = "headers.remove name must be a valid HTTP header name of at most 256 bytes";
 const INVALID_RENAME_SOURCE: &str = "headers.rename source must be a valid HTTP header name of at most 256 bytes";
 const INVALID_RENAME_DESTINATION: &str =
     "headers.rename destination must be a valid HTTP header name of at most 256 bytes";
-const INVALID_RENAME_FRAMING: &str = "headers.rename must not target content-length or transfer-encoding";
 const INVALID_SELF_RENAME: &str = "headers.rename source and destination must differ";
 
 fn is_valid_header_name(name: &str) -> bool {
     name.len() <= HEADER_NAME_MAX_LEN as usize && is_valid_header_token(name)
-}
-
-fn is_response_framing_header(name: &str) -> bool {
-    name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("transfer-encoding")
 }
 
 /// Response Rewrite plugin configuration
@@ -136,8 +130,8 @@ impl ResponseRewriteConfig {
                     if !is_valid_header_name(&entry.name) {
                         return Some(INVALID_SET_NAME.to_string());
                     }
-                    if is_response_framing_header(&entry.name) {
-                        return Some(INVALID_SET_FRAMING.to_string());
+                    if let Err(error) = validate_response_header_mutation(&entry.name) {
+                        return Some(error.to_string());
                     }
                     if HeaderValue::from_str(&entry.value).is_err() {
                         return Some(INVALID_SET_VALUE.to_string());
@@ -150,8 +144,8 @@ impl ResponseRewriteConfig {
                     if !is_valid_header_name(&entry.name) {
                         return Some(INVALID_ADD_NAME.to_string());
                     }
-                    if is_response_framing_header(&entry.name) {
-                        return Some(INVALID_ADD_FRAMING.to_string());
+                    if let Err(error) = validate_response_header_mutation(&entry.name) {
+                        return Some(error.to_string());
                     }
                     if HeaderValue::from_str(&entry.value).is_err() {
                         return Some(INVALID_ADD_VALUE.to_string());
@@ -164,6 +158,9 @@ impl ResponseRewriteConfig {
                     if !is_valid_header_name(name) {
                         return Some(INVALID_REMOVE_NAME.to_string());
                     }
+                    if let Err(error) = validate_response_header_mutation(name) {
+                        return Some(error.to_string());
+                    }
                 }
             }
 
@@ -175,8 +172,10 @@ impl ResponseRewriteConfig {
                     if !is_valid_header_name(&entry.to) {
                         return Some(INVALID_RENAME_DESTINATION.to_string());
                     }
-                    if is_response_framing_header(&entry.to) {
-                        return Some(INVALID_RENAME_FRAMING.to_string());
+                    if let Err(error) = validate_response_header_mutation(&entry.from)
+                        .and_then(|()| validate_response_header_mutation(&entry.to))
+                    {
+                        return Some(error.to_string());
                     }
                     if entry.from.eq_ignore_ascii_case(&entry.to) {
                         return Some(INVALID_SELF_RENAME.to_string());
@@ -205,6 +204,7 @@ impl PluginValidation for ResponseRewriteConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const PROTECTED_HEADER_ERROR: &str = "response header mutation targets a protected protocol field";
 
     fn config_with_headers(headers: ResponseHeaderActions) -> ResponseRewriteConfig {
         ResponseRewriteConfig {
@@ -463,7 +463,7 @@ mod tests {
                     remove: None,
                     rename: None,
                 }),
-                INVALID_SET_FRAMING,
+                PROTECTED_HEADER_ERROR,
             ),
             (
                 config_with_headers(ResponseHeaderActions {
@@ -472,7 +472,7 @@ mod tests {
                     remove: None,
                     rename: None,
                 }),
-                INVALID_ADD_FRAMING,
+                PROTECTED_HEADER_ERROR,
             ),
             (
                 config_with_headers(ResponseHeaderActions {
@@ -484,7 +484,7 @@ mod tests {
                         to: "content-length".to_string(),
                     }]),
                 }),
-                INVALID_RENAME_FRAMING,
+                PROTECTED_HEADER_ERROR,
             ),
             (
                 config_with_headers(ResponseHeaderActions {
@@ -512,7 +512,7 @@ mod tests {
                 to: "X-Upstream-Length".to_string(),
             }]),
         });
-        assert_eq!(framing_sources.check_fields(), None);
+        assert_eq!(framing_sources.check_fields().as_deref(), Some(PROTECTED_HEADER_ERROR));
     }
 
     #[test]
@@ -546,7 +546,7 @@ mod tests {
         });
         assert_eq!(
             framing_before_value.check_fields().as_deref(),
-            Some(INVALID_SET_FRAMING)
+            Some(PROTECTED_HEADER_ERROR)
         );
 
         let add_before_remove = config_with_headers(ResponseHeaderActions {
@@ -558,7 +558,10 @@ mod tests {
                 to: String::new(),
             }]),
         });
-        assert_eq!(add_before_remove.check_fields().as_deref(), Some(INVALID_ADD_FRAMING));
+        assert_eq!(
+            add_before_remove.check_fields().as_deref(),
+            Some(PROTECTED_HEADER_ERROR)
+        );
 
         let remove_before_rename = config_with_headers(ResponseHeaderActions {
             set: None,
@@ -599,7 +602,7 @@ mod tests {
         });
         assert_eq!(
             rename_framing_before_self.check_fields().as_deref(),
-            Some(INVALID_RENAME_FRAMING)
+            Some(PROTECTED_HEADER_ERROR)
         );
     }
 

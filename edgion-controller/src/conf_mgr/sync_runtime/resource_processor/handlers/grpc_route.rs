@@ -1434,6 +1434,21 @@ mod tests {
     }
 
     #[test]
+    fn response_header_policy_rejects_backend_mutation_and_preserves_request_direction() {
+        let mut route = route_with_rules(json!([
+            {"backendRefs": [{"name": "svc", "port": 80, "filters": [
+                {"type": "ResponseHeaderModifier", "responseHeaderModifier": {"remove": ["Content-Length"]}}
+            ]}]},
+            {"filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                "set": [{"name": "Content-Length", "value": "123"}]
+            }}]}
+        ]));
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
+        route.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].filters = None;
+        assert!(super::find_invalid_rule_indices(&route, "default").is_empty());
+    }
+
+    #[test]
     fn header_modifier_status_preserves_siblings_rejects_empty_route_and_recovers() {
         let mut route = route_with_rules(json!([
             {"filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {

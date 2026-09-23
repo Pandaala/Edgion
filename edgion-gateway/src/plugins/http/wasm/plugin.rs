@@ -4,6 +4,7 @@
 //! response-header phases. See mod.rs docs for scope and limitations.
 
 use bytes::Bytes;
+use edgion_resources::response_header_policy::is_protected_response_header;
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
@@ -584,10 +585,12 @@ fn apply_ops(session: &mut dyn PluginSession, ops: Vec<HeaderOp>) {
                 name,
             } => session.remove_response_header(&name),
             HeaderOp::ReplaceAll { map, remove, pairs } => {
-                // Whole-map replacement: first drop every name that existed
-                // before the replace so omitted headers (credentials, cookies,
-                // spoofable identity headers) do not survive as an additive set.
+                // Replace editable fields. Transport-owned response fields survive;
+                // omitted ordinary fields (credentials, cookies, identity) do not.
                 for name in remove {
+                    if map == MAP_HTTP_RESPONSE_HEADERS && is_protected_response_header(&name) {
+                        continue;
+                    }
                     let _ = match map {
                         MAP_HTTP_REQUEST_HEADERS => session.remove_request_header(&name),
                         MAP_HTTP_RESPONSE_HEADERS => session.remove_response_header(&name),
@@ -600,6 +603,9 @@ fn apply_ops(session: &mut dyn PluginSession, ops: Vec<HeaderOp>) {
                 // instead of collapsing to the last one.
                 let mut seen: HashSet<String> = HashSet::new();
                 for (name, value) in pairs {
+                    if map == MAP_HTTP_RESPONSE_HEADERS && is_protected_response_header(&name) {
+                        continue;
+                    }
                     let first = seen.insert(name.to_ascii_lowercase());
                     let _ = match (map, first) {
                         (MAP_HTTP_REQUEST_HEADERS, true) => session.set_request_header(&name, &value),
@@ -2275,8 +2281,14 @@ mod tests {
         // appended, instead of collapsing to the last value.
         let ops = vec![HeaderOp::ReplaceAll {
             map: MAP_HTTP_RESPONSE_HEADERS,
-            remove: vec!["set-cookie".to_string()],
+            remove: vec![
+                "set-cookie".to_string(),
+                "Content-Length".to_string(),
+                "Upgrade".to_string(),
+            ],
             pairs: vec![
+                ("CONTENT-LENGTH".to_string(), "999".to_string()),
+                ("Upgrade".to_string(), "spoofed".to_string()),
                 ("set-cookie".to_string(), "a=1".to_string()),
                 ("set-cookie".to_string(), "b=2".to_string()),
             ],
@@ -2298,5 +2310,63 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
         apply_ops(&mut session, ops);
+    }
+
+    #[tokio::test]
+    async fn response_policy_replace_all_and_individual_ops_preserve_transport_fields() {
+        use crate::plugins::runtime::session_adapter::record_outcome_tests::test_session;
+        use crate::plugins::runtime::PingoraSessionAdapter;
+        use crate::EdgionHttpContext;
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut response = pingora_http::ResponseHeader::build(101, None).unwrap();
+        for (name, value) in [("content-length", "2"), ("upgrade", "websocket"), ("x-old", "old")] {
+            response.insert_header(name, value).unwrap();
+        }
+        {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response);
+            apply_ops(
+                &mut adapter,
+                vec![
+                    HeaderOp::Set {
+                        map: MAP_HTTP_RESPONSE_HEADERS,
+                        name: "Content-Length".into(),
+                        value: "999".into(),
+                    },
+                    HeaderOp::Add {
+                        map: MAP_HTTP_RESPONSE_HEADERS,
+                        name: "Upgrade".into(),
+                        value: "spoofed".into(),
+                    },
+                    HeaderOp::Remove {
+                        map: MAP_HTTP_RESPONSE_HEADERS,
+                        name: "Content-Length".into(),
+                    },
+                    HeaderOp::ReplaceAll {
+                        map: MAP_HTTP_RESPONSE_HEADERS,
+                        remove: vec!["content-length".into(), "upgrade".into(), "x-old".into()],
+                        pairs: vec![
+                            ("content-length".into(), "999".into()),
+                            ("Set-Cookie".into(), "a=1".into()),
+                            ("set-cookie".into(), "b=2".into()),
+                            ("Content-Type".into(), "text/plain".into()),
+                        ],
+                    },
+                ],
+            );
+        }
+        assert_eq!(response.headers["content-length"], "2");
+        assert_eq!(response.headers["upgrade"], "websocket");
+        assert!(!response.headers.contains_key("x-old"));
+        assert_eq!(response.headers["content-type"], "text/plain");
+        assert_eq!(
+            response
+                .headers
+                .get_all("set-cookie")
+                .iter()
+                .map(|v| v.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["a=1", "b=2"]
+        );
     }
 }

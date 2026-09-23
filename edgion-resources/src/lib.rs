@@ -20,6 +20,7 @@ pub mod rate_limit_local_config;
 pub mod redact;
 pub mod redis_rate_limit;
 pub mod resources;
+pub mod response_header_policy;
 pub mod schema_check;
 pub mod sensitive;
 pub mod uri_utils;

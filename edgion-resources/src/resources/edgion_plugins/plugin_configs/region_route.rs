@@ -8,6 +8,9 @@
 //! An optional `override_ref` points to a `RegionRouteOverride` EdgionConfigData which can
 //! whole-replace the `regions` at request time (fail-to-base on any overlay error).
 
+use crate::gwapi_types::is_valid_header_token;
+use crate::gwapi_types::HEADER_NAME_MAX_LEN;
+use crate::response_header_policy::validate_response_header_mutation;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -257,6 +260,18 @@ use crate::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for RegionRouteConfig {
     fn validation_error(&self) -> Option<String> {
+        for target in self.hash_calc.iter().flat_map(|calc| &calc.write_back) {
+            if let KeySet::ResponseHeader { name } = target {
+                if name.len() > HEADER_NAME_MAX_LEN as usize || !is_valid_header_token(name) {
+                    return Some(
+                        "hashCalc.writeBack response header names must be HTTP tokens of at most 256 bytes".to_string(),
+                    );
+                }
+                if let Err(error) = validate_response_header_mutation(name) {
+                    return Some(error.to_string());
+                }
+            }
+        }
         if self.hash_calc.as_ref().is_some_and(|calc| calc.modulo < 2) {
             return Some("hashCalc.modulo must be at least 2".to_string());
         }

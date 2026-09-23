@@ -64,3 +64,9 @@ allowance, configure `onLimitExceeded: Continue` and the
 - [RateLimitRedis (Redis-backed precise cluster rate limiting)](./rate-limit-redis.md)
 - [IP Restriction](./ip-restriction.md)
 - [Plugin Composition](../plugin-composition.md)
+
+## Response header policy
+
+Custom response names also retain the rate-limit-specific reserved-name restrictions.
+
+[Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).

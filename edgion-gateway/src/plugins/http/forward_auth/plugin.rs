@@ -64,6 +64,7 @@ use pingora_http::ResponseHeader;
 use std::sync::Arc;
 
 use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
+use crate::plugins::http::common::connection_listed_hop_by_hop;
 use crate::plugins::http::common::outbound::call::{outbound_call_with_body, OutboundResponse};
 use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
 use crate::plugins::runtime::log::la;
@@ -71,6 +72,7 @@ use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessio
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::common::success::SuccessOutcome;
 use edgion_resources::resources::edgion_plugins::{ForwardAuthConfig, ForwardAuthDecision};
+use edgion_resources::response_header_policy::is_protected_response_header;
 
 /// Maximum bytes of the auth service error body to buffer and return to the client.
 ///
@@ -101,6 +103,9 @@ impl ForwardAuth {
     /// reaches the gateway. Callers may treat an `Err` return as fail-closed (do
     /// not install the plugin).
     pub fn new(config: &ForwardAuthConfig) -> Result<Self, String> {
+        if let Some(error) = config.validation_error() {
+            return Err(error);
+        }
         let client = ManagedOutboundClient::from_parts(
             &config.conn,
             &config.request,
@@ -135,7 +140,28 @@ impl ForwardAuth {
             return PluginRunningResult::ErrTerminateRequest;
         };
 
-        if let Some(content_type) = content_type {
+        // Received connection nominations belong to the auth exchange, including
+        // those in repeated field lines. An opaque nominator makes copying any
+        // received field unsafe; the bounded denial body can still be relayed.
+        let mut nominated = Vec::new();
+        let mut invalid_connection = false;
+        if let Some((headers, _)) = forwarded_headers {
+            for value in headers.get_all(http::header::CONNECTION) {
+                match value.to_str() {
+                    Ok(value) => nominated.extend(connection_listed_hop_by_hop(value)),
+                    Err(_) => invalid_connection = true,
+                }
+            }
+        }
+        if invalid_connection {
+            plugin_log.push_err("invalid auth Connection header");
+        }
+        let can_copy = |name: &str| {
+            !invalid_connection
+                && !is_protected_response_header(name)
+                && !nominated.iter().any(|listed| listed.eq_ignore_ascii_case(name))
+        };
+        if let Some(content_type) = content_type.filter(|_| can_copy("content-type")) {
             let _ = resp.insert_header("Content-Type", content_type);
         }
         let _ = resp.insert_header("Connection", "close");
@@ -145,6 +171,9 @@ impl ForwardAuth {
         // and later values remain separate response field lines.
         if let Some((auth_headers, client_headers)) = forwarded_headers {
             for (index, name) in client_headers.iter().enumerate() {
+                if !can_copy(name) {
+                    continue;
+                }
                 if client_headers[..index]
                     .iter()
                     .any(|prior| prior.eq_ignore_ascii_case(name))
@@ -427,6 +456,74 @@ mod tests {
 
         assert!(matches!(result, PluginRunningResult::GoodNext));
         assert_eq!(log.render_for_test(), "auth pass 200");
+    }
+
+    #[tokio::test]
+    async fn denial_does_not_copy_framing_or_any_connection_nominated_field() {
+        for opaque_connection in [false, true] {
+            let fa = make_forward_auth(ForwardAuthDecision {
+                client_headers: vec![
+                    "Content-Length".into(),
+                    "Proxy-Connection".into(),
+                    "X-First".into(),
+                    "X-Second".into(),
+                    "Content-Type".into(),
+                    "WWW-Authenticate".into(),
+                ],
+                ..ForwardAuthDecision::default()
+            });
+            let mut headers = HeaderMap::new();
+            headers.append("connection", HeaderValue::from_static("X-First"));
+            headers.append("connection", HeaderValue::from_static("x-SECOND, Content-Type"));
+            if opaque_connection {
+                headers.append("connection", HeaderValue::from_bytes(b"\xff").unwrap());
+            }
+            for (name, value) in [
+                ("content-length", "999"),
+                ("proxy-connection", "keep-alive"),
+                ("x-first", "private"),
+                ("x-second", "private"),
+                ("content-type", "text/plain"),
+                ("www-authenticate", "Bearer"),
+            ] {
+                headers.insert(name, HeaderValue::from_static(value));
+            }
+            let mut session = MockPluginSession::new();
+            session
+                .expect_write_response_header()
+                .times(1)
+                .returning(move |response, _| {
+                    for name in [
+                        "content-length",
+                        "proxy-connection",
+                        "x-first",
+                        "x-second",
+                        "content-type",
+                    ] {
+                        assert!(!response.headers.contains_key(name), "{name}");
+                    }
+                    assert_eq!(response.headers.contains_key("www-authenticate"), !opaque_connection);
+                    // The local response owner still controls its own connection.
+                    assert_eq!(response.headers["connection"], "close");
+                    Ok(())
+                });
+            session.expect_write_response_body().times(1).returning(|body, end| {
+                assert_eq!(body.unwrap(), Bytes::from_static(b"denied"));
+                assert!(end);
+                Ok(())
+            });
+            session.expect_shutdown().times(1).returning(|| {});
+            let mut log = PluginLog::new("ForwardAuth");
+            assert_eq!(
+                fa.handle_outbound_response(
+                    &mut session,
+                    &mut log,
+                    response(401, headers, Bytes::from_static(b"denied")),
+                )
+                .await,
+                PluginRunningResult::ErrTerminateRequest,
+            );
+        }
     }
 
     #[tokio::test]

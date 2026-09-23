@@ -2353,3 +2353,9 @@ if sig == nil {
 - [Sandbox Security Model](./sandbox-security.md)
 - [Practical Examples](./examples.md)
 - [Bytecode Guide](./bytecode.md)
+
+## Response header policy
+
+`resp.set_header`, `resp.append_header`, and `resp.remove_header` check dynamic names against the shared policy and keep their existing error semantics.
+
+[Response header policy](../../gateway-api/response-header-modifier.md#response-header-policy).

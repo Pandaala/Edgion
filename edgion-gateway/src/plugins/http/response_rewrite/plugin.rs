@@ -6,6 +6,7 @@
 use crate::plugins::runtime::{PluginLog, PluginSession, UpstreamResponseFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{PluginValidation, ResponseHeaderActions, ResponseRewriteConfig};
+use edgion_resources::response_header_policy::is_protected_response_header;
 
 const PLUGIN_NAME: &str = "ResponseRewrite";
 
@@ -65,6 +66,10 @@ impl ResponseRewrite {
             // 1. Rename headers first
             if let Some(ref rename_headers) = headers.rename {
                 for entry in rename_headers {
+                    if is_protected_response_header(&entry.from) || is_protected_response_header(&entry.to) {
+                        plugin_log.push_err("header rename fail");
+                        continue;
+                    }
                     if let Some(value) = session.get_response_header(&entry.from) {
                         if let Err(_e) = session.set_response_header(&entry.to, &value) {
                             plugin_log.push_err("header rename fail");
@@ -309,6 +314,29 @@ mod tests {
     }
 
     #[test]
+    fn response_policy_rejects_either_rename_side_before_any_mutation() {
+        for (from, to) in [("Content-Length", "x-copy"), ("x-copy", "Connection")] {
+            let prepared = PreparedResponseRewrite {
+                status_code: None,
+                status_log: None,
+                headers: Some(ResponseHeaderActions {
+                    set: None,
+                    add: None,
+                    remove: None,
+                    rename: Some(vec![HeaderRename {
+                        from: from.into(),
+                        to: to.into(),
+                    }]),
+                }),
+            };
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new(PLUGIN_NAME);
+            ResponseRewrite::modify_headers(&prepared, &mut session, &mut log);
+            assert_eq!(log.render_for_test(), "err: header rename fail");
+        }
+    }
+
+    #[test]
     fn writer_failures_use_static_logs_and_processing_continues() {
         let config = ResponseRewriteConfig {
             status_code: Some(201),
@@ -455,7 +483,7 @@ mod tests {
         assert_eq!(compiled.preparse_errors, schema_errors);
         assert_eq!(
             compiled.preparse_errors,
-            vec!["upstreamResponseFilterPlugins[0] (ResponseRewrite): headers.set must not target content-length or transfer-encoding"]
+            vec!["upstreamResponseFilterPlugins[0] (ResponseRewrite): response header mutation targets a protected protocol field"]
         );
         assert!(!compiled.is_activatable);
         assert!(!compiled.retain_previous_on_invalid_update);

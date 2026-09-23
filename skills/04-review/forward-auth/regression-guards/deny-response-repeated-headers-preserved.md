@@ -9,7 +9,11 @@ knowledge_type: regression-guards
 ## Conclusion
 
 `ForwardAuth::send_error_response` preserves every valid text value of each
-operator-selected `decision.clientHeaders` name. The first retained value uses
+allowed operator-selected `decision.clientHeaders` name. Protocol-owned fields
+and fields nominated by any received `Connection` line are excluded by the
+[response mutation policy](../../plugin-runtime/regression-guards/response-header-mutation-policy.md).
+A non-text `Connection` value suppresses all remote header copying while the
+bounded denial body is still relayed. The first retained value uses
 `ResponseHeader::insert_header` to replace any existing values, and later values
 use `append_header` so repeatable fields remain separate and ordered.
 
@@ -93,3 +97,4 @@ longer writes a Pingora `ResponseHeader` directly.
 
 - B0290 — ForwardAuth deny-response repeated-header preservation.
 - add-forward-auth-deny-multivalue-header-integration — real HTTP regression coverage.
+- `unify-response-header-mutation-policy` — forwarding exclusions preserve allowed repeated fields; current verification is recorded in the shared policy page.

@@ -277,3 +277,9 @@ returns `422` for an invalid candidate table without persisting the change.
 
 - [HTTPRoute Overview](../http-route/overview.md)
 - [Load Balancing Algorithms](../http-route/lb-algorithms.md)
+
+## Response header policy
+
+Configured response destinations follow the shared response header restrictions.
+
+[Response header policy](../http-route/filters/gateway-api/response-header-modifier.md#response-header-policy).

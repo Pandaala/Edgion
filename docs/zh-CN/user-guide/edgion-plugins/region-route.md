@@ -265,3 +265,9 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 须与配置一�
 
 - [HTTPRoute 概述](../http-route/overview.md)
 - [负载均衡算法](../http-route/lb-algorithms.md)
+
+## 响应头策略
+
+配置的响应头目标遵循共享响应头限制。
+
+[响应头策略](../http-route/filters/gateway-api/response-header-modifier.md#response-header-policy).

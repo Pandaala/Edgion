@@ -544,3 +544,9 @@ Yes — via `proxy_{get,set}_shared_data`, which is shared across pooled VMs bel
 
 - [ExtProc Plugin](./ext-proc.md) — the gRPC push-model alternative (see [Callout vs ExtProc](#callout-vs-extproc))
 - [Filters overview](../README.md)
+
+## Response header policy
+
+Response map operations and local reply headers follow this policy. Replace-all replaces editable fields while retaining protected fields; allowed duplicate `Set-Cookie` values remain separate. Rejected operations retain existing best-effort handling.
+
+[Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).

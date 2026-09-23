@@ -12,7 +12,7 @@ knowledge_type: regression-guards
 `reset`, and `retryIn` fields used by `RateLimitLocalConfig` and
 `RateLimitRedisConfig`. Every configured name must be an HTTP field-name token of
 at most 256 bytes, the four names must be unique case-insensitively, and none may
-target `Content-Length` or a canonical static hop-by-hop field. Empty strings
+target `Content-Length`, `Proxy-Connection`, or a canonical static hop-by-hop field. Empty strings
 retain their established meaning of omission.
 
 Both plugin configs call the same validation method from `check_fields`, so the
@@ -40,8 +40,11 @@ framing.
 
 ## Alternatives and limits
 
-- Runtime filtering was rejected because it would preserve invalid admission and
-  keep repeated checks on the request path.
+- The original rate-limit correction rejected runtime-only filtering because it
+  would preserve invalid admission. Static validation remains required. The later
+  [shared response mutation boundary](../../plugin-runtime/regression-guards/response-header-mutation-policy.md)
+  additionally checks ordinary session writes, including dynamic extension names;
+  this is not a replacement for rate-limit configuration validation.
 - A rate-limit-local token parser or private reserved-name list was rejected in
   favor of the shared HTTP primitive rules.
 - Dynamic names nominated by a message's `Connection` value cannot be known from
@@ -67,3 +70,5 @@ transport requires a different field-name or framing contract.
 
 - `validate-rate-limit-response-header-names` — fixed 2026-09-15; source task was
   `tasks/todo/validate-rate-limit-response-header-names.md`.
+- `unify-response-header-mutation-policy` — shared response classifier also rejects
+  `Proxy-Connection`; current verification is recorded in the shared policy page.

@@ -90,8 +90,10 @@ name parser. Changing that boundary would require a wider `PluginSession` and
 Pingora-fork API change for smaller gains. This correction therefore claims
 zero allocation and zero payload copy only for cloning each prepared value, not
 for the complete header-map insertion path.
-Request framing and response-field restrictions remain in their separate tasks;
-this correction does not establish a local restricted-header list.
+Request framing remains separate. Response modifiers additionally use the
+[shared response mutation policy](response-header-mutation-policy.md); request
+modifiers retain their existing validation. The historical validation-only
+correction did not establish a local restricted-header list.
 
 The existing [multi-value append rule](../../http1/regression-guards/append-request-header-multi-value.md)
 still applies: append preserves all existing same-name field lines. The prior

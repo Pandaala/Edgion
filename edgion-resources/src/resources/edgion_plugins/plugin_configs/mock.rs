@@ -1,4 +1,5 @@
 use crate::gwapi_types::{is_valid_header_token, HEADER_NAME_MAX_LEN};
+use crate::response_header_policy::validate_response_header_mutation;
 use http::HeaderValue;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -74,10 +75,6 @@ const INVALID_CONTENT_TYPE: &str = "mock.contentType must be a valid HTTP header
 const INVALID_HEADER_NAME: &str = "mock.headers contains an invalid HTTP header name";
 const INVALID_HEADER_VALUE: &str = "mock.headers contains an invalid HTTP header value";
 const CONTENT_TYPE_IN_HEADERS: &str = "mock.headers must not contain Content-Type; use contentType instead";
-const CONTENT_LENGTH_IN_HEADERS: &str =
-    "mock.headers must not contain Content-Length; response framing is managed by the gateway";
-const TRANSFER_ENCODING_IN_HEADERS: &str =
-    "mock.headers must not contain Transfer-Encoding; response framing is managed by the gateway";
 const DUPLICATE_HEADER_NAME: &str = "mock.headers must not contain case-insensitive duplicate names";
 
 impl Default for MockConfig {
@@ -134,15 +131,8 @@ impl MockConfig {
             return Err(CONTENT_TYPE_IN_HEADERS.to_string());
         }
 
-        if headers.keys().any(|name| name.eq_ignore_ascii_case("content-length")) {
-            return Err(CONTENT_LENGTH_IN_HEADERS.to_string());
-        }
-
-        if headers
-            .keys()
-            .any(|name| name.eq_ignore_ascii_case("transfer-encoding"))
-        {
-            return Err(TRANSFER_ENCODING_IN_HEADERS.to_string());
+        for name in headers.keys() {
+            validate_response_header_mutation(name).map_err(str::to_owned)?;
         }
 
         let mut normalized_names = HashSet::with_capacity(headers.len());
@@ -180,6 +170,7 @@ impl PluginValidation for MockConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const PROTECTED_HEADER_ERROR: &str = "response header mutation targets a protected protocol field";
 
     fn headers(entries: &[(&str, &str)]) -> Option<HashMap<String, String>> {
         Some(
@@ -294,8 +285,8 @@ mod tests {
     fn test_validate_reserved_headers_case_insensitively() {
         for (name, expected) in [
             ("cOnTeNt-TyPe", CONTENT_TYPE_IN_HEADERS),
-            ("CONTENT-length", CONTENT_LENGTH_IN_HEADERS),
-            ("Transfer-Encoding", TRANSFER_ENCODING_IN_HEADERS),
+            ("CONTENT-length", PROTECTED_HEADER_ERROR),
+            ("Transfer-Encoding", PROTECTED_HEADER_ERROR),
         ] {
             let config = MockConfig {
                 headers: headers(&[(name, "value")]),
@@ -347,10 +338,10 @@ mod tests {
         assert_eq!(config.validate().unwrap_err(), CONTENT_TYPE_IN_HEADERS);
 
         config.headers = headers(&[("Content-Length", "1")]);
-        assert_eq!(config.validate().unwrap_err(), CONTENT_LENGTH_IN_HEADERS);
+        assert_eq!(config.validate().unwrap_err(), PROTECTED_HEADER_ERROR);
 
         config.headers = headers(&[("Transfer-Encoding", "chunked")]);
-        assert_eq!(config.validate().unwrap_err(), TRANSFER_ENCODING_IN_HEADERS);
+        assert_eq!(config.validate().unwrap_err(), PROTECTED_HEADER_ERROR);
 
         config.headers = headers(&[("X-Mock", "one"), ("x-mock", "two")]);
         assert_eq!(config.validate().unwrap_err(), DUPLICATE_HEADER_NAME);
