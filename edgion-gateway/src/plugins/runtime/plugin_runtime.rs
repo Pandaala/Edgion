@@ -112,6 +112,7 @@ impl WafCandidate {
 
 pub struct PluginRuntime {
     rate_limit_local_outcome_slots: usize,
+    has_upstream_jump_plugin: bool,
     /// Plugins for request stage (async)
     request_plugins: Vec<Arc<dyn RequestFilter>>,
     /// The same native HTTP backend modifier held by `request_plugins`.
@@ -264,6 +265,7 @@ impl Default for PluginRuntime {
 impl PluginRuntime {
     pub fn new() -> Self {
         Self {
+            has_upstream_jump_plugin: false,
             request_plugins: vec![],
             backend_request_header_modifier: None,
             upstream_response_plugins: vec![],
@@ -302,6 +304,9 @@ impl PluginRuntime {
     }
 
     fn append_entry_bundle(&mut self, bundle: &EntryBundle) {
+        self.has_upstream_jump_plugin |= bundle.request.iter().any(|filter| {
+            edgion_resources::resources::edgion_plugins::edgion_plugin::is_upstream_jump_plugin_type(filter.name())
+        });
         self.request_plugins.extend(bundle.request.iter().cloned());
         self.upstream_response_plugins
             .extend(bundle.response_filter.iter().cloned());
@@ -401,6 +406,10 @@ impl PluginRuntime {
 
     pub(crate) fn has_waf(&self) -> bool {
         self.waf_candidate.is_some()
+    }
+
+    pub(crate) fn has_upstream_jump_plugin(&self) -> bool {
+        self.has_upstream_jump_plugin
     }
 
     /// Whether runtime construction found a plugin that cannot be activated.
@@ -2094,6 +2103,8 @@ impl PluginRuntime {
     }
 
     fn add_request_filter(&mut self, filter: Box<dyn RequestFilter>) {
+        self.has_upstream_jump_plugin |=
+            edgion_resources::resources::edgion_plugins::edgion_plugin::is_upstream_jump_plugin_type(filter.name());
         self.request_plugins.push(Arc::from(filter));
     }
 

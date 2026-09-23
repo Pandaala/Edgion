@@ -81,6 +81,11 @@ spec:
 
 可用插件详见 [Edgion 插件目录](../../http-route/filters/edgion-plugins/README.md)；注意依赖请求 body 的插件对流式 RPC 的行为可能有所不同。
 
+从 `backendRefs[].filters` 引用的 `EdgionPlugins` 不能包含已启用的
+`DirectEndpoint`、`DynamicInternalUpstream`、`DynamicExternalUpstream`、`RegionRoute` 或 `Canary`
+请求插件。BackendRef 过滤器在选定后端后执行；Controller 会将相应规则标为无效，
+Gateway 运行时也会拒绝该引用。
+
 ## 相关文档
 
 - [GRPCRoute 总览](../overview.md)

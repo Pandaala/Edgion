@@ -21,6 +21,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [BackendRef upstream-jump plugin scope](regression-guards/backendref-upstream-jump-plugin-scope.md)
+
 - [Runtime parent ports constrain logical listeners](regression-guards/runtime-parent-port-eligibility.md)
 
 - [Route attachment cannot override Listener protocol compatibility](regression-guards/route-listener-protocol-acceptance-parity.md)

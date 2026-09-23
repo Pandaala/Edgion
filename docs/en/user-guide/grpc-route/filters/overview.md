@@ -81,6 +81,11 @@ spec:
 
 See the [Edgion plugin catalog](../../http-route/filters/edgion-plugins/README.md) for the available plugins; note that request-body-dependent plugins may behave differently for streaming RPCs.
 
+An `EdgionPlugins` resource referenced from `backendRefs[].filters` must not contain an enabled
+`DirectEndpoint`, `DynamicInternalUpstream`, `DynamicExternalUpstream`, `RegionRoute`, or `Canary`
+request plugin. BackendRef filters run after backend selection. The Controller marks the rule
+invalid, and the Gateway rejects the reference if it reaches runtime.
+
 ## Related documents
 
 - [GRPCRoute Overview](../overview.md)

@@ -96,6 +96,12 @@ Filters can be declared at two scopes:
 
 BackendRef-scoped filters are useful for canary deployments — for example, adding an `X-Canary` header only on the requests sent to the canary backend.
 
+An `EdgionPlugins` resource referenced from `backendRefs[].filters` must not contain an enabled
+`DirectEndpoint`, `DynamicInternalUpstream`, `DynamicExternalUpstream`, `RegionRoute`, or `Canary`
+request plugin. These plugins select an upstream before backendRef filters run. The Controller
+marks the rule invalid, and the Gateway rejects the reference if it reaches runtime. Attach
+upstream-selection plugins at rule, Gateway, or global scope instead.
+
 A rule-level `RequestRedirect` is a terminal route action. Its rule must omit
 `backendRefs`; the Kubernetes CRD rejects a rule that combines both.
 

@@ -365,6 +365,11 @@ impl EdgionPlugin {
         }
     }
 
+    /// Whether this request plugin can publish an upstream jump.
+    pub fn publishes_upstream_jump(&self) -> bool {
+        is_upstream_jump_plugin_type(self.type_name())
+    }
+
     /// Renderable outcomes for this entry's stage and effective configuration.
     /// This is the shared Controller/Gateway contract. It includes request-owned
     /// callbacks before response-header commit, never body/trailer response dye.
@@ -698,6 +703,14 @@ impl EdgionPlugin {
             EdgionPlugin::UrlRewrite(config) => config.prepare().err().map(|error| error.to_string()),
         }
     }
+}
+
+/// Shared classification for backendRef-scope validation and Gateway dispatch.
+pub fn is_upstream_jump_plugin_type(name: &str) -> bool {
+    matches!(
+        name,
+        "DirectEndpoint" | "DynamicInternalUpstream" | "DynamicExternalUpstream" | "RegionRoute" | "Canary"
+    )
 }
 
 #[cfg(test)]

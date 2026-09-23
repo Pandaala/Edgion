@@ -481,7 +481,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         if let Some(rules) = &mut route.spec.resolved_rules {
             let mut resolved_index = 0usize;
             rules.retain(|rule| {
-                let reason = backend_waf_invalid_reason(rule, route_ns, _ctx.runtime());
+                let reason = backend_plugin_scope_invalid_reason(rule, route_ns, _ctx.runtime(), false);
                 let keep = reason.is_none();
                 if let Some(reason) = reason {
                     delegation_outcome.issues.push(DelegationIssue::RuleDropped {
@@ -716,7 +716,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // Static per-rule findings drop only the offending rule through
         // `invalid_rule_indices` + PartiallyInvalid. They become
         // Accepted=False only when no effective rule remains.
-        let ownership_accepted_errors = backend_waf_ownership_errors(route, route_ns, _ctx.runtime());
+        let plugin_scope_errors = backend_route_wide_scope_errors(route, route_ns, _ctx.runtime());
 
         // AI admission is Gateway-scoped. A source-only diagnostic neither
         // drops a rule nor activates a fallback, so it must not be represented
@@ -784,7 +784,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
         let hostname_error = route.spec.validate_hostnames().err();
         let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
-        validation_accepted_errors.extend(ownership_accepted_errors.clone());
+        validation_accepted_errors.extend(plugin_scope_errors.clone());
         if attachment_rejects_route {
             for (index, message) in &invalid_details {
                 validation_accepted_errors.push(AcceptedError::UnsupportedValue {
@@ -800,8 +800,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                     .map(|message| AcceptedError::UnsupportedValue { message }),
             );
         }
-        let route_rejected =
-            hostname_error.is_some() || attachment_rejects_route || !ownership_accepted_errors.is_empty();
+        let route_rejected = hostname_error.is_some() || attachment_rejects_route || !plugin_scope_errors.is_empty();
 
         let status = route.status.get_or_insert_with(|| HTTPRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
@@ -1344,7 +1343,7 @@ fn find_controller_invalid_rule_details(
         if already_invalid.contains(&index) {
             continue;
         }
-        if let Some(reason) = backend_waf_invalid_reason(rule, route_ns, runtime) {
+        if let Some(reason) = backend_plugin_scope_invalid_reason(rule, route_ns, runtime, false) {
             details.push((index, reason));
             continue;
         }
@@ -1353,10 +1352,11 @@ fn find_controller_invalid_rule_details(
     details
 }
 
-fn backend_waf_invalid_reason(
+fn backend_plugin_scope_invalid_reason(
     rule: &HTTPRouteRule,
     route_namespace: &str,
     runtime: &ControllerRuntime,
+    route_wide_only: bool,
 ) -> Option<String> {
     rule.backend_refs
         .iter()
@@ -1368,18 +1368,27 @@ fn backend_waf_invalid_reason(
                     return None;
                 }
                 filter.extension_ref.as_ref().and_then(|extension_ref| {
-                    super::route_utils::backend_request_scope_extension_ref_error(
-                        runtime,
-                        route_namespace,
-                        index,
-                        extension_ref,
-                    )
+                    if route_wide_only {
+                        super::route_utils::backend_request_scope_route_wide_error(
+                            runtime,
+                            route_namespace,
+                            index,
+                            extension_ref,
+                        )
+                    } else {
+                        super::route_utils::backend_request_scope_extension_ref_error(
+                            runtime,
+                            route_namespace,
+                            index,
+                            extension_ref,
+                        )
+                    }
                 })
             })
         })
 }
 
-fn backend_waf_ownership_errors(
+fn backend_route_wide_scope_errors(
     route: &HTTPRoute,
     route_namespace: &str,
     runtime: &ControllerRuntime,
@@ -1391,8 +1400,10 @@ fn backend_waf_ownership_errors(
         .flatten()
         .enumerate()
         .filter_map(|(index, rule)| {
-            backend_waf_invalid_reason(rule, route_namespace, runtime).map(|message| AcceptedError::UnsupportedValue {
-                message: format!("rules[{index}]: {message}"),
+            backend_plugin_scope_invalid_reason(rule, route_namespace, runtime, true).map(|message| {
+                AcceptedError::UnsupportedValue {
+                    message: format!("rules[{index}]: {message}"),
+                }
             })
         })
         .collect()
@@ -2379,7 +2390,7 @@ modelRoutes:
         let details = find_controller_invalid_rule_details(&route, "apps", ctx.runtime());
         assert_eq!(details.len(), 1);
         assert!(details[0].1.contains("cannot contain WAF"), "{:?}", details[0]);
-        let accepted = backend_waf_ownership_errors(&route, "apps", ctx.runtime());
+        let accepted = backend_route_wide_scope_errors(&route, "apps", ctx.runtime());
         assert_eq!(accepted.len(), 1);
         assert_eq!(accepted[0].reason(), condition_reasons::UNSUPPORTED_VALUE);
         assert!(accepted[0].message().contains("rules[0]"));
@@ -2390,6 +2401,68 @@ modelRoutes:
             ctx.runtime().plugin_ref_mgr.get_dependencies(&route_ref.key()),
             vec!["apps/waf".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn backend_jump_invalidates_only_its_rule() {
+        use super::super::GatewayHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+        use edgion_resources::resources::Gateway;
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            16,
+            Arc::new(EdgionPluginsHandler::new()),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        let plugins: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+            "metadata": {"namespace": "default", "name": "jump"},
+            "spec": {"requestPlugins": [{"type": "RegionRoute", "config": {}}]}
+        }))
+        .unwrap();
+        raw.upsert("default/jump".to_string(), Arc::new(plugins));
+        processor.set_raw_store(raw);
+        runtime.processor_registry.register(processor);
+        let gateway_processor = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            16,
+            Arc::new(GatewayHandler::new(None, None)),
+            runtime.clone(),
+        ));
+        let gateway_raw = Arc::new(LocalRawStore::new());
+        let gateway: Gateway = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+            "metadata": {"namespace": "default", "name": "gw"},
+            "spec": {"gatewayClassName": "edgion", "listeners": [{"name": "http", "protocol": "HTTP", "port": 80}]}
+        }))
+        .unwrap();
+        gateway_raw.upsert("default/gw".to_string(), Arc::new(gateway));
+        gateway_processor.set_raw_store(gateway_raw);
+        runtime.processor_registry.register(gateway_processor);
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime);
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+            "metadata": {"namespace": "default", "name": "jump-scope"},
+            "spec": {"parentRefs": [{"name": "gw"}], "rules": [
+                {"backendRefs": [{"name": "bad", "port": 80, "filters": [{"type": "ExtensionRef",
+                    "extensionRef": {"group": "edgion.io", "kind": "EdgionPlugins", "name": "jump"}}]}]},
+                {"backendRefs": [{"name": "good", "port": 80}]}
+            ]}
+        }))
+        .unwrap();
+        HttpRouteHandler::default().update_status(&mut route, &ctx, &[]);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0][..]));
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|condition| condition.type_ == "PartiallyInvalid"
+            && condition.status == "True"
+            && condition.message.contains("RegionRoute")));
+        assert!(conditions
+            .iter()
+            .any(|condition| condition.type_ == "Accepted" && condition.status == "True"));
     }
 
     #[tokio::test]

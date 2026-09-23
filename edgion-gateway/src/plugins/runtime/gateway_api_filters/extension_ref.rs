@@ -111,7 +111,8 @@ impl ExtensionRefFilter {
             Some(idx) => session.resolved_route_ext_ref(idx),
             None => session.pinned_backend_ext_ref(self.plugin_key()),
         }?;
-        if self.index.is_none() && (runtime.has_waf() || runtime.has_request_id()) {
+        if self.index.is_none() && (runtime.has_waf() || runtime.has_request_id() || runtime.has_upstream_jump_plugin())
+        {
             return None;
         }
         Some(runtime)
@@ -155,8 +156,12 @@ impl ExtensionRefFilter {
             },
         };
 
-        if self.index.is_none() && (plugin_runtime.has_waf() || plugin_runtime.has_request_id()) {
-            log.push_err("backend-scoped WAF/RequestId is not supported");
+        if self.index.is_none()
+            && (plugin_runtime.has_waf()
+                || plugin_runtime.has_request_id()
+                || plugin_runtime.has_upstream_jump_plugin())
+        {
+            log.push_err("backend-scoped WAF, RequestId, or upstream jump plugin is not supported");
             return Err(());
         }
 
@@ -670,6 +675,48 @@ mod tests {
         // Verify refer_to is set
         assert!(log.refer_to.is_some());
         assert_eq!(log.refer_to.as_ref().unwrap(), "p1");
+    }
+
+    #[test]
+    fn backend_scope_rejects_upstream_jump_runtime() {
+        let ep = EdgionPlugins {
+            metadata: ObjectMeta {
+                namespace: Some("ns".to_string()),
+                name: Some("jump".to_string()),
+                ..Default::default()
+            },
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::DirectEndpoint(
+                    edgion_resources::resources::edgion_plugins::DirectEndpointConfig::default(),
+                ))]),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let runtime = Arc::clone(&compile_plugins(&ep).plugin_runtime);
+        assert!(runtime.has_upstream_jump_plugin());
+        let mut session = MockPluginSession::new();
+        session
+            .expect_pinned_backend_ext_ref()
+            .with(eq("ns/jump"))
+            .once()
+            .returning(move |_| Some(Arc::clone(&runtime)));
+        let filter = ExtensionRefFilter::new(
+            "ns".to_string(),
+            LocalObjectReference {
+                group: "edgion.io".into(),
+                kind: "EdgionPlugins".into(),
+                name: "jump".into(),
+                resolved_namespace: None,
+            },
+        );
+        let mut log = PluginLog::new("ExtensionRef");
+        assert!(filter.prepare_execution(&mut session, &mut log).is_err());
+        assert!(log.render_for_test().contains("upstream jump plugin"));
+
+        let mut disabled = ep;
+        disabled.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+        assert!(!compile_plugins(&disabled).plugin_runtime.has_upstream_jump_plugin());
     }
 
     /// Rule-scope filter with valid index: resolved_route_ext_ref returns Some.

@@ -167,6 +167,33 @@ pub(super) fn backend_request_scope_extension_ref_error(
     backend_index: usize,
     extension_ref: &LocalObjectReference,
 ) -> Option<String> {
+    let (plugin, _) = backend_request_scope_violation(runtime, route_namespace, extension_ref)?;
+    Some(format!(
+        "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"
+    ))
+}
+
+/// The pre-existing WAF and RequestId ownership errors reject the whole route.
+/// A late upstream jump only invalidates its containing rule.
+pub(super) fn backend_request_scope_route_wide_error(
+    runtime: &ControllerRuntime,
+    route_namespace: &str,
+    backend_index: usize,
+    extension_ref: &LocalObjectReference,
+) -> Option<String> {
+    let (plugin, route_wide) = backend_request_scope_violation(runtime, route_namespace, extension_ref)?;
+    route_wide.then(|| {
+        format!(
+            "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"
+        )
+    })
+}
+
+fn backend_request_scope_violation(
+    runtime: &ControllerRuntime,
+    route_namespace: &str,
+    extension_ref: &LocalObjectReference,
+) -> Option<(&'static str, bool)> {
     if !is_supported_edgion_plugins_ref(extension_ref) {
         return None;
     }
@@ -176,16 +203,21 @@ pub(super) fn backend_request_scope_extension_ref_error(
     let plugins = processor
         .get_raw_any(&key)
         .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())?;
-    let plugin = if plugins.spec.waf.is_some() {
-        "WAF"
+    if plugins.spec.waf.is_some() {
+        Some(("WAF", true))
     } else if plugins.has_active_request_id() {
-        "RequestId"
+        Some(("RequestId", true))
+    } else if let Some(entry) = plugins
+        .spec
+        .request_plugins
+        .iter()
+        .flatten()
+        .find(|entry| entry.is_enabled() && entry.plugin.publishes_upstream_jump())
+    {
+        Some((entry.plugin.type_name(), false))
     } else {
-        return None;
-    };
-    Some(format!(
-        "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"
-    ))
+        None
+    }
 }
 
 /// Check if a listener's namespace policy allows a route from the given namespace.
@@ -1143,6 +1175,68 @@ mod tests {
             if let Some(error) = error {
                 assert!(error.contains("backendRefs[2]"));
                 assert!(error.contains("cannot contain RequestId"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn backend_scope_rejects_active_upstream_jump_plugins() {
+        use super::*;
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            16,
+            Arc::new(EdgionPluginsHandler::new()),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        processor.set_raw_store(raw.clone());
+        runtime.processor_registry.register(processor);
+        let reference: LocalObjectReference = serde_json::from_value(serde_json::json!({
+            "group": "edgion.io", "kind": "EdgionPlugins", "name": "jump"
+        }))
+        .unwrap();
+        use edgion_resources::resources::edgion_plugins::{
+            DirectEndpointConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, RegionRouteConfig,
+        };
+        for (plugin_type, config) in [
+            (
+                "DirectEndpoint",
+                serde_json::to_value(DirectEndpointConfig::default()).unwrap(),
+            ),
+            (
+                "DynamicInternalUpstream",
+                serde_json::to_value(DynamicInternalUpstreamConfig::default()).unwrap(),
+            ),
+            (
+                "DynamicExternalUpstream",
+                serde_json::to_value(DynamicExternalUpstreamConfig::default()).unwrap(),
+            ),
+            (
+                "RegionRoute",
+                serde_json::to_value(RegionRouteConfig::default()).unwrap(),
+            ),
+            (
+                "Canary",
+                serde_json::json!({"enable": true, "activeProfile": "main", "profiles": {"main": {"name": "svc"}}}),
+            ),
+        ] {
+            for enabled in [true, false] {
+                let plugins: EdgionPlugins = serde_json::from_value(serde_json::json!({
+                    "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+                    "metadata": {"namespace": "apps", "name": "jump"},
+                    "spec": {"requestPlugins": [{"type": plugin_type, "enable": enabled, "config": config}]}
+                }))
+                .unwrap();
+                raw.upsert("apps/jump".to_string(), Arc::new(plugins));
+                let error = backend_request_scope_extension_ref_error(&runtime, "apps", 0, &reference);
+                assert_eq!(error.is_some(), enabled, "{plugin_type}");
+                if let Some(error) = error {
+                    assert!(error.contains(plugin_type), "{error}");
+                }
             }
         }
     }

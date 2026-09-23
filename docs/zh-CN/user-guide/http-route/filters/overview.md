@@ -96,6 +96,11 @@ spec:
 
 BackendRef 级过滤器适合金丝雀发布场景——例如只在发往金丝雀后端的请求上添加 `X-Canary` 请求头。
 
+从 `backendRefs[].filters` 引用的 `EdgionPlugins` 不能包含已启用的
+`DirectEndpoint`、`DynamicInternalUpstream`、`DynamicExternalUpstream`、`RegionRoute` 或 `Canary`
+请求插件。这些插件必须在选定 BackendRef 之前选择上游；Controller 会将相应规则标为无效，
+Gateway 运行时也会拒绝该引用。请将上游选择插件挂载到规则、Gateway 或全局作用域。
+
 规则级 `RequestRedirect` 是终止型路由动作，其规则必须省略 `backendRefs`；
 Kubernetes CRD 会拒绝同时包含两者的规则。
 
