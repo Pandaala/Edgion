@@ -109,8 +109,13 @@ spec:
 - `messages[i].content` 为字符串时；
 - `messages[i].content[j].text`，且该 part 的 `type` 为 `text` 时。
 
-非文本 part（图片、音频、文件）不做检查。若某条消息的 `role` 或 `content` 缺失、
-重复或有歧义，则该请求视为不可守护，按下文的失败策略处理。
+每条消息必须且只能有一个字符串类型的 `role`；`role` 缺失、非字符串或重复，都会
+使该请求不可守护。消息的 `content` 重复同样使请求不可守护，而 `content` 缺失或为
+不支持的类型则跳过该消息。在 `content` 数组中，非对象元素，以及 `type` 缺失、非
+字符串或不可识别的 part，都会被跳过；`type` 重复使请求不可守护。当唯一的 `type`
+为 `text` 时，`text` 重复使请求不可守护，而 `text` 缺失或非字符串则跳过该 part。
+非文本 part（图片、音频、文件）的 `text` 字段不做检查。不可守护的请求按下文的失败
+策略处理。
 
 ## 掩码
 
@@ -187,14 +192,17 @@ token/配额估算所依据的内容。
 
 ## 上界
 
-| 字段 | 默认值 | 上限 |
+| 字段 | 默认值 | 显式配置时的上限 |
 |---|---|---|
 | `maxSpans` | 256 | 512 |
-| `maxSpanBytes` | 8 KiB | 64 KiB |
-| `maxTotalSpanBytes` | 网关请求体上限 | 8 MiB |
+| `maxSpanBytes` | 解析后的网关物理请求体上限 | 8 MiB |
+| `maxTotalSpanBytes` | 解析后的网关物理请求体上限 | 8 MiB |
 | `maxReplacementBytes` | 64 KiB | 1 MiB |
 | `evaluator.maxRequestBytes` | 1 MiB | 1 MiB |
 | `evaluator.maxConcurrent` | 64 | 1024 |
+
+省略 `maxSpanBytes` 或 `maxTotalSpanBytes` 时，其取值继承解析后的网关物理请求体
+上限，因此可能超过显式配置时 8 MiB 的最大值。物理请求体上限默认为 32 MiB。
 
 规则数量上限 64 条，单条模式上限 4096 字节。
 

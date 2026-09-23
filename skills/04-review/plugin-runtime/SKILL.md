@@ -37,6 +37,8 @@ before applying a decision to current code.
 
 - [AiGuard ordering errors fail closed at publication](regression-guards/ai-guard-ordering-publication.md)
 
+- [AiGuard span bounds and message-skip semantics](regression-guards/ai-guard-span-bounds-and-skip-semantics.md)
+
 - [Dye stage and producer parity](regression-guards/dye-stage-producer-parity.md)
 
 - [Invalid stream GeoIP generation denial and recovery](regression-guards/invalid-stream-geoip-generation-fail-closed.md)
