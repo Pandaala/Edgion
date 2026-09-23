@@ -58,6 +58,12 @@ The real Axum middleware/router tests in
 Pure parsing, trimming, digest, and outcome tests remain as lower-level
 coverage.
 
+The process-level integration script
+`edgion-tests/integration/scripts/integration/test_gateway_admin_auth.sh`
+checks the no-token, missing-token, valid-token, and probe-router outcomes.
+Its source-path comment was aligned with the current `admin_auth.rs` location
+under D0003; the correction does not change the test behavior.
+
 ## Re-evaluation Triggers
 
 - The Gateway Admin API adopts a different authentication scheme.

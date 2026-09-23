@@ -1,9 +1,13 @@
 # D0003 — Gateway Admin Auth Integration Comment Path
 
-- Status: ready-for-separate-task
+- Status: resolved
 - Severity: low
 - Category: maintainability
 - Discovered in: B0003
-- Canonical task: `tasks/todo/update-gateway-admin-auth-integration-comment-path.md`
+- Resolution: `skills/04-review/admin-api/regression-guards/gateway-admin-bearer-boundary.md`
 
-The frozen integration script contains a stale source-path comment. It has no runtime effect and cannot be edited during this campaign.
+At discovery, the frozen integration script contained a stale source-path
+comment. It had no runtime effect and could not be edited during the campaign.
+
+The separate documentation task corrected the source-path comment after the
+campaign batch. The test commands and assertions were not changed.
