@@ -478,4 +478,90 @@ mod tests {
         events.clear();
         assert!(events.events.is_empty());
     }
+
+    #[test]
+    fn compressed_events_publish_final_values_without_reclassifying_adds() {
+        #[derive(Default)]
+        struct Recorder(parking_lot::Mutex<Vec<(&'static str, Option<String>)>>);
+        impl ConfHandler<ConfigMap> for Recorder {
+            fn full_set(&self, data: &HashMap<String, Arc<ConfigMap>>) {
+                self.0.lock().push((
+                    "full",
+                    data.get("ns1/a")
+                        .and_then(|value| value.metadata.resource_version.clone()),
+                ));
+            }
+            fn partial_update(
+                &self,
+                add: HashMap<String, Arc<ConfigMap>>,
+                update: HashMap<String, Arc<ConfigMap>>,
+                remove: HashSet<String>,
+            ) {
+                assert_eq!(add.len() + update.len() + remove.len(), 1);
+                let (kind, value) = if !add.is_empty() {
+                    ("add", add.get("ns1/a"))
+                } else if !update.is_empty() {
+                    ("update", update.get("ns1/a"))
+                } else {
+                    assert!(remove.contains("ns1/a"));
+                    ("remove", None)
+                };
+                self.0
+                    .lock()
+                    .push((kind, value.and_then(|v| v.metadata.resource_version.clone())));
+            }
+        }
+        let recorder = Arc::new(Recorder::default());
+        let cache = Arc::new(RwLock::new(CacheData::new()));
+        cache.write().set_conf_processor_for_test(Box::new(recorder.clone()));
+        let enqueue = |change, version: &str| {
+            let mut value = make_cm("ns1", "a");
+            value.metadata.resource_version = Some(version.to_owned());
+            let mut data = cache.write();
+            if matches!(change, ResourceChange::EventDelete) {
+                data.remove("ns1/a");
+            } else {
+                data.insert("ns1/a".to_owned(), value);
+            }
+            data.add_compress_event("ns1/a".to_owned(), change);
+        };
+        let flush = || assert!(CacheData::flush_compressed_events_for_test(&cache));
+        let expect = |kind, version: Option<&str>| {
+            assert_eq!(*recorder.0.lock(), vec![(kind, version.map(str::to_owned))]);
+            recorder.0.lock().clear();
+        };
+
+        enqueue(ResourceChange::EventAdd, "1");
+        enqueue(ResourceChange::EventAdd, "2");
+        flush();
+        expect("add", Some("2"));
+        enqueue(ResourceChange::EventAdd, "3");
+        flush();
+        expect("add", Some("3"));
+        enqueue(ResourceChange::EventDelete, "3");
+        enqueue(ResourceChange::EventAdd, "4");
+        flush();
+        expect("add", Some("4"));
+        enqueue(ResourceChange::EventUpdate, "5");
+        flush();
+        expect("update", Some("5"));
+        enqueue(ResourceChange::EventDelete, "5");
+        flush();
+        expect("remove", None);
+
+        enqueue(ResourceChange::EventAdd, "6");
+        let mut replacement = make_cm("ns1", "a");
+        replacement.metadata.resource_version = Some("7".to_owned());
+        cache.write().reset(vec![replacement], 7);
+        expect("full", Some("7"));
+        flush();
+        assert!(recorder.0.lock().is_empty());
+        assert_eq!(
+            cache.read().get("ns1/a").unwrap().metadata.resource_version.as_deref(),
+            Some("7")
+        );
+        cache.write().reset(Vec::new(), 8);
+        expect("full", None);
+        assert!(cache.read().is_empty());
+    }
 }

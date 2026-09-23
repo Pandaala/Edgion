@@ -21,6 +21,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Gateway Add final-value publication](regression-guards/gateway-add-final-value-publication.md)
+
 - [EGC runtime snapshot publication and lifecycle capture](regression-guards/egc-runtime-snapshot-publication.md)
 - [UDP process shutdown and task completion](regression-guards/udp-process-shutdown.md)
 - [UDP session retirement follows the owning generation](regression-guards/udp-session-generation-retirement.md)

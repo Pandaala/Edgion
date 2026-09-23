@@ -9,7 +9,7 @@ use crate::runtime::server::proxy_protocol_policy::{
     get_global_proxy_protocol_policy_runtime, ProxyProtocolPolicyRuntime, SnapshotDisposition,
 };
 use crate::runtime::store::{
-    get_global_gateway_store, get_listener_gateway_info_store, rebuild_listener_gateway_infos,
+    get_global_gateway_store, get_listener_gateway_info_store, rebuild_listener_gateway_infos, GatewayStore,
 };
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::prelude_resources::Gateway;
@@ -173,9 +173,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
                     update_gateway_backend_tls_store(&key, &gateway);
 
-                    if let Err(e) = store.add_gateway((*gateway).clone()) {
-                        tracing::warn!(key = %key, error = %e, "Failed to add gateway");
-                    }
+                    store_added_gateway(&mut store, (*gateway).clone());
                 }
                 needs_rebuild = true;
             }
@@ -280,6 +278,12 @@ impl ConfHandler<Gateway> for GatewayHandler {
     }
 }
 
+/// Compressed Add carries the final value, even when the runtime key exists.
+/// Match the prospective snapshot and the backend TLS/plugin publication inputs.
+fn store_added_gateway(store: &mut GatewayStore, gateway: Gateway) {
+    store.update_gateway(gateway);
+}
+
 fn prospective_gateway_snapshot(
     add: &HashMap<String, Arc<Gateway>>,
     update: &HashMap<String, Arc<Gateway>>,
@@ -332,4 +336,38 @@ fn listeners_changed(before: &[ListenerKey], after: &[ListenerKey]) -> bool {
 
 pub fn create_gateway_handler() -> Box<dyn ConfHandler<Gateway> + Send + Sync> {
     Box::new(GatewayHandler::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_add_replaces_gateway_used_for_rebuild() {
+        let mut store = GatewayStore::new();
+        let make_gateway = |hostname: &str| -> Gateway {
+            serde_json::from_value(serde_json::json!({
+                "metadata": {"name": "gateway", "namespace": "apps"},
+                "spec": {"gatewayClassName": "public", "listeners": [
+                    {"name": "web", "port": 8080, "protocol": "HTTP", "hostname": hostname}
+                ]}
+            }))
+            .unwrap()
+        };
+        let old = make_gateway("old.example.com");
+        let new = make_gateway("new.example.com");
+        store_added_gateway(&mut store, old.clone());
+        assert_eq!(
+            serde_json::to_value(store.list_gateways()).unwrap(),
+            serde_json::json!([old])
+        );
+
+        store_added_gateway(&mut store, new.clone());
+        // This is the same snapshot consumed by the handler's derived rebuilds.
+        assert_eq!(
+            serde_json::to_value(store.list_gateways()).unwrap(),
+            serde_json::json!([new])
+        );
+        assert_eq!(store.count(), 1);
+    }
 }
