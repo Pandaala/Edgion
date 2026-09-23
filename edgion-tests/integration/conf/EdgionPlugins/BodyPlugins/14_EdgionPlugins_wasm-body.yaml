@@ -27,6 +27,8 @@ spec:
       config:
         source:
           file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
+        pluginConfig:
+          string: response-body-probe
         failOpen: false
         timeoutMs: 1000
 ---

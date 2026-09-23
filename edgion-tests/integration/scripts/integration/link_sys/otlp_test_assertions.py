@@ -246,6 +246,10 @@ def prepare():
   admin_listen: '127.0.0.1:{PORTS['CONTROLLER_ADMIN']}'
   probe_listen: '127.0.0.1:{PORTS['CONTROLLER_PROBE']}'
   metrics_listen: '127.0.0.1:{PORTS['CONTROLLER_METRICS']}'
+conf_center:
+  type: file_system
+  controller_name: edgion.io/gateway-controller
+  conf_dir: '{WORK / 'resources'}'
 logging:
   log_dir: logs
   log_level: info
