@@ -8,7 +8,7 @@
 | Status | in-progress |
 | Type | feature |
 | Priority | P0 |
-| Design | Consolidated user-approved requirements; integration verification pending |
+| Design | Consolidated user-approved requirements; Gateway wire/hot-reload verified locally |
 | Tracking task | [Request verdict before forwarding](../todo/waf-request-verdict-before-forwarding.md) |
 
 ## Summary
@@ -172,9 +172,12 @@ Local implementation exists in Edgion and the sibling Pingora branch
 `edgion_v5`, with the prefix implementation and discard fix in one commit.
 Edgion's manifest and lockfile select that commit through the canonical Git
 source. Local checks and independent reviews are recorded in the tracking task.
-The Gateway wire/hot-reload matrix has not run against the shared test topology.
-Remote publication remains pending under the no-push instruction. This spec does
-not claim those acceptance gates have passed.
+The Gateway wire/hot-reload matrix passed against the shared test topology on
+2026-09-23, including all four H1/H2 combinations, prefix/full switching, the
+1 MiB window, invalid-generation retention, detection-only, and delete/recovery.
+Remote publication and a clean remote-source build remain pending under the
+no-push instruction. This does not establish trailer preservation or replace
+the separate lifecycle, composition, and memory checks.
 
 ## References
 

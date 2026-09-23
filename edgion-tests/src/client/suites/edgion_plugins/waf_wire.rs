@@ -17,7 +17,15 @@ async fn verify_wire(
     full: bool,
 ) -> Result<(), String> {
     let host = format!("waf-transport-h{}.example.com", if upstream_h2 { 2 } else { 1 });
-    let mut builder = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(10));
+    let address = tokio::net::lookup_host((ctx.target_host.as_str(), ctx.http_port))
+        .await
+        .map_err(|error| format!("failed to resolve test address: {error}"))?
+        .next()
+        .ok_or_else(|| "test address resolved to no endpoints".to_string())?;
+    let mut builder = reqwest::Client::builder()
+        .no_proxy()
+        .resolve(&host, address)
+        .timeout(Duration::from_secs(10));
     if downstream_h2 {
         builder = builder.http2_prior_knowledge();
     } else {
@@ -25,8 +33,7 @@ async fn verify_wire(
     }
     let client = builder.build().map_err(|e| e.to_string())?;
     let response = client
-        .post(format!("http://{}:{}/waf-wire", ctx.target_host, ctx.http_port))
-        .header("host", host)
+        .post(format!("http://{host}:{}/waf-wire", ctx.http_port))
         .header(
             "traceparent",
             crate::access_log_client::traceparent_for_marker(probe.trace_id()),
@@ -50,7 +57,7 @@ async fn verify_wire(
         for (name, expected) in [
             ("x-up-req-body-len", expected_len.as_str()),
             ("x-up-req-body-sha256", expected_digest.as_str()),
-            ("x-up-http-version", if upstream_h2 { "2" } else { "HTTP/1.1" }),
+            ("x-up-http-version", if upstream_h2 { "2" } else { "1.1" }),
         ] {
             if headers.get(name).and_then(|v| v.to_str().ok()) != Some(expected) {
                 return Err(format!("{name}: expected {expected}, got {:?}", headers.get(name)));

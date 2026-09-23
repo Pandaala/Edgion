@@ -85,7 +85,7 @@ detection-only findings, and the output bound on borrowed bytes.
 Body-dependency regression tests cover prefix configuration acceptance for
 body-independent phase-two targets, zero Gateway body reads in both modes,
 `NotRequired` phase-two denial, and both orderings of mixed header/raw rules.
-These unit tests do not replace the outstanding Gateway wire/hot-reload gate.
+These unit tests complement the Gateway wire/hot-reload verification below.
 
 Before the configurable-window amendment, local verification passed with an external temporary Cargo patch to the sibling
 Pingora branch `feat/waf-request-body-prefix`: workspace check and Clippy,
@@ -94,17 +94,24 @@ Independent review approved that baseline and the subsequent configurable-window
 amendment. Fresh verification of the amendment passed workspace check/Clippy,
 formatting, 7 engine prefix-related tests, 10 resource WAF tests, 39 Gateway
 WAF-related tests, 19 CRD coverage tests, and 6 plugin CRD type tests. The 1 MiB
-hot-reload wire matrix is compiled but remains unrun with the shared topology.
+hot-reload wire matrix was compiled but had not run at that historical stage.
 Documentation, SSA, metrics inventory, and Gateway API transform guards passed. Pingora's request-body seam wire matrix passed all 65 cases, with
 focused prefix, cancellation, and retry-refusal tests also passing.
 
-The Gateway WafDynamic wire/hot-reload matrix is implemented and compiled but
-has not run: switching the existing shared test topology requires user approval.
+The Gateway WafDynamic wire/hot-reload matrix passed locally on 2026-09-23
+using the shared Controller/Gateway topology. It covers all four H1/H2 protocol
+combinations, N-1/N/N+1 body lengths and digests, prefix boundary matches, zero
+backend exposure on denial, chunked upload with local 100 Continue, prefix/full
+switching, a 1 MiB prefix, invalid-generation retention, detection-only, and
+delete/recovery. The wire fixture must use a domain URL with an explicit local
+address mapping so H2 authority and Host agree; its H1 backend version marker
+is `1.1`. Both fixture corrections retain the strict forwarding assertions.
 The prefix implementation and discard correction are consolidated into one
 commit on local `edgion_v5`. Edgion's manifest and lockfile select that branch
 and commit through the canonical Git source, without a path override. Remote
 publication remains pending under the user's no-push instruction.
-The active task stays open until these integration and publication gates pass.
+The active task stays open until remote publication and clean remote-source
+verification pass. This wire result does not prove trailer preservation.
 Re-evaluate when adding rule shapes, changing the prefix window, enabling prefix
 retry, changing body source ownership, or allowing post-inspection body mutation.
 

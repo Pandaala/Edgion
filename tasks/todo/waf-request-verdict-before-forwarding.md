@@ -9,7 +9,7 @@
 | Type | feature |
 | Priority | P0 |
 | Issue | N/A |
-| Design status | shared-storage prefix implementation in progress; verification and fork publication pending |
+| Design status | shared-storage prefix implemented; local wire/hot-reload verified; remote publication pending |
 
 ## AI guide summary
 
@@ -126,12 +126,42 @@ discard fix into commit `c74d7fb2d59349b8cb1f7948102c7f9bbf829638`, with the sam
 tree as the reviewed feature branch. Edgion now selects that branch and commit
 in its manifest and lockfile. No repository path patch is used. The older
 verification sections above describe the historical temporary-patch baseline.
-Remote publication and the Gateway wire/hot-reload matrix remain pending.
+Remote publication and a clean remote-source build remain pending.
 Fresh validation against the canonical Git source passed workspace check and
 Clippy with `--locked`, 40 Gateway WAF-related tests, formatting, documentation,
 SSA, metrics inventory, Pingora source policy, and Gateway API transform guards.
 The unpublished Git commit was fetched locally for validation; no persistent
 Git URL rewrite or repository path patch was installed.
+
+## Gateway integration verification (2026-09-23)
+
+The canonical Git dependency on local `edgion_v5` passed the static WAF suite
+(5/5) and every `WafDynamic` phase on one shared Controller/Gateway topology:
+initial prefix, full, invalid-generation retention, 1 MiB prefix, detection-only,
+recovery, deletion, and recovery again. The wire matrix checks downstream
+H1/H2 crossed with upstream H1/H2, exact length/digest and single delivery,
+N-1/N/N+1 and boundary markers, zero upstream exposure on denial, and chunked
+upload with local 100 Continue.
+
+Actual execution found two fixture errors: the H1 backend reports `1.1`, and
+H2 requests must use a domain URL plus a local address mapping to avoid a
+conflicting IP authority and Host. Both corrections passed independent review;
+address resolution also supports hostnames and IPv6. No Gateway or Pingora
+implementation change was needed. Final-source formatting, workspace check and
+Clippy passed with the canonical lockfile.
+
+Run evidence: `tmp/integration_testing/testing_20260923_215343/` contains the
+static report and supplemental WAF verification logs. Metrics role validation,
+zero unknown config fields, requeue-loop scanning, and the final cache-residue
+check passed. The residue check runs once after dynamic tests because it deletes
+all resources. The original CLI token was restored and owned services stopped.
+The task remains open for remote publication and clean remote-source validation.
+
+Separate observation, not diagnosed in this WAF gate: an earlier attempt to
+reload the entire topology after the runner's wipe-all produced route 404s even
+though resource synchronization passed. Reproduction evidence is retained in
+`tmp/integration_testing/testing_20260923_215138/`. Investigate whole-Gateway
+delete/recreate independently; the WAF plugin delete/recovery scenario passed.
 
 - Coordinate recording-backend cases with [production rule acceptance](waf-production-rule-acceptance.md).
 - Parent: [native WAF roadmap](waf-self-built-implementation.md).
