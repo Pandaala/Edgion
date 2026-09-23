@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -981,77 +982,64 @@ impl<'generation> Transaction<'generation> {
             self.request_prefix_completion = Some(completion);
             return Ok(outcome);
         }
-        let override_bytes = self.generation.members.len().saturating_mul(size_of::<Option<bool>>());
-        if self.retained_bytes().saturating_add(override_bytes) > self.limits.max_retained_bytes {
-            return Err(RuntimeError::RetainedByteLimit {
-                limit: self.limits.max_retained_bytes,
-            });
-        }
-        let mut overrides = Vec::new();
-        overrides
-            .try_reserve_exact(self.generation.members.len())
-            .map_err(|_| RuntimeError::Allocation)?;
-        overrides.resize(self.generation.members.len(), None);
-        let mut work = 0_usize;
-        let mut evaluations = 0_usize;
-        for unit in &self.generation.units {
-            if unit.phase != Phase::RequestBody {
-                continue;
-            }
-            evaluations = evaluations.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
-            if evaluations > self.limits.max_operator_evaluations {
-                return Err(RuntimeError::OperatorEvaluationLimit {
-                    limit: self.limits.max_operator_evaluations,
-                });
-            }
-            let id = unit.member_start;
-            let member = self.generation.members[id];
-            let transformations = member
-                .transformation_plan
-                .map(|id| {
-                    let plan = self.generation.transformation_plans[id];
-                    &self.generation.transformations
-                        [plan.transformation_start..plan.transformation_start + plan.transformation_count]
-                })
-                .unwrap_or_default();
-            let transformed = apply_transformations(
-                prefix,
-                transformations,
-                TransformLimits {
-                    max_output_bytes: self.limits.max_transformation_output_bytes,
-                    max_work_bytes: self.limits.max_transformation_work_bytes,
-                },
-            )
-            .map_err(map_transform_error)?;
-            work = work
-                .checked_add(prefix.len())
-                .and_then(|work| work.checked_add(transformed.len()))
-                .ok_or(RuntimeError::Arithmetic)?;
-            if work > self.limits.max_operator_work_bytes {
-                return Err(RuntimeError::OperatorWorkLimit {
-                    limit: self.limits.max_operator_work_bytes,
-                });
-            }
-            overrides[id] = Some(evaluate_operator(
-                &self.generation,
-                &self.request,
-                &self.tx,
-                &mut self.group_scratch,
-                &mut self.boolean_scratch,
-                &mut self.capture_scratch,
-                self.generation.operator_plans[id].ok_or(RuntimeError::GenerationInvariant)?,
-                &transformed,
-                member.runtime_expansion_byte_limit,
-                self.evaluation_mode,
-            )?);
-        }
-        self.stream_member_matches = Some(overrides);
-        let outcome = self.execute_phase(Phase::RequestBody);
-        self.stream_member_matches = None;
+        let outcome = self.execute_phase_with_prefix(Phase::RequestBody, true, Some(prefix));
         if outcome.is_ok() {
             self.request_prefix_completion = Some(completion);
         }
         outcome
+    }
+
+    fn evaluate_prefix_member(&mut self, id: usize, prefix: &[u8], work: &mut usize) -> Result<bool, RuntimeError> {
+        let member = self.generation.members[id];
+        let transformations = member
+            .transformation_plan
+            .map(|id| {
+                let plan = self.generation.transformation_plans[id];
+                &self.generation.transformations
+                    [plan.transformation_start..plan.transformation_start + plan.transformation_count]
+            })
+            .unwrap_or_default();
+        let transformed = if transformations.is_empty() {
+            if prefix.len() > self.limits.max_transformation_output_bytes {
+                return Err(map_transform_error(TransformError::OutputLimit {
+                    limit: self.limits.max_transformation_output_bytes,
+                }));
+            }
+            Cow::Borrowed(prefix)
+        } else {
+            Cow::Owned(
+                apply_transformations(
+                    prefix,
+                    transformations,
+                    TransformLimits {
+                        max_output_bytes: self.limits.max_transformation_output_bytes,
+                        max_work_bytes: self.limits.max_transformation_work_bytes,
+                    },
+                )
+                .map_err(map_transform_error)?,
+            )
+        };
+        *work = work
+            .checked_add(prefix.len())
+            .and_then(|work| work.checked_add(transformed.len()))
+            .ok_or(RuntimeError::Arithmetic)?;
+        if *work > self.limits.max_operator_work_bytes {
+            return Err(RuntimeError::OperatorWorkLimit {
+                limit: self.limits.max_operator_work_bytes,
+            });
+        }
+        evaluate_operator(
+            &self.generation,
+            &self.request,
+            &self.tx,
+            &mut self.group_scratch,
+            &mut self.boolean_scratch,
+            &mut self.capture_scratch,
+            self.generation.operator_plans[id].ok_or(RuntimeError::GenerationInvariant)?,
+            &transformed,
+            member.runtime_expansion_byte_limit,
+            self.evaluation_mode,
+        )
     }
 
     pub const fn request_prefix_completion(&self) -> Option<RequestBodyPrefixCompletion> {
@@ -1319,6 +1307,16 @@ impl<'generation> Transaction<'generation> {
     }
 
     fn execute_phase_with_advance(&mut self, phase: Phase, advance: bool) -> Result<PhaseOutcome, RuntimeError> {
+        self.execute_phase_with_prefix(phase, advance, None)
+    }
+
+    fn execute_phase_with_prefix(
+        &mut self,
+        phase: Phase,
+        advance: bool,
+        prefix: Option<&[u8]>,
+    ) -> Result<PhaseOutcome, RuntimeError> {
+        let mut prefix_work = 0_usize;
         let expected = self.next_phase();
         if expected != Some(phase) {
             return Err(RuntimeError::PhaseOrder {
@@ -1348,7 +1346,20 @@ impl<'generation> Transaction<'generation> {
                     limit: self.limits.max_operator_evaluations,
                 });
             }
-            if self.evaluate_unit(unit_id)? {
+            let prefix_match = if let Some(prefix) = prefix {
+                let unit = self
+                    .generation
+                    .units
+                    .get(unit_id)
+                    .ok_or(RuntimeError::GenerationInvariant)?;
+                if unit.member_count != 1 {
+                    return Err(RuntimeError::GenerationInvariant);
+                }
+                Some(self.evaluate_prefix_member(unit.member_start, prefix, &mut prefix_work)?)
+            } else {
+                None
+            };
+            if self.evaluate_unit(unit_id, prefix_match)? {
                 let unit = *self
                     .generation
                     .units
@@ -1399,7 +1410,7 @@ impl<'generation> Transaction<'generation> {
         Ok(outcome)
     }
 
-    fn evaluate_unit(&mut self, unit_id: usize) -> Result<bool, RuntimeError> {
+    fn evaluate_unit(&mut self, unit_id: usize, prefix_match: Option<bool>) -> Result<bool, RuntimeError> {
         let unit = *self
             .generation
             .units
@@ -1412,7 +1423,10 @@ impl<'generation> Transaction<'generation> {
         let mut initial = self.tx.try_clone()?;
         initial.clear_matches();
         if unit.member_count == 1 {
-            let matches = self.evaluate_member_matches(unit.member_start, &initial, false)?;
+            let matches = match prefix_match {
+                Some(matched) => Self::boolean_member_matches(matched)?,
+                None => self.evaluate_member_matches(unit.member_start, &initial, false)?,
+            };
             if matches.is_empty() {
                 return Ok(false);
             }
@@ -1499,6 +1513,15 @@ impl<'generation> Transaction<'generation> {
         Ok(true)
     }
 
+    fn boolean_member_matches(matched: bool) -> Result<Vec<MemberMatch>, RuntimeError> {
+        let mut matches = Vec::new();
+        if matched {
+            matches.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
+            matches.push(MemberMatch::default());
+        }
+        Ok(matches)
+    }
+
     fn evaluate_member_matches(
         &mut self,
         member_id: usize,
@@ -1512,12 +1535,7 @@ impl<'generation> Transaction<'generation> {
             .copied()
             .flatten()
         {
-            let mut matches = Vec::new();
-            if matched {
-                matches.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
-                matches.push(MemberMatch::default());
-            }
-            return Ok(matches);
+            return Self::boolean_member_matches(matched);
         }
         let member = *self
             .generation
@@ -4249,6 +4267,107 @@ mod tests {
             [61, 62, 63, 68]
         );
         assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
+    }
+
+    #[test]
+    fn prefix_short_circuits_deny_before_unreachable_work() {
+        let rules: String = (1..=33)
+            .map(|id| format!("SecRule REQUEST_BODY \"@contains blocked\" \"id:{id},phase:2,deny,status:403\"\n"))
+            .collect();
+        let generation = generation(&rules);
+        let mut payload = vec![b'x'; MAX_REQUEST_BODY_PREFIX_BYTES];
+        payload[..7].copy_from_slice(b"blocked");
+        let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        transaction.execute_request_headers().unwrap();
+        let outcome = transaction
+            .execute_request_body_prefix(&payload, payload.len(), RequestBodyPrefixCompletion::WindowFilled)
+            .unwrap();
+        assert_eq!(outcome.evaluated_units, 1);
+        let mut full = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        full.execute_request_headers().unwrap();
+        full.publish_request_body(RequestBody::new(
+            &payload,
+            super::super::super::BodyProcessorSelection::Auto,
+        ))
+        .unwrap();
+        let full_outcome = full.execute_request_body().unwrap();
+        assert_eq!(outcome.intervention, full_outcome.intervention);
+        assert_eq!(outcome.findings, full_outcome.findings);
+        assert_eq!(
+            outcome.intervention,
+            Some(Intervention {
+                rule_id: 1,
+                status: 403
+            })
+        );
+
+        for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+            let mut transaction = Transaction::new_with_modes(
+                &generation,
+                request(&[], b"/"),
+                RuntimeLimits::default(),
+                EvaluationMode::Accelerated,
+                mode,
+            )
+            .unwrap();
+            transaction.execute_request_headers().unwrap();
+            if mode == RuleEngineMode::On {
+                payload[..7].fill(b'x');
+            } else {
+                payload[..7].copy_from_slice(b"blocked");
+            }
+            assert!(matches!(
+                transaction.execute_request_body_prefix(
+                    &payload,
+                    payload.len(),
+                    RequestBodyPrefixCompletion::WindowFilled
+                ),
+                Err(RuntimeError::OperatorWorkLimit { .. })
+            ));
+            assert_eq!(transaction.request_prefix_completion(), None);
+        }
+    }
+
+    #[test]
+    fn prefix_borrowed_input_preserves_output_limit_and_detection_findings() {
+        let generation = generation(concat!(
+            "SecRule REQUEST_BODY \"@contains blocked\" \"id:1,phase:2,deny\"\n",
+            "SecRule REQUEST_BODY \"@contains blocked\" \"id:2,phase:2,deny\"\n",
+        ));
+        let limits = RuntimeLimits {
+            max_transformation_output_bytes: 6,
+            ..RuntimeLimits::default()
+        };
+        let mut transaction = Transaction::new(&generation, request(&[], b"/"), limits).unwrap();
+        transaction.execute_request_headers().unwrap();
+        assert!(matches!(
+            transaction.execute_request_body_prefix(b"blocked", 7, RequestBodyPrefixCompletion::EndOfStream),
+            Err(RuntimeError::Transformation {
+                kind: RuntimeTransformError::OutputLimit
+            })
+        ));
+        let mut transaction = Transaction::new_with_modes(
+            &generation,
+            request(&[], b"/"),
+            RuntimeLimits::default(),
+            EvaluationMode::Accelerated,
+            RuleEngineMode::DetectionOnly,
+        )
+        .unwrap();
+        transaction.execute_request_headers().unwrap();
+        let outcome = transaction
+            .execute_request_body_prefix(b"blocked", 7, RequestBodyPrefixCompletion::EndOfStream)
+            .unwrap();
+        assert_eq!(
+            outcome
+                .findings
+                .iter()
+                .map(|finding| finding.rule_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(outcome.evaluated_units, 2);
+        assert_eq!(outcome.intervention, None);
     }
 
     #[test]

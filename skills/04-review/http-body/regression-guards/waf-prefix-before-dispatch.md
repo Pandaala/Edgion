@@ -65,6 +65,15 @@ registered request-body buffer and request relay contracts.
 
 ## Verification and re-evaluation
 
+Prefix rules execute lazily in the canonical phase schedule. An enforced deny
+ends evaluation immediately; unreachable rules cannot replace that decision
+with a work-budget error. Detection-only and nonmatching rules still consume
+the configured evaluation/work budgets. Untransformed bytes are borrowed, while
+the transformation output bound and prefix operator-work accounting remain
+unchanged. No generation-sized prefix match table is retained. Regression tests
+cover a 1 MiB prefix with 33 rules, first-rule denial, actual budget exhaustion,
+detection-only findings, and the output bound on borrowed bytes.
+
 Before the configurable-window amendment, local verification passed with an external temporary Cargo patch to the sibling
 Pingora branch `feat/waf-request-body-prefix`: workspace check and Clippy,
 formatting, Gateway WAF tests (38), resource WAF tests (9), and CRD coverage (19).
