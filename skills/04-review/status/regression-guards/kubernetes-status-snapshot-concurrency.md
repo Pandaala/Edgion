@@ -102,4 +102,6 @@ metadata, resource scope/API versions, patch format, ownership/diff, or retry/le
 
 - `route-status-concurrent-writer-preservation`: shared stale-snapshot status overwrite,
   EBTP foreign-ancestor retention and ownership-aware ancestor diff corrected and verified
-  as described above.
+  as described above. A later request for immediate same-generation Route conflict
+  recovery was declined; the accepted no-retry limit is recorded in
+  [status-write failure policy](../../handler-requeue/intentional-design/status-write-no-retry-accepted.md).

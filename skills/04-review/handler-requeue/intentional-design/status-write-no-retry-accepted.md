@@ -25,6 +25,13 @@ The shared raw-input resourceVersion precondition also follows this policy: a st
 input versions fail locally through the existing error path. This retry decision never
 authorized unconditional writes or lost foreign updates; see the separate
 [snapshot concurrency correction](../../status/regression-guards/kubernetes-status-snapshot-concurrency.md).
+The `route-status-concurrent-writer-preservation` follow-up proposed an immediate
+fresh-read, merge, and bounded retry for same-UID/same-generation Route conflicts.
+That improvement was declined: preserving the foreign write and reconciling on a
+later event is the chosen behavior. A successful foreign status write normally
+produces a Route watch event, which can enqueue the key even while its previous
+attempt is in flight. Recovery still has no strict time bound if that event is
+not delivered and no later source LIST or other requeue occurs.
 
 ## Core Rationale
 
@@ -100,6 +107,9 @@ Re-open this decision only if:
 
 ## Reference Cases
 
+- `route-status-concurrent-writer-preservation` — immediate conflict recovery
+  declined after the resourceVersion guard already prevented foreign-entry loss;
+  the remaining cost is delayed Edgion status convergence without a time bound.
 - `tasks/review-envoy/controller-01-status-write-no-retry.md` (2026-05-29) —
   finding closed as accepted tradeoff.
 - `skills/01-architecture/01-controller/04-workqueue.md` — records the
