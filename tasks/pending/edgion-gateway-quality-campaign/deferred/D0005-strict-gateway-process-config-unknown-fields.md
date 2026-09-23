@@ -2,7 +2,7 @@
 
 ## Meta
 
-- Status: ready-for-separate-task
+- Status: resolved
 - Severity: medium
 - Discovered in: B0009, `edgion-gateway/src/cli/config.rs`
 - Category: configuration correctness
@@ -21,6 +21,7 @@ boundary than B0009's closed, one-field access-log option object. Applying
 `deny_unknown_fields` selectively across unrelated structs would be incomplete
 and could change startup acceptance without a coordinated design and inventory.
 
-## Canonical task
+## Resolution
 
-- `tasks/todo/strict-gateway-process-config-unknown-fields.md`
+- `skills/04-review/deserialization/intentional-design/gateway-process-config-unknown-fields-advisory.md`
+- The Gateway now reports ignored process-config fields with bounded startup WARN diagnostics. This record's evidence and deferral rationale describe the earlier B0009 state.
