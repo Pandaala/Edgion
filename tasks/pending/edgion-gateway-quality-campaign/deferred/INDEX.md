@@ -5,7 +5,7 @@
 | D0001 | resolved | `skills/04-review/supply-chain/regression-guards/allocator-feature-surface.md` | B0001 |
 | D0002 | resolved | `skills/04-review/supply-chain/regression-guards/rustls-tls13-encryption-level-validation.md` | B0001 |
 | D0003 | ready-for-separate-task | `tasks/todo/update-gateway-admin-auth-integration-comment-path.md` | B0003 |
-| D0004 | ready-for-separate-task | `tasks/todo/remove-stale-gateway-admin-redaction-design-link.md` | B0003 |
+| D0004 | resolved | `skills/04-review/admin-api/mandatory-design/gateway-admin-configclient-redaction.md` | B0003 |
 | D0005 | resolved | `skills/04-review/deserialization/intentional-design/gateway-process-config-unknown-fields-advisory.md` | B0009 |
 | D0006 | ready-for-separate-task | `tasks/todo/define-gatewayclass-process-config-ownership.md` | B0011 |
 | D0007 | ready-for-separate-task | `tasks/todo/add-etcd-linksys-health-flip-reporting.md` | B0035 |
