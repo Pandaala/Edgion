@@ -1034,6 +1034,7 @@ fn waf_resource(rules: &str) -> EdgionPlugins {
                 mode: WafMode::On,
                 priority: 0,
                 request_body: Default::default(),
+                ..WafConfig::default()
             }),
             ..Default::default()
         },
@@ -1087,6 +1088,79 @@ fn invalid_waf_update_retains_the_last_known_good_generation() {
         first_filter(&retained.plugin_runtime),
         first_filter(&previous_runtime)
     ));
+}
+
+fn bundled_waf_resource(id: u64) -> EdgionPlugins {
+    use edgion_resources::resources::edgion_config_data::{EdgionConfigDataRef, WafBundleMember, WafRuleBundleData};
+    use edgion_resources::resources::edgion_plugins::{ResolvedWafBundle, WafBundleRef};
+
+    let mut data = WafRuleBundleData {
+        version: format!("revision-{id}"),
+        profile: "test".into(),
+        provenance: "test/bundle".into(),
+        digest: String::new(),
+        roots: vec!["main.conf".into()],
+        rules: vec![WafBundleMember {
+            name: "main.conf".into(),
+            content: format!("SecRule REQUEST_URI \"@contains /blocked\" \"id:{id},phase:1,deny\"\n"),
+        }],
+        phrase_assets: vec![],
+    };
+    data.digest = data.compute_digest();
+    let mut resource = waf_resource("");
+    let waf = resource.spec.waf.as_mut().unwrap();
+    waf.bundle_refs = vec![WafBundleRef {
+        target: EdgionConfigDataRef {
+            name: format!("bundle-{id}"),
+            namespace: None,
+            ref_denied: None,
+        },
+        expected_digest: data.digest.clone(),
+    }];
+    waf.resolved_bundles = Some(vec![ResolvedWafBundle {
+        identity: format!("default/bundle-{id}"),
+        digest: data.digest.clone(),
+        data,
+    }]);
+    waf.owner_namespace = Some("default".into());
+    resource
+}
+
+#[test]
+fn bundled_waf_reloads_retain_invalid_update_and_pin_in_flight_generation() {
+    let key = "default/native-waf".to_string();
+    let first = compile_plugins(&bundled_waf_resource(100));
+    let second = compile_plugins(&bundled_waf_resource(101));
+    assert!(first.is_activatable, "{:?}", first.preparse_errors);
+    assert!(second.is_activatable, "{:?}", second.preparse_errors);
+
+    let mut unavailable = bundled_waf_resource(102);
+    unavailable.spec.waf.as_mut().unwrap().resolved_bundles = None;
+    let invalid = compile_plugins(&unavailable);
+    assert!(!invalid.is_activatable);
+    assert!(invalid.retain_previous_on_invalid_update);
+
+    let store = PluginStore::new();
+    store.replace_all(HashMap::from([(key.clone(), first)]));
+    let in_flight = store.get_plugin_runtime(&key).unwrap();
+    store.apply_delta(HashMap::new(), HashMap::from([(key.clone(), second)]), &HashSet::new());
+    let current = store.get_plugin_runtime(&key).unwrap();
+    assert!(!Arc::ptr_eq(first_filter(&in_flight), first_filter(&current)));
+
+    store.apply_delta(HashMap::new(), HashMap::from([(key.clone(), invalid)]), &HashSet::new());
+    let retained = store.get_plugin_runtime(&key).unwrap();
+    assert!(Arc::ptr_eq(first_filter(&current), first_filter(&retained)));
+
+    let rollback = compile_plugins(&bundled_waf_resource(100));
+    assert!(rollback.is_activatable);
+    store.apply_delta(
+        HashMap::new(),
+        HashMap::from([(key.clone(), rollback)]),
+        &HashSet::new(),
+    );
+    let rolled_back = store.get_plugin_runtime(&key).unwrap();
+    assert!(!Arc::ptr_eq(first_filter(&current), first_filter(&rolled_back)));
+    assert_eq!(in_flight.request_plugins_count(), 1);
 }
 
 fn mirror_program_resource(program: &str, valid: bool, mirror: Option<serde_json::Value>) -> EdgionPlugins {

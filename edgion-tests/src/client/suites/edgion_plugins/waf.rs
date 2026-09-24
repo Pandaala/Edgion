@@ -469,3 +469,27 @@ phase_suite!(
         500
     )]
 );
+
+phase_suite!(
+    WafDynamicBundleV1TestSuite,
+    "Native WAF Dynamic - Bundle V1",
+    [
+        ("waf_bundle_v1_denied", "bundle phrase asset denies v1", "v1", None, 451),
+        (
+            "waf_bundle_v2_allowed",
+            "bundle phrase asset allows v2",
+            "v2",
+            None,
+            200
+        ),
+    ]
+);
+
+phase_suite!(
+    WafDynamicBundleV2TestSuite,
+    "Native WAF Dynamic - Bundle V2",
+    [
+        ("waf_bundle_v1_allowed", "updated bundle allows v1", "v1", None, 200),
+        ("waf_bundle_v2_denied", "updated bundle denies v2", "v2", None, 451),
+    ]
+);

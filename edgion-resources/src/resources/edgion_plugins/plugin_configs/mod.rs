@@ -156,8 +156,8 @@ pub use tiny_ufo_ttl_cache_config::{
 };
 pub use upstream_fallback::UpstreamFallback;
 pub use waf::{
-    WafConfig, WafMode, WafRequestBodyConfig, WafRequestBodyInspection, WafSupportFailure, WafSupportFinding,
-    WafSupportReport,
+    ResolvedWafBundle, WafBundleRef, WafBundleResolutionError, WafBundleResolutionKind, WafConfig, WafMode,
+    WafRequestBodyConfig, WafRequestBodyInspection, WafSupportFailure, WafSupportFinding, WafSupportReport,
 };
 pub use wasm::{
     normalize_callout_origin, normalize_callout_origin_quiet, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry,

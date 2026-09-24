@@ -8,6 +8,7 @@ fn request_headers_outcome(rules: &str, uri: &'static [u8]) -> edgion_waf::secla
         mode: WafMode::On,
         priority: 0,
         request_body: Default::default(),
+        ..WafConfig::default()
     };
     let generation = Arc::new(config.compile_generation().expect("test WAF compiles"));
     let request = RequestHead::new(

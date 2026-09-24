@@ -2,7 +2,218 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::*;
-use crate::seclang::{Phase, PhaseDefaults};
+use crate::seclang::{Phase, PhaseDefaults, RequestHead, RuntimeLimits, Transaction};
+
+fn source_bundle<'a>(
+    identity: &'a str,
+    entrypoints: &'a [&'a str],
+    rules: &'a [RuleBundleMember<'a>],
+    phrase_assets: &'a [RuleBundleMember<'a>],
+) -> RuleBundleSource<'a> {
+    RuleBundleSource {
+        identity,
+        entrypoints,
+        rules,
+        phrase_assets,
+    }
+}
+
+#[test]
+fn bundles_compile_in_order_with_local_assets_and_nested_includes() {
+    let first_rules = [
+        RuleBundleMember {
+            path: "main.conf",
+            bytes: b"Include nested.conf\n",
+        },
+        RuleBundleMember {
+            path: "nested.conf",
+            bytes: b"SecRule REQUEST_URI \"@pmFromFile phrases.data\" \"id:1,phase:1,pass\"\n",
+        },
+    ];
+    let second_rules = [RuleBundleMember {
+        path: "main.conf",
+        bytes: b"SecRule REQUEST_URI \"@pmFromFile phrases.data\" \"id:2,phase:1,pass\"\n",
+    }];
+    let first_assets = [RuleBundleMember {
+        path: "phrases.data",
+        bytes: b"alpha\n",
+    }];
+    let second_assets = [RuleBundleMember {
+        path: "phrases.data",
+        bytes: b"beta\n",
+    }];
+    let bundles = [
+        source_bundle("first@a", &["main.conf"], &first_rules, &first_assets),
+        source_bundle("second@b", &["main.conf"], &second_rules, &second_assets),
+    ];
+    let compiled = compile_rule_bundles(
+        &bundles,
+        "SecAction \"id:3,phase:2,pass\"\n",
+        context(),
+        FrontendLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        compiled
+            .generation()
+            .rule_units()
+            .map(|unit| unit.id())
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    for (uri, expected) in [(b"/alpha".as_slice(), 1), (b"/beta".as_slice(), 2)] {
+        let request = RequestHead::new(
+            b"GET / HTTP/1.1",
+            b"GET",
+            uri,
+            uri,
+            b"HTTP/1.1",
+            b"192.0.2.1",
+            b"request-1",
+            &[],
+        );
+        let mut transaction = Transaction::new(compiled.generation(), request, RuntimeLimits::default()).unwrap();
+        let findings = transaction
+            .execute_request_headers()
+            .unwrap()
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>();
+        assert_eq!(findings, [expected]);
+    }
+}
+
+#[test]
+fn bundle_rejects_paths_missing_assets_and_duplicate_ids() {
+    let bad_rules = [RuleBundleMember {
+        path: "../escape.conf",
+        bytes: b"",
+    }];
+    assert!(matches!(
+        compile_rule_bundles(
+            &[source_bundle("bad", &["../escape.conf"], &bad_rules, &[])],
+            "",
+            context(),
+            FrontendLimits::default()
+        ),
+        Err(FrontendError::RuleBundle(RuleBundleError::Path))
+    ));
+
+    let missing_rules = [RuleBundleMember {
+        path: "main.conf",
+        bytes: b"SecRule ARGS \"@pmFromFile missing.data\" \"id:1,phase:2,pass\"\n",
+    }];
+    assert!(matches!(
+        compile_rule_bundles(
+            &[source_bundle("missing", &["main.conf"], &missing_rules, &[])],
+            "",
+            context(),
+            FrontendLimits::default()
+        ),
+        Err(FrontendError::Compiler(CompilerError::AssetSource {
+            failure: PhraseAssetFailure::NotFound,
+            ..
+        }))
+    ));
+
+    let duplicate_rules = [RuleBundleMember {
+        path: "main.conf",
+        bytes: b"SecAction \"id:1,phase:2,pass\"\n",
+    }];
+    assert!(compile_rule_bundles(
+        &[
+            source_bundle("first", &["main.conf"], &duplicate_rules, &[]),
+            source_bundle("second", &["main.conf"], &duplicate_rules, &[])
+        ],
+        "",
+        context(),
+        FrontendLimits::default()
+    )
+    .is_err());
+}
+
+#[test]
+fn bundle_rejects_cross_bundle_include_and_compiler_limits() {
+    let first_rules = [RuleBundleMember {
+        path: "main.conf",
+        bytes: b"Include other.conf\n",
+    }];
+    let second_rules = [RuleBundleMember {
+        path: "other.conf",
+        bytes: b"SecAction \"id:1,phase:2,pass\"\n",
+    }];
+    let bundles = [
+        source_bundle("first", &["main.conf"], &first_rules, &[]),
+        source_bundle("second", &["other.conf"], &second_rules, &[]),
+    ];
+    assert!(matches!(
+        compile_rule_bundles(&bundles, "", context(), FrontendLimits::default()),
+        Err(FrontendError::Include(IncludeError::Source {
+            failure: IncludeFailure::Denied,
+            ..
+        }))
+    ));
+
+    let small = FrontendLimits {
+        includes: IncludeLimits {
+            max_source_bytes: 8,
+            ..IncludeLimits::default()
+        },
+        ..FrontendLimits::default()
+    };
+    assert!(matches!(
+        compile_rule_bundles(&bundles, "", context(), small),
+        Err(FrontendError::RuleBundle(RuleBundleError::Limit))
+    ));
+}
+
+#[test]
+fn inline_rules_cannot_include_or_load_bundle_assets() {
+    let rules = [RuleBundleMember {
+        path: "main.conf",
+        bytes: b"SecAction \"id:1,phase:1,pass\"\n",
+    }];
+    let assets = [RuleBundleMember {
+        path: "phrases.data",
+        bytes: b"alpha\n",
+    }];
+    let bundles = [source_bundle("first", &["main.conf"], &rules, &assets)];
+    assert!(matches!(
+        compile_rule_bundles(&bundles, "Include 0:main.conf\n", context(), FrontendLimits::default()),
+        Err(FrontendError::Include(IncludeError::Source {
+            failure: IncludeFailure::Denied,
+            ..
+        }))
+    ));
+    assert!(matches!(
+        compile_rule_bundles(
+            &bundles,
+            "SecRule REQUEST_URI \"@pmFromFile phrases.data\" \"id:2,phase:1,pass\"\n",
+            context(),
+            FrontendLimits::default()
+        ),
+        Err(FrontendError::Compiler(CompilerError::AssetSource {
+            failure: PhraseAssetFailure::Denied,
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn bundle_rejects_unsupported_rule_in_complete_generation() {
+    let rules = [RuleBundleMember {
+        path: "main.conf",
+        bytes: b"SecRule RESPONSE_BODY \"@contains private\" \"id:1,phase:4,pass\"\n",
+    }];
+    let bundles = [source_bundle("unsupported", &["main.conf"], &rules, &[])];
+    assert!(matches!(
+        compile_rule_bundles(&bundles, "", context(), FrontendLimits::default()),
+        Err(FrontendError::Validation(
+            SemanticValidationError::UnavailableCapability { .. }
+        ))
+    ));
+}
 
 type FixtureSource = (&'static str, &'static [u8]);
 type FixtureEntry = (&'static str, Vec<FixtureSource>);

@@ -7,8 +7,39 @@ use super::{
     SourceLimits, SyntaxError, SyntaxLimits, UnavailableCapability, ValidationLimits,
 };
 
-#[cfg(test)]
 use super::{PhraseAssetFailure, PhraseAssetRequest, PhraseAssetSink};
+
+/// A named rule or phrase asset within one immutable rule bundle.
+#[derive(Clone, Copy)]
+pub struct RuleBundleMember<'a> {
+    pub path: &'a str,
+    pub bytes: &'a [u8],
+}
+
+/// One ordered rule bundle. Identity must uniquely name the selected bundle revision.
+#[derive(Clone, Copy)]
+pub struct RuleBundleSource<'a> {
+    pub identity: &'a str,
+    pub entrypoints: &'a [&'a str],
+    pub rules: &'a [RuleBundleMember<'a>],
+    pub phrase_assets: &'a [RuleBundleMember<'a>],
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum RuleBundleError {
+    #[error("rule bundle identity is empty, duplicated, or exceeds the identity byte limit")]
+    Identity,
+    #[error("rule bundle has no entrypoints or contains a repeated entrypoint")]
+    Entrypoints,
+    #[error("rule bundle member or reference path is invalid")]
+    Path,
+    #[error("rule bundle contains a duplicate member path")]
+    DuplicateMember,
+    #[error("rule bundle entrypoint does not name a rule member")]
+    MissingEntrypoint,
+    #[error("rule bundle input exceeds a configured source limit")]
+    Limit,
+}
 
 pub const DEFAULT_MAX_INCLUDE_DEPTH: usize = 16;
 pub const DEFAULT_MAX_INCLUDE_SOURCES: usize = 1_024;
@@ -287,6 +318,16 @@ struct IncludeExpander<'resolver> {
     source_bytes: usize,
     maximum_depth: usize,
     identity_comparison_bytes: usize,
+    provenance: Vec<ExpandedSegment>,
+    provenance_bytes: usize,
+    track_provenance: bool,
+}
+
+#[derive(Debug)]
+struct ExpandedSegment {
+    start: usize,
+    end: usize,
+    identity: String,
 }
 
 impl IncludeExpander<'_> {
@@ -305,6 +346,42 @@ impl IncludeExpander<'_> {
             .try_reserve_exact(bytes.len())
             .map_err(|_| IncludeError::Allocation)?;
         self.expanded.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn append_from(&mut self, identity: &str, bytes: &[u8]) -> Result<(), IncludeError> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let start = self.expanded.len();
+        self.append(bytes)?;
+        if !self.track_provenance {
+            return Ok(());
+        }
+        if let Some(last) = self.provenance.last_mut() {
+            if last.end == start && last.identity == identity {
+                last.end = self.expanded.len();
+                return Ok(());
+            }
+        }
+        let provenance_bytes = self
+            .provenance_bytes
+            .checked_add(identity.len())
+            .ok_or(IncludeError::Arithmetic)?;
+        if self.provenance.len() >= self.limits.max_sources.saturating_mul(self.limits.max_source_bytes)
+            || provenance_bytes > self.limits.max_expanded_bytes
+        {
+            return Err(IncludeError::ExpandedByteLimit {
+                limit: self.limits.max_expanded_bytes,
+            });
+        }
+        self.provenance.try_reserve(1).map_err(|_| IncludeError::Allocation)?;
+        self.provenance.push(ExpandedSegment {
+            start,
+            end: self.expanded.len(),
+            identity: identity.to_owned(),
+        });
+        self.provenance_bytes = provenance_bytes;
         Ok(())
     }
 
@@ -370,7 +447,7 @@ impl IncludeExpander<'_> {
                     self.append(b"\n")?;
                 }
             } else {
-                self.append(physical.as_bytes())?;
+                self.append_from(identity, physical.as_bytes())?;
             }
             continued = continues;
             start = end;
@@ -502,6 +579,7 @@ fn parse_include_line(line: &str, line_number: usize) -> Result<Option<ParsedInc
 struct ExpandedSource {
     bytes: Vec<u8>,
     metrics: IncludeMetrics,
+    provenance: Vec<ExpandedSegment>,
 }
 
 fn expand_includes(
@@ -509,6 +587,7 @@ fn expand_includes(
     root: &[u8],
     resolver: &mut dyn IncludeSource,
     limits: IncludeLimits,
+    track_provenance: bool,
 ) -> Result<ExpandedSource, IncludeError> {
     if root_identity.is_empty() {
         return Err(IncludeError::EmptyRootIdentity);
@@ -534,6 +613,9 @@ fn expand_includes(
         source_bytes: 0,
         maximum_depth: 0,
         identity_comparison_bytes: 0,
+        provenance: Vec::new(),
+        provenance_bytes: 0,
+        track_provenance,
     };
     expander.expand_source(root_identity, root, 0)?;
     Ok(ExpandedSource {
@@ -544,6 +626,7 @@ fn expand_includes(
             maximum_depth: expander.maximum_depth,
         },
         bytes: expander.expanded,
+        provenance: expander.provenance,
     })
 }
 
@@ -807,6 +890,8 @@ pub enum CompatibilityError {
 
 #[derive(Debug, Error)]
 pub enum FrontendError {
+    #[error("rule bundle input failed: {0}")]
+    RuleBundle(#[from] RuleBundleError),
     #[error("include expansion failed: {0}")]
     Include(#[from] IncludeError),
     #[error("source scanning failed: {0}")]
@@ -821,6 +906,214 @@ pub enum FrontendError {
     Validation(#[from] SemanticValidationError),
     #[error("immutable compilation failed: {0}")]
     Compiler(#[from] CompilerError),
+}
+
+fn valid_bundle_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= DEFAULT_MAX_INCLUDE_IDENTITY_BYTES
+        && path
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn bundle_path(parent: &str, reference: &str) -> Option<String> {
+    if !valid_bundle_path(reference) {
+        return None;
+    }
+    let (_, parent_path) = parent.split_once(':')?;
+    let directory = parent_path.rsplit_once('/').map(|(directory, _)| directory);
+    let result = directory.map_or_else(|| reference.to_owned(), |directory| format!("{directory}/{reference}"));
+    valid_bundle_path(&result).then_some(result)
+}
+
+struct BundleIncludes<'a> {
+    bundles: &'a [RuleBundleSource<'a>],
+}
+
+impl IncludeSource for BundleIncludes<'_> {
+    fn load(&mut self, request: IncludeRequest<'_>, sink: &mut IncludeSink<'_>) -> Result<(), IncludeFailure> {
+        let (index, path) = if request.parent_identity() == "bundle-root" {
+            let (index, path) = request.reference().split_once(':').ok_or(IncludeFailure::Denied)?;
+            (
+                index.parse::<usize>().map_err(|_| IncludeFailure::Denied)?,
+                path.to_owned(),
+            )
+        } else {
+            let (index, _) = request
+                .parent_identity()
+                .split_once(':')
+                .ok_or(IncludeFailure::Denied)?;
+            (
+                index.parse::<usize>().map_err(|_| IncludeFailure::Denied)?,
+                bundle_path(request.parent_identity(), request.reference()).ok_or(IncludeFailure::Denied)?,
+            )
+        };
+        let bundle = self.bundles.get(index).ok_or(IncludeFailure::Denied)?;
+        if !valid_bundle_path(&path) {
+            return Err(IncludeFailure::Denied);
+        }
+        let member = bundle
+            .rules
+            .iter()
+            .find(|member| member.path == path)
+            .ok_or(IncludeFailure::Denied)?;
+        let identity = format!("{index}:{path}");
+        sink.push_source(&identity, member.bytes)
+            .map_err(|_| IncludeFailure::Other)
+    }
+}
+
+struct BundleAssets<'a> {
+    bundles: &'a [RuleBundleSource<'a>],
+    provenance: &'a [ExpandedSegment],
+}
+
+struct DenyIncludes;
+
+impl IncludeSource for DenyIncludes {
+    fn load(&mut self, _request: IncludeRequest<'_>, _sink: &mut IncludeSink<'_>) -> Result<(), IncludeFailure> {
+        Err(IncludeFailure::Denied)
+    }
+}
+
+impl PhraseAssetSource for BundleAssets<'_> {
+    fn load(
+        &mut self,
+        request: PhraseAssetRequest<'_>,
+        sink: &mut PhraseAssetSink<'_>,
+    ) -> Result<(), PhraseAssetFailure> {
+        let offset = request.span().start.byte_offset;
+        let segment_index = self.provenance.partition_point(|segment| segment.end <= offset);
+        let segment = self
+            .provenance
+            .get(segment_index)
+            .filter(|segment| segment.start <= offset && offset < segment.end)
+            .ok_or(PhraseAssetFailure::Denied)?;
+        let (index, _) = segment.identity.split_once(':').ok_or(PhraseAssetFailure::Denied)?;
+        let index = index.parse::<usize>().map_err(|_| PhraseAssetFailure::Denied)?;
+        let bundle = self.bundles.get(index).ok_or(PhraseAssetFailure::Denied)?;
+        let path = bundle_path(&segment.identity, request.handle()).ok_or(PhraseAssetFailure::Denied)?;
+        let member = bundle
+            .phrase_assets
+            .iter()
+            .find(|member| member.path == path)
+            .ok_or(PhraseAssetFailure::NotFound)?;
+        sink.extend_from_slice(member.bytes)
+            .map_err(|_| PhraseAssetFailure::Other)
+    }
+}
+
+/// Compile all selected bundle entrypoints and trailing inline rules as one strict generation.
+/// Includes and phrase assets can only resolve inside the rule's own bundle.
+pub fn compile_rule_bundles(
+    bundles: &[RuleBundleSource<'_>],
+    inline_rules: &str,
+    context: SemanticValidationContext,
+    limits: FrontendLimits,
+) -> Result<CompiledBundle, FrontendError> {
+    if bundles.len() > limits.includes.max_sources {
+        return Err(RuleBundleError::Limit.into());
+    }
+    let mut root = String::new();
+    let mut members = 0_usize;
+    let mut source_bytes = 0_usize;
+    for (index, bundle) in bundles.iter().enumerate() {
+        if bundle.identity.is_empty()
+            || bundle.identity.len() > limits.includes.max_identity_bytes
+            || bundles[..index]
+                .iter()
+                .any(|previous| previous.identity == bundle.identity)
+        {
+            return Err(RuleBundleError::Identity.into());
+        }
+        if bundle.entrypoints.is_empty() {
+            return Err(RuleBundleError::Entrypoints.into());
+        }
+        for (entry_index, path) in bundle.entrypoints.iter().enumerate() {
+            if !valid_bundle_path(path) {
+                return Err(RuleBundleError::Path.into());
+            }
+            if bundle.entrypoints[..entry_index].contains(path) {
+                return Err(RuleBundleError::Entrypoints.into());
+            }
+            if !bundle.rules.iter().any(|member| member.path == *path) {
+                return Err(RuleBundleError::MissingEntrypoint.into());
+            }
+            root.push_str(&format!("Include {index}:{path}\n"));
+        }
+        for (member_index, member) in bundle.rules.iter().chain(bundle.phrase_assets).enumerate() {
+            if !valid_bundle_path(member.path) {
+                return Err(RuleBundleError::Path.into());
+            }
+            if bundle
+                .rules
+                .iter()
+                .chain(bundle.phrase_assets)
+                .take(member_index)
+                .any(|previous| previous.path == member.path)
+            {
+                return Err(RuleBundleError::DuplicateMember.into());
+            }
+            if bundle.rules.iter().any(|rule| rule.path == member.path) {
+                if member.bytes.len() > limits.includes.max_source_bytes {
+                    return Err(RuleBundleError::Limit.into());
+                }
+            } else if member.bytes.len() > limits.compiler.max_asset_bytes {
+                return Err(RuleBundleError::Limit.into());
+            }
+            members = members.checked_add(1).ok_or(RuleBundleError::Limit)?;
+            source_bytes = source_bytes
+                .checked_add(member.bytes.len())
+                .ok_or(RuleBundleError::Limit)?;
+        }
+    }
+    if members > limits.includes.max_sources || source_bytes > limits.includes.max_expanded_bytes {
+        return Err(RuleBundleError::Limit.into());
+    }
+    if root.len() > limits.includes.max_source_bytes {
+        return Err(RuleBundleError::Limit.into());
+    }
+    let mut resolver = BundleIncludes { bundles };
+    let mut expanded = expand_includes("bundle-root", root.as_bytes(), &mut resolver, limits.includes, true)?;
+    if !inline_rules.is_empty() {
+        let inline = expand_includes(
+            "inline",
+            inline_rules.as_bytes(),
+            &mut DenyIncludes,
+            limits.includes,
+            false,
+        )?;
+        if !expanded.bytes.is_empty() && !expanded.bytes.ends_with(b"\n") {
+            expanded.bytes.push(b'\n');
+        }
+        let total = expanded
+            .bytes
+            .len()
+            .checked_add(inline.bytes.len())
+            .ok_or(RuleBundleError::Limit)?;
+        if total > limits.includes.max_expanded_bytes {
+            return Err(RuleBundleError::Limit.into());
+        }
+        expanded.bytes.extend_from_slice(&inline.bytes);
+        expanded.metrics.expanded_bytes = total;
+    }
+    let source = scan_source("bundle-root", &expanded.bytes, limits.source)?;
+    let syntax = parse_syntax(&source, limits.syntax)?;
+    let draft = analyze_one_semantic_draft(syntax, limits.semantic)?;
+    let compatibility = CompatibilityReport::from_draft(&draft, expanded.metrics, limits.compatibility)?;
+    let validated = validate_semantic_draft(draft, context, limits.validation)?;
+    let mut assets = BundleAssets {
+        bundles,
+        provenance: &expanded.provenance,
+    };
+    let generation = compile_validated(validated, Some(&mut assets), limits.compiler)?;
+    Ok(CompiledBundle {
+        generation,
+        compatibility,
+    })
 }
 
 #[derive(Debug)]
@@ -849,7 +1142,7 @@ pub fn inspect_compatibility(
     includes: &mut dyn IncludeSource,
     limits: FrontendLimits,
 ) -> Result<CompatibilityReport, FrontendError> {
-    let expanded = expand_includes(root_identity, root, includes, limits.includes)?;
+    let expanded = expand_includes(root_identity, root, includes, limits.includes, false)?;
     let source = scan_source(root_identity, &expanded.bytes, limits.source)?;
     let syntax = parse_syntax(&source, limits.syntax)?;
     let draft = analyze_one_semantic_draft(syntax, limits.semantic)?;
@@ -864,7 +1157,7 @@ pub fn compile_with_includes(
     context: SemanticValidationContext,
     limits: FrontendLimits,
 ) -> Result<CompiledBundle, FrontendError> {
-    let expanded = expand_includes(root_identity, root, includes, limits.includes)?;
+    let expanded = expand_includes(root_identity, root, includes, limits.includes, false)?;
     let source = scan_source(root_identity, &expanded.bytes, limits.source)?;
     let syntax = parse_syntax(&source, limits.syntax)?;
     let draft = analyze_one_semantic_draft(syntax, limits.semantic)?;
@@ -891,7 +1184,7 @@ pub fn compile_executable_profile_with_includes(
     context: SemanticValidationContext,
     limits: FrontendLimits,
 ) -> Result<CompiledBundle, FrontendError> {
-    let expanded = expand_includes(root_identity, root, includes, limits.includes)?;
+    let expanded = expand_includes(root_identity, root, includes, limits.includes, false)?;
     let source = scan_source(root_identity, &expanded.bytes, limits.source)?;
     let syntax = parse_syntax(&source, limits.syntax)?;
     let draft = analyze_one_semantic_draft(syntax, limits.semantic)?;

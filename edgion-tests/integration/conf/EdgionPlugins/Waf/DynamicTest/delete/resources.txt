@@ -1,1 +1,3 @@
 EdgionPlugins/edgion-default/waf-dynamic
+EdgionConfigData/edgion-default/waf-bundle-v1
+EdgionConfigData/edgion-default/waf-bundle-v2

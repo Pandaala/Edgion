@@ -23,6 +23,7 @@ and others later) may reference it via a generic `dataRef`.
 - `IpGroup` (shared primitive): `edgion-resources/src/resources/edgion_config_data/ip_group.rs`
 - `Selector` shape: `edgion-resources/src/resources/edgion_config_data/selector.rs`
 - First-party overlay shape: `edgion-resources/src/resources/edgion_config_data/region_route.rs` (`RegionRouteOverride`)
+- Native WAF bundle shape: `edgion-resources/src/resources/edgion_config_data/waf_rule_bundle.rs` (`WafRuleBundleData`)
 - GlobalConnectionIpRestriction plugin config (consumes `Selector` via `activeProfileRef`):
   `edgion-resources/src/resources/edgion_stream_plugins/global_connection_ip_restriction.rs` (`GlobalConnectionIpRestrictionConfig`)
 - Overlay framework: `edgion-resources/src/resources/edgion_config_data/overlay.rs` (`apply_override`)
@@ -109,6 +110,7 @@ Envelope (any variant): `enable: bool` (default true), `active: Option<String>`,
 | selector | `Selector` | `{ active?: string, description?: string }` | Active-profile selector; switches among the consumer's git-owned profiles |
 | first-party overlay | `RegionRouteOverride` | `{ regions?: [...], enable?: bool, active?: string }` | Typed; whole-replace of region table |
 | security policy | `ProxyProtocolTrust` | `{ mode: required }` or `{ mode: trustedSources, trustedCidrs: [...] }` | Non-overlay, all-or-nothing Gateway listener trust policy. Requires envelope `enable=true` and `active` absent. Unknown config fields are fatal rather than advisory. |
+| executable policy data | `WafRuleBundle` | `{ version, profile, provenance, digest, roots, rules, phraseAssets? }` | Non-overlay WAF rule and phrase-asset inputs. Structural validation and digest are all-or-nothing; referring `EdgionPlugins.spec.waf.bundleRefs` must resolve and compile the complete selected generation. Requires `enable=true`, `active` absent, and no unknown config fields. |
 | escape hatch | `Misc` | `x-kubernetes-preserve-unknown-fields` | Third-party / unknown / experimental only |
 
 ## Unknown Config Fields
@@ -139,7 +141,16 @@ No separate `StringList`/`RegexList` (folded into `KeyList(matchMode)`). No stan
 overlay: GlobalConnectionIpRestriction now carries its full rule data inline (git-owned plugin config) and
 exposes only "which profile is active" as the hot-swappable surface — see the example below.
 
-`ProxyProtocolTrust` is the deliberate exception to the ordinary overlay/advisory behavior. It is
+`ProxyProtocolTrust` and `WafRuleBundle` are exceptions to the ordinary overlay/advisory behavior. `WafRuleBundle`
+contains executable rule input, so a wrong or omitted config field invalidates the bundle instead of silently
+reducing WAF coverage. Its standalone `Accepted=True` proves structure and content integrity, not that a
+consumer's combined rule generation is executable. `WafConfig` resolves all pinned references and compiles
+them together before publication; one missing, denied, disabled, mismatched, or invalid bundle rejects the
+whole candidate generation. Bundle content is transported through conf_sync, while Admin serialization and
+Rust `Debug` redact rule and phrase-asset bodies. Editing a referenced bundle can change WAF policy; enforce
+write permissions with that authority in mind.
+
+`ProxyProtocolTrust` is
 a security-policy target for `Gateway.metadata.annotations["edgion.io/inbound-proxy-protocol"]`,
 not an overlay and never fails to a base. Unknown fields, invalid CIDRs, `enable=false`, any
 `active`, or a wrong variant make the referring Gateway explicitly Invalid. Same-namespace
@@ -152,7 +163,8 @@ Namespace-visible targets require an exact grant from `gateway.networking.k8s.io
 ### preparse
 
 - Calls `EdgionConfigData::validate_pre_parse()` for per-variant validation (invalid regex for `KeyList`,
-  invalid regions for `RegionRouteOverride`) → `Vec<String>`. Non-empty → `Accepted=False/Invalid`.
+  invalid regions for `RegionRouteOverride`, invalid structure or digest for `WafRuleBundle`) → `Vec<String>`.
+  Non-empty → `Accepted=False/Invalid`.
   `Selector` is always structurally valid (the active-name ↔ profile check is a consumer-side,
   connection-time concern, not a controller preparse check).
 - **`IpList` is partial-good**: `validate_pre_parse` returns empty (no `Accepted=False`) for bad CIDR
@@ -167,7 +179,8 @@ Namespace-visible targets require an exact grant from `gateway.networking.k8s.io
 ### on_change
 
 - Looks up resources referencing this EdgionConfigData via `EdgionConfigDataRefManager` and requeues them.
-  Consumers include Gateway inbound PROXY policies, EdgionPlugins (via `overrideRef` in `RegionRouteConfig`) and EdgionStreamPlugins
+  Consumers include Gateway inbound PROXY policies, EdgionPlugins (via `overrideRef` in `RegionRouteConfig`
+  and `bundleRefs` in `WafConfig`) and EdgionStreamPlugins
   (via `activeProfileRef` in `GlobalConnectionIpRestrictionConfig`). Also requeues EdgionPlugins and
   EdgionStreamPlugins that reference this object as an `IpList` via `allowRefs`/`denyRefs` in
   IpRestriction configs or GCIR per-profile `ProfileRules`.
@@ -184,7 +197,7 @@ Namespace-visible targets require an exact grant from `gateway.networking.k8s.io
 | `Accepted` | Spec passes preparse validation. For `IpList`, always `True` even when entries are bad (partial-good). |
 | `ResolvedRefs` | EdgionConfigData itself carries no external cross-resource refs; own `ResolvedRefs` is always `True`. Note: `IpList` variants are ref targets — when `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile fail to resolve an `IpList`, `ResolvedRefs=False` is set on the *referring* EdgionPlugins/EdgionStreamPlugins, not on the `IpList` EdgionConfigData itself. |
 | `PartiallyInvalid` | **`IpList` only**: `status=True`/`reason=RuleInvalid` (with message listing bad entries) when `collect_entry_errors` finds invalid CIDRs, empty groups, duplicate group names, invalid group names, or cross-group duplicate CIDRs (keep-first). `status=False`/`reason=AllRulesValid` when clean. `Accepted` stays `True`; partial-good entries are admitted and the rest still compile. |
-| `UnknownConfigFields` | Present as `True/UnknownFieldsDetected` when a typed payload contains keys the generated schema does not recognize; removed entirely after a clean reapply. Advisory only and independent of `Accepted`. |
+| `UnknownConfigFields` | Present as `True/UnknownFieldsDetected` when a typed payload contains keys the generated schema does not recognize; removed entirely after a clean reapply. Advisory for ordinary data variants. `ProxyProtocolTrust` and `WafRuleBundle` reject unknown config fields through `Accepted=False` as well. |
 
 ## Gateway-Side Processing
 
@@ -200,11 +213,13 @@ full endpoint, interval, or failover-graph validation or copying the region tabl
 
 ## Ownership
 
-EdgionConfigData is the **Center-controlled data overlay**, and its bodies are not an ops-repo
-artifact. The split is deliberate: the git-owned half of the model is the base config
+EdgionConfigData is the shared data resource used for both overlays and strict policy inputs.
+The ordinary overlay model treats it as **Center-controlled data**, and its bodies are not an ops-repo
+artifact. The split for overlays is deliberate: the git-owned half of the model is the base config
 (`EdgionPlugins` and friends), which carries the *logic*; the EdgionConfigData overlay carries
-only *data* and exists to be pushed and hot-swapped by EdgionCenter. There is therefore a single
-intended writer for this kind, no ownership arbitration to perform, and none implemented.
+only *data* and exists to be pushed and hot-swapped by EdgionCenter. `WafRuleBundle` is a non-overlay
+exception: it may be distributed through the same resource API, but its content changes executable WAF
+policy only after a consumer pins its digest. There is no ownership arbitration for this kind.
 
 **The `edgion.io/managed-by` label is inert on EdgionConfigData — nothing reads it.**
 
@@ -254,6 +269,7 @@ Full analysis and the decision to keep it that way:
 | Direction | Mechanism |
 |-----------|-----------|
 | EdgionConfigData ← EdgionPlugins | `overrideRef` in `RegionRouteConfig` → `RegionRouteOverride`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
+| EdgionConfigData ← EdgionPlugins | Ordered `bundleRefs` in `WafConfig` → `WafRuleBundle`; Controller resolves a single batch and embeds complete uncompiled bundles in EdgionPlugins for Gateway revalidation. Missing or invalid references reject the entire candidate WAF generation; no partial-good or fail-to-base fallback. |
 | EdgionConfigData ← EdgionPlugins | `RequestAccessPolicy.activeProfileRef` → `Selector`; IP rules/conditions → `IpList`; URL rules → `RequestAccessUrlAllowList` | Selector failures affect `ResolvedRefs`; optional IP/URL data failures, including cross-ns denial, are omitted individually and reported through `PartiallyInvalid`. All refs use the shared reverse index and cross-namespace requeue path. |
 | EdgionConfigData ← EdgionStreamPlugins | `activeProfileRef` in `GlobalConnectionIpRestrictionConfig` → `Selector`; ESP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
 | EdgionConfigData ← {EdgionPlugins, EdgionStreamPlugins} | `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile `ProfileRules` → `IpList`; referrer `ResolvedRefs` reflects resolution (missing/disabled/wrong-type → `ResolvedRefs=False`; cross-ns without grant/visibility → `RefNotPermitted`) |
@@ -266,7 +282,7 @@ Full analysis and the decision to keep it that way:
 
 Cross-namespace EdgionConfigData references — all ref types: `allowRefs`/`denyRefs` (IpList),
 `overrideRef` (RegionRouteOverride), `activeProfileRef` (Selector, including
-`RequestAccessPolicy.activeProfileRef`) — are gated by two complementary controls.
+`RequestAccessPolicy.activeProfileRef`), and `bundleRefs` (WafRuleBundle) — are gated by two complementary controls.
 
 ### Mechanism
 

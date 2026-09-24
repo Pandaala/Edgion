@@ -26,6 +26,13 @@ subject to the current GatewayClass plugin policy and the existing security
 guards: an enabled JWE entry or an executable cross-namespace RequestMirror in
 either generation prevents whole-resource retention.
 
+Native WAF `bundleRefs` use the same policy. A missing, denied, disabled,
+tampered, or digest-mismatched bundle makes the new candidate invalid, while an
+eligible prior generation remains active. A reference grant revocation or bundle
+deletion can therefore leave the prior compiled rules active until an explicit
+resource removal or valid replacement. Operators must not treat bundle deletion
+or grant revocation as an immediate WAF policy revocation boundary.
+
 This is a key-scoped availability choice, not a claim that Kubernetes UID is
 unavailable or that a recreated object is the same Kubernetes object. The
 Controller and Gateway deliberately preserve service continuity for the logical
@@ -68,6 +75,8 @@ Current source and colocated tests establish the implementation shape:
   covers key-scoped full-snapshot retention and removal of omitted keys.
 - `plugin_store::waf_store_publishes_atomically_and_pins_in_flight_generations`
   covers WAF retention, later recovery, removal, and in-flight generation pins.
+- `plugin_store::bundled_waf_reloads_retain_invalid_update_and_pin_in_flight_generation`
+  exercises the same publication boundary with digest-pinned bundle inputs.
 
 ## Alternatives and limits
 

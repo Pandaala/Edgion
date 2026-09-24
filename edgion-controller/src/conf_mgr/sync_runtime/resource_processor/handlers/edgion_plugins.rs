@@ -19,8 +19,12 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 };
 use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::common::RefDenied;
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
-use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
+use edgion_resources::resources::edgion_plugins::{
+    EdgionPlugin, EdgionPluginsStatus, PluginValidation, ResolvedWafBundle, WafBundleResolutionError,
+    WafBundleResolutionKind,
+};
 use edgion_resources::ResourceKind;
 
 use super::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
@@ -30,6 +34,27 @@ use super::san_guard;
 pub struct EdgionPluginsHandler;
 
 impl EdgionPluginsHandler {
+    fn get_waf_ref_keys(ep: &EdgionPlugins) -> Vec<String> {
+        let namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
+        ep.spec
+            .waf
+            .as_ref()
+            .filter(|waf| waf.validate_shape().is_ok())
+            .map(|waf| {
+                waf.bundle_refs
+                    .iter()
+                    .map(|reference| {
+                        format!(
+                            "{}/{}",
+                            reference.target.namespace.as_deref().unwrap_or(namespace),
+                            reference.target.name
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn new() -> Self {
         Self
     }
@@ -273,7 +298,17 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             );
         }
 
-        let mut errors = ep.validate_plugins();
+        if let Some(waf) = ep.spec.waf.as_mut() {
+            waf.resolved_bundles = None;
+            waf.resolution_errors.clear();
+            waf.owner_namespace = Some(ep.metadata.namespace.as_deref().unwrap_or("default").to_string());
+        }
+        let mut errors = ep.validate_plugins_before_waf_resolution();
+        if let Some(waf) = ep.spec.waf.as_ref() {
+            if let Err(error) = waf.validate_shape() {
+                errors.push(format!("waf: {error}"));
+            }
+        }
         // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on plugins
         // where SAN pinning enforcement is not yet implemented.
         errors.extend(san_guard::check_plugins_san(ep));
@@ -353,6 +388,12 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                 .add_ref(canary_key, ep_key.clone());
         }
 
+        for bundle_key in Self::get_waf_ref_keys(&ep) {
+            ctx.runtime()
+                .edgion_config_data_refs
+                .add_ref(bundle_key, ep_key.clone());
+        }
+
         // Grant-change revalidation: register cross-ns EdgionConfigData ref target namespaces
         // into the namespace-keyed cross_ns_ref_mgr (mirrors http_route::record_cross_ns_refs).
         // When a ReferenceGrant in a target namespace changes, the CrossNsRevalidationListener
@@ -363,6 +404,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             .chain(Self::get_ip_list_ref_keys(&ep))
             .chain(Self::get_active_profile_ref_keys(&ep))
             .chain(Self::get_canary_active_profile_ref_keys(&ep))
+            .chain(Self::get_waf_ref_keys(&ep))
         {
             if let Some((target_ns, _)) = key.split_once('/') {
                 if target_ns != ns {
@@ -373,6 +415,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 
         // Mark cross-namespace EdgionConfigData refs as denied when no ReferenceGrant permits them.
         Self::mark_config_data_ref_denials(&mut ep, ctx);
+        resolve_waf_bundles(&mut ep, ctx);
 
         for entry in ep.spec.request_plugins.iter_mut().flatten() {
             if let EdgionPlugin::RequestMirror(config) = &mut entry.plugin {
@@ -441,6 +484,14 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 
     fn update_status(&self, ep: &mut EdgionPlugins, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = ep.metadata.generation;
+        let mut validation_errors = validation_errors.to_vec();
+        if let Some(waf) = ep.spec.waf.as_ref() {
+            if waf.validate_shape().is_ok() {
+                if let Some(error) = waf.validation_error() {
+                    validation_errors.push(format!("waf: {error}"));
+                }
+            }
+        }
 
         // Accepted reflects preparse + validate errors (already merged by processor).
         let accepted = if validation_errors.is_empty() {
@@ -474,6 +525,32 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         resolved_errors.extend(resolve_ip_list_refs(ep, ctx));
         resolved_errors.extend(resolve_active_profile_refs(ep, ctx));
         resolved_errors.extend(resolve_canary_active_profile_refs(ep, ctx));
+        if let Some(waf) = ep.spec.waf.as_ref() {
+            for error in &waf.resolution_errors {
+                resolved_errors.push(match error.kind {
+                    WafBundleResolutionKind::Denied => ResolvedRefsError::RefNotPermitted {
+                        from_namespace: ep.metadata.namespace.clone().unwrap_or_else(|| "default".to_string()),
+                        from_kind: "EdgionPlugins",
+                        target_namespace: error.namespace.clone(),
+                        target_name: error.name.clone(),
+                    },
+                    WafBundleResolutionKind::Missing | WafBundleResolutionKind::WrongType => {
+                        ResolvedRefsError::EdgionConfigDataNotFound {
+                            namespace: error.namespace.clone(),
+                            name: error.name.clone(),
+                            expected_type: "WafRuleBundle".to_string(),
+                        }
+                    }
+                    WafBundleResolutionKind::Disabled
+                    | WafBundleResolutionKind::Invalid
+                    | WafBundleResolutionKind::DigestMismatch => ResolvedRefsError::EdgionConfigDataInvalid {
+                        namespace: error.namespace.clone(),
+                        name: error.name.clone(),
+                        detail: format!("WafRuleBundle reference {} is {:?}", error.index, error.kind),
+                    },
+                });
+            }
+        }
         resolved_errors.extend(super::request_mirror::errors(
             ep.metadata.namespace.as_deref().unwrap_or("default"),
             ResourceKind::EdgionPlugins,
@@ -925,6 +1002,101 @@ fn classify_pull_secret_ref(
         });
     }
     None
+}
+
+/// Bind one complete WAF source set from a single capture of the referenced data.
+/// Registration happens before this read so later updates requeue the owner.
+fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
+    let namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
+    let keys = EdgionPluginsHandler::get_waf_ref_keys(ep);
+    let Some(waf) = ep.spec.waf.as_mut() else {
+        return;
+    };
+    waf.owner_namespace = Some(namespace.to_string());
+    waf.resolved_bundles = None;
+    waf.resolution_errors.clear();
+    for reference in &mut waf.bundle_refs {
+        reference.target.ref_denied = None;
+    }
+    if waf.validate_shape().is_err() {
+        return;
+    }
+    if keys.is_empty() {
+        return;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (index, (reference, key)) in waf.bundle_refs.iter().zip(&keys).enumerate() {
+        if !seen.insert(key.as_str()) {
+            waf.resolution_errors.push(WafBundleResolutionError {
+                index,
+                namespace: reference.target.namespace.as_deref().unwrap_or(namespace).to_string(),
+                name: reference.target.name.clone(),
+                kind: WafBundleResolutionKind::Invalid,
+            });
+            return;
+        }
+    }
+    let targets = ctx.runtime().edgion_config_data_store.get_many(&keys);
+    let mut resolved = Vec::with_capacity(keys.len());
+    for (index, ((reference, key), target)) in waf.bundle_refs.iter_mut().zip(&keys).zip(targets).enumerate() {
+        let target_namespace = reference.target.namespace.as_deref().unwrap_or(namespace).to_string();
+        reference.target.ref_denied = None;
+        let kind = if let Some(target) = target {
+            if let ConfigEntry::WafRuleBundle(data) = &target.spec.data {
+                let allowed =
+                    crate::conf_mgr::sync_runtime::resource_processor::ref_grant::is_edgion_config_data_ref_allowed(
+                        ctx.runtime(),
+                        namespace,
+                        "EdgionPlugins",
+                        &target_namespace,
+                        &reference.target.name,
+                        target.spec.visibility,
+                    );
+                if !allowed {
+                    reference.target.ref_denied = Some(RefDenied {
+                        target_namespace: target_namespace.clone(),
+                        target_name: reference.target.name.clone(),
+                        reason: Some("NoMatchingReferenceGrant".to_string()),
+                    });
+                    Some(WafBundleResolutionKind::Denied)
+                } else if !target.spec.enable || target.spec.active.is_some() {
+                    Some(WafBundleResolutionKind::Disabled)
+                } else if target
+                    .spec
+                    .unknown_fields
+                    .iter()
+                    .any(|path| path.starts_with("data.config"))
+                    || data.validate().is_err()
+                {
+                    Some(WafBundleResolutionKind::Invalid)
+                } else if data.digest != reference.expected_digest {
+                    Some(WafBundleResolutionKind::DigestMismatch)
+                } else {
+                    resolved.push(ResolvedWafBundle {
+                        identity: key.clone(),
+                        digest: data.digest.clone(),
+                        data: data.clone(),
+                    });
+                    None
+                }
+            } else {
+                Some(WafBundleResolutionKind::WrongType)
+            }
+        } else {
+            Some(WafBundleResolutionKind::Missing)
+        };
+        if let Some(kind) = kind {
+            waf.resolution_errors.push(WafBundleResolutionError {
+                index,
+                namespace: target_namespace,
+                name: reference.target.name.clone(),
+                kind,
+            });
+        }
+    }
+    if waf.resolution_errors.is_empty() {
+        waf.resolved_bundles = Some(resolved);
+    }
 }
 
 /// Check each RegionRoute plugin's `overrideRef` against the EdgionConfigData store.

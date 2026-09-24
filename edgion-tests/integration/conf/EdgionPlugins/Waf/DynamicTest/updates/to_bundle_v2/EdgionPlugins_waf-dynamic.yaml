@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: waf-dynamic
+  namespace: edgion-default
+spec:
+  waf:
+    bundleRefs:
+      - name: waf-bundle-v2
+        expectedDigest: df58f8707a440ad234681cbbbd59cd3849b0b29844eff7a3eee52930b1438002

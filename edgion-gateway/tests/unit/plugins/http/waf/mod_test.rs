@@ -18,6 +18,7 @@ fn plugin_with_inspection(rules: &str, mode: WafMode, inspection: WafRequestBody
             inspection,
             ..Default::default()
         },
+        ..WafConfig::default()
     })
     .expect("test WAF compiles")
 }
@@ -37,11 +38,12 @@ fn blank_rules_are_rejected_by_the_gateway_constructor() {
         mode: WafMode::On,
         priority: 0,
         request_body: Default::default(),
+        ..WafConfig::default()
     };
 
     assert_eq!(
         WafPlugin::try_new(&config).err().as_deref(),
-        Some("rules must not be empty")
+        Some("rules or bundleRefs must be provided")
     );
 }
 

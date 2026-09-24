@@ -25,13 +25,89 @@ spec:
 
 | 字段 | 必填 | 默认值 | 含义 |
 |------|------|--------|------|
-| `rules` | 是 | — | 编译为不可变规则版本的内联 SecLang 源码 |
+| `rules` | 否 | 空 | 内联 SecLang 源码，在引用的规则包之后编译；`rules` 与 `bundleRefs` 至少提供一项 |
+| `bundleRefs` | 否 | `[]` | 最多 16 个按顺序使用、以摘要固定版本的 `WafRuleBundle` 引用 |
+| `bundleRefs[].name` | 每个引用必填 | — | 目标 EdgionConfigData 名称 |
+| `bundleRefs[].namespace` | 否 | EdgionPlugins 的命名空间 | 目标命名空间；跨命名空间引用遵守 `visibility` 和 `ReferenceGrant` |
+| `bundleRefs[].expectedDigest` | 每个引用必填 | — | 目标规则包的完整小写 SHA-256 摘要 |
 | `mode` | 否 | `on` | `on` 执行规则阻断；`detectionOnly` 仅记录规则命中 |
 | `priority` | 否 | `0` | 0–65535，较大值优先；相同时 Route、Gateway、全局依次优先 |
 | `requestBody.inspection` | 否 | `prefix` | `prefix` 提前检查指定窗口；`full` 检查完整有界请求体 |
 | `requestBody.prefixSize` | 否 | `64KiB` | 前缀窗口，1 字节至 `1MiB`，支持 `16KiB`、`100k`、`1m` 等大小字符串；仅用于 `prefix` |
 
 规则源码不会写入错误响应、日志或指标，网关管理接口将其脱敏。
+
+## 共享规则包
+
+规则需要 `Include`、`@pmFromFile`，或多个 WAF 配置共用同一组规则时，使用有类型的
+`EdgionConfigData`。一个规则包把有序入口文件、规则文件和词组资源放在同一版本的资源中。
+下面的入口文件引用另一个规则文件；后者读取同包内的词组资源：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: application-rules-v1
+  namespace: default
+spec:
+  enable: true
+  data:
+    type: WafRuleBundle
+    config:
+      version: "2026.1"
+      profile: baseline
+      provenance: operations/revision-1
+      digest: a30e47998cace9b73f037d44f3fc9f0a29614e1753e07e6ea9f5c4e4c4d6b22d
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            Include child.conf
+        - name: child.conf
+          content: |
+            SecRule REQUEST_URI "@pmFromFile phrases.data" "id:2001,phase:1,deny,status:403"
+      phraseAssets:
+        - name: phrases.data
+          content: |
+            /blocked
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: application-waf
+  namespace: default
+spec:
+  waf:
+    bundleRefs:
+      - name: application-rules-v1
+        expectedDigest: a30e47998cace9b73f037d44f3fc9f0a29614e1753e07e6ea9f5c4e4c4d6b22d
+```
+
+| 规则包字段 | 必填 | 含义 |
+|------------|------|------|
+| `version`、`profile`、`provenance` | 是 | 非空的版本、规则集 profile 和来源说明；三者都参与摘要计算 |
+| `digest` | 是 | 规范化规则包的小写 SHA-256 摘要；成员或元数据变更后须重新计算 |
+| `roots` | 是 | 按顺序编译的入口规则成员名称，至少一个 |
+| `rules[].name`、`rules[].content` | 是 | 相对成员路径及 SecLang 源码，至少一个规则成员 |
+| `phraseAssets[].name`、`phraseAssets[].content` | 否 | 供 `@pmFromFile` 读取的相对成员路径及文本 |
+
+摘要涵盖 `version`、`profile`、`provenance`、有序的 `roots`，以及分别按名称排序的规则成员和词组成员。
+每个字符串前写入 8 字节大端长度，每个列表前写入 8 字节大端成员数；哈希输入以
+`edgion-waf-rule-bundle-v1` 加零字节开头。成员名称必须是安全相对路径，不允许空、`.`、`..`
+路径段、反斜杠、冒号或控制字符。规则和词组成员名称不能重复，所有入口必须指向规则成员。
+规则包有固定的成员数及字节数上限，最终组合还必须通过严格编译。
+
+编译顺序为 `bundleRefs` 顺序、每个包的 `roots` 顺序，最后是可选的内联 `rules`。
+`Include` 和词组资源只能读取发起规则所属包中的成员；内联 `rules` 不能读取包内成员。
+所有来源中的规则 ID 重复会使整个版本编译失败。控制面（Controller）校验引用及摘要，
+数据面（Gateway）在发布前重新校验收到的内容。引用缺失、被禁用、类型不符、未授权或内容无效时，
+不能发布部分规则；`WafRuleBundle` 不采用 overlay 的 fail-to-base 策略。
+
+修改规则包内容不会自动启用新版本：先创建新的版本化规则包并计算摘要，再更新各使用者的
+`name` 和 `expectedDigest`。还有使用者固定旧版本时，应保留旧资源。启用跨命名空间引用校验时，
+目标资源的 `visibility: Namespace` 需要在目标命名空间配置对应 `ReferenceGrant`；
+`visibility: Cluster` 允许所有命名空间引用。可以写入被引用规则包的主体也能改变 WAF 执行策略，
+应限制其写入权限。Admin 输出和 Rust `Debug` 会隐藏规则及词组正文，可信配置同步仍会将原文发送到 Gateway。
 
 ## 提交前检查规则支持情况
 
@@ -45,6 +121,8 @@ edgion-cli waf inspect --file application-waf.yaml --format json
 `analysisComplete` 只表示 SecLang 源码完成了兼容性分析，**不表示可以发布**；
 只有 `strictValidationPassed: true` 才表示该 WAF 配置通过与 Controller、Gateway
 相同的严格编译及请求体检查。未通过时命令以非零状态退出。
+配置含 `bundleRefs` 时，本地命令没有 Controller 解析后的规则包内容，
+因此会报告引用尚未解析，不会声称该配置可发布。提交资源后查看其状态以获得完整结果。
 
 例如，需要聚合完整上游响应体的规则会产生 `full_response_body` 条目，包含规则 ID、
 从零开始的文档和指令序号，以及移除该规则的建议。缺少 ID 的规则会使分析停止，
@@ -138,5 +216,5 @@ Phase 3 在响应头发送给客户端前执行。主上游响应始终流式处
 `Accepted=False` 并保留最近可用版本。删除资源后，新请求不能继续解析该资源。
 后端级 WAF 配置不受支持，因为 WAF 请求阶段先于后端选择。
 
-编译器严格拒绝未实现的指令、操作符、动作、外部资源及完整响应体要求，
+编译器严格拒绝未实现的指令、操作符、动作、无法解析的外部资源及完整响应体要求，
 不能据此宣称兼容所有 ModSecurity 或 CRS 配置。

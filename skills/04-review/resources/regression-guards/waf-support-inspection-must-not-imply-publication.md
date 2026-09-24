@@ -11,8 +11,10 @@ knowledge_type: regression-guards
 `WafConfig::inspect_support()` returns a value-free, bounded report for local
 tools and other consumers. `analysis_complete` means SecLang reached semantic
 compatibility analysis. Only `strict_validation_passed` means the exact
-`WafConfig.rules` and `request_body` settings passed the strict compiler and
-request-body inspection check. The Controller and Gateway continue to use
+inline `WafConfig.rules` and `request_body` settings passed the strict compiler and
+request-body inspection check. A configuration with `bundleRefs` reports an
+unresolved-reference failure in local inspection, because the CLI has no
+Controller-resolved bundle contents. The Controller and Gateway continue to use
 `WafConfig::compile_generation()` for publication.
 The strict compiler now admits `@detectSQLi` and `@detectXSS`, but an inspection
 result still does not establish Gateway request behavior.
@@ -43,7 +45,7 @@ behavior; the separate selected-profile acceptance gate owns that evidence.
 
 Resource-layer tests cover mixed supported and unavailable rules, strict
 rejection, missing IDs, malformed syntax, missing phrase assets, redaction,
-and report truncation. CLI tests cover local command parsing and value-free
+bundle reference handling, and report truncation. CLI tests cover local command parsing and value-free
 text presentation. Re-evaluate if the compiler, diagnostic categories,
 report bounds, resource schema, or publication path changes.
 
@@ -51,3 +53,5 @@ report bounds, resource schema, or publication path changes.
 
 - `waf-rule-support-diagnostics`: implemented as a bounded local inspection
   report with a reusable resource-layer API.
+- `waf-rule-bundles-and-assets`: typed `EdgionConfigData` bundles are resolved
+  before strict compilation; local inspection reports unresolved references.

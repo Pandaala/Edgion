@@ -16,7 +16,7 @@ spec:
               type: object
               required:
                 - data
-              description: "EdgionConfigData defines named typed data resources. Exactly one ConfigEntry variant (KeyList, IpList, RequestAccessUrlAllowList, ProxyProtocolTrust, Selector, RegionRouteOverride, Misc) is selected by `data.type`. ProxyProtocolTrust is a strict, non-overlay security policy and requires enable=true with active absent at its consumer."
+              description: "EdgionConfigData defines named typed data resources. Exactly one ConfigEntry variant (KeyList, IpList, RequestAccessUrlAllowList, ProxyProtocolTrust, Selector, RegionRouteOverride, WafRuleBundle, Misc) is selected by `data.type`. ProxyProtocolTrust and WafRuleBundle are strict, non-overlay data and require enable=true with active absent. WafRuleBundle may change executable WAF policy; writing it grants control over WAF rules used by its consumers."
               properties:
                 enable:
                   type: boolean
@@ -49,6 +49,7 @@ spec:
                         - ProxyProtocolTrust
                         - Selector
                         - RegionRouteOverride
+                        - WafRuleBundle
                         - Misc
                     config:
                       type: object
@@ -60,6 +61,7 @@ spec:
                           - ProxyProtocolTrust: strict non-overlay inbound PROXY sender trust policy — { mode: "required" } or { mode: "trustedSources", trustedCidrs: string[] }; invalid or unknown fields reject the policy
                           - Selector: active-profile selector — { active?: string, description?: string }; referenced via activeProfileRef in EdgionStreamPlugins GlobalConnectionIpRestriction configs. `active` names one of the plugin's git-owned profiles; `active: null`/absent is a no-op (base default). Switches among profiles only — never disables filtering
                           - RegionRouteOverride: all-Optional overlay for RegionRoute — { enable?, active?, regions? }; referenced via overrideRef in EdgionPlugins RegionRoute configs
+                          - WafRuleBundle: strict non-overlay WAF inputs — { version, profile, provenance, digest, roots: string[], rules: [{ name, content }], phraseAssets?: [{ name, content }] }; digest is lowercase SHA-256 of the canonical bundle contents. Standalone acceptance checks structure and integrity; referring plugins compile the selected bundles as one executable generation
                           - Misc: open payload (x-kubernetes-preserve-unknown-fields); escape hatch for third-party or unknown payloads only
                         Validation of the concrete shape is performed by the Controller
                         and surfaced via the `Accepted` status condition.

@@ -33,7 +33,11 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 
 | Field | Required | Default | Meaning |
 |-------|----------|---------|---------|
-| `rules` | yes | — | Inline SecLang source compiled as one immutable generation |
+| `rules` | no | empty | Inline SecLang source compiled after the referenced bundle roots; provide this field, `bundleRefs`, or both |
+| `bundleRefs` | no | `[]` | Up to 16 ordered references to digest-pinned `WafRuleBundle` EdgionConfigData resources |
+| `bundleRefs[].name` | with each reference | — | Target EdgionConfigData name |
+| `bundleRefs[].namespace` | no | EdgionPlugins namespace | Target namespace; cross-namespace use follows `visibility` and `ReferenceGrant` |
+| `bundleRefs[].expectedDigest` | with each reference | — | Exact lowercase SHA-256 digest of the selected bundle |
 | `mode` | no | `on` | `on` enforces disruptive actions; `detectionOnly` records matches without blocking |
 | `priority` | no | `0` | Owner-selection priority from `0` through `65535`; a larger value wins |
 | `requestBody.inspection` | no | `prefix` | Inspect a bounded prefix before backend dispatch, or use `full` for complete-body inspection |
@@ -50,6 +54,91 @@ metrics, or Rust `Debug`. Gateway admin configuration output replaces it with
 `[redacted]`; controller-to-gateway configuration sync still carries the real
 source.
 
+## Shared rule bundles
+
+Use a typed `EdgionConfigData` when a ruleset needs `Include` or `@pmFromFile`,
+or when several WAF configurations share the same rules. A bundle carries
+ordered root files, named rule files, and named phrase assets as one versioned
+resource. This example uses a root file that includes a second file; the second
+file reads a phrase asset from the same bundle:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: application-rules-v1
+  namespace: default
+spec:
+  enable: true
+  data:
+    type: WafRuleBundle
+    config:
+      version: "2026.1"
+      profile: baseline
+      provenance: operations/revision-1
+      digest: a30e47998cace9b73f037d44f3fc9f0a29614e1753e07e6ea9f5c4e4c4d6b22d
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            Include child.conf
+        - name: child.conf
+          content: |
+            SecRule REQUEST_URI "@pmFromFile phrases.data" "id:2001,phase:1,deny,status:403"
+      phraseAssets:
+        - name: phrases.data
+          content: |
+            /blocked
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: application-waf
+  namespace: default
+spec:
+  waf:
+    bundleRefs:
+      - name: application-rules-v1
+        expectedDigest: a30e47998cace9b73f037d44f3fc9f0a29614e1753e07e6ea9f5c4e4c4d6b22d
+```
+
+| Bundle field | Required | Meaning |
+|--------------|----------|---------|
+| `version`, `profile`, `provenance` | yes | Non-empty version, ruleset profile, and source description included in the digest |
+| `digest` | yes | Lowercase SHA-256 of the canonical, length-framed bundle; a changed member or metadata field needs a new digest |
+| `roots` | yes | Ordered rule member names to compile; at least one root is required |
+| `rules[].name`, `rules[].content` | yes | Relative member path and SecLang source; at least one rule member is required |
+| `phraseAssets[].name`, `phraseAssets[].content` | no | Relative member path and text for `@pmFromFile` |
+
+The digest covers `version`, `profile`, `provenance`, ordered `roots`, and
+rule and asset members sorted by name within each group. Each string is framed
+by an 8-byte big-endian length; each list starts with an 8-byte big-endian item
+count. Hash the bytes after the `edgion-waf-rule-bundle-v1` prefix and a zero
+byte. Member names must be safe relative paths: no empty, `.` or `..` segment,
+backslash, colon, or control character. Names are unique across rule and asset
+members; every root names a rule member. The bundle has fixed member and byte
+limits, and the complete selected generation must pass strict compilation.
+
+Bundles compile in `bundleRefs` order, each bundle's `roots` order, then the
+optional inline `rules`. Includes and phrase assets resolve only within the
+bundle that contains the requesting rule. Inline `rules` cannot read bundle
+members. Duplicate rule IDs across all sources reject the entire generation.
+The Controller checks each reference and its digest, and the Gateway checks the
+transported contents again before publishing the generation. An invalid,
+missing, disabled, wrong-type, or unauthorized reference cannot publish a
+partial ruleset. `WafRuleBundle` does not use the fail-to-base overlay policy.
+
+Bundle content changes do not activate automatically: create a new versioned
+bundle resource, calculate its digest, then update each consumer's `name` and
+`expectedDigest` to opt in. Keep the prior versioned resource while any
+consumer still pins it.
+When cross-namespace reference validation is enabled, a target with
+`visibility: Namespace` needs a matching `ReferenceGrant` in the target
+namespace; `visibility: Cluster` allows references from all namespaces.
+Writers of a referenced bundle can change executable WAF policy, so restrict
+write access accordingly. Admin output and Rust `Debug` redact rule and asset
+bodies, while trusted configuration sync carries them to the Gateway.
+
 ## Inspect rule support before applying
 
 Run the local CLI on one `EdgionPlugins` YAML document:
@@ -64,6 +153,9 @@ the compatibility analysis stage; it does **not** mean the rules can be
 published. Only `strictValidationPassed: true` means the exact WAF configuration
 passed the same strict compiler and request-body inspection checks used by the
 Controller and Gateway. The command exits nonzero otherwise.
+For `bundleRefs`, the local command has no Controller-resolved bundle contents:
+it reports an unresolved-reference failure rather than claiming publication
+readiness. Apply the resources and inspect their status for the full result.
 
 For example, a rule using complete upstream response-body matching reports a
 `full_response_body` finding with its rule ID and zero-based document and
@@ -215,7 +307,7 @@ referenced EdgionPlugins generation automatically revalidates the Route.
 
 The production compiler accepts only behavior implemented by Edgion's bounded
 runtime profile. It rejects unsupported directives, operators, actions,
-external includes/assets, and full-response-body requirements instead of
+unresolved external includes/assets, and full-response-body requirements instead of
 silently ignoring them. Compatibility is therefore an explicit per-ruleset
 compile result, not a claim that every historical ModSecurity configuration is
 accepted.

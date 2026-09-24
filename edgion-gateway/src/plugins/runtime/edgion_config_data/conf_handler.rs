@@ -240,6 +240,10 @@ impl EdgionConfigDataStore {
                     // Resolved by the Controller into GatewaySpec; the Gateway
                     // never builds a second EdgionConfigData runtime index.
                 }
+                ConfigEntry::WafRuleBundle(_) => {
+                    // The Controller embeds the pinned source in EdgionPlugins;
+                    // the Gateway compiles it with the complete WAF generation.
+                }
             }
         }
 
@@ -334,7 +338,8 @@ impl EdgionConfigDataStore {
             | ConfigEntry::RequestAccessUrlAllowList(_)
             | ConfigEntry::Selector(_)
             | ConfigEntry::Misc(_)
-            | ConfigEntry::ProxyProtocolTrust(_) => {}
+            | ConfigEntry::ProxyProtocolTrust(_)
+            | ConfigEntry::WafRuleBundle(_) => {}
         }
     }
 

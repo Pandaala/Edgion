@@ -145,6 +145,7 @@ fn streaming_waf_context(body_limit: u64) -> EdgionHttpContext {
         mode: WafMode::On,
         priority: 0,
         request_body: Default::default(),
+        ..WafConfig::default()
     };
     let generation = Arc::new(config.compile_generation().expect("test WAF compiles"));
     let request = RequestHead::new(

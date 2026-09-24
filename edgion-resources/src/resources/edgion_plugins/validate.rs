@@ -316,9 +316,19 @@ impl EdgionPlugins {
     /// (`Vm::new`), the one failure that cannot be predicted statically. See
     /// the module docs for the full contract.
     pub fn validate_plugins(&self) -> Vec<String> {
+        self.validate_plugins_with_waf(true)
+    }
+
+    /// Validate all source-local entries before Controller bundle resolution.
+    /// The resolved WAF is validated after reference binding.
+    pub fn validate_plugins_before_waf_resolution(&self) -> Vec<String> {
+        self.validate_plugins_with_waf(false)
+    }
+
+    fn validate_plugins_with_waf(&self, include_waf: bool) -> Vec<String> {
         let mut errors = Vec::new();
 
-        if let Some(waf) = &self.spec.waf {
+        if let Some(waf) = self.spec.waf.as_ref().filter(|_| include_waf) {
             if let Some(error) = waf.validation_error() {
                 errors.push(format!("waf: {error}"));
             }

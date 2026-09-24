@@ -124,6 +124,7 @@ async fn request_extension_suppresses_inner_waf_plugin_log() {
             mode: edgion_resources::resources::edgion_plugins::WafMode::On,
             priority: 0,
             request_body: Default::default(),
+            ..edgion_resources::resources::edgion_plugins::WafConfig::default()
         })
         .unwrap();
     let inner = Arc::new(inner);

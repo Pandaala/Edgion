@@ -487,6 +487,7 @@ async fn waf_request_runner_emits_only_the_dedicated_summary() {
             mode: edgion_resources::resources::edgion_plugins::WafMode::On,
             priority: 12,
             request_body: Default::default(),
+            ..WafConfig::default()
         })
         .unwrap();
     let candidate = runtime.waf_candidate().unwrap();

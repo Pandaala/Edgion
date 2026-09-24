@@ -2,16 +2,67 @@
 
 use edgion_waf::matcher::RegexProgramError;
 use edgion_waf::seclang::{
-    compile_with_includes, inspect_compatibility, CompatibilityLimits, CompatibilityReport, CompiledGeneration,
-    CompilerError, DirectiveLocation, FoldRequiredKind, FrontendError, FrontendLimits, IncludeFailure, IncludeRequest,
-    IncludeSink, IncludeSource, Phase, PhaseDefaults, SemanticError, SemanticLocation, SemanticValidationContext,
-    SemanticValidationError, SourceError, SourcePosition, SyntaxError, UnavailableCapability,
-    DEFAULT_REQUEST_BODY_PREFIX_BYTES, MAX_REQUEST_BODY_PREFIX_BYTES,
+    compile_rule_bundles, compile_with_includes, inspect_compatibility, CompatibilityLimits, CompatibilityReport,
+    CompiledGeneration, CompilerError, DirectiveLocation, FoldRequiredKind, FrontendError, FrontendLimits,
+    IncludeFailure, IncludeRequest, IncludeSink, IncludeSource, Phase, PhaseDefaults, RuleBundleMember,
+    RuleBundleSource, SemanticError, SemanticLocation, SemanticValidationContext, SemanticValidationError, SourceError,
+    SourcePosition, SyntaxError, UnavailableCapability, DEFAULT_REQUEST_BODY_PREFIX_BYTES,
+    MAX_REQUEST_BODY_PREFIX_BYTES,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::resources::edgion_config_data::{EdgionConfigDataRef, WafRuleBundleData};
 use crate::resources::edgion_plugins::PluginValidation;
+
+const MAX_WAF_BUNDLE_REFS: usize = 16;
+
+/// One version-pinned shared rule bundle.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WafBundleRef {
+    #[serde(flatten)]
+    pub target: EdgionConfigDataRef,
+    pub expected_digest: String,
+}
+
+/// Controller-resolved, uncompiled bundle transported to the Gateway.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ResolvedWafBundle {
+    pub identity: String,
+    pub digest: String,
+    pub data: WafRuleBundleData,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WafBundleResolutionKind {
+    Missing,
+    WrongType,
+    Disabled,
+    Denied,
+    Invalid,
+    DigestMismatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WafBundleResolutionError {
+    pub index: usize,
+    pub namespace: String,
+    pub name: String,
+    pub kind: WafBundleResolutionKind,
+}
+
+impl std::fmt::Debug for ResolvedWafBundle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolvedWafBundle")
+            .field("identity", &self.identity)
+            .field("digest", &self.digest)
+            .field("data", &"[redacted]")
+            .finish()
+    }
+}
 
 /// Disruptive-action behavior for one WAF generation.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -65,9 +116,33 @@ impl WafRequestBodyConfig {
 #[derive(Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WafConfig {
-    /// Inline SecLang source. Includes and filesystem paths are not available.
+    /// Inline SecLang source. Inline rules cannot include bundle members.
+    #[serde(default)]
     #[serde(serialize_with = "crate::redact::redact_required::serialize")]
     pub rules: String,
+
+    /// Ordered references to version-pinned shared rule bundles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bundle_refs: Vec<WafBundleRef>,
+
+    /// Complete uncompiled bundle contents, resolved by the Controller.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_bundles: Option<Vec<ResolvedWafBundle>>,
+
+    /// Controller-derived reference errors; never supplied by operators.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
+    pub resolution_errors: Vec<WafBundleResolutionError>,
+
+    /// Namespace used by the Controller to resolve implicit bundle namespaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub owner_namespace: Option<String>,
 
     /// Whether disruptive actions are enforced.
     #[serde(default)]
@@ -88,6 +163,10 @@ impl std::fmt::Debug for WafConfig {
         formatter
             .debug_struct("WafConfig")
             .field("rules", &"[redacted]")
+            .field("bundle_refs", &self.bundle_refs)
+            .field("resolved_bundles", &self.resolved_bundles.as_ref().map(Vec::len))
+            .field("resolution_errors", &self.resolution_errors)
+            .field("owner_namespace", &self.owner_namespace)
             .field("mode", &self.mode)
             .field("request_body", &self.request_body)
             .field("priority", &self.priority)
@@ -502,6 +581,9 @@ fn attach_safe_location(error: &FrontendError, failure: &mut WafSupportFailure) 
 
 fn frontend_failure(error: &FrontendError) -> WafSupportFailure {
     let mut failure = match error {
+        FrontendError::RuleBundle(_) => {
+            WafSupportFailure::new("invalid_bundle", "Correct the selected WAF rule bundle")
+        }
         FrontendError::Include(edgion_waf::seclang::IncludeError::Syntax { line }) => WafSupportFailure {
             physical_line: Some(*line),
             ..WafSupportFailure::new("syntax", "Correct the include directive syntax")
@@ -629,6 +711,31 @@ impl IncludeSource for NoIncludes {
 }
 
 impl WafConfig {
+    /// Validate the operator-authored shape before any bundle reference is resolved.
+    pub fn validate_shape(&self) -> Result<(), String> {
+        self.request_body.prefix_size_bytes()?;
+        if self.rules.trim().is_empty() && self.bundle_refs.is_empty() {
+            return Err("rules or bundleRefs must be provided".to_string());
+        }
+        if self.bundle_refs.len() > MAX_WAF_BUNDLE_REFS {
+            return Err(format!("bundleRefs cannot exceed {MAX_WAF_BUNDLE_REFS}"));
+        }
+        for reference in &self.bundle_refs {
+            if reference.target.name.is_empty() || reference.target.name.contains('/') {
+                return Err("bundleRefs contains an invalid name".to_string());
+            }
+            if reference.expected_digest.len() != 64
+                || !reference
+                    .expected_digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err("bundleRefs expectedDigest must be a lowercase SHA-256 digest".to_string());
+            }
+        }
+        Ok(())
+    }
+
     fn validation_context() -> Result<SemanticValidationContext, WafCompileFailure> {
         let defaults = [
             Phase::RequestHeaders,
@@ -643,20 +750,90 @@ impl WafConfig {
     }
 
     fn compile_generation_detailed(&self) -> Result<CompiledGeneration, WafCompileFailure> {
-        self.request_body
-            .prefix_size_bytes()
-            .map_err(WafCompileFailure::Config)?;
-        if self.rules.trim().is_empty() {
-            return Err(WafCompileFailure::Config("rules must not be empty".to_string()));
+        self.validate_shape().map_err(WafCompileFailure::Config)?;
+        if !self.resolution_errors.is_empty() {
+            return Err(WafCompileFailure::Config("bundleRefs resolution failed".to_string()));
         }
-        let generation = compile_with_includes(
-            "inline-waf-rules",
-            self.rules.as_bytes(),
-            &mut NoIncludes,
-            None,
-            Self::validation_context()?,
-            FrontendLimits::default(),
-        )
+        let generation = if self.bundle_refs.is_empty() {
+            compile_with_includes(
+                "inline-waf-rules",
+                self.rules.as_bytes(),
+                &mut NoIncludes,
+                None,
+                Self::validation_context()?,
+                FrontendLimits::default(),
+            )
+        } else {
+            let resolved = self
+                .resolved_bundles
+                .as_ref()
+                .ok_or_else(|| WafCompileFailure::Config("bundleRefs have not been resolved".to_string()))?;
+            if resolved.len() != self.bundle_refs.len() {
+                return Err(WafCompileFailure::Config(
+                    "bundleRefs resolution is incomplete".to_string(),
+                ));
+            }
+            for (reference, bundle) in self.bundle_refs.iter().zip(resolved) {
+                let owner_namespace = self
+                    .owner_namespace
+                    .as_deref()
+                    .ok_or_else(|| WafCompileFailure::Config("bundleRefs owner namespace is missing".to_string()))?;
+                let namespace = reference.target.namespace.as_deref().unwrap_or(owner_namespace);
+                let expected_identity = format!("{namespace}/{}", reference.target.name);
+                if reference.target.ref_denied.is_some()
+                    || bundle.identity != expected_identity
+                    || reference.expected_digest != bundle.digest
+                    || bundle.digest != bundle.data.digest
+                    || bundle.data.validate().is_err()
+                {
+                    return Err(WafCompileFailure::Config(
+                        "bundleRefs contain an invalid bundle".to_string(),
+                    ));
+                }
+            }
+            let prepared: Vec<_> = resolved
+                .iter()
+                .map(|bundle| {
+                    (
+                        bundle.data.roots.iter().map(String::as_str).collect::<Vec<_>>(),
+                        bundle
+                            .data
+                            .rules
+                            .iter()
+                            .map(|member| RuleBundleMember {
+                                path: &member.name,
+                                bytes: member.content.as_bytes(),
+                            })
+                            .collect::<Vec<_>>(),
+                        bundle
+                            .data
+                            .phrase_assets
+                            .iter()
+                            .map(|member| RuleBundleMember {
+                                path: &member.name,
+                                bytes: member.content.as_bytes(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect();
+            let sources = resolved
+                .iter()
+                .zip(&prepared)
+                .map(|(bundle, (entrypoints, rules, phrase_assets))| RuleBundleSource {
+                    identity: &bundle.identity,
+                    entrypoints,
+                    rules,
+                    phrase_assets,
+                })
+                .collect::<Vec<_>>();
+            compile_rule_bundles(
+                &sources,
+                &self.rules,
+                Self::validation_context()?,
+                FrontendLimits::default(),
+            )
+        }
         .map(|bundle| bundle.into_parts().0)
         .map_err(WafCompileFailure::Frontend)?;
         if self.request_body.inspection == WafRequestBodyInspection::Prefix {
@@ -682,6 +859,13 @@ impl WafConfig {
             omitted_rule_summaries: 0,
             failure: None,
         };
+        if !self.bundle_refs.is_empty() {
+            report.failure = Some(WafSupportFailure::new(
+                "unresolved_reference",
+                "Bundle references require Controller resolution before full support inspection",
+            ));
+            return report;
+        }
         if self.request_body.prefix_size_bytes().is_err() {
             report.failure = Some(WafSupportFailure::new(
                 "invalid_config",

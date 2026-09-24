@@ -31,6 +31,12 @@ impl EdgionConfigDataStore {
         map.get(&key).cloned()
     }
 
+    /// Capture an ordered set of references while holding one read guard.
+    pub fn get_many(&self, keys: &[String]) -> Vec<Option<EdgionConfigData>> {
+        let map = self.data.read();
+        keys.iter().map(|key| map.get(key).cloned()).collect()
+    }
+
     /// Replace all entries (used during reset).
     pub fn replace_all(&self, data: HashMap<String, EdgionConfigData>) {
         let count = data.len();

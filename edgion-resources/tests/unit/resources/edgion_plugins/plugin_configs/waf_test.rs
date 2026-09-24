@@ -1,5 +1,74 @@
 use super::*;
 
+fn test_bundle(name: &str, id: u64) -> (WafBundleRef, ResolvedWafBundle) {
+    use crate::resources::edgion_config_data::WafBundleMember;
+
+    let mut data = WafRuleBundleData {
+        version: "1".into(),
+        profile: "test".into(),
+        provenance: "test/revision".into(),
+        digest: String::new(),
+        roots: vec!["main.conf".into()],
+        rules: vec![WafBundleMember {
+            name: "main.conf".into(),
+            content: format!("SecAction \"id:{id},phase:1,pass\"\n"),
+        }],
+        phrase_assets: vec![],
+    };
+    data.digest = data.compute_digest();
+    (
+        WafBundleRef {
+            target: EdgionConfigDataRef {
+                name: name.into(),
+                namespace: None,
+                ref_denied: None,
+            },
+            expected_digest: data.digest.clone(),
+        },
+        ResolvedWafBundle {
+            identity: format!("default/{name}"),
+            digest: data.digest.clone(),
+            data,
+        },
+    )
+}
+
+#[test]
+fn bundle_refs_require_complete_pinned_sources_and_redact_content() {
+    let (first_ref, first) = test_bundle("first", 10);
+    let (second_ref, second) = test_bundle("second", 11);
+    let config = WafConfig {
+        bundle_refs: vec![first_ref, second_ref],
+        resolved_bundles: Some(vec![first, second]),
+        owner_namespace: Some("default".into()),
+        ..WafConfig::default()
+    };
+    assert_eq!(config.compile_generation().unwrap().rule_unit_count(), 2);
+
+    let json = serde_json::to_value(&config).unwrap();
+    let parsed: WafConfig = serde_json::from_value(json).unwrap();
+    assert_eq!(parsed.compile_generation().unwrap().rule_unit_count(), 2);
+
+    let mut tampered = config.clone();
+    tampered.resolved_bundles.as_mut().unwrap()[0].data.rules[0]
+        .content
+        .push_str("# changed");
+    assert!(tampered.compile_generation().is_err());
+
+    let mut mismatch = config.clone();
+    mismatch.bundle_refs[0].expected_digest = "0".repeat(64);
+    assert!(mismatch.compile_generation().is_err());
+
+    let mut missing = config.clone();
+    missing.resolved_bundles = None;
+    assert!(missing.compile_generation().is_err());
+
+    let _guard = crate::redact::AdminRedactGuard::new();
+    let admin = serde_json::to_string(&config).unwrap();
+    assert!(!admin.contains("SecAction"));
+    assert!(!format!("{config:?}").contains("SecAction"));
+}
+
 #[test]
 fn support_report_separates_inventory_from_strict_validation_and_redacts_operands() {
     let config = WafConfig {
@@ -286,13 +355,17 @@ fn blank_rules_are_rejected_by_the_shared_compile_entry() {
         mode: WafMode::On,
         request_body: WafRequestBodyConfig::default(),
         priority: 0,
+        ..WafConfig::default()
     };
 
     assert_eq!(
         config.compile_generation().err().as_deref(),
-        Some("rules must not be empty")
+        Some("rules or bundleRefs must be provided")
     );
-    assert_eq!(config.validation_error().as_deref(), Some("rules must not be empty"));
+    assert_eq!(
+        config.validation_error().as_deref(),
+        Some("rules or bundleRefs must be provided")
+    );
 }
 
 #[test]
@@ -302,6 +375,7 @@ fn validation_compiles_supported_rules_without_a_separate_prepare_call() {
         mode: WafMode::On,
         request_body: WafRequestBodyConfig::default(),
         priority: 0,
+        ..WafConfig::default()
     };
     assert_eq!(valid.validation_error(), None);
 
@@ -310,6 +384,7 @@ fn validation_compiles_supported_rules_without_a_separate_prepare_call() {
         mode: WafMode::DetectionOnly,
         request_body: WafRequestBodyConfig::default(),
         priority: 0,
+        ..WafConfig::default()
     };
     assert!(invalid.validation_error().is_some());
 }
@@ -322,6 +397,7 @@ fn terminal_waf_status_matches_the_final_reply_contract() {
             mode: WafMode::On,
             request_body: WafRequestBodyConfig::default(),
             priority: 0,
+            ..WafConfig::default()
         };
         assert_eq!(
             config.validation_error().is_none(),
@@ -338,6 +414,7 @@ fn validation_errors_do_not_render_rule_content() {
         mode: WafMode::On,
         request_body: WafRequestBodyConfig::default(),
         priority: 0,
+        ..WafConfig::default()
     };
     let error = config.validation_error().expect("invalid source must be rejected");
     assert!(!error.contains("private"));
@@ -350,6 +427,7 @@ fn rules_round_trip_for_transport_but_redact_from_admin_and_debug_output() {
         mode: WafMode::On,
         request_body: WafRequestBodyConfig::default(),
         priority: 17,
+        ..WafConfig::default()
     };
 
     let transport = serde_json::to_value(&config).expect("transport serialization succeeds");
@@ -400,6 +478,7 @@ fn dynamic_integration_generations_compile_with_the_production_profile() {
             mode: WafMode::On,
             request_body: WafRequestBodyConfig::default(),
             priority: 0,
+            ..WafConfig::default()
         };
         assert_eq!(config.validation_error(), None, "fixture must compile: {rules}");
     }

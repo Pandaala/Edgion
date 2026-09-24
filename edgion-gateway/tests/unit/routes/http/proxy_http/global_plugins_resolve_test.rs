@@ -50,6 +50,7 @@ fn waf_runtime(priority: u16) -> Arc<PluginRuntime> {
             mode: WafMode::On,
             priority,
             request_body: Default::default(),
+            ..WafConfig::default()
         })
         .expect("test WAF compiles");
     Arc::new(runtime)

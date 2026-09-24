@@ -32,3 +32,9 @@ setvars. A JSON processor override parses a `text/plain` body; the raw-body
 switch is tested in both directions against the same phase-2 rules. A target
 exclusion suppresses only the response-status child of a tagged phase-3 chain.
 The generation then reloads to the recovery rules.
+
+The bundle phases apply a versioned `WafRuleBundle` EdgionConfigData with an
+`Include` and a phrase asset, then bind it through a digest-pinned `bundleRefs`
+entry. A changed asset with the old digest retains the prior compiled WAF.
+The next version changes the denied phrase; reapplying the original bundle and
+pin rolls back. Deletion removes both bundle resources and the plugin.

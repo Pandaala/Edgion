@@ -1464,6 +1464,114 @@ fn build_edgion_config_data(namespace: &str, name: &str, spec: EdgionConfigDataS
 }
 
 #[tokio::test]
+async fn waf_bundle_refs_register_requeue_and_resolve_only_complete_pinned_sources() {
+    use edgion_resources::resources::edgion_config_data::{WafBundleMember, WafRuleBundleData};
+    use edgion_resources::resources::edgion_plugins::{WafBundleRef, WafConfig};
+
+    let mut bundle = WafRuleBundleData {
+        version: "1".into(),
+        profile: "test".into(),
+        provenance: "test/revision".into(),
+        digest: String::new(),
+        roots: vec!["main.conf".into()],
+        rules: vec![WafBundleMember {
+            name: "main.conf".into(),
+            content: "SecAction \"id:10,phase:1,pass\"\n".into(),
+        }],
+        phrase_assets: vec![],
+    };
+    bundle.digest = bundle.compute_digest();
+    let make_target = |data: WafRuleBundleData| {
+        build_edgion_config_data(
+            "default",
+            "rules-v1",
+            EdgionConfigDataSpec {
+                current_status: None,
+                unknown_fields: vec![],
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                data: ConfigEntry::WafRuleBundle(data),
+            },
+        )
+    };
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    runtime.edgion_config_data_store.replace_all(HashMap::from([(
+        "default/rules-v1".into(),
+        make_target(bundle.clone()),
+    )]));
+    let mut resource = EdgionPlugins::new("waf-owner", EdgionPluginsSpec::default());
+    resource.metadata.namespace = Some("default".into());
+    resource.spec.waf = Some(WafConfig {
+        bundle_refs: vec![WafBundleRef {
+            target: EdgionConfigDataRef {
+                name: "rules-v1".into(),
+                ..Default::default()
+            },
+            expected_digest: bundle.digest.clone(),
+        }],
+        ..WafConfig::default()
+    });
+
+    let handler = EdgionPluginsHandler::new();
+    let parsed = match handler.parse(resource.clone(), &ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert!(runtime
+        .edgion_config_data_refs
+        .get_refs("default/rules-v1")
+        .contains(&"EdgionPlugins:default/waf-owner".to_string()));
+    assert!(parsed.spec.waf.as_ref().unwrap().compile_generation().is_ok());
+
+    bundle.rules[0].content.push_str("# changed");
+    runtime
+        .edgion_config_data_store
+        .replace_all(HashMap::from([("default/rules-v1".into(), make_target(bundle))]));
+    let parsed = match handler.parse(resource, &ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    let waf = parsed.spec.waf.as_ref().unwrap();
+    assert!(waf.resolved_bundles.is_none());
+    assert_eq!(waf.resolution_errors.len(), 1);
+    assert!(waf.compile_generation().is_err());
+}
+
+#[tokio::test]
+async fn waf_bundle_reference_limit_stops_subscription_and_source_capture() {
+    use edgion_resources::resources::edgion_plugins::{WafBundleRef, WafConfig};
+
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let mut resource = EdgionPlugins::new("waf-owner", EdgionPluginsSpec::default());
+    resource.metadata.namespace = Some("default".into());
+    resource.spec.waf = Some(WafConfig {
+        bundle_refs: vec![
+            WafBundleRef {
+                target: EdgionConfigDataRef {
+                    name: "large-bundle".into(),
+                    ..Default::default()
+                },
+                expected_digest: "0".repeat(64),
+            };
+            1_024
+        ],
+        ..WafConfig::default()
+    });
+
+    assert!(EdgionPluginsHandler::get_waf_ref_keys(&resource).is_empty());
+    let parsed = match EdgionPluginsHandler.parse(resource, &ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert!(runtime
+        .edgion_config_data_refs
+        .get_refs("default/large-bundle")
+        .is_empty());
+    assert!(parsed.spec.waf.as_ref().unwrap().resolved_bundles.is_none());
+}
+
+#[tokio::test]
 async fn test_validate_region_route_override_ref_ok() {
     // RegionRouteOverride EdgionConfigData exists → resolve_override_refs returns no error
     let override_ed = build_edgion_config_data(
