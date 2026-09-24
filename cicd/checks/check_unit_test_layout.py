@@ -11,7 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 CRATE = ROOT / "edgion-common"
-MIGRATED_CRATES = ("edgion-common", "edgion-dsl", "edgion-cli", "edgion-controller", "edgion-algo", "edgion-waf")
+MIGRATED_CRATES = ("edgion-common", "edgion-dsl", "edgion-cli", "edgion-controller", "edgion-algo", "edgion-waf", "edgion-wasm")
 CFG = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 PATH = re.compile(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]')
 MODULE = re.compile(r"mod\s+([A-Za-z_][A-Za-z_0-9]*)\s*([;{])")
