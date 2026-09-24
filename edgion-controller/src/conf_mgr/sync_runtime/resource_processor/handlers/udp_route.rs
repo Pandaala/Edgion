@@ -71,7 +71,7 @@ impl UdpRouteHandler {
         let manager = &ctx.runtime().cross_ns_ref_mgr;
 
         // Clear old references first (handles updates)
-        manager.clear_resource_refs(&resource_ref);
+        manager.clear_value_refs(&resource_ref);
 
         if let Some(rules) = &route.spec.rules {
             for rule in rules {
@@ -203,7 +203,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
 
     async fn on_delete(&self, route: &UDPRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");

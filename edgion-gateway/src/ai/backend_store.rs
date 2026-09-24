@@ -299,14 +299,6 @@ impl EdgionBackendStore {
         self.snapshot.load().backends.keys().cloned().collect()
     }
 
-    pub fn count_all(&self) -> usize {
-        self.snapshot.load().backends.len()
-    }
-
-    pub fn keys_all(&self) -> Vec<String> {
-        self.snapshot.load().backends.keys().cloned().collect()
-    }
-
     fn replace_all(&self, resources: &HashMap<String, Arc<EdgionBackend>>) {
         let current = self.snapshot.load();
         let backends: RuntimeMap = resources

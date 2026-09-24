@@ -127,8 +127,8 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         );
 
         // Clear old references first (for update scenario)
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
 
         let resource_namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
         let resource_name = acme.metadata.name.as_deref().unwrap_or_default();
@@ -248,8 +248,8 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             acme.metadata.namespace.clone(),
             acme.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
         let resource_namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
         let resource_name = acme.metadata.name.as_deref().unwrap_or_default();
         notify_resource_changed(format!("{resource_namespace}/{resource_name}")).await;

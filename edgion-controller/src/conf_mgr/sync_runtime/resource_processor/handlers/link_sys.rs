@@ -24,7 +24,7 @@ use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::credentials::{ResolveError, SecretMaterialResolver};
 use edgion_resources::prelude_resources::LinkSys;
 use edgion_resources::resources::common::SecretObjectReference;
-use edgion_resources::resources::link_sys::webhook::{ResolvedSecrets, WebhookServiceConfig};
+use edgion_resources::resources::link_sys::webhook::ResolvedSecrets;
 use edgion_resources::resources::link_sys::{
     CredentialSourceConfig, CredentialSourceProvider, LinkSysStatus, SystemConfig,
 };
@@ -240,8 +240,8 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
         // Clear old Secret references first (for update scenario) so that a Secret
         // that was previously referenced but is no longer referenced after an update
         // does not trigger spurious requeues.
-        ctx.secret_ref_manager().clear_resource_refs(&owner);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
+        ctx.secret_ref_manager().clear_value_refs(&owner);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&owner);
         ctx.runtime()
             .credential_source_registry
             .remove_source(&owner.resource_key());
@@ -321,8 +321,8 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
             ls.metadata.namespace.clone(),
             ls.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.secret_ref_manager().clear_resource_refs(&owner);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
+        ctx.secret_ref_manager().clear_value_refs(&owner);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&owner);
         ctx.runtime()
             .credential_source_registry
             .forget_source(&owner.resource_key());
@@ -564,64 +564,6 @@ async fn drive_standard<A: AuthSpec, T: TlsSpec>(
 /// Leaving `secret: None` on the unresolved field is safe: gateway providers
 /// only build a client when `CredentialState::is_buildable` returns true, so
 /// a partially resolved spec never reaches a live client.
-/// A webhook shim field that is present in the spec and therefore triggers a
-/// deprecation warning. Carries the CRD field name and the migration hint so
-/// the WARN message and the unit test assertions share one source of truth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DeprecatedShimField {
-    /// CRD field name as the operator wrote it (camelCase).
-    field: &'static str,
-    /// Migration guidance appended to the warning message.
-    migrate_to: &'static str,
-}
-
-/// Detect which webhook shim fields are present (pure, side-effect free).
-///
-/// Splitting detection from logging lets unit tests assert exactly which fields
-/// would warn without standing up a tracing subscriber. Returns the fields in a
-/// stable order (auth, defaultHeaders, requestMethod) so log/test output is
-/// deterministic.
-fn detect_deprecated_webhook_shim_fields(w: &WebhookServiceConfig) -> Vec<DeprecatedShimField> {
-    let mut out = Vec::new();
-    if w.auth.is_some() {
-        out.push(DeprecatedShimField {
-            field: "auth",
-            migrate_to: "request.headers.custom with template: \"<prefix>${secretRef:ns/name:key}\"",
-        });
-    }
-    if w.default_headers.is_some() {
-        out.push(DeprecatedShimField {
-            field: "defaultHeaders",
-            migrate_to: "request.headers.custom with source: value",
-        });
-    }
-    if w.request_method.is_some() {
-        out.push(DeprecatedShimField {
-            field: "requestMethod",
-            migrate_to: "request.method.template",
-        });
-    }
-    out
-}
-
-/// Emit WARN-level deprecation logs for any webhook shim fields still present.
-///
-/// The shim fields (`auth`, `defaultHeaders`, `requestMethod`) are accepted for
-/// backward compatibility during rolling upgrades but are not used at runtime in
-/// this release. They will be removed in the next release (Task D2). This only
-/// logs — it never rejects the resource or alters behavior.
-fn warn_deprecated_webhook_shim_fields(owner: &ResourceRef, w: &WebhookServiceConfig) {
-    for shim in detect_deprecated_webhook_shim_fields(w) {
-        tracing::warn!(
-            link_sys = %owner.key(),
-            deprecated_field = shim.field,
-            "LinkSys uses a deprecated webhook configuration field that will be removed in the \
-             next release. Migrate to {}.",
-            shim.migrate_to,
-        );
-    }
-}
-
 #[derive(Default)]
 struct SpecResolution {
     errors: Vec<ResolvedRefsError>,
@@ -744,10 +686,6 @@ async fn resolve_for_spec(ctx: &HandlerContext, owner: &ResourceRef, config: &mu
         }
         SystemConfig::Elasticsearch(es) => drive_standard(ctx, owner, es.auth.as_mut(), es.tls.as_mut()).await,
         SystemConfig::Webhook(w) => {
-            // Emit deprecation warnings for shim fields (auth, defaultHeaders,
-            // requestMethod), accepted for backward compat but unused at runtime.
-            warn_deprecated_webhook_shim_fields(owner, w);
-
             let mut errs = Vec::new();
 
             // Resolve TLS (unchanged).

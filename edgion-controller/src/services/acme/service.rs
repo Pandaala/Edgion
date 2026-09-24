@@ -1582,9 +1582,9 @@ async fn fetch_eab_hmac(client: &Client, acme: &EdgionAcme, owner_ns: &str) -> R
 ///
 /// Uses `spec.privateKeySecretRef` and the `accountCredentials` data key (see `ACME_ACCOUNT_KEY`).
 /// - Secret not found: register, then create Secret (with ownerReferences when uid is set).
-/// - Secret exists with valid `accountCredentials` (or legacy `credentials`):
+/// - Secret exists with valid `accountCredentials`:
 ///   restore — **no overwrite** (backup / operator restore).
-/// - Secret exists but missing those keys: register, then **merge-patch** `accountCredentials` only
+/// - Secret exists but missing that key: register, then **merge-patch** `accountCredentials` only
 ///   (self-managed empty Secret).
 /// - Key present but JSON invalid: **error** (operator must fix; we do not re-register over it).
 async fn get_or_create_acme_account(attempt: &AcmeAttempt, acme: &EdgionAcme) -> Result<AcmeClient> {

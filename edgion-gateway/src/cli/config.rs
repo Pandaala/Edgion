@@ -187,7 +187,7 @@ pub struct EdgionGatewayConfig {
 
     /// Global configuration for the retained LRU implementation
     #[arg(skip)]
-    #[serde(default, alias = "auth_cache")]
+    #[serde(default)]
     pub lru_cache: LruCacheGlobalConfig,
 
     /// Global bounded TinyUFO TTL-cache configuration
@@ -1325,7 +1325,7 @@ conf_sync_security:
       skip_tls: true
   rotation:
     policy: lifetime
-auth_cache:
+lru_cache:
   default_capacity: 128
   default_shards: 2
 "#;

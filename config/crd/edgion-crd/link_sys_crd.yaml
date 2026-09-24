@@ -45,7 +45,7 @@ spec:
                       properties:
                         type:
                           type: string
-                          description: "Authentication type (elasticsearch/webhook style); omit for redis/etcd/otlp simple secretRef auth"
+                          description: "Authentication type (elasticsearch style); omit for redis/etcd/otlp simple secretRef auth"
                           enum: ["basic", "apiKey", "bearer", "hmac"]
                         secretRef:
                           type: object
@@ -79,7 +79,7 @@ spec:
                         - required: ["secretRef"]
                           not:
                             required: ["type"]
-                        # Elasticsearch/Webhook style: tagged by `type`
+                        # Elasticsearch style: tagged by `type`
                         - required: ["type", "secretRef"]
                     tls:
                       type: object
@@ -221,9 +221,6 @@ spec:
                     uri:
                       type: string
                       description: "Webhook service URL"
-                    requestMethod:
-                      type: string
-                      description: "HTTP method (GET, POST, etc.)"
                     timeoutMs:
                       type: integer
                       format: int64

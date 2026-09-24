@@ -4,13 +4,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use edgion_resources::credentials::SecretMaterialResolver;
-use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType, WellKnownCACertificates};
-use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::otlp::OtlpBearerResolver;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
-use k8s_openapi::api::core::v1::Secret;
 
-use crate::link_sys::runtime::apply::{ConnectionCoverage, FingerprintHasher, RuntimeFingerprint};
+use crate::link_sys::runtime::apply::{
+    hash_tls_material, hash_tls_policy, ConnectionCoverage, FingerprintHasher, RuntimeFingerprint,
+};
 use crate::link_sys::runtime::runner::ApplyOwner;
 
 use super::client::OtlpLinkClient;
@@ -101,134 +100,15 @@ pub fn fingerprint_otlp(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
     ))
 }
 
-fn hash_tls_policy(hasher: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
-    let Some(tls) = tls else {
-        hasher.tag(0);
-        return;
-    };
-    hasher.tag(1);
-    hasher.tag(u8::from(tls.enabled));
-    if !tls.enabled {
-        return;
-    }
-    hasher.opt_bool(tls.outbound.verify);
-    match tls.outbound.validation.as_ref() {
-        None => hasher.tag(0),
-        Some(validation) => {
-            hasher.tag(1);
-            hasher.opt_str(validation.hostname.as_deref());
-            match validation.well_known_ca_certificates {
-                None => hasher.tag(0),
-                Some(WellKnownCACertificates::System) => hasher.tag(1),
-                Some(WellKnownCACertificates::Other(ref name)) => {
-                    hasher.tag(2);
-                    hasher.bytes(name.as_bytes());
-                }
-            }
-            match validation.subject_alt_names.as_deref() {
-                None => hasher.tag(0),
-                Some(names) => {
-                    hasher.tag(1);
-                    hasher.u64(names.len() as u64);
-                    for name in names {
-                        hash_san(hasher, name);
-                    }
-                }
-            }
-            match validation.ca_certificate_refs.as_deref() {
-                None => hasher.tag(0),
-                Some(refs) => {
-                    hasher.tag(1);
-                    hasher.u64(refs.len() as u64);
-                    for reference in refs {
-                        hasher.bytes(reference.group.as_bytes());
-                        hasher.bytes(reference.kind.as_bytes());
-                        hasher.bytes(reference.name.as_bytes());
-                        hasher.opt_str(reference.namespace.as_deref());
-                    }
-                }
-            }
-        }
-    }
-    match tls.outbound.client_certificate_ref.as_ref() {
-        None => hasher.tag(0),
-        Some(reference) => {
-            hasher.tag(1);
-            hasher.opt_str(reference.group.as_deref());
-            hasher.opt_str(reference.kind.as_deref());
-            hasher.bytes(reference.name.as_bytes());
-            hasher.opt_str(reference.namespace.as_deref());
-        }
-    }
-}
-
-fn hash_san(hasher: &mut FingerprintHasher, san: &SubjectAltName) {
-    hasher.tag(match san.san_type {
-        SubjectAltNameType::Hostname => 0,
-        SubjectAltNameType::URI => 1,
-    });
-    hasher.opt_str(san.hostname.as_deref());
-    hasher.opt_str(san.uri.as_deref());
-}
-
-fn hash_tls_material(hasher: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
-    let Some(tls) = tls else {
-        hasher.tag(0);
-        return;
-    };
-    hasher.tag(1);
-    if !tls.enabled {
-        return;
-    }
-    hash_secrets(hasher, tls.resolved_ca_certificates.as_deref());
-    hash_secret(hasher, tls.resolved_client_certificate.as_ref());
-}
-
-fn hash_secrets(hasher: &mut FingerprintHasher, secrets: Option<&[Secret]>) {
-    match secrets {
-        None => hasher.tag(0),
-        Some(secrets) => {
-            hasher.tag(1);
-            hasher.u64(secrets.len() as u64);
-            for secret in secrets {
-                hash_secret_data(hasher, secret);
-            }
-        }
-    }
-}
-
-fn hash_secret(hasher: &mut FingerprintHasher, secret: Option<&Secret>) {
-    match secret {
-        None => hasher.tag(0),
-        Some(secret) => {
-            hasher.tag(1);
-            hash_secret_data(hasher, secret);
-        }
-    }
-}
-
-fn hash_secret_data(hasher: &mut FingerprintHasher, secret: &Secret) {
-    let mut entries: Vec<(&String, &k8s_openapi::ByteString)> = secret
-        .data
-        .as_ref()
-        .map(|data| data.iter().collect())
-        .unwrap_or_default();
-    entries.sort_by(|left, right| left.0.cmp(right.0));
-    hasher.u64(entries.len() as u64);
-    for (key, value) in entries {
-        hasher.bytes(key.as_bytes());
-        hasher.bytes(&value.0);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use edgion_resources::resources::common::outbound_tls::OutboundTlsLocal;
-    use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+    use edgion_resources::resources::common::{SecretObjectReference, SecretSlot, TlsConfig};
     use edgion_resources::resources::link_sys::otlp::{OtlpAuth, OtlpClientConfig};
     use edgion_resources::resources::link_sys::{LinkSysLocalStatus, LinkSysSpec};
+    use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
 
     use super::*;

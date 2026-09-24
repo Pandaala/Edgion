@@ -199,7 +199,7 @@ impl GrpcRouteHandler {
     fn register_plugin_refs(route: &GRPCRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
         let manager = &ctx.runtime().plugin_ref_mgr;
-        manager.clear_resource_refs(&resource_ref);
+        manager.clear_value_refs(&resource_ref);
 
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         for rules in [route.spec.rules.as_deref(), route.spec.resolved_rules.as_deref()]
@@ -251,7 +251,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
 
     async fn parse(&self, mut route: GRPCRoute, _ctx: &HandlerContext) -> ProcessResult<GRPCRoute> {
         let grant_owner = Self::create_resource_ref(&route);
-        _ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&grant_owner);
+        _ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&grant_owner);
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let route_ns = route_ns.as_str();
 
@@ -505,8 +505,8 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
 
     async fn on_delete(&self, route: &GRPCRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().plugin_ref_mgr.clear_value_refs(&resource_ref);
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");

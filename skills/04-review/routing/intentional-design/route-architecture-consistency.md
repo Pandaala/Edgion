@@ -115,7 +115,7 @@ Every route handler (`ProcessorHandler<T>`) must implement:
 | `validate` | `validate_*_route_if_enabled` + `validate_backend_refs` |
 | `parse` | `record_cross_ns_refs`, `register_service_refs`, mark `ref_denied`, resolve `resolved_listeners` (and `resolved_hostnames` for L7) |
 | `on_change` | `update_gateway_route_index`, `update_attached_route_tracker`, conditional `requeue_parent_gateways` |
-| `on_delete` | `clear_resource_refs`, `clear_service_backend_refs`, `remove_from_gateway_route_index`, `remove_from_attached_route_tracker`, conditional `requeue_parent_gateways` |
+| `on_delete` | `clear_value_refs`, `clear_service_backend_refs`, `remove_from_gateway_route_index`, `remove_from_attached_route_tracker`, conditional `requeue_parent_gateways` |
 | `update_status` | `set_parent_conditions_full` per parent, `retain_current_parent_statuses`, clear when `parent_refs` is None |
 
 **Critical rule:** Any handler that calls `lookup_gateway()` in `parse()` MUST

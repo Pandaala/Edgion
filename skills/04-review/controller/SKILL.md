@@ -15,6 +15,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Configuration writer error has one export](regression-guards/conf-writer-error-single-export.md)
+- [Reference-manager APIs use canonical names](regression-guards/reference-manager-canonical-surface.md)
 - [TLSRoute canonical API ingress](regression-guards/tls-route-canonical-api-ingress.md)
 
 - [BackendTLSPolicy canonical API ingress](regression-guards/backend-tls-policy-canonical-api-ingress.md)

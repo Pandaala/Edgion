@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Removed Webhook fields produce unknown-field feedback](regression-guards/webhook-removed-fields-unknown-feedback.md)
+- [LinkSys providers share TLS fingerprint encoding](regression-guards/shared-tls-fingerprint-encoding.md)
 - [Published generation owns LinkSys health transitions](regression-guards/published-generation-health-transition-ownership.md)
 - [LinkSys hot reload reuses equal material and does not promise queue drain](regression-guards/link-sys-hot-reload-reuse-and-retirement.md)
 - [A LinkSys forced rebuild survives ordinary replay](regression-guards/forced-rebuild-survives-ordinary-replay.md)

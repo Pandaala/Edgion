@@ -142,8 +142,8 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
         );
 
         backend.spec.reconcile_outcome = None;
-        ctx.secret_ref_manager().clear_resource_refs(&owner);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
+        ctx.secret_ref_manager().clear_value_refs(&owner);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&owner);
         let ai = &mut backend.spec.ai;
 
         for credential in &mut ai.credential_pool.credentials {
@@ -228,8 +228,8 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
             backend.metadata.namespace.clone(),
             backend.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.secret_ref_manager().clear_resource_refs(&owner);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
+        ctx.secret_ref_manager().clear_value_refs(&owner);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&owner);
         requeue_dependents(backend, ctx).await;
         tracing::debug!(
             component = "edgion_backend_handler",

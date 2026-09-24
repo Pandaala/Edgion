@@ -17,6 +17,11 @@ The resource remains admitted and synced, but the stale field is not silent:
 the advisory schema walker reports its exact path. The read-only Admin validate
 endpoint exposes the same finding with `ok: false`.
 
+For direct Kubernetes, filesystem, and etcd ingest, the finding can populate
+status and diagnostics. Admin writes return the warning from the submitted
+document, then persist a typed round-trip that drops the unknown key; later
+status and diagnostics do not retain that Admin-submitted finding.
+
 ## Core rationale
 
 The schema walker operates on raw input before typed round-tripping removes

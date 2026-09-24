@@ -419,10 +419,6 @@ impl AdaptiveTelemetryStore {
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.states.load().len()
-    }
-
     /// Number of adaptive telemetry identities currently discoverable.
     pub fn count(&self) -> usize {
         self.states.load().len()
@@ -998,7 +994,7 @@ mod tests {
         let states: Vec<_> = threads.into_iter().map(|thread| thread.join().unwrap()).collect();
         let published = store.get(&key).expect("same key must be published");
         assert!(states.iter().all(|state| Arc::ptr_eq(state, &published)));
-        assert_eq!(store.len(), 1);
+        assert_eq!(store.count(), 1);
     }
 
     #[test]
@@ -1009,7 +1005,7 @@ mod tests {
         let kept_state = store.get_or_create(keep.clone());
         let removed_state = store.get_or_create(remove);
         store.retain_keys(&HashSet::from([keep.clone()]));
-        assert_eq!(store.len(), 1);
+        assert_eq!(store.count(), 1);
         assert!(Arc::ptr_eq(&kept_state, &store.get(&keep).unwrap()));
         removed_state.tick(1);
         removed_state.record_charged_tokens(1, 3);

@@ -1,11 +1,9 @@
 //! Webhook fingerprint so equal-runtime relists skip prepare/commit.
 
-use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::webhook::ResolvedSecrets;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
-use k8s_openapi::api::core::v1::Secret;
 
-use crate::link_sys::runtime::apply::{FingerprintHasher, RuntimeFingerprint};
+use crate::link_sys::runtime::apply::{hash_tls_material, FingerprintHasher, RuntimeFingerprint};
 
 pub fn fingerprint_webhook(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
     let SystemConfig::Webhook(cfg) = &ls.spec.config else {
@@ -56,56 +54,6 @@ fn hash_resolved_secrets(h: &mut FingerprintHasher, secrets: Option<&ResolvedSec
                 h.bytes(value.as_bytes());
             }
         }
-    }
-}
-
-fn hash_tls_material(h: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
-    let Some(tls) = tls else {
-        h.tag(0);
-        return;
-    };
-    h.tag(1);
-    if !tls.enabled {
-        return;
-    }
-    hash_secrets(h, tls.resolved_ca_certificates.as_deref());
-    hash_secret(h, tls.resolved_client_certificate.as_ref());
-}
-
-fn hash_secrets(h: &mut FingerprintHasher, secrets: Option<&[Secret]>) {
-    match secrets {
-        None => h.tag(0),
-        Some(secrets) => {
-            h.tag(1);
-            h.u64(secrets.len() as u64);
-            for secret in secrets {
-                hash_secret_data(h, secret);
-            }
-        }
-    }
-}
-
-fn hash_secret(h: &mut FingerprintHasher, secret: Option<&Secret>) {
-    match secret {
-        None => h.tag(0),
-        Some(secret) => {
-            h.tag(1);
-            hash_secret_data(h, secret);
-        }
-    }
-}
-
-fn hash_secret_data(h: &mut FingerprintHasher, secret: &Secret) {
-    let mut entries: Vec<(&String, &k8s_openapi::ByteString)> = secret
-        .data
-        .as_ref()
-        .map(|data| data.iter().collect())
-        .unwrap_or_default();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    h.u64(entries.len() as u64);
-    for (key, value) in entries {
-        h.bytes(key.as_bytes());
-        h.bytes(&value.0);
     }
 }
 
@@ -162,18 +110,6 @@ mod tests {
         let a = webhook_ls(8080, None);
         let b = webhook_ls(8081, None);
         assert!(!fingerprint_webhook(&a)
-            .unwrap()
-            .equal_runtime(&fingerprint_webhook(&b).unwrap()));
-    }
-
-    #[test]
-    fn ignored_auth_shim_does_not_change_fingerprint() {
-        let mut a = webhook_ls(8080, None);
-        let b = a.clone();
-        if let SystemConfig::Webhook(cfg) = &mut a.spec.config {
-            cfg.auth = Some(serde_json::json!({"type": "bearer"}));
-        }
-        assert!(fingerprint_webhook(&a)
             .unwrap()
             .equal_runtime(&fingerprint_webhook(&b).unwrap()));
     }

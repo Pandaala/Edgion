@@ -44,7 +44,7 @@ mod tests {
     }
 
     #[test]
-    fn test_clear_resource_refs() {
+    fn test_clear_value_refs() {
         let manager = new_secret_ref_manager();
         let resource = ResourceRef::new(
             ResourceKind::EdgionTls,
@@ -55,7 +55,7 @@ mod tests {
         manager.add_ref("default/cert1".to_string(), resource.clone());
         manager.add_ref("default/cert2".to_string(), resource.clone());
 
-        let cleared = manager.clear_resource_refs(&resource);
+        let cleared = manager.clear_value_refs(&resource);
         assert_eq!(cleared.len(), 2);
         assert!(cleared.contains(&"default/cert1".to_string()));
         assert!(cleared.contains(&"default/cert2".to_string()));

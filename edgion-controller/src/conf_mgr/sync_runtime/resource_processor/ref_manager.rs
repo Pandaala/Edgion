@@ -284,11 +284,6 @@ impl<V: RefValue> BidirectionalRefManager<V> {
         source_keys
     }
 
-    /// Backward-compatible alias for [`clear_value_refs`](Self::clear_value_refs).
-    pub fn clear_resource_refs(&self, value: &V) -> Vec<String> {
-        self.clear_value_refs(value)
-    }
-
     /// Remove all references for a source key (e.g., when the source itself is
     /// deleted). Symmetric to [`clear_value_refs`]: removes the forward entry
     /// and scrubs the source key from every affected value's reverse entry.

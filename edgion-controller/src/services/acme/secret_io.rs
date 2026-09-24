@@ -12,13 +12,10 @@ use zeroize::Zeroizing;
 
 use edgion_resources::credentials::ACME_ACCOUNT_KEY;
 
-/// Legacy data key (pre-`ACME_ACCOUNT_KEY`); read-only for migration.
-const LEGACY_ACME_ACCOUNT_KEY: &str = "credentials";
-
 const EDGION_IO_MANAGED_BY: &str = "edgion.io/managed-by";
 const EDGION_IO_ACME_RESOURCE: &str = "edgion.io/acme-resource";
 
-/// Extract JSON bytes for the ACME account from Secret.data (prefers `accountCredentials`, else legacy `credentials`).
+/// Extract JSON bytes for the ACME account from Secret.data.
 ///
 /// # Zeroize scope
 ///
@@ -30,25 +27,12 @@ const EDGION_IO_ACME_RESOURCE: &str = "edgion.io/acme-resource";
 /// the caller-owned `Secret` also remains unprotected. This is local
 /// defense-in-depth, not an end-to-end erasure guarantee.
 pub fn extract_account_json_string(data: &BTreeMap<String, ByteString>) -> Result<Option<Zeroizing<String>>> {
-    let entry = if let Some(b) = data.get(ACME_ACCOUNT_KEY) {
-        Some((ACME_ACCOUNT_KEY, b))
-    } else if let Some(b) = data.get(LEGACY_ACME_ACCOUNT_KEY) {
-        tracing::warn!(
-            key = %LEGACY_ACME_ACCOUNT_KEY,
-            preferred = %ACME_ACCOUNT_KEY,
-            "Deprecated ACME account Secret key: migrate data to accountCredentials"
-        );
-        Some((LEGACY_ACME_ACCOUNT_KEY, b))
-    } else {
-        None
-    };
-
-    let Some((key, raw)) = entry else {
+    let Some(raw) = data.get(ACME_ACCOUNT_KEY) else {
         return Ok(None);
     };
 
     let s = String::from_utf8(raw.0.clone())
-        .with_context(|| format!("ACME account Secret key {key:?} is not valid UTF-8"))?;
+        .with_context(|| format!("ACME account Secret key {ACME_ACCOUNT_KEY:?} is not valid UTF-8"))?;
     Ok(Some(Zeroizing::new(s)))
 }
 
@@ -153,29 +137,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extract_prefers_account_credentials_over_legacy() {
+    fn extract_account_credentials() {
         let mut data = BTreeMap::new();
         data.insert(
             ACME_ACCOUNT_KEY.to_string(),
             ByteString(br#"{"preferred":true}"#.to_vec()),
-        );
-        data.insert(
-            LEGACY_ACME_ACCOUNT_KEY.to_string(),
-            ByteString(br#"{"legacy":true}"#.to_vec()),
         );
         let z = extract_account_json_string(&data).unwrap().expect("Some");
         assert!(z.contains("preferred"));
     }
 
     #[test]
-    fn extract_legacy_when_only_legacy_present() {
+    fn extract_legacy_key_is_missing() {
         let mut data = BTreeMap::new();
-        data.insert(
-            LEGACY_ACME_ACCOUNT_KEY.to_string(),
-            ByteString(br#"{"only":"legacy"}"#.to_vec()),
-        );
-        let z = extract_account_json_string(&data).unwrap().expect("Some");
-        assert!(z.contains("only"));
+        data.insert("credentials".to_string(), ByteString(br#"{"only":"legacy"}"#.to_vec()));
+        assert!(extract_account_json_string(&data).unwrap().is_none());
     }
 
     #[test]

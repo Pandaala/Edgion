@@ -569,7 +569,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     };
 
     let edgion_backend_store = {
-        let mut keys = crate::ai::global_edgion_backend_store().keys_all();
+        let mut keys = crate::ai::global_edgion_backend_store().keys();
         keys.sort_unstable();
         EdgionBackendStoreStats {
             count: keys.len(),

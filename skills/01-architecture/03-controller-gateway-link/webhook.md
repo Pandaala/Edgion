@@ -156,12 +156,9 @@ Tests: `client.rs::replacement_has_fresh_health_and_carries_resolved_secrets`,
 
 ## Migration (operator-facing)
 
-The current contract uses only the replacement fields below. The code still
-contains ignored `auth` / `defaultHeaders` / `requestMethod` placeholders from
-an earlier migration; those placeholders violate the project's pre-release
-no-compatibility policy. Treat them as removal debt, not supported input: do not
-document, extend, or copy the pattern into new schemas. A future code change
-should remove the fields and their warning/tests atomically.
+The current contract uses only the replacement fields below. Removed
+`auth` / `defaultHeaders` / `requestMethod` fields produce advisory unknown-field
+feedback at Controller ingress while lenient admission remains intact.
 
 Migration map:
 

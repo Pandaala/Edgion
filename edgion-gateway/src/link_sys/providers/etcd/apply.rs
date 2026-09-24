@@ -3,14 +3,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType, WellKnownCACertificates};
-use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
-use k8s_openapi::api::core::v1::Secret;
 
 use crate::link_sys::credential::{self, CredentialState};
-use crate::link_sys::runtime::apply::{ConnectionCoverage, FingerprintHasher, RuntimeFingerprint};
+use crate::link_sys::runtime::apply::{
+    hash_tls_material, hash_tls_policy, ConnectionCoverage, FingerprintHasher, RuntimeFingerprint,
+};
 use crate::link_sys::runtime::health_probe::health_transition_reporter;
 use crate::link_sys::runtime::runner::ApplyOwner;
 use edgion_common::link_sys_core::providers::etcd::config_mapping::{MAX_DIAL_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS};
@@ -149,76 +148,6 @@ fn hash_rebuild_fields(h: &mut FingerprintHasher, cfg: &EtcdClientConfig) {
     hash_tls_policy(h, cfg.tls.as_ref());
 }
 
-fn hash_tls_policy(h: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
-    let Some(tls) = tls else {
-        h.tag(0);
-        return;
-    };
-    h.tag(1);
-    h.tag(u8::from(tls.enabled));
-    if !tls.enabled {
-        return;
-    }
-    h.opt_bool(tls.outbound.verify);
-    match tls.outbound.validation.as_ref() {
-        None => h.tag(0),
-        Some(validation) => {
-            h.tag(1);
-            h.opt_str(validation.hostname.as_deref());
-            match validation.well_known_ca_certificates {
-                None => h.tag(0),
-                Some(WellKnownCACertificates::System) => h.tag(1),
-                Some(WellKnownCACertificates::Other(ref name)) => {
-                    h.tag(2);
-                    h.bytes(name.as_bytes());
-                }
-            }
-            match validation.subject_alt_names.as_deref() {
-                None => h.tag(0),
-                Some(sans) => {
-                    h.tag(1);
-                    h.u64(sans.len() as u64);
-                    for san in sans {
-                        hash_san(h, san);
-                    }
-                }
-            }
-            match validation.ca_certificate_refs.as_deref() {
-                None => h.tag(0),
-                Some(refs) => {
-                    h.tag(1);
-                    h.u64(refs.len() as u64);
-                    for r in refs {
-                        h.bytes(r.group.as_bytes());
-                        h.bytes(r.kind.as_bytes());
-                        h.bytes(r.name.as_bytes());
-                        h.opt_str(r.namespace.as_deref());
-                    }
-                }
-            }
-        }
-    }
-    match tls.outbound.client_certificate_ref.as_ref() {
-        None => h.tag(0),
-        Some(r) => {
-            h.tag(1);
-            h.opt_str(r.group.as_deref());
-            h.opt_str(r.kind.as_deref());
-            h.bytes(r.name.as_bytes());
-            h.opt_str(r.namespace.as_deref());
-        }
-    }
-}
-
-fn hash_san(h: &mut FingerprintHasher, san: &SubjectAltName) {
-    h.tag(match san.san_type {
-        SubjectAltNameType::Hostname => 0,
-        SubjectAltNameType::URI => 1,
-    });
-    h.opt_str(san.hostname.as_deref());
-    h.opt_str(san.uri.as_deref());
-}
-
 fn hash_auth_material(h: &mut FingerprintHasher, ls: &LinkSys) {
     match credential::basic_state(ls) {
         CredentialState::NotRequired => h.tag(0),
@@ -229,56 +158,6 @@ fn hash_auth_material(h: &mut FingerprintHasher, ls: &LinkSys) {
             h.bytes(material.username.as_deref().unwrap_or("").as_bytes());
             h.bytes(material.password.as_bytes());
         }
-    }
-}
-
-fn hash_tls_material(h: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
-    let Some(tls) = tls else {
-        h.tag(0);
-        return;
-    };
-    h.tag(1);
-    if !tls.enabled {
-        return;
-    }
-    hash_secrets(h, tls.resolved_ca_certificates.as_deref());
-    hash_secret(h, tls.resolved_client_certificate.as_ref());
-}
-
-fn hash_secrets(h: &mut FingerprintHasher, secrets: Option<&[Secret]>) {
-    match secrets {
-        None => h.tag(0),
-        Some(secrets) => {
-            h.tag(1);
-            h.u64(secrets.len() as u64);
-            for secret in secrets {
-                hash_secret_data(h, secret);
-            }
-        }
-    }
-}
-
-fn hash_secret(h: &mut FingerprintHasher, secret: Option<&Secret>) {
-    match secret {
-        None => h.tag(0),
-        Some(secret) => {
-            h.tag(1);
-            hash_secret_data(h, secret);
-        }
-    }
-}
-
-fn hash_secret_data(h: &mut FingerprintHasher, secret: &Secret) {
-    let mut entries: Vec<(&String, &k8s_openapi::ByteString)> = secret
-        .data
-        .as_ref()
-        .map(|data| data.iter().collect())
-        .unwrap_or_default();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    h.u64(entries.len() as u64);
-    for (key, value) in entries {
-        h.bytes(key.as_bytes());
-        h.bytes(&value.0);
     }
 }
 

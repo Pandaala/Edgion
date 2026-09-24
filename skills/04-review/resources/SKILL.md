@@ -27,6 +27,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Gateway LRU cache configuration has one key](regression-guards/gateway-cache-config-single-name.md)
 - [WAF support inspection must not imply publication](regression-guards/waf-support-inspection-must-not-imply-publication.md)
 - [Declared CRD objects use Kubernetes structural schema](regression-guards/declared-object-crd-structural-schema.md)
 - [Duration schema admission patterns](regression-guards/duration-schema-admission-patterns.md)

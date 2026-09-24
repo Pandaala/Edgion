@@ -309,7 +309,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         );
         let esp_ns = esp.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let cross_mgr = &ctx.runtime().cross_ns_ref_mgr;
-        cross_mgr.clear_resource_refs(&resource_ref);
+        cross_mgr.clear_value_refs(&resource_ref);
         for (target_ns, _name) in Self::iter_gcir_refs(&esp).chain(Self::iter_ip_list_refs(&esp)) {
             if target_ns != esp_ns {
                 cross_mgr.add_ref(target_ns, resource_ref.clone());
@@ -334,7 +334,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             esp.metadata.namespace.clone(),
             esp.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
         requeue_referencing_gateways(esp, ctx).await;
     }
 

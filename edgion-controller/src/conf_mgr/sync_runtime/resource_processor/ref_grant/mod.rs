@@ -14,7 +14,7 @@ pub mod events;
 mod revalidation_listener;
 mod store;
 mod validator;
-pub use cross_ns_ref_manager::{CrossNamespaceRefManager, CrossNsResourceRef};
+pub use cross_ns_ref_manager::CrossNamespaceRefManager;
 pub use edgion_config_data_grant::{
     is_edgion_config_data_ref_allowed, is_edgion_config_data_ref_allowed_from, EDGION_GROUP,
 };

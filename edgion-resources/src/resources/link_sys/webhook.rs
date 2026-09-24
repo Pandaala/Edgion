@@ -136,21 +136,6 @@ pub struct WebhookServiceConfig {
     pub conn: ExternalHttpConnection,
 
     // ============================================================
-    // Authentication (DEPRECATED - shim field)
-    // ============================================================
-    /// Authentication configuration (DEPRECATED).
-    ///
-    /// **DEPRECATED:** This field accepts the old authentication format for backward compatibility
-    /// during rolling upgrades. It is not used at runtime in this release.
-    ///
-    /// Migrate to `request.headers.custom` with `source: secret` for custom header injection.
-    /// This field will be removed in v1.X+1.
-    ///
-    /// Accepted but ignored in this release.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auth: Option<serde_json::Value>,
-
-    // ============================================================
     // Outbound Request
     // ============================================================
     /// Outbound webhook request specification.
@@ -170,31 +155,6 @@ pub struct WebhookServiceConfig {
     )]
     #[schemars(skip)]
     pub resolved_secrets: Option<ResolvedSecrets>,
-
-    // ============================================================
-    // Connection (DEPRECATED - shim field)
-    // ============================================================
-    /// HTTP method for the webhook request (DEPRECATED).
-    ///
-    /// **DEPRECATED:** This field is accepted for backward compatibility but not used at runtime.
-    /// Migrate to the new `request.method` field in Wave B.
-    ///
-    /// Default: GET (when absent in new configs)
-    /// Accepted but ignored in this release.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_method: Option<serde_json::Value>,
-
-    /// Static headers sent on every outbound call (DEPRECATED - shim field).
-    ///
-    /// **DEPRECATED:** This field accepts the old header format for backward compatibility.
-    /// It is not used at runtime in this release.
-    ///
-    /// Migrate to the new `request.headers` field in Wave B.
-    /// This field will be removed in v1.X+1.
-    ///
-    /// Accepted but ignored in this release.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_headers: Option<serde_json::Value>,
 }
 
 // ============================================================
@@ -204,16 +164,11 @@ pub struct WebhookServiceConfig {
 impl WebhookServiceConfig {
     /// Validate the configuration and return an error message if invalid.
     ///
-    /// Note: Deprecated shim fields (`auth`, `request_method`, `default_headers`)
-    /// are not validated; they are accepted for backward compatibility but not used at runtime.
     pub fn get_validation_error(&self) -> Option<String> {
         // Validate the target
         if let Some(err) = crate::resources::common::validate_connection_target(&self.conn) {
             return Some(err);
         }
-
-        // Note: request_method is now a deprecated shim field and is not validated.
-        // It was previously validated as a valid HTTP method, but is no longer used at runtime.
 
         // Note: `1 <= timeoutMs <= MAX_OUTBOUND_TIMEOUT_MS` and `maxResponseBytes > 0`
         // are validated by `validate_connection_target` above (shared with

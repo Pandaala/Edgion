@@ -772,9 +772,9 @@ The following combinations are rejected at admission with `Accepted=False`:
 | `success` | Object | any 2xx | Success criteria: status codes plus optional JSON body predicates. **Replaces the removed `successStatusCodes`** — see [Success](#success) below. |
 | `maxResponseBytes` | Integer | `1024` | Maximum response body size to read in bytes. Clamped at call time to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes` (default 16 KiB). Must be `>= 4096` when `success.body` predicates are set — see [Success](#success). |
 
-> **Removed fields.** `requestMethod`, `auth`, and `defaultHeaders` are deprecated. They are still accepted during a rolling upgrade but ignored at runtime, and the controller logs a WARN when it sees them. They will be removed in the next release — migrate before then. See [Migration from the old schema](#migration-from-the-old-schema).
+> **Removed fields.** `requestMethod`, `auth`, and `defaultHeaders` are ignored at runtime and reported through advisory unknown-field feedback. Direct Kubernetes, filesystem, and etcd ingest can retain the warning in status and diagnostics. Admin write returns response warnings, and Admin validate lists the paths in the JSON `unknownFields` field; an Admin write then drops the unknown key before storage, so later status and diagnostics do not retain that warning. Migrate to `request.*`; see [Migration from the old schema](#migration-from-the-old-schema).
 >
-> `successStatusCodes` is different: it is not on this deprecation path and has no runtime compatibility shim. It is ignored, but the Controller reports it through the advisory unknown-field surfaces described above. See [Success](#success) below.
+> `successStatusCodes` follows the same unknown-field feedback path and has no runtime compatibility shim. See [Success](#success) below.
 
 ### Success
 
@@ -1155,7 +1155,7 @@ spec:
 
 ### Migration from the old schema
 
-The webhook schema changed in this release. Old fields are accepted during a rolling upgrade but ignored at runtime (the controller logs a WARN), and will be removed in the next release. Migrate every webhook LinkSys before then.
+The webhook schema changed. Removed fields are ignored at runtime and reported through advisory unknown-field feedback. Migrate each webhook LinkSys to the current fields.
 
 | Old | New |
 |-----|-----|

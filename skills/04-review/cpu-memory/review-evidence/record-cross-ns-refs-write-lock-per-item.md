@@ -12,7 +12,7 @@ knowledge_type: review-evidence
 
 **Reality**:
 
-1. **Cold path — triggered by K8s resource watch event**: the call source is Route resource reconcile, event level (operator scale), not request level. The previous line in the same function `manager.clear_resource_refs(...)` itself takes a write lock once.
+1. **Cold path — triggered by K8s resource watch event**: the call source is Route resource reconcile, event level (operator scale), not request level. The previous line in the same function `manager.clear_value_refs(...)` itself takes a write lock once.
 2. **Lock is `parking_lot::RwLock<RefMaps<V>>`** (`ref_manager.rs:170`), uncontended write ~25 ns; a single route typically has 1-10 backend_refs; pathological 100 → total lock overhead ~25 ns–2.5 µs. The path total is dominated by etcd RTT + resource parsing + status update; a few lock acquisitions are not measurable in totals.
 3. **Change surface vs benefit**: to "save" you'd have to add `add_refs_batched` / `batch_update` methods to `BidirectionalRefManager`, or expose inner so the caller manages the lock — breaks encapsulation, expands API surface, requires changes in 5 handlers (http/udp/grpc/tcp/tls). Zero observable benefit on the cold path.
 4. Same category as the existing "Small-object clones on Resource reconcile / config sync paths are not issues" — reconcile event level + small scale + cascading change surface.

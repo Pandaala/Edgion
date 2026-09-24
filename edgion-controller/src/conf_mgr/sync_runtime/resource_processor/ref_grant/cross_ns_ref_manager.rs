@@ -8,9 +8,6 @@
 
 use super::super::ref_manager::{BidirectionalRefManager, ResourceRef};
 
-// Alias of ResourceRef kept for call-site compatibility; prefer ResourceRef directly.
-pub type CrossNsResourceRef = ResourceRef;
-
 /// Manages cross-namespace reference mappings.
 ///
 /// - Forward: `target_namespace → Set<ResourceRef>` (resources referencing that namespace)
@@ -40,7 +37,7 @@ mod tests {
         let refs = manager.get_refs("backend");
         assert_eq!(refs.len(), 2);
 
-        manager.clear_resource_refs(&route1);
+        manager.clear_value_refs(&route1);
 
         let refs_after = manager.get_refs("backend");
         assert_eq!(refs_after.len(), 1);

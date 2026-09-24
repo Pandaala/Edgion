@@ -372,13 +372,10 @@ spec:
 
 **Consumer side:** the outbound request shape is owned entirely by the webhook resource. The operator-facing consumer is the `WebhookKeyGet` plugin (`WebhookVar`: `webhookRef`, optional `pathOverride`, `extract`, `default`). It passes only the `session` and an optional `pathOverride` (honored only when `path.allowOverride: true`); the `forwardHeaders` / `pathSuffix` knobs are gone. Per-call dynamic values flow in via a preceding CtxSet entry → `${ctx:NAME}` in the webhook templates.
 
-**Removed-field debt:** current code still accepts `auth` / `defaultHeaders` /
-`requestMethod` as ignored no-ops and logs a warning. This is not a supported
-rolling-upgrade contract; it conflicts with the repository's pre-release
-no-compatibility policy. Do not use or extend these fields. Remove the
-placeholders, warning, and associated tests together when code changes are in
-scope. `successStatusCodes` is ignored at runtime but reported by the advisory
-unknown-field detector; see the note at the top of this section.
+**Removed fields:** `auth`, `defaultHeaders`, and `requestMethod` are ignored at
+runtime and reported by the advisory unknown-field detector. Use `request.*`
+instead. `successStatusCodes` follows the same unknown-field feedback path;
+see the note at the top of this section.
 
 ### `type: kafka`
 

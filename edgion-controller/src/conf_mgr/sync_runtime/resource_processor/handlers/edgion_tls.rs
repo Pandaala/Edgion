@@ -161,10 +161,10 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                 .is_err();
 
         // Clear old references first (for update scenario)
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
         // Clear old cross-namespace references too; they are re-registered below so a
         // later ReferenceGrant add/remove requeues this EdgionTls (mirrors GatewayHandler).
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
 
         // Runtime defense for typed objects that bypass serde/CRD admission.
         // Revoke the previous parent set without traversing the oversized input,
@@ -369,8 +369,8 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             tls.metadata.namespace.clone(),
             tls.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
 
         let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         let tls_name = tls.metadata.name.as_deref().unwrap_or("");

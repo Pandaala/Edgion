@@ -602,8 +602,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         );
 
         // Clear old references first (for update scenario)
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        ctx.runtime().frontend_ca_ref_manager.clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
+        ctx.runtime().frontend_ca_ref_manager.clear_value_refs(&resource_ref);
 
         // Kubernetes admission normally enforces this bound. A forged
         // conf-sync object or FS/etcd input must revoke the previous listener
@@ -636,7 +636,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         project_standard_frontend_validation(&mut g, !frontend_schema_errors.is_empty());
 
         // Clear and re-register stream plugin annotation ref (for update/remove annotation scenario)
-        ctx.runtime().stream_plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().stream_plugin_ref_mgr.clear_value_refs(&resource_ref);
         if let Some(v) = g
             .metadata
             .annotations
@@ -653,7 +653,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         }
 
         // Clear and re-register HTTP plugin annotation refs (edgion.io/edgion-plugins).
-        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().plugin_ref_mgr.clear_value_refs(&resource_ref);
         if let Some(v) = g
             .metadata
             .annotations
@@ -673,7 +673,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.name.clone().unwrap_or_default(),
         );
         let cross_ns_manager = &ctx.runtime().cross_ns_ref_mgr;
-        cross_ns_manager.clear_resource_refs(&cross_ns_ref);
+        cross_ns_manager.clear_value_refs(&cross_ns_ref);
 
         // Clear the previous EdgionConfigData dependency before rebuilding the
         // annotation's complete reference set. Missing targets are registered
@@ -994,10 +994,10 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.name.clone().unwrap_or_default(),
         );
         // Clear SecretRefManager references
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        ctx.runtime().frontend_ca_ref_manager.clear_resource_refs(&resource_ref);
-        ctx.runtime().stream_plugin_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
+        ctx.runtime().frontend_ca_ref_manager.clear_value_refs(&resource_ref);
+        ctx.runtime().stream_plugin_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().plugin_ref_mgr.clear_value_refs(&resource_ref);
         ctx.runtime()
             .edgion_config_data_refs
             .clear_refs_from(&format!("Gateway:{}", resource_ref.resource_key()));
@@ -1008,7 +1008,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.namespace.clone(),
             g.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&cross_ns_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&cross_ns_ref);
 
         // Clear ListenerPortManager registration (use ns/name format, same as parse/update_status)
         let gateway_key = format!(

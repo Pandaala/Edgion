@@ -666,7 +666,7 @@ pub fn register_service_backend_refs(
         .into_iter()
         .collect();
 
-    manager.clear_resource_refs(&resource_ref);
+    manager.clear_value_refs(&resource_ref);
 
     let mut new_service_keys = HashSet::new();
     for &(group, kind, namespace, name) in backend_refs {
@@ -697,7 +697,7 @@ pub fn clear_service_backend_refs(
     use crate::conf_mgr::sync_runtime::resource_processor::ResourceRef;
 
     let resource_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
-    runtime.service_ref_mgr.clear_resource_refs(&resource_ref);
+    runtime.service_ref_mgr.clear_value_refs(&resource_ref);
 }
 
 /// Look up a Gateway resource from the processor registry.

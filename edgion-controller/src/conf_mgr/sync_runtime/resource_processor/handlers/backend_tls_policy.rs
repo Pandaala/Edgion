@@ -310,10 +310,10 @@ impl BackendTlsPolicyHandler {
         // Clear every controller-owned staging field and dependency edge before
         // rebuilding the current generation. A delete->create coalesced by the
         // workqueue must not retain a previous target, marker, or Secret.
-        target_manager.clear_resource_refs(&resource_ref);
-        ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.runtime().backend_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        target_manager.clear_value_refs(&resource_ref);
+        ctx.runtime().service_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().backend_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
 
         btp.spec.resolved_target_class = None;
         btp.spec.resolved_ca_certificates = None;
@@ -515,15 +515,15 @@ impl BackendTlsPolicyHandler {
         ctx.runtime()
             .backend_tls_policy
             .target_mgr()
-            .clear_resource_refs(&resource_ref);
+            .clear_value_refs(&resource_ref);
         ctx.runtime()
             .backend_tls_policy
             .remove_timestamp(&resource_ref.resource_key());
 
         // Clear target and Secret dependency edges.
-        ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.runtime().backend_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().service_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().backend_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
 
         tracing::debug!(
             policy = %resource_ref.key(),

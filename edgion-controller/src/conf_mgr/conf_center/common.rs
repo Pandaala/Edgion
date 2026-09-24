@@ -1106,7 +1106,7 @@ spec:
     }
 
     #[test]
-    fn link_sys_clean_and_open_webhook_fields_have_no_findings() {
+    fn link_sys_clean_and_removed_webhook_fields_report_findings() {
         let clean = TYPO_LINK_SYS.replace("      conect: 20\n", "");
         let parsed: LinkSys = parse_resource_content(&clean).expect("clean LinkSys must parse");
         assert!(parsed.spec.unknown_fields.is_empty());
@@ -1123,8 +1123,11 @@ spec:
     defaultHeaders: {X-Legacy: {arbitrary: true}}
     requestMethod: {arbitrary: true}
 "#;
-        let parsed: LinkSys = parse_resource_content(webhook).expect("known open fields must parse");
-        assert!(parsed.spec.unknown_fields.is_empty());
+        let parsed: LinkSys = parse_resource_content(webhook).expect("removed fields must not block parsing");
+        assert_eq!(
+            parsed.spec.unknown_fields,
+            ["config.auth", "config.defaultHeaders", "config.requestMethod"]
+        );
     }
 
     /// The non-fatal guarantee: a document that re-parses as a `serde_yaml::Value`

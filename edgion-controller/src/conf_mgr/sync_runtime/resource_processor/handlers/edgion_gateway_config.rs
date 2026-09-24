@@ -72,9 +72,9 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             egc.metadata.namespace.clone(),
             egc.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().plugin_ref_mgr.clear_value_refs(&resource_ref);
         for reference in egc.spec.global_plugins_ref.as_deref().unwrap_or_default() {
             let namespace = reference.namespace.as_deref().unwrap_or("default");
             ctx.runtime()
@@ -124,9 +124,9 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             egc.metadata.namespace.clone(),
             egc.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().plugin_ref_mgr.clear_value_refs(&resource_ref);
         // A GatewayClass's ResolvedRefs/Accepted conditions depend on whether the
         // EdgionGatewayConfig it references exists, so recompute them on every EGC delete.
         requeue_all_gateway_classes(ctx).await;

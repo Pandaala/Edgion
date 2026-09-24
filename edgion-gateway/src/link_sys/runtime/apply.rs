@@ -6,7 +6,132 @@
 use std::fmt;
 use std::time::Duration;
 
+use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType, WellKnownCACertificates};
+use edgion_resources::resources::common::TlsConfig;
+use k8s_openapi::api::core::v1::Secret;
 use sha2::{Digest, Sha256};
+
+// Keep shared TLS policy and consumed Secret material encoding in one place.
+// Provider-specific rebuild and credential fields remain with each owner.
+pub(crate) fn hash_tls_policy(h: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
+    let Some(tls) = tls else {
+        h.tag(0);
+        return;
+    };
+    h.tag(1);
+    h.tag(u8::from(tls.enabled));
+    if !tls.enabled {
+        return;
+    }
+    h.opt_bool(tls.outbound.verify);
+    match tls.outbound.validation.as_ref() {
+        None => h.tag(0),
+        Some(validation) => {
+            h.tag(1);
+            h.opt_str(validation.hostname.as_deref());
+            match validation.well_known_ca_certificates {
+                None => h.tag(0),
+                Some(WellKnownCACertificates::System) => h.tag(1),
+                Some(WellKnownCACertificates::Other(ref name)) => {
+                    h.tag(2);
+                    h.bytes(name.as_bytes());
+                }
+            }
+            match validation.subject_alt_names.as_deref() {
+                None => h.tag(0),
+                Some(sans) => {
+                    h.tag(1);
+                    h.u64(sans.len() as u64);
+                    for san in sans {
+                        hash_san(h, san);
+                    }
+                }
+            }
+            match validation.ca_certificate_refs.as_deref() {
+                None => h.tag(0),
+                Some(refs) => {
+                    h.tag(1);
+                    h.u64(refs.len() as u64);
+                    for r in refs {
+                        h.bytes(r.group.as_bytes());
+                        h.bytes(r.kind.as_bytes());
+                        h.bytes(r.name.as_bytes());
+                        h.opt_str(r.namespace.as_deref());
+                    }
+                }
+            }
+        }
+    }
+    match tls.outbound.client_certificate_ref.as_ref() {
+        None => h.tag(0),
+        Some(r) => {
+            h.tag(1);
+            h.opt_str(r.group.as_deref());
+            h.opt_str(r.kind.as_deref());
+            h.bytes(r.name.as_bytes());
+            h.opt_str(r.namespace.as_deref());
+        }
+    }
+}
+
+fn hash_san(h: &mut FingerprintHasher, san: &SubjectAltName) {
+    h.tag(match san.san_type {
+        SubjectAltNameType::Hostname => 0,
+        SubjectAltNameType::URI => 1,
+    });
+    h.opt_str(san.hostname.as_deref());
+    h.opt_str(san.uri.as_deref());
+}
+
+pub(crate) fn hash_tls_material(h: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
+    let Some(tls) = tls else {
+        h.tag(0);
+        return;
+    };
+    h.tag(1);
+    if !tls.enabled {
+        return;
+    }
+    hash_secrets(h, tls.resolved_ca_certificates.as_deref());
+    hash_secret(h, tls.resolved_client_certificate.as_ref());
+}
+
+fn hash_secrets(h: &mut FingerprintHasher, secrets: Option<&[Secret]>) {
+    match secrets {
+        None => h.tag(0),
+        Some(secrets) => {
+            h.tag(1);
+            h.u64(secrets.len() as u64);
+            for secret in secrets {
+                hash_secret_data(h, secret);
+            }
+        }
+    }
+}
+
+fn hash_secret(h: &mut FingerprintHasher, secret: Option<&Secret>) {
+    match secret {
+        None => h.tag(0),
+        Some(secret) => {
+            h.tag(1);
+            hash_secret_data(h, secret);
+        }
+    }
+}
+
+fn hash_secret_data(h: &mut FingerprintHasher, secret: &Secret) {
+    let mut entries: Vec<(&String, &k8s_openapi::ByteString)> = secret
+        .data
+        .as_ref()
+        .map(|data| data.iter().collect())
+        .unwrap_or_default();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    h.u64(entries.len() as u64);
+    for (key, value) in entries {
+        h.bytes(key.as_bytes());
+        h.bytes(&value.0);
+    }
+}
 
 /// Runner connect backoff: 2s ×2, cap 30s. Distinct from health-probe backoff.
 pub const CONNECT_BACKOFF_START: Duration = Duration::from_secs(2);
@@ -175,7 +300,76 @@ pub fn next_connect_backoff(current: Duration, max: Duration) -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use edgion_resources::resources::common::outbound_tls::{OutboundTlsLocal, OutboundTlsValidation};
+    use k8s_openapi::ByteString;
+
     use super::*;
+
+    fn tls_digest(tls: Option<&TlsConfig>, policy: bool) -> [u8; 32] {
+        let mut hasher = FingerprintHasher::new();
+        if policy {
+            hash_tls_policy(&mut hasher, tls);
+        } else {
+            hash_tls_material(&mut hasher, tls);
+        }
+        hasher.finish()
+    }
+
+    #[test]
+    fn shared_tls_policy_distinguishes_validation_variants() {
+        let mut tls = TlsConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let base = tls_digest(Some(&tls), true);
+        assert_ne!(base, tls_digest(None, true));
+        assert_ne!(base, tls_digest(Some(&TlsConfig::default()), true));
+
+        tls.outbound = OutboundTlsLocal {
+            verify: Some(false),
+            validation: Some(OutboundTlsValidation {
+                well_known_ca_certificates: Some(WellKnownCACertificates::System),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let system_ca = tls_digest(Some(&tls), true);
+        assert_ne!(base, system_ca);
+        tls.outbound.validation.as_mut().unwrap().well_known_ca_certificates =
+            Some(WellKnownCACertificates::Other("custom".to_string()));
+        assert_ne!(system_ca, tls_digest(Some(&tls), true));
+    }
+
+    #[test]
+    fn shared_tls_material_hashes_only_enabled_secret_data_in_key_order() {
+        let mut first = TlsConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        first.resolved_ca_certificates = Some(vec![Secret {
+            data: Some(BTreeMap::from([
+                ("b".to_string(), ByteString(vec![2])),
+                ("a".to_string(), ByteString(vec![1])),
+            ])),
+            ..Default::default()
+        }]);
+        let mut second = first.clone();
+        second.resolved_ca_certificates.as_mut().unwrap()[0].metadata.name = Some("ignored".to_string());
+        assert_eq!(tls_digest(Some(&first), false), tls_digest(Some(&second), false));
+
+        second.resolved_ca_certificates.as_mut().unwrap()[0]
+            .data
+            .as_mut()
+            .unwrap()
+            .insert("a".to_string(), ByteString(vec![3]));
+        assert_ne!(tls_digest(Some(&first), false), tls_digest(Some(&second), false));
+        first.enabled = false;
+        second.enabled = false;
+        assert_eq!(tls_digest(Some(&first), false), tls_digest(Some(&second), false));
+        assert_ne!(tls_digest(None, false), tls_digest(Some(&first), false));
+    }
 
     fn fp(rebuild: u8, secret: u8, rv: Option<&str>) -> RuntimeFingerprint {
         let mut r = [0u8; 32];

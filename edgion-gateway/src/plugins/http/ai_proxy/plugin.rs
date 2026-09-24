@@ -1234,7 +1234,7 @@ mod tests {
             "economy",
             &mut candidates,
         );
-        assert_eq!(adaptive.len(), 1);
+        assert_eq!(adaptive.count(), 1);
         assert!(candidates[0].adaptive.is_some());
 
         let passthrough_inputs = vec![((0, 1, "tenant/backend".to_string()), candidates[0].backend.clone())];

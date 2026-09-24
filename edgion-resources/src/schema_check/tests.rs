@@ -662,6 +662,11 @@ fn link_sys_reports_deep_typo_and_removed_redis_observability() {
     });
     assert_eq!(
         unknown_key_paths(&webhook, link_sys_spec_schema()),
-        vec!["config.unknownSibling".to_string()]
+        vec![
+            "config.auth".to_string(),
+            "config.defaultHeaders".to_string(),
+            "config.requestMethod".to_string(),
+            "config.unknownSibling".to_string(),
+        ]
     );
 }

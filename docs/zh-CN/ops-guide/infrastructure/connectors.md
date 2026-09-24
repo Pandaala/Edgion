@@ -701,9 +701,9 @@ remoteIp 按缺失值处理；已存在但内容为空的命名变量仍是空�
 | `success` | Object | 任意 2xx | 成功判定条件：状态码加上可选的 JSON body 断言。**取代已移除的 `successStatusCodes`**——详见下文 [Success（成功判定）](#成功判定-success)。 |
 | `maxResponseBytes` | Integer | `1024` | 读取的最大响应体大小（字节），受 `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`（默认 16 KiB）限制。当设置了 `success.body` 断言时必须 `>= 4096`——详见 [Success（成功判定）](#成功判定-success)。 |
 
-> **已移除的字段。** `requestMethod`、`auth` 和 `defaultHeaders` 已弃用。在滚动升级期间它们仍被接受但运行时忽略，控制器在遇到时记录 WARN。它们将在下一个版本中移除——请在此之前迁移。详见[从旧 schema 迁移](#从旧-schema-迁移)。
+> **已移除的字段。** `requestMethod`、`auth` 和 `defaultHeaders` 在运行时被忽略，并通过提示性的未知字段反馈报告。直接经 Kubernetes、文件系统或 etcd 写入时，状态和诊断可以保留该提示；Admin 写入在响应的 `warnings` 中报告，Admin 校验在 JSON `unknownFields` 中列出路径。Admin 写入会在持久化前丢弃未知键，后续状态和诊断不会保留这次提示。请迁移到 `request.*`；详见[从旧 schema 迁移](#从旧-schema-迁移)。
 >
-> `successStatusCodes` 不属于这条弃用路径，也没有运行时兼容 shim。它会被忽略，但 Controller 会通过上述提示性未知字段界面报告。详见 [Success（成功判定）](#成功判定-success)。
+> `successStatusCodes` 遵循相同的未知字段反馈路径，也没有运行时兼容 shim。详见 [Success（成功判定）](#成功判定-success)。
 
 ### Success（成功判定）
 
@@ -1079,7 +1079,7 @@ spec:
 
 ### 从旧 schema 迁移
 
-Webhook schema 在本版本中发生变化。旧字段在滚动升级期间被接受但运行时忽略（控制器记录 WARN），并将在下一版本中移除。请在此之前迁移每个 webhook LinkSys。
+Webhook schema 已变更。已移除的字段在运行时被忽略，Controller 会通过提示性的未知字段反馈报告。请将每个 webhook LinkSys 迁移到当前字段。
 
 | 旧 | 新 |
 |----|----|

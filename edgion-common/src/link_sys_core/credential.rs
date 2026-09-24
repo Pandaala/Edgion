@@ -223,12 +223,7 @@ pub fn resolved_state(ls: &LinkSys) -> CredentialState<ResolvedCredential> {
             Some(auth) => state_from_optional_secret(auth.slot.secret.as_ref(), &OtlpBearerResolver)
                 .map(ResolvedCredential::Bearer),
         },
-        SystemConfig::Webhook(_w) => {
-            // Webhook auth is now a deprecated shim field (Option<serde_json::Value>)
-            // that is accepted for backward compatibility but not used at runtime.
-            // Credential processing will be re-implemented in Wave B with the new request field.
-            CredentialState::NotRequired
-        }
+        SystemConfig::Webhook(_) => CredentialState::NotRequired,
         SystemConfig::Kafka(kafka) => match kafka.sasl.as_ref() {
             None => CredentialState::NotRequired,
             Some(sasl) => state_from_optional_secret(sasl.password.secret.as_ref(), &BasicAuthResolver)
@@ -599,15 +594,11 @@ mod tests {
     }
 
     // ------------------------------------------------------------
-    // resolved_state + dispatch gate — Webhook variants
-    //
-    // Webhook dispatch must gate on `resolved_state(ls).is_buildable()`
-    // (same as Elasticsearch) so a webhook whose `auth.secretRef` Secret is
-    // Pending / Invalid is not registered and cannot silently send an
-    // unauthenticated request.
+    // Webhook has no provider-level credential slot. Request credentials are
+    // supplied through resolved request templates instead.
     // ------------------------------------------------------------
 
-    fn mk_webhook_linksys(auth: Option<serde_json::Value>) -> LinkSys {
+    fn mk_webhook_linksys() -> LinkSys {
         use edgion_resources::resources::link_sys::webhook::{
             ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
         };
@@ -634,7 +625,6 @@ mod tests {
                         },
                         ..Default::default()
                     },
-                    auth,
                     ..Default::default()
                 }),
             },
@@ -644,7 +634,7 @@ mod tests {
 
     #[test]
     fn resolved_state_webhook_no_auth_is_not_required() {
-        let ls = mk_webhook_linksys(None);
+        let ls = mk_webhook_linksys();
         assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
     }
 
@@ -749,30 +739,11 @@ mod tests {
 
     #[test]
     fn tls_ready_webhook_false_when_client_cert_unresolved() {
-        let mut ls = mk_webhook_linksys(None);
+        let mut ls = mk_webhook_linksys();
         if let SystemConfig::Webhook(w) = &mut ls.spec.config {
             w.conn.tls = Some(tls_with_unresolved_client_cert());
         }
         assert!(!tls_ready(&ls), "webhook conn.tls readiness must not fail open");
-    }
-
-    #[test]
-    fn resolved_state_webhook_bearer_not_required_shim_field_unused() {
-        // Webhook auth is now a deprecated shim field that is not used at runtime.
-        // Credential resolution always returns NotRequired regardless of auth content.
-        let ls = mk_webhook_linksys(None);
-        assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
-    }
-
-    #[test]
-    fn resolved_state_webhook_bearer_shim_value_ignored() {
-        // Webhook auth is now a deprecated shim field that is not used at runtime.
-        // Even with a shim value, credential resolution returns NotRequired.
-        let ls = mk_webhook_linksys(Some(serde_json::json!({
-            "type": "bearer",
-            "secretRef": {"name": "token"}
-        })));
-        assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
     }
 
     /// The exact gate expression used by both Webhook dispatch arms in
@@ -784,18 +755,7 @@ mod tests {
 
     #[test]
     fn webhook_dispatch_gate_open_without_auth() {
-        assert!(webhook_dispatch_gate(&mk_webhook_linksys(None)));
-    }
-
-    #[test]
-    fn webhook_dispatch_gate_open_with_shim_auth() {
-        // Webhook auth is a deprecated shim field that is not used.
-        // Dispatch gate is always open (NotRequired is buildable).
-        let ls = mk_webhook_linksys(Some(serde_json::json!({
-            "type": "bearer",
-            "secretRef": {"name": "token"}
-        })));
-        assert!(webhook_dispatch_gate(&ls));
+        assert!(webhook_dispatch_gate(&mk_webhook_linksys()));
     }
 
     // ------------------------------------------------------------

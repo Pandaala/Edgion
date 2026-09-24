@@ -287,9 +287,9 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ep.metadata.name.clone().unwrap_or_default(),
         );
 
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        ctx.runtime().link_sys_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
+        ctx.runtime().link_sys_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().service_ref_mgr.clear_value_refs(&resource_ref);
         ctx.runtime()
             .credential_source_registry
             .remove_consumer(&resource_ref.resource_key());
@@ -297,7 +297,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // references. Clear it before any resolver starts rebuilding either
         // class; clearing later would erase Secret refs registered above the
         // EdgionConfigData pass and prevent ReferenceGrant revalidation.
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
 
         cred::resolve_basic_auth(&mut ep, &resource_ref, ctx);
         cred::resolve_credential_injector(&mut ep, &resource_ref, ctx).await;
@@ -423,14 +423,14 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ep.metadata.namespace.clone(),
             ep.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        ctx.runtime().link_sys_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
+        ctx.runtime().link_sys_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().service_ref_mgr.clear_value_refs(&resource_ref);
         ctx.runtime()
             .credential_source_registry
             .forget_consumer(&resource_ref.resource_key());
         Self::clear_config_data_refs(ep, ctx);
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
         requeue_referencing_resources(ep, ctx).await;
 
         tracing::debug!(

@@ -62,7 +62,7 @@ impl ProcessorHandler<Service> for ServiceHandler {
             svc.metadata.namespace.clone(),
             svc.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&owner);
 
         // Gate a cross-namespace `edgion.io/dns-resolver-ref` to an httpdns
         // LinkSys. A native Service has no Edgion status surface, so a denial is
@@ -97,7 +97,7 @@ impl ProcessorHandler<Service> for ServiceHandler {
             svc.metadata.namespace.clone(),
             svc.metadata.name.clone().unwrap_or_default(),
         );
-        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&owner);
     }
 
     async fn after_publish(&self, svc: &Service, ctx: &HandlerContext) {

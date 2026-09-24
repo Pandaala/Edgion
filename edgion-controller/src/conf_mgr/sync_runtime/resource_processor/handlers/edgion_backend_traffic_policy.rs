@@ -298,7 +298,7 @@ fn resolve_health_tls(p: &mut EdgionBackendTrafficPolicy, ctx: &HandlerContext, 
     use edgion_common::tls_validation::{check_key_matches_cert, parse_canonical_ca_bundle};
     use edgion_resources::resources::health_check::HealthCheckType;
 
-    ctx.secret_ref_manager().clear_resource_refs(owner);
+    ctx.secret_ref_manager().clear_value_refs(owner);
     let Some(active) = p.spec.health_check.as_mut().and_then(|health| health.active.as_mut()) else {
         return;
     };
@@ -449,9 +449,9 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         //   * `target_mgr` — conflict/precedence index (siblings, is_winner).
         //   * typed Service/backend ref manager — drives target-change requeue so
         //     ResolvedRefs re-evaluates when a target appears/disappears.
-        state.target_mgr().clear_resource_refs(&resource_ref);
-        ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.runtime().backend_ref_mgr.clear_resource_refs(&resource_ref);
+        state.target_mgr().clear_value_refs(&resource_ref);
+        ctx.runtime().service_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().backend_ref_mgr.clear_value_refs(&resource_ref);
 
         // Register every syntactically canonical dependency before any
         // existence/capability lookup so target creation can wake a policy
@@ -519,11 +519,11 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         // Find siblings BEFORE clearing — a previously Conflicted sibling may now win.
         let siblings = state.get_siblings(&resource_ref);
 
-        state.target_mgr().clear_resource_refs(&resource_ref);
+        state.target_mgr().clear_value_refs(&resource_ref);
         state.remove_timestamp(&resource_ref.resource_key());
-        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
-        ctx.runtime().backend_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
+        ctx.runtime().service_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().backend_ref_mgr.clear_value_refs(&resource_ref);
 
         tracing::debug!(
             policy = %resource_ref.key(),

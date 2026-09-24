@@ -4,8 +4,6 @@ use super::*;
 #[test]
 fn test_default_config() {
     let config = WebhookServiceConfig::default();
-    assert!(config.auth.is_none());
-    assert!(config.request_method.is_none());
     assert_eq!(config.conn.timeout_ms, 5000);
     assert_eq!(config.conn.max_response_bytes, 1024);
     assert_eq!(config.conn.status_on_error, 503);
@@ -28,31 +26,6 @@ fn test_validation_empty_default() {
 }
 
 // URI variant removed; WebhookTarget now only supports Service backends
-
-#[test]
-fn test_validation_invalid_method_shim_field_not_validated() {
-    // request_method is now a deprecated shim field and is not validated.
-    // An invalid method value is accepted without error.
-    let config = WebhookServiceConfig {
-        conn: ExternalHttpConnection {
-            target: WebhookTarget {
-                service: WebhookServiceRef {
-                    kind: None,
-                    name: Some("svc".to_string()),
-                    namespace: None,
-                    port: Some(80),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        request_method: Some(serde_json::json!("INVALID")),
-        ..Default::default()
-    };
-    // Shim fields are not validated, so this should pass validation
-    assert!(config.get_validation_error().is_none());
-}
 
 #[test]
 fn test_validation_zero_timeout() {
@@ -301,7 +274,6 @@ target:
     let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
     assert_eq!(config.conn.target.service.name.as_deref(), Some("api-svc"));
     assert_eq!(config.conn.target.service.port, Some(8080));
-    assert!(config.request_method.is_none());
     assert_eq!(config.conn.timeout_ms, 5000);
     assert!(config.get_validation_error().is_none());
 }
@@ -314,7 +286,6 @@ target:
   namespace: "internal"
   port: 443
   kind: "Service"
-requestMethod: POST
 timeoutMs: 3000
 success:
   statusCodes: [200]
@@ -344,8 +315,6 @@ healthCheck:
     assert_eq!(config.conn.target.service.name.as_deref(), Some("key-service"));
     assert_eq!(config.conn.target.service.namespace, Some("internal".to_string()));
     assert_eq!(config.conn.target.service.port, Some(443));
-    // request_method is now a shim field; verify it deserialized as serde_json::Value
-    assert!(config.request_method.is_some());
     assert_eq!(config.conn.timeout_ms, 3000);
     assert_eq!(config.conn.max_response_bytes, 2048);
     let success = config.conn.success.as_ref().expect("success block must deserialize");
@@ -398,7 +367,6 @@ fn test_serde_roundtrip() {
             },
             ..Default::default()
         },
-        request_method: Some(serde_json::json!("POST")),
         ..Default::default()
     };
 
@@ -406,7 +374,6 @@ fn test_serde_roundtrip() {
     let deserialized: WebhookServiceConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.conn.target.service.name, config.conn.target.service.name);
     assert_eq!(deserialized.conn.target.service.port, config.conn.target.service.port);
-    assert_eq!(deserialized.request_method, config.request_method);
     assert_eq!(deserialized.conn.timeout_ms, config.conn.timeout_ms);
 }
 
@@ -428,7 +395,6 @@ fn test_serde_service_target_roundtrip() {
             },
             ..Default::default()
         },
-        request_method: Some(serde_json::json!("POST")),
         ..Default::default()
     };
 
@@ -537,43 +503,6 @@ fn webhook_auth_rejects_inline_password() {
     let yaml = "type: basic\nsecretRef:\n  name: s\npassword: leaked";
     let r: Result<WebhookAuth, _> = serde_yaml::from_str(yaml);
     assert!(r.is_err(), "inline password must be rejected by deny_unknown_fields");
-}
-
-#[test]
-fn test_webhook_config_with_auth() {
-    let yaml = r#"
-target:
-  name: "api-svc"
-  port: 443
-auth:
-  type: bearer
-  secretRef:
-    name: api-token
-"#;
-    let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-    // auth is now a shim field; verify it deserialized as serde_json::Value
-    assert!(config.auth.is_some());
-    let auth_value = config.auth.unwrap();
-    // Verify the JSON structure contains the expected auth data
-    assert!(auth_value.get("type").is_some());
-    assert_eq!(auth_value["type"], "bearer");
-}
-
-#[test]
-fn test_serde_default_headers() {
-    let yaml = r#"
-target:
-  name: "api-svc"
-  port: 80
-defaultHeaders:
-  X-Source: edgion
-  Content-Type: "application/json"
-"#;
-    let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-    // default_headers is now a shim field; verify it deserialized as serde_json::Value
-    let headers_value = config.default_headers.unwrap();
-    assert_eq!(headers_value["X-Source"], "edgion");
-    assert_eq!(headers_value["Content-Type"], "application/json");
 }
 
 #[test]
@@ -798,83 +727,6 @@ fn test_webhook_target_unsupported_kind_rejected() {
     let error = validate_webhook_target(&target);
     assert!(error.is_some(), "unsupported kind should be rejected");
     assert_eq!(error.unwrap(), "unsupported service kind: UnsupportedKind");
-}
-
-// ============================================================
-// Shim field deserialization tests (Task A2)
-// ============================================================
-
-#[test]
-fn test_shim_field_auth_with_bearer_deserializes() {
-    // Old config with auth: { type: bearer, ... } should deserialize to serde_json::Value
-    let yaml = r#"
-target:
-  name: "api-svc"
-  port: 443
-auth:
-  type: bearer
-  secretRef:
-    name: api-token
-"#;
-    let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-    // After shim field change, auth should be Some(serde_json::Value)
-    assert!(config.auth.is_some(), "auth field should deserialize from old config");
-}
-
-#[test]
-fn test_shim_field_default_headers_deserializes() {
-    // Old config with defaultHeaders should deserialize to serde_json::Value
-    let yaml = r#"
-target:
-  name: "api-svc"
-  port: 80
-defaultHeaders:
-  X-Source: edgion
-  Content-Type: "application/json"
-"#;
-    let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-    // After shim field change, default_headers should be Some(serde_json::Value)
-    assert!(
-        config.default_headers.is_some(),
-        "default_headers field should deserialize from old config"
-    );
-}
-
-#[test]
-fn test_shim_field_request_method_deserializes() {
-    // Old config with requestMethod as string should deserialize to serde_json::Value
-    let yaml = r#"
-target:
-  name: "api-svc"
-  port: 80
-requestMethod: POST
-"#;
-    let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-    // After shim field change, request_method should be Some(serde_json::Value)
-    assert!(
-        config.request_method.is_some(),
-        "request_method field should deserialize from old config"
-    );
-}
-
-#[test]
-fn test_shim_fields_absent_deserialize_to_none() {
-    // New config without deprecated shim fields should deserialize with None values
-    let yaml = r#"
-target:
-  name: "api-svc"
-  port: 8080
-"#;
-    let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-    assert!(config.auth.is_none(), "auth should be None when absent");
-    assert!(
-        config.default_headers.is_none(),
-        "default_headers should be None when absent"
-    );
-    assert!(
-        config.request_method.is_none(),
-        "request_method should be None when absent"
-    );
 }
 
 /// Intentional: #[serde(flatten)] disables deny_unknown_fields (spec §3.2).
