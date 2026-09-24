@@ -43,9 +43,10 @@ a version, is not sufficient evidence of Edgion support.
 The active [API version policy](../../04-api-version-upgrade.md) keeps one
 canonical model per kind and allows individually tested source adapters.
 The code-owned inventory is `edgion-resources/src/gateway_api_support.rs`.
-Its `Proposed` and `PartialKubernetes` entries are not support claims. The
-staged work in `tasks/todo/gateway-api-version-compatibility-and-validation/`
-must complete each adapter before changing that classification.
+Its `Proposed` and `PartialKubernetes` entries are not support claims. Each
+adapter must be complete and tested before changing that classification. The
+tested Standard release matrix is in
+`docs/en/ops-guide/gateway/gateway-api-compatibility.md`.
 
 ## Review checklist
 
