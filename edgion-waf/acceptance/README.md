@@ -36,12 +36,21 @@ new cases and updating the reviewed manifest digest and recorded YAML digests.
 Any exclusion needs a case ID,
 rationale, and revisit condition; this version fails on every exclusion.
 
-The `WafDynamic` Gateway scenario also applies an additional `to_injection`
-generation after its frozen v1 phases. It checks transformed SQLi/XSS blocking
-and a clean request, then restores the prior generation. This extension does
-not alter the nine frozen v1 cases or their configuration digests. The strict
-`WafConfig` compile test for the new generation is
+The `WafDynamic` Gateway scenario also applies `to_injection` and `to_control`
+generations after its frozen v1 phases. The first checks transformed SQLi/XSS
+blocking and a clean request. The second checks that a conditional
+`ctl:ruleRemoveByTag` exclusion affects only the matching request. The scenario
+then restores the prior generation. These extensions do not alter the nine
+frozen v1 cases or their configuration digests. The strict
+`WafConfig` compile test for the injection generation is
 `cargo test -p edgion-resources --test waf_injection_config`.
+
+The supported request control subset is `forceRequestBodyVariable`,
+`requestBodyProcessor`, `ruleRemoveByTag`, and `ruleRemoveTargetByTag`. Direct
+WAF transaction tests cover all four; the Gateway scenario covers publication,
+hot reload, and isolation for `ruleRemoveByTag`. This is not full `ctl` or CRS
+compatibility. The frozen `production-v1.json` corpus remains the nine-case
+baseline; the two post-baseline reloads are checked by the integration gate.
 
 The FTW executable-subset inventory remains a separate exploratory tool. It
 does not define the production acceptance denominator. When a larger selected

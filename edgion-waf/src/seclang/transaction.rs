@@ -10,7 +10,8 @@ use crate::matcher::{
 };
 
 use super::super::body::{
-    build_fallback_publication, build_publication, processor_from_content_type, BodyError, BodyLimits, BodyPublication,
+    build_fallback_publication, build_fallback_publication_with_raw_policy, build_publication,
+    build_publication_with_raw_policy, processor_from_content_type, BodyError, BodyLimits, BodyPublication,
     RequestBody,
 };
 use super::super::transform::{
@@ -36,6 +37,7 @@ pub const DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES: usize = 256 * 1024 * 1024;
 pub const DEFAULT_MAX_RUNTIME_TX_VARIABLES: usize = 4_096;
 pub const DEFAULT_MAX_RUNTIME_TX_BYTES: usize = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_RUNTIME_SETVAR_ACTIONS: usize = 100_000;
+pub const DEFAULT_MAX_RUNTIME_CTL_ENTRIES: usize = 4_096;
 pub const DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES: usize = 64;
 pub const DEFAULT_MAX_RUNTIME_CAPTURE_BYTES: usize = 256 * 1024;
 pub const DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS: usize = 1_024;
@@ -80,6 +82,7 @@ pub struct RuntimeLimits {
     pub max_tx_variables: usize,
     pub max_tx_bytes: usize,
     pub max_setvar_actions: usize,
+    pub max_ctl_entries: usize,
     pub max_capture_entries: usize,
     pub max_capture_bytes: usize,
     pub max_response_headers: usize,
@@ -109,6 +112,7 @@ impl Default for RuntimeLimits {
             max_tx_variables: DEFAULT_MAX_RUNTIME_TX_VARIABLES,
             max_tx_bytes: DEFAULT_MAX_RUNTIME_TX_BYTES,
             max_setvar_actions: DEFAULT_MAX_RUNTIME_SETVAR_ACTIONS,
+            max_ctl_entries: DEFAULT_MAX_RUNTIME_CTL_ENTRIES,
             max_capture_entries: DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES,
             max_capture_bytes: DEFAULT_MAX_RUNTIME_CAPTURE_BYTES,
             max_response_headers: DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS,
@@ -310,6 +314,8 @@ pub enum RuntimeError {
     TxByteLimit { limit: usize },
     #[error("setvar actions exceed the configured limit of {limit}")]
     SetVarActionLimit { limit: usize },
+    #[error("request-scoped control entries exceed the configured limit of {limit}")]
+    CtlEntryLimit { limit: usize },
     #[error("capture entries exceed the configured limit of {limit}")]
     CaptureEntryLimit { limit: usize },
     #[error("capture bytes exceed the configured limit of {limit}")]
@@ -320,6 +326,8 @@ pub enum RuntimeError {
     RequestBodyAlreadyPublished,
     #[error("request body state must be published before phase 2 executes")]
     RequestBodyNotPublished,
+    #[error("raw request-body streaming cannot apply request-scoped control actions")]
+    RequestBodyStreamCtlUnavailable,
     #[error("compiled XML target selector is unavailable in the bounded runtime profile")]
     XmlSelectorUnavailable,
     #[error("response has {actual} headers, exceeding the limit of {limit}")]
@@ -485,6 +493,7 @@ enum SelectedBytes {
     Tx(usize),
     MatchedVar,
     MatchedVars(usize),
+    CtlProcessor,
     Count { digits: [u8; 40], start: u8 },
 }
 
@@ -529,6 +538,10 @@ impl SelectedValue {
                 .matched_vars
                 .get(*index)
                 .map(|entry| entry.value.as_slice())
+                .ok_or(RuntimeError::GenerationInvariant),
+            SelectedBytes::CtlProcessor => tx
+                .request_body_processor
+                .map(super::super::BodyProcessorSelection::as_bytes)
                 .ok_or(RuntimeError::GenerationInvariant),
             SelectedBytes::Count { digits, start } => Ok(&digits[usize::from(*start)..]),
         }
@@ -609,7 +622,18 @@ struct TxState {
     matched_var: Option<Vec<u8>>,
     matched_var_name: Option<Vec<u8>>,
     matched_vars: Vec<TxEntry>,
+    removed_units: Vec<usize>,
+    target_exclusions: Vec<ActiveTargetExclusion>,
+    request_body_processor: Option<super::super::BodyProcessorSelection>,
+    force_request_body_variable: Option<super::OnOff>,
     retained_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActiveTargetExclusion {
+    unit: usize,
+    collection: CollectionKind,
+    selector: super::CompiledTargetSelector,
 }
 
 struct CaptureEntry {
@@ -670,6 +694,7 @@ pub struct Transaction<'generation> {
     capture_scratch: Vec<RegexCaptureScratch>,
     scratch_bytes: usize,
     detector_work_bytes: usize,
+    ctl_work_bytes: usize,
     tx: TxState,
     capture_keys: Vec<Vec<u8>>,
     response: Option<ResponseState>,
@@ -826,6 +851,7 @@ impl<'generation> Transaction<'generation> {
             capture_scratch,
             scratch_bytes,
             detector_work_bytes: 0,
+            ctl_work_bytes: 0,
             tx: TxState::default(),
             capture_keys: Vec::new(),
             response: None,
@@ -889,20 +915,45 @@ impl<'generation> Transaction<'generation> {
             .first_value(CollectionKind::ArgsCombinedSize)
             .ok_or(RuntimeError::GenerationInvariant)
             .and_then(parse_usize)?;
-        let (publication, body_error) =
-            match build_publication(body, content_type, head_args_combined_size, self.limits.body) {
-                Ok(publication) => (publication, None),
-                Err(error @ (BodyError::Malformed { .. } | BodyError::MultipartBoundary))
-                    if self.rule_engine_mode == RuleEngineMode::DetectionOnly =>
-                {
-                    (
+        let body = RequestBody::new(body.bytes(), self.tx.request_body_processor.unwrap_or(body.processor()));
+        let raw_policy = self
+            .tx
+            .force_request_body_variable
+            .map(|value| value == super::OnOff::On);
+        let publication = if raw_policy.is_some() {
+            build_publication_with_raw_policy(
+                body,
+                content_type,
+                head_args_combined_size,
+                self.limits.body,
+                raw_policy,
+            )
+        } else {
+            build_publication(body, content_type, head_args_combined_size, self.limits.body)
+        };
+        let (publication, body_error) = match publication {
+            Ok(publication) => (publication, None),
+            Err(error @ (BodyError::Malformed { .. } | BodyError::MultipartBoundary))
+                if self.rule_engine_mode == RuleEngineMode::DetectionOnly =>
+            {
+                (
+                    if raw_policy.is_some() {
+                        build_fallback_publication_with_raw_policy(
+                            body,
+                            content_type,
+                            head_args_combined_size,
+                            self.limits.body,
+                            raw_policy,
+                        )
+                    } else {
                         build_fallback_publication(body, content_type, head_args_combined_size, self.limits.body)
-                            .map_err(|kind| RuntimeError::Body { kind })?,
-                        Some(error),
-                    )
-                }
-                Err(kind) => return Err(RuntimeError::Body { kind }),
-            };
+                    }
+                    .map_err(|kind| RuntimeError::Body { kind })?,
+                    Some(error),
+                )
+            }
+            Err(kind) => return Err(RuntimeError::Body { kind }),
+        };
         let entry_count = self
             .request
             .entry_count
@@ -1056,6 +1107,13 @@ impl<'generation> Transaction<'generation> {
         }
         if self.request.body.is_some() || self.request_body_stream.is_some() {
             return Err(RuntimeError::RequestBodyAlreadyPublished);
+        }
+        if !self.tx.removed_units.is_empty()
+            || !self.tx.target_exclusions.is_empty()
+            || self.tx.request_body_processor.is_some()
+            || self.tx.force_request_body_variable.is_some()
+        {
+            return Err(RuntimeError::RequestBodyStreamCtlUnavailable);
         }
         let summary = self.generation.request_body_execution_summary();
         if summary.streaming_structured_rule_units() != 0
@@ -1340,6 +1398,9 @@ impl<'generation> Transaction<'generation> {
             let super::CompiledScheduleEntry::RuleUnit(unit_id) = entry else {
                 continue;
             };
+            if self.tx.removed_units.binary_search(&unit_id).is_ok() {
+                continue;
+            }
             outcome.evaluated_units = outcome.evaluated_units.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
             if outcome.evaluated_units > self.limits.max_operator_evaluations {
                 return Err(RuntimeError::OperatorEvaluationLimit {
@@ -1432,7 +1493,7 @@ impl<'generation> Transaction<'generation> {
         if unit.member_count == 1 {
             let matches = match prefix_match {
                 Some(matched) => Self::boolean_member_matches(matched)?,
-                None => self.evaluate_member_matches(unit.member_start, &initial, false)?,
+                None => self.evaluate_member_matches(unit_id, unit.member_start, &initial, false)?,
             };
             if matches.is_empty() {
                 return Ok(false);
@@ -1441,7 +1502,7 @@ impl<'generation> Transaction<'generation> {
             let mut setvar_actions = 0_usize;
             for matched in matches {
                 apply_member_match(&mut initial, &mut capture_keys, matched, self.limits)?;
-                self.apply_member_setvars(unit.member_start, &mut initial, &mut setvar_actions)?;
+                self.apply_member_actions(unit.member_start, &mut initial, &mut setvar_actions)?;
             }
             return self.commit_unit_match(unit, initial, capture_keys);
         }
@@ -1458,14 +1519,14 @@ impl<'generation> Transaction<'generation> {
             let mut next = Vec::new();
             let mut next_bytes = 0_usize;
             for branch in &frontier {
-                for matched in self.evaluate_member_matches(member_id, &branch.tx, final_member)? {
+                for matched in self.evaluate_member_matches(unit_id, member_id, &branch.tx, final_member)? {
                     let mut candidate = ChainBranch {
                         tx: branch.tx.try_clone()?,
                         capture_keys: try_clone_byte_vectors(&branch.capture_keys)?,
                         setvar_actions: branch.setvar_actions,
                     };
                     apply_member_match(&mut candidate.tx, &mut candidate.capture_keys, matched, self.limits)?;
-                    self.apply_member_setvars(member_id, &mut candidate.tx, &mut candidate.setvar_actions)?;
+                    self.apply_member_actions(member_id, &mut candidate.tx, &mut candidate.setvar_actions)?;
                     if final_member {
                         return self.commit_unit_match(unit, candidate.tx, candidate.capture_keys);
                     }
@@ -1531,6 +1592,7 @@ impl<'generation> Transaction<'generation> {
 
     fn evaluate_member_matches(
         &mut self,
+        unit_id: usize,
         member_id: usize,
         tx: &TxState,
         stop_after_first: bool,
@@ -1562,8 +1624,13 @@ impl<'generation> Transaction<'generation> {
             tx,
             self.response.as_ref(),
             &mut self.boolean_scratch,
-            target_plan,
-            self.limits.max_selected_values,
+            &mut self.ctl_work_bytes,
+            SelectionParams {
+                unit_id,
+                plan_id: target_plan,
+                limit: self.limits.max_selected_values,
+                work_limit: self.limits.max_operator_work_bytes,
+            },
         )?;
         let transformations = member
             .transformation_plan
@@ -1829,8 +1896,8 @@ impl<'generation> Transaction<'generation> {
         Ok(cursor)
     }
 
-    fn apply_member_setvars(
-        &self,
+    fn apply_member_actions(
+        &mut self,
         member_id: usize,
         staged: &mut TxState,
         setvar_actions: &mut usize,
@@ -1844,12 +1911,16 @@ impl<'generation> Transaction<'generation> {
             .action_start
             .checked_add(member.action_count)
             .ok_or(RuntimeError::Arithmetic)?;
-        for action in self
-            .generation
-            .actions
-            .get(member.action_start..action_end)
-            .ok_or(RuntimeError::GenerationInvariant)?
-        {
+        for action_index in member.action_start..action_end {
+            let action = *self
+                .generation
+                .actions
+                .get(action_index)
+                .ok_or(RuntimeError::GenerationInvariant)?;
+            if let super::CompiledActionOperand::Ctl(ctl) = action.operand {
+                self.apply_ctl(ctl, staged)?;
+                continue;
+            }
             let super::CompiledActionOperand::SetVar(setvar_id) = action.operand else {
                 continue;
             };
@@ -1909,6 +1980,84 @@ impl<'generation> Transaction<'generation> {
         }
         Ok(())
     }
+
+    fn apply_ctl(&mut self, ctl: super::CompiledCtl, staged: &mut TxState) -> Result<(), RuntimeError> {
+        charge_ctl_work(&mut self.ctl_work_bytes, 1, self.limits.max_operator_work_bytes)?;
+        match ctl {
+            super::CompiledCtl::ForceRequestBodyVariable(value) => {
+                staged.force_request_body_variable = Some(value);
+            }
+            super::CompiledCtl::RequestBodyProcessor(value) => {
+                if self.next_phase() != Some(Phase::RequestHeaders) || self.request.body.is_some() {
+                    return Err(RuntimeError::GenerationInvariant);
+                }
+                staged.request_body_processor = Some(match value {
+                    super::RequestBodyProcessor::UrlEncoded => super::super::BodyProcessorSelection::UrlEncoded,
+                    super::RequestBodyProcessor::Multipart => super::super::BodyProcessorSelection::Multipart,
+                    super::RequestBodyProcessor::Json => super::super::BodyProcessorSelection::Json,
+                    super::RequestBodyProcessor::Xml => super::super::BodyProcessorSelection::Xml,
+                });
+            }
+            super::CompiledCtl::RuleRemoveByTag(tag) => {
+                for entry in tagged_units(&self.generation, tag)? {
+                    charge_ctl_work(
+                        &mut self.ctl_work_bytes,
+                        staged.removed_units.len().saturating_add(1),
+                        self.limits.max_operator_work_bytes,
+                    )?;
+                    staged.add_removed_unit(entry.unit, self.limits)?;
+                }
+            }
+            super::CompiledCtl::RuleRemoveTargetByTag {
+                tag,
+                collection,
+                selector,
+            } => {
+                let super::CompiledCtlSelector::Resolved(selector) = selector else {
+                    return Err(RuntimeError::GenerationInvariant);
+                };
+                for entry in tagged_units(&self.generation, tag)? {
+                    charge_ctl_work(
+                        &mut self.ctl_work_bytes,
+                        staged.target_exclusions.len().saturating_add(1),
+                        self.limits.max_operator_work_bytes,
+                    )?;
+                    staged.add_target_exclusion(
+                        ActiveTargetExclusion {
+                            unit: entry.unit,
+                            collection,
+                            selector,
+                        },
+                        self.limits,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn charge_ctl_work(work: &mut usize, amount: usize, limit: usize) -> Result<(), RuntimeError> {
+    *work = work.checked_add(amount).ok_or(RuntimeError::Arithmetic)?;
+    if *work > limit {
+        return Err(RuntimeError::OperatorWorkLimit { limit });
+    }
+    Ok(())
+}
+
+fn tagged_units(
+    generation: &CompiledGeneration,
+    tag: super::ByteRange,
+) -> Result<&[super::CompiledTagRuleRef], RuntimeError> {
+    let tag = generation_bytes(&generation.bytes, tag)?;
+    let refs = &generation.tag_rule_refs;
+    let start = refs.partition_point(|entry| {
+        generation_bytes(&generation.bytes, entry.tag).expect("compiled tag reference has a valid range") < tag
+    });
+    let end = refs.partition_point(|entry| {
+        generation_bytes(&generation.bytes, entry.tag).expect("compiled tag reference has a valid range") <= tag
+    });
+    Ok(&refs[start..end])
 }
 
 fn extract_captures(
@@ -2137,6 +2286,60 @@ fn chain_branches_bytes(branches: &[ChainBranch]) -> Result<usize, RuntimeError>
 }
 
 impl TxState {
+    fn add_removed_unit(&mut self, unit: usize, limits: RuntimeLimits) -> Result<(), RuntimeError> {
+        let Err(index) = self.removed_units.binary_search(&unit) else {
+            return Ok(());
+        };
+        if self.removed_units.len().saturating_add(self.target_exclusions.len()) >= limits.max_ctl_entries {
+            return Err(RuntimeError::CtlEntryLimit {
+                limit: limits.max_ctl_entries,
+            });
+        }
+        self.removed_units
+            .try_reserve(1)
+            .map_err(|_| RuntimeError::Allocation)?;
+        self.removed_units.insert(index, unit);
+        self.recount();
+        if self.retained_bytes > limits.max_tx_bytes {
+            return Err(RuntimeError::TxByteLimit {
+                limit: limits.max_tx_bytes,
+            });
+        }
+        Ok(())
+    }
+
+    fn add_target_exclusion(
+        &mut self,
+        entry: ActiveTargetExclusion,
+        limits: RuntimeLimits,
+    ) -> Result<(), RuntimeError> {
+        let start = self
+            .target_exclusions
+            .partition_point(|existing| existing.unit < entry.unit);
+        let end = self
+            .target_exclusions
+            .partition_point(|existing| existing.unit <= entry.unit);
+        if self.target_exclusions[start..end].contains(&entry) {
+            return Ok(());
+        }
+        if self.removed_units.len().saturating_add(self.target_exclusions.len()) >= limits.max_ctl_entries {
+            return Err(RuntimeError::CtlEntryLimit {
+                limit: limits.max_ctl_entries,
+            });
+        }
+        self.target_exclusions
+            .try_reserve(1)
+            .map_err(|_| RuntimeError::Allocation)?;
+        self.target_exclusions.insert(end, entry);
+        self.recount();
+        if self.retained_bytes > limits.max_tx_bytes {
+            return Err(RuntimeError::TxByteLimit {
+                limit: limits.max_tx_bytes,
+            });
+        }
+        Ok(())
+    }
+
     fn clear_matches(&mut self) {
         self.matched_var = None;
         self.matched_var_name = None;
@@ -2191,11 +2394,25 @@ impl TxState {
     fn try_clone(&self) -> Result<Self, RuntimeError> {
         let entries = try_clone_entries(&self.entries)?;
         let matched_vars = try_clone_entries(&self.matched_vars)?;
+        let mut removed_units = Vec::new();
+        removed_units
+            .try_reserve_exact(self.removed_units.len())
+            .map_err(|_| RuntimeError::Allocation)?;
+        removed_units.extend_from_slice(&self.removed_units);
+        let mut target_exclusions = Vec::new();
+        target_exclusions
+            .try_reserve_exact(self.target_exclusions.len())
+            .map_err(|_| RuntimeError::Allocation)?;
+        target_exclusions.extend_from_slice(&self.target_exclusions);
         Ok(Self {
             entries,
             matched_var: self.matched_var.as_deref().map(owned_copy).transpose()?,
             matched_var_name: self.matched_var_name.as_deref().map(owned_copy).transpose()?,
             matched_vars,
+            removed_units,
+            target_exclusions,
+            request_body_processor: self.request_body_processor,
+            force_request_body_variable: self.force_request_body_variable,
             retained_bytes: self.retained_bytes,
         })
     }
@@ -2214,6 +2431,12 @@ impl TxState {
             .saturating_add(self.matched_var.as_ref().map_or(0, Vec::len))
             .saturating_add(self.matched_var_name.as_ref().map_or(0, Vec::len))
             .saturating_add(self.matched_vars.len().saturating_mul(size_of::<TxEntry>()))
+            .saturating_add(self.removed_units.len().saturating_mul(size_of::<usize>()))
+            .saturating_add(
+                self.target_exclusions
+                    .len()
+                    .saturating_mul(size_of::<ActiveTargetExclusion>()),
+            )
             .saturating_add(
                 self.matched_vars
                     .iter()
@@ -2320,15 +2543,28 @@ fn member_has_action(
         .any(|action| action.kind == super::ActionEnvelopeKind::Action(expected)))
 }
 
+struct SelectionParams {
+    unit_id: usize,
+    plan_id: usize,
+    limit: usize,
+    work_limit: usize,
+}
+
 fn select_values(
     generation: &CompiledGeneration,
     request: &RequestState,
     tx: &TxState,
     response: Option<&ResponseState>,
     scratch: &mut [RegexBooleanScratch],
-    plan_id: usize,
-    limit: usize,
+    ctl_work: &mut usize,
+    params: SelectionParams,
 ) -> Result<Vec<SelectedValue>, RuntimeError> {
+    let SelectionParams {
+        unit_id,
+        plan_id,
+        limit,
+        work_limit,
+    } = params;
     let plan = *generation
         .target_plans
         .get(plan_id)
@@ -2341,6 +2577,9 @@ fn select_values(
         .target_records
         .get(plan.record_start..end)
         .ok_or(RuntimeError::GenerationInvariant)?;
+    let exclude_start = tx.target_exclusions.partition_point(|entry| entry.unit < unit_id);
+    let exclude_end = tx.target_exclusions.partition_point(|entry| entry.unit <= unit_id);
+    let exclusions = &tx.target_exclusions[exclude_start..exclude_end];
     let mut selected = Vec::new();
     selected
         .try_reserve(limit.min(request.entry_count.saturating_add(records.len())))
@@ -2359,6 +2598,8 @@ fn select_values(
                         target.collection,
                         target.selector,
                         candidate,
+                    )? && !ctl_excludes_value(
+                        generation, request, tx, response, scratch, exclusions, candidate, ctl_work, work_limit,
                     )? {
                         if selected.len() == limit {
                             return Err(RuntimeError::SelectedValueLimit { limit });
@@ -2401,6 +2642,8 @@ fn select_values(
                         target.collection,
                         target.selector,
                         candidate,
+                    )? && !ctl_excludes_value(
+                        generation, request, tx, response, scratch, exclusions, candidate, ctl_work, work_limit,
                     )? {
                         count = count.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
                     }
@@ -2423,6 +2666,52 @@ fn select_values(
     Ok(selected)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn ctl_excludes_value(
+    generation: &CompiledGeneration,
+    request: &RequestState,
+    tx: &TxState,
+    response: Option<&ResponseState>,
+    scratch: &mut [RegexBooleanScratch],
+    exclusions: &[ActiveTargetExclusion],
+    candidate: SelectedValue,
+    work: &mut usize,
+    limit: usize,
+) -> Result<bool, RuntimeError> {
+    for exclusion in exclusions {
+        *work = work.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
+        if *work > limit {
+            return Err(RuntimeError::OperatorWorkLimit { limit });
+        }
+        if exclusion.collection != candidate.collection {
+            continue;
+        }
+        *work = work
+            .checked_add(
+                candidate
+                    .name_bytes(request, tx, response)?
+                    .map_or(1, |name| name.len().saturating_add(1)),
+            )
+            .ok_or(RuntimeError::Arithmetic)?;
+        if *work > limit {
+            return Err(RuntimeError::OperatorWorkLimit { limit });
+        }
+        if selector_matches(
+            generation,
+            request,
+            tx,
+            response,
+            scratch,
+            exclusion.collection,
+            exclusion.selector,
+            candidate,
+        )? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn collection_candidates(
     request: &RequestState,
     tx: &TxState,
@@ -2431,6 +2720,13 @@ fn collection_candidates(
 ) -> Result<Vec<SelectedValue>, RuntimeError> {
     let mut candidates = Vec::new();
     match collection {
+        CollectionKind::ReqbodyProcessor if request.body.is_none() && tx.request_body_processor.is_some() => {
+            candidates.push(SelectedValue {
+                collection,
+                name: None,
+                value: SelectedBytes::CtlProcessor,
+            });
+        }
         CollectionKind::Tx => {
             candidates
                 .try_reserve_exact(tx.entries.len())
@@ -5223,5 +5519,273 @@ mod tests {
                 "case={case}"
             );
         }
+    }
+
+    #[test]
+    fn ctl_rule_removal_is_transaction_local_and_applies_after_the_matching_rule() {
+        let generation = Arc::new(generation(concat!(
+            "SecRule REQUEST_HEADERS:X-Exempt \"@streq yes\" \"id:1,phase:1,pass,ctl:ruleRemoveByTag=blocklist\"\n",
+            "SecRule REQUEST_URI \"@streq /evil\" \"id:2,phase:1,deny,tag:blocklist\"\n",
+        )));
+        let run = |exempt: bool| {
+            let headers = exempt.then_some([RequestHeader::new(b"X-Exempt", b"yes")]);
+            let mut tx = Transaction::new_shared(
+                Arc::clone(&generation),
+                request(headers.as_ref().map_or(&[][..], |headers| &headers[..]), b"/evil"),
+                RuntimeLimits::default(),
+            )
+            .unwrap();
+            tx.execute_request_headers().unwrap().intervention().is_some()
+        };
+        assert!(!run(true));
+        assert!(run(false));
+        std::thread::scope(|scope| {
+            let blocked = scope.spawn(|| run(false));
+            let exempt = scope.spawn(|| run(true));
+            assert!(blocked.join().unwrap());
+            assert!(!exempt.join().unwrap());
+        });
+    }
+
+    #[test]
+    fn ctl_target_removal_filters_only_the_named_value_in_chain_children() {
+        let generation = generation(concat!(
+            "SecRule REQUEST_HEADERS:X-Exempt \"@streq yes\" \"id:1,phase:1,pass,ctl:ruleRemoveTargetByTag=blocklist;ARGS:/^allowed$/\"\n",
+            "SecRule REQUEST_FILENAME \"@streq /\" \"id:2,phase:2,deny,chain,tag:blocklist\"\n",
+            "SecRule ARGS \"@streq blocked\" \"t:none\"\n",
+        ));
+        let headers = [RequestHeader::new(b"X-Exempt", b"yes")];
+        for (uri, blocked) in [
+            (b"/?allowed=blocked".as_slice(), false),
+            (b"/?other=blocked".as_slice(), true),
+        ] {
+            let mut tx = Transaction::new(&generation, request(&headers, uri), RuntimeLimits::default()).unwrap();
+            tx.execute_request_headers().unwrap();
+            tx.publish_request_body(RequestBody::new(b"", super::super::super::BodyProcessorSelection::Auto))
+                .unwrap();
+            assert_eq!(tx.execute_request_body().unwrap().intervention().is_some(), blocked);
+        }
+    }
+
+    #[test]
+    fn ctl_processor_and_force_raw_body_apply_before_publication() {
+        let generation = generation(concat!(
+            "SecAction \"id:1,phase:1,pass,ctl:requestBodyProcessor=JSON,ctl:forceRequestBodyVariable=On\"\n",
+            "SecRule ARGS:json.name \"@streq blocked\" \"id:2,phase:2,deny\"\n",
+            "SecRule REQUEST_BODY \"@contains blocked\" \"id:3,phase:2,pass\"\n",
+        ));
+        let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        tx.publish_request_body(RequestBody::new(
+            b"{\"name\":\"blocked\"}",
+            super::super::super::BodyProcessorSelection::Auto,
+        ))
+        .unwrap();
+        let outcome = tx.execute_request_body().unwrap();
+        assert_eq!(
+            outcome
+                .findings()
+                .iter()
+                .map(|finding| finding.rule_id())
+                .collect::<Vec<_>>(),
+            [2]
+        );
+        assert_eq!(outcome.intervention().unwrap().rule_id(), 2);
+        assert!(tx
+            .request
+            .body
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| entry.collection == CollectionKind::RequestBody));
+    }
+
+    #[test]
+    fn ctl_force_raw_body_off_hides_only_the_raw_value() {
+        let generation = generation(concat!(
+            "SecAction \"id:1,phase:1,pass,ctl:forceRequestBodyVariable=Off\"\n",
+            "SecRule REQUEST_BODY \"@contains blocked\" \"id:2,phase:2,deny\"\n",
+            "SecRule REQUEST_BODY_LENGTH \"@streq 7\" \"id:3,phase:2,pass\"\n",
+        ));
+        let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        tx.publish_request_body(RequestBody::new(
+            b"blocked",
+            super::super::super::BodyProcessorSelection::Raw,
+        ))
+        .unwrap();
+        let outcome = tx.execute_request_body().unwrap();
+        assert!(outcome.intervention().is_none());
+        assert_eq!(
+            outcome
+                .findings()
+                .iter()
+                .map(|finding| finding.rule_id())
+                .collect::<Vec<_>>(),
+            [3]
+        );
+    }
+
+    #[test]
+    fn ctl_entry_limit_fails_without_affecting_another_transaction() {
+        let generation = generation(concat!(
+            "SecAction \"id:1,phase:1,pass,ctl:ruleRemoveByTag=blocklist\"\n",
+            "SecRule REQUEST_URI \"@streq /\" \"id:2,phase:1,deny,tag:blocklist\"\n",
+        ));
+        let limits = RuntimeLimits {
+            max_ctl_entries: 0,
+            ..RuntimeLimits::default()
+        };
+        let mut limited = Transaction::new(&generation, request(&[], b"/"), limits).unwrap();
+        assert!(matches!(
+            limited.execute_request_headers(),
+            Err(RuntimeError::CtlEntryLimit { limit: 0 })
+        ));
+        let mut normal = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        assert!(normal.execute_request_headers().unwrap().intervention().is_none());
+    }
+
+    #[test]
+    fn ctl_target_removal_supports_xml_attributes_without_removing_text() {
+        let generation = generation(concat!(
+            "SecRule REQUEST_HEADERS:X-Exempt \"@streq yes\" \"id:1,phase:1,pass,ctl:ruleRemoveTargetByTag=xml-check;XML://@*\"\n",
+            "SecRule XML:/*|XML://@* \"@streq blocked\" \"id:2,phase:2,deny,tag:xml-check\"\n",
+        ));
+        for (headers, body, blocked) in [
+            (
+                vec![RequestHeader::new(b"X-Exempt", b"yes")],
+                b"<root key=\"blocked\">clean</root>".as_slice(),
+                false,
+            ),
+            (vec![], b"<root key=\"blocked\">clean</root>".as_slice(), true),
+            (
+                vec![RequestHeader::new(b"X-Exempt", b"yes")],
+                b"<root key=\"clean\">blocked</root>".as_slice(),
+                true,
+            ),
+        ] {
+            let mut tx = Transaction::new(&generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+            tx.execute_request_headers().unwrap();
+            tx.publish_request_body(RequestBody::new(body, super::super::super::BodyProcessorSelection::Xml))
+                .unwrap();
+            assert_eq!(tx.execute_request_body().unwrap().intervention().is_some(), blocked);
+        }
+    }
+
+    #[test]
+    fn ctl_in_failed_chain_does_not_remove_a_later_rule() {
+        let generation = generation(concat!(
+            "SecRule REQUEST_URI \"@streq /evil\" \"id:1,phase:1,pass,chain,ctl:ruleRemoveByTag=blocklist\"\n",
+            "SecRule REQUEST_HEADERS:X-Allow \"@streq yes\" \"t:none\"\n",
+            "SecRule REQUEST_URI \"@streq /evil\" \"id:2,phase:1,deny,tag:blocklist\"\n",
+        ));
+        let mut tx = Transaction::new(&generation, request(&[], b"/evil"), RuntimeLimits::default()).unwrap();
+        assert_eq!(
+            tx.execute_request_headers().unwrap().intervention().unwrap().rule_id(),
+            2
+        );
+    }
+
+    #[test]
+    fn ctl_body_actions_reject_late_phase_and_streaming_bypass() {
+        let defaults = [
+            Phase::RequestHeaders,
+            Phase::RequestBody,
+            Phase::ResponseHeaders,
+            Phase::ResponseBody,
+            Phase::Logging,
+        ]
+        .map(|phase| PhaseDefaults::pass(phase, true, true));
+        let context = SemanticValidationContext::try_new(Some(Phase::RequestBody), &defaults).unwrap();
+        let late = compile_with_includes(
+            "ctl-late",
+            b"SecAction \"id:1,phase:2,pass,ctl:requestBodyProcessor=JSON\"\n",
+            &mut NoIncludes,
+            None,
+            context,
+            FrontendLimits::default(),
+        );
+        assert!(matches!(
+            late,
+            Err(crate::seclang::FrontendError::Compiler(
+                super::super::CompilerError::CtlPhase { .. }
+            ))
+        ));
+
+        let generation = generation(concat!(
+            "SecAction \"id:1,phase:1,pass,ctl:ruleRemoveByTag=body\"\n",
+            "SecRule REQUEST_BODY \"@contains blocked\" \"id:2,phase:2,deny,tag:body\"\n",
+        ));
+        let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        assert!(matches!(
+            tx.start_request_body_stream(),
+            Err(RuntimeError::RequestBodyStreamCtlUnavailable)
+        ));
+    }
+
+    #[test]
+    fn ctl_rejects_unsupported_xml_exclusion_path_during_compilation() {
+        let defaults = [
+            Phase::RequestHeaders,
+            Phase::RequestBody,
+            Phase::ResponseHeaders,
+            Phase::ResponseBody,
+            Phase::Logging,
+        ]
+        .map(|phase| PhaseDefaults::pass(phase, true, true));
+        let context = SemanticValidationContext::try_new(Some(Phase::RequestBody), &defaults).unwrap();
+        let result = compile_with_includes(
+            "ctl-xml-path",
+            b"SecAction \"id:1,phase:1,pass,ctl:ruleRemoveTargetByTag=check;XML:/root/node\"\nSecRule XML:/* \"@contains blocked\" \"id:2,phase:2,deny,tag:check\"\n",
+            &mut NoIncludes,
+            None,
+            context,
+            FrontendLimits::default(),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::seclang::FrontendError::Compiler(
+                super::super::CompilerError::CtlXmlSelector { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn ctl_repeated_tag_activation_consumes_work_budget() {
+        let generation = generation(concat!(
+            "SecAction \"id:1,phase:1,pass,ctl:ruleRemoveByTag=check,ctl:ruleRemoveByTag=check\"\n",
+            "SecRule REQUEST_URI \"@streq /\" \"id:2,phase:1,deny,tag:check\"\n",
+        ));
+        let limits = RuntimeLimits {
+            max_operator_work_bytes: 3,
+            ..RuntimeLimits::default()
+        };
+        let mut tx = Transaction::new(&generation, request(&[], b"/"), limits).unwrap();
+        assert!(matches!(
+            tx.execute_request_headers(),
+            Err(RuntimeError::OperatorWorkLimit { limit: 3 })
+        ));
+    }
+
+    #[test]
+    fn ctl_mismatched_target_exclusions_consume_work_budget() {
+        let generation = generation(concat!(
+            "SecAction \"id:1,phase:1,pass,ctl:ruleRemoveTargetByTag=check;REQUEST_HEADERS:X-Ignored\"\n",
+            "SecRule ARGS \"@streq x\" \"id:2,phase:2,deny,tag:check\"\n",
+        ));
+        let limits = RuntimeLimits {
+            max_operator_work_bytes: 2,
+            ..RuntimeLimits::default()
+        };
+        let mut tx = Transaction::new(&generation, request(&[], b"/?a=x"), limits).unwrap();
+        tx.execute_request_headers().unwrap();
+        tx.publish_request_body(RequestBody::new(b"", super::super::super::BodyProcessorSelection::Auto))
+            .unwrap();
+        assert!(matches!(
+            tx.execute_request_body(),
+            Err(RuntimeError::OperatorWorkLimit { limit: 2 })
+        ));
     }
 }

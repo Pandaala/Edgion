@@ -83,6 +83,30 @@ XSS 检测不会新增捕获，也不会覆盖已有的 `TX.0`。取反匹配不
 
 ## 请求体检查
 
+### 请求级控制动作
+
+设置 `requestBody.inspection: full` 后，严格编译器支持四种 `ctl` 动作：
+`forceRequestBodyVariable=On|Off`、
+`requestBodyProcessor=URLENCODED|MULTIPART|JSON|XML`、
+`ruleRemoveByTag=<tag>`、`ruleRemoveTargetByTag=<tag>;<target>`。
+动作仅修改当前请求的 WAF 事务。审计和引擎控制等其他 `ctl` 动作仍会导致整个规则集被拒绝；
+前缀检查模式不接受任何 `ctl` 动作。
+
+请求体控制动作必须在阶段 1 执行，并先于请求体解析。处理器动作覆盖当前请求的请求体解析器；
+`forceRequestBodyVariable=On` 在结构化解析结果之外暴露原始 `REQUEST_BODY`，
+`Off` 则隐藏原始值。这些动作不会修改配置的检查模式或请求体物理上限。
+按标签排除规则或目标的动作从控制规则命中后开始生效，先前执行的规则不受影响；
+目标排除仅作用于后续带相应标签的规则及其链成员中的指定集合和目标。
+失败的规则链不会提交控制动作。控制条目数和工作量均有限额，超限按 WAF 运行时错误策略处理。
+
+```yaml
+requestBody:
+  inspection: full
+rules: |
+  SecRule REQUEST_HEADERS:X-Waf-Exempt "@streq yes" "id:1201,phase:1,pass,ctl:ruleRemoveByTag=managed-check"
+  SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-check"
+```
+
 Phase 1 在读取正文前检查请求头等信息。默认的 `prefix` 模式在选择或连接后端前，
 检查最多 `prefixSize` 字节正文，默认 64 KiB、最大 1 MiB；移除传输分帧，但不解压 `Content-Encoding`。
 规则阻断时，后端收到零请求头、零正文。通过只表示检查窗口未被规则阻断，

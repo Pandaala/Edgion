@@ -117,6 +117,36 @@ runtime error policy. The implementation does not use Hyperscan.
 
 ## Execution and limits
 
+### Request-scoped control actions
+
+With `requestBody.inspection: full`, the strict compiler accepts four `ctl`
+actions: `forceRequestBodyVariable=On|Off`,
+`requestBodyProcessor=URLENCODED|MULTIPART|JSON|XML`,
+`ruleRemoveByTag=<tag>`, and
+`ruleRemoveTargetByTag=<tag>;<target>`. They change only the current request's
+transaction. Other `ctl` actions, including audit and engine controls, remain
+unsupported and reject the complete ruleset. Prefix inspection rejects all
+`ctl` actions.
+
+Body controls must run in phase 1, before request-body publication. The
+processor action overrides the request's body parser; the force action controls
+whether raw `REQUEST_BODY` is exposed alongside parsed values. `On` exposes
+raw bytes even for structured processors; `Off` hides raw bytes. Neither action
+changes the configured inspection mode or the physical body limit. Tag and
+target exclusions take effect after the controlling rule matches, so earlier
+rules remain evaluated. Target exclusions select only the named collection and
+target of later tagged rules, including chain members. Failed chains commit no
+controls. Each transaction has a bounded control-entry count and work budget;
+exhaustion follows the normal WAF runtime failure policy.
+
+```yaml
+requestBody:
+  inspection: full
+rules: |
+  SecRule REQUEST_HEADERS:X-Waf-Exempt "@streq yes" "id:1201,phase:1,pass,ctl:ruleRemoveByTag=managed-check"
+  SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-check"
+```
+
 - Phase 1 inspects the entry request URI, method/protocol, client address, and
   ordered request headers. A phase-1 denial occurs before request-body capture.
 - With `requestBody.inspection: prefix`, phase 2 inspects at most the first

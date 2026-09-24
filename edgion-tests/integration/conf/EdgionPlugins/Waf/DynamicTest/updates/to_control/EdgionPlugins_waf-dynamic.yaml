@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: waf-dynamic
+  namespace: edgion-default
+spec:
+  waf:
+    mode: on
+    requestBody:
+      inspection: full
+    rules: |
+      SecRule REQUEST_HEADERS:X-Waf-Version "@streq exempt" "id:3601,phase:1,pass,ctl:ruleRemoveByTag=control-block"
+      SecRule REQUEST_HEADERS:X-Waf-Sql "@streq blocked" "id:3602,phase:1,deny,status:403,tag:control-block"

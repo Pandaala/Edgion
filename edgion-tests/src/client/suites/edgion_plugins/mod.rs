@@ -150,8 +150,9 @@ pub use request_restriction::RequestRestrictionTestSuite;
 pub use resolved_refs::ResolvedRefsTestSuite;
 pub use response_rewrite::ResponseRewriteTestSuite;
 pub use waf::{
-    WafDynamicConfiguredPrefixTestSuite, WafDynamicDeletedTestSuite, WafDynamicDetectionTestSuite,
-    WafDynamicInitialTestSuite, WafDynamicInjectionTestSuite, WafDynamicRecoveredTestSuite, WafDynamicUpdatedTestSuite,
+    WafDynamicConfiguredPrefixTestSuite, WafDynamicControlTestSuite, WafDynamicDeletedTestSuite,
+    WafDynamicDetectionTestSuite, WafDynamicInitialTestSuite, WafDynamicInjectionTestSuite,
+    WafDynamicRecoveredTestSuite, WafDynamicUpdatedTestSuite,
 };
 pub use wasm::WasmPluginTestSuite;
 pub use webhook_key_get::WebhookKeyGetTestSuite;

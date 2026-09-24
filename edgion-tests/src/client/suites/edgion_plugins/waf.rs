@@ -236,6 +236,41 @@ pub struct WafDynamicDetectionTestSuite;
 
 pub struct WafDynamicInjectionTestSuite;
 
+pub struct WafDynamicControlTestSuite;
+
+impl TestSuite for WafDynamicControlTestSuite {
+    fn name(&self) -> &str {
+        "Native WAF Dynamic - Request Control"
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![
+            control_case("waf_control_exempt", "exempt", 200),
+            control_case("waf_control_deny", "ordinary", 403),
+        ]
+    }
+}
+
+fn control_case(name: &'static str, version: &'static str, status: u16) -> TestCase {
+    TestCase::new(
+        name,
+        "request-scoped tag exclusion after hot reload",
+        move |ctx: TestContext| {
+            Box::pin(async move {
+                let started = Instant::now();
+                match send_waf_request(&ctx, version, None, false, None, Some("blocked"), None).await {
+                    Ok(response) if response.status().as_u16() == status => TestResult::passed(started.elapsed()),
+                    Ok(response) => TestResult::failed(
+                        started.elapsed(),
+                        format!("expected status {status}, got {}", response.status()),
+                    ),
+                    Err(error) => TestResult::failed(started.elapsed(), error),
+                }
+            })
+        },
+    )
+}
+
 impl TestSuite for WafDynamicInjectionTestSuite {
     fn name(&self) -> &str {
         "Native WAF Dynamic - Injection"

@@ -24,3 +24,7 @@ backend's original 200 response.
 A configured-prefix reload sets `prefixSize: 1m` and repeats the H1/H2 matrix
 at the 1 MiB boundary, verifying that the new window takes effect before the
 subsequent detection-only reload.
+
+The request-control reload installs a phase-1 `ctl:ruleRemoveByTag` exemption.
+An exempt request passes, while the same blocking header on another request is
+denied. The generation then reloads to the recovery rules.

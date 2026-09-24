@@ -134,6 +134,7 @@ impl WafPlugin {
             | RuntimeError::TxVariableLimit { .. }
             | RuntimeError::TxByteLimit { .. }
             | RuntimeError::SetVarActionLimit { .. }
+            | RuntimeError::CtlEntryLimit { .. }
             | RuntimeError::CaptureEntryLimit { .. }
             | RuntimeError::CaptureByteLimit { .. } => WafErrorCode::RuntimeLimit,
             RuntimeError::ResponseHeaderLimit { .. }
@@ -146,6 +147,7 @@ impl WafPlugin {
             | RuntimeError::ResponseNotPublished
             | RuntimeError::PhaseOrder { .. } => WafErrorCode::PhaseState,
             RuntimeError::XmlSelectorUnavailable
+            | RuntimeError::RequestBodyStreamCtlUnavailable
             | RuntimeError::RuntimeActionUnavailable { .. }
             | RuntimeError::RuntimeMacroUnavailable { .. } => WafErrorCode::Unsupported,
             RuntimeError::GenerationInvariant

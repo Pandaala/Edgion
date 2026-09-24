@@ -5316,7 +5316,7 @@ fn classify_action_operand<'source>(
         usize::from(runtime_macro) + usize::from(setvar_requirement) + usize::from(block_requirement);
     let capability = match plan {
         ActionPlan::InitCol(_) => Some(UnavailableCapability::InitCol),
-        ActionPlan::Ctl(_) => Some(UnavailableCapability::Ctl),
+        ActionPlan::Ctl(CtlPlan::AuditEngine(_)) => Some(UnavailableCapability::Ctl),
         _ => None,
     };
     let dynamic = if template_shape.is_some() {
@@ -9591,7 +9591,7 @@ SecRuleRemoveById 3 4-5
             );
             assert_eq!(target.regex_body().unwrap().text(), "^name$");
             assert!(draft.requirements().next().is_none());
-            assert_eq!(draft.unavailable_capabilities().len(), 1);
+            assert_eq!(draft.unavailable_capabilities().len(), 0);
         })
         .unwrap();
     }
@@ -9669,7 +9669,7 @@ SecRuleRemoveById 3 4-5
     }
 
     #[test]
-    fn initcol_and_all_five_ctl_commands_are_typed_without_becoming_available() {
+    fn initcol_and_ctl_commands_keep_only_unsupported_actions_unavailable() {
         let source = concat!(
             "SecAction \"initcol:GLOBAL=key\"\n",
             "SecAction \"ctl:auditEngine=oN\"\n",
@@ -9707,10 +9707,6 @@ SecRuleRemoveById 3 4-5
                     .collect::<Vec<_>>(),
                 [
                     UnavailableCapability::InitCol,
-                    UnavailableCapability::Ctl,
-                    UnavailableCapability::Ctl,
-                    UnavailableCapability::Ctl,
-                    UnavailableCapability::Ctl,
                     UnavailableCapability::Ctl,
                 ]
             );

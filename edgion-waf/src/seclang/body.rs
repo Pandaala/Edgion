@@ -136,7 +136,24 @@ pub(super) fn build_publication(
     head_args_combined_size: usize,
     limits: BodyLimits,
 ) -> Result<BodyPublication, BodyError> {
-    build_publication_inner(body, content_type, head_args_combined_size, limits, true)
+    build_publication_with_raw_policy(body, content_type, head_args_combined_size, limits, None)
+}
+
+pub(super) fn build_publication_with_raw_policy(
+    body: RequestBody<'_>,
+    content_type: Option<&[u8]>,
+    head_args_combined_size: usize,
+    limits: BodyLimits,
+    force_raw_body: Option<bool>,
+) -> Result<BodyPublication, BodyError> {
+    build_publication_inner(
+        body,
+        content_type,
+        head_args_combined_size,
+        limits,
+        true,
+        force_raw_body,
+    )
 }
 
 pub(super) fn build_fallback_publication(
@@ -145,7 +162,24 @@ pub(super) fn build_fallback_publication(
     head_args_combined_size: usize,
     limits: BodyLimits,
 ) -> Result<BodyPublication, BodyError> {
-    build_publication_inner(body, content_type, head_args_combined_size, limits, false)
+    build_fallback_publication_with_raw_policy(body, content_type, head_args_combined_size, limits, None)
+}
+
+pub(super) fn build_fallback_publication_with_raw_policy(
+    body: RequestBody<'_>,
+    content_type: Option<&[u8]>,
+    head_args_combined_size: usize,
+    limits: BodyLimits,
+    force_raw_body: Option<bool>,
+) -> Result<BodyPublication, BodyError> {
+    build_publication_inner(
+        body,
+        content_type,
+        head_args_combined_size,
+        limits,
+        false,
+        force_raw_body,
+    )
 }
 
 fn build_publication_inner(
@@ -154,6 +188,7 @@ fn build_publication_inner(
     head_args_combined_size: usize,
     limits: BodyLimits,
     parse_derived_views: bool,
+    force_raw_body: Option<bool>,
 ) -> Result<BodyPublication, BodyError> {
     if body.bytes.len() > limits.max_body_bytes {
         return Err(BodyError::ByteLimit {
@@ -168,12 +203,13 @@ fn build_publication_inner(
     };
     let mut builder = BodyBuilder::new(limits);
     builder.charge_work(body.bytes.len())?;
-    if !parse_derived_views
-        || matches!(
-            processor,
-            BodyProcessorSelection::Auto | BodyProcessorSelection::Raw | BodyProcessorSelection::UrlEncoded
-        )
-    {
+    if force_raw_body.unwrap_or(
+        !parse_derived_views
+            || matches!(
+                processor,
+                BodyProcessorSelection::Auto | BodyProcessorSelection::Raw | BodyProcessorSelection::UrlEncoded
+            ),
+    ) {
         builder.push(CollectionKind::RequestBody, None, body.bytes, false)?;
     }
     let length = body.bytes.len().to_string();

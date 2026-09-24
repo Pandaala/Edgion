@@ -607,6 +607,15 @@ fn frontend_failure(error: &FrontendError) -> WafSupportFailure {
                 WafSupportFailure::new("resource_limit", "Reduce regex size or complexity").at_location(*location)
             }
         }
+        FrontendError::Compiler(CompilerError::CtlPhase { location }) => WafSupportFailure::new(
+            "unsupported_semantics",
+            "Move request-body control to the request headers phase",
+        )
+        .at_location(*location),
+        FrontendError::Compiler(CompilerError::CtlXmlSelector { location }) => {
+            WafSupportFailure::new("unsupported_semantics", "Use a supported XML control target selector")
+                .at_location(*location)
+        }
         FrontendError::Compiler(_) => WafSupportFailure::new("resource_limit", "Reduce rule compilation complexity"),
     };
     attach_safe_location(error, &mut failure);

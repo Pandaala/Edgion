@@ -10,10 +10,11 @@ use crate::matcher::{
 };
 
 use super::{
-    ActionEnvelopeKind, ActionOperandView, CollectionKind, CompileRequirement, DirectiveLocation, ExternalAssetView,
-    LocalActionValue, MacroExpansionView, MacroSource, OperandTemplateView, Phase, RegexStyle, ResolvedDisruptive,
-    SelectorKind, SemanticActionView, SemanticLocation, SemanticNodeKind, SetVarOperation, TargetModifier,
-    TemplateSegmentKind, TemplateSliceView, TransformationKind, ValidatedSemanticDocument,
+    ActionEnvelopeKind, ActionOperandView, CollectionKind, CompileRequirement, CtlView, DirectiveLocation,
+    ExternalAssetView, LocalActionValue, MacroExpansionView, MacroSource, OnOff, OperandTemplateView, Phase,
+    RegexStyle, RequestBodyProcessor, ResolvedDisruptive, SelectorKind, SemanticActionView, SemanticLocation,
+    SemanticNodeKind, SetVarOperation, TargetModifier, TemplateSegmentKind, TemplateSliceView, TransformationKind,
+    ValidatedSemanticDocument,
 };
 
 #[path = "transaction.rs"]
@@ -257,6 +258,10 @@ pub enum CompilerError {
     NodeLimit { actual: usize, limit: usize },
     #[error("compiler input has {actual} actions, exceeding the limit of {limit}")]
     ActionLimit { actual: usize, limit: usize },
+    #[error("request-body ctl action is only valid in request headers at {location:?}")]
+    CtlPhase { location: SemanticLocation },
+    #[error("unsupported XML ctl target selector at {location:?}")]
+    CtlXmlSelector { location: SemanticLocation },
     #[error("compiler input has {actual} asset requests, exceeding the limit of {limit}")]
     AssetRequestLimit { actual: usize, limit: usize },
     #[error("phrase asset source is missing for request {request_id} at {location:?}")]
@@ -438,6 +443,33 @@ struct CompiledSetVar {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompiledCtlSelector {
+    None,
+    Literal(ByteRange),
+    Path(ByteRange),
+    RegexSource(ByteRange),
+    Resolved(CompiledTargetSelector),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompiledCtl {
+    ForceRequestBodyVariable(OnOff),
+    RequestBodyProcessor(RequestBodyProcessor),
+    RuleRemoveByTag(ByteRange),
+    RuleRemoveTargetByTag {
+        tag: ByteRange,
+        collection: CollectionKind,
+        selector: CompiledCtlSelector,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompiledTagRuleRef {
+    tag: ByteRange,
+    unit: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompiledActionOperand {
     None,
     Local(LocalActionValue),
@@ -445,12 +477,14 @@ enum CompiledActionOperand {
     Template(usize),
     Literal(ByteRange),
     SetVar(usize),
+    Ctl(CompiledCtl),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompiledActionPlan {
     kind: ActionEnvelopeKind,
     operand: CompiledActionOperand,
+    location: SemanticLocation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -752,6 +786,7 @@ pub struct CompiledGeneration {
     segments: Vec<CompiledTemplateSegment>,
     macros: Vec<CompiledMacroRef>,
     actions: Vec<CompiledActionPlan>,
+    tag_rule_refs: Vec<CompiledTagRuleRef>,
     setvars: Vec<CompiledSetVar>,
     members: Vec<CompiledMemberPlan>,
     operator_plans: Vec<Option<CompiledOperatorPlan>>,
@@ -3455,7 +3490,7 @@ impl CompiledGeneration {
             operator_plans,
             ip_networks,
             target_regexes,
-            boolean_regexes,
+            mut boolean_regexes,
             capture_regexes,
             ..
         } = matchers;
@@ -3464,11 +3499,145 @@ impl CompiledGeneration {
             templates,
             segments,
             macros,
-            actions,
+            mut actions,
             setvars,
             members,
             ..
         } = asset_templates;
+        let mut target_bytes = target_bytes;
+        for action in &mut actions {
+            let CompiledActionOperand::Ctl(CompiledCtl::RuleRemoveTargetByTag {
+                collection, selector, ..
+            }) = &mut action.operand
+            else {
+                continue;
+            };
+            let resolved = match *selector {
+                CompiledCtlSelector::None => CompiledTargetSelector::None,
+                CompiledCtlSelector::Literal(source) | CompiledCtlSelector::Path(source) => {
+                    let value = byte_range(&bytes, source)?;
+                    if matches!(*selector, CompiledCtlSelector::Path(_)) && !matches!(value, b"/*" | b"//@*") {
+                        return Err(CompilerError::CtlXmlSelector {
+                            location: action.location,
+                        });
+                    }
+                    work.retain_compiler_bytes(value.len())?;
+                    let range = ByteRange {
+                        start: target_bytes.len(),
+                        len: value.len(),
+                    };
+                    target_bytes
+                        .try_reserve(value.len())
+                        .map_err(|_| CompilerError::Allocation {
+                            operation: "compiled ctl target bytes",
+                        })?;
+                    target_bytes.extend_from_slice(value);
+                    if matches!(*selector, CompiledCtlSelector::Literal(_)) {
+                        CompiledTargetSelector::Literal(range)
+                    } else {
+                        CompiledTargetSelector::Path(range)
+                    }
+                }
+                CompiledCtlSelector::RegexSource(source) => {
+                    let count = boolean_regexes
+                        .len()
+                        .checked_add(capture_regexes.len())
+                        .and_then(|count| count.checked_add(1))
+                        .ok_or(CompilerError::PreflightArithmetic)?;
+                    if count > limits.max_regex_programs {
+                        return Err(CompilerError::RegexProgramLimit {
+                            actual: count,
+                            limit: limits.max_regex_programs,
+                        });
+                    }
+                    let pattern = std::str::from_utf8(byte_range(&bytes, source)?).map_err(|_| {
+                        CompilerError::PrivateInvariant {
+                            kind: CompilerInvariant::InvalidByteRange,
+                        }
+                    })?;
+                    let regex = if *collection == CollectionKind::Tx {
+                        work.compile_ascii_case_insensitive_boolean_regex(pattern, action.location, true)?
+                    } else {
+                        work.compile_boolean_regex(pattern, action.location, true)?
+                    };
+                    work.retain_compiler_records::<CompiledRegexProgram>(1)?;
+                    boolean_regexes.try_reserve(1).map_err(|_| CompilerError::Allocation {
+                        operation: "compiled ctl target regex",
+                    })?;
+                    let program = boolean_regexes.len();
+                    boolean_regexes.push(regex);
+                    CompiledTargetSelector::Regex {
+                        style: RegexStyle::Bare,
+                        program,
+                    }
+                }
+                CompiledCtlSelector::Resolved(_) => {
+                    return Err(CompilerError::PrivateInvariant {
+                        kind: CompilerInvariant::UnexpectedActionOperand,
+                    });
+                }
+            };
+            *selector = CompiledCtlSelector::Resolved(resolved);
+        }
+        let tag_count = units.iter().try_fold(0_usize, |mut total, unit| {
+            let end = unit
+                .member_start
+                .checked_add(unit.member_count)
+                .ok_or(CompilerError::PreflightArithmetic)?;
+            let members = members
+                .get(unit.member_start..end)
+                .ok_or(CompilerError::PrivateInvariant {
+                    kind: CompilerInvariant::ScheduleOrder,
+                })?;
+            for member in members {
+                let end = member
+                    .action_start
+                    .checked_add(member.action_count)
+                    .ok_or(CompilerError::PreflightArithmetic)?;
+                let actions = actions
+                    .get(member.action_start..end)
+                    .ok_or(CompilerError::PrivateInvariant {
+                        kind: CompilerInvariant::ScheduleOrder,
+                    })?;
+                total = total
+                    .checked_add(
+                        actions
+                            .iter()
+                            .filter(|action| {
+                                matches!(
+                                    (action.kind, action.operand),
+                                    (
+                                        ActionEnvelopeKind::Action(super::ActionKind::Tag),
+                                        CompiledActionOperand::Literal(_)
+                                    )
+                                )
+                            })
+                            .count(),
+                    )
+                    .ok_or(CompilerError::PreflightArithmetic)?;
+            }
+            Ok::<_, CompilerError>(total)
+        })?;
+        work.retain_compiler_records::<CompiledTagRuleRef>(tag_count)?;
+        let mut tag_rule_refs = Vec::new();
+        reserve_exact(&mut tag_rule_refs, tag_count, "compiled ctl tag index")?;
+        for (unit_id, unit) in units.iter().enumerate() {
+            for member in &members[unit.member_start..unit.member_start + unit.member_count] {
+                for action in &actions[member.action_start..member.action_start + member.action_count] {
+                    if let (ActionEnvelopeKind::Action(super::ActionKind::Tag), CompiledActionOperand::Literal(tag)) =
+                        (action.kind, action.operand)
+                    {
+                        tag_rule_refs.push(CompiledTagRuleRef { tag, unit: unit_id });
+                    }
+                }
+            }
+        }
+        tag_rule_refs.sort_unstable_by(|left, right| {
+            byte_range(&bytes, left.tag)
+                .expect("compiled tag range is valid")
+                .cmp(byte_range(&bytes, right.tag).expect("compiled tag range is valid"))
+                .then(left.unit.cmp(&right.unit))
+        });
         let mut generation = Self {
             prefix_validation: Ok(()),
             requires_complete_request_body: false,
@@ -3477,6 +3646,7 @@ impl CompiledGeneration {
             segments,
             macros,
             actions,
+            tag_rule_refs,
             setvars,
             members,
             operator_plans,
@@ -4074,11 +4244,29 @@ impl KnownPreflight {
                                 )?;
                             }
                         }
+                        ActionOperandView::Ctl(ctl) => {
+                            let bytes = match ctl {
+                                CtlView::AuditEngine(_)
+                                | CtlView::ForceRequestBodyVariable(_)
+                                | CtlView::RequestBodyProcessor(_) => 0,
+                                CtlView::RuleRemoveByTag(tag) => tag.text().len(),
+                                CtlView::RuleRemoveTargetByTag { tag, target } => tag
+                                    .text()
+                                    .len()
+                                    .checked_add(
+                                        target
+                                            .regex_body()
+                                            .or_else(|| target.selector())
+                                            .map_or(0, |value| value.text().len()),
+                                    )
+                                    .ok_or(CompilerError::PreflightArithmetic)?,
+                            };
+                            result.metadata_bytes = checked_add(result.metadata_bytes, bytes)?;
+                        }
                         ActionOperandView::NoArgument
                         | ActionOperandView::Local(_)
                         | ActionOperandView::Transformation(_)
-                        | ActionOperandView::InitCol(_)
-                        | ActionOperandView::Ctl(_) => {}
+                        | ActionOperandView::InitCol(_) => {}
                     }
                 }
                 result.transformations = checked_add(result.transformations, member.effective_transformations().len())?;
@@ -4507,7 +4695,17 @@ impl CompileWork {
         } else {
             None
         };
+        let state = member.resolved_state();
         for action in member.actions() {
+            if matches!(
+                action.operand(),
+                ActionOperandView::Ctl(CtlView::ForceRequestBodyVariable(_) | CtlView::RequestBodyProcessor(_))
+            ) && state.phase() != Phase::RequestHeaders
+            {
+                return Err(CompilerError::CtlPhase {
+                    location: action.location(),
+                });
+            }
             self.compile_action(action)?;
         }
         let transformation_start = self.transformations.len();
@@ -4535,7 +4733,6 @@ impl CompileWork {
                 location: member.rule().location(),
             });
         }
-        let state = member.resolved_state();
         let member_location = member
             .operator()
             .map(|operator| operator.location())
@@ -4623,7 +4820,52 @@ impl CompileWork {
                 self.discharge(CompileRequirement::TransactionSetVar, action.location())?;
                 CompiledActionOperand::SetVar(index)
             }
-            ActionOperandView::InitCol(_) | ActionOperandView::Ctl(_) => {
+            ActionOperandView::Ctl(ctl) => {
+                let compiled = match ctl {
+                    CtlView::AuditEngine(_) => {
+                        return Err(CompilerError::PrivateInvariant {
+                            kind: CompilerInvariant::UnexpectedActionOperand,
+                        });
+                    }
+                    CtlView::ForceRequestBodyVariable(value) => CompiledCtl::ForceRequestBodyVariable(value),
+                    CtlView::RequestBodyProcessor(value) => CompiledCtl::RequestBodyProcessor(value),
+                    CtlView::RuleRemoveByTag(tag) => {
+                        CompiledCtl::RuleRemoveByTag(self.push_bytes(tag.text().as_bytes(), action.location())?)
+                    }
+                    CtlView::RuleRemoveTargetByTag { tag, target } => {
+                        let tag = self.push_bytes(tag.text().as_bytes(), action.location())?;
+                        let selector = match target.selector_kind() {
+                            SelectorKind::None => CompiledCtlSelector::None,
+                            SelectorKind::Literal | SelectorKind::Path => {
+                                let text = target.selector().ok_or(CompilerError::PrivateInvariant {
+                                    kind: CompilerInvariant::UnexpectedActionOperand,
+                                })?;
+                                let bytes = self.push_bytes(text.text().as_bytes(), action.location())?;
+                                if target.selector_kind() == SelectorKind::Literal {
+                                    CompiledCtlSelector::Literal(bytes)
+                                } else {
+                                    CompiledCtlSelector::Path(bytes)
+                                }
+                            }
+                            SelectorKind::Regex(_) => {
+                                let body = target.regex_body().ok_or(CompilerError::PrivateInvariant {
+                                    kind: CompilerInvariant::UnexpectedActionOperand,
+                                })?;
+                                CompiledCtlSelector::RegexSource(
+                                    self.push_bytes(body.text().as_bytes(), action.location())?,
+                                )
+                            }
+                        };
+                        CompiledCtl::RuleRemoveTargetByTag {
+                            tag,
+                            collection: target.collection(),
+                            selector,
+                        }
+                    }
+                };
+                CompiledActionOperand::Ctl(compiled)
+            }
+            ActionOperandView::InitCol(_) => {
                 return Err(CompilerError::PrivateInvariant {
                     kind: CompilerInvariant::UnexpectedActionOperand,
                 });
@@ -4634,6 +4876,7 @@ impl CompileWork {
         self.actions.push(CompiledActionPlan {
             kind: action.kind(),
             operand,
+            location: action.location(),
         });
         Ok(())
     }

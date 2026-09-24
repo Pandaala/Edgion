@@ -11,3 +11,4 @@ Check the current compiler, transaction, and detector code before applying a pas
 ## Regression guards
 
 - [Native injection operators use bounded detection and transaction semantics](regression-guards/native-injection-operators-use-bounded-detection.md)
+- [Selected WAF control actions are request scoped](regression-guards/request-scoped-control-actions.md)
