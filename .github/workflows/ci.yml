@@ -102,6 +102,11 @@ jobs:
       - name: Validate agent docs
         run: python3 cicd/checks/validate_agent_docs.py
 
+      - name: Check migrated unit-test layout
+        run: |
+          python3 cicd/checks/test_check_unit_test_layout.py
+          python3 cicd/checks/check_unit_test_layout.py
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

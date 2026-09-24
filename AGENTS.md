@@ -8,6 +8,20 @@
 > English-only. It is short and points to the detailed canon. **Scan its 🔴 rows against your
 > diff before every commit.** Nothing below overrides a 🔴 rule there.
 
+## Unit-test location
+
+Put new and migrated unit-test bodies in the owning crate's
+`tests/unit/<source path>/<stem>_test.rs` (`src/dns/mod.rs` maps to
+`tests/unit/dns/mod_test.rs`). Keep a `#[cfg(test)] #[path = "..."] mod tests;`
+declaration in the source module so tests retain private access and the existing
+`cargo test --all` command and test names. Preserve other gates, ignored cases,
+fixtures, and source-relative paths; compare test identities before and after a
+move. Do not widen production visibility for tests. Top-level `tests/*.rs`
+remain integration targets, and benchmarks remain under `benches/`. See
+[`skills/05-testing/00-unit-testing.md`](skills/05-testing/00-unit-testing.md)
+for naming exceptions and migration details. The `edgion-common` pilot is
+complete; other crates await migration.
+
 ## Project Overview
 
 Edgion is a Kubernetes gateway built on Rust + Pingora, using a Controller–Gateway split architecture with gRPC-based configuration sync.
@@ -235,6 +249,8 @@ When the user says "run check", "check the code", "format the code", "run CI", "
    `python3 cicd/checks/generate_gateway_api_transform_contract.py --check` — the
    committed RequestRedirect/URLRewrite OpenAPI, CEL, defaults, bounds, and scoped
    rule inventory must match both vendored Gateway API CRD channels.
+9. **Migrated unit-test layout**: `python3 cicd/checks/check_unit_test_layout.py` —
+   currently enforces the `edgion-common` pilot; expand its scope as other crates migrate.
 
 > `--workspace` is intentional: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip it. `--workspace` brings it back into the fast check/clippy signal (matching what `cargo test --all` already compiles).
 
