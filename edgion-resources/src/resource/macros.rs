@@ -180,4 +180,5 @@ macro_rules! define_resources {
 }
 
 #[cfg(test)]
-mod tests {}
+#[path = "../../tests/unit/resource/macros_test.rs"]
+mod tests;

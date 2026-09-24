@@ -661,7 +661,7 @@ Verifying initial state is not enough — add a dynamic scenario that exercises 
 
 Other references:
 
-- `edgion-resources/src/resources/edgion_plugins/tests.rs`
+- `edgion-resources/tests/unit/resources/edgion_plugins/mod_test.rs`
 - Each plugin's own `plugin.rs` / `tests.rs`
 - [../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)
 

@@ -136,11 +136,5 @@ impl PluginValidation for DirectEndpointConfig {
 }
 
 #[cfg(test)]
-mod validation_trait_tests {
-    use super::*;
-
-    #[test]
-    fn default_config_is_valid() {
-        assert!(PluginValidation::validation_error(&DirectEndpointConfig::default()).is_none());
-    }
-}
+#[path = "../../../../tests/unit/resources/edgion_plugins/plugin_configs/direct_endpoint_test/validation_trait_tests.rs"]
+mod validation_trait_tests;

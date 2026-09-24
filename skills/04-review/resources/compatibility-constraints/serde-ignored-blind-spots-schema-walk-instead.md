@@ -87,7 +87,7 @@ this one bug** — every internally-tagged enum reported its own discriminator k
 `requestPlugins[0].conditions.run[0].type`). Exactly 1 was real. The bug produced two compounding
 effects (pinned by
 `real_schema_internally_tagged_conditions_run_has_zero_findings` and the neighboring tests in
-`edgion-resources/src/schema_check/tests.rs`):
+`edgion-resources/tests/unit/schema_check/mod_test.rs`):
 
 1. The discriminator matcher never finds a matching branch (the `const` it needs lives only
    in the discarded siblings), so the walker falls into the "no branch matched" path and
@@ -104,7 +104,7 @@ by merging the chain, never by replacing the node with its final target.
 ## Reference cases
 
 - `edgion-resources/src/schema_check/walk.rs` module doc (rule 1) and `mod.rs`.
-- `edgion-resources/src/schema_check/tests.rs` — the internally-tagged-enum regression tests.
+- `edgion-resources/tests/unit/schema_check/mod_test.rs` — the internally-tagged-enum regression tests.
 - `skills/04-review/resources/intentional-design/deny-unknown-fields-credential-structs-forward-compat-tradeoff.md`
   — the sibling entry on the credential-injection defense this detector does NOT replace.
 - `skills/04-review/deserialization/SKILL.md` — the standing deserialization-review guidance,

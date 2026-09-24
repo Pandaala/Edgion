@@ -557,5 +557,5 @@ impl EdgionTls {
 
 // Unit tests for this module live in `tests/edgion_tls_test.rs`.
 #[cfg(test)]
-#[path = "tests/edgion_tls_test.rs"]
+#[path = "../../tests/unit/resources/edgion_tls_test.rs"]
 mod tests;

@@ -11,7 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 CRATE = ROOT / "edgion-common"
-MIGRATED_CRATES = ("edgion-common", "edgion-dsl", "edgion-cli", "edgion-controller", "edgion-algo", "edgion-waf", "edgion-wasm")
+MIGRATED_CRATES = ("edgion-common", "edgion-dsl", "edgion-cli", "edgion-controller", "edgion-algo", "edgion-waf", "edgion-wasm", "edgion-resources")
 CFG = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 PATH = re.compile(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]')
 MODULE = re.compile(r"mod\s+([A-Za-z_][A-Za-z_0-9]*)\s*([;{])")
@@ -143,7 +143,15 @@ def check() -> list[str]:
             if not path_match:
                 errors.append(f"{relative}:{line}: missing #[path] for {name}")
                 continue
-            actual = (source.parent / path_match.group(1)).resolve()
+            nested_annotations = (
+                CRATE.name == "edgion-resources"
+                and relative == Path("constants/annotations.rs")
+                and name == "plugin_ref_list_tests"
+            )
+            # This declaration is inside annotations::edgion. Rust resolves its
+            # path from the inline module's virtual directory.
+            path_base = source.parent / "annotations" / "edgion" if nested_annotations else source.parent
+            actual = (path_base / path_match.group(1)).resolve()
             base = CRATE / "tests" / "unit" / relative.parent / f"{relative.stem}_test"
             if name == "test_support" and CRATE.name == "edgion-common" and relative == Path("link_sys_core/outbound_tls.rs"):
                 expected = support
@@ -152,6 +160,8 @@ def check() -> list[str]:
                     expected = (CRATE / "tests" / "support" / "file_system_center.rs").resolve()
                 else:
                     expected = (CRATE / "tests" / "support" / relative).resolve()
+            elif nested_annotations:
+                expected = (CRATE / "tests" / "unit" / "constants" / "annotations_test" / "edgion" / "plugin_ref_list_tests.rs").resolve()
             else:
                 expected = (base.with_suffix(".rs") if name == "tests" else base / f"{name}.rs").resolve()
             if actual != expected:

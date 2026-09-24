@@ -24,6 +24,7 @@ pub mod plugin_validation;
 pub mod validate;
 
 #[cfg(test)]
+#[path = "../../../tests/unit/resources/edgion_plugins/mod_test.rs"]
 mod tests;
 
 // Re-exports

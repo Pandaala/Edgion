@@ -19,9 +19,11 @@
 mod walk;
 
 #[cfg(test)]
+#[path = "../../tests/unit/schema_check/mod_test.rs"]
 mod tests;
 
 #[cfg(test)]
+#[path = "../../tests/unit/schema_check/mod_test/ingest_tests.rs"]
 mod ingest_tests;
 
 use schemars::Schema;

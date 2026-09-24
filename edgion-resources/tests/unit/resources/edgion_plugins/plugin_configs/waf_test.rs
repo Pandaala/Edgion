@@ -1,0 +1,406 @@
+use super::*;
+
+#[test]
+fn support_report_separates_inventory_from_strict_validation_and_redacts_operands() {
+    let config = WafConfig {
+        rules: concat!(
+            "SecRule REQUEST_URI \"@contains private-token\" \"id:1,phase:1,pass\"\n",
+            "SecRule RESPONSE_BODY \"@rx secret-pattern\" \"id:2,phase:4,pass\"\n",
+        )
+        .to_string(),
+        ..WafConfig::default()
+    };
+    let report = config.inspect_support();
+    assert!(report.analysis_complete, "{report:?}");
+    assert!(!report.strict_validation_passed);
+    assert_eq!(report.rule_count, Some(2));
+    assert_eq!(report.unavailable_rule_count, Some(1));
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].rule_id, Some(2));
+    assert_eq!(report.findings[0].capability, "full_response_body");
+    let rendered = serde_json::to_string(&report).unwrap();
+    assert!(!rendered.contains("private-token"));
+    assert!(!rendered.contains("secret-pattern"));
+    assert!(!format!("{report:?}").contains("secret-pattern"));
+}
+
+#[test]
+fn support_report_classifies_incomplete_syntax_and_missing_assets() {
+    let syntax = WafConfig {
+        rules: "SecRule REQUEST_URI \"@contains secret".to_string(),
+        ..WafConfig::default()
+    }
+    .inspect_support();
+    assert!(!syntax.analysis_complete);
+    assert!(!syntax.strict_validation_passed);
+    assert_eq!(syntax.failure.unwrap().category, "syntax");
+    assert_eq!(syntax.failure.unwrap().physical_line, Some(1));
+
+    let asset = WafConfig {
+        rules: "SecRule ARGS \"@pmFromFile private.data\" \"id:1,phase:2,pass\"\n".to_string(),
+        ..WafConfig::default()
+    }
+    .inspect_support();
+    assert!(asset.analysis_complete);
+    assert!(!asset.strict_validation_passed);
+    assert_eq!(asset.failure.unwrap().category, "missing_asset");
+    assert_eq!(asset.failure.unwrap().directive_index, Some(0));
+    assert!(!serde_json::to_string(&asset).unwrap().contains("private.data"));
+}
+
+#[test]
+fn support_report_bounds_findings_and_marks_omissions() {
+    let rules = (1..=130)
+        .map(|id| format!("SecRule RESPONSE_BODY \"@contains secret\" \"id:{id},phase:4,pass\"\n"))
+        .collect::<String>();
+    let report = WafConfig {
+        rules,
+        ..WafConfig::default()
+    }
+    .inspect_support();
+    assert!(report.analysis_complete);
+    assert_eq!(report.findings.len(), 128);
+    assert_eq!(report.omitted_findings, 2);
+    assert_eq!(report.omitted_rule_summaries, 2);
+    assert!(!report.strict_validation_passed);
+}
+
+#[test]
+fn support_report_locates_missing_rule_id_without_fabricating_one() {
+    let report = WafConfig {
+        rules: "SecRule RESPONSE_BODY \"@contains secret\" \"phase:4,pass\"\n".to_string(),
+        ..WafConfig::default()
+    }
+    .inspect_support();
+    assert!(!report.analysis_complete);
+    assert!(report.findings.is_empty());
+    assert_eq!(report.failure.unwrap().physical_line, Some(1));
+    assert_eq!(report.failure.unwrap().reason, "Add an ID to the rule");
+    assert!(!report.strict_validation_passed);
+}
+
+#[test]
+fn support_report_preserves_available_locations_and_resource_categories() {
+    let position = SourcePosition {
+        line: 7,
+        column: 1,
+        byte_offset: 0,
+    };
+    let chain_limit = frontend_failure(&FrontendError::Semantic(SemanticError::ChainLengthLimit {
+        limit: 2,
+        position,
+    }));
+    assert_eq!(chain_limit.category, "resource_limit");
+    assert_eq!(chain_limit.physical_line, Some(7));
+    let work_limit = frontend_failure(&FrontendError::Validation(SemanticValidationError::WorkingByteLimit {
+        limit: 1,
+    }));
+    assert_eq!(work_limit.category, "resource_limit");
+    let ctl_target = frontend_failure(&FrontendError::Semantic(SemanticError::CtlTarget(
+        edgion_waf::seclang::TargetSyntaxError::AtomLimit { limit: 1, position },
+    )));
+    assert_eq!(ctl_target.category, "resource_limit");
+    assert_eq!(ctl_target.physical_line, Some(7));
+
+    let actions = std::iter::repeat_n("t:none", 1_025).collect::<Vec<_>>().join(",");
+    let action_limit = WafConfig {
+        rules: format!("SecAction \"id:1,phase:1,pass,{actions}\""),
+        ..WafConfig::default()
+    }
+    .inspect_support();
+    assert_eq!(action_limit.failure.unwrap().category, "resource_limit");
+    assert_eq!(action_limit.failure.unwrap().physical_line, Some(1));
+
+    let unknown_operator = WafConfig {
+        rules: "SecRule REQUEST_URI \"@notAnOperator secret\" \"id:1,phase:1,pass\"".to_string(),
+        ..WafConfig::default()
+    }
+    .inspect_support();
+    assert!(!unknown_operator.analysis_complete);
+    assert_eq!(unknown_operator.failure.unwrap().physical_line, Some(1));
+
+    let duplicate_id = WafConfig {
+        rules: concat!(
+            "SecRule REQUEST_URI \"@contains first\" \"id:1,phase:1,pass\"\n",
+            "SecRule REQUEST_URI \"@contains second\" \"id:1,phase:1,pass\"\n",
+        )
+        .to_string(),
+        ..WafConfig::default()
+    }
+    .inspect_support();
+    assert!(duplicate_id.analysis_complete);
+    let failure = duplicate_id.failure.unwrap();
+    assert_eq!(failure.document_index, Some(0));
+    assert_eq!(failure.directive_index, Some(1));
+
+    let missing_fields = WafConfig {
+        rules: "SecRule REQUEST_URI".to_string(),
+        ..WafConfig::default()
+    }
+    .inspect_support();
+    assert_eq!(missing_fields.failure.unwrap().physical_line, Some(1));
+}
+
+#[test]
+fn prefix_size_is_bounded_and_round_trips_without_changing_full_defaults() {
+    for (size, bytes) in [("1", 1), ("16KiB", 16384), ("100k", 102400), ("1m", 1048576)] {
+        let config: WafConfig = serde_json::from_value(serde_json::json!({
+            "rules": "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny\"",
+            "requestBody": {"prefixSize": size}
+        }))
+        .unwrap();
+        assert_eq!(config.request_body.prefix_size_bytes().unwrap(), bytes);
+        assert_eq!(config.validation_error(), None);
+        let encoded = serde_json::to_value(&config).unwrap();
+        assert_eq!(encoded["requestBody"]["prefixSize"], size);
+        let restored: WafConfig = serde_json::from_value(encoded).unwrap();
+        assert_eq!(restored.request_body.prefix_size_bytes().unwrap(), bytes);
+    }
+    for size in ["0", "1048577", "2m", "-1", "invalid"] {
+        let config = WafConfig {
+            rules: "SecAction \"id:1,phase:1,pass\"".to_string(),
+            request_body: WafRequestBodyConfig {
+                prefix_size: Some(size.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(config.validation_error().is_some(), "{size}");
+    }
+    let full = WafRequestBodyConfig {
+        inspection: WafRequestBodyInspection::Full,
+        ..Default::default()
+    };
+    assert!(full.prefix_size_bytes().is_ok());
+    assert!(WafRequestBodyConfig {
+        prefix_size: Some("1m".to_string()),
+        ..full
+    }
+    .prefix_size_bytes()
+    .is_err());
+}
+
+#[test]
+fn prefix_defaults_and_full_validation_share_the_same_compiler() {
+    let mut config: WafConfig = serde_json::from_value(serde_json::json!({
+        "rules": "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny\""
+    }))
+    .unwrap();
+    assert_eq!(config.request_body.inspection, WafRequestBodyInspection::Prefix);
+    assert_eq!(config.validation_error(), None);
+    config.request_body.inspection = WafRequestBodyInspection::Full;
+    let serialized = serde_json::to_value(&config).unwrap();
+    assert_eq!(serialized["requestBody"]["inspection"], "full");
+    let restored: WafConfig = serde_json::from_value(serialized).unwrap();
+    assert_eq!(restored.request_body.inspection, WafRequestBodyInspection::Full);
+    assert_eq!(restored.validation_error(), None);
+}
+
+#[test]
+fn full_capture_dependency_includes_later_phases_but_not_query_only_headers() {
+    for (rules, requires_body) in [
+        ("SecRule QUERY_STRING \"@contains query\" \"id:1,phase:1,deny\"", false),
+        (
+            "SecRule REQUEST_HEADERS:X-Test \"@contains test\" \"id:1,phase:2,deny\"",
+            false,
+        ),
+        ("SecRule REQUEST_BODY \"@contains test\" \"id:1,phase:3,deny\"", true),
+        ("SecRule ARGS:item \"@contains test\" \"id:1,phase:5,pass\"", true),
+        ("SecRule RESPONSE_STATUS \"@eq 200\" \"id:1,phase:3,pass\"", false),
+        (
+            "SecRule REQUEST_HEADERS:X-Test \"@streq %{ARGS.item}\" \"id:1,phase:3,pass\"",
+            true,
+        ),
+        ("SecAction \"id:1,phase:3,pass,setvar:tx.item=%{ARGS.item}\"", true),
+        (
+            "SecRule REQUEST_HEADERS:X-Test \"@streq %{REQUEST_HEADERS.X-Other}\" \"id:1,phase:3,pass\"",
+            false,
+        ),
+    ] {
+        let config = WafConfig {
+            rules: rules.to_owned(),
+            request_body: WafRequestBodyConfig {
+                inspection: WafRequestBodyInspection::Full,
+                ..Default::default()
+            },
+            ..WafConfig::default()
+        };
+        let generation = config.compile_generation().unwrap();
+        assert_eq!(generation.requires_complete_request_body(), requires_body, "{rules}");
+    }
+}
+
+#[test]
+fn prefix_accepts_body_independent_phase_two_rules() {
+    for target in [
+        "REQUEST_HEADERS:X-Test",
+        "REQUEST_URI",
+        "ARGS_GET:item",
+        "ARGS_GET_NAMES",
+    ] {
+        let config = WafConfig {
+            rules: format!("SecRule {target} \"!@contains blocked\" \"id:1,phase:2,deny\""),
+            ..Default::default()
+        };
+        let generation = config.compile_generation().unwrap();
+        assert!(!generation.requires_complete_request_body(), "{target}");
+        assert!(
+            !generation.request_body_execution_summary().requires_request_body(),
+            "{target}"
+        );
+        assert_eq!(
+            generation.request_body_execution_summary().streaming_raw_rule_units(),
+            1
+        );
+    }
+}
+
+#[test]
+fn prefix_rejects_whole_body_and_control_dependencies_across_generation() {
+    for rules in [
+            "SecRule REQUEST_BODY \"!@contains forbidden\" \"id:1,phase:2,deny\"",
+            "SecRule REQUEST_BODY \"@endsWith forbidden\" \"id:1,phase:2,deny\"",
+            "SecRule ARGS:item \"@contains forbidden\" \"id:1,phase:2,deny\"",
+            "SecRule ARGS_NAMES \"@contains forbidden\" \"id:1,phase:2,deny\"",
+            "SecRule REQBODY_PROCESSOR \"@streq JSON\" \"id:1,phase:2,deny\"",
+            "SecRule REQUEST_BODY_LENGTH \"@gt 10\" \"id:1,phase:2,deny\"",
+            "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny,t:base64Decode\"",
+            "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:3,deny\"",
+            "SecRule ARGS:item \"@contains forbidden\" \"id:1,phase:5,pass\"",
+            "SecAction \"id:1,phase:1,pass,setvar:tx.flag=1\"",
+            "SecRule REQUEST_URI \"@contains private\" \"id:1,phase:1,pass,skip:1\"\nSecRule REQUEST_BODY \"@contains forbidden\" \"id:2,phase:2,deny\"",
+            "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny,chain\"\nSecRule REQUEST_BODY \"@contains secret\" \"t:none\"",
+        ] {
+            let mut config = WafConfig { rules: rules.to_owned(), ..WafConfig::default() };
+            let error = config.validation_error().expect("prefix must reject unsupported semantics");
+            assert!(error.contains("inspection prefix"), "{error}");
+            config.request_body.inspection = WafRequestBodyInspection::Full;
+            assert_eq!(config.validation_error(), None, "full fixture must remain executable: {rules}");
+        }
+}
+
+#[test]
+fn blank_rules_are_rejected_by_the_shared_compile_entry() {
+    let config = WafConfig {
+        rules: " \n\t".to_string(),
+        mode: WafMode::On,
+        request_body: WafRequestBodyConfig::default(),
+        priority: 0,
+    };
+
+    assert_eq!(
+        config.compile_generation().err().as_deref(),
+        Some("rules must not be empty")
+    );
+    assert_eq!(config.validation_error().as_deref(), Some("rules must not be empty"));
+}
+
+#[test]
+fn validation_compiles_supported_rules_without_a_separate_prepare_call() {
+    let valid = WafConfig {
+        rules: "SecRule REQUEST_URI \"@contains private\" \"id:1,phase:1,deny\"\n".to_string(),
+        mode: WafMode::On,
+        request_body: WafRequestBodyConfig::default(),
+        priority: 0,
+    };
+    assert_eq!(valid.validation_error(), None);
+
+    let invalid = WafConfig {
+        rules: "SecRule RESPONSE_BODY \"@contains private\" \"id:2,phase:4,deny\"\n".to_string(),
+        mode: WafMode::DetectionOnly,
+        request_body: WafRequestBodyConfig::default(),
+        priority: 0,
+    };
+    assert!(invalid.validation_error().is_some());
+}
+
+#[test]
+fn terminal_waf_status_matches_the_final_reply_contract() {
+    for status in [100, 101, 199, 200, 599, 600] {
+        let config = WafConfig {
+            rules: format!("SecRule REQUEST_URI \"@contains private\" \"id:1,phase:1,deny,status:{status}\"\n"),
+            mode: WafMode::On,
+            request_body: WafRequestBodyConfig::default(),
+            priority: 0,
+        };
+        assert_eq!(
+            config.validation_error().is_none(),
+            crate::http_status::is_valid_final_http_status(status),
+            "status {status}"
+        );
+    }
+}
+
+#[test]
+fn validation_errors_do_not_render_rule_content() {
+    let config = WafConfig {
+        rules: "SecRule private-(".to_string(),
+        mode: WafMode::On,
+        request_body: WafRequestBodyConfig::default(),
+        priority: 0,
+    };
+    let error = config.validation_error().expect("invalid source must be rejected");
+    assert!(!error.contains("private"));
+}
+
+#[test]
+fn rules_round_trip_for_transport_but_redact_from_admin_and_debug_output() {
+    let config = WafConfig {
+        rules: "SecAction \"id:1,phase:1,pass,msg:'private'\"".to_string(),
+        mode: WafMode::On,
+        request_body: WafRequestBodyConfig::default(),
+        priority: 17,
+    };
+
+    let transport = serde_json::to_value(&config).expect("transport serialization succeeds");
+    assert!(transport["rules"]
+        .as_str()
+        .is_some_and(|rules| rules.contains("private")));
+
+    let admin = {
+        let _guard = crate::redact::AdminRedactGuard::new();
+        serde_json::to_value(&config).expect("admin serialization succeeds")
+    };
+    assert_eq!(admin["rules"], "[redacted]");
+    assert_eq!(admin["priority"], 17);
+    assert!(!format!("{config:?}").contains("private"));
+}
+
+#[test]
+fn priority_defaults_to_zero_and_rejects_out_of_range_values() {
+    let base = r#"{"rules":"SecAction \"id:1,phase:1,pass\""}"#;
+    let parsed: WafConfig = serde_json::from_str(base).expect("missing priority uses its default");
+    assert_eq!(parsed.priority, 0);
+
+    let maximum: WafConfig = serde_json::from_str(r#"{"rules":"SecAction \"id:1,phase:1,pass\"","priority":65535}"#)
+        .expect("u16 maximum is accepted");
+    assert_eq!(maximum.priority, u16::MAX);
+    assert!(serde_json::from_str::<WafConfig>(r#"{"rules":"SecAction \"id:1,phase:1,pass\"","priority":-1}"#).is_err());
+    assert!(
+        serde_json::from_str::<WafConfig>(r#"{"rules":"SecAction \"id:1,phase:1,pass\"","priority":65536}"#).is_err()
+    );
+}
+
+#[test]
+fn dynamic_integration_generations_compile_with_the_production_profile() {
+    let generations = [
+        concat!(
+            "SecRule REQUEST_HEADERS:X-Waf-Version \"!@streq v1\" ",
+            "\"id:1001,phase:1,deny,status:403\"\n",
+            "SecRule REQUEST_BODY \"@contains blocked\" ",
+            "\"id:1002,phase:2,deny,status:406\"\n"
+        ),
+        "SecRule REQUEST_HEADERS:X-Waf-Version \"!@streq v2\" \"id:2001,phase:1,deny,status:451\"\n",
+        "SecRule REQUEST_HEADERS:X-Waf-Version \"!@streq v3\" \"id:3001,phase:1,deny,status:429\"\n",
+    ];
+
+    for rules in generations {
+        let config = WafConfig {
+            rules: rules.to_string(),
+            mode: WafMode::On,
+            request_body: WafRequestBodyConfig::default(),
+            priority: 0,
+        };
+        assert_eq!(config.validation_error(), None, "fixture must compile: {rules}");
+    }
+}

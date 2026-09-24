@@ -11,13 +11,5 @@ pub fn all_resource_type_names() -> Vec<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_resource_registry() {
-        let all_names = all_resource_type_names();
-        assert!(all_names.contains(&"routes"));
-        assert!(all_names.contains(&"services"));
-    }
-}
+#[path = "../../tests/unit/resource/registry_test.rs"]
+mod tests;

@@ -44,7 +44,7 @@ configuration-dependent alias risk does not weaken this requirement for new cano
 Full design: `docs/superpowers/specs/2026-07-16-access-log-extern-plugin-design.md`. Unit coverage:
 `blocked_ctx_keys_are_rejected` in `access_log_extern.rs`;
 `access_log_extern_blocked_header_is_reported_at_ingest` in
-`edgion-resources/src/resources/edgion_plugins/tests.rs` (reports on `Accepted=False`; does not
+`edgion-resources/tests/unit/resources/edgion_plugins/mod_test.rs` (reports on `Accepted=False`; does not
 keep the resource off the cluster); `compile_plugins` drop coverage in
 `edgion-gateway/src/plugins/http/plugin_store.rs` (the actual enforcement). To confirm the blocklist
 holds, check both halves: `is_blocked(LogExtSource::Ctx, ...)` (the shared list the report and the
