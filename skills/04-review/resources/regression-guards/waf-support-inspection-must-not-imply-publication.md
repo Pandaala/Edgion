@@ -14,6 +14,8 @@ compatibility analysis. Only `strict_validation_passed` means the exact
 `WafConfig.rules` and `request_body` settings passed the strict compiler and
 request-body inspection check. The Controller and Gateway continue to use
 `WafConfig::compile_generation()` for publication.
+The strict compiler now admits `@detectSQLi` and `@detectXSS`, but an inspection
+result still does not establish Gateway request behavior.
 
 ## Rationale and evidence
 

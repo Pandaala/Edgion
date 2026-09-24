@@ -298,7 +298,6 @@ pub enum UnavailableCapability {
     FullResponseBody,
     Ctl,
     InitCol,
-    LibInjection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4356,8 +4355,7 @@ fn classify_operator_operand<'source>(
         | OperatorKind::UnconditionalMatch
         | OperatorKind::ValidateUrlEncoding
         | OperatorKind::ValidateUtf8Encoding => {
-            let capabilities = usize::from(matches!(kind, OperatorKind::DetectSqli | OperatorKind::DetectXss));
-            build.prepare_metadata_only(0, capabilities, operator.argument_span().start)?;
+            build.prepare_metadata_only(0, 0, operator.argument_span().start)?;
             OperatorOperandRecord::NoArgument
         }
         OperatorKind::Rx => {
@@ -4640,10 +4638,6 @@ fn classify_operator_operand<'source>(
                 requirement: CompileRequirement::PhraseMatcherCompilation,
             });
         }
-        OperatorKind::DetectSqli | OperatorKind::DetectXss => build.unavailable.push(CapabilityRecord {
-            location,
-            capability: UnavailableCapability::LibInjection,
-        }),
         _ => {}
     }
     Ok(id)
@@ -12101,7 +12095,7 @@ SecRuleRemoveById 3 4-5
         );
 
         let mut draft = make_draft();
-        assert_eq!(draft.unavailable.len(), 83);
+        assert_eq!(draft.unavailable.len(), 79);
         draft.unavailable.clear();
         let validated = validate_semantic_draft(draft, crs_validation_context(), ValidationLimits::default()).unwrap();
         let unit_ids = validated.rule_units().map(|unit| unit.id()).collect::<Vec<_>>();
@@ -12655,7 +12649,7 @@ SecRuleRemoveById 3 4-5
         );
         assert_eq!(
             (draft.requirements().len(), draft.unavailable_capabilities().len()),
-            (2_383, 83)
+            (2_383, 79)
         );
         let mut requirement_counts = [0usize; 8];
         for record in draft.requirements() {
@@ -12670,17 +12664,16 @@ SecRuleRemoveById 3 4-5
                 CompileRequirement::DefaultPhase => 7,
             }] += 1;
         }
-        let mut unavailable_counts = [0usize; 4];
+        let mut unavailable_counts = [0usize; 3];
         for record in draft.unavailable_capabilities() {
             unavailable_counts[match record.capability() {
                 UnavailableCapability::FullResponseBody => 0,
                 UnavailableCapability::Ctl => 1,
                 UnavailableCapability::InitCol => 2,
-                UnavailableCapability::LibInjection => 3,
             }] += 1;
         }
         assert_eq!(requirement_counts, [314, 0, 33, 21, 996, 341, 678, 0]);
-        assert_eq!(unavailable_counts, [59, 18, 2, 4]);
+        assert_eq!(unavailable_counts, [59, 18, 2]);
         assert_eq!(
             (
                 draft.template_count(),

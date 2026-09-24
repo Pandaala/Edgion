@@ -302,6 +302,8 @@ pub enum RuntimeError {
     OperatorEvaluationLimit { limit: usize },
     #[error("operator work exceeds the configured byte limit of {limit}")]
     OperatorWorkLimit { limit: usize },
+    #[error("detector input exceeds the fixed byte limit of {limit}")]
+    DetectorInputLimit { limit: usize },
     #[error("transaction variables exceed the configured count limit of {limit}")]
     TxVariableLimit { limit: usize },
     #[error("transaction variables exceed the configured byte limit of {limit}")]
@@ -667,6 +669,7 @@ pub struct Transaction<'generation> {
     boolean_scratch: Vec<RegexBooleanScratch>,
     capture_scratch: Vec<RegexCaptureScratch>,
     scratch_bytes: usize,
+    detector_work_bytes: usize,
     tx: TxState,
     capture_keys: Vec<Vec<u8>>,
     response: Option<ResponseState>,
@@ -822,6 +825,7 @@ impl<'generation> Transaction<'generation> {
             boolean_scratch,
             capture_scratch,
             scratch_bytes,
+            detector_work_bytes: 0,
             tx: TxState::default(),
             capture_keys: Vec::new(),
             response: None,
@@ -1035,6 +1039,7 @@ impl<'generation> Transaction<'generation> {
             member.runtime_expansion_byte_limit,
             self.evaluation_mode,
         )
+        .map(|(matched, _)| matched)
     }
 
     pub const fn request_prefix_completion(&self) -> Option<RequestBodyPrefixCompletion> {
@@ -1596,16 +1601,40 @@ impl<'generation> Transaction<'generation> {
                 values
             };
             for transformed in transformed_values {
+                let detector_work = match operator.operand {
+                    super::CompiledOperatorOperand::DetectSqli { .. } => {
+                        crate::injection::work_cost(crate::injection::Kind::Sqli, transformed.len())
+                    }
+                    super::CompiledOperatorOperand::DetectXss => {
+                        crate::injection::work_cost(crate::injection::Kind::Xss, transformed.len())
+                    }
+                    _ => Some(0),
+                }
+                .ok_or(RuntimeError::DetectorInputLimit {
+                    limit: crate::injection::MAX_INPUT_BYTES,
+                })?;
+                if detector_work != 0 {
+                    self.detector_work_bytes = self
+                        .detector_work_bytes
+                        .checked_add(detector_work)
+                        .ok_or(RuntimeError::Arithmetic)?;
+                    if self.detector_work_bytes > self.limits.max_operator_work_bytes {
+                        return Err(RuntimeError::OperatorWorkLimit {
+                            limit: self.limits.max_operator_work_bytes,
+                        });
+                    }
+                }
                 work = work
                     .checked_add(value.len())
                     .and_then(|value| value.checked_add(transformed.len()))
+                    .and_then(|value| value.checked_add(detector_work))
                     .ok_or(RuntimeError::Arithmetic)?;
                 if work > self.limits.max_operator_work_bytes {
                     return Err(RuntimeError::OperatorWorkLimit {
                         limit: self.limits.max_operator_work_bytes,
                     });
                 }
-                let positive = evaluate_operator(
+                let (positive, fingerprint) = evaluate_operator(
                     &self.generation,
                     &self.request,
                     tx,
@@ -1628,6 +1657,7 @@ impl<'generation> Transaction<'generation> {
                             &transformed,
                             self.limits,
                             self.evaluation_mode,
+                            fingerprint,
                         )?
                     };
                     let (matched_var, matched_var_name) =
@@ -1888,7 +1918,16 @@ fn extract_captures(
     input: &[u8],
     limits: RuntimeLimits,
     evaluation_mode: EvaluationMode,
+    fingerprint: Option<crate::injection::Fingerprint>,
 ) -> Result<Vec<CaptureEntry>, RuntimeError> {
+    if !matches!(
+        plan.operand,
+        super::CompiledOperatorOperand::Regex(super::RegexPlanRef::Capture(_))
+            | super::CompiledOperatorOperand::CapturePhrase(_)
+            | super::CompiledOperatorOperand::DetectSqli { capture: true }
+    ) {
+        return Ok(Vec::new());
+    }
     let mut captures = Vec::new();
     captures
         .try_reserve_exact(limits.max_capture_entries.min(64))
@@ -1927,6 +1966,10 @@ fn extract_captures(
                 .get(matched.start()..matched.end())
                 .ok_or(RuntimeError::GenerationInvariant)?;
             push_capture(&mut captures, b"0", value, limits)?;
+        }
+        super::CompiledOperatorOperand::DetectSqli { capture: true } => {
+            let fingerprint = fingerprint.ok_or(RuntimeError::GenerationInvariant)?;
+            push_capture(&mut captures, b"0", fingerprint.as_bytes(), limits)?;
         }
         _ => {}
     }
@@ -2571,8 +2614,9 @@ fn evaluate_operator(
     input: &[u8],
     member_runtime_limit: usize,
     evaluation_mode: EvaluationMode,
-) -> Result<bool, RuntimeError> {
-    match plan.operand {
+) -> Result<(bool, Option<crate::injection::Fingerprint>), RuntimeError> {
+    let mut fingerprint = None;
+    let positive = match plan.operand {
         super::CompiledOperatorOperand::String { relation, template } => {
             let operand = expand_template(generation, request, tx, template, member_runtime_limit)?;
             Ok(match relation {
@@ -2607,7 +2651,7 @@ fn evaluate_operator(
                 .ok()
                 .and_then(|value| value.parse::<std::net::IpAddr>().ok())
             else {
-                return Ok(false);
+                return Ok((false, None));
             };
             let end = start.checked_add(count).ok_or(RuntimeError::Arithmetic)?;
             let networks = generation
@@ -2623,6 +2667,11 @@ fn evaluate_operator(
         super::CompiledOperatorOperand::ValidateUrlEncoding => Ok(invalid_url_encoding(input)),
         super::CompiledOperatorOperand::ValidateUtf8Encoding => Ok(std::str::from_utf8(input).is_err()),
         super::CompiledOperatorOperand::Unconditional => Ok(true),
+        super::CompiledOperatorOperand::DetectSqli { .. } => {
+            fingerprint = crate::injection::detect_sqli(input);
+            Ok(fingerprint.is_some())
+        }
+        super::CompiledOperatorOperand::DetectXss => Ok(crate::injection::detect_xss(input)),
         super::CompiledOperatorOperand::Regex(reference) => match reference {
             super::RegexPlanRef::Boolean(program) => {
                 let regex = generation
@@ -2676,7 +2725,8 @@ fn evaluate_operator(
             }
             .is_some())
         }
-    }
+    }?;
+    Ok((positive, fingerprint))
 }
 
 fn expand_template(
@@ -3982,6 +4032,238 @@ mod tests {
         assert_eq!(transaction.tx_value(b"0"), Some(b"TOKEN".as_slice()));
         assert_eq!(transaction.tx_value(b"1"), None);
         assert_eq!(transaction.tx_value(b"num"), None);
+    }
+
+    #[test]
+    fn injection_operators_compile_transform_capture_and_chain_atomically() {
+        let generation = generation(concat!(
+            "SecRule REQUEST_HEADERS:X-SQL \"@detectSQLi\" \"id:101,phase:1,pass,t:urlDecodeUni,capture,chain,setvar:'tx.fingerprint=%{TX.0}'\"\n",
+            "SecRule TX:0 \"@streq 1&1\"\n",
+            "SecRule REQUEST_HEADERS:X-XSS \"@detectXSS\" \"id:102,phase:1,pass,capture,setvar:'tx.previous=%{TX.0}'\"\n",
+        ));
+        let headers = [
+            RequestHeader::new(b"X-SQL", b"1%20OR%201%3D1"),
+            RequestHeader::new(b"X-XSS", b"<script>alert(1)</script>"),
+        ];
+        let mut transaction = Transaction::new(&generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        let outcome = transaction.execute_request_headers().unwrap();
+        assert_eq!(
+            outcome
+                .findings()
+                .iter()
+                .map(|finding| finding.rule_id())
+                .collect::<Vec<_>>(),
+            [101, 102]
+        );
+        assert_eq!(transaction.tx_value(b"0"), Some(b"1&1".as_slice()));
+        assert_eq!(transaction.tx_value(b"fingerprint"), Some(b"1&1".as_slice()));
+        assert_eq!(transaction.tx_value(b"previous"), Some(b"1&1".as_slice()));
+
+        let failed = self::generation(concat!(
+            "SecRule REQUEST_HEADERS:X-SQL \"@detectSQLi\" \"id:103,phase:1,pass,capture,chain\"\n",
+            "SecRule REQUEST_METHOD \"@streq POST\"\n",
+        ));
+        let mut transaction = Transaction::new(&failed, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        assert!(transaction.execute_request_headers().unwrap().findings().is_empty());
+        assert_eq!(transaction.tx_value(b"0"), None);
+    }
+
+    #[test]
+    fn negated_detection_does_not_capture_and_detection_work_is_bounded() {
+        let generation = generation("SecRule REQUEST_HEADERS:X-SQL \"!@detectSQLi\" \"id:104,phase:1,pass,capture\"\n");
+        let headers = [RequestHeader::new(b"X-SQL", b"safe")];
+        let mut transaction = Transaction::new(&generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        assert_eq!(
+            transaction.execute_request_headers().unwrap().findings()[0].rule_id(),
+            104
+        );
+        assert_eq!(transaction.tx_value(b"0"), None);
+
+        let budget_generation =
+            self::generation("SecRule REQUEST_HEADERS:X-SQL \"@detectSQLi\" \"id:106,phase:1,pass\"\n");
+        let exact_work = 4096 + 10 * b"safe".len();
+        let mut transaction = Transaction::new(
+            &budget_generation,
+            request(&headers, b"/"),
+            RuntimeLimits {
+                max_operator_work_bytes: exact_work,
+                ..RuntimeLimits::default()
+            },
+        )
+        .unwrap();
+        transaction.execute_request_headers().unwrap();
+        let mut transaction = Transaction::new(
+            &budget_generation,
+            request(&headers, b"/"),
+            RuntimeLimits {
+                max_operator_work_bytes: exact_work - 1,
+                ..RuntimeLimits::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            transaction.execute_request_headers(),
+            Err(RuntimeError::OperatorWorkLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn decoded_query_high_byte_does_not_hide_later_xss() {
+        let generation = generation("SecRule ARGS_GET:x \"@detectXSS\" \"id:107,phase:1,pass\"\n");
+        let mut transaction = Transaction::new(
+            &generation,
+            request(&[], b"/?x=%3Ca%20%FFid%3Dx%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E"),
+            RuntimeLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            transaction.execute_request_headers().unwrap().findings()[0].rule_id(),
+            107
+        );
+
+        let generation = self::generation("SecRule ARGS_GET:x \"@detectSQLi\" \"id:108,phase:1,pass\"\n");
+        let mut transaction = Transaction::new(
+            &generation,
+            request(&[], b"/?x=%27-(f=q%27%BF"),
+            RuntimeLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            transaction.execute_request_headers().unwrap().findings()[0].rule_id(),
+            108
+        );
+
+        let mut transaction = Transaction::new(
+            &generation,
+            request(&[], b"/?x=1%20OR%20q%27%BF%C2%BF%27"),
+            RuntimeLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            transaction.execute_request_headers().unwrap().findings()[0].rule_id(),
+            108
+        );
+    }
+
+    #[test]
+    fn detector_work_accumulates_across_rules_and_phases() {
+        let detector_work = crate::injection::work_cost(crate::injection::Kind::Sqli, b"safe".len()).unwrap();
+        let one_rule_work = detector_work + 2 * b"safe".len();
+        let headers = [RequestHeader::new(b"X-SQL", b"safe")];
+        for rule_count in [1, 2, 100] {
+            let source = (1..=rule_count)
+                .map(|id| format!("SecRule REQUEST_HEADERS:X-SQL \"@detectSQLi\" \"id:{id},phase:1,pass\"\n"))
+                .collect::<String>();
+            let generation = generation(&source);
+            let limit = if rule_count == 1 {
+                one_rule_work
+            } else {
+                (rule_count - 1) * detector_work + 2 * b"safe".len()
+            };
+            let mut transaction = Transaction::new(
+                &generation,
+                request(&headers, b"/"),
+                RuntimeLimits {
+                    max_operator_work_bytes: limit,
+                    ..RuntimeLimits::default()
+                },
+            )
+            .unwrap();
+            let result = transaction.execute_request_headers();
+            if rule_count == 1 {
+                assert!(result.is_ok(), "{result:?}");
+            } else {
+                assert_eq!(result, Err(RuntimeError::OperatorWorkLimit { limit }));
+            }
+        }
+
+        let generation = generation(concat!(
+            "SecRule REQUEST_HEADERS:X-SQL \"@detectSQLi\" \"id:201,phase:1,pass\"\n",
+            "SecRule REQUEST_HEADERS:X-SQL \"@detectSQLi\" \"id:202,phase:2,pass\"\n",
+        ));
+        let mut transaction = Transaction::new(
+            &generation,
+            request(&headers, b"/"),
+            RuntimeLimits {
+                max_operator_work_bytes: one_rule_work,
+                ..RuntimeLimits::default()
+            },
+        )
+        .unwrap();
+        transaction.execute_request_headers().unwrap();
+        assert_eq!(
+            transaction.execute_request_body_prefix(b"", 1, RequestBodyPrefixCompletion::NotRequired),
+            Err(RuntimeError::OperatorWorkLimit { limit: one_rule_work })
+        );
+    }
+
+    #[test]
+    fn detector_work_accumulates_across_chain_members() {
+        let generation = generation(concat!(
+            "SecRule REQUEST_HEADERS:X-SQL \"@detectSQLi\" \"id:203,phase:1,pass,chain\"\n",
+            "SecRule REQUEST_HEADERS:X-SQL \"@detectSQLi\"\n",
+        ));
+        let value = b"1 OR 1=1";
+        let headers = [RequestHeader::new(b"X-SQL", value)];
+        let limit = crate::injection::work_cost(crate::injection::Kind::Sqli, value.len()).unwrap() + 2 * value.len();
+        let mut transaction = Transaction::new(
+            &generation,
+            request(&headers, b"/"),
+            RuntimeLimits {
+                max_operator_work_bytes: limit,
+                ..RuntimeLimits::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            transaction.execute_request_headers(),
+            Err(RuntimeError::OperatorWorkLimit { limit })
+        );
+        assert_eq!(transaction.tx_value(b"0"), None);
+    }
+
+    #[test]
+    fn detector_input_and_capture_failures_do_not_publish_tx_state() {
+        let generation = generation("SecRule REQUEST_HEADERS:X-SQL \"@detectSQLi\" \"id:105,phase:1,pass,capture\"\n");
+        let headers = [RequestHeader::new(b"X-SQL", b"1 OR 1=1")];
+        let mut transaction = Transaction::new(
+            &generation,
+            request(&headers, b"/"),
+            RuntimeLimits {
+                max_capture_entries: 0,
+                ..RuntimeLimits::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            transaction.execute_request_headers(),
+            Err(RuntimeError::CaptureEntryLimit { .. })
+        ));
+        assert_eq!(transaction.tx_value(b"0"), None);
+
+        let large = vec![b'a'; crate::injection::MAX_INPUT_BYTES + 1];
+        let headers = [RequestHeader::new(b"X-SQL", &large)];
+        let mut transaction = Transaction::new(
+            &generation,
+            request(&headers, b"/"),
+            RuntimeLimits {
+                max_operator_work_bytes: usize::MAX,
+                max_header_bytes: crate::injection::MAX_INPUT_BYTES + 1024,
+                max_value_bytes: crate::injection::MAX_INPUT_BYTES + 1,
+                max_transformation_output_bytes: crate::injection::MAX_INPUT_BYTES + 1,
+                ..RuntimeLimits::default()
+            },
+        )
+        .unwrap();
+        let result = transaction.execute_request_headers();
+        assert!(
+            matches!(
+                &result,
+                Err(RuntimeError::DetectorInputLimit { limit }) if *limit == crate::injection::MAX_INPUT_BYTES
+            ),
+            "{result:?}"
+        );
+        assert_eq!(transaction.tx_value(b"0"), None);
     }
 
     #[test]

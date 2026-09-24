@@ -84,6 +84,37 @@ same value-free report the CLI presents. Other tools, including EdgionCenter,
 can call it without duplicating SecLang parsing; they must enforce their own
 input-byte limit and access control before presenting it.
 
+## SQL injection and XSS operators
+
+`@detectSQLi` and `@detectXSS` are parameterless SecLang operators backed by
+Edgion's native Rust implementation of the libinjection-go v0.3.2 behavior.
+They inspect each selected value after its configured transformations. For
+example:
+
+```yaml
+requestBody:
+  inspection: full
+rules: |
+  SecRule ARGS_GET "@detectSQLi" "id:1101,phase:1,deny,status:403,t:urlDecodeUni,capture"
+  SecRule ARGS_GET "@detectXSS" "id:1102,phase:1,deny,status:403,t:urlDecodeUni"
+```
+
+When `capture` is set on a positive SQL injection match, the detected
+fingerprint is available as `TX.0` for the rule's actions and later rules.
+XSS detection does not create a capture or replace an existing `TX.0` value.
+Negated matches do not capture. A failed chain publishes neither its finding
+nor its capture. Rule targets, transformations, and chain behavior follow the
+same transaction semantics as other operators.
+
+These detectors scan complete selected values, so a rule consuming
+`REQUEST_BODY` or body-derived arguments needs `requestBody.inspection: full`.
+The prefix profile also requires `full` when a rule uses `capture`, including
+header-only rules.
+The detector input limit is 4 MiB per value. Operator work is charged to the
+request's bounded runtime budget, including all SQL dialect/quote or HTML
+contexts. Reaching a limit closes the WAF request according to its normal
+runtime error policy. The implementation does not use Hyperscan.
+
 ## Execution and limits
 
 - Phase 1 inspects the entry request URI, method/protocol, client address, and

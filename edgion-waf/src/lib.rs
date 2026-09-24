@@ -9,3 +9,12 @@
 pub mod aho_corasick;
 pub mod matcher;
 pub mod seclang;
+
+mod injection;
+#[allow(dead_code)]
+mod sqli;
+#[allow(dead_code)]
+mod xss;
+
+#[cfg(test)]
+mod libinjection_diff;

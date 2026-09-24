@@ -1,0 +1,2462 @@
+[
+  {
+    "source": "test-folding-001.txt",
+    "input": "SELECT \"first\" \"second\";",
+    "expected": "E SELECT\ns \"first\"\n; ;"
+  },
+  {
+    "source": "test-folding-002.txt",
+    "input": "- SELECT 1;",
+    "expected": "E SELECT\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-003.txt",
+    "input": "( SELECT 1 );",
+    "expected": "E SELECT\n1 1\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-004.txt",
+    "input": "-( - SELECT 1 );",
+    "expected": "E SELECT\n1 1\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-005.txt",
+    "input": "/* foo */ SELECT 1 );",
+    "expected": "E SELECT\n1 1\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-006.txt",
+    "input": "- /* foo */ ( /* bar */ -SELECT 1 );",
+    "expected": "E SELECT\n1 1\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-007.txt",
+    "input": "- /* foo */ ( /* bar */ -",
+    "expected": ""
+  },
+  {
+    "source": "test-folding-008.txt",
+    "input": "123",
+    "expected": "1 123"
+  },
+  {
+    "source": "test-folding-009.txt",
+    "input": "123;",
+    "expected": "1 123\n; ;"
+  },
+  {
+    "source": "test-folding-010.txt",
+    "input": "123 /* junk */;",
+    "expected": "1 123\n; ;"
+  },
+  {
+    "source": "test-folding-011.txt",
+    "input": "123; /* junk */",
+    "expected": "1 123\n; ;\nc /* junk */"
+  },
+  {
+    "source": "test-folding-012.txt",
+    "input": "-1",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-013.txt",
+    "input": "1+-1",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-014.txt",
+    "input": "1+-+1",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-015.txt",
+    "input": "1+(-1)",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-016.txt",
+    "input": "1 + foo",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-017.txt",
+    "input": "foo + 1",
+    "expected": "n foo"
+  },
+  {
+    "source": "test-folding-018.txt",
+    "input": "foo OR zap AND bar",
+    "expected": "n foo\n& OR\nn bar"
+  },
+  {
+    "source": "test-folding-019.txt",
+    "input": "1+(-(1))",
+    "expected": "1 1\n) )"
+  },
+  {
+    "source": "test-folding-020.txt",
+    "input": "1 + foo + 1",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-021.txt",
+    "input": "`foo`.`bar`",
+    "expected": "n foo"
+  },
+  {
+    "source": "test-folding-022.txt",
+    "input": "'foo' + zap + 'bar'",
+    "expected": "s 'foo'\no +\ns 'bar'"
+  },
+  {
+    "source": "test-folding-023.txt",
+    "input": "foo zap bar",
+    "expected": "n foo\nn zap\nn bar"
+  },
+  {
+    "source": "test-folding-024.txt",
+    "input": "",
+    "expected": ""
+  },
+  {
+    "source": "test-folding-025.txt",
+    "input": "UNION",
+    "expected": "U UNION"
+  },
+  {
+    "source": "test-folding-026.txt",
+    "input": "UNION ALL",
+    "expected": "U UNION ALL"
+  },
+  {
+    "source": "test-folding-027.txt",
+    "input": "UNION /* foo */ALL",
+    "expected": "U UNION ALL"
+  },
+  {
+    "source": "test-folding-028.txt",
+    "input": "",
+    "expected": ""
+  },
+  {
+    "source": "test-folding-029.txt",
+    "input": "select - 1;",
+    "expected": "E select\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-030.txt",
+    "input": "select + 1;",
+    "expected": "E select\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-031.txt",
+    "input": "select ~ 1;",
+    "expected": "E select\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-032.txt",
+    "input": "select !! 1;",
+    "expected": "E select\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-033.txt",
+    "input": "select - @version;",
+    "expected": "E select\nv @version\n; ;"
+  },
+  {
+    "source": "test-folding-034.txt",
+    "input": "select - 'astring';",
+    "expected": "E select\ns 'astring'\n; ;"
+  },
+  {
+    "source": "test-folding-035.txt",
+    "input": "select - sin(1);",
+    "expected": "E select\nf sin\n( (\n1 1\n) )"
+  },
+  {
+    "source": "test-folding-036.txt",
+    "input": "select - foobar;",
+    "expected": "E select\nn foobar\n; ;"
+  },
+  {
+    "source": "test-folding-037.txt",
+    "input": "select - foobar;",
+    "expected": "E select\nn foobar\n; ;"
+  },
+  {
+    "source": "test-folding-038.txt",
+    "input": "select user;",
+    "expected": "E select\nn user\n; ;"
+  },
+  {
+    "source": "test-folding-039.txt",
+    "input": "select user();",
+    "expected": "E select\nf user\n( (\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-040.txt",
+    "input": "select password;",
+    "expected": "E select\nn password\n; ;"
+  },
+  {
+    "source": "test-folding-041.txt",
+    "input": "select password();",
+    "expected": "E select\nf password\n( (\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-042.txt",
+    "input": "select database;",
+    "expected": "E select\nn database\n; ;"
+  },
+  {
+    "source": "test-folding-043.txt",
+    "input": "select database();",
+    "expected": "E select\nf database\n( (\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-044.txt",
+    "input": "select foobar();",
+    "expected": "E select\nn foobar\n( (\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-045.txt",
+    "input": "select if 1;",
+    "expected": "E select\nf if\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-046.txt",
+    "input": "select if(1)",
+    "expected": "E select\nf if\n( (\n1 1\n) )"
+  },
+  {
+    "source": "test-folding-047.txt",
+    "input": "foo & foo",
+    "expected": "n foo"
+  },
+  {
+    "source": "test-folding-048.txt",
+    "input": "foo foo & foo",
+    "expected": "n foo\nn foo"
+  },
+  {
+    "source": "test-folding-049.txt",
+    "input": "SELECT double precision '1';",
+    "expected": "E SELECT\ns '1'\n; ;"
+  },
+  {
+    "source": "test-folding-050.txt",
+    "input": "SELECT character varying '1';",
+    "expected": "E SELECT\ns '1'\n; ;"
+  },
+  {
+    "source": "test-folding-051.txt",
+    "input": "SELECT '1'::money, 2;",
+    "expected": "E SELECT\ns '1'\n; ;"
+  },
+  {
+    "source": "test-folding-052.txt",
+    "input": "SELECT float 1;",
+    "expected": "E SELECT\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-053.txt",
+    "input": "SELECT float @@version;",
+    "expected": "E SELECT\nv @@version\n; ;"
+  },
+  {
+    "source": "test-folding-054.txt",
+    "input": "1 float before",
+    "expected": "1 1\nt float\nk before"
+  },
+  {
+    "source": "test-folding-055.txt",
+    "input": "float junk",
+    "expected": "n junk"
+  },
+  {
+    "source": "test-folding-056.txt",
+    "input": "1 and 2 not between 3",
+    "expected": "1 1\n& and\n1 2"
+  },
+  {
+    "source": "test-folding-057.txt",
+    "input": "select current_user;",
+    "expected": "E select\nv current_user\n; ;"
+  },
+  {
+    "source": "test-folding-058.txt",
+    "input": "select current_user();",
+    "expected": "E select\nf current_user\n( (\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-059.txt",
+    "input": "select 1 AND -2 + 3;",
+    "expected": "E select\n1 1\n& AND\n1 2\n; ;"
+  },
+  {
+    "source": "test-folding-060.txt",
+    "input": "select +++ (1);",
+    "expected": "E select\n( (\n1 1\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-061.txt",
+    "input": "select 1 / (2,3,4);",
+    "expected": "E select\n1 1\no /\n( (\n1 2"
+  },
+  {
+    "source": "test-folding-062.txt",
+    "input": "select 1 IN (2,3,4);",
+    "expected": "E select\n1 1\no IN\n( (\n1 2"
+  },
+  {
+    "source": "test-folding-063.txt",
+    "input": "select 1 not IN (2,3,4);",
+    "expected": "E select\n1 1\no not IN\n( (\n1 2"
+  },
+  {
+    "source": "test-folding-064.txt",
+    "input": "1 group by -(2)",
+    "expected": "1 1\nB group by\n( (\n1 2\n) )"
+  },
+  {
+    "source": "test-folding-065.txt",
+    "input": "1 group by -2",
+    "expected": "1 1\nB group by\n1 2"
+  },
+  {
+    "source": "test-folding-066.txt",
+    "input": "1; /* foo */; select 2;",
+    "expected": "1 1\n; ;\nE select\n1 2\n; ;"
+  },
+  {
+    "source": "test-folding-067.txt",
+    "input": "1 UNION DISTINCT 1;",
+    "expected": "1 1\nU UNION DISTINCT\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-068.txt",
+    "input": "1 UNION ALL DISTINCT 1;",
+    "expected": "1 1\nU UNION ALL DISTINCT\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-069.txt",
+    "input": "1 UNION DISTINCT ALL 1;",
+    "expected": "1 1\nU UNION DISTINCT ALL\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-070.txt",
+    "input": "select 1,-(2);",
+    "expected": "E select\n1 1\n, ,\n( (\n1 2"
+  },
+  {
+    "source": "test-folding-071.txt",
+    "input": "select 1,-1;",
+    "expected": "E select\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-072.txt",
+    "input": "1;if 1=1",
+    "expected": "1 1\n; ;\nT if\n1 1"
+  },
+  {
+    "source": "test-folding-073.txt",
+    "input": "foo,bar",
+    "expected": "n foo"
+  },
+  {
+    "source": "test-folding-074.txt",
+    "input": "SELECT 1 + binary 1;",
+    "expected": "E SELECT\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-075.txt",
+    "input": "SELECT 1 + binary 2 + 3;",
+    "expected": "E SELECT\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-076.txt",
+    "input": "SELECT \\%0;",
+    "expected": "E SELECT\n1 \\\n; ;"
+  },
+  {
+    "source": "test-folding-077.txt",
+    "input": "SELECT \\ % 0 ;",
+    "expected": "E SELECT\n1 \\\n; ;"
+  },
+  {
+    "source": "test-folding-078.txt",
+    "input": "SELECT \\1;",
+    "expected": "E SELECT\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-079.txt",
+    "input": "SELECT 1 COLLATE papers;",
+    "expected": "E SELECT\n1 1\nA COLLATE\nn papers\n; ;"
+  },
+  {
+    "source": "test-folding-080.txt",
+    "input": "SELECT 1 COLLATE LATIN1_GERMAN2_CI;",
+    "expected": "E SELECT\n1 1\nA COLLATE\nt LATIN1_GERMAN2_CI\n; ;"
+  },
+  {
+    "source": "test-folding-081.txt",
+    "input": "1 mod (2)",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-082.txt",
+    "input": "@version mod (2)",
+    "expected": "v @version\no mod\n( (\n1 2\n) )"
+  },
+  {
+    "source": "test-folding-083.txt",
+    "input": "@version + @version",
+    "expected": "v @version"
+  },
+  {
+    "source": "test-folding-084.txt",
+    "input": "@version + 1",
+    "expected": "v @version"
+  },
+  {
+    "source": "test-folding-085.txt",
+    "input": "@version + foo",
+    "expected": "v @version"
+  },
+  {
+    "source": "test-folding-086.txt",
+    "input": "1))+1",
+    "expected": "1 1\n) )\no +\n1 1"
+  },
+  {
+    "source": "test-folding-087.txt",
+    "input": "1))))))))))))))+1",
+    "expected": "1 1\n) )\no +\n1 1"
+  },
+  {
+    "source": "test-folding-088.txt",
+    "input": "1 + NOT 1",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-089.txt",
+    "input": "1,-1",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-090.txt",
+    "input": "1,-junk",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-091.txt",
+    "input": "1,-@version",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-092.txt",
+    "input": "1,-\"foo\"",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-093.txt",
+    "input": "IN YOUR FACE",
+    "expected": "n IN\nn YOUR\nn FACE"
+  },
+  {
+    "source": "test-folding-094.txt",
+    "input": "select {foo 1};",
+    "expected": "E select\n1 1\n; ;"
+  },
+  {
+    "source": "test-folding-095.txt",
+    "input": "IF EXISTS(1)",
+    "expected": "f IF EXISTS\n( (\n1 1\n) )"
+  },
+  {
+    "source": "test-folding-096.txt",
+    "input": "IF EXISTS(1)",
+    "expected": "f IF EXISTS\n( (\n1 1\n) )"
+  },
+  {
+    "source": "test-folding-097.txt",
+    "input": "IF NOT EXISTS(1)",
+    "expected": "f IF NOT EXISTS\n( (\n1 1\n) )"
+  },
+  {
+    "source": "test-folding-098.txt",
+    "input": "foo . `bar`",
+    "expected": "n foo"
+  },
+  {
+    "source": "test-folding-099.txt",
+    "input": "SELECT 1.e.table_name",
+    "expected": "E SELECT\nn table_name"
+  },
+  {
+    "source": "test-folding-100.txt",
+    "input": "SELECT 10.e.`table_name`",
+    "expected": "E SELECT\nn table_name"
+  },
+  {
+    "source": "test-folding-101.txt",
+    "input": "SELECT . `foo`",
+    "expected": "E SELECT\nn foo"
+  },
+  {
+    "source": "test-folding-102.txt",
+    "input": "SELECT AAAAAAAAAABBBBBBBBBBCCCCCCCCCC AAAAAAAAAABBBBBBBBBBCCCCCCCCCC",
+    "expected": "E SELECT\nn AAAAAAAAAABBBBBBBBBBCCCCCCCCCC\nn AAAAAAAAAABBBBBBBBBBCCCCCCCCCC"
+  },
+  {
+    "source": "test-folding-103.txt",
+    "input": "SELECT AAAAAAAAAABBBBBBBBBBCCCCCCCCCC AAAAAAAAAABBBBBBBBBBCCCCCCCCCC",
+    "expected": "E SELECT\nn AAAAAAAAAABBBBBBBBBBCCCCCCCCCC\nn AAAAAAAAAABBBBBBBBBBCCCCCCCCCC"
+  },
+  {
+    "source": "test-folding-104.txt",
+    "input": "1 - (1 - 1)",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-105.txt",
+    "input": "1 - (1 - 1) + 2",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-106.txt",
+    "input": "1 - (1 - 1) --",
+    "expected": "1 1\nc --"
+  },
+  {
+    "source": "test-folding-107.txt",
+    "input": "1-(1-1)-2 --",
+    "expected": "1 1\nc --"
+  },
+  {
+    "source": "test-folding-108.txt",
+    "input": "SELECT (BINARY BINARY 1);",
+    "expected": "E SELECT\n( (\n1 1\n) )\n; ;"
+  },
+  {
+    "source": "test-folding-109.txt",
+    "input": "1 - binary ( 2 )",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-110.txt",
+    "input": "1 - binary binary 2",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-111.txt",
+    "input": "1 - binary binary (2)",
+    "expected": "1 1"
+  },
+  {
+    "source": "test-folding-112.txt",
+    "input": "1 - (binary binary (2))",
+    "expected": "1 1\n) )"
+  },
+  {
+    "source": "test-folding-113.txt",
+    "input": "SELECT LIKE(\"foo\",\"bar\")",
+    "expected": "E SELECT\nf LIKE\n( (\ns \"foo\"\n) )"
+  },
+  {
+    "source": "test-folding-114.txt",
+    "input": "SELECT NOT LIKE(\"foo\",\"bar\")",
+    "expected": "E SELECT\nf NOT LIKE\n( (\ns \"foo\"\n) )"
+  },
+  {
+    "source": "test-folding-115.txt",
+    "input": "{``.``.id} UNION SELECT TABLE",
+    "expected": "{ {\nX"
+  },
+  {
+    "source": "test-folding-116.txt",
+    "input": "1 USER(1)",
+    "expected": "1 1\nn USER\n( (\n1 1\n) )"
+  },
+  {
+    "source": "test-folding-117.txt",
+    "input": "1 USER()",
+    "expected": "1 1\nf USER\n( (\n) )"
+  },
+  {
+    "source": "test-folding-118.txt",
+    "input": "; if not((select serverproperty('isintegratedsecurityonly'))",
+    "expected": "; ;\nT if not\n( (\nE select\nf serverproperty"
+  },
+  {
+    "source": "test-html5-001.txt",
+    "input": "foo",
+    "expected": "DATA_TEXT,3,foo"
+  },
+  {
+    "source": "test-html5-002.txt",
+    "input": "\"foo\"",
+    "expected": "DATA_TEXT,5,\"foo\""
+  },
+  {
+    "source": "test-html5-003.txt",
+    "input": "",
+    "expected": ""
+  },
+  {
+    "source": "test-html5-004.txt",
+    "input": "aa<foo>bb",
+    "expected": "DATA_TEXT,2,aa\nTAG_NAME_OPEN,3,foo\nTAG_NAME_CLOSE,1,>\nDATA_TEXT,2,bb"
+  },
+  {
+    "source": "test-html5-005.txt",
+    "input": "aa<foo>",
+    "expected": "DATA_TEXT,2,aa\nTAG_NAME_OPEN,3,foo\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-006.txt",
+    "input": "<foo>bb",
+    "expected": "TAG_NAME_OPEN,3,foo\nTAG_NAME_CLOSE,1,>\nDATA_TEXT,2,bb"
+  },
+  {
+    "source": "test-html5-007.txt",
+    "input": "<foo>",
+    "expected": "TAG_NAME_OPEN,3,foo\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-008.txt",
+    "input": "<foo          >",
+    "expected": "TAG_NAME_OPEN,3,foo\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-009.txt",
+    "input": "<foo/>",
+    "expected": "TAG_NAME_OPEN,3,foo\nTAG_NAME_SELFCLOSE,2,/>"
+  },
+  {
+    "source": "test-html5-010.txt",
+    "input": "<foo   />",
+    "expected": "TAG_NAME_OPEN,3,foo\nTAG_NAME_SELFCLOSE,2,/>"
+  },
+  {
+    "source": "test-html5-011.txt",
+    "input": "<foo",
+    "expected": "TAG_NAME_OPEN,3,foo"
+  },
+  {
+    "source": "test-html5-012.txt",
+    "input": "<foo",
+    "expected": "TAG_NAME_OPEN,3,foo"
+  },
+  {
+    "source": "test-html5-013.txt",
+    "input": "<foo/",
+    "expected": "TAG_NAME_OPEN,3,foo"
+  },
+  {
+    "source": "test-html5-014.txt",
+    "input": "<foo   /",
+    "expected": "TAG_NAME_OPEN,3,foo"
+  },
+  {
+    "source": "test-html5-015.txt",
+    "input": "<foo  bar>",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-016.txt",
+    "input": "<foo  bar",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar"
+  },
+  {
+    "source": "test-html5-017.txt",
+    "input": "<foo  bar",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar"
+  },
+  {
+    "source": "test-html5-018.txt",
+    "input": "<foo  bar=yes>",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,yes\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-019.txt",
+    "input": "<foo  bar=yes  >",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,yes\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-020.txt",
+    "input": "<foo  bar=yes",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,yes"
+  },
+  {
+    "source": "test-html5-021.txt",
+    "input": "<foo  bar=yes",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,yes"
+  },
+  {
+    "source": "test-html5-022.txt",
+    "input": "<foo  bar= 'yes' >",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,yes\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-023.txt",
+    "input": "<foo  bar= \"yes\" >",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,yes\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-024.txt",
+    "input": "<foo  bar=>",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,0,\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-025.txt",
+    "input": "<foo  bar =  >",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,0,\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-026.txt",
+    "input": "<foo  bar = '' >",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,0,\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-027.txt",
+    "input": "<foo  bar = 'xxx",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,xxx"
+  },
+  {
+    "source": "test-html5-028.txt",
+    "input": "<foo  bar = '",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,0,"
+  },
+  {
+    "source": "test-html5-029.txt",
+    "input": "<foo  bar = \"xxx\"",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,xxx"
+  },
+  {
+    "source": "test-html5-030.txt",
+    "input": "</foo>",
+    "expected": "TAG_CLOSE,3,foo"
+  },
+  {
+    "source": "test-html5-031.txt",
+    "input": "</foo  >",
+    "expected": "TAG_NAME_OPEN,3,foo\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-032.txt",
+    "input": "<foo bar/>",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nTAG_NAME_SELFCLOSE,2,/>"
+  },
+  {
+    "source": "test-html5-033.txt",
+    "input": "<!--foo-->",
+    "expected": "TAG_COMMENT,3,foo"
+  },
+  {
+    "source": "test-html5-034.txt",
+    "input": "<!--foo",
+    "expected": "TAG_COMMENT,3,foo"
+  },
+  {
+    "source": "test-html5-035.txt",
+    "input": "<?foo",
+    "expected": "TAG_COMMENT,3,foo"
+  },
+  {
+    "source": "test-html5-036.txt",
+    "input": "<?foo>",
+    "expected": "TAG_COMMENT,3,foo"
+  },
+  {
+    "source": "test-html5-037.txt",
+    "input": "<foo bar=\"yes\"/>",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,yes\nTAG_NAME_SELFCLOSE,2,/>"
+  },
+  {
+    "source": "test-html5-038.txt",
+    "input": "<foo bar=\"yes\">",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,yes\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-039.txt",
+    "input": "<1234 foo",
+    "expected": "DATA_TEXT,1,<\nDATA_TEXT,8,1234 foo"
+  },
+  {
+    "source": "test-html5-040.txt",
+    "input": "<!-- -x -- -! -->",
+    "expected": "TAG_COMMENT,10, -x -- -!"
+  },
+  {
+    "source": "test-html5-041.txt",
+    "input": "<!------->",
+    "expected": "TAG_COMMENT,3,---"
+  },
+  {
+    "source": "test-html5-042.txt",
+    "input": "<!--foo--",
+    "expected": "TAG_COMMENT,5,foo--"
+  },
+  {
+    "source": "test-html5-043.txt",
+    "input": "<foo /junk>",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,4,junk\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-044.txt",
+    "input": "<foo bar=\"yes\"isdir>",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,yes\nATTR_NAME,5,isdir\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-045.txt",
+    "input": "<!DOCTYPE>",
+    "expected": "DOCTYPE,7,DOCTYPE"
+  },
+  {
+    "source": "test-html5-046.txt",
+    "input": "<!DOCTYPE \"stuff\">",
+    "expected": "DOCTYPE,15,DOCTYPE \"stuff\""
+  },
+  {
+    "source": "test-html5-047.txt",
+    "input": "<!DOCTYPE \"stuff\"",
+    "expected": "DOCTYPE,15,DOCTYPE \"stuff\""
+  },
+  {
+    "source": "test-html5-048.txt",
+    "input": "<!doctype>",
+    "expected": "DOCTYPE,7,doctype"
+  },
+  {
+    "source": "test-html5-049.txt",
+    "input": "<![CDATA[foobar]]>",
+    "expected": "DATA_TEXT,6,foobar"
+  },
+  {
+    "source": "test-html5-050.txt",
+    "input": "<![CDATA[foobar",
+    "expected": "DATA_TEXT,6,foobar"
+  },
+  {
+    "source": "test-html5-051.txt",
+    "input": "<![CDATA[foobar",
+    "expected": "DATA_TEXT,6,foobar"
+  },
+  {
+    "source": "test-html5-052.txt",
+    "input": "<![CDATA[foobar]]]>",
+    "expected": "DATA_TEXT,7,foobar]"
+  },
+  {
+    "source": "test-html5-053.txt",
+    "input": "<![CDATA",
+    "expected": "TAG_COMMENT,6,[CDATA"
+  },
+  {
+    "source": "test-html5-054.txt",
+    "input": "<![CDATA",
+    "expected": "TAG_COMMENT,6,[CDATA"
+  },
+  {
+    "source": "test-html5-055.txt",
+    "input": "<![CDATA foo>",
+    "expected": "TAG_COMMENT,10,[CDATA foo"
+  },
+  {
+    "source": "test-html5-056.txt",
+    "input": "<![CDATAX foo>",
+    "expected": "TAG_COMMENT,11,[CDATAX foo"
+  },
+  {
+    "source": "test-html5-059.txt",
+    "input": "<?import foo=\"bar\"/>",
+    "expected": "TAG_COMMENT,17,import foo=\"bar\"/"
+  },
+  {
+    "source": "test-html5-061.txt",
+    "input": "<% foo><x foo=\"%><script>",
+    "expected": "TAG_COMMENT,13, foo><x foo=\"\nTAG_NAME_OPEN,6,script\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-062.txt",
+    "input": "<!ENTITY foo>",
+    "expected": "TAG_COMMENT,10,ENTITY foo"
+  },
+  {
+    "source": "test-html5-063.txt",
+    "input": "<foo  bar   =   \"xxx\"",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,xxx"
+  },
+  {
+    "source": "test-html5-064.txt",
+    "input": "<foo  bar   =   `xxx`",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,3,bar\nATTR_VALUE,3,xxx"
+  },
+  {
+    "source": "test-html5-065.txt",
+    "input": "<foo =_=xxx",
+    "expected": "TAG_NAME_OPEN,3,foo\nATTR_NAME,2,=_\nATTR_VALUE,3,xxx"
+  },
+  {
+    "source": "test-html5-066.txt",
+    "input": "</ foo=\"><script>",
+    "expected": "TAG_COMMENT,6, foo=\"\nTAG_NAME_OPEN,6,script\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-067.txt",
+    "input": "<a href=\"  javascript:alert(1);\" >",
+    "expected": "TAG_NAME_OPEN,1,a\nATTR_NAME,4,href\nATTR_VALUE,22,  javascript:alert(1);\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-068.txt",
+    "input": "quitesomerandomcharacters<TABLE BACKGROUND=\"javascript:javascript:alert(99111)\">",
+    "expected": "DATA_TEXT,25,quitesomerandomcharacters\nTAG_NAME_OPEN,5,TABLE\nATTR_NAME,10,BACKGROUND\nATTR_VALUE,34,javascript:javascript:alert(99111)\nTAG_NAME_CLOSE,1,>"
+  },
+  {
+    "source": "test-html5-069.txt",
+    "input": "<![CDATA foofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoo",
+    "expected": "TAG_COMMENT,253,[CDATA foofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoofoo"
+  },
+  {
+    "source": "test-html5-070.txt",
+    "input": "</ looooooonger foo=\"><script>ReferenceError.prototype.__defineGetter__('name', function(){javascript:alert(1)}),x</script>",
+    "expected": "TAG_COMMENT,19, looooooonger foo=\"\nTAG_NAME_OPEN,6,script\nTAG_NAME_CLOSE,1,>\nDATA_TEXT,84,ReferenceError.prototype.__defineGetter__('name', function(){javascript:alert(1)}),x\nTAG_CLOSE,6,script"
+  },
+  {
+    "source": "test-html5-071.txt",
+    "input": "<BODY BACKGROUND=\"javascript:alert('XSS')\"><h1>Welcome to my awesome Website!</h1><p>This is a paragraph of text on my website. It contains more characters to make the test longer.</p><div id=\"content\"><p>Here's another paragraph of text. This one is inside a div with an id of \"content\".</p><ul><li>List item 1</li><li>List item 2</li><li>List item 3</li></ul></div></BODY>",
+    "expected": "TAG_NAME_OPEN,4,BODY\nATTR_NAME,10,BACKGROUND\nATTR_VALUE,23,javascript:alert('XSS')\nTAG_NAME_CLOSE,1,>\nTAG_NAME_OPEN,2,h1\nTAG_NAME_CLOSE,1,>\nDATA_TEXT,30,Welcome to my awesome Website!\nTAG_CLOSE,2,h1\nTAG_NAME_OPEN,1,p\nTAG_NAME_CLOSE,1,>\nDATA_TEXT,95,This is a paragraph of text on my website. It contains more characters to make the test longer.\nTAG_CLOSE,1,p\nTAG_NAME_OPEN,3,div\nATTR_NAME,2,id\nATTR_VALUE,7,content\nTAG_NAME_CLOSE,1,>\nTAG_NAME_OPEN,1,p\nTAG_NAME_CLOSE,1,>\nDATA_TEXT,83,Here's another paragraph of text. This one is inside a div with an id of \"content\".\nTAG_CLOSE,1,p\nTAG_NAME_OPEN,2,ul\nTAG_NAME_CLOSE,1,>\nTAG_NAME_OPEN,2,li\nTAG_NAME_CLOSE,1,>\nDATA_TEXT,11,List item 1\nTAG_CLOSE,2,li\nTAG_NAME_OPEN,2,li\nTAG_NAME_CLOSE,1,>\nDATA_TEXT,11,List item 2\nTAG_CLOSE,2,li\nTAG_NAME_OPEN,2,li\nTAG_NAME_CLOSE,1,>\nDATA_TEXT,11,List item 3\nTAG_CLOSE,2,li\nTAG_CLOSE,2,ul\nTAG_CLOSE,3,div\nTAG_CLOSE,4,BODY"
+  },
+  {
+    "source": "test-sqli-001.txt",
+    "input": "foo 'bar' \"zap\"",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-002.txt",
+    "input": "foo 'bar'",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-003.txt",
+    "input": "foo 'bar'",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-004.txt",
+    "input": "1 = 1 OR 1",
+    "expected": "1&1"
+  },
+  {
+    "source": "test-sqli-005.txt",
+    "input": "1 = '1' OR 1",
+    "expected": "1os&1"
+  },
+  {
+    "source": "test-sqli-006.txt",
+    "input": "1 = \"1\" OR 1",
+    "expected": "1os&1"
+  },
+  {
+    "source": "test-sqli-007.txt",
+    "input": "1 /* /* */ */ 2",
+    "expected": "X"
+  },
+  {
+    "source": "test-sqli-008.txt",
+    "input": "1 = \"1\" /* 'blah' */  OR 1",
+    "expected": "1os&1"
+  },
+  {
+    "source": "test-sqli-009.txt",
+    "input": "1 = '1' /* \"blah\" */  OR 1",
+    "expected": "1os&1"
+  },
+  {
+    "source": "test-sqli-010.txt",
+    "input": "1# blah blah",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-011.txt",
+    "input": "foo--",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-012.txt",
+    "input": "foo/* yes this is sqli */",
+    "expected": "nc"
+  },
+  {
+    "source": "test-sqli-013.txt",
+    "input": "1/* yes this is sqli */",
+    "expected": "1c"
+  },
+  {
+    "source": "test-sqli-014.txt",
+    "input": "1--",
+    "expected": "1c"
+  },
+  {
+    "source": "test-sqli-015.txt",
+    "input": "\"foo\" OR \"BAR\"",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-016.txt",
+    "input": "foo\" OR \"BAR\"",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-017.txt",
+    "input": "\"foo\" OR \"BAR",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-018.txt",
+    "input": "foo' OR \"BAR",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-019.txt",
+    "input": "foo' OR 'BAR",
+    "expected": "s&s"
+  },
+  {
+    "source": "test-sqli-020.txt",
+    "input": "foo' + 1",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-021.txt",
+    "input": "'foo' + 1",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-022.txt",
+    "input": "1\" UNION ALL SELECT * FROM FOO",
+    "expected": "sUEok"
+  },
+  {
+    "source": "test-sqli-023.txt",
+    "input": "1\" INCH",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-024.txt",
+    "input": "1' INCH",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-025.txt",
+    "input": "--1 UNION ALL SELECT * FROM FOO",
+    "expected": "1UEok"
+  },
+  {
+    "source": "test-sqli-026.txt",
+    "input": "1' == --1 OR 1",
+    "expected": "so1&1"
+  },
+  {
+    "source": "test-sqli-027.txt",
+    "input": "1\" UNION ALL SELECT --1 FROM FOO",
+    "expected": "sUE1k"
+  },
+  {
+    "source": "test-sqli-028.txt",
+    "input": "foo'--'bar'",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-029.txt",
+    "input": "--blah",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-030.txt",
+    "input": "1--sp_password",
+    "expected": "1c"
+  },
+  {
+    "source": "test-sqli-031.txt",
+    "input": "x'--sp_password",
+    "expected": "sc"
+  },
+  {
+    "source": "test-sqli-032.txt",
+    "input": "1*1--",
+    "expected": "1c"
+  },
+  {
+    "source": "test-sqli-033.txt",
+    "input": "1 /*!anything*/",
+    "expected": "X"
+  },
+  {
+    "source": "test-sqli-034.txt",
+    "input": "1--0000000000111111111122222222223333333333 sp_password",
+    "expected": "1c"
+  },
+  {
+    "source": "test-sqli-035.txt",
+    "input": "",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-036.txt",
+    "input": "foo\" and 1=1 `",
+    "expected": "s&1c"
+  },
+  {
+    "source": "test-sqli-037.txt",
+    "input": "foo\" and 1=1 `",
+    "expected": "s&1c"
+  },
+  {
+    "source": "test-sqli-038.txt",
+    "input": "1 and @version",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-039.txt",
+    "input": "1 and @version < 1",
+    "expected": "1&v"
+  },
+  {
+    "source": "test-sqli-040.txt",
+    "input": "1 and \"a\" < \"b\"",
+    "expected": "1&sos"
+  },
+  {
+    "source": "test-sqli-041.txt",
+    "input": "1 and \"a\"",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-042.txt",
+    "input": "1 TOP 'foo'",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-043.txt",
+    "input": "1 UNION",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-044.txt",
+    "input": "1 ANALYZE 'foo'",
+    "expected": ""
+  },
+  {
+    "source": "test-sqli-045.txt",
+    "input": "1 /* junk */ UNION",
+    "expected": "1U"
+  },
+  {
+    "source": "test-sqli-046.txt",
+    "input": "1),(1)) UNION SELECT 1;",
+    "expected": "1)UE1"
+  },
+  {
+    "source": "test-sqli-047.txt",
+    "input": "foo - (bar) UNION SELECT 1",
+    "expected": "nUE1"
+  },
+  {
+    "source": "test-sqli-048.txt",
+    "input": "foo - (1) UNION SELECT 1",
+    "expected": "nUE1"
+  },
+  {
+    "source": "test-sqli-049.txt",
+    "input": "1, -sin(1)) UNION SELECT 1",
+    "expected": "1,f(1"
+  },
+  {
+    "source": "test-sqli-050.txt",
+    "input": "{``.``.id} UNION SELECT table_name from information_schemas LIMIT 1",
+    "expected": "X"
+  },
+  {
+    "source": "test-sqli-1e-001.txt",
+    "input": "1' or 1.e(1)",
+    "expected": "s&(1)"
+  },
+  {
+    "source": "test-sqli-1e-002.txt",
+    "input": "abc or 2 1.e%2",
+    "expected": "n&1"
+  },
+  {
+    "source": "test-sqli-1e-003.txt",
+    "input": "1' or 2 1.E/1",
+    "expected": "s&1"
+  },
+  {
+    "source": "test-sqli-1e-004.txt",
+    "input": "1' or 2 1.e&1",
+    "expected": "s&1"
+  },
+  {
+    "source": "test-tokens-061.txt",
+    "input": "select 1,'''',2;",
+    "expected": "E select\n1 1\n, ,\ns ''''\n, ,\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-062.txt",
+    "input": "select 1,'\\\\\\\\',2;",
+    "expected": "E select\n1 1\n, ,\ns '\\\\\\\\'\n, ,\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-backquotes-001.txt",
+    "input": "SELECT `version`();",
+    "expected": "E SELECT\nf version\n( (\n) )\n; ;"
+  },
+  {
+    "source": "test-tokens-backquotes-002.txt",
+    "input": "SELECT `select`;",
+    "expected": "E SELECT\nn select\n; ;"
+  },
+  {
+    "source": "test-tokens-backquotes-003.txt",
+    "input": "SELECT foo.`select`;",
+    "expected": "E SELECT\nn foo.`select`\n; ;"
+  },
+  {
+    "source": "test-tokens-backquotes-004.txt",
+    "input": "SELECT `foo`.`bar`;",
+    "expected": "E SELECT\nn foo\n. .\nn bar\n; ;"
+  },
+  {
+    "source": "test-tokens-backquotes-005.txt",
+    "input": "SELECT `foo`.bar;",
+    "expected": "E SELECT\nn foo\n. .\nn bar\n; ;"
+  },
+  {
+    "source": "test-tokens-backquotes-006.txt",
+    "input": "SELECT @@`version`;",
+    "expected": "E SELECT\nv @@`version`\n; ;"
+  },
+  {
+    "source": "test-tokens-backquotes-007.txt",
+    "input": "SELECT @`version`;",
+    "expected": "E SELECT\nv @`version`\n; ;"
+  },
+  {
+    "source": "test-tokens-backquotes-008.txt",
+    "input": "SELECT @`foo``bar`;",
+    "expected": "E SELECT\nv @`foo``bar`\n; ;"
+  },
+  {
+    "source": "test-tokens-backquotes-009.txt",
+    "input": "SELECT @`foobar`",
+    "expected": "E SELECT\nv @`foobar`"
+  },
+  {
+    "source": "test-tokens-backquotes-010.txt",
+    "input": "SELECT @`foobar",
+    "expected": "E SELECT\nv @`foobar"
+  },
+  {
+    "source": "test-tokens-backquotes-011.txt",
+    "input": "SELECT @`foobar``",
+    "expected": "E SELECT\nv @`foobar``"
+  },
+  {
+    "source": "test-tokens-backquotes-012.txt",
+    "input": "SELECT`foobar`",
+    "expected": "E SELECT\nn foobar"
+  },
+  {
+    "source": "test-tokens-braces-001.txt",
+    "input": "SELECT { foo 1 };",
+    "expected": "E SELECT\n{ {\nn foo\n1 1\n} }\n; ;"
+  },
+  {
+    "source": "test-tokens-braces-002.txt",
+    "input": "SELECT{ foo 1 };",
+    "expected": "E SELECT\n{ {\nn foo\n1 1\n} }\n; ;"
+  },
+  {
+    "source": "test-tokens-chars-001.txt",
+    "input": "SELECT \\N;",
+    "expected": "E SELECT\n1 \\N\n; ;"
+  },
+  {
+    "source": "test-tokens-chars-002.txt",
+    "input": "SELECT \\X;",
+    "expected": "E SELECT\n\\ \\\nn X\n; ;"
+  },
+  {
+    "source": "test-tokens-chars-003.txt",
+    "input": "SELECT \\",
+    "expected": "E SELECT\n\\ \\"
+  },
+  {
+    "source": "test-tokens-chars-004.txt",
+    "input": "SELECT [1];",
+    "expected": "E SELECT\nn [1]\n; ;"
+  },
+  {
+    "source": "test-tokens-chars-005.txt",
+    "input": "SELECT \\ % 1;",
+    "expected": "E SELECT\n\\ \\\no %\n1 1\n; ;"
+  },
+  {
+    "source": "test-tokens-chars-006.txt",
+    "input": "SELECT ]",
+    "expected": "E SELECT\n? ]"
+  },
+  {
+    "source": "test-tokens-cimpl-001.txt",
+    "input": "zFFD8FFE000104A46494600010100000100010000FFDB0084000503040404030504040405050506070C08070707070F0B0B090C110F1212110F111113161C1713141A1511111821181A1D1D1F1F1F13172224221E241C1E1F1E010505050706070E08080E1E1411141E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1EFFC00011080078007803011100021101031101FFC401A20000010501010101010100000000000000000102030405060708090A0B100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A25262728292A3435363738393A434445464748494A535455565758595A636465666768696A737475767778797A838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE1E2E3E4E5E6E7E8E9EAF1F2F3F4F5F6F7F8F9FA0100030101010101010101010000000000000102030405060708090A0B1100020102040403040705040400010277000102031104052131061241510761711322328108144291A1B1C109233352F0156272D10A162434E125F11718191A262728292A35363738393A434FFD8FFE000104A46494600010100000100010000FFDB0084000503040404030504040405050506070C08070707070F0B0B090C110F1212110F111113161C1713141A1511111821181A1D1D1F1F1F13172224221E241C1E1F1E010505050706070E08080E1E1411141E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1EFFC00011080078007803011100021101031101FFC401A20000010501010101010100000000000000000102030405060708090A0B100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A25262728292A3435363738393A434445464748494A535455565758595A636465666768696A737475767778797A838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE1E2E3E4E5E6E7E8E9EAF1F2F3F4F5F6F7F8F9FA0100030101010101010101010000000000000102030405060708090A0B1100020102040403040705040400010277000102031104052131061241510761711322328108144291A1B1C109233352F0156272D10A162434E125F11718191A262728292A35363738393A434FFD8FFE000104A46494600010100000100010000FFDB0084000503040404030504040405050506070C08070707070F0B0B090C110F1212110F111113161C1713141A1511111821181A1D1D1F1F1F13172224221E241C1E1F1E010505050706070E08080E1E1411141E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1EFFC00011080078007803011100021101031101FFC401A20000010501010101010100000000000000000102030405060708090A0B100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A25262728292A3435363738393A434445464748494A535455565758595A636465666768696A737475767778797A838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE1E2E3E4E5E6E7E8E9EAF1F2F3F4F5F6F7F8F9FA0100030101010101010101010000000000000102030405060708090A0B1100020102040403040705040400010277000102031104052131061241510761711322328108144291A1B1C109233352F0156272D10A162434E125F11718191A262728292A35363738393A434FFD8FFE000104A46494600010100000100010000FFDB0084000503040404030504040405050506070C08070707070F0B0B090C110F1212110F111113161C1713141A1511111821181A1D1D1F1F1F13172224221E241C1E1F1E010505050706070E08080E1E1411141E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1EFFC00011080078007803011100021101031101FFC401A20000010501010101010100000000000000000102030405060708090A0B100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A25262728292A3435363738393A434445464748494A535455565758595A636465666768696A737475767778797A838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE1E2E3E4E5E6E7E8E9EAF1F2F3F4F5F6F7F8F9FA0100030101010101010101010000000000000102030405060708090A0B1100020102040403040705040400010277000102031104052131061241510761711322328108144291A1B1C109233352F0156272D10A162434E125F11718191A262728292A35363738393A4344FFD8FFE000104A46494600010100000100010000FFDB0084000503040404030504040405050506070C08070707070F0B0B090C110F1212110F111113161C1713141A1511111821181A1D1D1F1F1F13172224221E241C1E1F1E010505050706070E08080E1E1411141E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1EFFC00011080078007803011100021101031101FFC401A20000010501010101010100000000000000000102030405060708090A0B100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A25262728292A3435363738393A434445464748494A535455565758595A636465666768696A737475767778797A838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE1E2E3E4E5E6E7E8E9EAF1F2F3F4F5F6F7F8F9FA0100030101010101010101010000000000000102030405060708090A0B1100020102040403040705040400010277000102031104052131061241510761711322328108144291A1B1C109233352F0156272D10A162434E125F11718191A262728292A35363738393A434FFD8FFE000104A46494600010100000100010000FFDB0084000503040404030504040405050506070C08070707070F0B0B090C110F1212110F111113161C1713141A1511111821181A1D1D1F1F1F13172224221E241C1E1F1E010505050706070E08080E1E1411141E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1EFFC00011080078007803011100021101031101FFC401A20000010501010101010100000000000000000102030405060708090A0B100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A25262728292A3435363738393A434445464748494A535455565758595A636465666768696A737475767778797A838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE1E2E3E4E5E6E7E8E9EAF1F2F3F4F5F6F7F8F9FA0100030101010101010101010000000000000102030405060708090A0B1100020102040403040705040400010277000102031104052131061241510761711322328108144291A1B1C109233352F0156272D10A162434E125F11718191A262728292A35363738393A434 4",
+    "expected": "n zFFD8FFE000104A4649460001010000\n1 4"
+  },
+  {
+    "source": "test-tokens-cimpl-002.txt",
+    "input": "SELECT AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBBBBBBBBB;",
+    "expected": "E SELECT\nn AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n; ;"
+  },
+  {
+    "source": "test-tokens-cimpl-003.txt",
+    "input": "SELECT '1234567890123456789012345678901234567890';",
+    "expected": "E SELECT\ns '1234567890123456789012345678901'\n; ;"
+  },
+  {
+    "source": "test-tokens-cimpl-004.txt",
+    "input": "1 -- 0000000000111111111122222222223333333333",
+    "expected": "1 1\nc -- 0000000000111111111122222222"
+  },
+  {
+    "source": "test-tokens-comments-cstyle-001.txt",
+    "input": "SELECT 1 /* 2 */;",
+    "expected": "E SELECT\n1 1\nc /* 2 */\n; ;"
+  },
+  {
+    "source": "test-tokens-comments-cstyle-002.txt",
+    "input": "SELECT 1 /* 2",
+    "expected": "E SELECT\n1 1\nc /* 2"
+  },
+  {
+    "source": "test-tokens-comments-cstyle-003.txt",
+    "input": "SELECT 1 /* 2 */",
+    "expected": "E SELECT\n1 1\nc /* 2 */"
+  },
+  {
+    "source": "test-tokens-comments-cstyle-004.txt",
+    "input": "SELECT 1 /*",
+    "expected": "E SELECT\n1 1\nc /*"
+  },
+  {
+    "source": "test-tokens-comments-cstyle-005.txt",
+    "input": "SELECT 1 /",
+    "expected": "E SELECT\n1 1\no /"
+  },
+  {
+    "source": "test-tokens-comments-cstyle-006.txt",
+    "input": "/* foo **/1",
+    "expected": "c /* foo **/\n1 1"
+  },
+  {
+    "source": "test-tokens-comments-cstylenested-001.txt",
+    "input": "SELECT /* FOO /* BAR */ JUNK */",
+    "expected": "E SELECT\nX /* FOO /* BAR */\nn JUNK\no *\no /"
+  },
+  {
+    "source": "test-tokens-comments-cstylenested-002.txt",
+    "input": "SELECT /* FOO /*/ BAR */",
+    "expected": "E SELECT\nX /* FOO /*/\nn BAR\no *\no /"
+  },
+  {
+    "source": "test-tokens-comments-ddash-001.txt",
+    "input": "SELECT 1 --",
+    "expected": "E SELECT\n1 1\nc --"
+  },
+  {
+    "source": "test-tokens-comments-ddash-002.txt",
+    "input": "SELECT 1 --sp_password",
+    "expected": "E SELECT\n1 1\nc --sp_password"
+  },
+  {
+    "source": "test-tokens-comments-ddash-003.txt",
+    "input": "SELECT 1 -- ABCD\n;",
+    "expected": "E SELECT\n1 1\nc -- ABCD\n; ;"
+  },
+  {
+    "source": "test-tokens-comments-ddash-004.txt",
+    "input": "SELECT 1 -- ABCD",
+    "expected": "E SELECT\n1 1\nc -- ABCD"
+  },
+  {
+    "source": "test-tokens-comments-ddash-005.txt",
+    "input": "SELECT 1 -",
+    "expected": "E SELECT\n1 1\no -"
+  },
+  {
+    "source": "test-tokens-comments-mysql-001.txt",
+    "input": "SELECT 1 /*! 2 */;",
+    "expected": "E SELECT\n1 1\nX /*! 2 */\n; ;"
+  },
+  {
+    "source": "test-tokens-comments-mysql-002.txt",
+    "input": "SELECT 1 /*! ,2 */;",
+    "expected": "E SELECT\n1 1\nX /*! ,2 */\n; ;"
+  },
+  {
+    "source": "test-tokens-comments-mysql-006.txt",
+    "input": "SELECT 1 /*!00,2",
+    "expected": "E SELECT\n1 1\nX /*!00,2"
+  },
+  {
+    "source": "test-tokens-comments-mysql-007.txt",
+    "input": "SELECT 1 /*!",
+    "expected": "E SELECT\n1 1\nX /*!"
+  },
+  {
+    "source": "test-tokens-comments-mysql-009.txt",
+    "input": "SELECT 1 /*!123",
+    "expected": "E SELECT\n1 1\nX /*!123"
+  },
+  {
+    "source": "test-tokens-comments-mysql-010.txt",
+    "input": "SELECT 1 /*!12XXXXXXXXXXXX",
+    "expected": "E SELECT\n1 1\nX /*!12XXXXXXXXXXXX"
+  },
+  {
+    "source": "test-tokens-comments-mysql-011.txt",
+    "input": "SELECT 1 /*!*/;",
+    "expected": "E SELECT\n1 1\nX /*!*/\n; ;"
+  },
+  {
+    "source": "test-tokens-intents-001.txt",
+    "input": "SELECT _latin1'foo';",
+    "expected": "E SELECT\nt _latin1\ns 'foo'\n; ;"
+  },
+  {
+    "source": "test-tokens-intents-002.txt",
+    "input": "SELECT _latin1'foo",
+    "expected": "E SELECT\nt _latin1\ns 'foo"
+  },
+  {
+    "source": "test-tokens-intents-003.txt",
+    "input": "SELECT _latin1 'foo';",
+    "expected": "E SELECT\nt _latin1\ns 'foo'\n; ;"
+  },
+  {
+    "source": "test-tokens-intents-004.txt",
+    "input": "SELECT _bogon 'foo';",
+    "expected": "E SELECT\nn _bogon\ns 'foo'\n; ;"
+  },
+  {
+    "source": "test-tokens-intents-005.txt",
+    "input": "SELECT double precision '1';",
+    "expected": "E SELECT\nt double\nk precision\ns '1'\n; ;"
+  },
+  {
+    "source": "test-tokens-intents-006.txt",
+    "input": "SELECT '1'::money;",
+    "expected": "E SELECT\ns '1'\no ::\nt money\n; ;"
+  },
+  {
+    "source": "test-tokens-intents-007.txt",
+    "input": "SELECT _",
+    "expected": "E SELECT\nn _"
+  },
+  {
+    "source": "test-tokens-numbers-binary-001.txt",
+    "input": "SELECT 0b0101010;",
+    "expected": "E SELECT\n1 0b0101010\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-binary-002.txt",
+    "input": "SELECT 0B0101010;",
+    "expected": "E SELECT\n1 0B0101010\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-binary-003.txt",
+    "input": "SELECT 0b;",
+    "expected": "E SELECT\nn 0b\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-exp-001.txt",
+    "input": "SELECT 1E;",
+    "expected": "E SELECT\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-exp-002.txt",
+    "input": "SELECT 1E2;",
+    "expected": "E SELECT\n1 1E2\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-exp-003.txt",
+    "input": "SELECT 1.2E34;",
+    "expected": "E SELECT\n1 1.2E34\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-exp-004.txt",
+    "input": "SELECT 1E+10;",
+    "expected": "E SELECT\n1 1E+10\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-exp-005.txt",
+    "input": "SELECT 1E-10;",
+    "expected": "E SELECT\n1 1E-10\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-exp-006.txt",
+    "input": "SELECT .123e1;",
+    "expected": "E SELECT\n1 .123e1\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-exp-007.txt",
+    "input": "SELECT .123e+1;",
+    "expected": "E SELECT\n1 .123e+1\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-exp-008.txt",
+    "input": "SELECT .123e-1;",
+    "expected": "E SELECT\n1 .123e-1\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-exp-009.txt",
+    "input": "SELECT 123E",
+    "expected": "E SELECT"
+  },
+  {
+    "source": "test-tokens-numbers-exp-010.txt",
+    "input": "SELECT 123E+",
+    "expected": "E SELECT"
+  },
+  {
+    "source": "test-tokens-numbers-exp-011.txt",
+    "input": "SELECT 10.e;",
+    "expected": "E SELECT\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-exp-012.txt",
+    "input": "SELECT 10.10e;",
+    "expected": "E SELECT\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-floats-001.txt",
+    "input": "SELECT 1.",
+    "expected": "E SELECT\n1 1."
+  },
+  {
+    "source": "test-tokens-numbers-floats-002.txt",
+    "input": "SELECT 1.;",
+    "expected": "E SELECT\n1 1.\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-floats-003.txt",
+    "input": "SELECT .0;",
+    "expected": "E SELECT\n1 .0\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-floats-004.txt",
+    "input": "SELECT 123456789.12345678912345678 + 1;",
+    "expected": "E SELECT\n1 123456789.12345678912345678\no +\n1 1\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-floats-005.txt",
+    "input": "SELECT .23456789;",
+    "expected": "E SELECT\n1 .23456789\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-floats-006.txt",
+    "input": "SELECT .;",
+    "expected": "E SELECT\n. .\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-hex-001.txt",
+    "input": "SELECT 0xFF;",
+    "expected": "E SELECT\n1 0xFF\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-hex-002.txt",
+    "input": "SELECT 0X0123456789ABCDEF;",
+    "expected": "E SELECT\n1 0X0123456789ABCDEF\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-hex-003.txt",
+    "input": "SELECT 0X;",
+    "expected": "E SELECT\nn 0X\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-ints-001.txt",
+    "input": "SELECT 1",
+    "expected": "E SELECT\n1 1"
+  },
+  {
+    "source": "test-tokens-numbers-ints-002.txt",
+    "input": "SELECT +1",
+    "expected": "E SELECT\no +\n1 1"
+  },
+  {
+    "source": "test-tokens-numbers-ints-003.txt",
+    "input": "SELECT -1",
+    "expected": "E SELECT\no -\n1 1"
+  },
+  {
+    "source": "test-tokens-numbers-ints-004.txt",
+    "input": "SELECT 0;",
+    "expected": "E SELECT\n1 0\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-ints-005.txt",
+    "input": "SELECT (-1);",
+    "expected": "E SELECT\n( (\no -\n1 1\n) )\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-money-001.txt",
+    "input": "SELECT $1",
+    "expected": "E SELECT\n1 $1"
+  },
+  {
+    "source": "test-tokens-numbers-money-002.txt",
+    "input": "SELECT $1.00",
+    "expected": "E SELECT\n1 $1.00"
+  },
+  {
+    "source": "test-tokens-numbers-money-003.txt",
+    "input": "SELECT $1.00",
+    "expected": "E SELECT\n1 $1.00"
+  },
+  {
+    "source": "test-tokens-numbers-money-004.txt",
+    "input": "SELECT $1000.00",
+    "expected": "E SELECT\n1 $1000.00"
+  },
+  {
+    "source": "test-tokens-numbers-money-005.txt",
+    "input": "SELECT $.0",
+    "expected": "E SELECT\n1 $.0"
+  },
+  {
+    "source": "test-tokens-numbers-money-006.txt",
+    "input": "SELECT $1,000.00",
+    "expected": "E SELECT\n1 $1,000.00"
+  },
+  {
+    "source": "test-tokens-numbers-money-007.txt",
+    "input": "SELECT $1.000,00",
+    "expected": "E SELECT\n1 $1.000,00"
+  },
+  {
+    "source": "test-tokens-numbers-money-008.txt",
+    "input": "SELECT $",
+    "expected": "E SELECT\nn $"
+  },
+  {
+    "source": "test-tokens-numbers-money-009.txt",
+    "input": "SELECT $APPLE",
+    "expected": "E SELECT\nn $\nn APPLE"
+  },
+  {
+    "source": "test-tokens-numbers-money-010.txt",
+    "input": "SELECT $.foo;",
+    "expected": "E SELECT\nn $.foo\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-nan-001.txt",
+    "input": "SELECT binary_double_infinity",
+    "expected": "E SELECT\n1 binary_double_infinity"
+  },
+  {
+    "source": "test-tokens-numbers-nan-002.txt",
+    "input": "SELECT binary_double_nan",
+    "expected": "E SELECT\n1 binary_double_nan"
+  },
+  {
+    "source": "test-tokens-numbers-nan-003.txt",
+    "input": "SELECT binary_float_infinity",
+    "expected": "E SELECT\n1 binary_float_infinity"
+  },
+  {
+    "source": "test-tokens-numbers-nan-004.txt",
+    "input": "SELECT binary_float_nan",
+    "expected": "E SELECT\n1 binary_float_nan"
+  },
+  {
+    "source": "test-tokens-numbers-null-001.txt",
+    "input": "SELECT NULL;",
+    "expected": "E SELECT\nv NULL\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-null-002.txt",
+    "input": "SELECT \\N;",
+    "expected": "E SELECT\n1 \\N\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-oracle-001.txt",
+    "input": "SELECT 1f;",
+    "expected": "E SELECT\n1 1f\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-oracle-002.txt",
+    "input": "SELECT 1d;",
+    "expected": "E SELECT\n1 1d\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-oracle-003.txt",
+    "input": "SELECT -1.123e+23d;",
+    "expected": "E SELECT\no -\n1 1.123e+23d\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-oracle-004.txt",
+    "input": "SELECT 1f",
+    "expected": "E SELECT\n1 1f"
+  },
+  {
+    "source": "test-tokens-numbers-oracle-005.txt",
+    "input": "SELECT 1FROM foo;",
+    "expected": "E SELECT\n1 1\nk FROM\nn foo\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-oracle-006.txt",
+    "input": "SELECT 1Funion select",
+    "expected": "E SELECT\n1 1F\nU union\nE select"
+  },
+  {
+    "source": "test-tokens-numbers-parser-001.txt",
+    "input": "SELECT 123UNION",
+    "expected": "E SELECT\n1 123\nU UNION"
+  },
+  {
+    "source": "test-tokens-numbers-parser-002.txt",
+    "input": "SELECT 123.UNION",
+    "expected": "E SELECT\n1 123.\nU UNION"
+  },
+  {
+    "source": "test-tokens-numbers-string-001.txt",
+    "input": "SELECT x'1234';",
+    "expected": "E SELECT\n1 x'1234'\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-string-002.txt",
+    "input": "SELECT x'';",
+    "expected": "E SELECT\n1 x''\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-string-003.txt",
+    "input": "SELECT x'",
+    "expected": "E SELECT\nn x\ns '"
+  },
+  {
+    "source": "test-tokens-numbers-string-004.txt",
+    "input": "SELECT X'1234';",
+    "expected": "E SELECT\n1 X'1234'\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-string-005.txt",
+    "input": "SELECT x\"1234\";",
+    "expected": "E SELECT\nn x\ns \"1234\"\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-string-006.txt",
+    "input": "SELECT b'1010101';",
+    "expected": "E SELECT\n1 b'1010101'\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-string-007.txt",
+    "input": "SELECT B'1010101';",
+    "expected": "E SELECT\n1 B'1010101'\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-string-008.txt",
+    "input": "SELECT b'';",
+    "expected": "E SELECT\n1 b''\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-string-009.txt",
+    "input": "SELECT b'",
+    "expected": "E SELECT\nn b\ns '"
+  },
+  {
+    "source": "test-tokens-numbers-string-010.txt",
+    "input": "SELECT b B",
+    "expected": "E SELECT\nn b\nn B"
+  },
+  {
+    "source": "test-tokens-numbers-string-011.txt",
+    "input": "SELECT x;",
+    "expected": "E SELECT\nn x\n; ;"
+  },
+  {
+    "source": "test-tokens-numbers-string-012.txt",
+    "input": "SELECT x X;",
+    "expected": "E SELECT\nn x\nn X\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-001.txt",
+    "input": "SELECT 1 DIV 2;",
+    "expected": "E SELECT\n1 1\no DIV\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-002.txt",
+    "input": "SELECT 1 / 2;",
+    "expected": "E SELECT\n1 1\no /\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-003.txt",
+    "input": "SELECT 1/2;",
+    "expected": "E SELECT\n1 1\no /\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-004.txt",
+    "input": "SELECT 1 |",
+    "expected": "E SELECT\n1 1\no |"
+  },
+  {
+    "source": "test-tokens-operators-005.txt",
+    "input": "SELECT 1 | 2;",
+    "expected": "E SELECT\n1 1\no |\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-006.txt",
+    "input": "SELECT 1 || 2;",
+    "expected": "E SELECT\n1 1\n& ||\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-007.txt",
+    "input": "SELECT 1 && 2;",
+    "expected": "E SELECT\n1 1\n& &&\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-008.txt",
+    "input": "SELECT 1 << 2;",
+    "expected": "E SELECT\n1 1\no <<\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-009.txt",
+    "input": "SELECT 1 <= 2;",
+    "expected": "E SELECT\n1 1\no <=\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-010.txt",
+    "input": "SELECT 1 <=> 2;",
+    "expected": "E SELECT\n1 1\no <=>\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-011.txt",
+    "input": "SELECT 1 <=",
+    "expected": "E SELECT\n1 1\no <="
+  },
+  {
+    "source": "test-tokens-operators-012.txt",
+    "input": "SELECT NOT 1;",
+    "expected": "E SELECT\no NOT\n1 1\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-013.txt",
+    "input": "SELECT ~ 1;",
+    "expected": "E SELECT\no ~\n1 1\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-014.txt",
+    "input": "SELECT 1 */* FOO */ 2;",
+    "expected": "E SELECT\n1 1\no *\nc /* FOO */\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-015.txt",
+    "input": "SELECT 1 := 2;",
+    "expected": "E SELECT\n1 1\no :=\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-016.txt",
+    "input": "SELECT 1 : 2;",
+    "expected": "E SELECT\n1 1\n: :\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-017.txt",
+    "input": "SELECT !~",
+    "expected": "E SELECT\no !\no ~"
+  },
+  {
+    "source": "test-tokens-operators-018.txt",
+    "input": "SELECT 1 # 1;",
+    "expected": "E SELECT\n1 1\no #\n1 1\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-019.txt",
+    "input": "SELECT 1 EQV 1;",
+    "expected": "E SELECT\n1 1\no EQV\n1 1\n; ;"
+  },
+  {
+    "source": "test-tokens-operators-020.txt",
+    "input": "SELECT 1 XOR 2;",
+    "expected": "E SELECT\n1 1\n& XOR\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-string-001.txt",
+    "input": "SELECT 'FOO';",
+    "expected": "E SELECT\ns 'FOO'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-003.txt",
+    "input": "SELECT \"FOO\";",
+    "expected": "E SELECT\ns \"FOO\"\n; ;"
+  },
+  {
+    "source": "test-tokens-string-004.txt",
+    "input": "SELECT \"'FOO'\";",
+    "expected": "E SELECT\ns \"'FOO'\"\n; ;"
+  },
+  {
+    "source": "test-tokens-string-005.txt",
+    "input": "SELECT '\"FOO\"';",
+    "expected": "E SELECT\ns '\"FOO\"'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-006.txt",
+    "input": "SELECT 'FOO\\'BAR';",
+    "expected": "E SELECT\ns 'FOO\\'BAR'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-007.txt",
+    "input": "SELECT 'FOO\\\"BAR';",
+    "expected": "E SELECT\ns 'FOO\\\"BAR'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-008.txt",
+    "input": "SELECT \"FOO\\\"BAR\";",
+    "expected": "E SELECT\ns \"FOO\\\"BAR\"\n; ;"
+  },
+  {
+    "source": "test-tokens-string-009.txt",
+    "input": "SELECT \"FOO\\'BAR\";",
+    "expected": "E SELECT\ns \"FOO\\'BAR\"\n; ;"
+  },
+  {
+    "source": "test-tokens-string-010.txt",
+    "input": "SELECT \"FOO",
+    "expected": "E SELECT\ns \"FOO"
+  },
+  {
+    "source": "test-tokens-string-011.txt",
+    "input": "SELECT 'FOO",
+    "expected": "E SELECT\ns 'FOO"
+  },
+  {
+    "source": "test-tokens-string-012.txt",
+    "input": "SELECT 'FOO\\",
+    "expected": "E SELECT\ns 'FOO\\"
+  },
+  {
+    "source": "test-tokens-string-013.txt",
+    "input": "SELECT 'FOO\\'",
+    "expected": "E SELECT\ns 'FOO\\'"
+  },
+  {
+    "source": "test-tokens-string-014.txt",
+    "input": "SELECT \"FOO",
+    "expected": "E SELECT\ns \"FOO"
+  },
+  {
+    "source": "test-tokens-string-015.txt",
+    "input": "SELECT \"FOO\\",
+    "expected": "E SELECT\ns \"FOO\\"
+  },
+  {
+    "source": "test-tokens-string-016.txt",
+    "input": "SELECT \"FOO\\\"",
+    "expected": "E SELECT\ns \"FOO\\\""
+  },
+  {
+    "source": "test-tokens-string-017.txt",
+    "input": "SELECT \"FOO\" \"BAR\";",
+    "expected": "E SELECT\ns \"FOO\"\ns \"BAR\"\n; ;"
+  },
+  {
+    "source": "test-tokens-string-018.txt",
+    "input": "SELECT \"FOO\" 'BAR';",
+    "expected": "E SELECT\ns \"FOO\"\ns 'BAR'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-019.txt",
+    "input": "SELECT 'FOO' 'BAR';",
+    "expected": "E SELECT\ns 'FOO'\ns 'BAR'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-020.txt",
+    "input": "SELECT 'FOO' \"BAR\";",
+    "expected": "E SELECT\ns 'FOO'\ns \"BAR\"\n; ;"
+  },
+  {
+    "source": "test-tokens-string-021.txt",
+    "input": "'FOO' \"BAR\";",
+    "expected": "s 'FOO'\ns \"BAR\"\n; ;"
+  },
+  {
+    "source": "test-tokens-string-022.txt",
+    "input": "$$FOO$$",
+    "expected": "s $FOO$"
+  },
+  {
+    "source": "test-tokens-string-023.txt",
+    "input": "$foo$foo$foo$",
+    "expected": "s $foo$"
+  },
+  {
+    "source": "test-tokens-string-024.txt",
+    "input": "$foo$ 1 $bar$ 2 $foo$ other",
+    "expected": "s $ 1 $bar$ 2 $\nn other"
+  },
+  {
+    "source": "test-tokens-string-025.txt",
+    "input": "$$FOO$",
+    "expected": "s $FOO$"
+  },
+  {
+    "source": "test-tokens-string-026.txt",
+    "input": "$$FOO$$more",
+    "expected": "s $FOO$\nn more"
+  },
+  {
+    "source": "test-tokens-string-027.txt",
+    "input": "$$FOO BAR$$more",
+    "expected": "s $FOO BAR$\nn more"
+  },
+  {
+    "source": "test-tokens-string-028.txt",
+    "input": "$foo$FOO BAR$foo$more",
+    "expected": "s $FOO BAR$\nn more"
+  },
+  {
+    "source": "test-tokens-string-029.txt",
+    "input": "$foo$FOO BAR",
+    "expected": "s $FOO BAR"
+  },
+  {
+    "source": "test-tokens-string-030.txt",
+    "input": "$foo",
+    "expected": "n $\nn foo"
+  },
+  {
+    "source": "test-tokens-string-031.txt",
+    "input": "$foo!",
+    "expected": "n $\nn foo\no !"
+  },
+  {
+    "source": "test-tokens-string-032.txt",
+    "input": "$!foo",
+    "expected": "n $\no !\nn foo"
+  },
+  {
+    "source": "test-tokens-string-033.txt",
+    "input": "U",
+    "expected": "n U"
+  },
+  {
+    "source": "test-tokens-string-034.txt",
+    "input": "U&",
+    "expected": "n U\no &"
+  },
+  {
+    "source": "test-tokens-string-035.txt",
+    "input": "U&'",
+    "expected": "s u"
+  },
+  {
+    "source": "test-tokens-string-036.txt",
+    "input": "U&'foo",
+    "expected": "s ufoo"
+  },
+  {
+    "source": "test-tokens-string-037.txt",
+    "input": "U&'foo'",
+    "expected": "s ufoou"
+  },
+  {
+    "source": "test-tokens-string-038.txt",
+    "input": "U&'foo'bar",
+    "expected": "s ufoou\nn bar"
+  },
+  {
+    "source": "test-tokens-string-039.txt",
+    "input": "U&\"",
+    "expected": "n U\no &\ns \""
+  },
+  {
+    "source": "test-tokens-string-040.txt",
+    "input": "q",
+    "expected": "n q"
+  },
+  {
+    "source": "test-tokens-string-041.txt",
+    "input": "q'",
+    "expected": "n q\ns '"
+  },
+  {
+    "source": "test-tokens-string-042.txt",
+    "input": "q'!",
+    "expected": "s q"
+  },
+  {
+    "source": "test-tokens-string-043.txt",
+    "input": "q'!foo!'",
+    "expected": "s qfooq"
+  },
+  {
+    "source": "test-tokens-string-044.txt",
+    "input": "q'!foo!",
+    "expected": "s qfoo!"
+  },
+  {
+    "source": "test-tokens-string-045.txt",
+    "input": "q'!foo!'more",
+    "expected": "s qfooq\nn more"
+  },
+  {
+    "source": "test-tokens-string-046.txt",
+    "input": "q'!foo!bar!'more",
+    "expected": "s qfoo!barq\nn more"
+  },
+  {
+    "source": "test-tokens-string-047.txt",
+    "input": "q'(foo)'",
+    "expected": "s qfooq"
+  },
+  {
+    "source": "test-tokens-string-048.txt",
+    "input": "q'<foo>'",
+    "expected": "s qfooq"
+  },
+  {
+    "source": "test-tokens-string-049.txt",
+    "input": "q'{foo}'",
+    "expected": "s qfooq"
+  },
+  {
+    "source": "test-tokens-string-050.txt",
+    "input": "q'[foo]'",
+    "expected": "s qfooq"
+  },
+  {
+    "source": "test-tokens-string-051.txt",
+    "input": "n",
+    "expected": "n n"
+  },
+  {
+    "source": "test-tokens-string-052.txt",
+    "input": "nq",
+    "expected": "n nq"
+  },
+  {
+    "source": "test-tokens-string-053.txt",
+    "input": "nq'! foo !'",
+    "expected": "s q foo q"
+  },
+  {
+    "source": "test-tokens-string-054.txt",
+    "input": "nq'! foo !'more",
+    "expected": "s q foo q\nn more"
+  },
+  {
+    "source": "test-tokens-string-055.txt",
+    "input": "NQ'! foo !'more",
+    "expected": "s q foo q\nn more"
+  },
+  {
+    "source": "test-tokens-string-056.txt",
+    "input": "Nq'! foo !'more",
+    "expected": "s q foo q\nn more"
+  },
+  {
+    "source": "test-tokens-string-057.txt",
+    "input": "nQ'! foo !'more",
+    "expected": "s q foo q\nn more"
+  },
+  {
+    "source": "test-tokens-string-058.txt",
+    "input": "Q'! foo !'more",
+    "expected": "s q foo q\nn more"
+  },
+  {
+    "source": "test-tokens-string-059.txt",
+    "input": "select '1\\\\''2';",
+    "expected": "E select\ns '1\\\\''2'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-060.txt",
+    "input": "select 1,'\\\\\\'',2;",
+    "expected": "E select\n1 1\n, ,\ns '\\\\\\''\n, ,\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-string-061.txt",
+    "input": "select N'123';",
+    "expected": "E select\ns '123'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-062.txt",
+    "input": "select n'123';",
+    "expected": "E select\ns '123'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-063.txt",
+    "input": "select n'';",
+    "expected": "E select\ns ''\n; ;"
+  },
+  {
+    "source": "test-tokens-string-064.txt",
+    "input": "select n N;",
+    "expected": "E select\nn n\nn N\n; ;"
+  },
+  {
+    "source": "test-tokens-string-065.txt",
+    "input": "select n'",
+    "expected": "E select\nn n\ns '"
+  },
+  {
+    "source": "test-tokens-string-066.txt",
+    "input": "select E'123';",
+    "expected": "E select\ns '123'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-067.txt",
+    "input": "select e'123';",
+    "expected": "E select\ns '123'\n; ;"
+  },
+  {
+    "source": "test-tokens-string-068.txt",
+    "input": "select e'';",
+    "expected": "E select\ns ''\n; ;"
+  },
+  {
+    "source": "test-tokens-string-069.txt",
+    "input": "select e E;",
+    "expected": "E select\nn e\nn E\n; ;"
+  },
+  {
+    "source": "test-tokens-string-070.txt",
+    "input": "select e'",
+    "expected": "E select\nn e\ns '"
+  },
+  {
+    "source": "test-tokens-string-071.txt",
+    "input": ";$s$s$$",
+    "expected": "; ;\ns $s$$"
+  },
+  {
+    "source": "test-tokens-variables-001.txt",
+    "input": "SELECT @;",
+    "expected": "E SELECT\nv @\n; ;"
+  },
+  {
+    "source": "test-tokens-variables-002.txt",
+    "input": "SELECT @@;",
+    "expected": "E SELECT\nv @@\n; ;"
+  },
+  {
+    "source": "test-tokens-variables-003.txt",
+    "input": "SELECT @VERSION;",
+    "expected": "E SELECT\nv @VERSION\n; ;"
+  },
+  {
+    "source": "test-tokens-variables-004.txt",
+    "input": "SELECT @@VERSION;",
+    "expected": "E SELECT\nv @@VERSION\n; ;"
+  },
+  {
+    "source": "test-tokens-variables-005.txt",
+    "input": "SELECT @",
+    "expected": "E SELECT\nv @"
+  },
+  {
+    "source": "test-tokens-variables-006.txt",
+    "input": "SELECT @'foo'",
+    "expected": "E SELECT\nv @'foo'"
+  },
+  {
+    "source": "test-tokens-variables-007.txt",
+    "input": "SELECT @\"foo\"",
+    "expected": "E SELECT\nv @\"foo\""
+  },
+  {
+    "source": "test-tokens-variables-008.txt",
+    "input": "SELECT @a\"foo\"",
+    "expected": "E SELECT\nv @a\ns \"foo\""
+  },
+  {
+    "source": "test-tokens-variables-009.txt",
+    "input": "SELECT @a'foo'",
+    "expected": "E SELECT\nv @a\ns 'foo'"
+  },
+  {
+    "source": "test-tokens-variables-010.txt",
+    "input": "SELECT @a`foo`",
+    "expected": "E SELECT\nv @a\nn foo"
+  },
+  {
+    "source": "test-tokens-variables-011.txt",
+    "input": "SELECT @a`from 1`",
+    "expected": "E SELECT\nv @a\nn from 1"
+  },
+  {
+    "source": "test-tokens-variables-012.txt",
+    "input": "SELECT @a`",
+    "expected": "E SELECT\nv @a\nn"
+  },
+  {
+    "source": "test-tokens-variables-013.txt",
+    "input": "SELECT @a``",
+    "expected": "E SELECT\nv @a\nn"
+  },
+  {
+    "source": "test-tokens-variables-014.txt",
+    "input": "SELECT @a'",
+    "expected": "E SELECT\nv @a\ns '"
+  },
+  {
+    "source": "test-tokens-variables-015.txt",
+    "input": "SELECT @a''",
+    "expected": "E SELECT\nv @a\ns ''"
+  },
+  {
+    "source": "test-tokens-words-002.txt",
+    "input": "SELECT Z;",
+    "expected": "E SELECT\nn Z\n; ;"
+  },
+  {
+    "source": "test-tokens-words-003.txt",
+    "input": "SELECT 1 IN BOOLEAN MODE;",
+    "expected": "E SELECT\n1 1\nk IN\nt BOOLEAN\nn MODE\n; ;"
+  },
+  {
+    "source": "test-tokens-words-004.txt",
+    "input": "SELECT 1 CROSS JOIN 2;",
+    "expected": "E SELECT\n1 1\nn CROSS\nk JOIN\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-words-005.txt",
+    "input": "SELECT 1 CROSS FIT 2;",
+    "expected": "E SELECT\n1 1\nn CROSS\nn FIT\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-words-006.txt",
+    "input": "SELECT 1 CROSS FIT 2;",
+    "expected": "E SELECT\n1 1\nn CROSS\nn FIT\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-words-007.txt",
+    "input": "FOO AND BAR",
+    "expected": "n FOO\n& AND\nn BAR"
+  },
+  {
+    "source": "test-tokens-words-008.txt",
+    "input": "FOO + BAR",
+    "expected": "n FOO\no +\nn BAR"
+  },
+  {
+    "source": "test-tokens-words-009.txt",
+    "input": "[]",
+    "expected": "n []"
+  },
+  {
+    "source": "test-tokens-words-010.txt",
+    "input": "SELECT 1 IS NOT 2;",
+    "expected": "E SELECT\n1 1\no IS\no NOT\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-words-011.txt",
+    "input": "SELECT 1 NOT LIKE 2;",
+    "expected": "E SELECT\n1 1\no NOT\no LIKE\n1 2\n; ;"
+  },
+  {
+    "source": "test-tokens-words-012.txt",
+    "input": "SELECT-1.",
+    "expected": "E SELECT\no -\n1 1."
+  },
+  {
+    "source": "test-tokens-words-013.txt",
+    "input": "SELECT+1.",
+    "expected": "E SELECT\no +\n1 1."
+  },
+  {
+    "source": "test-tokens-words-014.txt",
+    "input": "SELECT.1",
+    "expected": "E SELECT\n1 .1"
+  },
+  {
+    "source": "test-tokens-words-015.txt",
+    "input": "SELECT1",
+    "expected": "n SELECT1"
+  },
+  {
+    "source": "test-tokens-words-016.txt",
+    "input": "SELECT UTL_INADDR.GET_HOST_ADDRESS(1)",
+    "expected": "E SELECT\nf UTL_INADDR.GET_HOST_ADDRESS\n( (\n1 1\n) )"
+  },
+  {
+    "source": "test-tokens-words-017.txt",
+    "input": "SELECT.1",
+    "expected": "E SELECT\n1 .1"
+  },
+  {
+    "source": "test-tokens-words-018.txt",
+    "input": "FOO.1",
+    "expected": "n FOO.1"
+  },
+  {
+    "source": "test-tokens-words-019.txt",
+    "input": "FOO``BAR",
+    "expected": "n FOO``BAR"
+  },
+  {
+    "source": "test-tokens-words-020.txt",
+    "input": "CURRENT_USER``BAR",
+    "expected": "v CURRENT_USER\nn \nn BAR"
+  },
+  {
+    "source": "test-tokens-words-021.txt",
+    "input": "1 AND`BAR`",
+    "expected": "1 1\n& AND\nn BAR"
+  },
+  {
+    "source": "test-tokens-words-023.txt",
+    "input": "SELECT [foo] FROM[bar]",
+    "expected": "E SELECT\nn [foo]\nk FROM\nn [bar]"
+  },
+  {
+    "source": "test-tokens-words-024.txt",
+    "input": "SELECT [foo] FROM [bar",
+    "expected": "E SELECT\nn [foo]\nk FROM\nn [bar"
+  },
+  {
+    "source": "test-xss-001.txt",
+    "input": "<script>alert(1);</script>",
+    "expected": "1"
+  },
+  {
+    "source": "test-xss-002.txt",
+    "input": "<a href=\"javascript:alert(1)\">",
+    "expected": "1"
+  },
+  {
+    "source": "test-xss-003.txt",
+    "input": "<img onerror=alert(1)>",
+    "expected": "1"
+  },
+  {
+    "source": "test-xss-004.txt",
+    "input": "<a href=\"https://example.com\">link</a>",
+    "expected": "0"
+  },
+  {
+    "source": "test-xss-005.txt",
+    "input": "hello world",
+    "expected": "0"
+  },
+  {
+    "source": "test-xss-006.txt",
+    "input": "<a href=\"data:text/html,<script>alert(1)</script>\">",
+    "expected": "1"
+  },
+  {
+    "source": "test-xss-007.txt",
+    "input": "<!DOCTYPE html>",
+    "expected": "1"
+  }
+]

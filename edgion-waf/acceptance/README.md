@@ -36,6 +36,13 @@ new cases and updating the reviewed manifest digest and recorded YAML digests.
 Any exclusion needs a case ID,
 rationale, and revisit condition; this version fails on every exclusion.
 
+The `WafDynamic` Gateway scenario also applies an additional `to_injection`
+generation after its frozen v1 phases. It checks transformed SQLi/XSS blocking
+and a clean request, then restores the prior generation. This extension does
+not alter the nine frozen v1 cases or their configuration digests. The strict
+`WafConfig` compile test for the new generation is
+`cargo test -p edgion-resources --test waf_injection_config`.
+
 The FTW executable-subset inventory remains a separate exploratory tool. It
 does not define the production acceptance denominator. When a larger selected
 CRS profile can strictly compile with the product's supported rule semantics,

@@ -575,7 +575,6 @@ const fn capability_index(capability: UnavailableCapability) -> usize {
         UnavailableCapability::FullResponseBody => 0,
         UnavailableCapability::Ctl => 1,
         UnavailableCapability::InitCol => 2,
-        UnavailableCapability::LibInjection => 3,
     }
 }
 
@@ -599,7 +598,7 @@ pub struct CompatibilityReport {
     directive_count: usize,
     rule_count: usize,
     requirement_count: usize,
-    unavailable_counts: [usize; 4],
+    unavailable_counts: [usize; 3],
     rule_unit_count: usize,
     unavailable_rule_unit_count: usize,
     unattributed_findings: usize,
@@ -655,7 +654,7 @@ impl CompatibilityReport {
         findings
             .try_reserve_exact(limits.max_findings.min(draft.unavailable_capabilities().len()))
             .map_err(|_| CompatibilityError::Allocation)?;
-        let mut unavailable_counts = [0_usize; 4];
+        let mut unavailable_counts = [0_usize; 3];
         let mut omitted_findings = 0_usize;
         let mut unavailable_rule_capabilities = Vec::new();
         unavailable_rule_capabilities
@@ -754,10 +753,7 @@ impl CompatibilityReport {
     }
 
     pub const fn is_supported(&self) -> bool {
-        self.unavailable_counts[0] == 0
-            && self.unavailable_counts[1] == 0
-            && self.unavailable_counts[2] == 0
-            && self.unavailable_counts[3] == 0
+        self.unavailable_counts[0] == 0 && self.unavailable_counts[1] == 0 && self.unavailable_counts[2] == 0
     }
 
     pub const fn rule_unit_count(&self) -> usize {
@@ -1388,7 +1384,7 @@ mod tests {
                 .rule_units()
                 .map(|unit| unit.id())
                 .collect::<Vec<_>>(),
-            [1]
+            [1, 3]
         );
         assert_eq!(
             (
@@ -1396,7 +1392,7 @@ mod tests {
                 bundle.compatibility().unavailable_rule_unit_count(),
                 bundle.compatibility().locally_executable_rule_unit_count(),
             ),
-            (5, 4, 1)
+            (5, 3, 2)
         );
         assert_eq!(
             bundle
@@ -1404,7 +1400,7 @@ mod tests {
                 .rule_summaries()
                 .map(CompatibilityRuleSummary::rule_id)
                 .collect::<Vec<_>>(),
-            [2, 3, 4, 5]
+            [2, 4, 5]
         );
     }
 
@@ -1502,11 +1498,10 @@ mod tests {
                 report.unavailable_count(UnavailableCapability::FullResponseBody),
                 report.unavailable_count(UnavailableCapability::Ctl),
                 report.unavailable_count(UnavailableCapability::InitCol),
-                report.unavailable_count(UnavailableCapability::LibInjection),
             ],
-            [59, 18, 2, 4]
+            [59, 18, 2]
         );
-        assert_eq!(report.findings().len(), 83);
+        assert_eq!(report.findings().len(), 79);
         assert_eq!(report.omitted_findings(), 0);
         assert_eq!(
             (
@@ -1515,13 +1510,12 @@ mod tests {
                 report.locally_executable_rule_unit_count(),
                 report.unattributed_findings(),
             ),
-            (627, 72, 555, 0)
+            (627, 68, 559, 0)
         );
         let unavailable_rule_counts = [
             UnavailableCapability::FullResponseBody,
             UnavailableCapability::Ctl,
             UnavailableCapability::InitCol,
-            UnavailableCapability::LibInjection,
         ]
         .map(|capability| {
             report
@@ -1531,15 +1525,14 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>()
                 .len()
         });
-        assert_eq!(unavailable_rule_counts, [59, 8, 1, 4]);
-        assert_eq!(report.rule_summaries().len(), 72);
+        assert_eq!(unavailable_rule_counts, [59, 8, 1]);
+        assert_eq!(report.rule_summaries().len(), 68);
         assert_eq!(report.omitted_rule_summaries(), 0);
         for summary in report.rule_summaries() {
             assert!([
                 UnavailableCapability::FullResponseBody,
                 UnavailableCapability::Ctl,
                 UnavailableCapability::InitCol,
-                UnavailableCapability::LibInjection,
             ]
             .into_iter()
             .any(|capability| summary.has_capability(capability)));
@@ -1557,7 +1550,7 @@ mod tests {
             FrontendLimits::default(),
         )
         .unwrap();
-        assert_eq!(profile.generation().rule_unit_count(), 555);
+        assert_eq!(profile.generation().rule_unit_count(), 559);
         assert_eq!(profile.compatibility(), &report);
     }
 }

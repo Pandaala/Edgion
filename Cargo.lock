@@ -1989,6 +1989,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha1",
+ "smallvec",
  "thiserror 2.0.20",
 ]
 

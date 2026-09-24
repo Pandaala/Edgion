@@ -1,0 +1,429 @@
+[
+  {
+    "input": "foo 'bar' \"zap\"",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-001.txt"
+  },
+  {
+    "input": "foo 'bar'",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-002.txt"
+  },
+  {
+    "input": "foo 'bar'",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-003.txt"
+  },
+  {
+    "input": "1 = 1 OR 1",
+    "sqli": true,
+    "fingerprint": "1&1",
+    "xss": false,
+    "source": "test-sqli-004.txt"
+  },
+  {
+    "input": "1 = '1' OR 1",
+    "sqli": true,
+    "fingerprint": "1os&1",
+    "xss": false,
+    "source": "test-sqli-005.txt"
+  },
+  {
+    "input": "1 = \"1\" OR 1",
+    "sqli": true,
+    "fingerprint": "1os&1",
+    "xss": false,
+    "source": "test-sqli-006.txt"
+  },
+  {
+    "input": "1 /* /* */ */ 2",
+    "sqli": true,
+    "fingerprint": "X",
+    "xss": false,
+    "source": "test-sqli-007.txt"
+  },
+  {
+    "input": "1 = \"1\" /* 'blah' */  OR 1",
+    "sqli": true,
+    "fingerprint": "1os&1",
+    "xss": false,
+    "source": "test-sqli-008.txt"
+  },
+  {
+    "input": "1 = '1' /* \"blah\" */  OR 1",
+    "sqli": true,
+    "fingerprint": "1os&1",
+    "xss": false,
+    "source": "test-sqli-009.txt"
+  },
+  {
+    "input": "1# blah blah",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-010.txt"
+  },
+  {
+    "input": "foo--",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-011.txt"
+  },
+  {
+    "input": "foo/* yes this is sqli */",
+    "sqli": true,
+    "fingerprint": "nc",
+    "xss": false,
+    "source": "test-sqli-012.txt"
+  },
+  {
+    "input": "1/* yes this is sqli */",
+    "sqli": true,
+    "fingerprint": "1c",
+    "xss": false,
+    "source": "test-sqli-013.txt"
+  },
+  {
+    "input": "1--",
+    "sqli": true,
+    "fingerprint": "1c",
+    "xss": false,
+    "source": "test-sqli-014.txt"
+  },
+  {
+    "input": "\"foo\" OR \"BAR\"",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-015.txt"
+  },
+  {
+    "input": "foo\" OR \"BAR\"",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-016.txt"
+  },
+  {
+    "input": "\"foo\" OR \"BAR",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-017.txt"
+  },
+  {
+    "input": "foo' OR \"BAR",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-018.txt"
+  },
+  {
+    "input": "foo' OR 'BAR",
+    "sqli": true,
+    "fingerprint": "s&s",
+    "xss": false,
+    "source": "test-sqli-019.txt"
+  },
+  {
+    "input": "foo' + 1",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-020.txt"
+  },
+  {
+    "input": "'foo' + 1",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-021.txt"
+  },
+  {
+    "input": "1\" UNION ALL SELECT * FROM FOO",
+    "sqli": true,
+    "fingerprint": "sUEok",
+    "xss": false,
+    "source": "test-sqli-022.txt"
+  },
+  {
+    "input": "1\" INCH",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-023.txt"
+  },
+  {
+    "input": "1' INCH",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-024.txt"
+  },
+  {
+    "input": "--1 UNION ALL SELECT * FROM FOO",
+    "sqli": true,
+    "fingerprint": "1UEok",
+    "xss": false,
+    "source": "test-sqli-025.txt"
+  },
+  {
+    "input": "1' == --1 OR 1",
+    "sqli": true,
+    "fingerprint": "so1&1",
+    "xss": false,
+    "source": "test-sqli-026.txt"
+  },
+  {
+    "input": "1\" UNION ALL SELECT --1 FROM FOO",
+    "sqli": true,
+    "fingerprint": "sUE1k",
+    "xss": false,
+    "source": "test-sqli-027.txt"
+  },
+  {
+    "input": "foo'--'bar'",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-028.txt"
+  },
+  {
+    "input": "--blah",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-029.txt"
+  },
+  {
+    "input": "1--sp_password",
+    "sqli": true,
+    "fingerprint": "1c",
+    "xss": false,
+    "source": "test-sqli-030.txt"
+  },
+  {
+    "input": "x'--sp_password",
+    "sqli": true,
+    "fingerprint": "sc",
+    "xss": false,
+    "source": "test-sqli-031.txt"
+  },
+  {
+    "input": "1*1--",
+    "sqli": true,
+    "fingerprint": "1c",
+    "xss": false,
+    "source": "test-sqli-032.txt"
+  },
+  {
+    "input": "1 /*!anything*/",
+    "sqli": true,
+    "fingerprint": "X",
+    "xss": false,
+    "source": "test-sqli-033.txt"
+  },
+  {
+    "input": "1--0000000000111111111122222222223333333333 sp_password",
+    "sqli": true,
+    "fingerprint": "1c",
+    "xss": false,
+    "source": "test-sqli-034.txt"
+  },
+  {
+    "input": "",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-035.txt"
+  },
+  {
+    "input": "foo\" and 1=1 `",
+    "sqli": true,
+    "fingerprint": "s&1c",
+    "xss": false,
+    "source": "test-sqli-036.txt"
+  },
+  {
+    "input": "foo\" and 1=1 `",
+    "sqli": true,
+    "fingerprint": "s&1c",
+    "xss": false,
+    "source": "test-sqli-037.txt"
+  },
+  {
+    "input": "1 and @version",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-038.txt"
+  },
+  {
+    "input": "1 and @version < 1",
+    "sqli": true,
+    "fingerprint": "1&v",
+    "xss": false,
+    "source": "test-sqli-039.txt"
+  },
+  {
+    "input": "1 and \"a\" < \"b\"",
+    "sqli": true,
+    "fingerprint": "1&sos",
+    "xss": false,
+    "source": "test-sqli-040.txt"
+  },
+  {
+    "input": "1 and \"a\"",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-041.txt"
+  },
+  {
+    "input": "1 TOP 'foo'",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-042.txt"
+  },
+  {
+    "input": "1 UNION",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-043.txt"
+  },
+  {
+    "input": "1 ANALYZE 'foo'",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-sqli-044.txt"
+  },
+  {
+    "input": "1 /* junk */ UNION",
+    "sqli": true,
+    "fingerprint": "1U",
+    "xss": false,
+    "source": "test-sqli-045.txt"
+  },
+  {
+    "input": "1),(1)) UNION SELECT 1;",
+    "sqli": true,
+    "fingerprint": "1)UE1",
+    "xss": false,
+    "source": "test-sqli-046.txt"
+  },
+  {
+    "input": "foo - (bar) UNION SELECT 1",
+    "sqli": true,
+    "fingerprint": "nUE1",
+    "xss": false,
+    "source": "test-sqli-047.txt"
+  },
+  {
+    "input": "foo - (1) UNION SELECT 1",
+    "sqli": true,
+    "fingerprint": "nUE1",
+    "xss": false,
+    "source": "test-sqli-048.txt"
+  },
+  {
+    "input": "1, -sin(1)) UNION SELECT 1",
+    "sqli": true,
+    "fingerprint": "1,f(1",
+    "xss": false,
+    "source": "test-sqli-049.txt"
+  },
+  {
+    "input": "{``.``.id} UNION SELECT table_name from information_schemas LIMIT 1",
+    "sqli": true,
+    "fingerprint": "X",
+    "xss": false,
+    "source": "test-sqli-050.txt"
+  },
+  {
+    "input": "1' or 1.e(1)",
+    "sqli": true,
+    "fingerprint": "s&(1)",
+    "xss": false,
+    "source": "test-sqli-1e-001.txt"
+  },
+  {
+    "input": "abc or 2 1.e%2",
+    "sqli": true,
+    "fingerprint": "n&1",
+    "xss": false,
+    "source": "test-sqli-1e-002.txt"
+  },
+  {
+    "input": "1' or 2 1.E/1",
+    "sqli": true,
+    "fingerprint": "s&1",
+    "xss": false,
+    "source": "test-sqli-1e-003.txt"
+  },
+  {
+    "input": "1' or 2 1.e&1",
+    "sqli": true,
+    "fingerprint": "s&1",
+    "xss": false,
+    "source": "test-sqli-1e-004.txt"
+  },
+  {
+    "input": "<script>alert(1);</script>",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": true,
+    "source": "test-xss-001.txt"
+  },
+  {
+    "input": "<a href=\"javascript:alert(1)\">",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": true,
+    "source": "test-xss-002.txt"
+  },
+  {
+    "input": "<img onerror=alert(1)>",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": true,
+    "source": "test-xss-003.txt"
+  },
+  {
+    "input": "<a href=\"https://example.com\">link</a>",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-xss-004.txt"
+  },
+  {
+    "input": "hello world",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": false,
+    "source": "test-xss-005.txt"
+  },
+  {
+    "input": "<a href=\"data:text/html,<script>alert(1)</script>\">",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": true,
+    "source": "test-xss-006.txt"
+  },
+  {
+    "input": "<!DOCTYPE html>",
+    "sqli": false,
+    "fingerprint": "",
+    "xss": true,
+    "source": "test-xss-007.txt"
+  }
+]

@@ -1,0 +1,9 @@
+schema_version,case,input_bytes,iterations,p50_ns,p95_ns,findings
+1,sqli_hit,8,1001,1000,1333,1
+1,sqli_miss,13,1001,1000,1250,0
+1,xss_hit,25,1001,667,750,1
+1,xss_miss,12,1001,584,667,0
+1,sqli_long_miss,65536,1001,192083,208292,0
+1,sqli_dotted_32k,32768,1001,98291,103625,0
+1,sqli_dotted_64k,65536,1001,194292,206458,0
+1,xss_long_miss,65536,1001,165834,178166,0

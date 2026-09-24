@@ -175,7 +175,6 @@ fn capability_name(capability: UnavailableCapability) -> (&'static str, &'static
         ),
         UnavailableCapability::Ctl => ("ctl", "Remove unsupported ctl actions"),
         UnavailableCapability::InitCol => ("initcol", "Remove unsupported persistent collection initialization"),
-        UnavailableCapability::LibInjection => ("libinjection", "Remove unsupported libinjection operators"),
     }
 }
 

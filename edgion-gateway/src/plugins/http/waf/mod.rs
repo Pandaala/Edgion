@@ -115,6 +115,7 @@ impl WafPlugin {
     pub(crate) fn runtime_error_code(error: &RuntimeError) -> WafErrorCode {
         match error {
             RuntimeError::InputByteLimit { .. }
+            | RuntimeError::DetectorInputLimit { .. }
             | RuntimeError::HeaderLimit { .. }
             | RuntimeError::HeaderByteLimit { .. }
             | RuntimeError::ValueByteLimit { .. }

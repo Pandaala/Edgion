@@ -16,6 +16,7 @@ regex-automata = { version = "=0.4.18", default-features = false, features = [
 regex-syntax = { version = "=0.8.11", default-features = false, features = ["std", "unicode"] }
 serde_json.workspace = true
 sha1.workspace = true
+smallvec.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
@@ -25,6 +26,10 @@ serde_yaml.workspace = true
 
 [[bench]]
 name = "matcher_regression"
+harness = false
+
+[[bench]]
+name = "injection_regression"
 harness = false
 
 [lints]

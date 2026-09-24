@@ -58,6 +58,29 @@ edgion-cli waf inspect --file application-waf.yaml --format json
 EdgionCenter 等工具可以复用它，无需另写 SecLang 解析器；调用方仍需自行限制输入字节数
 并控制报告访问权限。
 
+## SQL 注入和 XSS 操作符
+
+`@detectSQLi` 和 `@detectXSS` 是无参数 SecLang 操作符。Edgion 用原生 Rust 实现
+libinjection-go v0.3.2 的检测行为，对规则选中的每个值先执行已配置的变换，再进行检测。
+
+```yaml
+requestBody:
+  inspection: full
+rules: |
+  SecRule ARGS_GET "@detectSQLi" "id:1101,phase:1,deny,status:403,t:urlDecodeUni,capture"
+  SecRule ARGS_GET "@detectXSS" "id:1102,phase:1,deny,status:403,t:urlDecodeUni"
+```
+
+SQL 注入规则设置 `capture` 且正向命中时，指纹写入 `TX.0`，供本规则动作和后续规则使用。
+XSS 检测不会新增捕获，也不会覆盖已有的 `TX.0`。取反匹配不捕获；链式规则失败时，
+命中结果和捕获均不提交。目标选择、变换和链式行为沿用 WAF 事务的既有语义。
+
+检测器会读取所选值的完整内容；若规则使用 `REQUEST_BODY` 或从正文解析出的参数，
+应设置 `requestBody.inspection: full`。使用 `capture` 时，包括仅检查请求头的规则，
+前缀模式也要求切换为 `full`。每个值的检测输入上限为 4 MiB，多个 SQL
+解析上下文或 HTML 上下文的工作量计入请求的有界执行预算。超限按 WAF 既有运行时错误
+策略失败关闭。此实现不使用 Hyperscan。
+
 ## 请求体检查
 
 Phase 1 在读取正文前检查请求头等信息。默认的 `prefix` 模式在选择或连接后端前，

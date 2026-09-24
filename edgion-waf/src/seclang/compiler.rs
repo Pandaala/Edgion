@@ -566,6 +566,10 @@ enum CompiledOperatorOperand {
     ValidateUrlEncoding,
     ValidateUtf8Encoding,
     Unconditional,
+    DetectSqli {
+        capture: bool,
+    },
+    DetectXss,
     Regex(RegexPlanRef),
     Matcher {
         group: usize,
@@ -3841,11 +3845,6 @@ fn compile_operator_plan(
     if matches!(kind, OperatorKind::DetectSqli | OperatorKind::DetectXss) && !active {
         return Ok(None);
     }
-    if matches!(kind, OperatorKind::DetectSqli | OperatorKind::DetectXss) {
-        return Err(CompilerError::PrivateInvariant {
-            kind: CompilerInvariant::UnexpectedActionOperand,
-        });
-    }
     let operand = match (kind, operator.operand()) {
         (
             OperatorKind::BeginsWith
@@ -3916,6 +3915,10 @@ fn compile_operator_plan(
         (OperatorKind::UnconditionalMatch, super::OperatorOperandView::NoArgument) => {
             CompiledOperatorOperand::Unconditional
         }
+        (OperatorKind::DetectSqli, super::OperatorOperandView::NoArgument) => CompiledOperatorOperand::DetectSqli {
+            capture: member.rule().fold().capture_action().is_some(),
+        },
+        (OperatorKind::DetectXss, super::OperatorOperandView::NoArgument) => CompiledOperatorOperand::DetectXss,
         (OperatorKind::Rx, super::OperatorOperandView::Regex(regex)) => {
             let location = operator.location();
             let capture = member.rule().fold().capture_action().is_some();

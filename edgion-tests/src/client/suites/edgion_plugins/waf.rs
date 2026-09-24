@@ -16,6 +16,8 @@ async fn send_waf_request(
     body: Option<&str>,
     response_deny: bool,
     trace_id: Option<&str>,
+    sql: Option<&str>,
+    xss: Option<&str>,
 ) -> Result<reqwest::Response, String> {
     let url = format!("http://{}:{}/test/waf-dynamic", ctx.target_host, ctx.http_port);
     let mut last_error = None;
@@ -36,6 +38,12 @@ async fn send_waf_request(
                     crate::access_log_client::traceparent_for_marker(trace_id),
                 )
                 .header("access_log", "test_store");
+        }
+        if let Some(sql) = sql {
+            request = request.header("x-waf-sql", sql);
+        }
+        if let Some(xss) = xss {
+            request = request.header("x-waf-xss", xss);
         }
         if let Some(body) = body {
             request = request.body(body.to_string());
@@ -64,7 +72,7 @@ fn request_case(
     TestCase::new(name, description, move |ctx: TestContext| {
         Box::pin(async move {
             let start = Instant::now();
-            match send_waf_request(&ctx, version, body, false, None).await {
+            match send_waf_request(&ctx, version, body, false, None, None, None).await {
                 Ok(response) if response.status().as_u16() == expected_status => TestResult::passed(start.elapsed()),
                 Ok(response) => TestResult::failed(
                     start.elapsed(),
@@ -77,7 +85,7 @@ fn request_case(
 }
 
 async fn check_response_stage_deny(ctx: &TestContext, trace: &str) -> Result<(), String> {
-    let response = send_waf_request(ctx, "v1", None, true, Some(trace)).await;
+    let response = send_waf_request(ctx, "v1", None, true, Some(trace), None, None).await;
     let mut failures = Vec::new();
     match response {
         Ok(response) => {
@@ -225,6 +233,56 @@ impl TestSuite for WafDynamicConfiguredPrefixTestSuite {
 }
 
 pub struct WafDynamicDetectionTestSuite;
+
+pub struct WafDynamicInjectionTestSuite;
+
+impl TestSuite for WafDynamicInjectionTestSuite {
+    fn name(&self) -> &str {
+        "Native WAF Dynamic - Injection"
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![
+            injection_case("waf_injection_sqli", Some("1%20OR%201%3D1"), None, 403),
+            injection_case(
+                "waf_injection_xss",
+                None,
+                Some("%3Cscript%3Ealert(1)%3C/script%3E"),
+                406,
+            ),
+            injection_case("waf_injection_safe", Some("ordinary"), Some("hello"), 200),
+        ]
+    }
+}
+
+fn injection_case(name: &'static str, sql: Option<&'static str>, xss: Option<&'static str>, status: u16) -> TestCase {
+    TestCase::new(
+        name,
+        "native libinjection verdict after hot reload",
+        move |ctx: TestContext| {
+            Box::pin(async move {
+                let started = Instant::now();
+                match send_waf_request(&ctx, "v3", None, false, None, sql, xss).await {
+                    Ok(response) => {
+                        let actual = response.status().as_u16();
+                        let body = response.text().await.unwrap_or_default();
+                        if actual != status {
+                            return TestResult::failed(started.elapsed(), format!("expected {status}, got {actual}"));
+                        }
+                        if status != 200 && body.contains("Server: 0.0.0.0:30001") {
+                            return TestResult::failed(
+                                started.elapsed(),
+                                "denied request reached the backend".to_string(),
+                            );
+                        }
+                        TestResult::passed(started.elapsed())
+                    }
+                    Err(error) => TestResult::failed(started.elapsed(), error),
+                }
+            })
+        },
+    )
+}
 
 impl TestSuite for WafDynamicDetectionTestSuite {
     fn name(&self) -> &str {

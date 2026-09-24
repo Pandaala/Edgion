@@ -73,6 +73,7 @@ The mandatory graded design index remains [00-design-rules.md](../00-design-rule
 | testing | [testing](testing/SKILL.md) |
 | tls | [tls](tls/SKILL.md) |
 | uri-normalization | [uri-normalization](uri-normalization/SKILL.md) |
+| waf | [waf](waf/SKILL.md) |
 | wasm | [wasm](wasm/SKILL.md) |
 | webhook-key | [webhook-key](webhook-key/SKILL.md) |
 | websocket | [websocket](websocket/SKILL.md) |

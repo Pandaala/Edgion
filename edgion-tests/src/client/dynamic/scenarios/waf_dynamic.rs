@@ -31,6 +31,10 @@ fn detection() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicDetectionTestSuite)
 }
 
+fn injection() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicInjectionTestSuite)
+}
+
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "configured-prefix",
@@ -39,6 +43,10 @@ static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "detection",
         factory: detection,
+    },
+    PhaseSuite {
+        name: "injection",
+        factory: injection,
     },
     PhaseSuite {
         name: "initial",
@@ -76,6 +84,8 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             .await?;
         ctx.apply_dir("updates/to_detection").await?;
         ctx.wait_phase(scenario, "detection", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_injection").await?;
+        ctx.wait_phase(scenario, "injection", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/to_recovered").await?;
         ctx.wait_phase(scenario, "recovered", Duration::from_secs(15)).await?;
         ctx.delete_resources("delete/resources.txt").await?;
