@@ -35,10 +35,10 @@ full transaction semantics.
 
 The Gateway and Controller use the same strict WAF compilation through
 `edgion-resources`. Gateway runtime errors map control limits to the WAF
-failure policy. The `WafDynamic` control reload checks one request's tag
-exemption and a subsequent request's denial. Direct transaction tests cover
-the processor override, raw body exposure, tag removal, target exclusion,
-chain staging, XML attributes, phase legality, limits, and concurrent requests.
+failure policy. The `WafDynamic` control reload checks tag and response-target
+exclusions, processor and raw-body controls, successful and failed chains,
+captures, macro expansion, and request isolation. Direct transaction tests
+also cover XML attributes, phase legality, limits, and concurrent requests.
 
 ## Verification and re-evaluation
 

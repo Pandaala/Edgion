@@ -245,30 +245,136 @@ impl TestSuite for WafDynamicControlTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            control_case("waf_control_exempt", "exempt", 200),
-            control_case("waf_control_deny", "ordinary", 403),
+            control_case(
+                "waf_control_exempt",
+                "tag removal affects the matching request",
+                "exempt",
+                None,
+                Some("blocked"),
+                200,
+            ),
+            control_case(
+                "waf_control_deny",
+                "tagged rule still denies the next request",
+                "ordinary",
+                None,
+                Some("blocked"),
+                403,
+            ),
+            control_case(
+                "waf_control_processor",
+                "phase-1 processor override feeds JSON arguments",
+                "processor",
+                Some("{\"name\":\"blocked\"}"),
+                None,
+                407,
+            ),
+            control_case(
+                "waf_control_processor_raw_hidden",
+                "JSON processor does not expose raw body by default",
+                "processor",
+                Some("{\"name\":\"clean\",\"note\":\"raw-only\"}"),
+                None,
+                200,
+            ),
+            control_case(
+                "waf_control_force_on",
+                "force On exposes the raw JSON body",
+                "force-on",
+                Some("{\"name\":\"clean\",\"note\":\"raw-only\"}"),
+                None,
+                408,
+            ),
+            control_case(
+                "waf_control_raw_default",
+                "raw body rule denies without force Off",
+                "ordinary",
+                Some("blocked"),
+                None,
+                406,
+            ),
+            control_case(
+                "waf_control_force_off",
+                "force Off hides raw body but still forwards it",
+                "force-off",
+                Some("blocked"),
+                None,
+                200,
+            ),
+            control_case(
+                "waf_control_response_deny",
+                "response-stage chain denies on upstream 200",
+                "response",
+                None,
+                None,
+                409,
+            ),
+            control_case(
+                "waf_control_response_exempt",
+                "response target exclusion leaves other requests unchanged",
+                "response",
+                None,
+                Some("response-exempt"),
+                200,
+            ),
+            control_case(
+                "waf_control_successful_chain",
+                "capture and setvar macros allow chain ctl to commit",
+                "chain-allow",
+                None,
+                Some("allow"),
+                200,
+            ),
+            control_case(
+                "waf_control_failed_chain",
+                "failed capture chain does not commit ctl",
+                "chain-deny",
+                None,
+                Some("allow"),
+                403,
+            ),
         ]
     }
 }
 
-fn control_case(name: &'static str, version: &'static str, status: u16) -> TestCase {
-    TestCase::new(
-        name,
-        "request-scoped tag exclusion after hot reload",
-        move |ctx: TestContext| {
-            Box::pin(async move {
-                let started = Instant::now();
-                match send_waf_request(&ctx, version, None, false, None, Some("blocked"), None).await {
-                    Ok(response) if response.status().as_u16() == status => TestResult::passed(started.elapsed()),
-                    Ok(response) => TestResult::failed(
-                        started.elapsed(),
-                        format!("expected status {status}, got {}", response.status()),
-                    ),
-                    Err(error) => TestResult::failed(started.elapsed(), error),
+fn control_case(
+    name: &'static str,
+    description: &'static str,
+    version: &'static str,
+    body: Option<&'static str>,
+    sql: Option<&'static str>,
+    status: u16,
+) -> TestCase {
+    TestCase::new(name, description, move |ctx: TestContext| {
+        Box::pin(async move {
+            let started = Instant::now();
+            match send_waf_request(&ctx, version, body, false, None, sql, None).await {
+                Ok(response) if response.status().as_u16() == status => {
+                    if body.is_some() && status == 200 {
+                        match response.text().await {
+                            Ok(text) if text.contains("Method: POST") && text.contains("Path: /test/waf-dynamic") => {
+                                TestResult::passed(started.elapsed())
+                            }
+                            Ok(text) => TestResult::failed(
+                                started.elapsed(),
+                                format!("allowed body did not reach the backend: {text}"),
+                            ),
+                            Err(error) => {
+                                TestResult::failed(started.elapsed(), format!("backend response failed: {error}"))
+                            }
+                        }
+                    } else {
+                        TestResult::passed(started.elapsed())
+                    }
                 }
-            })
-        },
-    )
+                Ok(response) => TestResult::failed(
+                    started.elapsed(),
+                    format!("expected status {status}, got {}", response.status()),
+                ),
+                Err(error) => TestResult::failed(started.elapsed(), error),
+            }
+        })
+    })
 }
 
 impl TestSuite for WafDynamicInjectionTestSuite {

@@ -25,6 +25,10 @@ A configured-prefix reload sets `prefixSize: 1m` and repeats the H1/H2 matrix
 at the 1 MiB boundary, verifying that the new window takes effect before the
 subsequent detection-only reload.
 
-The request-control reload installs a phase-1 `ctl:ruleRemoveByTag` exemption.
-An exempt request passes, while the same blocking header on another request is
-denied. The generation then reloads to the recovery rules.
+The request-control reload covers all four selected request-scoped `ctl`
+actions. It checks that a tag exemption applies only to the matching request,
+including successful and failed chains with staged captures and macro-based
+setvars. A JSON processor override parses a `text/plain` body; the raw-body
+switch is tested in both directions against the same phase-2 rules. A target
+exclusion suppresses only the response-status child of a tagged phase-3 chain.
+The generation then reloads to the recovery rules.

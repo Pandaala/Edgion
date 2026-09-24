@@ -10,4 +10,16 @@ spec:
       inspection: full
     rules: |
       SecRule REQUEST_HEADERS:X-Waf-Version "@streq exempt" "id:3601,phase:1,pass,ctl:ruleRemoveByTag=control-block"
-      SecRule REQUEST_HEADERS:X-Waf-Sql "@streq blocked" "id:3602,phase:1,deny,status:403,tag:control-block"
+      SecRule REQUEST_HEADERS:X-Waf-Version "@streq processor" "id:3603,phase:1,pass,ctl:requestBodyProcessor=JSON"
+      SecRule REQUEST_HEADERS:X-Waf-Version "@streq force-on" "id:3604,phase:1,pass,ctl:requestBodyProcessor=JSON,ctl:forceRequestBodyVariable=On"
+      SecRule REQUEST_HEADERS:X-Waf-Version "@streq force-off" "id:3605,phase:1,pass,ctl:forceRequestBodyVariable=Off"
+      SecRule REQUEST_HEADERS:X-Waf-Sql "@streq response-exempt" "id:3606,phase:1,pass,ctl:ruleRemoveTargetByTag=response-check;RESPONSE_STATUS"
+      SecRule REQUEST_HEADERS:X-Waf-Version "@rx ^chain-(allow|deny)$" "id:3607,phase:1,pass,capture,chain,setvar:'tx.chain=%{TX.1}',ctl:ruleRemoveByTag=control-block"
+      SecRule TX:chain "@streq %{TX.1}" "chain"
+      SecRule REQUEST_HEADERS:X-Waf-Sql "@streq %{TX.chain}" "t:none"
+      SecRule REQUEST_HEADERS:X-Waf-Sql "@pm blocked allow" "id:3602,phase:1,deny,status:403,tag:control-block"
+      SecRule ARGS:json.name "@streq blocked" "id:3608,phase:2,deny,status:407"
+      SecRule REQUEST_BODY "@contains raw-only" "id:3609,phase:2,deny,status:408"
+      SecRule REQUEST_BODY "@streq blocked" "id:3610,phase:2,deny,status:406"
+      SecRule REQUEST_HEADERS:X-Waf-Version "@streq response" "id:3611,phase:3,deny,status:409,chain,tag:response-check"
+      SecRule RESPONSE_STATUS "@streq 200" "t:none"

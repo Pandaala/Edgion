@@ -38,17 +38,19 @@ rationale, and revisit condition; this version fails on every exclusion.
 
 The `WafDynamic` Gateway scenario also applies `to_injection` and `to_control`
 generations after its frozen v1 phases. The first checks transformed SQLi/XSS
-blocking and a clean request. The second checks that a conditional
-`ctl:ruleRemoveByTag` exclusion affects only the matching request. The scenario
-then restores the prior generation. These extensions do not alter the nine
+blocking and a clean request. The second checks all four selected request
+controls: conditional tag and response target exclusions, JSON processor
+selection, raw-body visibility, and successful/failed chains with capture and
+macro expansion. The scenario then restores the prior generation. These
+extensions do not alter the nine
 frozen v1 cases or their configuration digests. The strict
 `WafConfig` compile test for the injection generation is
 `cargo test -p edgion-resources --test waf_injection_config`.
 
 The supported request control subset is `forceRequestBodyVariable`,
 `requestBodyProcessor`, `ruleRemoveByTag`, and `ruleRemoveTargetByTag`. Direct
-WAF transaction tests cover all four; the Gateway scenario covers publication,
-hot reload, and isolation for `ruleRemoveByTag`. This is not full `ctl` or CRS
+WAF transaction tests and the Gateway scenario cover all four, including
+publication, hot reload, and request isolation. This is not full `ctl` or CRS
 compatibility. The frozen `production-v1.json` corpus remains the nine-case
 baseline; the two post-baseline reloads are checked by the integration gate.
 

@@ -692,6 +692,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/dns/hits/{host}", get(dns_hits_handler))
         // GET /dns/reset: clear all HTTP DNS resolve counters (between test cases).
         .route("/dns/reset", get(dns_reset_handler))
+        .route("/test/waf-dynamic", get(catch_all_handler).post(catch_all_handler))
         .route("/{*path}", get(catch_all_handler))
         .layer(Extension(server_addr_str))
 }
