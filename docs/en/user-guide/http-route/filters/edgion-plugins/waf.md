@@ -50,6 +50,40 @@ metrics, or Rust `Debug`. Gateway admin configuration output replaces it with
 `[redacted]`; controller-to-gateway configuration sync still carries the real
 source.
 
+## Inspect rule support before applying
+
+Run the local CLI on one `EdgionPlugins` YAML document:
+
+```sh
+edgion-cli waf inspect --file application-waf.yaml --format json
+```
+
+The command needs no Controller connection or token. It reads at most 16 MiB and
+returns a versioned report. `analysisComplete` means the SecLang source reached
+the compatibility analysis stage; it does **not** mean the rules can be
+published. Only `strictValidationPassed: true` means the exact WAF configuration
+passed the same strict compiler and request-body inspection checks used by the
+Controller and Gateway. The command exits nonzero otherwise.
+
+For example, a rule using complete upstream response-body matching reports a
+`full_response_body` finding with its rule ID and zero-based document and
+directive indexes. `reason` tells the operator to remove that rule. A rule
+without an ID stops analysis with a safe physical line and an instruction to
+add an ID; no ID is invented. `unattributedFindings`
+counts any findings that cannot be assigned to an ID, so `unavailableRuleCount`
+does not claim to include them. Syntax, missing-asset,
+unsupported-semantics, and resource-limit failures have a fixed `category` and
+safe location when one is available. The report never contains source lines,
+regexes, operands, or file identities. `omittedFindings` and
+`omittedRuleSummaries` show whether the 128-entry presentation bounds hid any
+entries. An incomplete analysis reports no compatibility counts; correct the
+reported failure and inspect again.
+
+The public `WafConfig::inspect_support()` result in `edgion-resources` is the
+same value-free report the CLI presents. Other tools, including EdgionCenter,
+can call it without duplicating SecLang parsing; they must enforce their own
+input-byte limit and access control before presenting it.
+
 ## Execution and limits
 
 - Phase 1 inspects the entry request URI, method/protocol, client address, and

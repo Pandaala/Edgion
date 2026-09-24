@@ -27,6 +27,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [WAF support inspection must not imply publication](regression-guards/waf-support-inspection-must-not-imply-publication.md)
 - [Declared CRD objects use Kubernetes structural schema](regression-guards/declared-object-crd-structural-schema.md)
 - [Duration schema admission patterns](regression-guards/duration-schema-admission-patterns.md)
 - [EdgionBackend unknown-field handling is mode-specific](regression-guards/edgion-backend-unknown-fields-are-mode-specific.md)

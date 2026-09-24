@@ -33,6 +33,31 @@ spec:
 
 规则源码不会写入错误响应、日志或指标，网关管理接口将其脱敏。
 
+## 提交前检查规则支持情况
+
+对单个 `EdgionPlugins` YAML 文件运行本地命令：
+
+```sh
+edgion-cli waf inspect --file application-waf.yaml --format json
+```
+
+此命令无需连接 Controller，也无需令牌。输入上限为 16 MiB，输出为带版本号的报告。
+`analysisComplete` 只表示 SecLang 源码完成了兼容性分析，**不表示可以发布**；
+只有 `strictValidationPassed: true` 才表示该 WAF 配置通过与 Controller、Gateway
+相同的严格编译及请求体检查。未通过时命令以非零状态退出。
+
+例如，需要聚合完整上游响应体的规则会产生 `full_response_body` 条目，包含规则 ID、
+从零开始的文档和指令序号，以及移除该规则的建议。缺少 ID 的规则会使分析停止，
+报告安全的物理行号并提示添加 ID，不会捏造编号。`unattributedFindings` 统计无法归属规则 ID 的条目，因此
+`unavailableRuleCount` 不宣称包含这些条目。语法、缺失资源、不支持语义和资源限额错误以固定 `category` 表示，
+可定位时还会提供安全的位置。报告不会包含规则原文、正则、操作数或文件身份。
+`omittedFindings` 和 `omittedRuleSummaries` 标出超过 128 项展示上限的条目。
+分析未完成时没有兼容性计数；先修正报告中的失败，再重新检查。
+
+`edgion-resources` 的公开 `WafConfig::inspect_support()` 返回同一份无原始值的报告，
+EdgionCenter 等工具可以复用它，无需另写 SecLang 解析器；调用方仍需自行限制输入字节数
+并控制报告访问权限。
+
 ## 请求体检查
 
 Phase 1 在读取正文前检查请求头等信息。默认的 `prefix` 模式在选择或连接后端前，

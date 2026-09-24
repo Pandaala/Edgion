@@ -165,6 +165,9 @@ pub enum Commands {
 
     /// Inspect or convert Proxy-Wasm artifacts locally (no authentication or network).
     Wasm(commands::wasm::WasmArgs),
+
+    /// Inspect inline WAF rules locally (no authentication or network).
+    Waf(commands::waf::WafArgs),
 }
 
 impl Cli {
@@ -199,6 +202,9 @@ impl Cli {
         // server/token environment cannot cause authentication or network work.
         if let Commands::Wasm(args) = &self.command {
             return commands::wasm::execute(args);
+        }
+        if let Commands::Waf(args) = &self.command {
+            return commands::waf::execute(args);
         }
 
         // Pre-flight compat check: --metadata-only only works with --target center.
@@ -302,7 +308,11 @@ impl Cli {
                 }
                 commands::reload::reload(&client).await
             }
-            Commands::GenCerts(_) | Commands::Login { .. } | Commands::GenToken | Commands::Wasm(_) => {
+            Commands::GenCerts(_)
+            | Commands::Login { .. }
+            | Commands::GenToken
+            | Commands::Wasm(_)
+            | Commands::Waf(_) => {
                 unreachable!() // all handled before dispatch
             }
         }
