@@ -64,19 +64,11 @@ pub fn validate_gateway_api_raw(
     let raw: serde_yaml::Value = serde_yaml::from_str(content).map_err(|_| StatusCode::BAD_REQUEST)?;
     crate::conf_mgr::conf_center::common::validate_gateway_api_source(kind, &raw)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_gateway_rule_count(kind, &value)?;
     if is_k8s_mode {
         return Ok(());
     }
-    let version = if matches!(
-        kind,
-        ResourceKind::ReferenceGrant | ResourceKind::GatewayClass | ResourceKind::Gateway | ResourceKind::HTTPRoute
-    ) && raw.get("apiVersion").and_then(serde_yaml::Value::as_str)
-        == Some("gateway.networking.k8s.io/v1beta1")
-    {
-        "v1beta1"
-    } else {
-        source.version
-    };
+    let version = gateway_source_version(&raw).unwrap_or(source.version);
     validator
         .validate_gateway_source(
             edgion_resources::gateway_api_support::GROUP,
@@ -88,6 +80,22 @@ pub fn validate_gateway_api_raw(
             tracing::warn!(component = "unified_api", kind = ?kind, "Gateway API schema validation failed");
             StatusCode::BAD_REQUEST
         })
+}
+
+pub fn gateway_source_version(raw: &serde_yaml::Value) -> Option<&str> {
+    raw.get("apiVersion")
+        .and_then(serde_yaml::Value::as_str)
+        .and_then(|api_version| api_version.strip_prefix("gateway.networking.k8s.io/"))
+}
+
+pub fn validate_gateway_rule_count(kind: ResourceKind, value: &serde_json::Value) -> Result<(), StatusCode> {
+    if matches!(kind, ResourceKind::TCPRoute | ResourceKind::UDPRoute)
+        && value["spec"]["rules"].as_array().is_some_and(|rules| rules.len() > 1)
+    {
+        Err(StatusCode::BAD_REQUEST)
+    } else {
+        Ok(())
+    }
 }
 
 /// Apply the shared Gateway API request-transform contract to authored rules.
@@ -450,12 +458,12 @@ mod tests {
     }
 
     #[test]
-    fn admin_parser_rejects_non_v1_backend_tls_policy_in_all_modes() {
+    fn admin_parser_accepts_backend_tls_policy_alpha3_in_all_modes() {
         let legacy = backend_tls_policy_body("gateway.networking.k8s.io/v1alpha3");
 
         for update_version in [false, true] {
             let result = parse_resource_and_update_version::<BackendTLSPolicy>(&legacy, update_version);
-            assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+            assert!(result.is_ok());
         }
 
         let canonical = backend_tls_policy_body("gateway.networking.k8s.io/v1");
@@ -479,7 +487,10 @@ mod tests {
             Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
             Some(serde_json::json!("gateway.networking.k8s.io/v1")),
         ] {
-            let valid = version.as_ref().and_then(serde_json::Value::as_str) == Some("gateway.networking.k8s.io/v1");
+            let valid = matches!(
+                version.as_ref().and_then(serde_json::Value::as_str),
+                Some("gateway.networking.k8s.io/v1" | "gateway.networking.k8s.io/v1alpha3")
+            );
             let mut document = canonical.clone();
             match version {
                 Some(value) => document["apiVersion"] = value,

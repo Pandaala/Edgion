@@ -114,3 +114,42 @@ async fn coalesced_recreate_requeues_btp_on_dropped_backend_service() {
         seen
     );
 }
+
+#[tokio::test]
+async fn multi_rule_update_withdraws_old_route_without_dependency_residue() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor =
+        ResourceProcessor::<TCPRoute>::new("TCPRoute", 100, Arc::new(TcpRouteHandler::default()), runtime.clone());
+    let valid = tcp_route_with_backend("svc-a");
+    let mut invalid = valid.clone();
+    invalid.spec.rules.as_mut().unwrap().push(TCPRouteRule {
+        backend_refs: Some(vec![TCPBackendRef {
+            name: "svc-b".to_string(),
+            namespace: None,
+            port: Some(80),
+            weight: None,
+            group: None,
+            kind: None,
+            ref_denied: None,
+        }]),
+    });
+
+    processor.on_init_apply(invalid.clone(), None).await;
+    assert!(processor.get("default/r1").is_none());
+    assert!(runtime.service_ref_mgr.get_refs("default/svc-a").is_empty());
+    assert!(runtime.service_ref_mgr.get_refs("default/svc-b").is_empty());
+
+    processor.on_init_apply(valid.clone(), None).await;
+    assert!(processor.get("default/r1").is_some());
+    assert!(!runtime.service_ref_mgr.get_refs("default/svc-a").is_empty());
+
+    processor.on_init_apply(invalid.clone(), None).await;
+    processor.on_init_apply(invalid, None).await;
+    assert!(processor.get("default/r1").is_none());
+    assert!(runtime.service_ref_mgr.get_refs("default/svc-a").is_empty());
+    assert!(runtime.service_ref_mgr.get_refs("default/svc-b").is_empty());
+
+    processor.on_init_apply(valid, None).await;
+    assert!(processor.get("default/r1").is_some());
+    assert!(!runtime.service_ref_mgr.get_refs("default/svc-a").is_empty());
+}

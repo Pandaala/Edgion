@@ -26,12 +26,15 @@ pub struct SchemaValidator {
 enum GatewaySchemaProfile {
     Standard,
     Experimental,
+    HistoricalGrpc,
 }
 
-fn gateway_profile(kind: &str) -> GatewaySchemaProfile {
-    match kind {
+fn gateway_profile(kind: &str, version: &str) -> GatewaySchemaProfile {
+    match (kind, version) {
+        ("GRPCRoute", "v1alpha2") => GatewaySchemaProfile::HistoricalGrpc,
+        ("BackendTLSPolicy", "v1alpha3") => GatewaySchemaProfile::Experimental,
         // These models represent fields shipped only in the Experimental CRD.
-        "HTTPRoute" | "TLSRoute" | "TCPRoute" | "UDPRoute" => GatewaySchemaProfile::Experimental,
+        ("HTTPRoute" | "TLSRoute" | "TCPRoute" | "UDPRoute", _) => GatewaySchemaProfile::Experimental,
         _ => GatewaySchemaProfile::Standard,
     }
 }
@@ -205,10 +208,22 @@ impl SchemaValidator {
                 GatewaySchemaProfile::Experimental,
                 "gateway-api-experimental-v1.6.2.yaml",
             ),
+            (
+                GatewaySchemaProfile::HistoricalGrpc,
+                "grpcroute-v1alpha2-v1.1.1-experimental.yaml",
+            ),
         ] {
-            let path = dir.join(file);
-            let content = fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read Gateway API CRD bundle: {path:?}"))?;
+            let path = if profile == GatewaySchemaProfile::HistoricalGrpc {
+                Path::new("embedded Gateway API source schema").join(file)
+            } else {
+                dir.join(file)
+            };
+            let content = if profile == GatewaySchemaProfile::HistoricalGrpc {
+                include_str!("../../../config/gateway-api-source-schemas/grpcroute-v1alpha2-v1.1.1-experimental.yaml")
+                    .to_string()
+            } else {
+                fs::read_to_string(&path).with_context(|| format!("Failed to read Gateway API CRD bundle: {path:?}"))?
+            };
             for doc in serde_yaml::Deserializer::from_str(&content) {
                 let crd =
                     JsonValue::deserialize(doc).with_context(|| format!("Invalid Gateway API CRD in {path:?}"))?;
@@ -245,7 +260,7 @@ impl SchemaValidator {
         let Some(group) = spec["group"].as_str() else {
             return Ok(());
         };
-        if group != GROUP || gateway_profile(kind) != profile {
+        if group != GROUP {
             return Ok(());
         }
         let Some(versions) = spec["versions"].as_array() else {
@@ -255,6 +270,9 @@ impl SchemaValidator {
             let Some(version_name) = version["name"].as_str() else {
                 continue;
             };
+            if gateway_profile(kind, version_name) != profile {
+                continue;
+            }
             if !SOURCES.iter().any(|source| {
                 source.kind == kind
                     && source.version == version_name
@@ -373,8 +391,16 @@ mod tests {
 
     #[test]
     fn gateway_profile_and_duplicate_registration_are_deterministic() {
-        assert_eq!(gateway_profile("HTTPRoute"), GatewaySchemaProfile::Experimental);
-        assert_eq!(gateway_profile("GatewayClass"), GatewaySchemaProfile::Standard);
+        assert_eq!(gateway_profile("HTTPRoute", "v1"), GatewaySchemaProfile::Experimental);
+        assert_eq!(gateway_profile("GatewayClass", "v1"), GatewaySchemaProfile::Standard);
+        assert_eq!(
+            gateway_profile("BackendTLSPolicy", "v1alpha3"),
+            GatewaySchemaProfile::Experimental
+        );
+        assert_eq!(
+            gateway_profile("GRPCRoute", "v1alpha2"),
+            GatewaySchemaProfile::HistoricalGrpc
+        );
         let crd = serde_json::json!({
             "kind": "CustomResourceDefinition",
             "spec": {
@@ -389,6 +415,46 @@ mod tests {
         SchemaValidator::register_gateway_crd(&crd, GatewaySchemaProfile::Standard, &mut validators).unwrap();
         assert_eq!(validators.len(), 1);
         assert!(SchemaValidator::register_gateway_crd(&crd, GatewaySchemaProfile::Standard, &mut validators).is_err());
+    }
+
+    #[test]
+    fn last_pre_v1_source_schemas_load_from_the_selected_artifacts() {
+        let crd_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+        let validator = SchemaValidator::from_crd_dir(&crd_dir).unwrap();
+        for (kind, version) in [
+            ("GRPCRoute", "v1alpha2"),
+            ("TLSRoute", "v1alpha3"),
+            ("BackendTLSPolicy", "v1alpha3"),
+            ("TCPRoute", "v1alpha2"),
+            ("UDPRoute", "v1alpha2"),
+        ] {
+            assert!(
+                validator
+                    .gateway_validators
+                    .contains_key(&(GROUP.to_string(), version.to_string(), kind.to_string())),
+                "missing {kind} {version} schema"
+            );
+        }
+        assert!(!validator.gateway_validators.contains_key(&(
+            GROUP.to_string(),
+            "v1alpha2".to_string(),
+            "TLSRoute".to_string()
+        )));
+        for kind in ["TCPRoute", "UDPRoute"] {
+            let route = serde_json::json!({
+                "apiVersion": "gateway.networking.k8s.io/v1alpha2",
+                "kind": kind,
+                "metadata": {"name": "route", "namespace": "default"},
+                "spec": {"rules": [
+                    {"backendRefs": [{"name": "first", "port": 8080}]},
+                    {"backendRefs": [{"name": "second", "port": 8080}]}
+                ]}
+            });
+            assert!(validator
+                .validate_gateway_source(GROUP, "v1alpha2", kind, &route)
+                .is_ok());
+            assert!(validator.validate_gateway_source(GROUP, "v1", kind, &route).is_err());
+        }
     }
 
     #[test]

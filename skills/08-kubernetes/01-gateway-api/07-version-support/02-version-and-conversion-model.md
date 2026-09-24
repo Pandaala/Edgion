@@ -102,6 +102,9 @@ ReferenceGrant v1beta1 is converted to the canonical v1 resource before raw
 store insertion for Kubernetes watch and before typed processing for offline
 and Admin input. The center selects one Kubernetes transport version for its
 lifetime; a cluster must serve v1beta1 for that Kubernetes input to be accepted.
-Per-source bundle and conformance evidence remains incomplete. Proposed
-v1beta1 adapters remain unimplemented. TLSRoute and BackendTLSPolicy remain
-canonical-only at this stage.
+Per-source bundle and conformance evidence remains incomplete. The selected
+GRPCRoute v1alpha2, TLSRoute v1alpha3, BackendTLSPolicy v1alpha3, TCPRoute
+v1alpha2, and UDPRoute v1alpha2 raw sources convert to canonical v1 for
+non-Kubernetes input. Kubernetes watch, CRUD, and status use one selected
+transport per kind: v1 when served, otherwise the registered alpha version.
+If neither is served, the kind is skipped without failing Controller startup.

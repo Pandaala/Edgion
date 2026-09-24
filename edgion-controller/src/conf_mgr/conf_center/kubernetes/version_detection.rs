@@ -10,6 +10,58 @@ use kube::error::DiscoveryError;
 use kube::Client;
 use std::collections::HashSet;
 
+pub const LEGACY_SOURCE_KINDS: [(&str, &str); 5] = [
+    ("GRPCRoute", "v1alpha2"),
+    ("TLSRoute", "v1alpha3"),
+    ("BackendTLSPolicy", "v1alpha3"),
+    ("TCPRoute", "v1alpha2"),
+    ("UDPRoute", "v1alpha2"),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyRouteVersion {
+    V1,
+    Alpha2,
+    Alpha3,
+}
+
+impl LegacyRouteVersion {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::V1 => "v1",
+            Self::Alpha2 => "v1alpha2",
+            Self::Alpha3 => "v1alpha3",
+        }
+    }
+}
+
+pub async fn probe_legacy_route_version(client: &Client, kind: &str) -> Result<Option<LegacyRouteVersion>> {
+    let alpha = LEGACY_SOURCE_KINDS
+        .iter()
+        .find(|(registered, _)| *registered == kind)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported Gateway API legacy source kind: {kind}"))?
+        .1;
+    for (version, selected) in [
+        ("v1", LegacyRouteVersion::V1),
+        (
+            alpha,
+            if alpha == "v1alpha2" {
+                LegacyRouteVersion::Alpha2
+            } else {
+                LegacyRouteVersion::Alpha3
+            },
+        ),
+    ] {
+        let gvk = GroupVersionKind::gvk(GROUP, version, kind);
+        match is_kind_served(client, &gvk).await {
+            Ok(true) => return Ok(Some(selected)),
+            Ok(false) => continue,
+            Err(error) => return Err(anyhow::anyhow!("Failed to probe {kind} {version}: {error}")),
+        }
+    }
+    Ok(None)
+}
+
 /// The API version detected for ReferenceGrant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceGrantVersion {
@@ -196,9 +248,9 @@ pub fn validate_no_watch_kinds(no_watch_kinds: &[String]) {
 
 /// Preflight check: verify that all required Gateway API CRDs are installed.
 ///
-/// For each Gateway API resource not in `no_watch_kinds`, queries API
-/// discovery. An unavailable GVK means the CRD is missing. All missing CRDs are
-/// collected and reported in a single error with install instructions.
+/// Required kinds are checked and missing CRDs are reported together.
+/// The five optional legacy source kinds are selected separately and skipped
+/// when neither their v1 nor registered alpha version is served.
 pub async fn preflight_check_gateway_api_crds(
     client: &Client,
     no_watch_kinds: &HashSet<String>,
@@ -265,6 +317,10 @@ pub async fn preflight_check_gateway_api_crds(
                     missing.push(res);
                 }
             }
+            continue;
+        }
+
+        if LEGACY_SOURCE_KINDS.iter().any(|(kind, _)| *kind == res.kind) {
             continue;
         }
 

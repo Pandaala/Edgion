@@ -86,17 +86,8 @@ pub async fn validate_kind(
         crate::conf_mgr::conf_center::common::validate_gateway_api_source(kind, &raw_yaml)
             .map_err(|_| StatusCode::BAD_REQUEST)?;
         let raw_json: serde_json::Value = crate::api::common::parse_resource(&content)?;
-        let version = if matches!(
-            kind,
-            ResourceKind::ReferenceGrant | ResourceKind::GatewayClass | ResourceKind::Gateway | ResourceKind::HTTPRoute
-        ) && raw_yaml.get("apiVersion").and_then(serde_yaml::Value::as_str)
-            == Some("gateway.networking.k8s.io/v1beta1")
-        {
-            "v1beta1"
-        } else {
-            source.version
-        };
-        match state.schema_validator.validate_gateway_source(
+        let version = crate::api::common::gateway_source_version(&raw_yaml).unwrap_or(source.version);
+        let mut errors = match state.schema_validator.validate_gateway_source(
             edgion_resources::gateway_api_support::GROUP,
             version,
             source.kind,
@@ -104,7 +95,11 @@ pub async fn validate_kind(
         ) {
             Ok(()) => Vec::new(),
             Err(ValidationError::SchemaViolation(message)) => message.split("; ").map(str::to_string).collect(),
+        };
+        if crate::api::common::validate_gateway_rule_count(kind, &raw_json).is_err() {
+            errors.push(format!("{kind:?} v1 supports at most one rule"));
         }
+        errors
     } else {
         Vec::new()
     };
@@ -301,6 +296,58 @@ mod tests {
             .schema_errors
             .iter()
             .any(|error| error.contains("/spec/controllerName")));
+    }
+
+    #[tokio::test]
+    async fn last_pre_v1_validate_uses_source_schema_and_canonical_rule_limit() {
+        let (mut state, _tmp) = make_state().await;
+        let crd_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+        Arc::get_mut(&mut state).unwrap().schema_validator = Arc::new(SchemaValidator::from_crd_dir(&crd_dir).unwrap());
+        let grpc = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1alpha2",
+            "kind": "GRPCRoute",
+            "metadata": {"name": "grpc", "namespace": "default"},
+            "spec": {"rules": [{"matches": vec![serde_json::json!({"method": {"service": "example.Echo"}}); 9]}]}
+        });
+        let response = validate_kind(
+            State(state.clone()),
+            Path("GRPCRoute".to_string()),
+            Bytes::from(grpc.to_string()),
+        )
+        .await
+        .unwrap()
+        .0
+        .data
+        .unwrap();
+        assert!(!response.ok);
+        assert!(response.schema_errors.iter().any(|error| error.contains("matches")));
+
+        for kind in ["TCPRoute", "UDPRoute"] {
+            let route = serde_json::json!({
+                "apiVersion": "gateway.networking.k8s.io/v1alpha2",
+                "kind": kind,
+                "metadata": {"name": "stream", "namespace": "default"},
+                "spec": {"rules": [
+                    {"backendRefs": [{"name": "one", "port": 8080}]},
+                    {"backendRefs": [{"name": "two", "port": 8080}]}
+                ]}
+            });
+            let response = validate_kind(
+                State(state.clone()),
+                Path(kind.to_string()),
+                Bytes::from(route.to_string()),
+            )
+            .await
+            .unwrap()
+            .0
+            .data
+            .unwrap();
+            assert!(!response.ok);
+            assert!(response
+                .schema_errors
+                .iter()
+                .any(|error| error.contains("at most one rule")));
+        }
     }
 
     #[tokio::test]
@@ -502,11 +549,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backend_tls_policy_validation_rejects_non_v1_before_typed_parse() {
+    async fn backend_tls_policy_validation_rejects_unregistered_version_before_typed_parse() {
         let (state, tmp) = make_state().await;
         let body = Bytes::from(
             r#"{
-                "apiVersion":"gateway.networking.k8s.io/v1alpha3",
+                "apiVersion":"gateway.networking.k8s.io/v1alpha2",
                 "kind":"BackendTLSPolicy",
                 "metadata":{"name":"backend-tls","namespace":"default"},
                 "spec":{
@@ -535,7 +582,7 @@ mod tests {
             None,
             Some(serde_json::Value::Null),
             Some(serde_json::json!(7)),
-            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha2")),
         ] {
             let mut document = serde_json::json!({
                 "kind": "TLSRoute", "metadata": {"name": "tls-route", "namespace": "default"},

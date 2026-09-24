@@ -43,6 +43,7 @@ use kube::runtime::WatchStreamExt;
 use kube::{Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -136,6 +137,70 @@ where
     }
 
     ctx.tracker.track_future(async move { rc.run_namespaced().await })
+}
+
+fn spawn_legacy_selected<K, S, H>(
+    controller: &KubernetesController,
+    kind: &'static str,
+    handler: H,
+    ctx: &SpawnContext,
+) -> impl std::future::Future<Output = Result<()>> + Send + 'static
+where
+    K: ResourceMeta
+        + Resource<Scope = kube::core::NamespaceResourceScope>
+        + Clone
+        + Send
+        + Sync
+        + Debug
+        + Serialize
+        + DeserializeOwned
+        + 'static,
+    K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+    S: Resource<Scope = kube::core::NamespaceResourceScope, DynamicType = ()>
+        + Clone
+        + Send
+        + Sync
+        + Debug
+        + DeserializeOwned
+        + Into<K>
+        + 'static,
+    H: ProcessorHandler<K> + 'static,
+{
+    edgion_resources::gateway_api_support::assert_canonical_type_identity::<K>(kind);
+    let processor = Arc::new(ResourceProcessor::new(
+        kind,
+        crate::config::get_cache_capacity(kind),
+        Arc::new(handler),
+        ctx.runtime.clone(),
+    ));
+    if let Some(ref filter) = ctx.metadata_filter {
+        processor.set_metadata_filter(filter.clone());
+    }
+    ctx.runtime.processor_registry.register(processor.clone());
+    let mut rc = ResourceController::new(
+        kind,
+        controller.client.clone(),
+        processor,
+        ApiScope::Namespaced(controller.watch_mode.clone()),
+        ctx.watcher_config.clone(),
+    )
+    .with_shutdown(ctx.shutdown.clone())
+    .with_epoch(ctx.cancel.clone(), ctx.tracker.clone());
+    if let Some(ref leader) = ctx.leader_handle {
+        rc = rc.with_leader_handle(leader.clone());
+    }
+    let selected = controller.legacy_versions.get(kind).copied();
+    ctx.tracker.track_future(async move {
+        match selected {
+            Some(super::version_detection::LegacyRouteVersion::V1) => rc.run_namespaced().await,
+            Some(version) => {
+                rc.with_status_version(version.as_str())
+                    .run_legacy_namespaced::<S>()
+                    .await
+            }
+            None => anyhow::bail!("No selected Kubernetes source version for {kind}"),
+        }
+    })
 }
 
 /// One canonical HTTPRoute processor with the selected namespaced wire source.
@@ -545,6 +610,7 @@ pub struct KubernetesController {
     pub(super) gateway_class_version: Option<super::version_detection::GatewayClassVersion>,
     pub(super) gateway_version: Option<super::version_detection::GatewayVersion>,
     pub(super) http_route_version: Option<super::version_detection::HTTPRouteVersion>,
+    pub(super) legacy_versions: HashMap<&'static str, super::version_detection::LegacyRouteVersion>,
 }
 
 impl KubernetesController {
@@ -590,6 +656,7 @@ impl KubernetesController {
             gateway_class_version: None,
             gateway_version: None,
             http_route_version: None,
+            legacy_versions: HashMap::new(),
         })
     }
 
@@ -625,6 +692,14 @@ impl KubernetesController {
         version: Option<super::version_detection::HTTPRouteVersion>,
     ) -> Self {
         self.http_route_version = version;
+        self
+    }
+
+    pub(super) fn with_legacy_versions(
+        mut self,
+        versions: HashMap<&'static str, super::version_detection::LegacyRouteVersion>,
+    ) -> Self {
+        self.legacy_versions = versions;
         self
     }
 
@@ -722,7 +797,7 @@ impl KubernetesController {
                 "EdgionGatewayConfig",
             ]
             .into_iter()
-            .filter(|k| !self.no_watch_kinds.contains(*k)),
+            .filter(|k| self.should_watch(k)),
         );
         kinds
     }
@@ -730,6 +805,10 @@ impl KubernetesController {
     /// Check if a resource kind should be watched
     fn should_watch(&self, kind: &str) -> bool {
         !self.no_watch_kinds.contains(kind)
+            && (!super::version_detection::LEGACY_SOURCE_KINDS
+                .iter()
+                .any(|(legacy_kind, _)| *legacy_kind == kind)
+                || self.legacy_versions.contains_key(kind))
     }
 
     /// Internal method to run all controllers with phased initialization.
@@ -932,7 +1011,7 @@ impl KubernetesController {
             h.spawn(spawn_http_route(self, &ctx));
         }
         if self.should_watch("GRPCRoute") {
-            h.spawn(spawn::<GRPCRoute, _>(
+            h.spawn(spawn_legacy_selected::<GRPCRoute, GRPCRouteAlpha2, _>(
                 self,
                 "GRPCRoute",
                 GrpcRouteHandler::new(self.controller_name.clone()),
@@ -940,7 +1019,7 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("TCPRoute") {
-            h.spawn(spawn::<TCPRoute, _>(
+            h.spawn(spawn_legacy_selected::<TCPRoute, TCPRouteAlpha2, _>(
                 self,
                 "TCPRoute",
                 TcpRouteHandler::new(self.controller_name.clone()),
@@ -948,7 +1027,7 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("UDPRoute") {
-            h.spawn(spawn::<UDPRoute, _>(
+            h.spawn(spawn_legacy_selected::<UDPRoute, UDPRouteAlpha2, _>(
                 self,
                 "UDPRoute",
                 UdpRouteHandler::new(self.controller_name.clone()),
@@ -956,7 +1035,7 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("TLSRoute") {
-            h.spawn(spawn::<TLSRoute, _>(
+            h.spawn(spawn_legacy_selected::<TLSRoute, TLSRouteAlpha3, _>(
                 self,
                 "TLSRoute",
                 TlsRouteHandler::new(self.controller_name.clone()),
@@ -974,7 +1053,7 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("BackendTLSPolicy") {
-            h.spawn(spawn::<BackendTLSPolicy, _>(
+            h.spawn(spawn_legacy_selected::<BackendTLSPolicy, BackendTLSPolicyAlpha3, _>(
                 self,
                 "BackendTLSPolicy",
                 BackendTlsPolicyHandler::new(self.controller_name.clone()),

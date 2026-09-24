@@ -105,7 +105,14 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         validate_tcp_route_if_enabled(route)
     }
 
+    fn should_publish(&self, route: &TCPRoute, _ctx: &HandlerContext) -> bool {
+        validate_tcp_route_if_enabled(route).is_empty()
+    }
+
     async fn parse(&self, mut route: TCPRoute, _ctx: &HandlerContext) -> ProcessResult<TCPRoute> {
+        if !validate_tcp_route_if_enabled(&route).is_empty() {
+            return ProcessResult::Continue(route);
+        }
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route, _ctx);
 
@@ -273,14 +280,16 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
             );
         }
 
-        super::route_utils::update_tracker_accepted_only(
-            ResourceKind::TCPRoute,
-            route_ns,
-            route.metadata.name.as_deref().unwrap_or(""),
-            route.spec.parent_refs.as_ref(),
-            None,
-            _ctx.runtime(),
-        );
+        if validation_errors.is_empty() {
+            super::route_utils::update_tracker_accepted_only(
+                ResourceKind::TCPRoute,
+                route_ns,
+                route.metadata.name.as_deref().unwrap_or(""),
+                route.spec.parent_refs.as_ref(),
+                None,
+                _ctx.runtime(),
+            );
+        }
     }
 }
 

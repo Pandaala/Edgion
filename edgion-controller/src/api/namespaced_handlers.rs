@@ -1067,12 +1067,12 @@ mod update_identity_tests {
     }
 
     #[tokio::test]
-    async fn create_rejects_non_v1_backend_tls_policy_before_persistence() {
+    async fn create_rejects_unregistered_backend_tls_policy_version_before_persistence() {
         let (state, _tmp) = make_fs_state().await;
         let result = create_namespaced(
             State(Arc::clone(&state)),
             Path(("BackendTLSPolicy".to_string(), "default".to_string())),
-            backend_tls_policy_body("backend-tls", "gateway.networking.k8s.io/v1alpha3"),
+            backend_tls_policy_body("backend-tls", "gateway.networking.k8s.io/v1alpha2"),
         )
         .await;
 
@@ -1096,7 +1096,7 @@ mod update_identity_tests {
             None,
             Some(serde_json::Value::Null),
             Some(serde_json::json!(42)),
-            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha2")),
         ] {
             let mut invalid = canonical.clone();
             match version {
@@ -1127,7 +1127,7 @@ mod update_identity_tests {
         .unwrap();
         assert_eq!(status, StatusCode::CREATED);
         let mut invalid = canonical;
-        invalid["apiVersion"] = serde_json::json!("gateway.networking.k8s.io/v1alpha3");
+        invalid["apiVersion"] = serde_json::json!("gateway.networking.k8s.io/v1alpha2");
         let result = update_namespaced(
             State(state.clone()),
             Path(("TLSRoute".to_string(), "default".to_string(), "tls-route".to_string())),
@@ -1146,7 +1146,7 @@ mod update_identity_tests {
     }
 
     #[tokio::test]
-    async fn update_rejects_non_v1_backend_tls_policy_and_keeps_canonical_object() {
+    async fn update_rejects_unregistered_backend_tls_policy_version_and_keeps_canonical_object() {
         let (state, _tmp) = make_fs_state().await;
         let (status, _headers, _response) = create_namespaced(
             State(Arc::clone(&state)),
@@ -1165,7 +1165,7 @@ mod update_identity_tests {
                 "backend-tls".to_string(),
             )),
             HeaderMap::new(),
-            backend_tls_policy_body("backend-tls", "gateway.networking.k8s.io/v1alpha3"),
+            backend_tls_policy_body("backend-tls", "gateway.networking.k8s.io/v1alpha2"),
         )
         .await;
 

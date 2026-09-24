@@ -5,9 +5,9 @@
 | Ingress | Structural/schema validation | TypeMeta/version handling | Semantic validation and status |
 |---------|------------------------------|---------------------------|--------------------------------|
 | Kubernetes | API server applies the installed CRD's OpenAPI schema, pruning/defaulting rules, and CEL | Watchers use statically selected or probed GVKs; preflight checks served availability, not bundle compatibility | Controller handlers validate references and behavior, then patch native status |
-| Non-Kubernetes Admin write | Raw source TypeMeta check before typed parse, then source-aware schema validation; HTTPRoute additionally runs the shared generated request-transform contract | Canonical v1 sources and four implemented v1beta1 adapters are inventoried | Schema or transform-contract failure returns 400; accepted resources later enter the normal handler/status path |
+| Non-Kubernetes Admin write | Raw source TypeMeta check before typed parse, then source-aware schema validation; HTTPRoute additionally runs the shared generated request-transform contract | Canonical v1 sources, four v1beta1 adapters, and five selected last pre-v1 adapters are inventoried | Schema or transform-contract failure returns 400; accepted resources later enter the normal handler/status path |
 | Validation endpoint | Source-aware schema selection and typed validation | Same raw source identity boundary | Returns schema errors plus side-effect-free business validation for EdgionPlugins and HTTPRoute request transforms |
-| Filesystem and etcd direct write | Serde parse after raw source identity check; complete local CRD `SchemaValidator` is intentionally not run in watcher paths under the current accepted design | Four implemented v1beta1 adapters convert into canonical models | Parse failures use error sidecars; parsed objects use handler validation/status |
+| Filesystem and etcd direct write | Serde parse after raw source identity check; the five selected alpha adapters run source OpenAPI validation before conversion; other watcher paths retain the accepted schema-validation asymmetry | Four v1beta1 and five selected last pre-v1 adapters convert into canonical models | Parse failures use error sidecars; parsed objects use handler validation/status |
 | Gateway conf-sync ingest | No API-server admission; selected HTTPRoute request-transform constraints are rechecked from the embedded generated contract | List and Watch reject noncanonical Gateway API TypeMeta before typed serde; no Gateway-side beta adapter | Invalid transform rules are not published; constructors consume prepared immutable transform state and fail closed if malformed state bypasses the Controller |
 
 The accepted rationale for not running the complete CRD validator in direct
@@ -21,7 +21,8 @@ it as an unexamined omission.
 `edgion-controller/src/conf_mgr/schema_validator.rs` uses a source-aware
 registry for Admin/validation paths. The remaining limits are:
 
-- local schema files are pinned to the repository's v1.6.2 bundle profile;
+- local schema files are pinned to the repository's v1.6.2 bundle profile, with
+  the historical GRPCRoute v1alpha2 source schema embedded from v1.1.1;
 - generic JSON Schema evaluation does not reproduce API-server defaulting or
   pruning;
 - uses the standard JSON Schema engine, which does not execute Kubernetes
@@ -38,13 +39,12 @@ unless bundle/channel policy is part of schema registration.
 
 ## Existing conversions
 
-- TLSRoute uses v1 only with raw TypeMeta validation, one canonical watcher,
-  and the same v1 identity for CRUD and status. The old conversions and
-  fallback selection have been removed.
+- TLSRoute prefers v1, falls back to v1alpha3 for Kubernetes watch, CRUD, and
+  status, and skips its watcher when neither version is served.
 - ReferenceGrant has v1 and v1beta1 Rust types. Kubernetes probing can select a
   v1beta1 watcher whose handler converts into the v1 store representation.
-- BackendTLSPolicy was intentionally promoted to v1-only with raw TypeMeta
-  guards at filesystem, etcd, Admin, watch, CRUD, and status boundaries.
+- BackendTLSPolicy prefers v1, falls back to v1alpha3 for Kubernetes watch,
+  CRUD, and status, and skips its watcher when neither version is served.
 - Other Gateway API versions served by the bundled CRDs generally rely on API
   server conversion when submitted to Kubernetes and do not have Edgion-owned
   non-Kubernetes adapters.

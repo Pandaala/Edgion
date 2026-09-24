@@ -19,7 +19,8 @@ use super::event::EtcdEvent;
 use super::status::EtcdStatusHandler;
 use super::watcher::KindEventReceiver;
 use crate::conf_mgr::conf_center::common::{
-    clear_runtime_invalid, get_runtime_invalid, parse_resource_content, store_runtime_invalid, RuntimeInvalidEnvelopes,
+    clear_runtime_invalid, get_runtime_invalid, parse_resource_content_offline, store_runtime_invalid,
+    RuntimeInvalidEnvelopes,
 };
 use crate::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
@@ -124,7 +125,7 @@ where
                             self.processor.on_init();
                         }
                     }
-                    EtcdEvent::InitApply { key, content } => match parse_resource_content::<K>(&content) {
+                    EtcdEvent::InitApply { key, content } => match parse_resource_content_offline::<K>(&content) {
                         Ok(obj) => {
                             let content_key = make_resource_key(&obj);
                             let Some(rkey) =
@@ -211,7 +212,7 @@ where
                     EtcdEvent::Apply { key, content } => {
                         if !init_done {
                             // During init, treat as InitApply
-                            if let Ok(obj) = parse_resource_content::<K>(&content) {
+                            if let Ok(obj) = parse_resource_content_offline::<K>(&content) {
                                 let content_key = make_resource_key(&obj);
                                 let Some(rkey) = validated_init_key(
                                     &self.status_handler,
@@ -245,7 +246,7 @@ where
                                 }
                             }
                         } else {
-                            match parse_resource_content::<K>(&content) {
+                            match parse_resource_content_offline::<K>(&content) {
                                 Ok(obj) => {
                                     let content_key = make_resource_key(&obj);
                                     let rkey = match validate_etcd_identity(&key, &self.conf_prefix, kind, &content_key)
@@ -671,7 +672,7 @@ mod tests {
             None,
             Some(serde_json::Value::Null),
             Some(serde_json::json!(42)),
-            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha2")),
             Some(serde_json::json!("gateway.networking.k8s.io/v1")),
         ] {
             let valid = version.as_ref().and_then(serde_json::Value::as_str) == Some("gateway.networking.k8s.io/v1");

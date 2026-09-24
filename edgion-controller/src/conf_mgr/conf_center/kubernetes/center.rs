@@ -18,7 +18,9 @@ use super::config::{HaMode, KubernetesConfig};
 use super::controller::{ControllerExitReason, KubernetesController};
 use super::leader_election::{LeaderElection, LeaderElectionConfig as InternalLeaderElectionConfig, LeaderHandle};
 use super::storage::KubernetesStorage;
-use super::version_detection::{preflight_check_gateway_api_crds, validate_no_watch_kinds};
+use super::version_detection::{
+    preflight_check_gateway_api_crds, validate_no_watch_kinds, LegacyRouteVersion, LEGACY_SOURCE_KINDS,
+};
 use crate::conf_mgr::conf_center::traits::{
     impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult, ResourceKey,
 };
@@ -377,6 +379,7 @@ impl KubernetesCenter {
         gateway_class_version: Option<super::version_detection::GatewayClassVersion>,
         gateway_version: Option<super::version_detection::GatewayVersion>,
         http_route_version: Option<super::version_detection::HTTPRouteVersion>,
+        legacy_versions: HashMap<&'static str, LegacyRouteVersion>,
     ) -> Result<KubernetesController> {
         let config = self.config();
 
@@ -407,7 +410,23 @@ impl KubernetesCenter {
                 .with_gateway_class_version(gateway_class_version)
                 .with_gateway_version(gateway_version)
                 .with_http_route_version(http_route_version)
+                .with_legacy_versions(legacy_versions)
         })
+    }
+
+    async fn selected_legacy_versions(
+        &self,
+        no_watch_kinds: &std::collections::HashSet<String>,
+    ) -> Result<HashMap<&'static str, LegacyRouteVersion>> {
+        let mut selected = HashMap::new();
+        for (kind, _) in LEGACY_SOURCE_KINDS {
+            if !no_watch_kinds.contains(kind) {
+                if let Some(version) = self.writer.selected_legacy_version(kind).await? {
+                    selected.insert(kind, version);
+                }
+            }
+        }
+        Ok(selected)
     }
 
     /// Main flow - runs only when this instance is the leader
@@ -701,6 +720,7 @@ impl KubernetesCenter {
         } else {
             Some(self.writer.selected_http_route_version().await?)
         };
+        let legacy_versions = self.selected_legacy_versions(&no_watch_kinds).await?;
         preflight_check_gateway_api_crds(
             client,
             &no_watch_kinds,
@@ -722,6 +742,7 @@ impl KubernetesCenter {
                 gateway_class_version,
                 gateway_version,
                 http_route_version,
+                legacy_versions,
             )?
             .with_leader_handle(leader_handle.clone());
         let expected_processor_kinds = controller.all_processor_kinds();
@@ -1227,6 +1248,7 @@ impl KubernetesCenter {
         } else {
             Some(self.writer.selected_http_route_version().await?)
         };
+        let legacy_versions = self.selected_legacy_versions(&no_watch_kinds).await?;
         preflight_check_gateway_api_crds(
             client,
             &no_watch_kinds,
@@ -1248,6 +1270,7 @@ impl KubernetesCenter {
                 gateway_class_version,
                 gateway_version,
                 http_route_version,
+                legacy_versions,
             )?
             .with_leader_handle(leader_handle.clone());
         let expected_processor_kinds = controller.all_processor_kinds();
@@ -1559,6 +1582,7 @@ mod leadership_signal_tests {
                     selected_class.get().copied(),
                     selected_gateway.get().copied(),
                     None,
+                    HashMap::new(),
                 )
                 .unwrap();
             assert_eq!(controller.reference_grant_version, Some(ReferenceGrantVersion::V1Beta1));

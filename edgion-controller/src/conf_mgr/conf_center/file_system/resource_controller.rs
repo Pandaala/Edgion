@@ -15,8 +15,11 @@ use super::file_watcher::KindEventReceiver;
 use super::path_registry::{PathRegistry, ResourceKey};
 use super::status::FileSystemStatusHandler;
 use super::storage::build_resource_path_from_key;
+#[cfg(test)]
+use crate::conf_mgr::conf_center::common::parse_resource_content;
 use crate::conf_mgr::conf_center::common::{
-    clear_runtime_invalid, get_runtime_invalid, parse_resource_content, store_runtime_invalid, RuntimeInvalidEnvelopes,
+    clear_runtime_invalid, get_runtime_invalid, parse_resource_content_offline, store_runtime_invalid,
+    RuntimeInvalidEnvelopes,
 };
 use crate::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::conf_mgr::sync_runtime::resource_processor::{
@@ -151,7 +154,7 @@ where
                         }
                         FileSystemEvent::InitApply { path, content } => {
                             // Parse YAML content to resource type
-                            match parse_resource_content::<K>(&content) {
+                            match parse_resource_content_offline::<K>(&content) {
                                 Ok(obj) => {
                                     let key = make_resource_key(&obj);
 
@@ -315,7 +318,7 @@ where
                         FileSystemEvent::Apply { path, content } => {
                             if !init_done {
                                 // During init phase, treat as InitApply
-                                match parse_resource_content::<K>(&content) {
+                                match parse_resource_content_offline::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         if let Some(filename_key) = filename_identity_mismatch(&path, kind, &key) {
@@ -412,7 +415,7 @@ where
                                 }
                             } else {
                                 // Runtime phase - parse and enqueue
-                                match parse_resource_content::<K>(&content) {
+                                match parse_resource_content_offline::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         if let Some(filename_key) = filename_identity_mismatch(&path, kind, &key) {
@@ -647,7 +650,7 @@ where
 
                     let (store_obj, parse_error) = if path.exists() {
                         match tokio::fs::read_to_string(&path).await {
-                            Ok(content) => match parse_resource_content::<K>(&content) {
+                            Ok(content) => match parse_resource_content_offline::<K>(&content) {
                                 Ok(obj) => {
                                     // Guard the same content/filename identity invariant the
                                     // main loop enforces. The worker re-reads the registry-winner
@@ -1086,17 +1089,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_backend_tls_policy_rejects_v1alpha3() {
+    fn parse_backend_tls_policy_converts_v1alpha3() {
         let yaml = serde_yaml::to_string(&make_policy()).unwrap().replacen(
             "gateway.networking.k8s.io/v1",
             "gateway.networking.k8s.io/v1alpha3",
             1,
         );
 
-        let error = parse_resource_content::<BackendTLSPolicy>(&yaml).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("BackendTLSPolicy apiVersion must be gateway.networking.k8s.io/v1"));
+        let parsed = parse_resource_content::<BackendTLSPolicy>(&yaml).unwrap();
+        assert_eq!(parsed.spec.validation.hostname, "backend.default.svc");
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["apiVersion"],
+            "gateway.networking.k8s.io/v1"
+        );
     }
 
     #[test]
@@ -1109,7 +1114,9 @@ mod tests {
             .join("\n");
 
         let error = parse_resource_content::<BackendTLSPolicy>(&yaml).unwrap_err();
-        assert!(error.to_string().contains("found <missing>"));
+        assert!(error
+            .to_string()
+            .contains("BackendTLSPolicy apiVersion must use a supported"));
     }
 
     #[test]
@@ -1170,7 +1177,6 @@ mod tests {
             Some(serde_json::Value::Null),
             Some(serde_json::json!(1)),
             Some(serde_json::json!("")),
-            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
             Some(serde_json::json!("gateway.networking.k8s.io/v1alpha2")),
         ] {
             let mut document = serde_json::to_value(make_tls_route()).unwrap();
@@ -1185,9 +1191,7 @@ mod tests {
                 serde_yaml::to_string(&document).unwrap(),
             ] {
                 let error = parse_resource_content::<TLSRoute>(&body).unwrap_err();
-                assert!(error
-                    .to_string()
-                    .contains("TLSRoute apiVersion must be gateway.networking.k8s.io/v1"));
+                assert!(error.to_string().contains("TLSRoute apiVersion must use a supported"));
             }
         }
     }
@@ -1258,7 +1262,7 @@ mod tests {
             None,
             Some(serde_json::Value::Null),
             Some(serde_json::json!(42)),
-            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha2")),
         ]
         .into_iter()
         .enumerate()

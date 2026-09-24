@@ -4,8 +4,9 @@
 //! Similar to client-go, this allows creating/updating/deleting K8s resources via API.
 
 use super::version_detection::{
-    probe_gateway_class_version, probe_gateway_version, probe_http_route_version, probe_reference_grant_version,
-    GatewayClassVersion, GatewayVersion, HTTPRouteVersion, ReferenceGrantVersion,
+    probe_gateway_class_version, probe_gateway_version, probe_http_route_version, probe_legacy_route_version,
+    probe_reference_grant_version, GatewayClassVersion, GatewayVersion, HTTPRouteVersion, LegacyRouteVersion,
+    ReferenceGrantVersion,
 };
 use crate::conf_mgr::conf_center::common::{
     ensure_expected_resource_version_value, merge_operator_update_values, validate_backend_tls_policy_api_version,
@@ -39,6 +40,29 @@ pub struct KubernetesStorage {
     gateway_class_version: Arc<OnceCell<GatewayClassVersion>>,
     gateway_version: Arc<OnceCell<GatewayVersion>>,
     http_route_version: Arc<OnceCell<HTTPRouteVersion>>,
+    legacy_versions: LegacySelections,
+}
+
+#[derive(Default)]
+struct LegacySelections {
+    grpc_route: OnceCell<Option<LegacyRouteVersion>>,
+    tls_route: OnceCell<Option<LegacyRouteVersion>>,
+    backend_tls_policy: OnceCell<Option<LegacyRouteVersion>>,
+    tcp_route: OnceCell<Option<LegacyRouteVersion>>,
+    udp_route: OnceCell<Option<LegacyRouteVersion>>,
+}
+
+impl LegacySelections {
+    fn cell(&self, kind: &str) -> Option<&OnceCell<Option<LegacyRouteVersion>>> {
+        match kind {
+            "GRPCRoute" => Some(&self.grpc_route),
+            "TLSRoute" => Some(&self.tls_route),
+            "BackendTLSPolicy" => Some(&self.backend_tls_policy),
+            "TCPRoute" => Some(&self.tcp_route),
+            "UDPRoute" => Some(&self.udp_route),
+            _ => None,
+        }
+    }
 }
 
 impl KubernetesStorage {
@@ -52,6 +76,7 @@ impl KubernetesStorage {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         })
     }
 
@@ -116,6 +141,16 @@ impl KubernetesStorage {
             .copied()
     }
 
+    pub(super) async fn selected_legacy_version(&self, kind: &str) -> Result<Option<LegacyRouteVersion>> {
+        let cell = self
+            .legacy_versions
+            .cell(kind)
+            .ok_or_else(|| anyhow::anyhow!("Unsupported Gateway API source kind: {kind}"))?;
+        cell.get_or_try_init(|| async { probe_legacy_route_version(&self.client, kind).await })
+            .await
+            .copied()
+    }
+
     pub(super) async fn new_with_selection(
         allowed_namespaces: Vec<String>,
         selection: Arc<OnceCell<ReferenceGrantVersion>>,
@@ -142,14 +177,24 @@ impl KubernetesStorage {
         let service = tower::service_fn(|_req: http::Request<kube::client::Body>| async {
             Ok::<_, std::convert::Infallible>(http::Response::new(kube::client::Body::empty()))
         });
-        Self {
+        let storage = Self {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
             reference_grant_version: Arc::new(OnceCell::new()),
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
+        };
+        for (kind, _) in super::version_detection::LEGACY_SOURCE_KINDS {
+            storage
+                .legacy_versions
+                .cell(kind)
+                .unwrap()
+                .set(Some(LegacyRouteVersion::V1))
+                .unwrap();
         }
+        storage
     }
 
     /// Resolve ApiResource and Scope for a resource kind.
@@ -210,22 +255,23 @@ impl KubernetesStorage {
                         Scope::Namespaced,
                     )
                 }
-                "GRPCRoute" => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "GRPCRoute")),
-                    Scope::Namespaced,
-                ),
-                "TCPRoute" => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TCPRoute")),
-                    Scope::Namespaced,
-                ),
-                "UDPRoute" => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "UDPRoute")),
-                    Scope::Namespaced,
-                ),
-                "TLSRoute" => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TLSRoute")),
-                    Scope::Namespaced,
-                ),
+                "GRPCRoute" | "TCPRoute" | "UDPRoute" | "TLSRoute" | "BackendTLSPolicy" => {
+                    let version = self
+                        .selected_legacy_version(kind)
+                        .await
+                        .map_err(|error| {
+                            ConfWriterError::InternalError(format!("Failed to select {kind} version: {error}"))
+                        })?
+                        .ok_or_else(|| ConfWriterError::InternalError(format!("{kind} CRD is not installed")))?;
+                    (
+                        ApiResource::from_gvk(&GroupVersionKind::gvk(
+                            "gateway.networking.k8s.io",
+                            version.as_str(),
+                            kind,
+                        )),
+                        Scope::Namespaced,
+                    )
+                }
                 "ReferenceGrant" => {
                     let version = self.selected_reference_grant_version().await.map_err(|e| {
                         ConfWriterError::InternalError(format!("Failed to select ReferenceGrant version: {e}"))
@@ -243,14 +289,6 @@ impl KubernetesStorage {
                         Scope::Namespaced,
                     )
                 }
-                "BackendTLSPolicy" => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk(
-                        "gateway.networking.k8s.io",
-                        "v1",
-                        "BackendTLSPolicy",
-                    )),
-                    Scope::Namespaced,
-                ),
                 // Core resources
                 "Secret" => (
                     ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Secret")),
@@ -494,6 +532,28 @@ impl KubernetesStorage {
                 context: "Failed to serialize canonical ReferenceGrant",
                 source: source.into(),
             })?;
+            project_gateway_api_version(&mut value, &api_resource.kind, &api_resource.api_version);
+        }
+
+        if matches!(
+            kind,
+            "GRPCRoute" | "TLSRoute" | "BackendTLSPolicy" | "TCPRoute" | "UDPRoute"
+        ) {
+            let resource_kind = edgion_resources::ResourceKind::from_kind_name(kind)
+                .ok_or_else(|| ConfWriterError::ValidationError(format!("Unknown Gateway API kind: {kind}")))?;
+            let raw = serde_yaml::to_value(&value).map_err(|source| ConfWriterError::ParseError {
+                context: "Failed to decode Gateway API source",
+                source: source.into(),
+            })?;
+            crate::conf_mgr::conf_center::common::validate_gateway_api_source(resource_kind, &raw)
+                .map_err(ConfWriterError::ValidationError)?;
+            if matches!(kind, "TCPRoute" | "UDPRoute")
+                && value["spec"]["rules"].as_array().is_some_and(|rules| rules.len() > 1)
+            {
+                return Err(ConfWriterError::ValidationError(format!(
+                    "{kind} v1 supports at most one rule"
+                )));
+            }
             project_gateway_api_version(&mut value, &api_resource.kind, &api_resource.api_version);
         }
 
@@ -1229,6 +1289,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
         storage.gateway_class_version.set(GatewayClassVersion::V1Beta1).unwrap();
         storage
@@ -1281,6 +1342,7 @@ mod tests {
                 gateway_class_version: Arc::new(OnceCell::new()),
                 gateway_version: Arc::new(OnceCell::new()),
                 http_route_version: Arc::new(OnceCell::new()),
+                legacy_versions: LegacySelections::default(),
             };
             let selected = storage.selected_gateway_class_version().await.unwrap();
             assert_eq!(
@@ -1330,6 +1392,7 @@ mod tests {
                 gateway_class_version: Arc::new(OnceCell::new()),
                 gateway_version: Arc::new(OnceCell::new()),
                 http_route_version: Arc::new(OnceCell::new()),
+                legacy_versions: LegacySelections::default(),
             };
             let selected = storage.selected_http_route_version().await.unwrap();
             assert_eq!(
@@ -1474,6 +1537,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
         storage.http_route_version.set(HTTPRouteVersion::V1Beta1).unwrap();
         storage
@@ -1536,6 +1600,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
         storage.gateway_version.set(GatewayVersion::V1Beta1).unwrap();
         storage
@@ -1592,6 +1657,7 @@ mod tests {
                 gateway_class_version: Arc::new(OnceCell::new()),
                 gateway_version: Arc::new(OnceCell::new()),
                 http_route_version: Arc::new(OnceCell::new()),
+                legacy_versions: LegacySelections::default(),
             };
             let selected = storage.selected_gateway_version().await.unwrap();
             assert_eq!(
@@ -1632,9 +1698,19 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
         storage.gateway_class_version.set(GatewayClassVersion::V1).unwrap();
         storage.gateway_version.set(GatewayVersion::V1).unwrap();
+        storage.http_route_version.set(HTTPRouteVersion::V1).unwrap();
+        for (kind, _) in super::super::version_detection::LEGACY_SOURCE_KINDS {
+            storage
+                .legacy_versions
+                .cell(kind)
+                .unwrap()
+                .set(Some(LegacyRouteVersion::V1))
+                .unwrap();
+        }
         for source in canonical_sources().filter(|source| source.kind != "ReferenceGrant") {
             let (resolved, scope) = storage.resolve_api_resource(source.kind).await.unwrap();
             assert_eq!(resolved.api_version, format!("{GROUP}/{}", source.version));
@@ -1723,11 +1799,74 @@ mod tests {
                 gateway_class_version: Arc::new(OnceCell::new()),
                 gateway_version: Arc::new(OnceCell::new()),
                 http_route_version: Arc::new(OnceCell::new()),
+                legacy_versions: LegacySelections::default(),
             };
             let (resolved, scope) = storage.resolve_api_resource("ReferenceGrant").await.unwrap();
             assert_eq!(resolved.api_version, format!("gateway.networking.k8s.io/{served}"));
             assert_eq!(resolved.kind, "ReferenceGrant");
             assert_eq!(scope, Scope::Namespaced);
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_route_crud_selects_alpha_only_and_prefers_v1_when_available() {
+        for (kind, alpha, plural) in [
+            ("GRPCRoute", "v1alpha2", "grpcroutes"),
+            ("TLSRoute", "v1alpha3", "tlsroutes"),
+            ("BackendTLSPolicy", "v1alpha3", "backendtlspolicies"),
+            ("TCPRoute", "v1alpha2", "tcproutes"),
+            ("UDPRoute", "v1alpha2", "udproutes"),
+        ] {
+            for (serve_v1, serve_alpha) in [(false, false), (false, true), (true, false), (true, true)] {
+                let requests = Arc::new(Mutex::new(Vec::new()));
+                let observed = requests.clone();
+                let service = service_fn(move |request: http::Request<Body>| {
+                    let observed = observed.clone();
+                    async move {
+                        let path = request.uri().path().to_string();
+                        observed.lock().push(path.clone());
+                        let version = path.rsplit('/').next().unwrap_or_default();
+                        let served = (serve_alpha && version == alpha) || (serve_v1 && version == "v1");
+                        let response = if served {
+                            json_response(
+                                StatusCode::OK,
+                                json!({
+                                    "kind": "APIResourceList", "apiVersion": "v1",
+                                    "groupVersion": format!("gateway.networking.k8s.io/{version}"),
+                                    "resources": [{"name": plural, "singularName": "",
+                                        "namespaced": true, "kind": kind, "verbs": ["get", "list", "watch"]}]
+                                }),
+                            )
+                        } else {
+                            not_found_response()
+                        };
+                        Ok::<_, Infallible>(response)
+                    }
+                });
+                let storage = KubernetesStorage {
+                    client: Client::new(service, "default"),
+                    allowed_namespaces: BTreeSet::new(),
+                    reference_grant_version: Arc::new(OnceCell::new()),
+                    gateway_class_version: Arc::new(OnceCell::new()),
+                    gateway_version: Arc::new(OnceCell::new()),
+                    http_route_version: Arc::new(OnceCell::new()),
+                    legacy_versions: LegacySelections::default(),
+                };
+                let selected = storage.selected_legacy_version(kind).await.unwrap();
+                if serve_v1 || serve_alpha {
+                    let (resource, scope) = storage.resolve_api_resource(kind).await.unwrap();
+                    assert_eq!(scope, Scope::Namespaced);
+                    assert_eq!(
+                        resource.api_version,
+                        format!("gateway.networking.k8s.io/{}", if serve_v1 { "v1" } else { alpha })
+                    );
+                    assert_eq!(selected.unwrap().as_str(), if serve_v1 { "v1" } else { alpha });
+                } else {
+                    assert!(selected.is_none());
+                    assert!(storage.resolve_api_resource(kind).await.is_err());
+                }
+                assert_eq!(requests.lock().len(), if serve_v1 { 1 } else { 2 });
+            }
         }
     }
 
@@ -1750,6 +1889,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
         let (resource, _) = storage.resolve_api_resource("ReferenceGrant").await.unwrap();
         assert_eq!(resource.api_version, "gateway.networking.k8s.io/v1");
@@ -1788,6 +1928,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
         let main = make_storage();
         let runtime = make_storage();
@@ -1874,6 +2015,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
         let main = storage();
         let runtime = storage();
@@ -1999,6 +2141,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
         assert!(storage.selected_reference_grant_version().await.is_err());
         assert_eq!(
@@ -2009,7 +2152,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tls_route_storage_uses_v1_without_discovery_and_rejects_other_versions() {
+    async fn tls_route_storage_uses_selected_v1_and_rejects_other_versions() {
         let service = service_fn(|_req: http::Request<Body>| async {
             panic!("TLSRoute endpoint selection and raw parsing must not perform discovery");
             #[allow(unreachable_code)]
@@ -2022,7 +2165,14 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
+        storage
+            .legacy_versions
+            .cell("TLSRoute")
+            .unwrap()
+            .set(Some(LegacyRouteVersion::V1))
+            .unwrap();
         let (api_resource, _) = storage.resolve_api_resource("TLSRoute").await.unwrap();
         assert_eq!(api_resource.api_version, "gateway.networking.k8s.io/v1");
         assert_eq!(api_resource.kind, "TLSRoute");
@@ -2031,10 +2181,14 @@ mod tests {
             Some(Value::Null),
             Some(json!(42)),
             Some(json!("")),
+            Some(json!("gateway.networking.k8s.io/v1alpha2")),
             Some(json!("gateway.networking.k8s.io/v1alpha3")),
             Some(json!("gateway.networking.k8s.io/v1")),
         ] {
-            let valid = version.as_ref().and_then(Value::as_str) == Some("gateway.networking.k8s.io/v1");
+            let valid = matches!(
+                version.as_ref().and_then(Value::as_str),
+                Some("gateway.networking.k8s.io/v1" | "gateway.networking.k8s.io/v1alpha3")
+            );
             let mut document = json!({"kind": "TLSRoute", "metadata": {"name": "route", "namespace": "default"}, "spec": {"hostnames": ["example.com"]}});
             if let Some(value) = version {
                 document["apiVersion"] = value;
@@ -2052,7 +2206,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tls_route_create_persists_v1_and_rejects_legacy_before_http() {
+    async fn tls_route_create_projects_alpha3_to_v1() {
         let requests = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
         let captured = requests.clone();
         let service = service_fn(move |request: http::Request<Body>| {
@@ -2074,20 +2228,19 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
-        let mut value = json!({
+        storage
+            .legacy_versions
+            .cell("TLSRoute")
+            .unwrap()
+            .set(Some(LegacyRouteVersion::V1))
+            .unwrap();
+        let value = json!({
             "apiVersion": "gateway.networking.k8s.io/v1alpha3", "kind": "TLSRoute",
             "metadata": {"name": "route", "namespace": "default"},
             "spec": {"hostnames": ["example.com"]}
         });
-        assert!(matches!(
-            storage
-                .create_one("TLSRoute", Some("default"), "route", value.to_string())
-                .await,
-            Err(ConfWriterError::ValidationError(_))
-        ));
-        assert!(requests.lock().is_empty());
-        value["apiVersion"] = json!("gateway.networking.k8s.io/v1");
         storage
             .create_one("TLSRoute", Some("default"), "route", value.to_string())
             .await
@@ -2299,6 +2452,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
 
         storage
@@ -2343,6 +2497,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
 
         let first = storage
@@ -2450,14 +2605,44 @@ mod tests {
     }
 
     #[test]
-    fn backend_tls_policy_api_version_accepts_only_v1() {
+    fn backend_tls_policy_api_version_accepts_registered_sources() {
         let canonical = json!({"apiVersion": "gateway.networking.k8s.io/v1"});
         assert!(validate_backend_tls_policy_api_version(canonical.get("apiVersion").and_then(Value::as_str)).is_ok());
+        assert!(validate_backend_tls_policy_api_version(Some("gateway.networking.k8s.io/v1alpha3")).is_ok());
 
-        for value in [json!({"apiVersion": "gateway.networking.k8s.io/v1alpha3"}), json!({})] {
+        for value in [json!({"apiVersion": "gateway.networking.k8s.io/v1alpha2"}), json!({})] {
             let error =
                 validate_backend_tls_policy_api_version(value.get("apiVersion").and_then(Value::as_str)).unwrap_err();
-            assert!(error.contains("BackendTLSPolicy apiVersion must be gateway.networking.k8s.io/v1"));
+            assert!(error.contains("BackendTLSPolicy apiVersion must use a supported"));
+        }
+    }
+
+    #[tokio::test]
+    async fn last_pre_v1_sources_project_to_the_v1_crud_endpoint() {
+        let storage = KubernetesStorage::new_unconnected_for_test();
+        for (kind, version) in [
+            ("GRPCRoute", "v1alpha2"),
+            ("TLSRoute", "v1alpha3"),
+            ("BackendTLSPolicy", "v1alpha3"),
+            ("TCPRoute", "v1alpha2"),
+            ("UDPRoute", "v1alpha2"),
+        ] {
+            let (api_resource, _) = storage.resolve_api_resource(kind).await.unwrap();
+            let source = json!({
+                "apiVersion": format!("gateway.networking.k8s.io/{version}"),
+                "kind": kind,
+                "metadata": {"name": "resource", "namespace": "default"},
+                "spec": {}
+            });
+            let object = storage
+                .parse_dynamic_object(kind, &source.to_string(), &api_resource)
+                .unwrap();
+            assert_eq!(
+                object.types.unwrap().api_version,
+                "gateway.networking.k8s.io/v1",
+                "{kind}"
+            );
+            assert_eq!(object.data["spec"], source["spec"], "{kind}");
         }
     }
 
@@ -2574,6 +2759,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
 
         let error = storage
@@ -2628,6 +2814,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
 
         let error = storage
@@ -2681,6 +2868,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
 
         storage
@@ -2723,6 +2911,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
 
         let error = storage
@@ -2776,6 +2965,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
 
         storage
@@ -2856,6 +3046,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
         let mut requested = canonical_reference_grant_value();
         requested["metadata"]["labels"] = json!({"edited": "true"});
@@ -2920,6 +3111,7 @@ mod tests {
             gateway_class_version: Arc::new(OnceCell::new()),
             gateway_version: Arc::new(OnceCell::new()),
             http_route_version: Arc::new(OnceCell::new()),
+            legacy_versions: LegacySelections::default(),
         };
 
         let err = storage

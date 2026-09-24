@@ -6,6 +6,17 @@ knowledge_type: regression-guards
 
 # BackendTLSPolicy uses one canonical API identity
 
+## Current source-version update (2026-09-24)
+
+The historical v1-only input conclusion below has been superseded for the
+explicit v1alpha3 source. FileSystem, etcd, and Admin accept and convert it to
+the canonical v1 model after raw TypeMeta validation. Kubernetes selects one
+transport: v1 when served, otherwise v1alpha3. Watch, CRUD, and status use
+that selected version; if neither is served, this kind is skipped without
+failing startup. The adapter is `ImplementedUnverified` pending exact source
+conformance evidence. The earlier removal and verification results below
+remain historical evidence for canonical transport and status ownership.
+
 ## Conclusion and scope
 
 The Controller accepts BackendTLSPolicy as `gateway.networking.k8s.io/v1`.

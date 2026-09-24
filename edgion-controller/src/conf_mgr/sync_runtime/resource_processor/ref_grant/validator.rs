@@ -294,16 +294,24 @@ pub fn validate_grpc_route_if_enabled(route: &edgion_resources::resources::GRPCR
 ///
 /// Cross-namespace backend ref violations are handled by parse() (sets ref_denied)
 /// and update_status() (sets ResolvedRefs=False), not here.
-pub fn validate_tcp_route_if_enabled(_route: &edgion_resources::resources::TCPRoute) -> Vec<String> {
-    Vec::new()
+pub fn validate_tcp_route_if_enabled(route: &edgion_resources::resources::TCPRoute) -> Vec<String> {
+    if route.spec.rules.as_ref().is_some_and(|rules| rules.len() > 1) {
+        vec!["TCPRoute v1 supports at most one rule".to_string()]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Validate UDPRoute with ReferenceGrant if validation is enabled.
 ///
 /// Cross-namespace backend ref violations are handled by parse() (sets ref_denied)
 /// and update_status() (sets ResolvedRefs=False), not here.
-pub fn validate_udp_route_if_enabled(_route: &edgion_resources::resources::UDPRoute) -> Vec<String> {
-    Vec::new()
+pub fn validate_udp_route_if_enabled(route: &edgion_resources::resources::UDPRoute) -> Vec<String> {
+    if route.spec.rules.as_ref().is_some_and(|rules| rules.len() > 1) {
+        vec!["UDPRoute v1 supports at most one rule".to_string()]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Validate TLSRoute with ReferenceGrant if validation is enabled.
@@ -318,6 +326,35 @@ pub fn validate_tls_route_if_enabled(_route: &edgion_resources::resources::TLSRo
 mod tests {
     use super::*;
     use edgion_resources::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
+
+    #[test]
+    fn tcp_and_udp_multi_rule_routes_are_invalid_after_api_server_conversion() {
+        let spec = serde_json::json!({
+            "rules": [
+                {"backendRefs": [{"name": "first", "port": 8080}]},
+                {"backendRefs": [{"name": "second", "port": 8080}]}
+            ]
+        });
+        for kind in ["TCPRoute", "UDPRoute"] {
+            let route = serde_json::json!({
+                "apiVersion": "gateway.networking.k8s.io/v1",
+                "kind": kind,
+                "metadata": {"name": "route", "namespace": "default"},
+                "spec": spec.clone()
+            });
+            if kind == "TCPRoute" {
+                let mut route: edgion_resources::TCPRoute = serde_json::from_value(route).unwrap();
+                assert_eq!(validate_tcp_route_if_enabled(&route).len(), 1);
+                route.spec.rules.as_mut().unwrap().pop();
+                assert!(validate_tcp_route_if_enabled(&route).is_empty());
+            } else {
+                let mut route: edgion_resources::UDPRoute = serde_json::from_value(route).unwrap();
+                assert_eq!(validate_udp_route_if_enabled(&route).len(), 1);
+                route.spec.rules.as_mut().unwrap().pop();
+                assert!(validate_udp_route_if_enabled(&route).is_empty());
+            }
+        }
+    }
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use std::collections::HashMap;
 

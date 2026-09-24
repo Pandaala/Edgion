@@ -141,6 +141,19 @@ pub enum ApiScope {
 
 type NamespacedWatcher<K> = Pin<Box<dyn Stream<Item = watcher::Result<Event<K>>> + Send>>;
 
+fn canonical_legacy_event<S, K>(event: Event<S>) -> Event<K>
+where
+    S: Into<K>,
+{
+    match event {
+        Event::Init => Event::Init,
+        Event::InitApply(resource) => Event::InitApply(resource.into()),
+        Event::InitDone => Event::InitDone,
+        Event::Apply(resource) => Event::Apply(resource.into()),
+        Event::Delete(resource) => Event::Delete(resource.into()),
+    }
+}
+
 struct ActiveController;
 impl ActiveController {
     fn start() -> Self {
@@ -389,6 +402,55 @@ where
                 (WatchScope::Namespace(ns), stream)
             })
             .collect();
+        self.run_sources(sources).await
+    }
+
+    /// Watch one selected legacy endpoint and convert events into the canonical queue.
+    pub async fn run_legacy_namespaced<S>(self) -> Result<()>
+    where
+        K: Resource<Scope = kube::core::NamespaceResourceScope>,
+        S: Resource<Scope = kube::core::NamespaceResourceScope, DynamicType = ()>
+            + Clone
+            + Debug
+            + DeserializeOwned
+            + Into<K>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let client = self.client.clone();
+        let config = self.watcher_config.clone();
+        let stream = |api| -> NamespacedWatcher<K> {
+            Box::pin(
+                watcher(api, config.clone())
+                    .default_backoff()
+                    .map(|event| event.map(canonical_legacy_event)),
+            )
+        };
+        let sources = match &self.api_scope {
+            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces) => {
+                vec![(WatchScope::AllNamespaces, stream(Api::<S>::all(client)))]
+            }
+            ApiScope::Namespaced(NamespaceWatchMode::SingleNamespace(ns)) => {
+                vec![(
+                    WatchScope::Namespace(ns.clone()),
+                    stream(Api::<S>::namespaced(client, ns)),
+                )]
+            }
+            ApiScope::Namespaced(NamespaceWatchMode::MultipleNamespaces(namespaces)) => {
+                let mut names = namespaces.clone();
+                names.sort();
+                names.dedup();
+                names
+                    .into_iter()
+                    .map(|ns| {
+                        let watched = stream(Api::<S>::namespaced(client.clone(), &ns));
+                        (WatchScope::Namespace(ns), watched)
+                    })
+                    .collect()
+            }
+            ApiScope::ClusterScoped => anyhow::bail!("Cannot run a cluster-scoped legacy Route source"),
+        };
         self.run_sources(sources).await
     }
 
@@ -935,6 +997,40 @@ mod status_persistence_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alpha_watch_events_enter_the_canonical_lifecycle() {
+        use edgion_resources::resources::TLSRouteAlpha3;
+        let source: TLSRouteAlpha3 = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1alpha3",
+            "kind": "TLSRoute",
+            "metadata": {"name": "route", "namespace": "default", "resourceVersion": "17"},
+            "spec": {"hostnames": ["example.com"], "rules": [{"backendRefs": [{"name": "backend", "port": 443}]}]},
+            "status": {"parents": []}
+        }))
+        .unwrap();
+        assert!(matches!(
+            canonical_legacy_event::<TLSRouteAlpha3, edgion_resources::TLSRoute>(Event::Init),
+            Event::Init
+        ));
+        assert!(matches!(
+            canonical_legacy_event::<TLSRouteAlpha3, edgion_resources::TLSRoute>(Event::InitDone),
+            Event::InitDone
+        ));
+        for event in [
+            Event::InitApply(source.clone()),
+            Event::Apply(source.clone()),
+            Event::Delete(source.clone()),
+        ] {
+            let canonical: Event<edgion_resources::TLSRoute> = canonical_legacy_event(event);
+            let (Event::InitApply(route) | Event::Apply(route) | Event::Delete(route)) = canonical else {
+                unreachable!();
+            };
+            assert_eq!(route.metadata.resource_version.as_deref(), Some("17"));
+            assert_eq!(route.spec.hostnames.as_ref().unwrap(), &vec!["example.com".to_string()]);
+            assert!(route.status.is_some());
+        }
+    }
 
     #[test]
     fn gateway_class_beta_events_keep_one_canonical_lifecycle() {

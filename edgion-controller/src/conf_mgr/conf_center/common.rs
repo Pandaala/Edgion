@@ -7,6 +7,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use crate::conf_mgr::conf_center::traits::ConfWriterError;
 
@@ -151,10 +152,9 @@ use serde::de::{DeserializeOwned, Error as _};
 use std::fmt::Debug;
 
 /// Check a raw Gateway API document before typed serde can discard TypeMeta.
-/// Canonical sources are admitted directly. ReferenceGrant v1beta1 has an
-/// explicit decoder and converter at every non-Kubernetes ingress path.
+/// Only explicitly inventoried source versions are admitted.
 pub fn validate_gateway_api_source(kind: ResourceKind, value: &serde_yaml::Value) -> Result<(), String> {
-    use edgion_resources::gateway_api_support::{canonical_sources, GROUP};
+    use edgion_resources::gateway_api_support::{canonical_sources, source_for, GROUP};
 
     let mut sources = canonical_sources().filter(|source| source.kind == kind.as_str());
     let Some(source) = sources.next() else {
@@ -168,38 +168,37 @@ pub fn validate_gateway_api_source(kind: ResourceKind, value: &serde_yaml::Value
     if actual_kind != Some(source.kind) {
         return Err(format!("{} kind must be {}", kind.as_str(), source.kind));
     }
-    let selected_version = if matches!(
-        kind,
-        ResourceKind::ReferenceGrant | ResourceKind::GatewayClass | ResourceKind::Gateway | ResourceKind::HTTPRoute
-    ) && value.get("apiVersion").and_then(serde_yaml::Value::as_str)
-        == Some("gateway.networking.k8s.io/v1beta1")
-    {
-        "v1beta1"
-    } else {
-        source.version
-    };
-    let expected_api_version = format!("{GROUP}/{selected_version}");
-    if value.get("apiVersion").and_then(serde_yaml::Value::as_str) != Some(expected_api_version.as_str()) {
-        return Err(format!("{} apiVersion must be {expected_api_version}", kind.as_str()));
+    let actual_version = value
+        .get("apiVersion")
+        .and_then(serde_yaml::Value::as_str)
+        .and_then(|api_version| api_version.strip_prefix(&format!("{GROUP}/")));
+    if actual_version.is_none_or(|version| source_for(source.kind, version).is_none()) {
+        return Err(format!(
+            "{} apiVersion must use a supported {GROUP} source version",
+            kind.as_str()
+        ));
     }
     Ok(())
 }
 
-/// Kubernetes CRUD still calls these typed version guards before writing.
+/// Kubernetes CRUD checks these explicit source versions before v1 projection.
 pub fn validate_backend_tls_policy_api_version(api_version: Option<&str>) -> Result<(), String> {
-    validate_canonical_v1("BackendTLSPolicy", api_version)
+    validate_registered_source_version("BackendTLSPolicy", api_version)
 }
 
 pub fn validate_tls_route_api_version(api_version: Option<&str>) -> Result<(), String> {
-    validate_canonical_v1("TLSRoute", api_version)
+    validate_registered_source_version("TLSRoute", api_version)
 }
 
-fn validate_canonical_v1(kind: &str, api_version: Option<&str>) -> Result<(), String> {
-    const VERSION: &str = "gateway.networking.k8s.io/v1";
-    if api_version == Some(VERSION) {
+fn validate_registered_source_version(kind: &str, api_version: Option<&str>) -> Result<(), String> {
+    use edgion_resources::gateway_api_support::{source_for, GROUP};
+    if api_version
+        .and_then(|api_version| api_version.strip_prefix(&format!("{GROUP}/")))
+        .is_some_and(|version| source_for(kind, version).is_some())
+    {
         Ok(())
     } else {
-        Err(format!("{kind} apiVersion must be {VERSION}"))
+        Err(format!("{kind} apiVersion must use a supported {GROUP} source version"))
     }
 }
 
@@ -207,6 +206,21 @@ fn validate_canonical_v1(kind: &str, api_version: Option<&str>) -> Result<(), St
 ///
 /// Gateway API sources are checked against the canonical inventory first.
 pub fn parse_resource_content<K>(content: &str) -> serde_yaml::Result<K>
+where
+    K: ResourceMeta + Resource + Clone + Send + Sync + Debug + serde::Serialize + DeserializeOwned + 'static,
+{
+    parse_resource_content_inner(content, false)
+}
+
+/// Static backends validate selected alpha sources before canonical conversion.
+pub fn parse_resource_content_offline<K>(content: &str) -> serde_yaml::Result<K>
+where
+    K: ResourceMeta + Resource + Clone + Send + Sync + Debug + serde::Serialize + DeserializeOwned + 'static,
+{
+    parse_resource_content_inner(content, true)
+}
+
+fn parse_resource_content_inner<K>(content: &str, validate_alpha_schema: bool) -> serde_yaml::Result<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + serde::Serialize + DeserializeOwned + 'static,
 {
@@ -234,6 +248,46 @@ where
         let beta: edgion_resources::ReferenceGrantBeta = serde_yaml::from_str(content)?;
         let canonical: edgion_resources::ReferenceGrant = beta.into();
         serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
+    } else if matches!(
+        kind,
+        ResourceKind::GRPCRoute
+            | ResourceKind::TLSRoute
+            | ResourceKind::BackendTLSPolicy
+            | ResourceKind::TCPRoute
+            | ResourceKind::UDPRoute
+    ) && serde_yaml::from_str::<serde_yaml::Value>(content)?
+        .get("apiVersion")
+        .and_then(serde_yaml::Value::as_str)
+        != Some("gateway.networking.k8s.io/v1")
+    {
+        let mut source: serde_yaml::Value = serde_yaml::from_str(content)?;
+        if validate_alpha_schema {
+            let version = source
+                .get("apiVersion")
+                .and_then(serde_yaml::Value::as_str)
+                .and_then(|value| value.strip_prefix("gateway.networking.k8s.io/"))
+                .ok_or_else(|| serde_yaml::Error::custom("Missing Gateway API source version"))?;
+            static SOURCE_SCHEMAS: OnceLock<Result<crate::conf_mgr::SchemaValidator, String>> = OnceLock::new();
+            let schemas = SOURCE_SCHEMAS.get_or_init(|| {
+                let crd_dir = edgion_resources::work_dir().resolve("config/crd");
+                #[cfg(test)]
+                let crd_dir = if crd_dir.is_dir() {
+                    crd_dir
+                } else {
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/crd")
+                };
+                crate::conf_mgr::SchemaValidator::from_crd_dir(&crd_dir).map_err(|error| error.to_string())
+            });
+            let schemas = schemas
+                .as_ref()
+                .map_err(|error| serde_yaml::Error::custom(error.as_str()))?;
+            let source_json = serde_json::to_value(&source).map_err(serde_yaml::Error::custom)?;
+            schemas
+                .validate_gateway_source("gateway.networking.k8s.io", version, kind.as_str(), &source_json)
+                .map_err(serde_yaml::Error::custom)?;
+        }
+        source["apiVersion"] = serde_yaml::Value::String("gateway.networking.k8s.io/v1".to_string());
+        serde_yaml::from_value(source)?
     } else {
         serde_yaml::from_str::<K>(content)?
     };
@@ -283,6 +337,77 @@ mod gateway_api_version_guard_tests {
     use edgion_resources::{
         BackendTLSPolicy, Gateway, GatewayClass, HTTPRoute, ReferenceGrant, TCPRoute, TLSRoute, UDPRoute,
     };
+
+    #[test]
+    fn last_pre_v1_sources_convert_to_canonical_resources() {
+        let cases = [
+            ("GRPCRoute", "v1alpha2"),
+            ("TLSRoute", "v1alpha3"),
+            ("TCPRoute", "v1alpha2"),
+            ("UDPRoute", "v1alpha2"),
+            ("BackendTLSPolicy", "v1alpha3"),
+        ];
+        for (kind, version) in cases {
+            let mut source = serde_json::json!({
+                "apiVersion": format!("gateway.networking.k8s.io/{version}"),
+                "kind": kind,
+                "metadata": {"name": "route", "namespace": "default", "resourceVersion": "42"},
+                "spec": {}
+            });
+            if kind == "BackendTLSPolicy" {
+                source["spec"] = serde_json::json!({
+                    "targetRefs": [{"group": "", "kind": "Service", "name": "backend"}],
+                    "validation": {"hostname": "backend.example.com"}
+                });
+                source["status"] = serde_json::json!({"ancestors": []});
+            } else {
+                source["spec"]["rules"] = serde_json::json!([{"backendRefs": [{"name": "backend", "port": 8080}]}]);
+                if kind == "TLSRoute" {
+                    source["spec"]["hostnames"] = serde_json::json!(["example.com"]);
+                }
+                source["status"] = serde_json::json!({"parents": []});
+            }
+            let canonical = match kind {
+                "GRPCRoute" => serde_json::to_value(
+                    super::parse_resource_content_offline::<edgion_resources::GRPCRoute>(&source.to_string()).unwrap(),
+                )
+                .unwrap(),
+                "TLSRoute" => serde_json::to_value(
+                    super::parse_resource_content_offline::<TLSRoute>(&source.to_string()).unwrap(),
+                )
+                .unwrap(),
+                "TCPRoute" => serde_json::to_value(
+                    super::parse_resource_content_offline::<TCPRoute>(&source.to_string()).unwrap(),
+                )
+                .unwrap(),
+                "UDPRoute" => serde_json::to_value(
+                    super::parse_resource_content_offline::<UDPRoute>(&source.to_string()).unwrap(),
+                )
+                .unwrap(),
+                "BackendTLSPolicy" => serde_json::to_value(
+                    super::parse_resource_content_offline::<BackendTLSPolicy>(&source.to_string()).unwrap(),
+                )
+                .unwrap(),
+                _ => unreachable!(),
+            };
+            assert_eq!(canonical["apiVersion"], "gateway.networking.k8s.io/v1", "{kind}");
+            assert_eq!(canonical["metadata"], source["metadata"], "{kind}");
+            assert_eq!(canonical["spec"]["rules"], source["spec"]["rules"], "{kind}");
+            assert_eq!(canonical["status"], source["status"], "{kind}");
+        }
+    }
+
+    #[test]
+    fn grpc_alpha_source_schema_rejects_too_many_matches_before_conversion() {
+        let matches = vec![serde_json::json!({"method": {"service": "example.Service"}}); 9];
+        let source = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1alpha2",
+            "kind": "GRPCRoute",
+            "metadata": {"name": "route", "namespace": "default"},
+            "spec": {"rules": [{"matches": matches, "backendRefs": [{"name": "backend", "port": 8080}]}]}
+        });
+        assert!(super::parse_resource_content_offline::<edgion_resources::GRPCRoute>(&source.to_string()).is_err());
+    }
 
     #[test]
     fn gateway_class_beta_preserves_source_fields_and_status() {
@@ -414,7 +539,9 @@ mod gateway_api_version_guard_tests {
             ),
         ] {
             for api_version in ["gateway.networking.k8s.io/v1beta1", "other.example/v1"] {
-                if matches!(kind, "ReferenceGrant" | "GatewayClass" | "Gateway") && api_version.ends_with("/v1beta1") {
+                if matches!(kind, "ReferenceGrant" | "GatewayClass" | "Gateway" | "HTTPRoute")
+                    && api_version.ends_with("/v1beta1")
+                {
                     continue;
                 }
                 let yaml = format!("apiVersion: {api_version}\nkind: {kind}\nmetadata:\n  name: test\nspec: {{}}\n");
@@ -434,7 +561,7 @@ mod gateway_api_version_guard_tests {
     }
 
     #[test]
-    fn tcp_and_udp_v1_ingress_reject_alpha_then_accept_repaired_document() {
+    fn tcp_and_udp_alpha_ingress_converts_to_v1() {
         for (kind, check) in [
             (
                 "TCPRoute",
@@ -448,7 +575,7 @@ mod gateway_api_version_guard_tests {
             let alpha = format!(
                 "apiVersion: gateway.networking.k8s.io/v1alpha2\nkind: {kind}\nmetadata:\n  name: route\n  namespace: default\nspec:\n  parentRefs:\n    - name: edge\n  rules:\n    - backendRefs:\n        - name: backend\n          port: 8080\n"
             );
-            assert!(check(&alpha).is_err(), "{kind} accepted alpha source");
+            assert!(check(&alpha).is_ok(), "{kind} rejected alpha source");
             let canonical = alpha.replace("/v1alpha2", "/v1");
             assert!(check(&canonical).is_ok(), "{kind} rejected v1 source");
             if kind == "TCPRoute" {

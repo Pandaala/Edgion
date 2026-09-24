@@ -87,6 +87,13 @@ const BETA_STATUS_ADAPTER: SourcePaths = SourcePaths {
     status_transport: PathState::Wired,
     ..BETA_ADAPTER
 };
+const ALPHA_ADAPTER: SourcePaths = SourcePaths {
+    kubernetes_watch: PathState::Wired,
+    kubernetes_crud: PathState::Wired,
+    status_transport: PathState::Wired,
+    raw_type_meta_guard: PathState::Wired,
+    converter: PathState::Wired,
+};
 /// Source GVKs are listed explicitly. `Proposed` and `ImplementedUnverified` are
 /// deliberately not advertised as conformance-verified source versions.
 pub const SOURCES: &[GatewayApiSource] = &[
@@ -140,10 +147,24 @@ pub const SOURCES: &[GatewayApiSource] = &[
         evidence: NO_SOURCE_EVIDENCE,
     },
     GatewayApiSource {
+        kind: "GRPCRoute",
+        version: "v1alpha2",
+        state: SourceState::ImplementedUnverified,
+        paths: ALPHA_ADAPTER,
+        evidence: NO_SOURCE_EVIDENCE,
+    },
+    GatewayApiSource {
         kind: "TLSRoute",
         version: "v1",
         state: SourceState::Canonical,
         paths: CANONICAL,
+        evidence: NO_SOURCE_EVIDENCE,
+    },
+    GatewayApiSource {
+        kind: "TLSRoute",
+        version: "v1alpha3",
+        state: SourceState::ImplementedUnverified,
+        paths: ALPHA_ADAPTER,
         evidence: NO_SOURCE_EVIDENCE,
     },
     GatewayApiSource {
@@ -168,10 +189,24 @@ pub const SOURCES: &[GatewayApiSource] = &[
         evidence: NO_SOURCE_EVIDENCE,
     },
     GatewayApiSource {
+        kind: "TCPRoute",
+        version: "v1alpha2",
+        state: SourceState::ImplementedUnverified,
+        paths: ALPHA_ADAPTER,
+        evidence: NO_SOURCE_EVIDENCE,
+    },
+    GatewayApiSource {
         kind: "UDPRoute",
         version: "v1",
         state: SourceState::Canonical,
         paths: CANONICAL,
+        evidence: NO_SOURCE_EVIDENCE,
+    },
+    GatewayApiSource {
+        kind: "UDPRoute",
+        version: "v1alpha2",
+        state: SourceState::ImplementedUnverified,
+        paths: ALPHA_ADAPTER,
         evidence: NO_SOURCE_EVIDENCE,
     },
     GatewayApiSource {
@@ -181,7 +216,20 @@ pub const SOURCES: &[GatewayApiSource] = &[
         paths: CANONICAL,
         evidence: NO_SOURCE_EVIDENCE,
     },
+    GatewayApiSource {
+        kind: "BackendTLSPolicy",
+        version: "v1alpha3",
+        state: SourceState::ImplementedUnverified,
+        paths: ALPHA_ADAPTER,
+        evidence: NO_SOURCE_EVIDENCE,
+    },
 ];
+
+pub fn source_for(kind: &str, version: &str) -> Option<&'static GatewayApiSource> {
+    SOURCES
+        .iter()
+        .find(|source| source.kind == kind && source.version == version && source.state != SourceState::Proposed)
+}
 
 pub fn canonical_sources() -> impl Iterator<Item = &'static GatewayApiSource> {
     SOURCES.iter().filter(|source| source.state == SourceState::Canonical)

@@ -13,12 +13,12 @@ conformance change.
 | GatewayClass | v1 | One center-lifetime v1-preferred transport shared by watch, CRUD, and status; v1beta1 converts before canonical processing | v1beta1 served and storage in the v1.6.2 bundle | v1 canonical; v1beta1 `ImplementedUnverified`, pending per-source bundle and conformance evidence |
 | Gateway | v1 | One center-lifetime v1-preferred transport shared by watch, CRUD, and status; v1beta1 converts before canonical processing | v1beta1 served | v1 canonical; v1beta1 `ImplementedUnverified`, pending bundle and conformance evidence |
 | HTTPRoute | v1 | One center-lifetime v1-preferred transport shared by watch, CRUD, and status; v1beta1 converts before canonical processing | v1beta1 served | v1 canonical; v1beta1 `ImplementedUnverified`, pending bundle and conformance evidence |
-| GRPCRoute | v1 | v1 typed watch and CRUD | none | v1 declared |
-| TCPRoute | v1 | v1 typed watch, CRUD, and status | v1alpha2 served but unsupported | v1 canonical; no alpha adapter |
-| UDPRoute | v1 | v1 typed watch, CRUD, and status | v1alpha2 served but unsupported | v1 canonical; no alpha adapter |
-| TLSRoute | v1 | v1-only watch, CRUD, and raw TypeMeta guard | v1alpha2 and v1alpha3 served | v1 only; alternate versions have no direct Edgion adapter |
+| GRPCRoute | v1 | Prefer v1; use v1alpha2 watch, CRUD, and status when only that version is served; skip when absent | none; v1alpha2 was last served in v1.1.1 | v1alpha2 `ImplementedUnverified` |
+| TCPRoute | v1 | Prefer v1; use v1alpha2 watch, CRUD, and status when only that version is served; skip when absent | v1alpha2 served | v1alpha2 `ImplementedUnverified`; multiple rules are rejected and withdrawn |
+| UDPRoute | v1 | Prefer v1; use v1alpha2 watch, CRUD, and status when only that version is served; skip when absent | v1alpha2 served | v1alpha2 `ImplementedUnverified`; multiple rules are rejected and withdrawn |
+| TLSRoute | v1 | Prefer v1; use v1alpha3 watch, CRUD, and status when only that version is served; skip when absent | v1alpha2 and v1alpha3 served | v1alpha3 `ImplementedUnverified`; v1alpha2 unsupported |
 | ReferenceGrant | v1 | One center-lifetime v1-preferred transport selection shared by watch and CRUD; v1beta1 converts before canonical processing | v1beta1 served and storage in the v1.6.2 bundle | v1 canonical; v1beta1 adapter wired for Kubernetes watch and offline/Admin input, pending per-source bundle and conformance evidence |
-| BackendTLSPolicy | v1 | v1-only watch, CRUD, and raw TypeMeta guard | v1alpha3 served | v1 declared; v1alpha3 intentionally has no Edgion adapter |
+| BackendTLSPolicy | v1 | Prefer v1; use v1alpha3 watch, CRUD, and status when only that version is served; skip when absent | v1alpha3 served | v1alpha3 `ImplementedUnverified` |
 | ListenerSet | unsupported | no processor or watcher | v1 served | CRD availability only; explicitly not advertised |
 
 The Standard v1.6.2 bundle serves TCPRoute and UDPRoute v1. The Experimental
@@ -43,6 +43,17 @@ status subresource. Direct Kubernetes API
 submission still requires the cluster CRD to serve the submitted version. Their
 generated Rust roots keep the original wire kinds. Source adapters remain
 `ImplementedUnverified` until their bundle, feature, and conformance evidence is complete.
+
+The five last pre-v1 sources use an explicit raw TypeMeta guard and conversion
+for FileSystem, etcd, and Admin. Admin validates against the selected v1.6.2
+Experimental schema except GRPCRoute v1alpha2, whose last co-served v1.1.1
+Experimental schema is embedded in the Controller binary. Kubernetes continues
+to prefer v1 watch and CRUD and use the selected alpha version when v1 is not
+served. If neither selected version is served, that kind is skipped without
+failing Controller startup. TCPRoute and UDPRoute apply the v1 one-rule
+limit after Kubernetes conversion, so an invalid alpha-authored update cannot
+keep an earlier route published. These adapters have no per-source conformance
+evidence yet.
 
 No row carries per-source-version conformance evidence yet. Existing
 Gateway API profile results are tied to a suite and feature set, not proof of
@@ -125,6 +136,7 @@ Experimental channel membership are separate properties.
   `edgion-resources/src/resources/{tls_route,reference_grant}.rs` and the
   corresponding Controller handlers.
 - Bundled schemas: `config/crd/gateway-api/gateway-api-*-v1.6.2.yaml`.
+- Historical GRPCRoute source schema: `config/gateway-api-source-schemas/grpcroute-v1alpha2-v1.1.1-experimental.yaml`.
 - Conformance dependency: `edgion-tests/conformance/go.mod` (currently v1.6.2,
   pinned separately from the v1.6.2 CRD bundle).
 
