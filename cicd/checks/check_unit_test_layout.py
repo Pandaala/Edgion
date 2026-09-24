@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Check the migrated edgion-common unit-test mounts.
+"""Check unit-test mounts in migrated crates.
 
-This deliberately scopes enforcement to the completed pilot crate. Expand the
-scope as other crates migrate. Cargo compilation and test-identity comparisons
+Expand the scope as other crates migrate. Cargo compilation and test-identity comparisons
 remain necessary for macro expansions, cfg combinations, and privacy checks.
 """
 
@@ -12,6 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 CRATE = ROOT / "edgion-common"
+MIGRATED_CRATES = ("edgion-common", "edgion-dsl", "edgion-cli")
 CFG = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 PATH = re.compile(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]')
 MODULE = re.compile(r"mod\s+([A-Za-z_][A-Za-z_0-9]*)\s*([;{])")
@@ -51,6 +51,11 @@ def mask_non_code(text: str) -> str:
             blank(i, end)
             i = end
         else:
+            char = re.match(r"(?:b)?'(?:\\.|[^'\\\n])'", text[i:])
+            if char:
+                blank(i, i + char.end())
+                i += char.end()
+                continue
             raw = re.match(r'(?:b|br|r)?(#+)?"', text[i:])
             if raw:
                 hashes = raw.group(1) or ""
@@ -134,8 +139,13 @@ def check() -> list[str]:
 
 
 if __name__ == "__main__":
-    failures = check()
+    failures = []
+    mounted = 0
+    for name in MIGRATED_CRATES:
+        CRATE = ROOT / name
+        failures.extend(check())
+        mounted += len(list((CRATE / "tests" / "unit").rglob("*.rs")))
     if failures:
         print("\n".join(failures), file=sys.stderr)
         sys.exit(1)
-    print(f"Unit-test layout passed: {len(list((CRATE / 'tests' / 'unit').rglob('*.rs')))} mounted files")
+    print(f"Unit-test layout passed: {mounted} mounted files across {len(MIGRATED_CRATES)} crates")

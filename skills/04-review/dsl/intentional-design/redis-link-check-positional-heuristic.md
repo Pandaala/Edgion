@@ -7,7 +7,7 @@ knowledge_type: intentional-design
 # `check_redis_link_names` Positional Heuristic — FIXED (fail-open), PIN-IN-PLACE
 
 **Status**: Resolved (plugins-http-dsl-F015, 2026-05-26) — see `check_redis_link_names` + `is_single_push_op` in `edgion-dsl/src/script.rs`.
-**Tests**: `edgion-dsl/src/script.rs::tests::check_accepts_declared_link_with_multi_instruction_sibling_arg` (regression for the false-positive 500) and `check_fails_open_when_layout_is_ambiguous` (documents fail-open); `check_rejects_unknown_redis_link` still locks the all-literal reject path.
+**Tests**: `edgion-dsl/tests/unit/script_test.rs::check_accepts_declared_link_with_multi_instruction_sibling_arg` (regression for the false-positive 500) and `check_fails_open_when_layout_is_ambiguous` (documents fail-open); `check_rejects_unknown_redis_link` still locks the all-literal reject path.
 
 ## Conclusion
 

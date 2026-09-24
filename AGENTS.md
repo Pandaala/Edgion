@@ -19,8 +19,8 @@ fixtures, and source-relative paths; compare test identities before and after a
 move. Do not widen production visibility for tests. Top-level `tests/*.rs`
 remain integration targets, and benchmarks remain under `benches/`. See
 [`skills/05-testing/00-unit-testing.md`](skills/05-testing/00-unit-testing.md)
-for naming exceptions and migration details. The `edgion-common` pilot is
-complete; other crates await migration.
+for naming exceptions and migration details. `edgion-common`, `edgion-dsl`,
+and `edgion-cli` are migrated; other crates await migration.
 
 ## Project Overview
 
@@ -250,7 +250,7 @@ When the user says "run check", "check the code", "format the code", "run CI", "
    committed RequestRedirect/URLRewrite OpenAPI, CEL, defaults, bounds, and scoped
    rule inventory must match both vendored Gateway API CRD channels.
 9. **Migrated unit-test layout**: `python3 cicd/checks/check_unit_test_layout.py` —
-   currently enforces the `edgion-common` pilot; expand its scope as other crates migrate.
+   currently enforces `edgion-common`, `edgion-dsl`, and `edgion-cli`; expand its scope as other crates migrate.
 
 > `--workspace` is intentional: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip it. `--workspace` brings it back into the fast check/clippy signal (matching what `cargo test --all` already compiles).
 

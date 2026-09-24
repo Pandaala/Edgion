@@ -28,6 +28,7 @@ class LayoutTests(unittest.TestCase):
     def test_mounted_mod_and_named_modules(self):
         self.write("src/dns/mod.rs", '''// #[cfg(test)] mod false_positive { }
 const SAMPLE: &str = r#"#[test]"#;
+const QUOTE: u8 = b'"';
 #[cfg(test)]
 #[path = "../../tests/unit/dns/mod_test.rs"]
 mod tests;
