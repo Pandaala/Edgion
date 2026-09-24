@@ -34,7 +34,7 @@ Stamping this out ~70 times multiplies a 3-line body into a 9-line file-level it
 
 **2. The "per-builtin unit-testability" claim is overstated**
 
-The issue's testability argument rests on "extract `IpInCidr` so it can be fuzzed in isolation". But the extracted fn's signature would still need `&mut VmState` (to pop the args) and `&mut dyn PluginSession` (it currently doesn't, but most siblings do, so the extraction is uniform only if all take the same args). A test harness that mocks those is not cheaper to build than the existing integration tests in `edgion-gateway/src/plugins/http/dsl/tests/` which already exercise every builtin through compiled DSL scripts. The narrowest legitimate win — making the CIDR bit-mask arithmetic unit-testable — does **not** require touching the dispatch shape:
+The issue's testability argument rests on "extract `IpInCidr` so it can be fuzzed in isolation". But the extracted fn's signature would still need `&mut VmState` (to pop the args) and `&mut dyn PluginSession` (it currently doesn't, but most siblings do, so the extraction is uniform only if all take the same args). A test harness that mocks those is not cheaper to build than the existing integration tests in `edgion-gateway/tests/unit/plugins/http/dsl/mod_test/` which already exercise every builtin through compiled DSL scripts. The narrowest legitimate win — making the CIDR bit-mask arithmetic unit-testable — does **not** require touching the dispatch shape:
 
 ```rust
 // What's actually worth extracting (one helper, narrow, pure):

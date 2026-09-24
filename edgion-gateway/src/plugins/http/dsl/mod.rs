@@ -29,4 +29,5 @@ pub mod plugin;
 pub mod runtime;
 
 #[cfg(test)]
+#[path = "../../../../tests/unit/plugins/http/dsl/mod_test.rs"]
 mod tests;

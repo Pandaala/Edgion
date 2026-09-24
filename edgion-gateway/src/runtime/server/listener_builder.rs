@@ -603,76 +603,9 @@ fn build_stream_connection_filter(context: &ListenerContext) -> Option<Arc<dyn C
 }
 
 #[cfg(test)]
-mod tests {
-    use super::TlsOffloadBudget;
-    use crate::routes::common::resolve_gateway_stream_plugin_store_key;
-    use pingora_core::server::configuration::ServerConf;
-
-    #[test]
-    fn tls_offload_budget_enforces_process_thread_limit() {
-        let conf = ServerConf {
-            downstream_tls_offload_threadpools: Some(2),
-            downstream_tls_offload_thread_per_pool: Some(2),
-            ..Default::default()
-        };
-        let mut budget = TlsOffloadBudget::new(&conf).unwrap();
-        for _ in 0..16 {
-            budget.reserve("app/gateway", "https").unwrap();
-        }
-        let err = budget.reserve("app/gateway", "tls-tcp").unwrap_err();
-        assert!(err.to_string().contains("68 threads for 17 terminating listeners"));
-        assert_eq!(budget.acceptors, 16);
-
-        let mut disabled = TlsOffloadBudget::new(&ServerConf::default()).unwrap();
-        disabled.reserve("app/gateway", "https").unwrap();
-        assert_eq!(disabled.acceptors, 0);
-    }
-
-    #[test]
-    fn gateway_stream_plugin_store_key_uses_gateway_namespace() {
-        assert_eq!(
-            resolve_gateway_stream_plugin_store_key("  policy  ", "app").unwrap(),
-            Some("app/policy".to_string())
-        );
-    }
-
-    #[test]
-    fn gateway_stream_plugin_store_key_rejects_qualified_name() {
-        assert!(resolve_gateway_stream_plugin_store_key("shared/policy", "app").is_err());
-    }
-}
+#[path = "../../../tests/unit/runtime/server/listener_builder_test.rs"]
+mod tests;
 
 #[cfg(test)]
-mod proxy_protocol_trust_tests {
-    use std::net::SocketAddr;
-
-    use pingora_core::protocols::l4::proxy_protocol::ProxyProtocolTrust;
-
-    use super::*;
-
-    #[derive(Debug)]
-    struct AlwaysTrust;
-
-    impl ProxyProtocolTrust for AlwaysTrust {
-        fn is_trusted(&self, _addr: &SocketAddr) -> bool {
-            true
-        }
-    }
-
-    #[test]
-    fn socket_mapping_has_one_mandatory_none_case() {
-        assert!(tcp_sock_opts_for_policy(&PreparedProxyProtocolPolicy::Disabled).is_none());
-
-        let required = tcp_sock_opts_for_policy(&PreparedProxyProtocolPolicy::Required).unwrap();
-        assert!(required.proxy_protocol);
-        assert!(required.proxy_protocol_trusted_sources.is_none());
-
-        let trusted = tcp_sock_opts_for_policy(&PreparedProxyProtocolPolicy::TrustedSources {
-            trust: Arc::new(AlwaysTrust),
-            cidr_count: 1,
-        })
-        .unwrap();
-        assert!(trusted.proxy_protocol);
-        assert!(trusted.proxy_protocol_trusted_sources.is_some());
-    }
-}
+#[path = "../../../tests/unit/runtime/server/listener_builder_test/proxy_protocol_trust_tests.rs"]
+mod proxy_protocol_trust_tests;

@@ -6,6 +6,7 @@ pub mod request_filter;
 pub mod session;
 pub mod streaming_response_processor;
 #[cfg(test)]
+#[path = "../../../../tests/unit/plugins/runtime/traits/mod_test/test_helpers.rs"]
 pub mod test_helpers;
 pub mod upstream_response;
 pub mod upstream_response_body_filter;

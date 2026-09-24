@@ -34,4 +34,5 @@ pub use traits::{
 };
 
 #[cfg(test)]
+#[path = "../../../tests/unit/plugins/runtime/mod_test/rate_limit_local_overflow_tests.rs"]
 mod rate_limit_local_overflow_tests;

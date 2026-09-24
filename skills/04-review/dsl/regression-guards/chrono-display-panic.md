@@ -7,7 +7,7 @@ knowledge_type: regression-guards
 # Chrono `Display::to_string()` Panic on Bad Format — FIXED, PIN-IN-PLACE
 
 **Status**: Resolved — see `BuiltinId::TimeFormat` in `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` for the canonical pattern.
-**Test**: `edgion-gateway/src/plugins/http/dsl/tests/p3_utility_tests.rs::test_time_format_invalid_specifier_returns_api_error`.
+**Test**: `edgion-gateway/tests/unit/plugins/http/dsl/mod_test/p3_utility_tests.rs::test_time_format_invalid_specifier_returns_api_error`.
 
 ## Conclusion
 

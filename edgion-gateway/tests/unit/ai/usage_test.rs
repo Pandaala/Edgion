@@ -1,0 +1,964 @@
+use super::*;
+use crate::ai::quota::QuotaFinalStatus;
+use crate::plugins::runtime::traits::session::MockPluginSession;
+
+fn mock_session() -> MockPluginSession {
+    let mut session = MockPluginSession::new();
+    session.expect_semantic_guard_active().return_const(false);
+    session.expect_try_claim_response_terminal().return_const(true);
+    session.expect_mark_response_terminal_emission().return_const(());
+    session
+}
+
+async fn feed(processor: &mut UsageExtractionProcessor, chunks: &[(&[u8], bool)], kind: ResponseStreamKind) {
+    let mut session = mock_session();
+    // Tests that assert on recorded statuses build their own session; this
+    // shared driver only has to tolerate them.
+    session.expect_record_error().return_const(());
+    let mut sink = ResponseBodySink::new();
+    for (chunk, eos) in chunks {
+        let original = Bytes::copy_from_slice(chunk);
+        let mut body = Some(original.clone());
+        processor.on_chunk(&mut body, *eos, kind, &mut sink, &mut session).await;
+        assert_eq!(body, Some(original), "usage observation must not mutate the response");
+    }
+}
+
+#[tokio::test]
+async fn extracts_non_streaming_usage_at_eos() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    feed(
+        &mut processor,
+        &[(
+            br#"{"id":"x","usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}"#,
+            true,
+        )],
+        ResponseStreamKind::None,
+    )
+    .await;
+    assert_eq!(shared.reported_tokens(), Some((12, 7)));
+}
+
+#[tokio::test]
+async fn extracts_final_split_sse_usage_and_ignores_done() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    feed(
+        &mut processor,
+        &[
+            (b"data: {\"usage\":{\"prompt_tokens\":4,", false),
+            (b"\"completion_tokens\":9}}\n\n", false),
+            (b"data: [DONE]\n\n", true),
+        ],
+        ResponseStreamKind::Sse,
+    )
+    .await;
+    assert_eq!(shared.reported_tokens(), Some((4, 9)));
+}
+
+#[tokio::test]
+async fn malformed_or_partial_usage_remains_unreported() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    feed(
+        &mut processor,
+        &[(br#"{"usage":{"prompt_tokens":1}}"#, true)],
+        ResponseStreamKind::None,
+    )
+    .await;
+    assert_eq!(shared.reported_tokens(), None);
+
+    let malformed_shared = Arc::new(AiUsageShared::default());
+    let mut malformed = UsageExtractionProcessor::new(malformed_shared.clone());
+    feed(&mut malformed, &[(b"{not-json", true)], ResponseStreamKind::None).await;
+    assert_eq!(malformed_shared.reported_tokens(), None);
+}
+
+#[tokio::test]
+async fn non_streaming_exact_boundary_is_accepted_and_overflow_degrades() {
+    let exact_shared = Arc::new(AiUsageShared::default());
+    let mut exact = UsageExtractionProcessor::new(exact_shared.clone());
+    let mut body = vec![b' '; MAX_NON_STREAMING_USAGE_BYTES];
+    let usage = br#"{"usage":{"prompt_tokens":2,"completion_tokens":3}}"#;
+    body[..usage.len()].copy_from_slice(usage);
+    feed(&mut exact, &[(&body, true)], ResponseStreamKind::None).await;
+    assert!(!exact_shared.non_streaming_overflowed());
+    assert_eq!(exact_shared.reported_tokens(), Some((2, 3)));
+
+    let overflow_shared = Arc::new(AiUsageShared::default());
+    let mut overflow = UsageExtractionProcessor::new(overflow_shared.clone());
+    let oversized = vec![b'x'; MAX_NON_STREAMING_USAGE_BYTES + 1];
+    feed(&mut overflow, &[(&oversized, true)], ResponseStreamKind::None).await;
+    assert!(overflow_shared.non_streaming_overflowed());
+    assert_eq!(overflow_shared.reported_tokens(), None);
+}
+
+#[tokio::test]
+async fn sse_overflow_degrades_without_stopping_character_count() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    let mut oversized = vec![b'x'; crate::sse::DEFAULT_MAX_PENDING_EVENT_BYTES + 1];
+    oversized.extend_from_slice(b"\n\n");
+    feed(
+        &mut processor,
+        &[(&oversized, false), (b"data: more", true)],
+        ResponseStreamKind::Sse,
+    )
+    .await;
+    assert!(shared.sse_degraded());
+    assert_eq!(shared.output_chars(), 4);
+}
+
+#[tokio::test]
+async fn sse_counts_only_data_values_and_ignores_heartbeat_and_framing() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    feed(
+        &mut processor,
+        &[(b": keepalive\nevent: chunk\nid: 7\nretry: 1000\ndata: hello\n\n", true)],
+        ResponseStreamKind::Sse,
+    )
+    .await;
+    assert_eq!(shared.output_chars(), 5);
+}
+
+#[tokio::test]
+async fn sse_split_data_prefix_and_aborted_content_are_counted_incrementally() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    feed(
+        &mut processor,
+        &[(b"da", false), (b"ta: hel", false), (b"lo", false)],
+        ResponseStreamKind::Sse,
+    )
+    .await;
+    assert_eq!(shared.output_chars(), 5);
+}
+
+#[tokio::test]
+async fn sse_multiline_data_uses_one_semantic_newline() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    feed(
+        &mut processor,
+        &[(b"data: first\ndata: second\n\n", true)],
+        ResponseStreamKind::Sse,
+    )
+    .await;
+    assert_eq!(shared.output_chars(), "first\nsecond".chars().count() as u64);
+}
+
+#[tokio::test]
+async fn sse_utf8_split_inside_data_value_counts_one_scalar() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    feed(
+        &mut processor,
+        &[(b"data: \xe2", false), (b"\x82", false), (b"\xac\n\n", true)],
+        ResponseStreamKind::Sse,
+    )
+    .await;
+    assert_eq!(shared.output_chars(), 1);
+}
+
+#[tokio::test]
+async fn many_small_sse_events_in_one_chunk_are_observed_without_batching() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    let chunk = "data: x\n\n".repeat(10_000);
+    feed(&mut processor, &[(chunk.as_bytes(), true)], ResponseStreamKind::Sse).await;
+    assert_eq!(shared.output_chars(), 10_000);
+}
+
+#[tokio::test]
+async fn split_utf8_and_abort_without_eos_publish_incremental_characters() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    feed(
+        &mut processor,
+        &[(b"a\xe2", false), (b"\x82\xacb", false)],
+        ResponseStreamKind::None,
+    )
+    .await;
+    assert_eq!(shared.output_chars(), 3, "a, euro sign, b");
+    assert_eq!(shared.reported_tokens(), None);
+}
+
+#[tokio::test]
+async fn eos_flushes_incomplete_utf8_and_is_idempotent() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    feed(
+        &mut processor,
+        &[(b"\xe2", false), (b"", true), (b"", true)],
+        ResponseStreamKind::None,
+    )
+    .await;
+    assert_eq!(shared.output_chars(), 1);
+}
+
+#[tokio::test]
+async fn incomplete_utf8_is_visible_before_eos_and_invalid_bytes_are_deterministic() {
+    let abort_shared = Arc::new(AiUsageShared::default());
+    let mut abort = UsageExtractionProcessor::new(abort_shared.clone());
+    feed(&mut abort, &[(b"\xe2\x82", false)], ResponseStreamKind::None).await;
+    assert_eq!(abort_shared.output_chars(), 1, "an incomplete scalar is one character");
+
+    let invalid_shared = Arc::new(AiUsageShared::default());
+    let mut invalid = UsageExtractionProcessor::new(invalid_shared.clone());
+    feed(&mut invalid, &[(b"\xe2\x82A", false)], ResponseStreamKind::None).await;
+    assert_eq!(invalid_shared.output_chars(), 3, "invalid bytes count individually");
+}
+
+#[test]
+fn output_counter_saturates() {
+    let shared = AiUsageShared::default();
+    shared.add_output_chars(u64::MAX);
+    shared.add_output_chars(1);
+    assert_eq!(shared.output_chars(), u64::MAX);
+}
+
+#[test]
+fn reported_usage_keeps_component_high_water_marks() {
+    let shared = AiUsageShared::default();
+    shared.observe_reported_usage(10, 0, 2, 0);
+    shared.observe_reported_usage(10, 7, 3, 1);
+    shared.observe_reported_usage(9, 3, 1, 0);
+    assert_eq!(
+        shared.reported_usage(),
+        Some(ReportedAiUsage {
+            input_tokens: 10,
+            output_tokens: 7,
+            cache_read_input_tokens: 3,
+            cache_write_input_tokens: 1,
+        })
+    );
+}
+
+#[tokio::test]
+async fn quota_over_limit_appends_an_error_event_and_terminates_without_dropping_the_current_chunk() {
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    quota.finish(QuotaFinalStatus::OverLimit);
+    // terminate_on_over_limit = true: the route's `onExceeded` resolved
+    // to `Reject`.
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
+
+    let mut session = mock_session();
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiQuotaOverLimitTerminated)
+        .times(1)
+        .return_const(());
+    let mut sink = ResponseBodySink::new();
+    let mut body = Some(Bytes::from_static(b"data: {\"x\":1}\n\n"));
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    assert!(sink.is_terminated(), "over-limit must end the stream");
+    assert!(
+        shared.gateway_terminated(),
+        "settlement can only tell this apart from an upstream truncation through this latch, \
+             because a terminate guarantees no eos callback ever follows"
+    );
+    let extra = sink.peek_extra();
+    assert_eq!(extra.len(), 1);
+    assert_eq!(
+        extra[0], *QUOTA_EXCEEDED_SSE_EVENT,
+        "the injected event must reuse the same message/type/code the 429 admission-time \
+             rejection renders"
+    );
+    // This proves the in-flight chunk is not dropped when a terminate is
+    // queued, NOT that the sink writes it before the terminate — that
+    // ordering is a pump property (`ResponseBodySink::push`/`terminate`
+    // have no ordering relationship with each other), exercised by the
+    // fork's own `terminate_after_commit_ends_the_body_cleanly` test.
+    assert_eq!(
+        body,
+        Some(Bytes::from_static(b"data: {\"x\":1}\n\n")),
+        "the current chunk must not be dropped when the response is about to terminate"
+    );
+}
+
+#[tokio::test]
+async fn quota_over_limit_on_a_non_streaming_response_does_not_terminate() {
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    quota.finish(QuotaFinalStatus::OverLimit);
+    // requested_streaming = false: an ordinary non-streaming completion
+    // has already finished generating by the time its body streams, so
+    // there is no burn left to stop and terminating would only truncate
+    // a JSON body for no benefit. terminate_on_over_limit = true (Reject)
+    // isolates this from the separate onExceeded gate covered below.
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), false, true);
+
+    let mut session = mock_session();
+    let mut sink = ResponseBodySink::new();
+    let mut body = Some(Bytes::from_static(
+        br#"{"usage":{"prompt_tokens":1,"completion_tokens":1}}"#,
+    ));
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::None, &mut sink, &mut session)
+        .await;
+
+    assert!(
+        !sink.is_terminated(),
+        "a non-streaming completion must not be cut short"
+    );
+    assert!(sink.peek_extra().is_empty());
+}
+
+#[tokio::test]
+async fn quota_over_limit_is_not_terminated_under_throttle_or_downgrade() {
+    // `terminate_on_over_limit = false` is what the plugin computes for
+    // BOTH `Throttle` and `Downgrade` (see `AiProxy`'s plan construction)
+    // -- the processor only ever sees the resolved boolean, so a single
+    // `false` case here covers both. Either way the operator declared
+    // "do not hard-fail this user", and that must still hold once the
+    // stream is over limit, exactly as it did before mid-stream
+    // termination existed.
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    quota.finish(QuotaFinalStatus::OverLimit);
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, false);
+
+    let mut session = mock_session();
+    let mut sink = ResponseBodySink::new();
+    let mut body = Some(Bytes::from_static(b"data: {\"x\":1}\n\n"));
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    assert!(
+        !sink.is_terminated(),
+        "Throttle/Downgrade must let an over-limit stream run to completion"
+    );
+    assert!(
+        !shared.gateway_terminated(),
+        "the latch must follow the terminate, not the over-limit condition: this stream ends \
+             at its own eos and settles like any other"
+    );
+    assert!(sink.peek_extra().is_empty(), "no error event without a terminate");
+    assert_eq!(
+        body,
+        Some(Bytes::from_static(b"data: {\"x\":1}\n\n")),
+        "the chunk must pass through untouched"
+    );
+}
+
+/// Builds one unterminated SSE event past the decoder's cap, which is what
+/// permanently degrades it.
+fn oversized_sse_event() -> Bytes {
+    Bytes::from(vec![b'x'; crate::sse::DEFAULT_MAX_PENDING_EVENT_BYTES + 1])
+}
+
+fn malformed_sse_with_valid_middle() -> Bytes {
+    Bytes::from_static(b"data: \xff\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"valid\"}}]}\n\ndata: \xfe\n\n")
+}
+
+#[tokio::test]
+async fn first_malformed_sse_event_is_observed_once_and_tolerated() {
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
+    let mut session = mock_session();
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
+        .times(1)
+        .return_const(());
+    let mut sink = ResponseBodySink::new();
+
+    let original = Bytes::from_static(b"data: \xff\n\n");
+    let mut body = Some(original.clone());
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+    let mut later = Some(Bytes::from_static(b"data: {\"choices\":[]}\n\n"));
+    processor
+        .on_chunk(&mut later, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    assert_eq!(body, Some(original), "observation must leave upstream bytes untouched");
+    assert!(!sink.is_terminated());
+    assert!(sink.peek_extra().is_empty());
+    assert!(!shared.gateway_terminated());
+}
+
+#[tokio::test]
+async fn second_cumulative_malformed_sse_event_fails_quota_closed() {
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
+    let mut session = mock_session();
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
+        .times(1)
+        .return_const(());
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseMalformedQuotaTerminated)
+        .times(1)
+        .return_const(());
+    let mut sink = ResponseBodySink::new();
+    let original = malformed_sse_with_valid_middle();
+    let mut body = Some(original.clone());
+
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    assert_eq!(
+        body,
+        Some(original),
+        "the terminating callback must still forward its current bytes"
+    );
+    assert!(sink.is_terminated());
+    assert!(shared.gateway_terminated());
+    assert_eq!(sink.peek_extra().len(), 1);
+    assert_eq!(sink.peek_extra()[0], *QUOTA_UNENFORCEABLE_SSE_EVENT);
+}
+
+#[tokio::test]
+async fn multiple_invalid_lines_in_first_event_consume_one_tolerance() {
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
+    let mut session = mock_session();
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
+        .times(1)
+        .return_const(());
+    let mut sink = ResponseBodySink::new();
+    let mut body = Some(Bytes::from_static(b"data: \xff\ndata: \xfe\nevent: \xff\n\n"));
+
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    assert!(!sink.is_terminated());
+    assert!(sink.peek_extra().is_empty());
+}
+
+#[tokio::test]
+async fn malformed_sse_never_terminates_without_every_reject_gate() {
+    for (quota, requested_streaming, terminate_on_over_limit) in [
+        (None, true, true),
+        (Some(Arc::new(QuotaAccumulator::new(16))), true, false),
+        (Some(Arc::new(QuotaAccumulator::new(16))), false, true),
+    ] {
+        let shared = Arc::new(AiUsageShared::default());
+        let mut processor = UsageExtractionProcessor::new_with_quota(
+            shared.clone(),
+            quota,
+            requested_streaming,
+            terminate_on_over_limit,
+        );
+        let mut session = mock_session();
+        session
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
+            .times(1)
+            .return_const(());
+        let mut sink = ResponseBodySink::new();
+        let mut body = Some(malformed_sse_with_valid_middle());
+
+        processor
+            .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert!(!sink.is_terminated());
+        assert!(sink.peek_extra().is_empty());
+        assert!(!shared.gateway_terminated());
+    }
+}
+
+#[tokio::test]
+async fn over_limit_precedes_repeated_malformed_sse_events() {
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    quota.finish(QuotaFinalStatus::OverLimit);
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
+    let mut session = mock_session();
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
+        .times(1)
+        .return_const(());
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiQuotaOverLimitTerminated)
+        .times(1)
+        .return_const(());
+    let mut sink = ResponseBodySink::new();
+    let mut body = Some(malformed_sse_with_valid_middle());
+
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    assert_eq!(sink.peek_extra().len(), 1);
+    assert_eq!(sink.peek_extra()[0], *QUOTA_EXCEEDED_SSE_EVENT);
+}
+
+#[tokio::test]
+async fn decoder_degradation_precedes_repeated_malformed_sse_events() {
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
+    let mut session = mock_session();
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
+        .times(1)
+        .return_const(());
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDecodeDegraded)
+        .times(1)
+        .return_const(());
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDegradedQuotaTerminated)
+        .times(1)
+        .return_const(());
+    let mut bytes = malformed_sse_with_valid_middle().to_vec();
+    bytes.extend_from_slice(&oversized_sse_event());
+    let mut body = Some(Bytes::from(bytes));
+    let mut sink = ResponseBodySink::new();
+
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    assert_eq!(sink.peek_extra().len(), 1);
+    assert_eq!(sink.peek_extra()[0], *QUOTA_UNENFORCEABLE_SSE_EVENT);
+    assert!(sink.is_terminated(), "only the degradation cause should terminate");
+}
+
+#[tokio::test]
+async fn oversized_sse_event_must_not_disable_mid_stream_quota_enforcement() {
+    // The regression this locks down: `quota.add_output_units` is only
+    // reachable from inside `feed_each`'s visitor, and a degraded decoder
+    // returns from `feed_each` immediately for the rest of the stream. So
+    // once degraded, nothing grows the accumulator, no flush runs, and
+    // `over_limit()` can never flip -- enforcement was silently off for the
+    // remainder of the request while the upstream kept billing.
+    let shared = Arc::new(AiUsageShared::default());
+    // Deliberately NOT over limit: the point is that enforcement is
+    // unreachable from here on, not that the limit was already hit.
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
+
+    let mut session = mock_session();
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDecodeDegraded)
+        .times(1)
+        .return_const(());
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDegradedQuotaTerminated)
+        .times(1)
+        .return_const(());
+    let mut sink = ResponseBodySink::new();
+    let mut body = Some(oversized_sse_event());
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    assert!(shared.sse_degraded());
+    assert!(
+        sink.is_terminated(),
+        "a stream whose framing can no longer be parsed is a stream whose cost can no longer \
+             be bounded, so quota enforcement must fail closed"
+    );
+    assert!(
+        shared.gateway_terminated(),
+        "this cut is as deliberate as the over-limit one, so it must settle its reservation \
+             the same way instead of holding it for the rest of the window"
+    );
+    let extra = sink.peek_extra();
+    assert_eq!(extra.len(), 1);
+    assert_eq!(
+        extra[0], *QUOTA_UNENFORCEABLE_SSE_EVENT,
+        "the client must see the same error the admission path renders when quota cannot be \
+             enforced, not a private degradation vocabulary"
+    );
+}
+
+#[test]
+fn every_injected_event_stays_parseable_after_an_unterminated_event() {
+    // Pins the BEHAVIOR the leading blank line exists for, not its bytes:
+    // asserting the sink carries the constant compares it to itself and
+    // would keep passing if the prefix were deleted. The injection lands
+    // at whatever byte offset the upstream's chunk boundary fell on, so a
+    // conforming client can always be partway through a `data:` line when
+    // it arrives -- certainly so on the degraded path, and reachable on
+    // the over-limit path through ordinary TCP segmentation or a provider
+    // writing one byte per chunk. Decoding that client's-eye view with the
+    // same WHATWG decoder is what proves the boundary actually works.
+    for (event, expected_code) in [
+        (&QUOTA_EXCEEDED_SSE_EVENT, "token_quota_exceeded"),
+        (&QUOTA_UNENFORCEABLE_SSE_EVENT, "token_quota_unavailable"),
+    ] {
+        let mut decoder = crate::sse::SseDecoder::with_default_limit();
+        let mut events = Vec::new();
+        decoder.feed(b"data: {\"choices\":[{\"delta\":{\"content\":\"partial", &mut events);
+        decoder.feed(event.as_ref(), &mut events);
+
+        assert_eq!(
+            events.len(),
+            2,
+            "the injected error must arrive as its own event, not concatenated onto the truncated one"
+        );
+        assert_eq!(events[1].event.as_deref(), Some("error"));
+        let value: serde_json::Value =
+            serde_json::from_str(&events[1].data).expect("the injected error must parse as JSON client-side");
+        assert_eq!(value["error"]["code"], expected_code);
+    }
+}
+
+#[test]
+fn an_injected_event_dispatches_nothing_extra_at_a_clean_boundary() {
+    // The other half of the unconditional-prefix argument: a blank line
+    // with nothing buffered is a no-op dispatch, so paying two bytes to
+    // cover the mid-event case never costs a spurious event at a boundary
+    // that was already clean (the Anthropic translator's output always is,
+    // since it re-emits only complete events).
+    let mut decoder = crate::sse::SseDecoder::with_default_limit();
+    let mut events = Vec::new();
+    decoder.feed(b"data: {\"choices\":[]}\n\n", &mut events);
+    decoder.feed(QUOTA_EXCEEDED_SSE_EVENT.as_ref(), &mut events);
+
+    assert_eq!(
+        events.len(),
+        2,
+        "the leading blank line must not dispatch an empty event"
+    );
+    assert_eq!(events[1].event.as_deref(), Some("error"));
+}
+
+#[tokio::test]
+async fn sse_degradation_without_quota_enforcement_only_records_the_signal() {
+    // Degradation predates mid-stream enforcement and was harmless on its
+    // own: usage falls back to the character estimate. That must stay
+    // true, so an unquota'd stream is never cut for a framing reason.
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+
+    let mut session = mock_session();
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDecodeDegraded)
+        .times(1)
+        .return_const(());
+    let mut sink = ResponseBodySink::new();
+    let mut body = Some(oversized_sse_event());
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+    // A second chunk proves the sticky decoder flag does not re-append the
+    // status once per remaining chunk; `times(1)` above is the assertion.
+    let mut more = Some(Bytes::from_static(b"data: {\"x\":1}\n\n"));
+    processor
+        .on_chunk(&mut more, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    assert!(shared.sse_degraded());
+    assert!(!sink.is_terminated(), "no quota enforcement, so nothing to fail closed");
+    assert!(sink.peek_extra().is_empty());
+}
+
+#[tokio::test]
+async fn an_already_over_limit_stream_reports_over_limit_not_degradation() {
+    // Both conditions true at once: the accurate reason is that the limit
+    // was actually reached, and the two terminations must stay mutually
+    // exclusive because either one alone ends the stream.
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    quota.finish(QuotaFinalStatus::OverLimit);
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
+
+    let mut session = mock_session();
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiSseDecodeDegraded)
+        .times(1)
+        .return_const(());
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiQuotaOverLimitTerminated)
+        .times(1)
+        .return_const(());
+    let mut sink = ResponseBodySink::new();
+    let mut body = Some(oversized_sse_event());
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    let extra = sink.peek_extra();
+    assert_eq!(extra.len(), 1, "exactly one termination, never both");
+    assert_eq!(extra[0], *QUOTA_EXCEEDED_SSE_EVENT);
+}
+
+#[tokio::test]
+async fn quota_over_limit_push_failure_is_recorded_and_still_terminates() {
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    quota.finish(QuotaFinalStatus::OverLimit);
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
+
+    let mut session = mock_session();
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiQuotaErrorEventDropped)
+        .times(1)
+        .return_const(());
+    session
+        .expect_record_error()
+        .withf(|status| *status == EdgionErrorCode::AiQuotaOverLimitTerminated)
+        .times(1)
+        .return_const(());
+    let mut sink = ResponseBodySink::new();
+    // Exhaust the per-batch emit budget an earlier processor might have
+    // already spent, so this processor's own push cannot fit.
+    sink.push(Bytes::from(vec![0u8; pingora_proxy::RESPONSE_BODY_EMIT_BUDGET]))
+        .expect("filling the budget exactly must succeed");
+    let mut body = Some(Bytes::from_static(b"data: {\"x\":1}\n\n"));
+    processor
+        .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+        .await;
+
+    assert!(
+        sink.is_terminated(),
+        "a dropped diagnostic event must not stop the gateway from terminating"
+    );
+}
+
+#[test]
+fn changes_body_length_tracks_every_precondition_the_terminate_gate_checks() {
+    let shared = Arc::new(AiUsageShared::default());
+    let observing = UsageExtractionProcessor::new(shared.clone());
+    assert!(
+        !observing.changes_body_length(),
+        "pure observation must stay framing-neutral"
+    );
+
+    // Quota attached, streaming, Reject: this is the only combination
+    // that can actually terminate or inject, so it is the only one that
+    // must declare true.
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    let enforcing = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
+    assert!(
+        enforcing.changes_body_length(),
+        "an attached quota accumulator under Reject can truncate or extend the body, so \
+             content-length must be stripped"
+    );
+
+    // Quota attached, non-streaming: `on_chunk`'s gate requires
+    // `requested_streaming`, so this processor never mutates the body
+    // regardless of quota state -- declaring true here would strip
+    // content-length from a response this processor provably never
+    // touches.
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    let non_streaming = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), false, true);
+    assert!(
+        !non_streaming.changes_body_length(),
+        "a non-streaming completion is never mutated by this processor"
+    );
+
+    // Quota attached, streaming, but the route's onExceeded resolved to
+    // Throttle/Downgrade (terminate_on_over_limit = false): the
+    // termination gate can never fire, so this processor never mutates
+    // the body here either.
+    let quota = Arc::new(QuotaAccumulator::new(16));
+    let throttled = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, false);
+    assert!(
+        !throttled.changes_body_length(),
+        "Throttle/Downgrade never terminate, so content-length must not be stripped"
+    );
+}
+
+#[test]
+fn openai_incremental_quota_counts_only_semantic_output_deltas() {
+    let units = |json: &[u8]| {
+        let value: serde_json::Value = serde_json::from_slice(json).unwrap();
+        approximate_openai_output_units(&value)
+    };
+    assert_eq!(
+        units(br#"{"choices":[{"delta":{"role":"assistant"}},{"delta":{"content":""}}]}"#),
+        0
+    );
+    assert_eq!(
+        units(
+            br#"{"choices":[{"delta":{"content":"hello"}},{"delta":{"tool_calls":[{"function":{"arguments":"x"}}]}}]}"#
+        ),
+        2
+    );
+    assert_eq!(
+        units(
+            br#"{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}"#
+        ),
+        0
+    );
+}
+
+fn value_observation_oracle(json: &[u8]) -> Option<UsageEventObservation> {
+    let value: serde_json::Value = serde_json::from_slice(json).ok()?;
+    let reported_usage = value
+        .get("usage")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|usage| {
+            Some(ReportedAiUsage {
+                input_tokens: usage.get("prompt_tokens")?.as_u64()?,
+                output_tokens: usage.get("completion_tokens")?.as_u64()?,
+                cache_read_input_tokens: usage
+                    .get("prompt_tokens_details")
+                    .and_then(serde_json::Value::as_object)
+                    .and_then(|details| details.get("cached_tokens"))
+                    .and_then(serde_json::Value::as_u64)
+                    .or_else(|| usage.get("cache_read_input_tokens").and_then(serde_json::Value::as_u64))
+                    .unwrap_or(0),
+                cache_write_input_tokens: usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+            })
+        });
+    Some(UsageEventObservation {
+        reported_usage,
+        output_units: approximate_openai_output_units(&value),
+    })
+}
+
+#[test]
+fn streaming_observer_matches_value_for_tolerant_numeric_and_duplicate_fields() {
+    let cases: &[&[u8]] = &[
+            br#"{"usage":{"prompt_tokens":7,"completion_tokens":9,"prompt_tokens_details":{"cached_tokens":3},"cache_read_input_tokens":2,"cache_creation_input_tokens":1}}"#,
+            br#"{"usage":{"prompt_tokens":null,"completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":-1,"completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":1.5,"completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":18446744073709551616,"completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":1,"prompt_tokens":"wrong","completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":"wrong","prompt_tokens":1,"completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":1,"completion_tokens":2,"cache_read_input_tokens":4,"prompt_tokens_details":{"cached_tokens":5,"cached_tokens":null}}}"#,
+            br#"{"usage":{"prompt_tokens":1,"completion_tokens":2,"cache_read_input_tokens":4,"prompt_tokens_details":false}}"#,
+            br#"{"usage":{"prompt_tokens":1,"completion_tokens":2},"usage":null}"#,
+            br#"{"usage":null,"usage":{"prompt_tokens":1,"completion_tokens":2}}"#,
+        ];
+    for json in cases {
+        assert_eq!(
+            observe_openai_streaming_event(json),
+            value_observation_oracle(json),
+            "{json:?}"
+        );
+    }
+}
+
+#[test]
+fn streaming_observer_matches_value_for_choice_replacement_and_escapes() {
+    let cases: &[&[u8]] = &[
+            br#"{"choices":[{"delta":{"content":"hello","tool_calls":[{"function":{"arguments":"x"}}]}}]}"#,
+            br#"{"choices":[{"delta":{"content":""}},{"delta":{"tool_calls":[{"function":{"arguments":""}},{"function":{"arguments":"x"}}]}}]}"#,
+            br#"{"choices":[{"delta":{"content":"x","content":null}}]}"#,
+            br#"{"choices":[{"delta":{"content":null,"content":"x"}}]}"#,
+            br#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"x","arguments":3}}]}}]}"#,
+            br#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"x"},"function":false}]}}]}"#,
+            br#"{"choices":[{"delta":{"content":"x"},"delta":null}]}"#,
+            br#"{"choices":[{"delta":null,"delta":{"content":"x"}}]}"#,
+            br#"{"choices":[{"delta":{"content":"x"}}],"choices":false}"#,
+            br#"{"choices":false,"choices":[{"delta":{"content":"x"}}]}"#,
+            br#"{"cho\u0069ces":[{"del\u0074a":{"cont\u0065nt":"\u20ac"}}]}"#,
+        ];
+    for json in cases {
+        assert_eq!(
+            observe_openai_streaming_event(json),
+            value_observation_oracle(json),
+            "{json:?}"
+        );
+    }
+}
+
+#[test]
+fn streaming_observer_counts_at_most_one_unit_per_qualifying_choice() {
+    let observation = observe_openai_streaming_event(
+            br#"{"choices":[{"delta":{"content":"x","tool_calls":[{"function":{"arguments":"a"}},{"function":{"arguments":"b"}}]}},{"delta":{"content":"y"}}]}"#,
+        )
+        .unwrap();
+    assert_eq!(observation.output_units, 2);
+}
+
+#[test]
+fn streaming_observer_discards_the_whole_malformed_document() {
+    for json in [
+        b"{not-json".as_slice(),
+        br#"{"usage":{"prompt_tokens":1,"completion_tokens":2},"unknown":[1,}"#,
+        br#"{"choices":[{"delta":{"content":"x"}}]} trailing"#,
+    ] {
+        assert_eq!(observe_openai_streaming_event(json), None);
+    }
+}
+
+#[test]
+fn streaming_observer_bounded_cross_product_matches_value_oracle() {
+    let numeric_values = ["0", "17", "null", "-1", "1.25", "18446744073709551616", "{}", "[]"];
+    let string_values = [r#"""#, r#""x""#, r#""\u20ac""#, "null", "7", "{}", "[]"];
+    for prompt in numeric_values {
+        for completion in numeric_values {
+            let json = format!(r#"{{"usage":{{"prompt_tokens":{prompt},"completion_tokens":{completion}}}}}"#);
+            assert_eq!(
+                observe_openai_streaming_event(json.as_bytes()),
+                value_observation_oracle(json.as_bytes()),
+                "{json}"
+            );
+        }
+    }
+    for content in string_values {
+        for arguments in string_values {
+            let json = format!(
+                r#"{{"choices":[{{"delta":{{"content":{content},"tool_calls":[{{"function":{{"arguments":{arguments}}}}}]}}}}]}}"#
+            );
+            assert_eq!(
+                observe_openai_streaming_event(json.as_bytes()),
+                value_observation_oracle(json.as_bytes()),
+                "{json}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn openai_streaming_processor_updates_quota_only_for_semantic_deltas() {
+    let shared = Arc::new(AiUsageShared::default());
+    let quota = Arc::new(QuotaAccumulator::new_for_test(100));
+    let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota.clone()), true, false);
+
+    for (event, expected) in [
+        (r#"{"choices":[{"delta":{"role":"assistant"}}]}"#, 0),
+        (r#"{"choices":[{"delta":{"content":""}}]}"#, 0),
+        (r#"{"choices":[{"delta":{"content":"hello"}}]}"#, 1),
+        (
+            r#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":""}}]}}]}"#,
+            1,
+        ),
+        (
+            r#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"x"}}]}}]}"#,
+            2,
+        ),
+        (
+            r#"{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17}}"#,
+            2,
+        ),
+    ] {
+        let framed = format!("data: {event}\n\n");
+        feed(&mut processor, &[(framed.as_bytes(), false)], ResponseStreamKind::Sse).await;
+        assert_eq!(quota.observed_output_for_test(), expected);
+    }
+    feed(&mut processor, &[(b"data: [DONE]\n\n", true)], ResponseStreamKind::Sse).await;
+    assert_eq!(shared.reported_tokens(), Some((10, 7)));
+}

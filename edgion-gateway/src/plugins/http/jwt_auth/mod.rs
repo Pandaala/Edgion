@@ -6,6 +6,7 @@ mod request_stage;
 mod verify;
 
 #[cfg(test)]
+#[path = "../../../../tests/unit/plugins/http/jwt_auth/mod_test.rs"]
 mod tests;
 
 pub use plugin::JwtAuth;

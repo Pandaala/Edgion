@@ -152,16 +152,5 @@ pub fn cleanup_old_files(base_path: &Path, max_files: usize) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn find_next_size_index_ignores_overlapping_base_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("a.a");
-        fs::write(&base, "active").unwrap();
-        fs::write(dir.path().join("a.2.a"), "archive").unwrap();
-
-        assert_eq!(find_next_size_index(&base), 3);
-    }
-}
+#[path = "../../../../tests/unit/link_sys/providers/local_file/rotation_test.rs"]
+mod tests;

@@ -32,7 +32,7 @@ removing the capability for operators who genuinely need it.
 
 - `edgion-resources/src/resources/edgion_plugins/plugin_configs/jwt_auth.rs` — `allow_token_in_query: bool` (`#[serde(default)]`, Default = false)
 - `edgion-gateway/src/plugins/http/jwt_auth/request_stage.rs` — `extract_token` guards the query branch with `if self.config.allow_token_in_query`
-- `edgion-gateway/src/plugins/http/jwt_auth/tests/token_source.rs` — `test_query_token_rejected_when_not_allowed_by_default`
+- `edgion-gateway/tests/unit/plugins/http/jwt_auth/mod_test/token_source.rs` — `test_query_token_rejected_when_not_allowed_by_default`
 
 ## Operator-visible note
 

@@ -713,5 +713,5 @@ pub fn rebuild_gateway_tls_matcher(gateways: &[Gateway]) {
 
 // Unit tests for this module live in `tests/tls_test.rs`.
 #[cfg(test)]
-#[path = "tests/tls_test.rs"]
+#[path = "../../../tests/unit/runtime/matching/tls_test.rs"]
 mod tests;

@@ -64,7 +64,7 @@ isolation. See the [upstream TLS architecture](../../../01-architecture/02-gatew
 
 ## Verification and re-evaluation
 
-Tests in `edgion-gateway/src/backends/tests/backend_tls_pool_test.rs` cover CA
+Tests in `edgion-gateway/tests/unit/backends/peer_builder_test/pool_tests.rs` cover CA
 mode/content, SAN composition, same-serial leaf replacement, same-length and
 same-serial chain replacement, private-key-only changes, Gateway identity
 rotation/removal, source separation, stable inputs, and policy precedence.

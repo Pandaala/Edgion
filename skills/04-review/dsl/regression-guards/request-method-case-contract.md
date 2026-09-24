@@ -60,7 +60,7 @@ Existing integration tests remain unchanged.
 
 ## Verification and re-evaluation
 
-Focused tests in `edgion-gateway/src/plugins/http/dsl/tests/request_mutation.rs`:
+Focused tests in `edgion-gateway/tests/unit/plugins/http/dsl/mod_test/request_mutation.rs`:
 
 - `test_request_method_case_preserved_through_real_adapter`: uppercase,
   lowercase, mixed-case, short and long extension tokens; successful `Nil`,

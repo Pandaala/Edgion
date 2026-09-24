@@ -87,6 +87,23 @@ mod extra;
         self.write("src/seclang/other.rs", "struct Projection { #[cfg(test)] inspected_folds: usize }\n")
         self.assertIn("test-only implementation remains in src", "\n".join(layout.check()))
 
+    def test_gateway_gated_mount_support_include_and_associated_helper(self):
+        layout.CRATE = Path(self.temp.name) / "edgion-gateway"
+        self.crate = layout.CRATE
+        self.write(
+            "src/ai/adaptive.rs",
+            '#[cfg(all(test, unix))]\n// Keep the test gate.\n#[allow(dead_code)]\n'
+            '#[path = "../../tests/unit/ai/adaptive_test.rs"]\n'
+            'mod tests;\n#[cfg(test)]\ninclude!("../../tests/support/ai/adaptive_test/helper.rs");\n'
+            'impl AdaptiveTelemetryStore { #[cfg(test)] fn get_or_create(&self) {} }\n',
+        )
+        self.write("tests/unit/ai/adaptive_test.rs", "use super::*;\n")
+        self.write("tests/support/ai/adaptive_test/helper.rs", "fn helper() {}\n")
+        self.assertEqual(layout.check(), [])
+
+        self.write("src/ai/new.rs", "impl New { #[cfg(test)] fn unlisted_helper(&self) {} }\n")
+        self.assertIn("test-only implementation remains in src", "\n".join(layout.check()))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -357,5 +357,5 @@ impl CacheAccess {
 }
 
 #[cfg(test)]
-#[path = "cache_tests.rs"]
+#[path = "../../../../../tests/unit/plugins/http/wasm/oci/cache_test.rs"]
 mod tests;

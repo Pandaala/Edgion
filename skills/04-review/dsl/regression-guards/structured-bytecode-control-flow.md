@@ -31,7 +31,7 @@ lexical parent chain, so equal indices imply equal active loop stacks. The
 compiler sends `while` `continue` to `LoopBack` before revisiting its
 condition; the two `for` forms send `continue` to their increment step and
 then `LoopBack`. See `edgion-dsl/src/{validator.rs,compiler/loop_.rs,script.rs}`
-and `edgion-gateway/src/plugins/http/dsl/tests/control_flow.rs`.
+and `edgion-gateway/tests/unit/plugins/http/dsl/mod_test/control_flow.rs`.
 
 ## Alternatives and limits
 

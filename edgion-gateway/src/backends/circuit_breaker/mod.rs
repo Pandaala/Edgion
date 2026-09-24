@@ -43,21 +43,9 @@ pub fn inc_shed_total(service_key: &str) {
 }
 
 #[cfg(test)]
+#[path = "../../../tests/unit/backends/circuit_breaker/mod_test/concurrency_integration_tests.rs"]
 mod concurrency_integration_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pingora_load_balancing::Backend;
-
-    #[test]
-    fn permit_releases_on_drop() {
-        let b = Arc::new(LbBackend::new(Backend::new("127.0.0.1:1").unwrap()));
-        {
-            let _p = CbPermit::try_acquire(b.clone(), 1).unwrap();
-            assert_eq!(b.cb_inflight(), 1);
-            assert!(CbPermit::try_acquire(b.clone(), 1).is_none()); // at cap
-        }
-        assert_eq!(b.cb_inflight(), 0); // dropped -> released
-    }
-}
+#[path = "../../../tests/unit/backends/circuit_breaker/mod_test.rs"]
+mod tests;

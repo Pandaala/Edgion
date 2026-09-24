@@ -9,7 +9,7 @@ knowledge_type: intentional-design
 **Status**: Resolved by documentation — see the doc comment on
 `DslPlugin::run_upstream_response_filter` in
 `edgion-gateway/src/plugins/http/dsl/plugin.rs`.
-**Test**: `edgion-gateway/src/plugins/http/dsl/tests/response_builtins.rs::test_upstream_response_filter_phase`
+**Test**: `edgion-gateway/tests/unit/plugins/http/dsl/mod_test/response_builtins.rs::test_upstream_response_filter_phase`
 (uses `#[tokio::test(flavor = "multi_thread")]`).
 
 ## Conclusion

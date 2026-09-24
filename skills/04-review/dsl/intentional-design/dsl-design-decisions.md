@@ -160,7 +160,7 @@ The 7-report investigation series (sub-reports deleted 2026-05-19; this section 
 | `03-source-position-errors.md` §5.1 | `CompiledScript.source` field landed | `lang/compiler/mod.rs` `compile_with_source` + `compile_dsl_source` |
 | `03-source-position-errors.md` §5.2 | Runtime line-number access-log declined | [observability/dsl-error-line-number-declined.md](../../observability/intentional-design/dsl-error-line-number-declined.md) + `tasks/todo/dsl/03-runtime-fault-at-line.md` (gated) |
 | `04-builtin-registration.md` | Closed `BuiltinId` enum kept; non-exhaustive lint rejected | [architecture/builtin-dispatch-non-exhaustive-lint.md](builtin-dispatch-non-exhaustive-lint.md) |
-| `05-test-coverage.md` §6.2 ROI #1 | proptest target landed | `edgion-gateway/src/plugins/http/dsl/tests/property_bytecode.rs` + [deserialization/dsl-bytecode-deserialize-safety.md](../../deserialization/regression-guards/dsl-bytecode-deserialize-safety.md) |
+| `05-test-coverage.md` §6.2 ROI #1 | proptest target landed | `edgion-gateway/tests/unit/plugins/http/dsl/mod_test/property_bytecode.rs` + [deserialization/dsl-bytecode-deserialize-safety.md](../../deserialization/regression-guards/dsl-bytecode-deserialize-safety.md) |
 | `06-value-str-migration.md` | SSO migration deferred indefinitely | [dsl-value-str/sso-migration-not-worth-it.md](sso-migration-not-worth-it.md) |
 | `07-rhai-feature-shopping-list.md` | Engine-selection rationale frozen | **this file** |
 | `issue-10-fill-compiled-script-source.md` | Phase 0 implemented | `lang/compiler/mod.rs:99-101` (`compile_with_source`) |

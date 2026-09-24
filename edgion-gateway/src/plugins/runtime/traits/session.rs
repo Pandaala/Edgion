@@ -1034,11 +1034,5 @@ pub trait PluginSession: Send + Sync {
 }
 
 #[cfg(test)]
-mod response_trailer_capability_tests {
-    use super::safe_default_downstream_response_trailers_representable;
-
-    #[test]
-    fn response_trailer_transport_capability_defaults_fail_closed() {
-        assert!(!safe_default_downstream_response_trailers_representable());
-    }
-}
+#[path = "../../../../tests/unit/plugins/runtime/traits/session_test/response_trailer_capability_tests.rs"]
+mod response_trailer_capability_tests;

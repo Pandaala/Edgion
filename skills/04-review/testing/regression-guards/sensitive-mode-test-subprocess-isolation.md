@@ -13,7 +13,7 @@ the mutation and all dependent assertions in an isolated subprocess. A mutex loc
 one test module does not protect the same mode from tests in other modules. The parent
 test process must not mutate `SENSITIVE_MODE`.
 
-The current shared helper is `edgion-gateway/src/test_subprocess.rs`. Sensitive-output
+The current shared helper is `edgion-gateway/tests/unit/lib_test/test_subprocess.rs`. Sensitive-output
 tests use a unique environment marker, a fully qualified `--exact` test name, and a
 case identifier. The child prints a completion marker containing that exact test
 identity only after its assertions finish. The parent requires a successful exit and

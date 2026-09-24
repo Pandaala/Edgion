@@ -69,13 +69,5 @@ impl Default for GatewayBackendTlsStore {
 }
 
 #[cfg(test)]
-mod stats_tests {
-    use super::*;
-
-    #[test]
-    fn empty_store_reports_zero() {
-        let store = GatewayBackendTlsStore::new();
-        assert_eq!(store.count(), 0);
-        assert!(store.keys().is_empty());
-    }
-}
+#[path = "../../tests/unit/backends/gateway_backend_tls_store_test/stats_tests.rs"]
+mod stats_tests;

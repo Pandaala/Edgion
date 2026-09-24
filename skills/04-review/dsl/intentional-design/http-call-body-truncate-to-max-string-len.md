@@ -30,6 +30,6 @@ Redis read truncation is a separate, still-current compatibility behavior; it is
 
 ## Regression guards
 
-`edgion-gateway/src/plugins/http/dsl/tests/http_call_tests.rs` covers declared and chunked overflow, exact-cap EOF, zero-cap behavior, lossy UTF-8 expansion, response-header traversal, stream errors, and the status-zero result shape. Inline helper tests in `builtins.rs` cover checked length arithmetic and exact lossy-output preflight.
+`edgion-gateway/tests/unit/plugins/http/dsl/mod_test/http_call_tests.rs` covers declared and chunked overflow, exact-cap EOF, zero-cap behavior, lossy UTF-8 expansion, response-header traversal, stream errors, and the status-zero result shape. Inline helper tests in `builtins.rs` cover checked length arithmetic and exact lossy-output preflight.
 
 Re-evaluate only if the global `http.call` result/error contract changes. Do not reintroduce truncation, an uncapped read, a response-side `BodyStorage`, or main-upstream response aggregation.

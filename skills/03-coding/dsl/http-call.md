@@ -13,7 +13,7 @@ map; scripts using a deny error policy must understand that distinction.
 | `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | Argument validation, SSRF checks, request/result mapping |
 | `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `DslRuntime` and the permissive/guarded reqwest clients |
 | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | Async execution and panic isolation |
-| `edgion-gateway/src/plugins/http/dsl/tests/http_call_tests.rs` | Lock-in tests |
+| `edgion-gateway/tests/unit/plugins/http/dsl/mod_test/http_call_tests.rs` | Lock-in tests |
 
 Gateway `dsl/config.rs` is a re-export, not the schema owner.
 

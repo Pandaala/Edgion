@@ -520,17 +520,17 @@ mod token_verify;
 mod userinfo;
 
 #[cfg(test)]
-#[path = "tests.rs"]
+#[path = "../../../../tests/unit/plugins/http/openid_connect/plugin_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "auth_response_caps_integration.rs"]
+#[path = "../../../../tests/unit/plugins/http/openid_connect/plugin_test/auth_response_caps_integration.rs"]
 mod auth_response_caps_integration;
 
 #[cfg(test)]
-#[path = "dependency_error_tests.rs"]
+#[path = "../../../../tests/unit/plugins/http/openid_connect/plugin_test/dependency_error_tests.rs"]
 mod dependency_error_tests;
 
 #[cfg(test)]
-#[path = "dependency_error_integration.rs"]
+#[path = "../../../../tests/unit/plugins/http/openid_connect/plugin_test/dependency_error_integration.rs"]
 mod dependency_error_integration;

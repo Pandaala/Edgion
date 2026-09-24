@@ -12,6 +12,7 @@ pub mod redirect_http;
 pub mod routes_mgr;
 
 #[cfg(test)]
+#[path = "../../../tests/unit/routes/http/mod_test.rs"]
 mod tests;
 
 pub mod proxy_http;

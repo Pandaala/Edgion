@@ -323,5 +323,5 @@ fn body_read_failure_result_for_mode(
 
 // Unit tests for this module live in `tests/body_gate_test.rs`.
 #[cfg(test)]
-#[path = "tests/body_gate_test.rs"]
+#[path = "../../../tests/unit/plugins/runtime/body_gate_test.rs"]
 mod tests;

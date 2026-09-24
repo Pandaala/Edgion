@@ -38,13 +38,5 @@ pub fn request_body_replay_active(session: &pingora_proxy::Session) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::EMPTY_SHA256;
-    use sha2::Digest;
-
-    #[test]
-    fn empty_sha256_constant_matches_the_algorithm() {
-        let computed: [u8; 32] = sha2::Sha256::digest([]).into();
-        assert_eq!(EMPTY_SHA256, computed);
-    }
-}
+#[path = "../../tests/unit/request_body/mod_test.rs"]
+mod tests;

@@ -27,37 +27,5 @@ pub const OVERLAY_TYPE_MISMATCH: &str = "overlay_type_mismatch";
 pub const OVERLAY_INVALID: &str = "overlay_invalid";
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const PLUGIN_SRC: &str = include_str!("plugin.rs");
-
-    #[test]
-    fn every_token_appears_in_plugin_source() {
-        let tokens: &[(&str, &str)] = &[
-            ("HASH_KEY", HASH_KEY),
-            ("HASH_WB", HASH_WB),
-            ("HASH_PASS", HASH_PASS),
-            ("CONF_MATCH_KEY", CONF_MATCH_KEY),
-            ("CONF_MATCH_NO_ENTRY", CONF_MATCH_NO_ENTRY),
-            ("DIRECT", DIRECT),
-            ("DIRECT_UNKNOWN", DIRECT_UNKNOWN),
-            ("FAILOVER_REDIRECT", FAILOVER_REDIRECT),
-            ("LOCAL_REGION_PASS", LOCAL_REGION_PASS),
-            ("OVERLAY_DISABLED", OVERLAY_DISABLED),
-            ("OVERLAY_MISSING", OVERLAY_MISSING),
-            ("OVERLAY_TYPE_MISMATCH", OVERLAY_TYPE_MISMATCH),
-            ("OVERLAY_INVALID", OVERLAY_INVALID),
-        ];
-        for (name, value) in tokens {
-            assert!(
-                PLUGIN_SRC.contains(value),
-                "token {} (`{}`) not present in region_route/plugin.rs — \
-                 the plugin source changed without updating log_consts.rs, \
-                 or vice versa",
-                name,
-                value,
-            );
-        }
-    }
-}
+#[path = "../../../../tests/unit/plugins/http/region_route/log_consts_test.rs"]
+mod tests;

@@ -57,6 +57,6 @@ chunk, and permanently fails replay for that request.
 ## Reference Cases
 
 - `edgion-gateway/src/request_body/storage.rs`
-- `edgion-gateway/src/request_body/storage_io_tests.rs`
-- `edgion-gateway/src/plugins/runtime/session_adapter/storage_io_tests.rs`
+- `edgion-gateway/tests/unit/request_body/storage_test/storage_io_tests.rs`
+- `edgion-gateway/tests/unit/plugins/runtime/session_adapter_test/storage_io_tests.rs`
 - `skills/04-review/http-body/mandatory-design/request-body-policy-egc-hot-reload.md`

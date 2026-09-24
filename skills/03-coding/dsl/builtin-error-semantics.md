@@ -21,7 +21,7 @@ DSL builtins fall into three groups for invalid / boundary input. The group is t
 
 ## Silent-fallback contracts to preserve
 
-Locked in by tests under `edgion-gateway/src/plugins/http/dsl/tests/` (including
+Locked in by tests under `edgion-gateway/tests/unit/plugins/http/dsl/mod_test/` (including
 `utility_functions.rs`, `p3_utility_tests.rs`, `runtime_errors.rs`, and
 `api_errors.rs`). If a reviewer suggests changing one, inspect the current test and
 design note before altering the observable contract.
@@ -99,4 +99,4 @@ After implementing, add a lock-in test to the appropriate file (mirroring the ex
 - Panic-via-Display prevention rule → [chrono-display-panic](../../04-review/dsl/regression-guards/chrono-display-panic.md)
 - Engine architecture & error policy → `skills/01-architecture/02-gateway/dsl-engine.md`
 - User-facing function reference → `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md`
-- Test helpers → `edgion-gateway/src/plugins/http/dsl/tests/mod.rs`
+- Test helpers → `edgion-gateway/tests/unit/plugins/http/dsl/mod_test.rs`

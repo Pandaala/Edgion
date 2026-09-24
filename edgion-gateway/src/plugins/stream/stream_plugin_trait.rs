@@ -99,12 +99,5 @@ pub trait StreamPlugin: Send + Sync {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::StreamLayer;
-
-    #[test]
-    fn stream_layer_metric_labels_are_stable() {
-        assert_eq!(StreamLayer::Stage1.as_metric_label(), "stage1");
-        assert_eq!(StreamLayer::Tcp.as_metric_label(), "tcp");
-    }
-}
+#[path = "../../../tests/unit/plugins/stream/stream_plugin_trait_test.rs"]
+mod tests;

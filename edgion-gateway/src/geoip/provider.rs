@@ -31,50 +31,23 @@ pub struct GeoIpProvider {
 
 static GLOBAL: LazyLock<GeoIpProvider> = LazyLock::new(GeoIpProvider::new);
 
-/// Serializes tests that touch the process-global `GeoIpProvider::global()`.
-///
-/// `GeoIpProvider::global()` is a single `LazyLock` shared by every test in
-/// this process (Cargo runs a crate's tests as parallel threads in one
-/// process). Tests that load the fixture into the global and tests that
-/// assert the global is empty would otherwise flake against each other; take
-/// this lock around any test body that touches `GeoIpProvider::global()`.
 #[cfg(test)]
-pub static GEO_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-
-/// Sticky per-thread lookup fault for deterministic decode/panic coverage.
-/// Cleared by [`LookupFaultGuard`] on drop so a panicked test cannot leak into
-/// the next one sharing the thread.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LookupFault {
-    /// Return `Err(MaxMindDbError::Decoding)` from inside the lookup closure so
-    /// the production `Ok(Err(_)) => Failed` arm is the path under test.
-    Decode,
-    /// Panic inside the same `catch_unwind` used on the request path.
-    Panic,
-}
+include!("../../tests/support/geoip/provider_test/41_static_item.rs");
 
 #[cfg(test)]
-thread_local! {
-    static LOOKUP_FAULT: Cell<Option<LookupFault>> = const { Cell::new(None) };
-}
+include!("../../tests/support/geoip/provider_test/47_enum_item.rs");
 
 #[cfg(test)]
-pub struct LookupFaultGuard;
+include!("../../tests/support/geoip/provider_test/57_macro_invocation.rs");
 
 #[cfg(test)]
-impl Drop for LookupFaultGuard {
-    fn drop(&mut self) {
-        LOOKUP_FAULT.with(|c| c.set(None));
-    }
-}
+include!("../../tests/support/geoip/provider_test/62_struct_item.rs");
 
-/// Inject a sticky lookup fault until the returned guard is dropped.
 #[cfg(test)]
-pub fn inject_lookup_fault(fault: LookupFault) -> LookupFaultGuard {
-    LOOKUP_FAULT.with(|c| c.set(Some(fault)));
-    LookupFaultGuard
-}
+include!("../../tests/support/geoip/provider_test/65_impl_item.rs");
+
+#[cfg(test)]
+include!("../../tests/support/geoip/provider_test/73_function_item.rs");
 
 impl GeoIpProvider {
     pub fn new() -> Self {
@@ -177,155 +150,5 @@ impl Default for GeoIpProvider {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-    fn fixture_city_db() -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests/geoip/edgion-test-city.mmdb")
-    }
-
-    #[test]
-    fn empty_provider_reports_unavailable() {
-        let p = GeoIpProvider::new();
-        assert!(!p.is_loaded());
-        assert_eq!(p.lookup("203.0.113.7".parse().unwrap()), GeoLookup::Unavailable);
-    }
-
-    #[test]
-    fn missing_file_is_an_error_not_a_panic() {
-        let p = GeoIpProvider::new();
-        let err = p.load_from(std::path::Path::new("/nonexistent/x.mmdb")).unwrap_err();
-        assert!(!err.is_empty());
-        assert!(!p.is_loaded());
-    }
-
-    #[test]
-    fn corrupt_file_is_an_error_not_a_panic() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bad.mmdb");
-        let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(b"this is not an mmdb").unwrap();
-        drop(f);
-
-        let p = GeoIpProvider::new();
-        assert!(p.load_from(&path).is_err());
-        assert!(!p.is_loaded());
-    }
-
-    #[test]
-    fn loaded_db_resolves_a_known_address() {
-        let p = GeoIpProvider::new();
-        p.load_from(&fixture_city_db()).expect("fixture must load");
-        assert!(p.is_loaded());
-
-        match p.lookup("203.0.113.7".parse().unwrap()) {
-            GeoLookup::Found(info) => {
-                assert_eq!(info.country_iso.as_deref(), Some("GB"));
-            }
-            other => panic!("expected Found, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn unknown_address_is_not_found_not_unavailable() {
-        let p = GeoIpProvider::new();
-        p.load_from(&fixture_city_db()).unwrap();
-        assert_eq!(p.lookup("8.8.8.8".parse().unwrap()), GeoLookup::NotFound);
-    }
-
-    /// A dual-stack listener hands us the mapped form; it must resolve
-    /// identically to the plain IPv4 address.
-    #[test]
-    fn ipv4_mapped_address_resolves_like_its_ipv4_form() {
-        let p = GeoIpProvider::new();
-        p.load_from(&fixture_city_db()).unwrap();
-        let plain = p.lookup("203.0.113.7".parse().unwrap());
-        let mapped = p.lookup("::ffff:203.0.113.7".parse().unwrap());
-        assert_eq!(plain, mapped);
-    }
-
-    /// `127.0.0.6` resolves on the City fixture but carries no city/subdivision
-    /// record. This is per-record absence, and must route to `onMissing`, not
-    /// to the database-unavailable (`failOpen`) path — those are two
-    /// different `GeoLookup` outcomes (`Found` with `None` dimensions, vs.
-    /// `Unavailable`) and callers must not conflate them.
-    #[test]
-    fn dimension_absent_on_record_is_ordinary_missingness() {
-        let p = GeoIpProvider::new();
-        p.load_from(&fixture_city_db()).unwrap();
-        let GeoLookup::Found(info) = p.lookup("127.0.0.6".parse().unwrap()) else {
-            panic!("127.0.0.6 must resolve on the City fixture");
-        };
-        assert_eq!(info.country_iso.as_deref(), Some("US"));
-        assert_eq!(info.city, None);
-        assert_eq!(info.subdivision, None);
-    }
-
-    /// Reloading swaps the active database without disturbing the API.
-    #[test]
-    fn reload_replaces_the_active_database() {
-        let p = GeoIpProvider::new();
-        p.load_from(&fixture_city_db()).unwrap();
-        let first = p.build_epoch();
-        p.load_from(&fixture_city_db()).unwrap();
-        assert_eq!(p.build_epoch(), first);
-        assert!(p.is_loaded());
-    }
-
-    #[test]
-    fn decode_fault_is_failed_not_not_found() {
-        let p = GeoIpProvider::new();
-        p.load_from(&fixture_city_db()).unwrap();
-        let _fault = inject_lookup_fault(LookupFault::Decode);
-        assert_eq!(p.lookup("203.0.113.7".parse().unwrap()), GeoLookup::Failed);
-    }
-
-    #[test]
-    fn panic_fault_is_failed_and_increments_panic_counter() {
-        let p = GeoIpProvider::new();
-        p.load_from(&fixture_city_db()).unwrap();
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
-        let handle = recorder.handle();
-        metrics::with_local_recorder(&recorder, || {
-            let _fault = inject_lookup_fault(LookupFault::Panic);
-            assert_eq!(p.lookup("203.0.113.7".parse().unwrap()), GeoLookup::Failed);
-        });
-        let rendered = handle.render();
-        assert!(
-            rendered.contains("edgion_geoip_lookup_panic_total"),
-            "panic seam must increment edgion_geoip_lookup_panic_total, got:\n{rendered}"
-        );
-    }
-
-    #[test]
-    fn decode_fault_does_not_increment_panic_counter() {
-        let p = GeoIpProvider::new();
-        p.load_from(&fixture_city_db()).unwrap();
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
-        let handle = recorder.handle();
-        metrics::with_local_recorder(&recorder, || {
-            let _fault = inject_lookup_fault(LookupFault::Decode);
-            assert_eq!(p.lookup("8.8.8.8".parse().unwrap()), GeoLookup::Failed);
-        });
-        let rendered = handle.render();
-        assert!(
-            !rendered.contains("edgion_geoip_lookup_panic_total"),
-            "decode seam must not increment the panic counter, got:\n{rendered}"
-        );
-    }
-
-    #[test]
-    fn fault_guard_clears_so_later_lookups_are_real() {
-        let p = GeoIpProvider::new();
-        p.load_from(&fixture_city_db()).unwrap();
-        {
-            let _fault = inject_lookup_fault(LookupFault::Decode);
-            assert_eq!(p.lookup("203.0.113.7".parse().unwrap()), GeoLookup::Failed);
-        }
-        match p.lookup("203.0.113.7".parse().unwrap()) {
-            GeoLookup::Found(_) => {}
-            other => panic!("cleared seam must not stick, got {other:?}"),
-        }
-    }
-}
+#[path = "../../tests/unit/geoip/provider_test.rs"]
+mod tests;

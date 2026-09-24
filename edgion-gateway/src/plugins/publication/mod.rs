@@ -10,4 +10,5 @@ pub(crate) use views::{
 };
 
 #[cfg(test)]
+#[path = "../../../tests/unit/plugins/publication/mod_test.rs"]
 mod tests;

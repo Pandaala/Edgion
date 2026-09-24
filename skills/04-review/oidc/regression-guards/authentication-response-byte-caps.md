@@ -102,4 +102,4 @@ the shared reader changes, or a provider requires a different documented limit.
 - D0036 credential ownership audit; source task `oidc-auth-response-byte-caps.md`,
   fixed on 2026-09-09.
 - Production: `edgion-gateway/src/plugins/http/openid_connect/{token_exchange,token_verify,error,callback,request_filter_impl}.rs`.
-- Reproduction: `edgion-gateway/src/plugins/http/openid_connect/auth_response_caps_integration.rs`.
+- Reproduction: `edgion-gateway/tests/unit/plugins/http/openid_connect/plugin_test/auth_response_caps_integration.rs`.

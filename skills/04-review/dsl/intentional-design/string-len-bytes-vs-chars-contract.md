@@ -68,4 +68,4 @@ Revisit this decision if any of the following holds:
 - `tasks/plugins/plugins-http-dsl-FB04-string-len-check-bytes-vs-chars-mismatch.md` — original finding (Low / BadLogic), closed by this entry.
 - `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md` (`### len`) and the zh-CN mirror — user-facing contract with the unit-mismatch note.
 - `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs::check_string_len` and `edgion-dsl/src/error.rs::RuntimeError::StringTooLong` doc-comments — implementation-side pointers back to the API reference.
-- `edgion-gateway/src/plugins/http/dsl/tests/utility_functions.rs::test_len_multibyte_returns_char_count_not_byte_count` — regression guard for `len()`'s character-count semantics on a 2-byte UTF-8 character.
+- `edgion-gateway/tests/unit/plugins/http/dsl/mod_test/utility_functions.rs::test_len_multibyte_returns_char_count_not_byte_count` — regression guard for `len()`'s character-count semantics on a 2-byte UTF-8 character.

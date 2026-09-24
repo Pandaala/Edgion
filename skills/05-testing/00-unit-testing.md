@@ -17,11 +17,18 @@ Use for these tasks:
 ### Test location
 
 Migrated crates (`edgion-common`, `edgion-dsl`, `edgion-cli`,
-`edgion-controller`, `edgion-algo`, `edgion-waf`, `edgion-wasm`, and
-`edgion-resources`) keep unit-test bodies under `tests/unit/`, mirroring their
-owning `src/` paths. `edgion-gateway` is pending migration. Source files keep test-gated module declarations and,
-where shared helpers require them, test-only imports or re-exports. This
+`edgion-controller`, `edgion-algo`, `edgion-waf`, `edgion-wasm`,
+`edgion-resources`, and `edgion-gateway`) keep unit-test bodies under
+`tests/unit/`, mirroring their owning `src/` paths. Source files keep
+test-gated module declarations and, where shared helpers require them,
+test-only imports or re-exports. This
 preserves private access and existing helper paths:
+
+Gateway test-only top-level helpers live under `tests/support/` and are mounted
+with `#[cfg(test)] include!`. Associated test helpers and source-local test
+instrumentation stay in their production `impl` or item because Rust cannot
+expand `include!` to associated items or struct fields; the layout guard lists
+their exact exceptions.
 
 ```rust
 // In src/dns/httpdns.rs:

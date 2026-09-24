@@ -1,0 +1,225 @@
+use super::*;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
+
+fn callout(origin: String, timeout_ms: u32) -> PendingCallout {
+    PendingCallout {
+        token: 7,
+        origin,
+        path: "/callout".to_string(),
+        method: "GET".to_string(),
+        authority: None,
+        headers: Vec::new(),
+        body: Vec::new(),
+        timeout_ms,
+    }
+}
+
+fn test_client() -> reqwest::Client {
+    reqwest::Client::builder().no_proxy().build().expect("test client")
+}
+
+#[test]
+fn request_builder_rebuilds_body_framing_and_preserves_guest_headers() {
+    let client = test_client();
+    let callout = PendingCallout {
+        token: 11,
+        origin: "https://example.test:8443".to_string(),
+        path: "/v1/check?tenant=blue".to_string(),
+        method: "POST".to_string(),
+        authority: Some("service.internal:9443".to_string()),
+        headers: vec![
+            ("content-length".to_string(), "999".to_string()),
+            ("content-length".to_string(), "1".to_string()),
+            ("transfer-encoding".to_string(), "chunked".to_string()),
+            ("x-order".to_string(), "first".to_string()),
+            ("bad header".to_string(), "skipped".to_string()),
+            ("x-invalid".to_string(), "bad\nvalue".to_string()),
+            ("x-order".to_string(), "second".to_string()),
+        ],
+        body: b"payload".to_vec(),
+        timeout_ms: 500,
+    };
+
+    let (token, req) = build_callout_request(callout, &client).expect("callout request should build");
+
+    assert_eq!(token, 11);
+    assert_eq!(req.url().as_str(), "https://example.test:8443/v1/check?tenant=blue");
+    assert_eq!(req.method(), reqwest::Method::POST);
+    assert_eq!(
+        req.body().and_then(reqwest::Body::as_bytes),
+        Some(b"payload".as_slice())
+    );
+    assert_eq!(
+        req.headers()
+            .get(reqwest::header::HOST)
+            .and_then(|value| value.to_str().ok()),
+        Some("service.internal:9443")
+    );
+    assert_eq!(
+        req.headers()
+            .get_all(reqwest::header::CONTENT_LENGTH)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect::<Vec<_>>(),
+        vec!["7"]
+    );
+    assert!(req.headers().get(reqwest::header::TRANSFER_ENCODING).is_none());
+    assert_eq!(
+        req.headers()
+            .get_all("x-order")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
+    assert!(req.headers().get("bad header").is_none());
+    assert!(req.headers().get("x-invalid").is_none());
+}
+
+#[test]
+fn bodyless_request_removes_guest_framing_without_adding_zero_length() {
+    let client = test_client();
+    let mut callout = callout("https://example.test".to_string(), 500);
+    callout.headers = vec![
+        ("content-length".to_string(), "99".to_string()),
+        ("transfer-encoding".to_string(), "chunked".to_string()),
+    ];
+
+    let (_, req) = build_callout_request(callout, &client).expect("bodyless callout request should build");
+
+    assert!(req.body().is_none());
+    assert!(req.headers().get(reqwest::header::CONTENT_LENGTH).is_none());
+    assert!(req.headers().get(reqwest::header::TRANSFER_ENCODING).is_none());
+}
+
+#[tokio::test]
+async fn unavailable_guarded_client_fails_without_network() {
+    let server = wiremock::MockServer::start().await;
+    let callout = callout(server.uri(), 1_000);
+    let token = callout.token;
+    let permits = tokio::sync::Semaphore::new(1);
+
+    let response = execute_callout_with_client_and_permits(callout, 1_000, "test", Err(()), &permits).await;
+
+    assert_eq!(response.token, token);
+    assert!(response.headers.is_empty());
+    assert!(response.body.is_empty());
+    assert!(
+        server.received_requests().await.expect("read mock requests").is_empty(),
+        "client initialization failure must not fall back to an unguarded request"
+    );
+}
+
+#[tokio::test]
+async fn zero_permit_semaphore_is_bounded_by_callout_deadline() {
+    let client = test_client();
+    let permits = tokio::sync::Semaphore::new(0);
+    let callout = callout("http://127.0.0.1:9".to_string(), 0);
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        execute_callout_with_client_and_permits(callout, 25, "test", Ok(&client), &permits),
+    )
+    .await
+    .expect("callout deadline must bound semaphore wait");
+
+    assert!(response.headers.is_empty());
+    assert!(response.body.is_empty());
+}
+
+#[tokio::test]
+async fn held_permit_until_deadline_prevents_network_request() {
+    let server = wiremock::MockServer::start().await;
+    let client = test_client();
+    let permits = tokio::sync::Semaphore::new(1);
+    let held = permits.acquire().await.expect("hold only permit");
+    let callout = callout(server.uri(), 30);
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        execute_callout_with_client_and_permits(callout, 1_000, "test", Ok(&client), &permits),
+    )
+    .await
+    .expect("callout deadline must expire");
+
+    assert!(response.headers.is_empty());
+    assert!(response.body.is_empty());
+    assert!(server.received_requests().await.expect("read mock requests").is_empty());
+    drop(held);
+}
+
+#[tokio::test]
+async fn permit_released_before_deadline_allows_real_callout() {
+    let server = wiremock::MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/callout"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ok".to_vec()))
+        .mount(&server)
+        .await;
+    let client = test_client();
+    let permits = tokio::sync::Semaphore::new(1);
+    let held = permits.acquire().await.expect("hold only permit");
+    let callout = callout(server.uri(), 1_000);
+
+    let run_callout = execute_callout_with_client_and_permits(callout, 1_000, "test", Ok(&client), &permits);
+    let release = async move {
+        tokio::task::yield_now().await;
+        drop(held);
+    };
+    let (response, ()) = tokio::time::timeout(Duration::from_secs(2), async { tokio::join!(run_callout, release) })
+        .await
+        .expect("released permit must unblock callout");
+
+    assert_eq!(response.headers.first().map(|h| h.1.as_str()), Some("200"));
+    assert_eq!(response.body, b"ok");
+}
+
+#[tokio::test]
+async fn body_stream_timeout_drops_in_flight_permit_without_leak() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test server");
+    let addr = listener.local_addr().expect("test server address");
+    let (headers_sent_tx, headers_sent_rx) = tokio::sync::oneshot::channel();
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept callout");
+        let mut request = [0u8; 1024];
+        let bytes_read = stream.read(&mut request).await.expect("read callout");
+        assert!(bytes_read > 0, "callout request must not be empty");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+            .await
+            .expect("write response headers");
+        let _ = headers_sent_tx.send(());
+        std::future::pending::<()>().await;
+    });
+
+    let client = std::sync::Arc::new(test_client());
+    let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+    let callout = callout(format!("http://{addr}"), 500);
+    let call_client = client.clone();
+    let call_permits = permits.clone();
+    let call_task = tokio::spawn(async move {
+        execute_callout_with_client_and_permits(callout, 1_000, "test", Ok(&call_client), &call_permits).await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), headers_sent_rx)
+        .await
+        .expect("callout must receive response headers before its deadline")
+        .expect("test server must report sent headers");
+    let response = tokio::time::timeout(Duration::from_secs(2), call_task)
+        .await
+        .expect("body stream must obey callout deadline")
+        .expect("callout task must not panic");
+
+    assert!(response.headers.is_empty());
+    assert!(response.body.is_empty());
+    let reacquired = tokio::time::timeout(Duration::from_secs(1), permits.acquire())
+        .await
+        .expect("timed-out callout must release permit")
+        .expect("semaphore remains open");
+    drop(reacquired);
+    server_task.abort();
+}

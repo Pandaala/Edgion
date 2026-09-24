@@ -59,4 +59,5 @@ impl RateLimitLocalOutcomes {
 }
 
 #[cfg(test)]
+#[path = "../../../../tests/unit/plugins/runtime/conditions/rate_limit_local_outcome_test.rs"]
 mod tests;
