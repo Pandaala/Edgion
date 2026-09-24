@@ -1,4 +1,4 @@
-# EWMA LB basic distribution — 3 endpoints, no retry.
+# EWMA LB basic distribution — 3 endpoints, minimum valid retry budget.
 # Exercises commit_attempt (LbCommit::Ewma) at connect and
 # finalize_attempt(Settle) at request end.
 apiVersion: gateway.networking.k8s.io/v1
@@ -18,7 +18,7 @@ spec:
             type: PathPrefix
             value: /
       retry:
-        attempts: 0
+        attempts: 1
       timeouts:
         request: 5s
         backendRequest: 4s

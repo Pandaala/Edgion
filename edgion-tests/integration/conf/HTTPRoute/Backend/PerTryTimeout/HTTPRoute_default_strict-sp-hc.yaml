@@ -15,7 +15,7 @@ spec:
             type: PathPrefix
             value: /
       retry:
-        attempts: 0
+        attempts: 1
       sessionPersistence:
         sessionName: "edgion-sp-strict-hc"
         type: Cookie

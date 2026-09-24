@@ -18,10 +18,10 @@ spec:
         - path:
             type: PathPrefix
             value: /blackhole
-      # No retries: a single connect attempt keeps the assertion tight to one
-      # connectTimeout window instead of (retry attempts + 1) windows.
+      # Gateway API requires at least one retry when a retry policy is present.
+      # Keep the budget at its minimum while checking the total failure time.
       retry:
-        attempts: 0
+        attempts: 1
       backendRefs:
         - name: ct-svc-a
           namespace: edgion-test

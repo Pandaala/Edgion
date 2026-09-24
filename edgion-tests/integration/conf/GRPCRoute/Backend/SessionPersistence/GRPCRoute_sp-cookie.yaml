@@ -16,7 +16,7 @@ spec:
             type: Exact
             service: test.TestService
       retry:
-        attempts: 0
+        attempts: 1
       sessionPersistence:
         sessionName: "edgion-grpc-sp"
         type: Cookie

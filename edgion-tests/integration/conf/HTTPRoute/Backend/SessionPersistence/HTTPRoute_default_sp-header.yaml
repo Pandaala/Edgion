@@ -16,7 +16,7 @@ spec:
             type: PathPrefix
             value: /test
       retry:
-        attempts: 0
+        attempts: 1
       sessionPersistence:
         sessionName: "x-session-id"
         type: Header

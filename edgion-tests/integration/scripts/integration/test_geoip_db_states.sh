@@ -671,7 +671,7 @@ spec:
 EOF
 
     cat > "${CONF_DIR}/edgion-test/TCPRoute_edgion-test_geo-tcp-deny-route.yaml" <<EOF
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: geo-tcp-deny-route
@@ -692,7 +692,7 @@ spec:
 EOF
 
     cat > "${CONF_DIR}/edgion-test/TCPRoute_edgion-test_geo-tcp-allow-route.yaml" <<EOF
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: geo-tcp-allow-route
@@ -713,7 +713,7 @@ spec:
 EOF
 
     cat > "${CONF_DIR}/edgion-test/TCPRoute_edgion-test_geo-tcp-cidr-route.yaml" <<EOF
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: geo-tcp-cidr-route

@@ -1,12 +1,12 @@
 // ============================================================================
-// LB EWMA Test Suite — retry-free distribution coverage
+// LB EWMA Test Suite — successful first-attempt distribution coverage
 // ============================================================================
 //
 // Validates that an EdgionBackendTrafficPolicy with loadBalancer.type: Ewma
 // routes requests across multiple endpoints and
 // correctly runs the commit_attempt / finalize_attempt connection-accounting lifecycle for
-// each request. This route has no retry policy, so retry outcomes cannot bias
-// the distribution assertion. Under concurrent load all endpoints start with
+// each request. Successful requests finish on their first attempt, so retry
+// outcomes cannot bias the distribution assertion. Under concurrent load all endpoints start with
 // equal Peak-EWMA scores (all seeded at DEFAULT_RTT_US), so the selector distributes
 // across them.
 //

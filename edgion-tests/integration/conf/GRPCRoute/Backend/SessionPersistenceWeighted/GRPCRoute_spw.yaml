@@ -17,7 +17,7 @@ spec:
             type: Exact
             service: test.TestService
       retry:
-        attempts: 0
+        attempts: 1
       sessionPersistence:
         sessionName: "x-grpc-spw-session"
         type: Header

@@ -16,7 +16,7 @@ spec:
             type: PathPrefix
             value: /test
       retry:
-        attempts: 0
+        attempts: 1
       timeouts:
         request: 2s
         backendRequest: 1s
