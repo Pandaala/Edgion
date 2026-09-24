@@ -1,0 +1,14 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: compatible-backend-tls
+  namespace: edgion-test
+spec:
+  targetRefs:
+  - group: ''
+    kind: Service
+    name: test-tls-policy
+  validation:
+    hostname: test-tls-policy.edgion-test.svc.cluster.local
+    wellKnownCACertificates: System

@@ -1,0 +1,12 @@
+{
+  "release": "v1.2.0",
+  "expectedSources": {
+    "standard": {
+      "GatewayClass": "v1",
+      "Gateway": "v1",
+      "GRPCRoute": "v1",
+      "HTTPRoute": "v1",
+      "ReferenceGrant": "v1beta1"
+    }
+  }
+}

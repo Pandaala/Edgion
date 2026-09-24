@@ -1,0 +1,14 @@
+{
+  "release": "v1.5.0",
+  "expectedSources": {
+    "standard": {
+      "BackendTLSPolicy": "v1",
+      "GatewayClass": "v1",
+      "Gateway": "v1",
+      "GRPCRoute": "v1",
+      "HTTPRoute": "v1",
+      "ReferenceGrant": "v1",
+      "TLSRoute": "v1"
+    }
+  }
+}

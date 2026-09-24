@@ -7,6 +7,7 @@
 ### Gateway 配置
 - [Gateway 资源总览](./gateway/overview.md)：Gateway 与 listener 配置入口。
 - [GatewayClass 配置](./gateway/gateway-class.md)：控制器绑定与参数管理。
+- [Gateway API Standard 兼容性](./gateway/gateway-api-compatibility.md)：已测试的 CRD 包版本和资源 API 版本。
 - [HTTP to HTTPS 重定向 🔌](./gateway/http-to-https-redirect.md)：Gateway 级重定向策略。
 - [Preflight 策略 🔌](./gateway/preflight-policy.md)：Gateway 级 OPTIONS 预检处理。
 

@@ -222,6 +222,7 @@ const enSidebar = [
         items: [
           { text: 'Overview', link: '/en/ops-guide/gateway/overview' },
           { text: 'GatewayClass', link: '/en/ops-guide/gateway/gateway-class' },
+          { text: 'Gateway API Compatibility', link: '/en/ops-guide/gateway/gateway-api-compatibility' },
           { text: 'HTTP to HTTPS Redirect', link: '/en/ops-guide/gateway/http-to-https-redirect' },
           { text: 'Preflight Policy', link: '/en/ops-guide/gateway/preflight-policy' },
           {
@@ -470,6 +471,7 @@ const zhSidebar = [
         items: [
           { text: '概览', link: '/zh-CN/ops-guide/gateway/overview' },
           { text: 'GatewayClass', link: '/zh-CN/ops-guide/gateway/gateway-class' },
+          { text: 'Gateway API 兼容性', link: '/zh-CN/ops-guide/gateway/gateway-api-compatibility' },
           { text: 'HTTP 跳转 HTTPS', link: '/zh-CN/ops-guide/gateway/http-to-https-redirect' },
           { text: '预检策略', link: '/zh-CN/ops-guide/gateway/preflight-policy' },
           {

@@ -1,0 +1,14 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: compatible-grpcroute
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: compatible-gateway
+    sectionName: grpcroute
+  rules:
+  - backendRefs:
+    - name: test-grpc
+      port: 30021

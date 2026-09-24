@@ -7,6 +7,7 @@ This section is intended for operators, covering Gateway deployment, configurati
 ### Gateway Configuration
 - [Gateway Resource Overview](./gateway/overview.md): Gateway and listener configuration entry point.
 - [GatewayClass Configuration](./gateway/gateway-class.md): Controller binding and parameter management.
+- [Gateway API Standard Compatibility](./gateway/gateway-api-compatibility.md): Tested CRD releases and resource API versions.
 - [HTTP to HTTPS Redirect 🔌](./gateway/http-to-https-redirect.md): Gateway-level redirect policy.
 - [Preflight Policy 🔌](./gateway/preflight-policy.md): Gateway-level OPTIONS preflight handling.
 

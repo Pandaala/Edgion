@@ -1,0 +1,16 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: compatible-tlsroute
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: compatible-gateway
+    sectionName: tlsroute
+  rules:
+  - backendRefs:
+    - name: test-https
+      port: 30051
+  hostnames:
+  - compatible.example.com

@@ -1,0 +1,27 @@
+release: v1.2.1
+channel: standard
+supportedSources:
+  GatewayClass:
+  - v1
+  - v1beta1
+  Gateway:
+  - v1
+  - v1beta1
+  ReferenceGrant:
+  - v1beta1
+  HTTPRoute:
+  - v1
+  - v1beta1
+  GRPCRoute:
+  - v1
+noWatchKinds:
+- TLSRoute
+- TCPRoute
+- UDPRoute
+- BackendTLSPolicy
+resources:
+- GatewayClass.yaml
+- Gateway.yaml
+- ReferenceGrant.yaml
+- HTTPRoute.yaml
+- GRPCRoute.yaml

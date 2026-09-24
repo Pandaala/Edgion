@@ -1,0 +1,15 @@
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: compatible-grant
+  namespace: edgion-test
+spec:
+  from:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    namespace: edgion-default
+  to:
+  - group: ''
+    kind: Service
+    name: test-http

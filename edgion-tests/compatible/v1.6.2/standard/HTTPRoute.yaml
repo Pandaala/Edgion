@@ -1,0 +1,67 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: compatible-http
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: compatible-gateway
+    sectionName: http
+  rules:
+  - backendRefs:
+    - name: test-http
+      port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: compatible-cross-namespace
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: compatible-gateway
+    namespace: edgion-test
+    sectionName: http
+  hostnames:
+  - cross.compatible.example
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /health
+    backendRefs:
+    - name: test-http
+      namespace: edgion-test
+      port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: compatible-policy-http
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: compatible-gateway
+    sectionName: http
+  hostnames:
+  - policy.compatible.example
+  rules:
+  - backendRefs:
+    - name: test-tls-policy
+      port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: compatible-beta-http
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: compatible-beta-gateway
+  hostnames:
+  - beta.compatible.example
+  rules:
+  - backendRefs:
+    - name: test-http
+      port: 30001

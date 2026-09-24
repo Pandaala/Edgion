@@ -1,0 +1,14 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: TCPRoute
+metadata:
+  name: compatible-tcproute
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: compatible-gateway
+    sectionName: tcproute
+  rules:
+  - backendRefs:
+    - name: test-tcp
+      port: 30010

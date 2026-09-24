@@ -1,0 +1,53 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: compatible-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: compatible-gateway
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All
+  - name: grpcroute
+    protocol: HTTP
+    port: 30021
+    allowedRoutes:
+      kinds:
+      - kind: GRPCRoute
+  - name: tcproute
+    protocol: TCP
+    port: 31092
+    allowedRoutes:
+      kinds:
+      - kind: TCPRoute
+  - name: udproute
+    protocol: UDP
+    port: 31101
+    allowedRoutes:
+      kinds:
+      - kind: UDPRoute
+  - name: tlsroute
+    protocol: TLS
+    port: 8443
+    allowedRoutes:
+      kinds:
+      - kind: TLSRoute
+    tls:
+      mode: Passthrough
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: compatible-beta-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: compatible-beta-class
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 10080

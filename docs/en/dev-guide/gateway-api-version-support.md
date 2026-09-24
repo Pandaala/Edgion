@@ -2,6 +2,9 @@
 
 Edgion treats a resource API version and a Gateway API bundle version as two different concepts. This page describes the version boundaries you can rely on today and the compatibility that must not be inferred from them.
 
+For the tested Standard CRD releases and their resource-by-resource YAML
+coverage, see [Gateway API Standard CRD compatibility](../ops-guide/gateway/gateway-api-compatibility.md).
+
 ## Currently declared resource versions
 
 | Resource | Edgion-declared version | Notes |

@@ -2,6 +2,9 @@
 
 This directory contains the test and build scripts used by the Edgion project.
 
+Gateway API CRD release compatibility has a separate Kubernetes matrix at
+[`../../compatible/README.md`](../../compatible/README.md).
+
 ## Directory Layout
 
 ```text

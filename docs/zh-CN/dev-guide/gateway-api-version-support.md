@@ -2,6 +2,9 @@
 
 Edgion 将 Gateway API 的“资源 API 版本”和“Gateway API bundle 版本”视为两个不同概念。本页说明当前可依赖的版本边界，以及不能据此推断的兼容性。
 
+已测试的 Standard CRD 包版本及逐资源 YAML 覆盖情况，见
+[Gateway API Standard CRD 兼容性](../ops-guide/gateway/gateway-api-compatibility.md)。
+
 ## 当前声明的资源版本
 
 | 资源 | Edgion 声明的版本 | 说明 |
