@@ -155,6 +155,7 @@ Authorization: Bearer <admin-token>
 {
   "ts": 1767089146376,
   "request_info": {
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
     "direct_peer_ip": "192.168.1.20",
     "host": "api.example.com",
     "path": "/health",
@@ -198,8 +199,8 @@ Authorization: Bearer <admin-token>
 | `direct_peer_ip` | String | 下游物理传输对端（`DirectPeerIp`） |
 | `client-port` | Integer | 客户端 TCP 端口 |
 | `remote_ip` | String | 经过适用的 PROXY/RealIp 解析后的客户端 IP（`RemoteIp`） |
-| `trace_id["x-trace-id"]` | String | 标准 W3C trace ID，32 位小写十六进制 |
-| `trace_id["<custom-header>"]` | String | 同一个扁平 Map 中的活动自定义 ID；复制的外部值按日志配置脱敏 |
+| `trace_id` | String | 标准 W3C trace ID，32 位小写十六进制 |
+| `request_ids["<custom-header>"]` | String | 活动自定义 ID；复制的外部值按日志配置脱敏 |
 | `host` | String | 请求 `Host` 头 |
 | `path` | String | 规范化后的请求路径 |
 | `status` | Integer | 最终下游 HTTP 状态，与 Nginx/OpenResty `$status` 语义一致；`0` 表示未观察到最终状态 |
@@ -516,12 +517,10 @@ access_log_options:
 {
   "ts": 1767089146376,
   "request_info": {
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
     "direct_peer_ip": "192.168.1.20",
     "client-port": 54882,
     "remote_ip": "192.168.1.20",
-    "trace_id": {
-      "x-trace-id": "4bf92f3577b34da6a3ce929d0e0e4736"
-    },
     "host": "test.example.com",
     "path": "/health",
     "status": 200
@@ -609,7 +608,7 @@ cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstre
 cat logs/edgion_access.log | jq '.stage_logs[]?.logs[]? | select(.time_cost > 100)'
 
 # 端到端追踪一个请求
-cat logs/edgion_access.log | jq 'select(.request_info.trace_id["x-trace-id"] == "4bf92f3577b34da6a3ce929d0e0e4736")'
+cat logs/edgion_access.log | jq 'select(.request_info.trace_id == "4bf92f3577b34da6a3ce929d0e0e4736")'
 ```
 
 重点关注的字段：
@@ -632,7 +631,7 @@ cat logs/edgion_access.log | jq 'select(.request_info.trace_id["x-trace-id"] == 
 
 ### Q3：如何关联多跳请求的日志？
 
-**A**：按 `request_info.trace_id["x-trace-id"]` 查找标准链路。默认响应头开启时始终等于该 ID；关闭默认头也会保留日志中的标准 ID。其他活动 ID 直接放在同一个扁平 Map 中，复制的外部值按日志配置脱敏。参见 [RequestId](../../user-guide/http-route/filters/edgion-plugins/request-id.md)。
+**A**：按 `request_info.trace_id` 查找标准链路。默认响应头开启时始终等于该 ID；关闭默认头也会保留日志中的标准 ID。其他活动 ID 放在 `request_info.request_ids` 中，复制的外部值按日志配置脱敏。参见 [RequestId](../../user-guide/http-route/filters/edgion-plugins/request-id.md)。
 
 ### Q4：请求被插件拒绝了——看哪里？
 

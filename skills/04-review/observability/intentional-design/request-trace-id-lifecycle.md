@@ -15,6 +15,12 @@ request-owned data structure; it is not another configurable plugin.
 On 2026-09-11 the user approved a flat access-log ID map and reserved
 `x-trace-id` for the canonical W3C identity. This supersedes the initial nested
 log shape and the initial preservation of conflicting inbound `x-trace-id`.
+On 2026-09-24 the user requested a single `request_info.trace_id` string for
+the canonical ID, without a second top-level copy. Active custom IDs use
+`request_info.request_ids`; `x-trace-id` remains the reserved wire header.
+OpenTelemetry recommends a top-level `trace_id` in non-OTLP JSON logs, so
+Edgion's request-info nesting is an explicit product choice rather than an
+exact match to that recommendation.
 
 Core propagation preserves valid incoming W3C context and creates context when it
 is missing or invalid. Generated roots have the sampled bit unset. This does not
@@ -55,8 +61,8 @@ parent ID must not be reported as a gateway span ID.
 - At most 16 managed names include suppression tombstones; active values have a
   4096-byte aggregate limit. The usual single-ID case uses a Vec serialized as a
   JSON map. Copied custom values follow the log masking policy without altering
-  wire values. The reserved key is emitted once from W3C state before the custom
-  entries, even when its header is disabled; it is not treated as a copied ID.
+  wire values. The W3C ID is emitted as `request_info.trace_id`,
+  even when its wire header is disabled; it is not treated as a copied ID.
 
 The first-set rule applies to correlation headers, not a new W3C wire protocol.
 Removing a header at one gateway cannot prevent the next gateway from generating
@@ -78,9 +84,9 @@ occurrence. Execution flags stay request-owned, never on shared PluginRuntime.
 A later route owned by a different Gateway cannot reuse already-executed early
 policy; it fails closed before executing that other Gateway's plugins.
 
-RequestInfo owns a flat `trace_id` map: `trace_id["x-trace-id"]` is the W3C ID,
-and other names are active custom IDs with log masking for copied
-client/header/context values. Header sources observe current managed headers;
+RequestInfo owns the W3C context and custom IDs. The access log emits a
+`request_info.trace_id` string and `request_info.request_ids` for active custom
+IDs, with log masking for copied client/header/context values. Header sources observe current managed headers;
 no original incoming x-trace-id snapshot is retained. W3C trace IDs
 and business IDs may repeat across requests and must not become unique storage
 keys. Gateway traffic observability remains in the canonical access log without

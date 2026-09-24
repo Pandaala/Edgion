@@ -449,10 +449,30 @@ impl Serialize for RequestTraceId {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
         if let Some(id) = self.standard_trace_id() {
-            map.serialize_entry(DEFAULT_HEADER, id)?;
+            map.serialize_entry("trace_id", id)?;
         }
-        for id in &self.correlation_ids {
-            // The reserved key is emitted from W3C state even when its wire header is disabled.
+        if self.has_custom_ids() {
+            map.serialize_entry("request_ids", &CustomRequestIds(self))?;
+        }
+        map.end()
+    }
+}
+
+impl RequestTraceId {
+    fn has_custom_ids(&self) -> bool {
+        self.correlation_ids
+            .iter()
+            .any(|id| id.key != DEFAULT_HEADER && id.value.is_some())
+    }
+}
+
+struct CustomRequestIds<'a>(&'a RequestTraceId);
+
+impl Serialize for CustomRequestIds<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        for id in &self.0.correlation_ids {
+            // The default wire header is represented by the trace_id field.
             if id.key == DEFAULT_HEADER {
                 continue;
             }
@@ -506,8 +526,8 @@ mod tests {
         assert_eq!(headers["traceparent"], PARENT);
         assert_eq!(headers[DEFAULT_HEADER], state.standard_trace_id().unwrap());
         assert_eq!(
-            serde_json::to_value(&state).unwrap()[DEFAULT_HEADER],
-            state.standard_trace_id().unwrap()
+            serde_json::to_value(&state).unwrap(),
+            serde_json::json!({"trace_id": state.standard_trace_id().unwrap()})
         );
     }
 
@@ -566,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn disabled_default_suppresses_wire_headers_but_retains_log_identity() {
+    fn disabled_default_suppresses_wire_headers_but_retains_trace_identity() {
         let mut state = state();
         let patch: DefaultIdConfig = serde_json::from_value(serde_json::json!({"enabled":false})).unwrap();
         state.apply_default_patch(&patch);
@@ -577,11 +597,10 @@ mod tests {
         state.reconcile_request(&mut headers);
         assert!(!headers.contains_key(DEFAULT_HEADER));
         assert_eq!(headers["traceparent"], PARENT);
+        assert_eq!(state.standard_trace_id(), Some("4bf92f3577b34da6a3ce929d0e0e4736"));
         assert_eq!(
             serde_json::to_value(&state).unwrap(),
-            serde_json::json!({
-                "x-trace-id": "4bf92f3577b34da6a3ce929d0e0e4736"
-            })
+            serde_json::json!({"trace_id": state.standard_trace_id().unwrap()})
         );
         state.apply_default_patch(&patch);
         state.reconcile_response(&mut headers);
@@ -701,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn serialization_uses_named_map_and_excludes_wire_context() {
+    fn serialization_separates_trace_id_and_custom_request_ids() {
         let mut state = state();
         let custom = rule(serde_json::json!({"header":"x-order-id","source":{"type":"traceId"}}));
         state.apply_rule(
@@ -713,13 +732,13 @@ mod tests {
         assert_eq!(
             serialized,
             serde_json::json!({
-                "x-trace-id": "4bf92f3577b34da6a3ce929d0e0e4736",
-                "x-order-id": "4bf92f3577b34da6a3ce929d0e0e4736"
+                "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "request_ids": {"x-order-id": "4bf92f3577b34da6a3ce929d0e0e4736"}
             })
         );
         assert_eq!(
             serde_json::to_string(&state).unwrap().matches("\"x-trace-id\"").count(),
-            1
+            0
         );
     }
 

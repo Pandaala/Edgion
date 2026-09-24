@@ -1257,6 +1257,7 @@ pub struct RequestInfo {
     )]
     pub remote_ip: String,
     /// Canonical W3C context and managed correlation identifiers.
+    #[serde(flatten, skip_serializing_if = "crate::request_trace_id::RequestTraceId::is_empty")]
     pub trace_id: crate::request_trace_id::RequestTraceId,
     /// Normalized hostname from the Host header (lowercased, port-stripped).
     /// Construct via `NormalizedHostname::new()` — never apply `to_lowercase()` again.

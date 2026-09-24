@@ -155,6 +155,7 @@ The log is always JSON, one entry per line. Optional fields are omitted entirely
 {
   "ts": 1767089146376,
   "request_info": {
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
     "direct_peer_ip": "192.168.1.20",
     "host": "api.example.com",
     "path": "/health",
@@ -198,8 +199,8 @@ Nested one level deep under the top-level `request_info` object (see [Top-level 
 | `direct_peer_ip` | String | Physical downstream transport peer (`DirectPeerIp`) |
 | `client-port` | Integer | Client TCP port |
 | `remote_ip` | String | Resolved client IP (`RemoteIp`) after the applicable proxy/RealIp resolution |
-| `trace_id["x-trace-id"]` | String | Canonical W3C trace ID, 32 lowercase hexadecimal characters |
-| `trace_id["<custom-header>"]` | String | Active custom ID in the same flat map; copied external values follow the log masking policy |
+| `trace_id` | String | Canonical W3C trace ID, 32 lowercase hexadecimal characters |
+| `request_ids["<custom-header>"]` | String | Active custom ID in the request map; copied external values follow the log masking policy |
 | `host` | String | Request `Host` header |
 | `path` | String | Normalized request path |
 | `status` | Integer | Final downstream HTTP status, equivalent to Nginx/OpenResty `$status`; `0` means no final status was observable |
@@ -594,12 +595,10 @@ access_log_options:
 {
   "ts": 1767089146376,
   "request_info": {
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
     "direct_peer_ip": "192.168.1.20",
     "client-port": 54882,
     "remote_ip": "192.168.1.20",
-    "trace_id": {
-      "x-trace-id": "4bf92f3577b34da6a3ce929d0e0e4736"
-    },
     "host": "test.example.com",
     "path": "/health",
     "status": 200
@@ -714,7 +713,7 @@ cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstre
 cat logs/edgion_access.log | jq '.stage_logs[]?.logs[]? | select(.time_cost > 100)'
 
 # Trace one request end to end
-cat logs/edgion_access.log | jq 'select(.request_info.trace_id["x-trace-id"] == "4bf92f3577b34da6a3ce929d0e0e4736")'
+cat logs/edgion_access.log | jq 'select(.request_info.trace_id == "4bf92f3577b34da6a3ce929d0e0e4736")'
 ```
 
 Key fields to watch:
@@ -737,7 +736,7 @@ Key fields to watch:
 
 ### Q3: How do I correlate logs across a multi-hop request?
 
-**A**: Filter `request_info.trace_id["x-trace-id"]` for the standard trace. The default response header, when enabled, always equals that ID. Disabling the header leaves this log field present. Other active IDs share the same flat map; copied external values follow the log masking policy. See [RequestId](../../user-guide/http-route/filters/edgion-plugins/request-id.md).
+**A**: Filter `request_info.trace_id` for the standard trace. The default response header, when enabled, always equals that ID. Disabling the header leaves this log field present. Active custom IDs appear under `request_info.request_ids`; copied external values follow the log masking policy. See [RequestId](../../user-guide/http-route/filters/edgion-plugins/request-id.md).
 
 ### Q4: A request was rejected by a plugin — where do I look?
 

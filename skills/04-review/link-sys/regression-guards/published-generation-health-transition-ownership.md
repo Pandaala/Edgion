@@ -57,7 +57,7 @@ The Kafka integration recovery oracle checks the current
 `edgion_link_sys_health` gauge for the exact LinkSys key and delivery of an
 identified access-log record generated after broker restart. Supply a unique
 valid W3C `traceparent` and match its canonical
-`request_info.trace_id["x-trace-id"]`; request paths may be masked and an inbound
+`trace_id`; request paths may be masked and an inbound
 `x-trace-id` alone does not establish the canonical identity. Keep normal log
 redaction enabled. Match the metric
 name and link label independently of global labels such as `service` and their

@@ -416,9 +416,10 @@ mod deferred_credential_connection_tests {
             Some("business-42")
         );
         let access_log_ids = serde_json::to_value(&ctx.request_info.trace_id).unwrap();
-        assert_eq!(access_log_ids["x-trace-id"], trace_id);
-        assert_eq!(access_log_ids["x-real-ip"], "client-correlation");
-        assert_eq!(access_log_ids["x-order-id"], "business-42");
+        assert_eq!(ctx.request_info.trace_id.standard_trace_id(), Some(trace_id.as_str()));
+        assert_eq!(access_log_ids["trace_id"], trace_id);
+        assert_eq!(access_log_ids["request_ids"]["x-real-ip"], "client-correlation");
+        assert_eq!(access_log_ids["request_ids"]["x-order-id"], "business-42");
         assert!(ctx.diagnostics.is_empty());
         assert!(ctx
             .ai_state()

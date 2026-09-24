@@ -199,7 +199,7 @@ topic_has_trace_id() {
     local trace_id="$1"
     consume_topic_for 4 > "${LOG_DIR}/kafka-recovery-records.json"
     jq -se --arg trace_id "$trace_id" '
-        any(.[]; (.value | fromjson? | .request_info.trace_id["x-trace-id"]) == $trace_id)
+        any(.[]; (.value | fromjson? | .request_info.trace_id) == $trace_id)
     ' "${LOG_DIR}/kafka-recovery-records.json" >/dev/null 2>&1
 }
 

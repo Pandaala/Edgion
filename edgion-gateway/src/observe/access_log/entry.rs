@@ -276,7 +276,9 @@ mod tests {
     use super::*;
     use crate::ctx::{WafLogMode, WafLogSource, WafSelection};
     use crate::geoip::GeoInfo;
+    use crate::request_trace_id::CompiledRequestIdRule;
     use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
+    use http::{HeaderMap, HeaderValue};
     use std::sync::Arc;
 
     #[test]
@@ -284,6 +286,34 @@ mod tests {
         let json = AccessLogEntry::from_context(&EdgionHttpContext::new()).to_json();
         assert!(!json.contains(r#""diagnostics""#), "got: {json}");
         assert!(!json.contains(r#""diagnostics_full""#), "got: {json}");
+    }
+
+    #[test]
+    fn request_info_has_trace_id_string_and_custom_request_ids() {
+        let mut ctx = EdgionHttpContext::new();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+        );
+        ctx.request_info.trace_id.initialize(&headers);
+        let rule =
+            serde_json::from_value(serde_json::json!({"header":"x-order-id","source":{"type":"traceId"}})).unwrap();
+        let rule = CompiledRequestIdRule::new(&rule).unwrap();
+        ctx.request_info.trace_id.apply_rule(
+            &rule,
+            None,
+            Some(HeaderValue::from_static("4bf92f3577b34da6a3ce929d0e0e4736")),
+        );
+
+        let entry: serde_json::Value = serde_json::from_str(&AccessLogEntry::from_context(&ctx).to_json()).unwrap();
+        assert!(entry.get("trace_id").is_none());
+        assert_eq!(entry["request_info"]["trace_id"], "4bf92f3577b34da6a3ce929d0e0e4736");
+        assert_eq!(
+            entry["request_info"]["request_ids"]["x-order-id"],
+            "4bf92f3577b34da6a3ce929d0e0e4736"
+        );
+        assert!(entry["request_info"]["request_ids"].get("x-trace-id").is_none());
     }
 
     #[test]

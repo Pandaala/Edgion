@@ -9,9 +9,11 @@ async fn check_log(ctx: &TestContext, trace: &str) -> Result<Value, String> {
         .get_access_log_with_retry(trace, 30, 50)
         .await
         .map_err(|e| e.to_string())?;
-    let ids = &entry.data["request_info"]["trace_id"];
-    if ids["x-trace-id"] != trace || !ids.as_object().is_some_and(|map| map.values().all(Value::is_string)) {
-        return Err(format!("expected flat ID map with canonical W3C identity: {ids}"));
+    let ids = &entry.data["request_info"]["request_ids"];
+    if entry.data["request_info"]["trace_id"] != trace
+        || !ids.is_null() && !ids.as_object().is_some_and(|map| map.values().all(Value::is_string))
+    {
+        return Err(format!("expected W3C trace ID and custom request IDs: {ids}"));
     }
     Ok(ids.clone())
 }

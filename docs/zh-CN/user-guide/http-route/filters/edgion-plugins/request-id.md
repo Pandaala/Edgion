@@ -119,13 +119,13 @@ spec:
 
 `echoResponse: false` 会移除该受管理的响应头，包括上游回显；`forwardUpstream: false` 会从上游请求中移除它。两者都不会关闭 W3C 传播。
 
-访问日志中的 `request_info.trace_id` 是一个扁平 JSON 对象：
+访问日志将标准 W3C ID 直接保存在 `request_info.trace_id`，将活动自定义 ID 保存在 `request_info.request_ids`：
 
 ```json
-{"x-trace-id":"4bf92f3577b34da6a3ce929d0e0e4736","x-order-id":"order-123"}
+{"request_info":{"trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","request_ids":{"x-order-id":"order-123"}}}
 ```
 
-保留项 `x-trace-id` 始终是标准 W3C ID，即使默认头被关闭也会记录。其他项是活动业务 ID；复制的客户端/header/ctx 值按配置的日志模式脱敏，线上转发和响应值不变。生成值可用于关联。标准链路按 `request_info.trace_id["x-trace-id"]` 查找。OTLP 直接使用内部类型化 W3C ID，日志导出仍需单独配置。
+`request_info.trace_id` 始终是标准 W3C ID，即使默认头被关闭也会记录。`request_info.request_ids` 保存活动业务 ID；复制的客户端/header/ctx 值按配置的日志模式脱敏，线上转发和响应值不变。生成值可用于关联。标准链路按 `request_info.trace_id` 查找。OTLP 直接使用内部类型化 W3C ID，日志导出仍需单独配置。
 
 ## 相关链接
 

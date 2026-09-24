@@ -119,13 +119,13 @@ The gateway does not automatically return `traceparent` or `tracestate`. Return 
 
 `echoResponse: false` removes that managed response header, including an upstream echo. `forwardUpstream: false` removes it from the managed upstream request. These flags do not turn off W3C propagation.
 
-Access logs serialize `request_info.trace_id` as one flat JSON object:
+Access logs place the canonical W3C ID directly in `request_info.trace_id` and active custom IDs in `request_info.request_ids`:
 
 ```json
-{"x-trace-id":"4bf92f3577b34da6a3ce929d0e0e4736","x-order-id":"order-123"}
+{"request_info":{"trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","request_ids":{"x-order-id":"order-123"}}}
 ```
 
-The reserved `x-trace-id` always contains the canonical W3C ID, including when the default header is disabled. Custom entries contain active business IDs; copied client/header/context values follow the configured log masking mode without changing wire values. Generated IDs remain available for correlation. Query `request_info.trace_id["x-trace-id"]` for the standard trace. OTLP uses the internal typed W3C ID directly; exporting logs to OTLP remains a separate configuration choice.
+`request_info.trace_id` always contains the canonical W3C ID, including when the default header is disabled. `request_info.request_ids` contains active business IDs; copied client/header/context values follow the configured log masking mode without changing wire values. Generated IDs remain available for correlation. Query `request_info.trace_id` for the standard trace. OTLP uses the internal typed W3C ID directly; exporting logs to OTLP remains a separate configuration choice.
 
 ## Related links
 

@@ -36,13 +36,14 @@ impl TestSuite for Phase {
                             .get_access_log_with_retry(&trace, 30, 50)
                             .await
                             .map_err(|e| e.to_string())?;
-                        let ids = &log.data["request_info"]["trace_id"];
-                        if ids["x-trace-id"] != trace
-                            || !ids
-                                .as_object()
-                                .is_some_and(|map| map.values().all(serde_json::Value::is_string))
+                        let ids = &log.data["request_info"]["request_ids"];
+                        if log.data["request_info"]["trace_id"] != trace
+                            || !ids.is_null()
+                                && !ids
+                                    .as_object()
+                                    .is_some_and(|map| map.values().all(serde_json::Value::is_string))
                         {
-                            return Err("flat log map must retain W3C identity in every phase".into());
+                            return Err("log must retain the W3C trace ID in every phase".into());
                         }
                         if phase == "deleted" {
                             return if status == 404

@@ -19,7 +19,7 @@ struct LogEntry {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct RequestInfo {
-    trace_id: HashMap<String, String>,
+    trace_id: String,
     host: String,
     path: String,
     status: u16,
@@ -97,43 +97,42 @@ impl AccessLogAnalyzer {
         };
 
         for entry in entries {
-            if let Some(trace_id) = entry.request_info.trace_id.get("x-trace-id") {
-                if trace_id.starts_with(prefix) {
-                    result.total_requests += 1;
-                    if let Some(backend_ctx) = entry.backend_context {
-                        if let Some(upstream) = backend_ctx.upstreams.last() {
-                            // Parse LB policy
-                            let policy_str = match &upstream.lb_policy {
-                                Some(val) => {
-                                    if val.is_string() {
-                                        val.as_str().unwrap_or("RoundRobin").to_string()
-                                    } else if val.is_object() {
-                                        // For ConsistentHash with object format
-                                        if val.get("ConsistentHash").is_some() {
-                                            "ConsistentHash".to_string()
-                                        } else {
-                                            format!("{:?}", val)
-                                        }
+            if entry.request_info.trace_id.starts_with(prefix) {
+                let trace_id = &entry.request_info.trace_id;
+                result.total_requests += 1;
+                if let Some(backend_ctx) = entry.backend_context {
+                    if let Some(upstream) = backend_ctx.upstreams.last() {
+                        // Parse LB policy
+                        let policy_str = match &upstream.lb_policy {
+                            Some(val) => {
+                                if val.is_string() {
+                                    val.as_str().unwrap_or("RoundRobin").to_string()
+                                } else if val.is_object() {
+                                    // For ConsistentHash with object format
+                                    if val.get("ConsistentHash").is_some() {
+                                        "ConsistentHash".to_string()
                                     } else {
-                                        "RoundRobin".to_string()
+                                        format!("{:?}", val)
                                     }
+                                } else {
+                                    "RoundRobin".to_string()
                                 }
-                                None => "RoundRobin".to_string(),
-                            };
-                            *result.lb_policy_counts.entry(policy_str).or_insert(0) += 1;
+                            }
+                            None => "RoundRobin".to_string(),
+                        };
+                        *result.lb_policy_counts.entry(policy_str).or_insert(0) += 1;
 
-                            let backend_addr = format!("{}:{}", upstream.ip, upstream.port);
-                            *result.backend_counts.entry(backend_addr).or_insert(0) += 1;
-                        } else {
-                            result
-                                .errors
-                                .push(format!("No upstream info for trace_id: {}", trace_id));
-                        }
+                        let backend_addr = format!("{}:{}", upstream.ip, upstream.port);
+                        *result.backend_counts.entry(backend_addr).or_insert(0) += 1;
                     } else {
                         result
                             .errors
-                            .push(format!("No backend context for trace_id: {}", trace_id));
+                            .push(format!("No upstream info for trace_id: {}", trace_id));
                     }
+                } else {
+                    result
+                        .errors
+                        .push(format!("No backend context for trace_id: {}", trace_id));
                 }
             }
         }
@@ -228,8 +227,8 @@ mod tests {
     #[test]
     fn test_parse_access_log() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        let log_content = r#"{"request_info":{"trace_id":{"x-trace-id":"rr-test-0001"},"host":"lb-roundrobin.test","path":"/health","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":30001,"lb_policy":"RoundRobin"}]}}
-{"request_info":{"trace_id":{"x-trace-id":"rr-test-0002"},"host":"lb-roundrobin.test","path":"/health","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":30002}]}}
+        let log_content = r#"{"request_info":{"trace_id":"rr-test-0001","host":"lb-roundrobin.test","path":"/health","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":30001,"lb_policy":"RoundRobin"}]}}
+{"request_info":{"trace_id":"rr-test-0002","host":"lb-roundrobin.test","path":"/health","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":30002}]}}
 "#;
         temp_file.write_all(log_content.as_bytes()).unwrap();
         temp_file.flush().unwrap();
@@ -244,7 +243,7 @@ mod tests {
 
     #[test]
     fn test_parse_canonical_downstream_ip_fields() {
-        let lines = r#"{"request_info":{"trace_id":{"x-trace-id":"ip-1"},"host":"h","path":"/","status":200,"direct_peer_ip":"192.0.2.10","direct_peer_port":443,"remote_ip":"203.0.113.7"},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9000}]}}
+        let lines = r#"{"request_info":{"trace_id":"ip-1","host":"h","path":"/","status":200,"direct_peer_ip":"192.0.2.10","direct_peer_port":443,"remote_ip":"203.0.113.7"},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9000}]}}
 "#;
         let (_f, a) = analyzer_for(lines);
         let entries = a.parse_log().unwrap();
@@ -260,9 +259,9 @@ mod tests {
     #[test]
     fn test_prefix_filtering_keeps_only_matching_entries() {
         let lines = concat!(
-            r#"{"request_info":{"trace_id":{"x-trace-id":"aa-1"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":8001,"lb_policy":"RoundRobin"}]}}"#,
+            r#"{"request_info":{"trace_id":"aa-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":8001,"lb_policy":"RoundRobin"}]}}"#,
             "\n",
-            r#"{"request_info":{"trace_id":{"x-trace-id":"bb-1"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.2","port":8002,"lb_policy":"RoundRobin"}]}}"#,
+            r#"{"request_info":{"trace_id":"bb-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.2","port":8002,"lb_policy":"RoundRobin"}]}}"#,
             "\n",
         );
         let (_f, a) = analyzer_for(lines);
@@ -278,7 +277,7 @@ mod tests {
     #[test]
     fn test_lb_policy_consistent_hash_object() {
         let lines = concat!(
-            r#"{"request_info":{"trace_id":{"x-trace-id":"ch-1"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9000,"lb_policy":{"ConsistentHash":{"hash_on":"header"}}}]}}"#,
+            r#"{"request_info":{"trace_id":"ch-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9000,"lb_policy":{"ConsistentHash":{"hash_on":"header"}}}]}}"#,
             "\n",
         );
         let (_f, a) = analyzer_for(lines);
@@ -294,7 +293,7 @@ mod tests {
     #[test]
     fn test_lb_policy_other_object_uses_debug_fallback() {
         let lines = concat!(
-            r#"{"request_info":{"trace_id":{"x-trace-id":"wr-1"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9001,"lb_policy":{"WeightedRandom":{}}}]}}"#,
+            r#"{"request_info":{"trace_id":"wr-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9001,"lb_policy":{"WeightedRandom":{}}}]}}"#,
             "\n",
         );
         let (_f, a) = analyzer_for(lines);
@@ -311,7 +310,7 @@ mod tests {
     #[test]
     fn test_lb_policy_number_defaults_to_round_robin() {
         let lines = concat!(
-            r#"{"request_info":{"trace_id":{"x-trace-id":"num-1"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9002,"lb_policy":123}]}}"#,
+            r#"{"request_info":{"trace_id":"num-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9002,"lb_policy":123}]}}"#,
             "\n",
         );
         let (_f, a) = analyzer_for(lines);
@@ -325,7 +324,7 @@ mod tests {
     #[test]
     fn test_lb_policy_absent_defaults_to_round_robin() {
         let lines = concat!(
-            r#"{"request_info":{"trace_id":{"x-trace-id":"abs-1"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9003}]}}"#,
+            r#"{"request_info":{"trace_id":"abs-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9003}]}}"#,
             "\n",
         );
         let (_f, a) = analyzer_for(lines);
@@ -341,7 +340,7 @@ mod tests {
     #[test]
     fn test_uses_last_upstream_not_first() {
         let lines = concat!(
-            r#"{"request_info":{"trace_id":{"x-trace-id":"last-1"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":1111,"lb_policy":"RoundRobin"},{"ip":"10.0.0.2","port":2222,"lb_policy":{"ConsistentHash":{}}}]}}"#,
+            r#"{"request_info":{"trace_id":"last-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":1111,"lb_policy":"RoundRobin"},{"ip":"10.0.0.2","port":2222,"lb_policy":{"ConsistentHash":{}}}]}}"#,
             "\n",
         );
         let (_f, a) = analyzer_for(lines);
@@ -359,7 +358,7 @@ mod tests {
     #[test]
     fn test_missing_backend_context_produces_error() {
         let lines = concat!(
-            r#"{"request_info":{"trace_id":{"x-trace-id":"noctx-1"},"host":"h","path":"/","status":200}}"#,
+            r#"{"request_info":{"trace_id":"noctx-1","host":"h","path":"/","status":200}}"#,
             "\n",
         );
         let (_f, a) = analyzer_for(lines);
@@ -377,7 +376,7 @@ mod tests {
     #[test]
     fn test_empty_upstreams_produces_error() {
         let lines = concat!(
-            r#"{"request_info":{"trace_id":{"x-trace-id":"emup-1"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[]}}"#,
+            r#"{"request_info":{"trace_id":"emup-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[]}}"#,
             "\n",
         );
         let (_f, a) = analyzer_for(lines);
@@ -394,10 +393,10 @@ mod tests {
     #[test]
     fn test_malformed_json_line_is_skipped_silently() {
         let lines = concat!(
-            r#"{"request_info":{"trace_id":{"x-trace-id":"ok-1"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":5001}]}}"#,
+            r#"{"request_info":{"trace_id":"ok-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":5001}]}}"#,
             "\n",
             "not json at all\n",
-            r#"{"request_info":{"trace_id":{"x-trace-id":"ok-2"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":5002}]}}"#,
+            r#"{"request_info":{"trace_id":"ok-2","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":5002}]}}"#,
             "\n",
         );
         let (_f, a) = analyzer_for(lines);
@@ -413,10 +412,10 @@ mod tests {
     #[test]
     fn test_blank_lines_are_skipped() {
         let lines = concat!(
-            r#"{"request_info":{"trace_id":{"x-trace-id":"bl-1"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":6001}]}}"#,
+            r#"{"request_info":{"trace_id":"bl-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":6001}]}}"#,
             "\n",
             "\n",
-            r#"{"request_info":{"trace_id":{"x-trace-id":"bl-2"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":6002}]}}"#,
+            r#"{"request_info":{"trace_id":"bl-2","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":6002}]}}"#,
             "\n",
         );
         let (_f, a) = analyzer_for(lines);
@@ -430,7 +429,7 @@ mod tests {
     // across all matching entries.
     #[test]
     fn test_backend_counts_aggregates_same_address() {
-        let entry = r#"{"request_info":{"trace_id":{"x-trace-id":"agg-x"},"host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":30001}]}}"#;
+        let entry = r#"{"request_info":{"trace_id":"agg-x","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":30001}]}}"#;
         let lines = format!("{}\n{}\n{}\n", entry, entry, entry);
         let (_f, a) = analyzer_for(&lines);
         let result = a.analyze_by_prefix("agg").unwrap();

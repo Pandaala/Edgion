@@ -166,7 +166,7 @@ def body(record):
 
 
 def record_id(record):
-    return body(record).get("request_info", {}).get("trace_id", {}).get("x-trace-id")
+    return body(record).get("request_info", {}).get("trace_id")
 
 
 def found(which, trace):
