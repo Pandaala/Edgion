@@ -86,6 +86,8 @@ security floor is not operator-overridable. Other targets retain normal module-l
 
 server:
   threads: 0                               # 0 = CPU core count
+  # downstream_tls_offload_threadpools: 2       # Optional, 1..=4
+  # downstream_tls_offload_thread_per_pool: 2  # Optional, 1..=4; both fields required
   work_stealing: true                      # Tokio work-stealing
   grace_period_seconds: 30                 # Graceful shutdown wait
   graceful_shutdown_timeout_seconds: 10    # Shutdown timeout

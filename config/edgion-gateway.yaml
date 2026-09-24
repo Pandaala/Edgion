@@ -104,6 +104,11 @@ server:
   # ， CPU
   # threads: 4
 
+  # Optional downstream TLS handshake offload, disabled when both are omitted.
+  # Each terminating HTTPS/TLS listener owns its own pool; total threads must be <= 64.
+  # downstream_tls_offload_threadpools: 2
+  # downstream_tls_offload_thread_per_pool: 2
+
   # Enable work stealing (default: true)
   # ，
   # work_stealing: true

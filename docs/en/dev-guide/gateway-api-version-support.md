@@ -33,9 +33,9 @@ ports bound at Gateway startup. Their full v1.6.2 profiles timed out when
 tests created new listener ports after startup. The Gateway must restart to
 bind those ports, so `TCPRoute` and `UDPRoute` are withheld from
 `GatewayClass.status.supportedFeatures` pending full profile passes. The
-remaining [TLS](../../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md)
-and [dynamic-listener](../../../tasks/pending/gateway-api-v16-dynamic-stream-listeners.md)
-work is tracked separately. These results do not establish complete v1.6.2
+full-profile TLS timeout remains unresolved, and the
+[listener port lifecycle](../../../skills/04-review/listeners/compatibility-constraints/listener-port-set-frozen-at-startup.md)
+still requires a restart for new ports. These results do not establish complete v1.6.2
 conformance or compatibility with arbitrary installed CRD bundles.
 
 A version being exposed by the cluster CRD does not mean that Edgion declares support for it. Complete support also requires the corresponding read path, type conversion, semantic handling, status update, and tests.

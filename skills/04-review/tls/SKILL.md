@@ -29,6 +29,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Downstream TLS offload budget and cancellation](regression-guards/downstream-handshake-offload-budget-and-cancellation.md)
 - [TLS log backend-address masking and plaintext SNI scope](regression-guards/tls-log-address-redaction.md)
 
 - [TLSRoute stage isolation and explicit empty configuration](regression-guards/tls-route-stage-isolation.md)

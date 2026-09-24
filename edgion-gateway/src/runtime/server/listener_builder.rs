@@ -8,7 +8,7 @@ use crate::runtime::server::proxy_protocol_policy::{
     get_global_proxy_protocol_policy_runtime, GuardFirstConnectionFilter, PreparedProxyProtocolPolicy,
 };
 use crate::runtime::ServerHeaderOpts;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use pingora_core::apps::HttpServerOptions;
 use pingora_core::connectors::TransportConnector;
 use pingora_core::listeners::{ConnectionFilter, Listeners, TcpSocketOptions};
@@ -54,6 +54,52 @@ pub struct ListenerContext {
     pub proxy_protocol_policy: PreparedProxyProtocolPolicy,
     /// Bounded source metadata for startup diagnostics.
     pub proxy_protocol_source: Option<ProxyProtocolPolicySourceKind>,
+}
+
+/// Startup budget for distinct terminating TLS acceptors. Pingora creates one
+/// independent offload runtime per acceptor, not one per Gateway process.
+pub struct TlsOffloadBudget {
+    threads_per_acceptor: Option<usize>,
+    acceptors: usize,
+}
+
+impl TlsOffloadBudget {
+    pub fn new(server_conf: &ServerConf) -> Result<Self> {
+        let threads_per_acceptor = server_conf
+            .downstream_tls_offload_threadpool()
+            .map(|(pools, threads)| {
+                pools
+                    .checked_mul(threads)
+                    .context("downstream TLS offload thread count overflow")
+            })
+            .transpose()?;
+        Ok(Self {
+            threads_per_acceptor,
+            acceptors: 0,
+        })
+    }
+
+    fn reserve(&mut self, gateway_key: &str, listener_name: &str) -> Result<()> {
+        let Some(threads_per_acceptor) = self.threads_per_acceptor else {
+            return Ok(());
+        };
+        let next = self
+            .acceptors
+            .checked_add(1)
+            .context("downstream TLS acceptor count overflow")?;
+        let total = next
+            .checked_mul(threads_per_acceptor)
+            .context("downstream TLS offload thread count overflow")?;
+        if total > 64 {
+            bail!(
+                "downstream TLS offload needs {total} threads for {next} terminating listeners; limit is 64 (at gateway '{}' listener '{}')",
+                gateway_key,
+                listener_name
+            );
+        }
+        self.acceptors = next;
+        Ok(())
+    }
 }
 
 /// Pre-flight TCP bind probe.
@@ -137,6 +183,7 @@ pub fn add_http_listener(
     context: &ListenerContext,
     enable_tls: bool,
     enable_http2: bool,
+    offload_budget: &mut TlsOffloadBudget,
 ) -> Result<()> {
     let listener_name = context.listener.name.clone();
     // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
@@ -221,6 +268,7 @@ pub fn add_http_listener(
     if enable_tls {
         #[cfg(feature = "boringssl")]
         {
+            offload_budget.reserve(&context.gateway_key, &context.listener.name)?;
             let port = context.listener.port as u16;
             let mut tls_settings = TlsCallback::new_tls_settings_with_callback(
                 port,
@@ -228,6 +276,7 @@ pub fn add_http_listener(
                 context.egc.clone(),
                 true,
             )?;
+            tls_settings.set_offload_threadpool_from_server_conf(&context.server_conf);
             // Enable HTTP/2 for HTTPS if enable_http2 is true
             if enable_http2 {
                 tls_settings.enable_h2();
@@ -358,7 +407,11 @@ pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Resu
 /// This function creates a TLS listener that terminates TLS and forwards
 /// plain TCP traffic to backend services based on SNI routing.
 #[cfg(feature = "boringssl")]
-pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &ListenerContext) -> Result<()> {
+pub fn add_tls_terminate_to_tcp_listener(
+    server: &mut Server,
+    context: &ListenerContext,
+    offload_budget: &mut TlsOffloadBudget,
+) -> Result<()> {
     let listener_name = context.listener.name.clone();
     // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
     let addr = format!("0.0.0.0:{}", context.listener.port);
@@ -376,8 +429,10 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     };
 
     // Create TLS settings with callback for certificate loading (with port for SNI lookup)
-    let tls_settings =
+    offload_budget.reserve(&context.gateway_key, &context.listener.name)?;
+    let mut tls_settings =
         TlsCallback::new_tls_settings_with_callback(port, context.listener_key.clone(), context.egc.clone(), false)?;
+    tls_settings.set_offload_threadpool_from_server_conf(&context.server_conf);
 
     let mut tls_service = Service::new(format!("TLS-TCP-{}", listener_name), edgion_tls);
 
@@ -448,7 +503,11 @@ pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerConte
 ///
 /// This function dispatches to the appropriate listener builder based on the
 /// protocol specified in the listener configuration.
-pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()> {
+pub fn add_listener(
+    server: &mut Server,
+    context: ListenerContext,
+    offload_budget: &mut TlsOffloadBudget,
+) -> Result<()> {
     match &context.proxy_protocol_policy {
         PreparedProxyProtocolPolicy::Disabled => {}
         PreparedProxyProtocolPolicy::Required => tracing::info!(
@@ -482,8 +541,8 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
     }
 
     match context.listener.protocol.to_uppercase().as_str() {
-        "HTTP" => add_http_listener(server, &context, false, context.enable_http2),
-        "HTTPS" => add_http_listener(server, &context, true, context.enable_http2),
+        "HTTP" => add_http_listener(server, &context, false, context.enable_http2, offload_budget),
+        "HTTPS" => add_http_listener(server, &context, true, context.enable_http2, offload_budget),
         "TCP" => add_tcp_listener(server, &context),
         "UDP" => add_udp_listener(server, &context),
         "TLS" => {
@@ -501,7 +560,7 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
                     // HTTPS already covers TLS→HTTP. No annotation required.
                     #[cfg(feature = "boringssl")]
                     {
-                        add_tls_terminate_to_tcp_listener(server, &context)
+                        add_tls_terminate_to_tcp_listener(server, &context, offload_budget)
                     }
 
                     #[cfg(not(feature = "boringssl"))]
@@ -545,7 +604,29 @@ fn build_stream_connection_filter(context: &ListenerContext) -> Option<Arc<dyn C
 
 #[cfg(test)]
 mod tests {
+    use super::TlsOffloadBudget;
     use crate::routes::common::resolve_gateway_stream_plugin_store_key;
+    use pingora_core::server::configuration::ServerConf;
+
+    #[test]
+    fn tls_offload_budget_enforces_process_thread_limit() {
+        let conf = ServerConf {
+            downstream_tls_offload_threadpools: Some(2),
+            downstream_tls_offload_thread_per_pool: Some(2),
+            ..Default::default()
+        };
+        let mut budget = TlsOffloadBudget::new(&conf).unwrap();
+        for _ in 0..16 {
+            budget.reserve("app/gateway", "https").unwrap();
+        }
+        let err = budget.reserve("app/gateway", "tls-tcp").unwrap_err();
+        assert!(err.to_string().contains("68 threads for 17 terminating listeners"));
+        assert_eq!(budget.acceptors, 16);
+
+        let mut disabled = TlsOffloadBudget::new(&ServerConf::default()).unwrap();
+        disabled.reserve("app/gateway", "https").unwrap();
+        assert_eq!(disabled.acceptors, 0);
+    }
 
     #[test]
     fn gateway_stream_plugin_store_key_uses_gateway_namespace() {

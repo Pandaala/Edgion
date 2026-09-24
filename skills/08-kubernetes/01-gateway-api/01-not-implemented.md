@@ -265,7 +265,7 @@ The v1.6.2 full `GATEWAY-TLS` run in isolated kind passed Core 20/20 and
 Extended 2/3. The only failure was `TLSRouteTerminateSimpleSameNamespace`
 after a targeted run of that case had passed. Keep `TLSRouteModeTerminate`
 out of `SUPPORTED_FEATURES` pending a full-profile pass; see
-[the pending task](../../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md).
+[the TLS conformance report](../../../edgion-tests/conformance/reports/gateway-tls-v1.6.2-kind-2026-09-23.yaml).
 Keep HTTP/gRPC and TLS profile runs
 separate because their upstream manifests both reserve port 443; see
 [02-conformance-testing.md](02-conformance-testing.md).

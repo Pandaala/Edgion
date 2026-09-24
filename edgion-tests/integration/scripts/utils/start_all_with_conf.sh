@@ -1350,6 +1350,17 @@ main() {
     cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "${CONFIG_DIR}/edgion-gateway.yaml"
     CONTROLLER_CONFIG="${CONFIG_DIR}/edgion-controller.yaml"
     GATEWAY_CONFIG="${CONFIG_DIR}/edgion-gateway.yaml"
+    if [ "${EDGION_TEST_DOWNSTREAM_TLS_OFFLOAD:-0}" = "1" ]; then
+        awk '
+            /^server:$/ {
+                print
+                print "  downstream_tls_offload_threadpools: 1"
+                print "  downstream_tls_offload_thread_per_pool: 1"
+                next
+            }
+            { print }
+        ' "${GATEWAY_CONFIG}" > "${GATEWAY_CONFIG}.tmp" && mv "${GATEWAY_CONFIG}.tmp" "${GATEWAY_CONFIG}"
+    fi
     # The L4 backpressure suite asserts the canonical TCP close diagnostic.
     # Enable only the copied integration config, preserving its logs/tcp.log sink.
     awk '

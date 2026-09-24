@@ -62,6 +62,8 @@ logging:
 
 server:
   threads: 0                               # 0 = 自动使用 CPU 核心数
+  # downstream_tls_offload_threadpools: 2       # 可选，1..=4
+  # downstream_tls_offload_thread_per_pool: 2  # 可选，1..=4；必须同时设置
   work_stealing: true                      # Tokio 任务窃取
   grace_period_seconds: 30                 # 优雅关闭等待秒数
   graceful_shutdown_timeout_seconds: 10    # 关闭超时秒数
@@ -247,6 +249,8 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `threads` | `Integer` | CPU 核心数 | Pingora 工作线程数，`0` 表示自动检测 |
+| `downstream_tls_offload_threadpools` | `Integer` | 关闭 | 每个终止 TLS 的监听器使用的专用握手线程池数，范围 `1`–`4`；必须同时设置另一字段 |
+| `downstream_tls_offload_thread_per_pool` | `Integer` | 关闭 | 每个握手线程池的线程数，范围 `1`–`4`；必须同时设置另一字段 |
 | `work_stealing` | `Boolean` | `true` | 启用 Tokio 任务窃取，提高 CPU 利用率 |
 | `grace_period_seconds` | `Integer` | `30` | 优雅关闭期间等待连接结束的秒数 |
 | `graceful_shutdown_timeout_seconds` | `Integer` | `10` | 优雅关闭超时，超过后强制终止 |
@@ -255,6 +259,15 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 
 > 这些设置仅属于本地 Gateway 进程，在启动时解析，修改后需要重启。GatewayClass 级别的
 > HTTP 压缩和下游连接请求数上限由 `EdgionGatewayConfig.spec.server` 配置。
+
+TLS 握手卸载仅用于 HTTPS 和终止 TLS 的监听器。每个实际监听器拥有独立线程池，
+`监听器数 × 线程池数 × 每池线程数` 不得超过 64；无效或只设置一个字段会使启动失败。
+线程在首次握手时创建，因此启动时的配置校验不能保证之后创建线程一定成功。
+卸载本身不限制并发握手，也不为已有流量保留 CPU；需要时应另外配置连接准入。
+启用前，应在相同 CPU 限额下比较开关前后的实际流量表现；小型部署或大量复用连接的
+部署可能因新增线程而变慢。若需回退，删除这两个字段并重启 Gateway。
+对应的 CLI 参数是 `--downstream-tls-offload-threadpools` 和
+`--downstream-tls-offload-thread-per-pool`；显式传入的参数覆盖对应 YAML 字段。
 
 ### 业务日志
 

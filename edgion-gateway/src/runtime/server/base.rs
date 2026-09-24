@@ -89,6 +89,7 @@ impl GatewayBase {
         // GatewayStore and ListenerGatewayInfoStore are already populated by
         // GatewayHandler::full_set (see the method-level startup invariant).
         let server_conf_arc = pingora_server.configuration.clone();
+        let mut offload_budget = listener_builder::TlsOffloadBudget::new(&server_conf_arc)?;
 
         // Track bound listeners to avoid duplicate physical bindings
         let mut bound_listeners: HashSet<ListenerKey> = HashSet::new();
@@ -226,7 +227,7 @@ impl GatewayBase {
                     };
 
                     // Add listener to pingora_server
-                    listener_builder::add_listener(pingora_server, context)?;
+                    listener_builder::add_listener(pingora_server, context, &mut offload_budget)?;
                     bound_listeners.insert(listener_key);
                 }
             }

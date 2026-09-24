@@ -568,6 +568,16 @@ pub struct ServerConfig {
     #[serde(default)]
     pub threads: Option<usize>,
 
+    /// Dedicated downstream TLS handshake pools per terminating listener (1..=4).
+    #[arg(long = "downstream-tls-offload-threadpools", value_name = "NUM")]
+    #[serde(default)]
+    pub downstream_tls_offload_threadpools: Option<usize>,
+
+    /// Threads per downstream TLS handshake pool (1..=4).
+    #[arg(long = "downstream-tls-offload-thread-per-pool", value_name = "NUM")]
+    #[serde(default)]
+    pub downstream_tls_offload_thread_per_pool: Option<usize>,
+
     /// Enable work stealing (default: true)
     #[arg(long = "work-stealing")]
     #[serde(default)]
@@ -1141,6 +1151,13 @@ impl EdgionGatewayConfig {
         // Work directory: CLI value takes precedence if provided
         if cli.work_dir.is_some() {
             base.work_dir = cli.work_dir.clone();
+        }
+
+        if cli.server.downstream_tls_offload_threadpools.is_some() {
+            base.server.downstream_tls_offload_threadpools = cli.server.downstream_tls_offload_threadpools;
+        }
+        if cli.server.downstream_tls_offload_thread_per_pool.is_some() {
+            base.server.downstream_tls_offload_thread_per_pool = cli.server.downstream_tls_offload_thread_per_pool;
         }
 
         // Gateway config. `server_addrs` is a Vec: an EMPTY CLI vec means the

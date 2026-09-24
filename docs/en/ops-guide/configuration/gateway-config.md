@@ -64,6 +64,8 @@ logging:
 
 server:
   threads: 0                               # 0 = auto-detect CPU core count
+  # downstream_tls_offload_threadpools: 2       # Optional, 1..=4
+  # downstream_tls_offload_thread_per_pool: 2  # Optional, 1..=4; both fields required
   work_stealing: true                      # Enable Tokio work-stealing
   grace_period_seconds: 30                 # Wait for connections to drain on shutdown
   graceful_shutdown_timeout_seconds: 10    # Force-terminate after this timeout
@@ -313,6 +315,8 @@ cannot be enabled below `error`; other targets retain normal module-level filter
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `threads` | `Integer` | CPU core count | Pingora worker thread count; `0` means auto-detect |
+| `downstream_tls_offload_threadpools` | `Integer` | Disabled | Dedicated handshake pools per terminating TLS listener; `1`–`4`, requires the paired field |
+| `downstream_tls_offload_thread_per_pool` | `Integer` | Disabled | Threads per handshake pool; `1`–`4`, requires the paired field |
 | `work_stealing` | `Boolean` | `true` | Enable Tokio work-stealing to improve CPU utilization |
 | `grace_period_seconds` | `Integer` | `30` | Seconds to wait for connections to drain during graceful shutdown |
 | `graceful_shutdown_timeout_seconds` | `Integer` | `10` | Force-terminate after this many seconds during shutdown |
@@ -322,6 +326,19 @@ cannot be enabled below `error`; other targets retain normal module-level filter
 > These settings configure one Gateway process at startup and require a restart to change. For
 > GatewayClass-scoped HTTP compression and downstream connection request limits, use
 > [EdgionGatewayConfig](./edgion-gateway-config.md).
+
+TLS handshake offload applies to HTTPS and TLS termination listeners. Each distinct
+terminating listener owns its own pool: `listeners × pools × threads per pool` must
+not exceed 64. Invalid or partial settings fail startup. The threads start on the
+first handshake, so startup validation does not guarantee that thread creation will
+succeed later. Offload does not cap concurrent handshakes or reserve CPU for
+established traffic. Use connection admission separately when needed. Compare
+off/on under the same CPU limit for your traffic before enabling it; additional
+threads can hurt small or mostly reused-connection deployments. Disable both
+fields and restart the Gateway to roll back. The equivalent CLI flags are
+`--downstream-tls-offload-threadpools` and
+`--downstream-tls-offload-thread-per-pool`; a provided flag overrides its YAML
+field.
 
 ### Business Logs
 

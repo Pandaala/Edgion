@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "TinyUFO"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "ahash",
  "crossbeam-queue",
@@ -4524,7 +4524,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pingora-boringssl"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "boring",
  "boring-sys",
@@ -4537,7 +4537,7 @@ dependencies = [
 [[package]]
 name = "pingora-cache"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "ahash",
  "arrayvec",
@@ -4572,7 +4572,7 @@ dependencies = [
 [[package]]
 name = "pingora-core"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "ahash",
  "async-trait",
@@ -4617,6 +4617,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-test",
+ "tokio-util",
  "unicase",
  "windows-sys 0.59.0",
  "x509-parser 0.16.0",
@@ -4626,12 +4627,12 @@ dependencies = [
 [[package]]
 name = "pingora-error"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 
 [[package]]
 name = "pingora-header-serde"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "bytes",
  "http",
@@ -4646,7 +4647,7 @@ dependencies = [
 [[package]]
 name = "pingora-http"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "bytes",
  "http",
@@ -4656,7 +4657,7 @@ dependencies = [
 [[package]]
 name = "pingora-ketama"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "crc32fast",
 ]
@@ -4664,7 +4665,7 @@ dependencies = [
 [[package]]
 name = "pingora-limits"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "ahash",
 ]
@@ -4672,7 +4673,7 @@ dependencies = [
 [[package]]
 name = "pingora-load-balancing"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -4693,7 +4694,7 @@ dependencies = [
 [[package]]
 name = "pingora-lru"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "ahash",
  "arrayvec",
@@ -4709,7 +4710,7 @@ dependencies = [
 [[package]]
 name = "pingora-pool"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "crossbeam-queue",
  "dashmap 5.5.3",
@@ -4724,7 +4725,7 @@ dependencies = [
 [[package]]
 name = "pingora-proxy"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4747,7 +4748,7 @@ dependencies = [
 [[package]]
 name = "pingora-runtime"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "log",
  "once_cell",
@@ -4760,7 +4761,7 @@ dependencies = [
 [[package]]
 name = "pingora-rustls"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "log",
  "no_debug",
@@ -4776,7 +4777,7 @@ dependencies = [
 [[package]]
 name = "pingora-timeout"
 version = "0.8.0"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#c74d7fb2d59349b8cb1f7948102c7f9bbf829638"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v5#7c24c0dd6ea5996af011529f6bae8ae8972f695a"
 dependencies = [
  "once_cell",
  "parking_lot",

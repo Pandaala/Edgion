@@ -19,7 +19,8 @@
 //               ResolvedRefs flips to False/InvalidCertificate.
 //   - recovered: valid Secret restored -> ResolvedRefs=True and the original
 //               serial is still served; this phase must not rewrite the stash.
-// The dynamic scenario repeats fallback after recovery and restores on exit.
+// The dynamic scenario rotates to a fresh valid certificate, repeats fallback
+// against that certificate, and restores the initial certificate on exit.
 //
 // Required fixtures (edgion-tests/integration/conf/EdgionTls/LastKnownGood/):
 //   - initial/Gateway.yaml          # HTTPS listener https-lkg on 31201
@@ -204,7 +205,7 @@ pub struct LastKnownGoodInitialTestSuite;
 impl LastKnownGoodInitialTestSuite {
     /// Seed the dynamic baseline from the exact Secret being applied, so an old
     /// certificate plus an already-True status cannot satisfy its initial phase.
-    pub(crate) fn stash_fixture_serial(ctx: &TestContext, fixture: &Path) -> Result<(), String> {
+    pub(crate) fn stash_fixture_serial(ctx: &TestContext, fixture: &Path) -> Result<String, String> {
         use base64::Engine;
 
         let content =
@@ -223,7 +224,9 @@ impl LastKnownGoodInitialTestSuite {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("failed to create serial stash directory: {error}"))?;
         }
-        std::fs::write(path, serial).map_err(|error| format!("failed to stash expected certificate serial: {error}"))
+        std::fs::write(path, &serial)
+            .map_err(|error| format!("failed to stash expected certificate serial: {error}"))?;
+        Ok(serial)
     }
 
     pub(crate) fn recovery_test_cases() -> Vec<TestCase> {

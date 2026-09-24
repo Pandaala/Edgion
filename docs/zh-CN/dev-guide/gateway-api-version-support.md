@@ -30,9 +30,9 @@ v1.6.2：完整 `GATEWAY-HTTP` profile 的 Core 37/37、Extended 30/30 通过；
 TCPRoute/v1 和 UDPRoute/v1 在 Gateway 启动时已绑定的端口上能够接受路由并转发
 实际流量。完整 v1.6.2 profile 在测试于启动后新建监听端口时超时；这些端口目前
 需要重启 Gateway 才能绑定。因此 `TCPRoute` 和 `UDPRoute` 暂不列入
-`GatewayClass.status.supportedFeatures`。后续工作见
-[TLS 任务](../../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md)和
-[动态监听任务](../../../tasks/pending/gateway-api-v16-dynamic-stream-listeners.md)。
+`GatewayClass.status.supportedFeatures`。完整 TLS profile 的超时仍未解决；
+[监听端口生命周期](../../../skills/04-review/listeners/compatibility-constraints/listener-port-set-frozen-at-startup.md)
+目前要求新增端口时重启 Gateway。
 这些结果不表示完整 v1.6.2 conformance，也不表示任意已安装 CRD bundle 均兼容。
 
 “集群 CRD 提供了某个版本”不等于“Edgion 声明支持该版本”。完整支持还需要相应的读取方式、类型转换、语义处理、状态更新和测试。

@@ -6,7 +6,7 @@ use crate::runtime::server::base::GatewayBase;
 use crate::runtime::server::proxy_protocol_policy::{
     get_global_proxy_protocol_policy_runtime, ProxyProtocolPolicyRuntime,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use edgion_resources::resources::edgion_gateway_config::MAX_RETRY_ATTEMPTS;
 use pingora_core::server::configuration::ServerConf;
@@ -20,7 +20,16 @@ use std::sync::Arc;
 const PINGORA_MAX_UPSTREAM_ATTEMPTS: usize = MAX_RETRY_ATTEMPTS as usize + 1;
 
 /// Create Pingora ServerConf from local YAML configuration
-fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
+fn create_server_conf(config: &EdgionGatewayConfig) -> Result<ServerConf> {
+    let offload = match (
+        config.server.downstream_tls_offload_threadpools,
+        config.server.downstream_tls_offload_thread_per_pool,
+    ) {
+        (None, None) => None,
+        (Some(pools @ 1..=4), Some(threads @ 1..=4)) => Some((pools, threads)),
+        (Some(_), Some(_)) => bail!("downstream TLS offload pools and threads per pool must each be 1..=4"),
+        _ => bail!("downstream TLS offload pools and threads per pool must be configured together"),
+    };
     let threads = config
         .server
         .threads
@@ -46,6 +55,8 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
         upstream_keepalive_pool_size,
         error_log,
         max_retries: PINGORA_MAX_UPSTREAM_ATTEMPTS,
+        downstream_tls_offload_threadpools: offload.map(|(pools, _)| pools),
+        downstream_tls_offload_thread_per_pool: offload.map(|(_, threads)| threads),
         ..Default::default()
     };
 
@@ -58,7 +69,7 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
         "Created Pingora ServerConf from local configuration"
     );
 
-    conf
+    Ok(conf)
 }
 
 #[cfg(test)]
@@ -67,10 +78,10 @@ mod server_conf_tests {
 
     #[test]
     fn omitted_and_zero_threads_use_the_same_nonzero_platform_default() {
-        let omitted = create_server_conf(&EdgionGatewayConfig::default());
+        let omitted = create_server_conf(&EdgionGatewayConfig::default()).unwrap();
         let mut zero = EdgionGatewayConfig::default();
         zero.server.threads = Some(0);
-        let zero = create_server_conf(&zero);
+        let zero = create_server_conf(&zero).unwrap();
 
         assert_eq!(omitted.threads, zero.threads);
         assert!(omitted.threads >= 1);
@@ -81,16 +92,67 @@ mod server_conf_tests {
         let mut config = EdgionGatewayConfig::default();
         config.server.threads = Some(7);
 
-        assert_eq!(create_server_conf(&config).threads, 7);
+        assert_eq!(create_server_conf(&config).unwrap().threads, 7);
     }
 
     #[test]
     fn pingora_loop_capacity_includes_initial_attempt() {
-        let conf = create_server_conf(&EdgionGatewayConfig::default());
+        let conf = create_server_conf(&EdgionGatewayConfig::default()).unwrap();
 
         assert_eq!(conf.max_retries, MAX_RETRY_ATTEMPTS as usize + 1);
         assert!(conf.max_retries > crate::ai::attempt::MAX_AI_BACKENDS);
         assert!(conf.max_retries > usize::from(crate::ai::attempt::MAX_AI_DISPATCH_ATTEMPTS));
+    }
+
+    #[test]
+    fn downstream_tls_offload_requires_a_bounded_pair() {
+        let mut config = EdgionGatewayConfig::default();
+        assert_eq!(
+            create_server_conf(&config).unwrap().downstream_tls_offload_threadpool(),
+            None
+        );
+
+        config.server.downstream_tls_offload_threadpools = Some(2);
+        assert!(create_server_conf(&config).is_err());
+        config.server.downstream_tls_offload_threadpools = None;
+        config.server.downstream_tls_offload_thread_per_pool = Some(2);
+        assert!(create_server_conf(&config).is_err());
+        config.server.downstream_tls_offload_threadpools = Some(2);
+        config.server.downstream_tls_offload_thread_per_pool = Some(2);
+        assert_eq!(
+            create_server_conf(&config).unwrap().downstream_tls_offload_threadpool(),
+            Some((2, 2))
+        );
+
+        for invalid in [0, 5, usize::MAX] {
+            config.server.downstream_tls_offload_threadpools = Some(invalid);
+            assert!(create_server_conf(&config).is_err());
+            config.server.downstream_tls_offload_threadpools = Some(2);
+            config.server.downstream_tls_offload_thread_per_pool = Some(invalid);
+            assert!(create_server_conf(&config).is_err());
+            config.server.downstream_tls_offload_thread_per_pool = Some(2);
+        }
+        config.server.downstream_tls_offload_threadpools = Some(4);
+        config.server.downstream_tls_offload_thread_per_pool = Some(4);
+        assert_eq!(
+            create_server_conf(&config).unwrap().downstream_tls_offload_threadpool(),
+            Some((4, 4))
+        );
+    }
+
+    #[test]
+    fn downstream_tls_offload_cli_values_override_file_values() {
+        let mut file: EdgionGatewayConfig = serde_yaml::from_str(
+            "server:\n  downstream_tls_offload_threadpools: 1\n  downstream_tls_offload_thread_per_pool: 2\n",
+        )
+        .unwrap();
+        let mut cli = EdgionGatewayConfig::default();
+        cli.server.downstream_tls_offload_threadpools = Some(3);
+        EdgionGatewayConfig::merge(&mut file, &cli);
+        assert_eq!(
+            create_server_conf(&file).unwrap().downstream_tls_offload_threadpool(),
+            Some((3, 2))
+        );
     }
 }
 
@@ -109,7 +171,7 @@ pub fn create_and_configure_server(
     gateway_config: &EdgionGatewayConfig,
 ) -> Result<Server> {
     // 1. Create ServerConf from local YAML configuration
-    let server_conf = create_server_conf(gateway_config);
+    let server_conf = create_server_conf(gateway_config)?;
 
     // 2. Create and bootstrap Pingora Server
     let mut pingora_server = Server::new_with_opt_and_conf(None, server_conf);

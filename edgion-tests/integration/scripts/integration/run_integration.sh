@@ -1939,6 +1939,10 @@ run_all_tests() {
             EdgionTls)
                 if [ -z "$G_ITEM" ]; then
                     run_test "EdgionTls_https" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i https" || test_failed=true
+                    if $FULL_TEST && [ "${EDGION_TEST_DOWNSTREAM_TLS_OFFLOAD:-0}" = "1" ]; then
+                        run_test "DownstreamTlsOffloadTimeout" \
+                            "python3 ${SCRIPT_DIR}/test_downstream_tls_offload_timeout.py" || test_failed=true
+                    fi
                     run_test "EdgionTls_grpctls" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i grpctls" || test_failed=true
                     run_test "EdgionTls_mTLS" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i mTLS" || test_failed=true
                     run_test "EdgionTls_cipher" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i cipher" || test_failed=true
@@ -1948,6 +1952,15 @@ run_all_tests() {
         run_test "EdgionTls_port_only" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i port_only" || test_failed=true
         run_test "EdgionTls_sni_collision" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i sni_collision" || test_failed=true
         run_test "EdgionTls_wildcard_single_label" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i wildcard_single_label" || test_failed=true
+                elif [ "$G_ITEM" = "https" ]; then
+                    run_test "EdgionTls_https" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i https" || test_failed=true
+                    if $FULL_TEST && [ "${EDGION_TEST_DOWNSTREAM_TLS_OFFLOAD:-0}" = "1" ]; then
+                        run_test "DownstreamTlsOffloadTimeout" \
+                            "python3 ${SCRIPT_DIR}/test_downstream_tls_offload_timeout.py" || test_failed=true
+                    fi
+                elif [ "$G_ITEM" = "LastKnownGood" ]; then
+                    run_test "Dyn_TlsLastKnownGood" \
+                        "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario TlsLastKnownGood" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "EdgionTls_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
@@ -2474,6 +2487,9 @@ main() {
                 # default/redis-test LinkSys CRD, which only the LinkSys/Redis
                 # suite defines — load it so targeted runs have the Redis client.
                 suites="${base_suites},LinkSys/Redis,${G_RESOURCE}/${G_ITEM}"
+            elif [ "$G_RESOURCE" = "TLSRoute" ] && [ "$G_ITEM" = "ProxyProtocol" ]; then
+                # The negative case connects to the Basic TLSRoute listener.
+                suites="${base_suites},TLSRoute/Basic,TLSRoute/ProxyProtocol"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi
