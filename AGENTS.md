@@ -20,7 +20,7 @@ move. Do not widen production visibility for tests. Top-level `tests/*.rs`
 remain integration targets, and benchmarks remain under `benches/`. See
 [`skills/05-testing/00-unit-testing.md`](skills/05-testing/00-unit-testing.md)
 for naming exceptions and migration details. `edgion-common`, `edgion-dsl`,
-`edgion-cli`, `edgion-controller`, and `edgion-algo` are migrated; other crates
+`edgion-cli`, `edgion-controller`, `edgion-algo`, and `edgion-waf` are migrated; other crates
 await migration.
 
 ## Project Overview
@@ -252,7 +252,7 @@ When the user says "run check", "check the code", "format the code", "run CI", "
    rule inventory must match both vendored Gateway API CRD channels.
 9. **Migrated unit-test layout**: `python3 cicd/checks/check_unit_test_layout.py` —
    currently enforces `edgion-common`, `edgion-dsl`, `edgion-cli`, and
-   `edgion-controller`, and `edgion-algo`; expand its scope as other crates migrate.
+   `edgion-controller`, `edgion-algo`, and `edgion-waf`; expand its scope as other crates migrate.
 
 > `--workspace` is intentional: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip it. `--workspace` brings it back into the fast check/clippy signal (matching what `cargo test --all` already compiles).
 

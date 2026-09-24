@@ -288,14 +288,8 @@ impl PatternSet {
         *word |= 1_u64 << bit_index;
         Ok(())
     }
-
-    #[cfg(test)]
-    pub(crate) fn word_capacity(&self) -> usize {
-        self.words.capacity()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn word_allocation_ptr(&self) -> *const u64 {
-        self.words.as_ptr()
-    }
 }
+
+#[cfg(test)]
+#[path = "../../tests/support/aho_corasick/match_types.rs"]
+mod test_support;

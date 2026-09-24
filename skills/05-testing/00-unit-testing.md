@@ -16,9 +16,9 @@ Use for these tasks:
 
 ### Test location
 
-Migrated crates (`edgion-common`, `edgion-dsl`, `edgion-cli`, and
-`edgion-controller`, and `edgion-algo`) keep unit-test
-bodies under `tests/unit/`, mirroring their owning `src/` paths. Other crates
+Migrated crates (`edgion-common`, `edgion-dsl`, `edgion-cli`,
+`edgion-controller`, `edgion-algo`, and `edgion-waf`) keep unit-test bodies
+under `tests/unit/`, mirroring their owning `src/` paths. Other crates
 are pending migration. Source files keep test-gated module declarations and,
 where shared helpers require them, test-only imports or re-exports. This
 preserves private access and existing helper paths:
@@ -41,7 +41,7 @@ test module name, feature and platform gates, and test identities. Multiple
 separately gated modules may use files under `<stem>_test/`. Calculate `#[path]`
 from the source file's directory and verify it with the compiler. Do not widen
 production visibility to move tests. Benchmarks retain Cargo's `benches/`
-location; `edgion-algo` has two benchmark targets there.
+location; `edgion-algo` and `edgion-waf` each have two benchmark targets there.
 
 ### Distribution of test files
 

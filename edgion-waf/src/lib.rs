@@ -17,4 +17,5 @@ mod sqli;
 mod xss;
 
 #[cfg(test)]
+#[path = "../tests/unit/lib_test/libinjection_diff.rs"]
 mod libinjection_diff;

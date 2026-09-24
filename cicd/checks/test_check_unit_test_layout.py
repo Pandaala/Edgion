@@ -70,6 +70,23 @@ mod extra;
         self.write("src/api/other.rs", "fn f() { #[cfg(test)]\nlet crd_dir = fallback; }\n")
         self.assertIn("test-only implementation remains in src", "\n".join(layout.check()))
 
+    def test_waf_support_mount_and_exact_exception(self):
+        layout.CRATE = Path(self.temp.name) / "edgion-waf"
+        self.crate = layout.CRATE
+        self.write(
+            "src/aho_corasick/match_types.rs",
+            '#[cfg(test)]\n#[path = "../../tests/support/aho_corasick/match_types.rs"]\nmod test_support;\n',
+        )
+        self.write("tests/support/aho_corasick/match_types.rs", "use super::*;\n")
+        self.write(
+            "src/seclang/semantic.rs",
+            "struct Projection { #[cfg(test)] inspected_folds: usize }\n",
+        )
+        self.assertEqual(layout.check(), [])
+
+        self.write("src/seclang/other.rs", "struct Projection { #[cfg(test)] inspected_folds: usize }\n")
+        self.assertIn("test-only implementation remains in src", "\n".join(layout.check()))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -221,15 +221,6 @@ impl Backend {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn stored_output_count(&self) -> usize {
-        match self {
-            Self::Sparse(nfa) => nfa.stored_output_count(),
-            Self::Contiguous(nfa) => nfa.stored_output_count(),
-            Self::Dfa(dfa) => dfa.stored_output_count(),
-        }
-    }
-
     pub(super) fn dense_state_count(&self) -> usize {
         match self {
             Self::Sparse(nfa) => nfa.dense_state_count(),
@@ -314,3 +305,7 @@ impl Iterator for OutputIter<'_> {
         self.backend.next_output(&mut self.cursor)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/support/aho_corasick/nfa/mod.rs"]
+mod test_support;

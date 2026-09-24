@@ -55,7 +55,7 @@ fn compare_generated_corpus() {
     let content = if let Ok(path) = std::env::var("LIBINJECTION_GO_CORPUS") {
         fs::read(path).expect("read corpus")
     } else {
-        include_bytes!("../tests/fixtures/libinjection-go-v0.3.2.json").to_vec()
+        include_bytes!("../../fixtures/libinjection-go-v0.3.2.json").to_vec()
     };
     let cases: serde_json::Value = serde_json::from_slice(&content).expect("json corpus");
     let cases = cases.as_array().expect("array");
@@ -129,7 +129,7 @@ fn compare_all_upstream_token_fixtures() {
 #[test]
 fn compare_offline_parser_fixtures() {
     let cases: serde_json::Value =
-        serde_json::from_slice(include_bytes!("../tests/fixtures/libinjection-go-v0.3.2-parser.json"))
+        serde_json::from_slice(include_bytes!("../../fixtures/libinjection-go-v0.3.2-parser.json"))
             .expect("offline parser corpus");
     let mut count = 0;
     for case in cases.as_array().expect("fixture array") {

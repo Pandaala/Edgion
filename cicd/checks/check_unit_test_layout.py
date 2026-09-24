@@ -11,18 +11,28 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 CRATE = ROOT / "edgion-common"
-MIGRATED_CRATES = ("edgion-common", "edgion-dsl", "edgion-cli", "edgion-controller", "edgion-algo")
+MIGRATED_CRATES = ("edgion-common", "edgion-dsl", "edgion-cli", "edgion-controller", "edgion-algo", "edgion-waf")
 CFG = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 PATH = re.compile(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]')
 MODULE = re.compile(r"mod\s+([A-Za-z_][A-Za-z_0-9]*)\s*([;{])")
 TEST = re.compile(r"#\s*\[\s*(?:(?:tokio|async_std)\s*::\s*)?test\b")
 USE = re.compile(r"(?:pub\s*(?:\([^)]*\))?\s+)?use\s+")
 
-# Test execution needs the source-local CRD fallback; the branch is inside a
-# production function and cannot be represented by an external module mount.
+# These branches and fields must stay in their owning production items so the
+# test configuration can exercise the same function or preserve struct shape.
 SCOPED_EXCEPTIONS = {
-    ("edgion-controller", Path("conf_mgr/conf_center/common.rs"), "let crd_dir"):
+    ("edgion-controller", Path("conf_mgr/conf_center/common.rs"), re.compile(r"let crd_dir\b")):
         "test-only CRD path fallback inside parse_resource_content_offline",
+    ("edgion-waf", Path("seclang/compiler.rs"), re.compile(r"if COMPILER_ALLOCATION_FAILURE\.with\b")):
+        "allocation failure injection inside reserve_exact",
+    ("edgion-waf", Path("seclang/semantic.rs"), re.compile(r"if VALIDATION_ALLOCATION_FAILURE\.with\b")):
+        "allocation failure injection inside reserve_exact",
+    ("edgion-waf", Path("seclang/semantic.rs"), re.compile(r"inspected_folds:\s*usize\b")):
+        "test-only chain projection counter field",
+    ("edgion-waf", Path("seclang/semantic.rs"), re.compile(r"inspected_folds:\s*0\b")):
+        "test-only chain projection counter initializer",
+    ("edgion-waf", Path("seclang/semantic.rs"), re.compile(r"\{\s*projection\.inspected_folds \+= 1;")):
+        "test-only chain projection counter update",
 }
 
 
@@ -116,7 +126,7 @@ def check() -> list[str]:
                         for key in SCOPED_EXCEPTIONS
                         if key[0] == CRATE.name
                         and key[1] == relative
-                        and code[cursor:].lstrip().startswith(key[2])
+                        and key[2].match(code, cursor)
                     ),
                     None,
                 )
@@ -137,8 +147,8 @@ def check() -> list[str]:
             base = CRATE / "tests" / "unit" / relative.parent / f"{relative.stem}_test"
             if name == "test_support" and CRATE.name == "edgion-common" and relative == Path("link_sys_core/outbound_tls.rs"):
                 expected = support
-            elif name == "test_support" and CRATE.name == "edgion-controller":
-                if relative == Path("conf_mgr/conf_center/file_system/center.rs"):
+            elif name == "test_support" and CRATE.name in ("edgion-controller", "edgion-waf"):
+                if CRATE.name == "edgion-controller" and relative == Path("conf_mgr/conf_center/file_system/center.rs"):
                     expected = (CRATE / "tests" / "support" / "file_system_center.rs").resolve()
                 else:
                     expected = (CRATE / "tests" / "support" / relative).resolve()
