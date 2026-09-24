@@ -10,7 +10,7 @@
 
 ## Unit-test location
 
-Put new and migrated unit-test bodies in the owning crate's
+Put unit-test bodies in each production crate's
 `tests/unit/<source path>/<stem>_test.rs` (`src/dns/mod.rs` maps to
 `tests/unit/dns/mod_test.rs`). Keep a `#[cfg(test)] #[path = "..."] mod tests;`
 declaration in the source module so tests retain private access and the existing
@@ -19,9 +19,8 @@ fixtures, and source-relative paths; compare test identities before and after a
 move. Do not widen production visibility for tests. Top-level `tests/*.rs`
 remain integration targets, and benchmarks remain under `benches/`. See
 [`skills/05-testing/00-unit-testing.md`](skills/05-testing/00-unit-testing.md)
-for naming exceptions and migration details. `edgion-common`, `edgion-dsl`,
-`edgion-cli`, `edgion-controller`, `edgion-algo`, `edgion-waf`,
-`edgion-wasm`, `edgion-resources`, and `edgion-gateway` are migrated.
+for naming exceptions and migration details. `edgion-tests` remains the
+dedicated integration-test harness.
 
 ## Project Overview
 
@@ -250,9 +249,8 @@ When the user says "run check", "check the code", "format the code", "run CI", "
    `python3 cicd/checks/generate_gateway_api_transform_contract.py --check` — the
    committed RequestRedirect/URLRewrite OpenAPI, CEL, defaults, bounds, and scoped
    rule inventory must match both vendored Gateway API CRD channels.
-9. **Migrated unit-test layout**: `python3 cicd/checks/check_unit_test_layout.py` —
-   enforces all nine production crates, excluding the `edgion-tests` integration
-   harness.
+9. **Unit-test layout**: `python3 cicd/checks/check_unit_test_layout.py` —
+   enforces production crates and excludes the `edgion-tests` integration harness.
 
 > `--workspace` is intentional: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip it. `--workspace` brings it back into the fast check/clippy signal (matching what `cargo test --all` already compiles).
 
