@@ -370,7 +370,14 @@ impl KubernetesCenter {
     }
 
     /// Create the Kubernetes resource controller (no ConfigServer dependency).
-    fn create_k8s_controller(&self, client: &Client) -> Result<KubernetesController> {
+    fn create_k8s_controller(
+        &self,
+        client: &Client,
+        reference_grant_version: Option<super::version_detection::ReferenceGrantVersion>,
+        gateway_class_version: Option<super::version_detection::GatewayClassVersion>,
+        gateway_version: Option<super::version_detection::GatewayVersion>,
+        http_route_version: Option<super::version_detection::HTTPRouteVersion>,
+    ) -> Result<KubernetesController> {
         let config = self.config();
 
         tracing::info!(
@@ -394,6 +401,13 @@ impl KubernetesCenter {
             config.metadata_filter.clone(),
             no_watch_kinds,
         )
+        .map(|controller| {
+            controller
+                .with_reference_grant_version(reference_grant_version)
+                .with_gateway_class_version(gateway_class_version)
+                .with_gateway_version(gateway_version)
+                .with_http_route_version(http_route_version)
+        })
     }
 
     /// Main flow - runs only when this instance is the leader
@@ -667,14 +681,48 @@ impl KubernetesCenter {
         // 1. Validate and preflight check Gateway API CRDs
         validate_no_watch_kinds(&self.config.no_watch_kinds);
         let no_watch_kinds: std::collections::HashSet<String> = self.config.no_watch_kinds.iter().cloned().collect();
-        preflight_check_gateway_api_crds(client, &no_watch_kinds).await?;
+        let reference_grant_version = if no_watch_kinds.contains("ReferenceGrant") {
+            None
+        } else {
+            Some(self.writer.selected_reference_grant_version().await?)
+        };
+        let gateway_class_version = if no_watch_kinds.contains("GatewayClass") {
+            None
+        } else {
+            Some(self.writer.selected_gateway_class_version().await?)
+        };
+        let gateway_version = if no_watch_kinds.contains("Gateway") {
+            None
+        } else {
+            Some(self.writer.selected_gateway_version().await?)
+        };
+        let http_route_version = if no_watch_kinds.contains("HTTPRoute") {
+            None
+        } else {
+            Some(self.writer.selected_http_route_version().await?)
+        };
+        preflight_check_gateway_api_crds(
+            client,
+            &no_watch_kinds,
+            reference_grant_version,
+            gateway_class_version,
+            gateway_version,
+            http_route_version,
+        )
+        .await?;
 
         // 2. Create ConfigSyncServer (will be populated when caches are ready)
         let config_sync_server = Arc::new(ConfigSyncServer::new());
 
         // 3. Create Controller and leader handle
         let controller = self
-            .create_k8s_controller(client)?
+            .create_k8s_controller(
+                client,
+                reference_grant_version,
+                gateway_class_version,
+                gateway_version,
+                http_route_version,
+            )?
             .with_leader_handle(leader_handle.clone());
         let expected_processor_kinds = controller.all_processor_kinds();
 
@@ -1159,14 +1207,48 @@ impl KubernetesCenter {
         // 1. Validate and preflight check Gateway API CRDs
         validate_no_watch_kinds(&self.config.no_watch_kinds);
         let no_watch_kinds: std::collections::HashSet<String> = self.config.no_watch_kinds.iter().cloned().collect();
-        preflight_check_gateway_api_crds(client, &no_watch_kinds).await?;
+        let reference_grant_version = if no_watch_kinds.contains("ReferenceGrant") {
+            None
+        } else {
+            Some(self.writer.selected_reference_grant_version().await?)
+        };
+        let gateway_class_version = if no_watch_kinds.contains("GatewayClass") {
+            None
+        } else {
+            Some(self.writer.selected_gateway_class_version().await?)
+        };
+        let gateway_version = if no_watch_kinds.contains("Gateway") {
+            None
+        } else {
+            Some(self.writer.selected_gateway_version().await?)
+        };
+        let http_route_version = if no_watch_kinds.contains("HTTPRoute") {
+            None
+        } else {
+            Some(self.writer.selected_http_route_version().await?)
+        };
+        preflight_check_gateway_api_crds(
+            client,
+            &no_watch_kinds,
+            reference_grant_version,
+            gateway_class_version,
+            gateway_version,
+            http_route_version,
+        )
+        .await?;
 
         // 2. Create ConfigSyncServer
         let config_sync_server = Arc::new(ConfigSyncServer::new());
 
         // 3. Create controller with leader_handle for status write gating
         let controller = self
-            .create_k8s_controller(client)?
+            .create_k8s_controller(
+                client,
+                reference_grant_version,
+                gateway_class_version,
+                gateway_version,
+                http_route_version,
+            )?
             .with_leader_handle(leader_handle.clone());
         let expected_processor_kinds = controller.all_processor_kinds();
 
@@ -1337,8 +1419,16 @@ impl CenterLifeCycle for KubernetesCenter {
         self.set_shutdown_handle(shutdown_handle.clone());
 
         // Inject conf_writer into runtime so handlers can auto-create resources (e.g. EdgionConfigData).
-        let writer_arc: Arc<dyn CenterApi + Send + Sync> =
-            Arc::new(KubernetesStorage::new(self.config.watch_namespaces.clone()).await?);
+        let writer_arc: Arc<dyn CenterApi + Send + Sync> = Arc::new(
+            KubernetesStorage::new_with_selection(
+                self.config.watch_namespaces.clone(),
+                self.writer.selection(),
+                self.writer.gateway_class_selection(),
+                self.writer.gateway_selection(),
+                self.writer.http_route_selection(),
+            )
+            .await?,
+        );
         self.runtime.set_conf_writer(writer_arc);
 
         let client = Client::try_default().await?;
@@ -1442,6 +1532,51 @@ mod leadership_signal_tests {
             runtime,
             leader_flag: Arc::new(watch::channel(false).0),
         }
+    }
+
+    #[tokio::test]
+    async fn controller_epochs_receive_the_center_selected_reference_grant_transport() {
+        use super::super::version_detection::{GatewayClassVersion, GatewayVersion, ReferenceGrantVersion};
+        let center = unconnected_center();
+        let selected = center.writer.selection();
+        selected.set(ReferenceGrantVersion::V1Beta1).unwrap();
+        let selected_class = center.writer.gateway_class_selection();
+        selected_class.set(GatewayClassVersion::V1Beta1).unwrap();
+        let selected_gateway = center.writer.gateway_selection();
+        selected_gateway.set(GatewayVersion::V1Beta1).unwrap();
+        let client = Client::new(
+            tower::service_fn(|_request: http::Request<kube::client::Body>| async {
+                Ok::<_, std::convert::Infallible>(http::Response::new(kube::client::Body::empty()))
+            }),
+            "default",
+        );
+        for _ in 0..2 {
+            let version = selected.get().copied();
+            let controller = center
+                .create_k8s_controller(
+                    &client,
+                    version,
+                    selected_class.get().copied(),
+                    selected_gateway.get().copied(),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(controller.reference_grant_version, Some(ReferenceGrantVersion::V1Beta1));
+            assert_eq!(controller.gateway_class_version, Some(GatewayClassVersion::V1Beta1));
+            assert_eq!(controller.gateway_version, Some(GatewayVersion::V1Beta1));
+        }
+        assert_eq!(
+            center.writer.selected_reference_grant_version().await.unwrap(),
+            ReferenceGrantVersion::V1Beta1
+        );
+        assert_eq!(
+            center.writer.selected_gateway_class_version().await.unwrap(),
+            GatewayClassVersion::V1Beta1
+        );
+        assert_eq!(
+            center.writer.selected_gateway_version().await.unwrap(),
+            GatewayVersion::V1Beta1
+        );
     }
 
     #[tokio::test]

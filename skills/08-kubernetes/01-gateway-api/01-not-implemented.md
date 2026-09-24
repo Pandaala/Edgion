@@ -145,6 +145,16 @@ Edgion's Gateway process binds all ports via `configure_listeners` **at startup*
 - In the conformance report, `GatewayWithAttachedRoutesWithPort8080`, `GatewayPort8080`, `HTTPRouteListenerPortMatching`, and `HTTPRouteRedirectPortAndScheme` are marked as skipped
 - To support dynamic ports in the future, re-evaluate whether Pingora's `Server::add_service` supports runtime invocation, plus the Controller→Gateway sync timing problem
 
+The Gateway API v1.6.2 `GATEWAY-TCP` and `GATEWAY-UDP` profiles also create
+listener ports after the Gateway process starts. In an isolated kind cluster,
+TCPRoute/v1 on a prebound port 31092 returned the backend PONG, and
+UDPRoute/v1 on a prebound port 31101 returned an echo. The official TCP
+profile then timed out while testing newly created ports 9310-9312; the UDP
+profile also timed out probing newly created port 5300. These are partial
+runtime capabilities, not passing profile results. Keep `TCPRoute` and
+`UDPRoute` out of `SUPPORTED_FEATURES` until dynamic listener binding is
+implemented and the corresponding full profile passes.
+
 ## BackendTLSPolicy Conformance
 
 **Decision: implemented (declares `SupportBackendTLSPolicy` and `SupportBackendTLSPolicySANValidation`)**
@@ -251,8 +261,12 @@ upstream conformance run.
 
 ## Conformance profile boundaries
 
-`GATEWAY-TLS` is declared and its committed split-profile report passes. It is
-therefore not an unimplemented item. Keep HTTP/gRPC and TLS profile runs
+The v1.6.2 full `GATEWAY-TLS` run in isolated kind passed Core 20/20 and
+Extended 2/3. The only failure was `TLSRouteTerminateSimpleSameNamespace`
+after a targeted run of that case had passed. Keep `TLSRouteModeTerminate`
+out of `SUPPORTED_FEATURES` pending a full-profile pass; see
+[the pending task](../../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md).
+Keep HTTP/gRPC and TLS profile runs
 separate because their upstream manifests both reserve port 443; see
 [02-conformance-testing.md](02-conformance-testing.md).
 

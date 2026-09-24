@@ -11,7 +11,7 @@
 - **Rust 原生性能** — 基于 Cloudflare 的 Pingora 和 Tokio 构建。内存安全，无 GC 停顿，高负载下延迟可预测。
 - **Gateway API 支持** — 原生实现 Kubernetes Gateway API 标准。同一二进制文件可运行于 Kubernetes 或独立模式。
   - `v1` GA: GatewayClass · Gateway · HTTPRoute · GRPCRoute · TLSRoute · ReferenceGrant · BackendTLSPolicy
-  - `v1alpha2` 实验性: TCPRoute · UDPRoute
+  - `v1` 标准: TCPRoute · UDPRoute
 - **多协议** — HTTP/1.1、HTTP/2、gRPC、TCP、UDP、WebSocket、SNI 代理。
 - **动态热加载** — 路由、后端、插件、证书的任何变更都会即时传播到所有网关，无需重启。
 - **生产就绪的 Kubernetes 控制器** — 开箱即用的完整协调循环、状态上报和 CRD 生命周期管理。
@@ -36,7 +36,7 @@
 
 ### Gateway API 配置
 
-Edgion 实现了 Kubernetes Gateway API 规范，当前支持 **v1.5.1**。
+Edgion 实现了 Kubernetes Gateway API 规范，当前支持 **v1.6.2**。
 
 #### Gateway API 支持
 
@@ -45,8 +45,8 @@ Edgion 实现了 Kubernetes Gateway API 规范，当前支持 **v1.5.1**。
 - [`v1.TLSRoute`](../en/ops-guide/gateway/tls/tls-termination.md)
 - [`v1.ReferenceGrant`](../en/ops-guide/infrastructure/reference-grant.md)
 - [`v1.BackendTLSPolicy`](../en/user-guide/http-route/backends/backend-tls.md)
-- [`v1alpha2.TCPRoute`](../en/user-guide/tcp-route/overview.md)
-- [`v1alpha2.UDPRoute`](../en/user-guide/udp-route/overview.md)
+- [`v1.TCPRoute`](../en/user-guide/tcp-route/overview.md)
+- [`v1.UDPRoute`](../en/user-guide/udp-route/overview.md)
 
 #### Edgion 自定义资源
 

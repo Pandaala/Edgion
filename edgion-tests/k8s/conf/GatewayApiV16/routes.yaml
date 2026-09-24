@@ -1,0 +1,48 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: v16-stream-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp
+      protocol: TCP
+      port: 31092
+      allowedRoutes:
+        kinds:
+          - kind: TCPRoute
+    - name: udp
+      protocol: UDP
+      port: 31101
+      allowedRoutes:
+        kinds:
+          - kind: UDPRoute
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: TCPRoute
+metadata:
+  name: v16-tcp-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: v16-stream-gateway
+      sectionName: tcp
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: UDPRoute
+metadata:
+  name: v16-udp-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: v16-stream-gateway
+      sectionName: udp
+  rules:
+    - backendRefs:
+        - name: test-udp
+          port: 30011

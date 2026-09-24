@@ -84,6 +84,9 @@ fn make_gateway(namespace: &str, name: &str, listeners: Vec<Listener>) -> Gatewa
             listeners: Some(listeners),
             addresses: None,
             tls: None,
+            allowed_listeners: None,
+            infrastructure: None,
+            default_scope: None,
             resolved_inbound_proxy_protocol: Default::default(),
             resolved_attachment_proof: Some(GatewayAttachmentProof {
                 instance: "test-instance".to_string(),

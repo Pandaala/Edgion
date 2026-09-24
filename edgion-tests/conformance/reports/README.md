@@ -1,6 +1,11 @@
 # Gateway API Conformance Test Reports
 
-Reports generated on **2026-04-07** against Edgion `dev` build.
+The 2026-06 reports are historical Edgion `dev` runs. They record
+`gatewayAPIVersion: UNDEFINED` and `gatewayAPIChannel: UNDEFINED`, so they
+cannot establish compatibility with a particular installed CRD bundle.
+The current Go module pins both `sigs.k8s.io/gateway-api` and
+`sigs.k8s.io/gateway-api/conformance` at v1.6.2. These updated dependencies do
+not recover the missing bundle/channel metadata from an old run.
 
 ## Why Split-Profile Runs
 
@@ -20,10 +25,23 @@ with its own base manifest set and gateway startup configuration:
 
 | File | Profiles | Date | Notes |
 |------|----------|------|-------|
-| `gateway-http-grpc-conformance-report.yaml` | GATEWAY-HTTP, GATEWAY-GRPC | 2026-04-07 | Split-profile run |
-| `gateway-tls-conformance-report.yaml` | GATEWAY-TLS | 2026-04-07 | Split-profile run with TLS-only base manifest |
+| `gateway-http-grpc-conformance-report.yaml` | GATEWAY-HTTP, GATEWAY-GRPC | 2026-06-18 13:54:50 UTC | Split-profile run |
+| `gateway-tls-conformance-report.yaml` | GATEWAY-TLS | 2026-06-18 13:17:59 UTC | Split-profile run with TLS-only base manifest |
+| `gateway-http-conformance-report.yaml` | GATEWAY-HTTP | 2026-05-23 | Earlier partial/failing report, retained as history |
+| `gateway-http-grpc-v1.6.2-kind-2026-09-23.yaml` | GATEWAY-HTTP, GATEWAY-GRPC | 2026-09-23 | v1.6.2 Experimental, isolated kind node run; all selected tests passed |
+| `gateway-tls-v1.6.2-kind-2026-09-23.yaml` | GATEWAY-TLS | 2026-09-23 | v1.6.2 Experimental, isolated kind node run; one extended test failed |
 
-## How to Reproduce
+The new reports use Go conformance v1.6.2 and Gateway API v1.6.2
+Experimental CRDs with local arm64 Edgion images. The full HTTP profile
+passed Core 37/37 and Extended 30/30; GRPC passed Core 15/15. The full TLS
+profile passed Core 20/20 and Extended 2/3. Its only failure was
+`TLSRouteTerminateSimpleSameNamespace` after a separate targeted pass. See
+the [TLS follow-up](../../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md).
+The TCP and UDP full profiles timed out while probing listener ports created
+after Gateway startup, so neither produced a report. See the
+[dynamic-listener follow-up](../../../tasks/pending/gateway-api-v16-dynamic-stream-listeners.md).
+
+## Historical run commands
 
 ```bash
 # Step 1: HTTP + gRPC
@@ -35,33 +53,39 @@ with its own base manifest set and gateway startup configuration:
   --conformance-profiles "GATEWAY-TLS" --timeout 30m
 ```
 
-Reports are automatically saved to this directory with profile-derived names.
+These commands describe the historical split-profile setup. A new run uses
+the then-current code and installed CRDs; it cannot recreate the undefined
+bundle/channel metadata in the older reports.
 
 ## Results Summary
 
-### GATEWAY-HTTP — FULL PASS
+### GATEWAY-HTTP — 2026-06-18 report
 
 - **Core**: 33/33 passed
-- **Extended**: 32/32 passed (including `BackendTLSPolicyConflictResolution`)
+- **Extended**: 31/31 passed
 
-### GATEWAY-GRPC — FULL PASS
+### GATEWAY-GRPC — 2026-06-18 report
 
 - **Core**: 13/13 passed
 
-### GATEWAY-TLS — FULL PASS
+### GATEWAY-TLS — 2026-06-18 report
 
 - **Core**: 18/18 passed
 - **Extended**: 3/3 passed (`TLSRouteModeTerminate`, `GatewayHTTPListenerIsolation`, `GatewayHTTPSListenerDetectMisdirectedRequests`)
 
+The earlier GATEWAY-HTTP report dated 2026-05-23 recorded core 0 passed,
+33 skipped, and extended 0 passed, 1 failed, 31 skipped. It is retained so
+the later improvement can be audited. Neither report series has a defined
+installed bundle version or channel, and no test result here is assigned to
+a specific source GVK or release in the offline fixture matrix.
+
 ## Known Quirks
 
-### Upstream conformance cert CA:FALSE (Go 1.24+)
+### Historical certificate issue
 
-The upstream conformance suite (`sigs.k8s.io/gateway-api/conformance v1.5.1`)
-generates self-signed certificates with `BasicConstraints CA:FALSE`. Go 1.24+
-rejects these when used as root CAs. Edgion patches this locally via a `replace`
-directive in `go.mod` pointing to `patches/conformance-v1.5.1/`, which sets
-`IsCA=true` and adds `KeyUsageCertSign` for self-signed certs.
+An earlier Go toolchain and conformance suite combination exposed a self-signed
+certificate CA constraint issue. The current v1.6.2 module has no local
+conformance replacement. The saved reports predate this module update.
 
 ### TLS backend pods must restart after cert regeneration
 

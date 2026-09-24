@@ -25,9 +25,9 @@ Authoritative upstream references:
 - [Implementer's guide](https://gateway-api.sigs.k8s.io/guides/implementers-guide/)
 - [CRD management](https://gateway-api.sigs.k8s.io/guides/crd-management/)
 
-## Candidate source-adapter contract
+## Source-adapter contract
 
-The multi-version investigation will evaluate this definition:
+The active policy uses this definition:
 
 > A source GVK is supported only when Edgion has a schema-backed decoder, an
 > explicit conversion to the canonical resource model, full semantic/status
@@ -45,8 +45,9 @@ raw document or watched object
   -> status and publication through the source-version transport
 ```
 
-The adapter registry, if adopted, should be keyed by full source GVK. The mere
-presence of a schema in a CRD bundle must not auto-register support.
+The code-owned source inventory records full source GVKs, including proposed
+and partial paths. Only an implemented, tested source path may be advertised.
+The mere presence of a schema in a CRD bundle must not auto-register support.
 
 The source adapter must also define a feature projection. A field accepted by
 the selected source schema must either convert into supported canonical
@@ -94,9 +95,13 @@ declaration must make that choice explicit.
 - Gateway defensive construction must fail closed if invalid state bypasses the
   Controller; it must not implement a second version-conversion system.
 
-## Current-policy boundary
+## Current implementation boundary
 
-This candidate model is not yet the active implementation policy. Until the
-umbrella task resolves the design and updates
-`skills/08-kubernetes/04-api-version-upgrade.md`, ordinary changes continue to
-use one canonical version per resource and atomic upgrades.
+The inventory is a policy and consistency aid, not a source decoder.
+ReferenceGrant v1beta1 is converted to the canonical v1 resource before raw
+store insertion for Kubernetes watch and before typed processing for offline
+and Admin input. The center selects one Kubernetes transport version for its
+lifetime; a cluster must serve v1beta1 for that Kubernetes input to be accepted.
+Per-source bundle and conformance evidence remains incomplete. Proposed
+v1beta1 adapters remain unimplemented. TLSRoute and BackendTLSPolicy remain
+canonical-only at this stage.

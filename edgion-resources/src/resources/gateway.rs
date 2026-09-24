@@ -55,6 +55,18 @@ pub struct GatewaySpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<GatewaySpecTLS>,
 
+    /// Known upstream fields unsupported by this controller. Kept through
+    /// source conversion for per-object status; omitted from conf_sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub allowed_listeners: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub infrastructure: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub default_scope: Option<serde_json::Value>,
+
     /// Controller-resolved inbound PROXY protocol policy transported to the
     /// Gateway. This is not an operator-authored Gateway API field.
     #[serde(default)]
@@ -64,6 +76,56 @@ pub struct GatewaySpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_attachment_proof: Option<super::edgion_tls::GatewayAttachmentProof>,
+}
+
+/// Standard v1beta1 Gateway source. Shared nested types preserve the complete
+/// listener, TLS, route-attachment, address, and status representation.
+#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[kube(
+    group = "gateway.networking.k8s.io",
+    version = "v1beta1",
+    kind = "Gateway",
+    root = "GatewayBeta",
+    plural = "gateways",
+    status = "GatewayStatus",
+    namespaced
+)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayBetaSpec {
+    pub gateway_class_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listeners: Option<Vec<Listener>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addresses: Option<Vec<GatewayAddress>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<GatewaySpecTLS>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_listeners: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infrastructure: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_scope: Option<serde_json::Value>,
+}
+
+impl From<GatewayBeta> for Gateway {
+    fn from(beta: GatewayBeta) -> Self {
+        Self {
+            metadata: beta.metadata,
+            spec: GatewaySpec {
+                current_status: None,
+                gateway_class_name: beta.spec.gateway_class_name,
+                listeners: beta.spec.listeners,
+                addresses: beta.spec.addresses,
+                tls: beta.spec.tls,
+                allowed_listeners: beta.spec.allowed_listeners,
+                infrastructure: beta.spec.infrastructure,
+                default_scope: beta.spec.default_scope,
+                resolved_inbound_proxy_protocol: ResolvedInboundProxyProtocol::default(),
+                resolved_attachment_proof: None,
+            },
+            status: beta.status,
+        }
+    }
 }
 
 pub fn gateway_attachment_proof(gateway: &Gateway) -> super::edgion_tls::GatewayAttachmentProof {
@@ -133,7 +195,7 @@ pub struct FrontendTLSValidation {
     /// CACertificateRefs references Secrets or ConfigMaps containing CA certificate bundles
     /// for validating client certificates. Must contain `ca.crt` key.
     #[serde(deserialize_with = "deserialize_frontend_ca_refs")]
-    #[schemars(length(min = 1, max = 8))]
+    #[schemars(length(min = 1, max = 16))]
     pub ca_certificate_refs: Vec<FrontendCACertificateRef>,
 
     /// Validation mode (default: AllowValidOnly).
@@ -174,9 +236,9 @@ where
             "caCertificateRefs must contain at least one reference",
         ));
     }
-    if refs.len() > 8 {
+    if refs.len() > 16 {
         return Err(serde::de::Error::custom(
-            "caCertificateRefs must contain at most eight references",
+            "caCertificateRefs must contain at most 16 references",
         ));
     }
     for reference in &refs {
@@ -435,7 +497,8 @@ pub struct GatewayAddress {
     pub address_type: Option<String>,
 
     /// Value of the address
-    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
@@ -603,6 +666,9 @@ mod tests {
                 }]),
                 addresses: None,
                 tls: None,
+                allowed_listeners: None,
+                infrastructure: None,
+                default_scope: None,
                 resolved_inbound_proxy_protocol: ResolvedInboundProxyProtocol::Disabled,
                 resolved_attachment_proof: None,
             },
@@ -735,6 +801,24 @@ spec:
     }
 
     #[test]
+    fn frontend_ca_reference_limit_matches_v16_schema() {
+        let reference = serde_json::json!({"group": "", "kind": "ConfigMap", "name": "ca"});
+        for count in [9, 16] {
+            let value = serde_json::json!({"caCertificateRefs": vec![reference.clone(); count]});
+            let parsed: FrontendTLSValidation = serde_json::from_value(value).unwrap();
+            assert_eq!(parsed.ca_certificate_refs.len(), count);
+        }
+        let too_many = serde_json::json!({"caCertificateRefs": vec![reference; 17]});
+        assert!(serde_json::from_value::<FrontendTLSValidation>(too_many).is_err());
+
+        let schema = serde_json::to_value(schemars::schema_for!(FrontendTLSValidation)).unwrap();
+        assert_eq!(
+            schema.pointer("/properties/caCertificateRefs/maxItems"),
+            Some(&serde_json::json!(16))
+        );
+    }
+
+    #[test]
     fn frontend_wire_shape_requires_default_and_per_port_tls_but_allows_empty_policy() {
         let missing_default = r#"
 apiVersion: gateway.networking.k8s.io/v1
@@ -779,6 +863,80 @@ spec:
         let frontend = gateway.spec.tls.unwrap().frontend.unwrap();
         assert!(frontend.default.validation.is_none());
         assert!(frontend.per_port.unwrap()[0].tls.validation.is_none());
+    }
+
+    #[test]
+    fn beta_conversion_preserves_gateway_fields_and_known_unsupported_fields() {
+        let source = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "Gateway",
+            "metadata": {"name": "edge", "namespace": "demo", "resourceVersion": "17"},
+            "spec": {
+                "gatewayClassName": "edgion",
+                "addresses": [{"type": "IPAddress", "value": "192.0.2.1"}],
+                "listeners": [{"name": "https", "port": 443, "protocol": "HTTPS",
+                    "hostname": "example.com",
+                    "tls": {"mode": "Terminate", "certificateRefs": [{"name": "server"}]},
+                    "allowedRoutes": {"namespaces": {"from": "Selector", "selector": {"matchLabels": {"team": "web"}}},
+                                      "kinds": [{"kind": "HTTPRoute"}]}}]
+            },
+            "status": {"addresses": [{"type": "IPAddress", "value": "192.0.2.1"}],
+                       "listeners": [{"name": "https", "supportedKinds": [{"kind": "HTTPRoute"}],
+                                      "attachedRoutes": 2, "conditions": []}]}
+        });
+        let beta: GatewayBeta = serde_json::from_value(source).unwrap();
+        let gateway: Gateway = beta.into();
+        assert_eq!(gateway.metadata.resource_version.as_deref(), Some("17"));
+        assert_eq!(
+            gateway.spec.addresses.as_ref().unwrap()[0].value.as_deref(),
+            Some("192.0.2.1")
+        );
+        let listener = &gateway.spec.listeners.as_ref().unwrap()[0];
+        assert_eq!(
+            listener.tls.as_ref().unwrap().certificate_refs.as_ref().unwrap()[0].name,
+            "server"
+        );
+        assert_eq!(
+            listener
+                .allowed_routes
+                .as_ref()
+                .unwrap()
+                .namespaces
+                .as_ref()
+                .unwrap()
+                .from
+                .as_deref(),
+            Some("Selector")
+        );
+        assert_eq!(gateway.status.unwrap().listeners.unwrap()[0].attached_routes, 2);
+
+        let mut unsupported = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "Gateway",
+            "metadata": {"name": "edge", "namespace": "demo"},
+            "spec": {"gatewayClassName": "edgion"}
+        });
+        for field in ["allowedListeners", "infrastructure", "defaultScope"] {
+            unsupported["spec"][field] = serde_json::json!({"known": true});
+            let beta: GatewayBeta = serde_json::from_value(unsupported.clone()).unwrap();
+            let gateway: Gateway = beta.into();
+            assert!(match field {
+                "allowedListeners" => gateway.spec.allowed_listeners.is_some(),
+                "infrastructure" => gateway.spec.infrastructure.is_some(),
+                _ => gateway.spec.default_scope.is_some(),
+            });
+            unsupported["spec"].as_object_mut().unwrap().remove(field);
+        }
+        unsupported["spec"]["futureField"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<GatewayBeta>(unsupported).is_ok());
+    }
+
+    #[test]
+    fn unsupported_diagnostic_fields_do_not_enter_the_operator_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(GatewaySpec))
+            .unwrap()
+            .to_string();
+        for field in ["allowedListeners", "infrastructure", "defaultScope"] {
+            assert!(!schema.contains(field));
+        }
     }
 
     #[test]

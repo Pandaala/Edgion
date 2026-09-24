@@ -2,10 +2,15 @@
 
 TCPRoute 用于四层 TCP 流量转发，不解析 HTTP 协议语义。
 
+Edgion 接受 TCPRoute v1，并能在 Gateway 进程启动时已绑定的监听端口上转发流量。
+启动后新增监听端口需要重启 Gateway 进程。Gateway API v1.6.2 的
+`GATEWAY-TCP` profile 会动态创建端口，因此 Edgion 暂不在
+`GatewayClass.status.supportedFeatures` 中声明完整的 `TCPRoute` feature。
+
 ## 基本结构
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: tcp-route
@@ -78,7 +83,7 @@ spec:
       port: 3306
 ---
 # Redis 路由
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: redis-route
@@ -94,7 +99,7 @@ spec:
           weight: 100
 ---
 # MySQL 路由
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: mysql-route

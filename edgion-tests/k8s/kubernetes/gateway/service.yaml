@@ -27,6 +27,10 @@ spec:
     port: 443
     targetPort: 443
     protocol: TCP
+  - name: tls-terminate
+    port: 8443
+    targetPort: 8443
+    protocol: TCP
   - name: http-10080
     port: 10080
     targetPort: 10080

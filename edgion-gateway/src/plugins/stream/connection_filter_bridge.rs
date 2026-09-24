@@ -184,7 +184,7 @@ mod tests {
             ]);
             publisher.replace_gateways(original.clone());
             let route = json!({
-                "apiVersion": "gateway.networking.k8s.io/v1alpha2", "kind": kind,
+                "apiVersion": "gateway.networking.k8s.io/v1", "kind": kind,
                 "metadata": {"namespace": "default", "name": "port-owner"},
                 "spec": {"resolvedStatusController": "edgion.io/gateway-controller",
                     "parentRefs": [{"name": "a", "port": 8080}, {"name": "b", "port": 8081}],

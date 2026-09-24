@@ -71,7 +71,7 @@ spec:
 
 `filters` 在请求到达后端之前或响应返回客户端之前执行处理逻辑：
 
-- **Gateway API 标准 Filter**：`RequestHeaderModifier`、`ResponseHeaderModifier`、`RequestRedirect`、`URLRewrite`、`RequestMirror`、原生 `CORS` 和 `ExternalAuth`。
+- **Edgion 已处理的 Gateway API Filter**：`RequestHeaderModifier`、`ResponseHeaderModifier`、`RequestRedirect`、`URLRewrite`、`RequestMirror` 和原生 `CORS`。上游 `ExternalAuth` 的 `backendRef`／`protocol` 形式会被拒绝；需要该功能时请使用 Edgion 独立的 ForwardAuth 插件。
 - **Edgion 扩展 Plugin**：通过 `ExtensionRef` 引用 `EdgionPlugins` 资源（限流、认证、DSL 等）。
 
 `URLRewrite` 和 `RequestRedirect` 在同一规则内互斥。详见 [过滤器](./filters/README.md)。

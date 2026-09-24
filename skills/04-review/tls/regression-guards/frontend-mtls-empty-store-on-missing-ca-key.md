@@ -63,6 +63,12 @@ complete set becomes one immutable `X509Store`. The handshake callback performs 
 store construction: `StrictEffective` installs the compiled store, `StrictReject` returns an
 error, and only `NotConfigured` returns `Ok(false)`.
 
+Gateway API v1.6.2 permits up to 16 frontend CA references. The resource decoder and schema,
+the shared `MAX_CA_REFERENCE_COUNT`, Controller resolution, and Gateway compiler must agree on
+that bound. A prior mismatch admitted 9–16 references but rejected their runtime projection;
+fallback status could still report success while TLS rejected the connection. Boundary tests
+cover 9 and 16 references in strict and fallback modes, plus rejection of 17 at the source.
+
 ## Fix suggestions not accepted
 
 - "Reject the misconfiguration at the controller validator instead" — out of scope here; the
@@ -81,6 +87,8 @@ error, and only `NotConfigured` returns `Ok(false)`.
   but the guard stays correct defense-in-depth — keep it).
 - A new frontend CA source or material format is supported — extend the cold compiler while
   preserving complete ordered identity validation and immutable publication.
+- The upstream frontend CA reference bound changes — update the decoder, generated schema,
+  Controller and Gateway shared limit, and boundary tests together.
 
 ## Reference cases
 

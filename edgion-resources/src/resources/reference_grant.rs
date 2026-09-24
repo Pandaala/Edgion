@@ -156,7 +156,8 @@ impl ReferenceGrant {
 #[kube(
     group = "gateway.networking.k8s.io",
     version = "v1beta1",
-    kind = "ReferenceGrantBeta",
+    kind = "ReferenceGrant",
+    root = "ReferenceGrantBeta",
     plural = "referencegrants",
     shortname = "refgrant",
     namespaced

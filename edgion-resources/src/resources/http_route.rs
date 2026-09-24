@@ -34,6 +34,12 @@ pub struct HTTPRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_refs: Option<Vec<ParentReference>>,
 
+    /// Experimental default Gateway attachment is not implemented. Retain the
+    /// source value so the controller can report it on this object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub use_default_gateways: Option<String>,
+
     /// Controller-owned status identity, published with this processed route by conf_sync.
     /// Overwritten by the Controller; never an operator-authored field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,10 +96,63 @@ pub struct HTTPRouteSpec {
     pub delegation_issues: Vec<DelegationIssue>,
 }
 
+/// v1beta1 wire source. Nested Standard and selected Experimental fields use
+/// the same typed model as v1; only controller-resolved fields are omitted.
+#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[kube(
+    group = "gateway.networking.k8s.io",
+    version = "v1beta1",
+    kind = "HTTPRoute",
+    root = "HTTPRouteBeta",
+    plural = "httproutes",
+    status = "HTTPRouteStatus",
+    namespaced
+)]
+#[serde(rename_all = "camelCase")]
+pub struct HTTPRouteBetaSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_refs: Option<Vec<ParentReference>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostnames: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<Vec<HTTPRouteRule>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_default_gateways: Option<String>,
+}
+
+impl From<HTTPRouteBeta> for HTTPRoute {
+    fn from(beta: HTTPRouteBeta) -> Self {
+        Self {
+            metadata: beta.metadata,
+            spec: HTTPRouteSpec {
+                current_status: None,
+                parent_refs: beta.spec.parent_refs,
+                resolved_status_controller: None,
+                hostnames: beta.spec.hostnames,
+                resolved_hostnames: None,
+                resolved_listeners: None,
+                invalid_rule_indices: None,
+                rules: beta.spec.rules,
+                resolved_rules: None,
+                delegation_issues: Vec::new(),
+                use_default_gateways: beta.spec.use_default_gateways,
+            },
+            status: beta.status,
+        }
+    }
+}
+
 impl HTTPRouteSpec {
     /// Validate authored hostname syntax and the Gateway API list bound.
     pub fn validate_hostnames(&self) -> Result<(), crate::HostnameError> {
         crate::validate_route_hostnames(self.hostnames.as_deref(), false)
+    }
+
+    pub fn unsupported_default_gateway_attachment(&self) -> Option<&'static str> {
+        self.use_default_gateways
+            .as_deref()
+            .is_some_and(|scope| scope != "None")
+            .then_some("useDefaultGateways attachment is not supported")
     }
 }
 
@@ -263,7 +322,17 @@ impl HTTPRouteRule {
     /// before Controller delegation or Gateway publication.
     pub fn unsupported_cors_reason(&self) -> Option<String> {
         self.unsupported_backend_cors_reason().or_else(|| {
-            self.filters.as_ref()?.iter().find_map(|filter| {
+            let filters = self.filters.as_ref()?;
+            if filters
+                .iter()
+                .filter(|filter| filter.filter_type == HTTPRouteFilterType::CORS)
+                .take(2)
+                .count()
+                > 1
+            {
+                return Some("CORS filter cannot be repeated".to_string());
+            }
+            filters.iter().find_map(|filter| {
                 if filter.filter_type != HTTPRouteFilterType::CORS {
                     return None;
                 }
@@ -738,11 +807,126 @@ pub struct HTTPRouteFilter {
 
     /// ExternalAuth defines a Gateway API native external authentication filter (GEP-1494)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external_auth: Option<crate::resources::edgion_plugins::ForwardAuthConfig>,
+    pub external_auth: Option<HTTPRouteExternalAuth>,
 
     /// ExtensionRef is an optional, implementation-specific extension to the "filter" behavior
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension_ref: Option<LocalObjectReference>,
+}
+
+/// The upstream v1.5 ExternalAuth schema is an Envoy ext_authz reference,
+/// while Edgion's earlier ForwardAuth object is an internal extension. Keep
+/// the upstream object intact so one unsupported rule can be status-reported
+/// without failing deserialization of its valid siblings.
+#[derive(Serialize, Clone, Debug, JsonSchema)]
+#[serde(untagged)]
+pub enum HTTPRouteExternalAuth {
+    Edgion(Box<crate::resources::edgion_plugins::ForwardAuthConfig>),
+    Upstream(serde_json::Value),
+}
+
+impl<'de> Deserialize<'de> for HTTPRouteExternalAuth {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        // Protocol and backendRef identify the upstream Envoy ext_authz shape.
+        // Check them before attempting Edgion's permissive ForwardAuth decoder:
+        // a mixed object with a `decision` must never lose the upstream keys.
+        if value.as_object().is_some_and(|object| {
+            ["backendRef", "protocol", "http", "grpc"]
+                .iter()
+                .any(|key| object.contains_key(*key))
+        }) {
+            return Ok(Self::Upstream(value));
+        }
+        match serde_json::from_value(value.clone()) {
+            Ok(config) => Ok(Self::Edgion(Box::new(config))),
+            Err(_) => Ok(Self::Upstream(value)),
+        }
+    }
+}
+
+impl HTTPRouteExternalAuth {
+    pub fn validation_error(&self) -> Option<String> {
+        match self {
+            Self::Edgion(config) => config.validation_error(),
+            Self::Upstream(_) => {
+                Some("Gateway API ExternalAuth backendRef/protocol is not supported by Edgion ForwardAuth".to_string())
+            }
+        }
+    }
+
+    pub fn edgion_config(&self) -> Option<&crate::resources::edgion_plugins::ForwardAuthConfig> {
+        match self {
+            Self::Edgion(config) => Some(config.as_ref()),
+            Self::Upstream(_) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod source_version_tests {
+    use super::*;
+
+    #[test]
+    fn beta_conversion_preserves_rules_status_and_experimental_source_fields() {
+        let source = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "HTTPRoute",
+            "metadata": {"name": "route", "namespace": "app", "resourceVersion": "42"},
+            "spec": {
+                "parentRefs": [{"name": "edge"}], "hostnames": ["example.com"],
+                "useDefaultGateways": "All",
+                "rules": [{"matches": [{"method": "GET"}], "backendRefs": [{"name": "api", "port": 80}],
+                    "retry": {"codes": [503]},
+                    "filters": [{"type": "ExternalAuth", "externalAuth": {
+                        "backendRef": {"name": "auth", "port": 8080}, "protocol": "HTTP",
+                        "http": {"path": "/check"}
+                    }}]
+                }]
+            },
+            "status": {"parents": [{"parentRef": {"name": "edge"}, "controllerName": "example.com/other", "conditions": []}]}
+        });
+        let beta: HTTPRouteBeta = serde_json::from_value(source.clone()).unwrap();
+        let canonical: HTTPRoute = beta.into();
+        assert_eq!(canonical.metadata.resource_version.as_deref(), Some("42"));
+        assert_eq!(canonical.spec.use_default_gateways.as_deref(), Some("All"));
+        assert_eq!(canonical.spec.hostnames.as_ref().unwrap(), &["example.com"]);
+        assert_eq!(canonical.status.as_ref().unwrap().parents.len(), 1);
+        let rule = &canonical.spec.rules.as_ref().unwrap()[0];
+        assert_eq!(rule.backend_refs.as_ref().unwrap()[0].name, "api");
+        assert!(rule.retry.is_some());
+        assert_eq!(
+            rule.matches.as_ref().unwrap()[0]
+                .path
+                .as_ref()
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("/")
+        );
+        assert!(matches!(
+            rule.filters.as_ref().unwrap()[0].external_auth,
+            Some(HTTPRouteExternalAuth::Upstream(_))
+        ));
+    }
+
+    #[test]
+    fn upstream_external_auth_shape_is_retained_for_rule_level_rejection() {
+        for raw in [
+            serde_json::json!({"backendRef": {"name": "auth", "port": 8080}, "protocol": "GRPC", "grpc": {}}),
+            serde_json::json!({"backendRef": {"name": "auth", "port": 8080}, "protocol": "HTTP", "http": {"path": "/check"}}),
+            serde_json::json!({"backendRef": {"name": "auth", "port": 8080}, "protocol": "HTTP",
+                "http": {"path": "/check", "allowedHeaders": ["Authorization"]},
+                "forwardBody": {"maxSize": 1024}}),
+            serde_json::json!({"backendRef": {"name": "auth", "port": 8080}, "protocol": "HTTP",
+                "http": {"path": "/check"}, "decision": {"clientHeaders": []}}),
+        ] {
+            let source: HTTPRouteExternalAuth = serde_json::from_value(raw.clone()).unwrap();
+            assert!(matches!(source, HTTPRouteExternalAuth::Upstream(_)));
+            assert!(source.validation_error().unwrap().contains("not supported"));
+            assert!(source.edgion_config().is_none());
+            assert_eq!(serde_json::to_value(source).unwrap(), raw);
+        }
+    }
 }
 
 /// HTTPRouteFilterType identifies a type of HTTPRoute filter
@@ -1423,6 +1607,53 @@ pub struct HTTPRouteRetry {
     pub codes: Option<Vec<i32>>,
 }
 
+impl HTTPRouteRetry {
+    /// Mirror the v1.6 Experimental retry bounds for non-Kubernetes input.
+    pub fn validation_error(&self) -> Option<&'static str> {
+        if self.attempts.is_some_and(|attempts| attempts < 1) {
+            return Some("retry.attempts must be at least 1");
+        }
+        if let Some(codes) = &self.codes {
+            if codes.iter().any(|code| !(400..=599).contains(code)) {
+                return Some("retry.codes must contain only HTTP status codes from 400 to 599");
+            }
+            let mut seen = [false; 200];
+            for code in codes {
+                let slot = &mut seen[(code - 400) as usize];
+                if *slot {
+                    return Some("retry.codes must contain unique status codes");
+                }
+                *slot = true;
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod v16_retry_tests {
+    use super::HTTPRouteRetry;
+
+    #[test]
+    fn retry_attempts_and_codes_follow_v16_experimental_admission() {
+        let retry = |attempts, codes| HTTPRouteRetry {
+            attempts,
+            backoff: None,
+            codes,
+        };
+        assert!(retry(Some(1), Some(vec![500, 502, 503, 504]))
+            .validation_error()
+            .is_none());
+        assert!(retry(Some(0), None).validation_error().unwrap().contains("at least 1"));
+        assert!(retry(Some(-1), None).validation_error().is_some());
+        assert!(retry(None, Some(vec![503, 503]))
+            .validation_error()
+            .unwrap()
+            .contains("unique"));
+        assert!(retry(None, Some(vec![399])).validation_error().is_some());
+    }
+}
+
 /// SessionPersistence defines the desired state of SessionPersistence
 /// Support: Extended (Experimental)
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -1439,14 +1670,6 @@ pub struct SessionPersistence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub absolute_timeout: Option<String>,
-
-    /// IdleTimeout defines the idle timeout of the persistent session.
-    /// Once the session has been idle for more than the specified
-    /// IdleTimeout, the session becomes invalid.
-    /// Format: Duration (e.g., "30m", "1h")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
-    pub idle_timeout: Option<String>,
 
     /// Type defines the type of session persistence such as through
     /// the use a header or cookie.
@@ -1998,6 +2221,21 @@ mod tests {
     }
 
     #[test]
+    fn repeated_rule_cors_is_rejected_by_v16_filter_validation() {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "filters": [
+                {"type": "CORS", "cors": {"allowOrigins": ["https://a.example"]}},
+                {"type": "CORS", "cors": {"allowOrigins": ["https://b.example"]}}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            rule.unsupported_cors_reason().as_deref(),
+            Some("CORS filter cannot be repeated")
+        );
+    }
+
+    #[test]
     fn route_status_empty_parents_serialize_explicit_array() {
         // K8s status persistence uses JSON Merge Patch. An empty parents list
         // must serialize as `"parents": []`, not be omitted, or a merge patch
@@ -2141,7 +2379,6 @@ mod tests {
         let unset = SessionPersistence {
             session_name: None,
             absolute_timeout: None,
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: None,
             strict: None,
@@ -2154,7 +2391,6 @@ mod tests {
                 lifetime_type: Some(CookieLifetimeType::Permanent),
             }),
             session_name: None,
-            idle_timeout: None,
             persistence_type: None,
             strict: None,
         };
@@ -2169,7 +2405,6 @@ mod tests {
                 lifetime_type: Some(CookieLifetimeType::Permanent),
             }),
             session_name: None,
-            idle_timeout: None,
             persistence_type: None,
             strict: None,
         };
@@ -2182,7 +2417,6 @@ mod tests {
         let bad = SessionPersistence {
             absolute_timeout: Some("1d".into()), // not GEP-2257
             session_name: None,
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: None,
             strict: None,

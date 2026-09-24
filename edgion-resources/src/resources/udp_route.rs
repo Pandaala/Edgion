@@ -13,7 +13,7 @@ use crate::ListenerKey;
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "gateway.networking.k8s.io",
-    version = "v1alpha2",
+    version = "v1",
     kind = "UDPRoute",
     plural = "udproutes",
     status = "UDPRouteStatus",

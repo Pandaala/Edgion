@@ -219,6 +219,12 @@ impl BackendTLSPolicyStore {
     }
 
     fn is_valid_candidate(policy: &BackendTLSPolicy) -> bool {
+        if matches!(
+            policy.spec.validation.well_known_ca_certificates.as_ref(),
+            Some(edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::Other(_))
+        ) {
+            return false;
+        }
         if policy.spec.target_refs.len() != 1 {
             return false;
         }
@@ -689,6 +695,24 @@ mod tests {
             namespace: "tenant".to_string(),
             name: name.to_string(),
         }
+    }
+
+    #[test]
+    fn unsupported_named_ca_is_not_a_runtime_candidate() {
+        let mut candidate = (*policy(
+            "named-ca",
+            PolicyTargetKind::Service,
+            "backend",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        ))
+        .clone();
+        candidate.spec.validation.well_known_ca_certificates = Some(
+            edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::Other(
+                "example.com/Custom".to_string(),
+            ),
+        );
+        assert!(!BackendTLSPolicyStore::is_valid_candidate(&candidate));
     }
 
     #[test]

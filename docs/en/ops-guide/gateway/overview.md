@@ -45,9 +45,9 @@ separate `EdgionGatewayConfig` resource.
 | `Gateway` | `gateway.networking.k8s.io/v1` | Declares listeners (port, protocol, TLS, allowed routes). |
 | `HTTPRoute` | `gateway.networking.k8s.io/v1` | Matches and forwards HTTP traffic. |
 | `GRPCRoute` | `gateway.networking.k8s.io/v1` | Matches and forwards gRPC (HTTP/2) traffic. |
-| `TLSRoute` | `gateway.networking.k8s.io/v1alpha2` | SNI routing for `Passthrough` TLS. |
-| `TCPRoute` | `gateway.networking.k8s.io/v1alpha2` | L4 TCP forwarding. |
-| `UDPRoute` | `gateway.networking.k8s.io/v1alpha2` | L4 UDP forwarding. |
+| `TLSRoute` | `gateway.networking.k8s.io/v1` | SNI routing for `Passthrough` TLS. |
+| `TCPRoute` | `gateway.networking.k8s.io/v1` | L4 TCP forwarding. |
+| `UDPRoute` | `gateway.networking.k8s.io/v1` | L4 UDP forwarding. |
 | `EdgionGatewayConfig` | `edgion.io/v1alpha1` | Cluster-scoped gateway tuning, referenced via `parametersRef`. |
 
 ## Minimal example

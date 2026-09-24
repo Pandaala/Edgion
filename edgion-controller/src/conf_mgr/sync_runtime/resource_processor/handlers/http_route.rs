@@ -348,12 +348,19 @@ impl Default for HttpRouteHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
+    fn should_publish(&self, route: &HTTPRoute, _ctx: &HandlerContext) -> bool {
+        route.spec.unsupported_default_gateway_attachment().is_none()
+    }
+
     fn finalize_transport(&self, route: &mut HTTPRoute, _ctx: &HandlerContext) {
         route.spec.resolved_status_controller = Some(self.controller_name.clone());
     }
 
     fn validate(&self, route: &HTTPRoute, _ctx: &HandlerContext) -> Vec<String> {
-        let errors = validate_http_route_if_enabled(route);
+        let mut errors = validate_http_route_if_enabled(route);
+        if let Some(reason) = route.spec.unsupported_default_gateway_attachment() {
+            errors.push(reason.to_string());
+        }
         // Note: per-rule validation (filter conflicts, malformed CORS) is handled by
         // find_invalid_rule_details() in update_status(), which marks individual rules
         // as invalid via PartiallyInvalid condition rather than rejecting the entire route.
@@ -365,6 +372,17 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         _ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&grant_owner);
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let route_ns = route_ns.as_str();
+
+        if route.spec.unsupported_default_gateway_attachment().is_some() {
+            // The only publication decision for this source is a full reject.
+            // Avoid registering dependencies for an object that will never
+            // enter the cache; an earlier published generation is removed by
+            // the processor's should_publish=false transition.
+            route.spec.resolved_rules = None;
+            route.spec.resolved_listeners = None;
+            route.spec.resolved_hostnames = None;
+            return ProcessResult::Continue(route);
+        }
 
         // This is controller-owned transport metadata. Kubernetes prunes it
         // via schemars, while filesystem/etcd inputs need the same explicit
@@ -702,11 +720,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             ctx.requeue("HTTPRoute", parent_key).await;
         }
 
-        let tracker_changed =
-            remove_from_attached_route_tracker(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
-        if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
-        }
+        remove_from_attached_route_tracker(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
+        // update_status may already have removed the last attachment before a
+        // rejected replacement withdraws this cached generation. Requeue its
+        // former parents even when the tracker removal above is a no-op.
+        requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
     }
 
     fn update_status(&self, route: &mut HTTPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
@@ -942,7 +960,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             ResourceKind::HTTPRoute,
             route_ns,
             route.metadata.name.as_deref().unwrap_or(""),
-            route.spec.parent_refs.as_ref().filter(|_| hostname_error.is_none()),
+            route
+                .spec
+                .parent_refs
+                .as_ref()
+                .filter(|_| hostname_error.is_none() && route.spec.unsupported_default_gateway_attachment().is_none()),
             route.spec.hostnames.as_ref(),
             _ctx.runtime(),
         );
@@ -1484,6 +1506,10 @@ pub(crate) fn find_invalid_rule_details(route: &HTTPRoute, _route_ns: &str) -> V
             details.push((idx, reason));
             continue;
         }
+        if let Some(reason) = rule.retry.as_ref().and_then(|retry| retry.validation_error()) {
+            details.push((idx, reason.to_string()));
+            continue;
+        }
         if let Some(reason) = invalid_extension_ref_reason(rule) {
             details.push((idx, reason));
             continue;
@@ -1502,6 +1528,36 @@ mod tests {
     use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::conf_mgr::ControllerRuntime;
     use std::sync::Arc;
+
+    #[test]
+    fn v16_cors_and_retry_drift_invalidates_only_the_affected_rules() {
+        let route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "v16", "namespace": "default"},
+            "spec": {"rules": [
+                {"filters": [
+                    {"type": "CORS", "cors": {"allowOrigins": ["https://a.example"]}},
+                    {"type": "CORS", "cors": {"allowOrigins": ["https://b.example"]}}
+                ]},
+                {"retry": {"attempts": 0}},
+                {"retry": {"codes": [503, 503]}},
+                {"backendRefs": [{"name": "service", "port": 8080}]}
+            ]}
+        }))
+        .unwrap();
+        let invalid = find_invalid_rule_details(&route, "default");
+        assert_eq!(invalid.len(), 3);
+        assert!(invalid
+            .iter()
+            .any(|(index, reason)| *index == 0 && reason.contains("CORS filter cannot be repeated")));
+        assert!(invalid
+            .iter()
+            .any(|(index, reason)| *index == 1 && reason.contains("at least 1")));
+        assert!(invalid
+            .iter()
+            .any(|(index, reason)| *index == 2 && reason.contains("unique")));
+    }
 
     #[tokio::test]
     async fn hostname_validation_clears_stale_attachments_and_recovers() {
@@ -1604,6 +1660,171 @@ mod tests {
                 .count_for_listener("apps/gateway", "http"),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn default_gateway_rejection_keeps_owned_gateway_tracker_empty_until_corrected() {
+        use super::super::{GatewayClassHandler, GatewayClassOwnership, GatewayHandler};
+        use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::{
+            gateway_is_owned, KubernetesStatusIdentity,
+        };
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+        use edgion_resources::{Gateway, GatewayClass};
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        runtime.set_status_identity(KubernetesStatusIdentity {
+            controller_name: "edgion.io/gateway-controller".into(),
+        });
+        let classes = Arc::new(ResourceProcessor::new(
+            "GatewayClass",
+            16,
+            Arc::new(GatewayClassHandler::new(GatewayClassOwnership::new(
+                "edgion.io/gateway-controller".into(),
+            ))),
+            runtime.clone(),
+        ));
+        let gateways = Arc::new(ResourceProcessor::new(
+            "Gateway",
+            16,
+            Arc::new(GatewayHandler::new(
+                Some(GatewayClassOwnership::new("edgion.io/gateway-controller".into())),
+                None,
+            )),
+            runtime.clone(),
+        ));
+        let routes = Arc::new(ResourceProcessor::new(
+            "HTTPRoute",
+            16,
+            Arc::new(HttpRouteHandler::default()),
+            runtime.clone(),
+        ));
+        let class_raw = Arc::new(LocalRawStore::new());
+        let gateway_raw = Arc::new(LocalRawStore::new());
+        let route_raw = Arc::new(LocalRawStore::new());
+        classes.set_raw_store(class_raw.clone());
+        gateways.set_raw_store(gateway_raw.clone());
+        routes.set_raw_store(route_raw.clone());
+        runtime.processor_registry.register(classes.clone());
+        runtime.processor_registry.register(gateways.clone());
+        runtime.processor_registry.register(routes.clone());
+
+        let class: GatewayClass = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "edge", "uid": "class-uid"},
+            "spec": {"controllerName": "edgion.io/gateway-controller"}
+        }))
+        .unwrap();
+        class_raw.upsert("edge".into(), Arc::new(class.clone()));
+        classes.on_init_apply(class, None).await;
+        let gateway: Gateway = serde_json::from_value(serde_json::json!({
+            "metadata": {"namespace": "apps", "name": "gateway", "uid": "gateway-uid"},
+            "spec": {"gatewayClassName": "edge", "listeners": [
+                {"name": "http", "port": 8080, "protocol": "HTTP"}
+            ]}
+        }))
+        .unwrap();
+        gateway_raw.upsert("apps/gateway".into(), Arc::new(gateway.clone()));
+        gateways.on_init_apply(gateway.clone(), None).await;
+        assert!(gateway_is_owned(&gateway, &runtime));
+
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "metadata": {"namespace": "apps", "name": "route", "uid": "route-uid"},
+            "spec": {"parentRefs": [{"name": "gateway"}], "useDefaultGateways": "All",
+                "rules": [{"backendRefs": [{"name": "service", "port": 80}]}]}
+        }))
+        .unwrap();
+        route_raw.upsert("apps/route".into(), Arc::new(route.clone()));
+        routes.on_init_apply(route.clone(), None).await;
+        assert!(routes.get("apps/route").is_none());
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "http"),
+            0
+        );
+
+        routes.on_init_done();
+        async fn reconcile(routes: &Arc<ResourceProcessor<HTTPRoute>>, source: Option<HTTPRoute>) {
+            routes.on_event_key("apps/route".into()).await;
+            let queue = routes.workqueue();
+            let item = tokio::time::timeout(std::time::Duration::from_secs(1), queue.dequeue())
+                .await
+                .expect("route event was not queued")
+                .expect("route queue closed");
+            assert_eq!(item.key, "apps/route");
+            routes
+                .process_work_item(&item.key, source, None, item.trigger_chain)
+                .await;
+            queue.done(&item.key);
+        }
+
+        async fn reconcile_gateway(gateways: &Arc<ResourceProcessor<Gateway>>, source: &Gateway, expected: i32) {
+            let queue = gateways.workqueue();
+            let item = tokio::time::timeout(std::time::Duration::from_secs(2), queue.dequeue())
+                .await
+                .expect("parent Gateway was not requeued")
+                .expect("Gateway queue closed");
+            assert_eq!(item.key, "apps/gateway");
+            gateways
+                .process_work_item(&item.key, Some(source.clone()), None, item.trigger_chain)
+                .await;
+            queue.done(&item.key);
+            let reconciled = gateways.get("apps/gateway").expect("Gateway remains published");
+            let listeners = reconciled.status.unwrap().listeners.unwrap();
+            assert_eq!(listeners[0].attached_routes, expected);
+        }
+
+        gateways.on_event_key("apps/gateway".into()).await;
+        reconcile_gateway(&gateways, &gateway, 0).await;
+
+        route_raw.remove("apps/route");
+        reconcile(&routes, None).await;
+        assert!(routes.get("apps/route").is_none());
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "http"),
+            0
+        );
+        assert_eq!(
+            gateways.get("apps/gateway").unwrap().status.unwrap().listeners.unwrap()[0].attached_routes,
+            0
+        );
+
+        route.spec.use_default_gateways = None;
+        route_raw.upsert("apps/route".into(), Arc::new(route.clone()));
+        reconcile(&routes, Some(route.clone())).await;
+        assert!(routes.get("apps/route").is_some());
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "http"),
+            1
+        );
+        reconcile_gateway(&gateways, &gateway, 1).await;
+
+        route.spec.use_default_gateways = Some("All".into());
+        route_raw.upsert("apps/route".into(), Arc::new(route.clone()));
+        reconcile(&routes, Some(route.clone())).await;
+        assert!(routes.get("apps/route").is_none());
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "http"),
+            0
+        );
+        reconcile_gateway(&gateways, &gateway, 0).await;
+
+        route.spec.use_default_gateways = None;
+        route_raw.upsert("apps/route".into(), Arc::new(route.clone()));
+        reconcile(&routes, Some(route)).await;
+        assert!(routes.get("apps/route").is_some());
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "http"),
+            1
+        );
+        reconcile_gateway(&gateways, &gateway, 1).await;
     }
 
     fn make_ctx() -> HandlerContext {
@@ -2490,9 +2711,7 @@ modelRoutes:
         assert!(conditions.iter().any(|condition| condition.type_ == "PartiallyInvalid"
             && condition.status == "True"
             && condition.message.contains("RegionRoute")));
-        assert!(conditions
-            .iter()
-            .any(|condition| condition.type_ == "Accepted" && condition.status == "True"));
+        assert_eq!(route.spec.rules.as_ref().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -3134,7 +3353,11 @@ spec:
             } else {
                 rule.filters.as_mut().unwrap()
             };
-            filters[0].external_auth.as_mut().unwrap().decision.client_headers = vec![
+            let edgion_resources::HTTPRouteExternalAuth::Edgion(config) = filters[0].external_auth.as_mut().unwrap()
+            else {
+                panic!("expected Edgion ForwardAuth")
+            };
+            config.decision.client_headers = vec![
                 "WWW-Authenticate".into(),
                 "Set-Cookie".into(),
                 "Content-Encoding".into(),
@@ -3147,6 +3370,76 @@ spec:
                 .iter()
                 .any(|c| c.message.contains("ExternalAuth")));
         }
+    }
+
+    #[test]
+    fn beta_upstream_external_auth_invalidates_only_its_rule() {
+        use crate::conf_mgr::conf_center::common::parse_resource_content;
+
+        let mut source = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "HTTPRoute",
+            "metadata": {"name": "auth", "namespace": "default", "resourceVersion": "17"},
+            "spec": {"parentRefs": [{"name": "gw"}], "rules": [
+                {"filters": [{"type": "ExternalAuth", "externalAuth": {
+                    "backendRef": {"name": "auth", "port": 8080}, "protocol": "HTTP", "http": {"path": "/check"}
+                }}], "backendRefs": [{"name": "svc", "port": 80}]},
+                {"backendRefs": [{"name": "other", "port": 80}]}
+            ]}
+        });
+        for auth in [
+            serde_json::json!({"backendRef": {"name": "auth", "port": 8080},
+                "protocol": "HTTP", "http": {"path": "/check"}}),
+            serde_json::json!({"backendRef": {"name": "auth", "port": 8080},
+                "protocol": "GRPC", "grpc": {"allowedHeaders": ["Authorization"]}}),
+            serde_json::json!({"backendRef": {"name": "auth", "port": 8080},
+                "protocol": "HTTP", "http": {"path": "/check"},
+                "decision": {"clientHeaders": []}}),
+        ] {
+            source["spec"]["rules"][0]["filters"][0]["externalAuth"] = auth;
+            let mut route: HTTPRoute = parse_resource_content(&source.to_string()).unwrap();
+            assert_eq!(route.metadata.resource_version.as_deref(), Some("17"));
+            let handler = HttpRouteHandler::default();
+            let ctx = make_ctx();
+            handler.update_status(&mut route, &ctx, &[]);
+            assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0][..]));
+            let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+            assert!(conditions.iter().any(|condition| condition.type_ == "PartiallyInvalid"
+                && condition.status == "True"
+                && condition.message.contains("ExternalAuth")));
+            assert_eq!(route.spec.rules.as_ref().unwrap().len(), 2);
+
+            route.spec.rules.as_mut().unwrap().remove(1);
+            handler.update_status(&mut route, &ctx, &[]);
+            let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+            assert!(conditions.iter().any(|condition| condition.type_ == "Accepted"
+                && condition.status == "False"
+                && condition.message.contains("ExternalAuth")));
+        }
+    }
+
+    #[test]
+    fn beta_default_gateway_attachment_is_explicitly_rejected() {
+        use crate::conf_mgr::conf_center::common::parse_resource_content;
+        let source = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "HTTPRoute",
+            "metadata": {"name": "default", "namespace": "default"},
+            "spec": {"parentRefs": [{"name": "gw"}], "useDefaultGateways": "All", "rules": [{}]}
+        });
+        let route: HTTPRoute = parse_resource_content(&source.to_string()).unwrap();
+        let handler = HttpRouteHandler::default();
+        let ctx = make_ctx();
+        let errors = handler.validate(&route, &ctx);
+        assert!(errors.iter().any(|error| error.contains("useDefaultGateways")));
+        assert!(!handler.should_publish(&route, &ctx));
+
+        let mut without_parent = route.clone();
+        without_parent.spec.parent_refs = None;
+        assert!(!handler.should_publish(&without_parent, &ctx));
+
+        let mut none = source;
+        none["spec"]["useDefaultGateways"] = serde_json::json!("None");
+        let none: HTTPRoute = parse_resource_content(&none.to_string()).unwrap();
+        assert!(handler.should_publish(&none, &ctx));
     }
 
     #[test]

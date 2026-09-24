@@ -325,3 +325,28 @@ async fn parent_edges_precede_gateway_reads_and_old_counts_clear_before_requeue(
     requeued.sort();
     assert_eq!(requeued, ["apps/new", "apps/old"]);
 }
+
+#[tokio::test]
+async fn beta_gateway_conversion_keeps_route_requeues_on_invalid_and_corrected_updates() {
+    let beta = |unsupported: bool| {
+        let mut source = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "Gateway",
+            "metadata": {"namespace": "apps", "name": "gateway", "generation": 1},
+            "spec": {"gatewayClassName": "test",
+                "listeners": [listener("tls", None, 8443)]}
+        });
+        if unsupported {
+            source["spec"]["infrastructure"] = serde_json::json!({"labels": {"team": "web"}});
+        }
+        let beta: edgion_resources::GatewayBeta = serde_json::from_value(source).unwrap();
+        Gateway::from(beta)
+    };
+    let fixture = Fixture::new(&beta(false), &["api.example.com"]).await;
+    assert_eq!(fixture.attachments().len(), 1);
+    fixture.update(Some(beta(true))).await;
+    assert!(fixture.attachments().is_empty());
+    assert!(fixture.gateways.get(GATEWAY).unwrap().spec.listeners.is_none());
+    fixture.update(Some(beta(false))).await;
+    assert_eq!(fixture.attachments().len(), 1);
+    assert_eq!(fixture.route_requeues(), 2);
+}

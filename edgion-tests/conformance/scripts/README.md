@@ -106,7 +106,7 @@ The TLSRoute 443 passthrough listener conflicts with the default HTTPS listener 
 
 1. Verify the kubectl context is `orbstack`.
 2. Build local images with `docker build` (tag: `pandaala/edgion-*:conformance-dev`, `imagePullPolicy: Never`).
-3. Install namespaces + CRDs (Gateway API experimental v1.5.0 + Edgion CRDs).
+3. Install namespaces + CRDs (Gateway API experimental v1.6.2 + Edgion CRDs).
 4. Deploy the controller (with `RUST_BACKTRACE` injected).
 5. Apply GatewayClass + EdgionGatewayConfig.
 6. Pre-create the Gateway CRs needed by conformance (avoiding races when the test framework creates them).
@@ -181,8 +181,10 @@ Each invocation runs the following **prechecks**; any failure exits early with a
 **Key flags**:
 
 ```bash
-./scripts/run.sh                                         # Default: GATEWAY-HTTP + GATEWAY-GRPC
+./scripts/run.sh                                         # Default: GATEWAY-HTTP + GATEWAY-GRPC + GATEWAY-TLS
 ./scripts/run.sh --conformance-profiles "GATEWAY-HTTP"   # HTTP profile only
+./scripts/run.sh --conformance-profiles "GATEWAY-TCP"    # Explicit TCP profile; requires stream port reachability
+./scripts/run.sh --conformance-profiles "GATEWAY-UDP"    # Explicit UDP profile; requires stream port reachability
 ./scripts/run.sh --run-test HTTPRouteHeaderMatching       # Single test
 ./scripts/run.sh --core                                   # Core features only
 ./scripts/run.sh --extended                               # Core + Extended features

@@ -32,8 +32,9 @@ Options:
   --timeout <duration>          Test timeout (default: 30m)
   --report <path>               Conformance report output path
   --conformance-profiles <list> Comma-separated conformance profile list
-                                (default: GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS; options: GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS)
+                                (default: GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS; options: GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS,GATEWAY-TCP,GATEWAY-UDP)
   --port-forward                Auto-start kubectl port-forward and route traffic
+  --context <name>              Require and use this Kubernetes context
                                 through localhost (for clusters with unreachable pod IPs)
   -h, --help                    Show this help
 
@@ -242,6 +243,7 @@ check_go_installed() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 PORT_FORWARD="${PORT_FORWARD:-false}"
+KUBE_CONTEXT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -254,6 +256,7 @@ while [[ $# -gt 0 ]]; do
     --timeout)             TIMEOUT="$2";              shift 2 ;;
     --report)              REPORT_OUTPUT="$2";        shift 2 ;;
     --port-forward)        PORT_FORWARD=true;         shift   ;;
+    --context)             KUBE_CONTEXT="$2";         shift 2 ;;
     --core)
       SUPPORTED_FEATURES="Gateway,HTTPRoute,ReferenceGrant"
       shift ;;
@@ -278,6 +281,14 @@ TLSRoute,GRPCRoute"
     *) echo "Unknown option: $1"; show_help; exit 1 ;;
   esac
 done
+
+if [[ -n "${KUBE_CONTEXT}" ]]; then
+  if [[ -z "${KUBECONFIG:-}" || "$(command kubectl config current-context)" != "${KUBE_CONTEXT}" ]]; then
+    echo "--context requires KUBECONFIG with the matching current context" >&2
+    exit 1
+  fi
+  kubectl() { command kubectl --context "${KUBE_CONTEXT}" "$@"; }
+fi
 
 echo "=== Gateway API Conformance Tests ==="
 echo "  GatewayClass      : ${GATEWAY_CLASS}"

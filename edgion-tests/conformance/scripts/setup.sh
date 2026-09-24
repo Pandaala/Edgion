@@ -14,6 +14,7 @@ GATEWAY_IMAGE="${GATEWAY_IMAGE:-}"
 PULL_POLICY="${PULL_POLICY:-Always}"
 SKIP_CRD="${SKIP_CRD:-false}"
 TLS_ONLY="${TLS_ONLY:-false}"
+KUBE_CONTEXT=""
 
 show_help() {
   cat <<USAGE
@@ -27,6 +28,7 @@ Options:
   --pull-policy <policy>    Image pull policy (default: Always)
   --skip-crd                Skip CRD installation
   --tls-only                Use TLSRoute-focused pre-created Gateways
+  --context <name>          Require and use this Kubernetes context
   -h, --help                Show this help
 USAGE
 }
@@ -38,10 +40,19 @@ while [[ $# -gt 0 ]]; do
     --pull-policy)      PULL_POLICY="$2";      shift 2 ;;
     --skip-crd)         SKIP_CRD=true;         shift   ;;
     --tls-only)         TLS_ONLY=true;         shift   ;;
+    --context)          KUBE_CONTEXT="$2";     shift 2 ;;
     -h|--help)          show_help; exit 0              ;;
     *) echo "Unknown option: $1"; show_help; exit 1    ;;
   esac
 done
+
+if [[ -n "${KUBE_CONTEXT}" ]]; then
+  if [[ -z "${KUBECONFIG:-}" || "$(command kubectl config current-context)" != "${KUBE_CONTEXT}" ]]; then
+    echo "--context requires KUBECONFIG with the matching current context" >&2
+    exit 1
+  fi
+  kubectl() { command kubectl --context "${KUBE_CONTEXT}" "$@"; }
+fi
 
 if [[ "${TLS_ONLY}" == "true" ]]; then
   CONFORMANCE_GATEWAY_MANIFEST="$MANIFESTS_DIR/conformance-gateway-tls.yaml"
@@ -72,7 +83,7 @@ if [[ "${SKIP_CRD}" != "true" ]]; then
   # Remove safe-upgrades VAP to allow experimental CRDs on top of standard
   kubectl delete validatingadmissionpolicy safe-upgrades.gateway.networking.k8s.io --ignore-not-found 2>/dev/null || true
   kubectl delete validatingadmissionpolicybinding safe-upgrades.gateway.networking.k8s.io --ignore-not-found 2>/dev/null || true
-  _exp_file="$CRD_ROOT/gateway-api/gateway-api-experimental-v1.5.0.yaml"
+  _exp_file="$CRD_ROOT/gateway-api/gateway-api-experimental-v1.6.2.yaml"
   if [[ -f "$_exp_file" ]]; then
     # Strip VAP objects from experimental YAML to avoid re-creation race
     awk '
@@ -153,6 +164,10 @@ sleep 3
 # 6. Gateway data plane
 # ------------------------------------------------------------------
 echo "[6/8] Apply gateway"
+kubectl apply -f "$K8S_DEPLOY_ROOT/gateway/geoip-fixture-configmap.yaml"
+kubectl create configmap edgion-test-wasm -n edgion-system \
+  --from-file="header_demo.wasm=$PROJECT_ROOT/edgion-tests/wasm/artifacts/header_demo.wasm" \
+  --dry-run=client -o yaml | kubectl apply -f -
 # The 0.3.x gateway requires a mandatory admin API token (EDGION_GATEWAY_ADMIN_TOKEN
 # from the edgion-gateway-admin-credentials Secret via secretKeyRef). Without it the
 # Pod is stuck in CreateContainerConfigError. Generate one by default; idempotent so

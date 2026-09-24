@@ -8,7 +8,8 @@ use edgion_resources::prelude_resources::*;
 use std::sync::Arc;
 
 use super::common::{
-    expected_resource_version, map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource,
+    expected_resource_version, map_writer_error, parse_kind, parse_resource_and_update_version,
+    validate_gateway_api_raw, validate_resource,
 };
 use super::types::*;
 use edgion_resources::resource::is_kind_cluster_scoped;
@@ -58,6 +59,7 @@ pub async fn create_cluster(
     let is_k8s = state.is_k8s_mode();
     let writer = state.conf_center();
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_gateway_api_raw(state.schema_validator.as_ref(), kind, &content, is_k8s)?;
 
     let metadata =
         edgion_resources::resource::meta::extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
@@ -125,6 +127,7 @@ pub async fn update_cluster(
     let is_k8s = state.is_k8s_mode();
     let writer = state.conf_center();
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_gateway_api_raw(state.schema_validator.as_ref(), kind, &content, is_k8s)?;
     let expected_resource_version = expected_resource_version(&headers, &content)?;
 
     // The URL name is the authoritative storage key, but the body content is what
@@ -301,5 +304,21 @@ mod update_identity_tests {
         )
         .await;
         assert_eq!(result.err(), Some(StatusCode::NOT_FOUND));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_original_schema_invalid_gateway_class() {
+        let (mut state, _tmp) = make_fs_state().await;
+        let crd_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+        Arc::get_mut(&mut state).unwrap().schema_validator = Arc::new(SchemaValidator::from_crd_dir(&crd_dir).unwrap());
+        let content = Bytes::from(
+            r#"{"apiVersion":"gateway.networking.k8s.io/v1","kind":"GatewayClass","metadata":{"name":"gc-a"},"spec":{"controllerName":"invalid"}}"#,
+        );
+        assert!(
+            parse_resource_and_update_version::<GatewayClass>(std::str::from_utf8(&content).unwrap(), false).is_ok()
+        );
+        let result = create_cluster(State(Arc::clone(&state)), Path("GatewayClass".to_string()), content).await;
+        assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+        assert!(state.conf_center().get_one("GatewayClass", None, "gc-a").await.is_err());
     }
 }

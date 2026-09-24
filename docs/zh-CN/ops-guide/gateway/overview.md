@@ -32,9 +32,9 @@ Gateway 的动态创建、删除以及监听 socket 的变更不支持免重启�
 | `Gateway` | `gateway.networking.k8s.io/v1` | 声明 Listener（端口、协议、TLS、允许的路由）。 |
 | `HTTPRoute` | `gateway.networking.k8s.io/v1` | 匹配并转发 HTTP 流量。 |
 | `GRPCRoute` | `gateway.networking.k8s.io/v1` | 匹配并转发 gRPC（HTTP/2）流量。 |
-| `TLSRoute` | `gateway.networking.k8s.io/v1alpha2` | 用于 `Passthrough` TLS 的 SNI 路由。 |
-| `TCPRoute` | `gateway.networking.k8s.io/v1alpha2` | 四层 TCP 转发。 |
-| `UDPRoute` | `gateway.networking.k8s.io/v1alpha2` | 四层 UDP 转发。 |
+| `TLSRoute` | `gateway.networking.k8s.io/v1` | 用于 `Passthrough` TLS 的 SNI 路由。 |
+| `TCPRoute` | `gateway.networking.k8s.io/v1` | 四层 TCP 转发。 |
+| `UDPRoute` | `gateway.networking.k8s.io/v1` | 四层 UDP 转发。 |
 | `EdgionGatewayConfig` | `edgion.io/v1alpha1` | 集群作用域的网关调优配置，通过 `parametersRef` 引用。 |
 
 ## 最小示例

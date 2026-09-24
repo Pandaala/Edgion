@@ -1,0 +1,106 @@
+{
+  "v1.0.0/experimental": {
+    "sha256": "6c601dced7872a940d76fa667ae126ba718cb4c6db970d0bab49128ecc1192a3",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/experimental-install.yaml"
+  },
+  "v1.0.0/standard": {
+    "sha256": "23e4e1095c72a0587474f7fb3f85c319cdec77a083ab91237ffbdec1f1834d2a",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml"
+  },
+  "v1.1.0/experimental": {
+    "sha256": "10f322744a005d4e73e2b067e95fecd4cfec619dc7564930b488c296bfa3bec1",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/experimental-install.yaml"
+  },
+  "v1.1.0/standard": {
+    "sha256": "c411805475d430a34242623a8e17153a7c40e946497bfd494e558b0d1a8858b3",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml"
+  },
+  "v1.1.1/experimental": {
+    "sha256": "529011bdf6c71ad6200bcd483ce4f248bc45309207d294bedf24e45a7563a9b0",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.1/experimental-install.yaml"
+  },
+  "v1.1.1/standard": {
+    "sha256": "ffbfc11c5d1a11e8fd03de12a1b48f55ee782646d84b630068f48fdde86a60cf",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.1/standard-install.yaml"
+  },
+  "v1.2.0/experimental": {
+    "sha256": "4369188e63b9ab5a35b5a83032c94d871159dece086b908b6ea18ea321ca06a9",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml"
+  },
+  "v1.2.0/standard": {
+    "sha256": "38ed055bb25dc580c0366899c0bed9b9e92dfcd1c180a569133f3946026cf102",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml"
+  },
+  "v1.2.1/experimental": {
+    "sha256": "d3aa6723a3306770cffb601ee22af3d35da43acfa1ca547fc0d3bce08dad66e7",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/experimental-install.yaml"
+  },
+  "v1.2.1/standard": {
+    "sha256": "97598bf6ab3b33b9b5c5432bdd24de091e4e9c3aa0575ebb0710a2a19cd64d64",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml"
+  },
+  "v1.3.0/experimental": {
+    "sha256": "3e7a27e4456ff3d68606a6a8516306aaff354d6f0950b32bb31930669b7bf8b8",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.3.0/experimental-install.yaml"
+  },
+  "v1.3.0/standard": {
+    "sha256": "78796d5c51450fc55d8dc8092ba8137f8c807982d7508d7875d5c537a24082b9",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.3.0/standard-install.yaml"
+  },
+  "v1.4.0/experimental": {
+    "sha256": "0414b160767377e85fd362855501200c6b83b84758bcd532652e3fe1cc677e49",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/experimental-install.yaml"
+  },
+  "v1.4.0/standard": {
+    "sha256": "6a4029e661446d64add866a00ecdc40c14219b68777ab614c5cdaac0adb481f1",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
+  },
+  "v1.4.1/experimental": {
+    "sha256": "553327e0ff32a1a2be446bf93823c8413cf9253ac6a6d5407eebd1e8d269f69e",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/experimental-install.yaml"
+  },
+  "v1.4.1/standard": {
+    "sha256": "73b91b77f6be023a8c92c969fc664e5bd3b1a28aea59eac9ebc904607354dad2",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
+  },
+  "v1.5.0/experimental": {
+    "sha256": "f7cc7d309a7ad9d316938341046ed81c40e787d8082f0b281df3926289a7a445",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/experimental-install.yaml"
+  },
+  "v1.5.0/standard": {
+    "sha256": "510338cf6709f84410efcce5269268f4c7c5067efdc5d04c75aa2fd2f8380c96",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml"
+  },
+  "v1.5.1/experimental": {
+    "sha256": "64ec76609a6ac885e0405dea79ca509c229fa019d342f0857aa8b6bdc8b8ba92",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/experimental-install.yaml"
+  },
+  "v1.5.1/standard": {
+    "sha256": "751002b3b91a87f7ae3bd2517c79a47a8d7ed6702901808a1cf9bd97d284f9b8",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml"
+  },
+  "v1.6.0/experimental": {
+    "sha256": "f0d5c2b0bef2b9d80ba6ba909e5e5dbde0800638437608353f41a6ebd3afcd9f",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.0/experimental-install.yaml"
+  },
+  "v1.6.0/standard": {
+    "sha256": "a557172e8348f758479e9ee4000bbbb4b4aa48302a6b73461823ea5349bad56d",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.0/standard-install.yaml"
+  },
+  "v1.6.1/experimental": {
+    "sha256": "d7fa77650e4ef28fca0411536fcb5e237deb4d50301cfded3be49d9a1b7bbd02",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/experimental-install.yaml"
+  },
+  "v1.6.1/standard": {
+    "sha256": "24d931f22abd8e40c973264319ead7cfa09d0fb7716b7ab1ee2ff174cb063a73",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
+  },
+  "v1.6.2/experimental": {
+    "sha256": "fb03263a4a720cc7abe9b36ede6e308b558d2d725a39595d664f34fe37f9c503",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/experimental-install.yaml"
+  },
+  "v1.6.2/standard": {
+    "sha256": "faede450fa178126aba41337737b97d351ebe87d93c910237ce1e072d1ca40d9",
+    "url": "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml"
+  }
+}

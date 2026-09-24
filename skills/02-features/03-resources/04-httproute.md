@@ -6,7 +6,7 @@ description: Full HTTPRoute schema and features: match conditions, filters, back
 # HTTPRoute Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.5.0 Core resource
+> Gateway API v1.6.2 Core resource
 
 HTTPRoute is the most complex routing resource in Edgion, defining routing rules at the HTTP/HTTPS layer.
 
@@ -119,7 +119,6 @@ spec:
       sessionPersistence:                          # Session persistence
         sessionName: "EDGION_SESSION"              # Session token name
         absoluteTimeout: "1h"                      # Absolute timeout
-        idleTimeout: "30m"                         # Idle timeout
         type: Cookie                               # Cookie | Header
         cookieConfig:
           lifetimeType: Permanent                  # Permanent | Session
@@ -294,7 +293,6 @@ pages live under `docs/zh-CN/`.
 sessionPersistence:
   sessionName: String?               # Session token name (default edgion-session-affinity)
   absoluteTimeout: Duration?         # Gateway-enforced lifetime (GEP-2257), embedded in the token; also Max-Age for Permanent Cookies
-  idleTimeout: Duration?             # Idle timeout (not supported in the current version, reserved for Redis mode)
   type: Cookie | Header              # Persistence type (default Cookie)
   cookieConfig:
     lifetimeType: Permanent | Session # Cookie lifetime

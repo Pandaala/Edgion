@@ -53,6 +53,9 @@ Vendored experimental CRDs may still serve alternate versions. Their schemas
 remain unchanged and Kubernetes may perform its own conversion; this does not
 establish direct Edgion input support for those versions. ReferenceGrant and
 the broader source-version/schema investigation are outside this correction.
+The current global version policy permits separately tested source adapters;
+this historical TLSRoute correction remains a v1-only boundary until an
+explicit TLSRoute adapter is implemented and verified.
 
 ## Verification and re-evaluation
 

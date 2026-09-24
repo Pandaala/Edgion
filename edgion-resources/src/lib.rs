@@ -7,6 +7,7 @@ pub mod diagnostic;
 pub mod duration;
 pub mod err;
 pub mod filters;
+pub mod gateway_api_support;
 pub mod geoip_codes;
 pub mod gwapi_types;
 pub mod hostname;

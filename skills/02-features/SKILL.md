@@ -11,7 +11,7 @@ description: Use when looking up configuration schemas, resource field definitio
 ## Design Principles
 
 - **Schema-driven**: every resource and every configuration has a complete field definition and type description
-- **Gateway API v1.5 aligned**: Gateway API standard resources follow the v1.5.0 specification, with Edgion extension points called out
+- **Gateway API v1.6.2 aligned**: Gateway API standard resources follow the pinned v1.6.2 CRD bundle, with Edgion extension points called out
 - **Aligned with architecture numbering**: `03-resources/` numbering corresponds one-to-one with `01-architecture/05-resources/`
 - **User perspective**: focuses on "how to use" and "how to configure", not "how it is implemented internally"
 
@@ -46,7 +46,7 @@ description: Use when looking up configuration schemas, resource field definitio
 
 ## Gateway API Version
 
-Edgion is based on **Gateway API v1.5.0**, with the following support scope:
+Edgion vendors **Gateway API v1.6.2** CRDs, with the following support scope:
 
 | Resource | API Version | Support Status |
 |----------|-------------|----------------|
@@ -55,14 +55,13 @@ Edgion is based on **Gateway API v1.5.0**, with the following support scope:
 | HTTPRoute | `gateway.networking.k8s.io/v1` | Core |
 | GRPCRoute | `gateway.networking.k8s.io/v1` | Core |
 | ReferenceGrant | `gateway.networking.k8s.io/v1` (v1beta1 compatible) | Core |
-| TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
+| TCPRoute | `gateway.networking.k8s.io/v1` | Standard |
 | TLSRoute | `gateway.networking.k8s.io/v1` | Standard; [canonical contract and remaining implementation gap](03-resources/07-tlsroute.md#api-version-contract) |
-| UDPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
+| UDPRoute | `gateway.networking.k8s.io/v1` | Standard |
 | BackendTLSPolicy | `gateway.networking.k8s.io/v1` | Standard / v1 only |
 
-TLSRoute's supported scope is v1-only. The current Controller and FileSystem
-paths still retain a nonconforming v1alpha3 probe/watch/storage/status and
-normalization fallback that must be removed atomically.
+TLSRoute uses a canonical v1 watcher, CRUD, status, and static input contract.
+Served alpha versions have no Edgion adapter.
 
 Edgion extension resources (API group: `edgion.io`):
 

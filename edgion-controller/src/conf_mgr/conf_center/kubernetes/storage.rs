@@ -3,7 +3,10 @@
 //! Implements the CenterApi trait by calling Kubernetes API.
 //! Similar to client-go, this allows creating/updating/deleting K8s resources via API.
 
-use super::version_detection::{probe_reference_grant_version, ReferenceGrantVersion};
+use super::version_detection::{
+    probe_gateway_class_version, probe_gateway_version, probe_http_route_version, probe_reference_grant_version,
+    GatewayClassVersion, GatewayVersion, HTTPRouteVersion, ReferenceGrantVersion,
+};
 use crate::conf_mgr::conf_center::common::{
     ensure_expected_resource_version_value, merge_operator_update_values, validate_backend_tls_policy_api_version,
     validate_tls_route_api_version,
@@ -22,6 +25,8 @@ use kube::{Api, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
+use std::sync::Arc;
+use tokio::sync::OnceCell;
 
 /// Kubernetes API based configuration writer
 ///
@@ -30,6 +35,10 @@ use std::collections::BTreeSet;
 pub struct KubernetesStorage {
     client: Client,
     allowed_namespaces: BTreeSet<String>,
+    reference_grant_version: Arc<OnceCell<ReferenceGrantVersion>>,
+    gateway_class_version: Arc<OnceCell<GatewayClassVersion>>,
+    gateway_version: Arc<OnceCell<GatewayVersion>>,
+    http_route_version: Arc<OnceCell<HTTPRouteVersion>>,
 }
 
 impl KubernetesStorage {
@@ -39,7 +48,87 @@ impl KubernetesStorage {
         Ok(Self {
             client,
             allowed_namespaces: allowed_namespaces.into_iter().collect(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         })
+    }
+
+    /// Share the selected transport with the center writer and all controller epochs.
+    pub(super) fn gateway_selection(&self) -> Arc<OnceCell<GatewayVersion>> {
+        self.gateway_version.clone()
+    }
+
+    pub(super) async fn selected_gateway_version(&self) -> Result<GatewayVersion> {
+        self.gateway_version
+            .get_or_try_init(|| async {
+                probe_gateway_version(&self.client)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("Gateway CRD not found (expected v1 or v1beta1)"))
+            })
+            .await
+            .copied()
+    }
+
+    pub(super) fn http_route_selection(&self) -> Arc<OnceCell<HTTPRouteVersion>> {
+        self.http_route_version.clone()
+    }
+
+    pub(super) async fn selected_http_route_version(&self) -> Result<HTTPRouteVersion> {
+        self.http_route_version
+            .get_or_try_init(|| async {
+                probe_http_route_version(&self.client)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("HTTPRoute CRD not found (expected v1 or v1beta1)"))
+            })
+            .await
+            .copied()
+    }
+
+    pub(super) fn gateway_class_selection(&self) -> Arc<OnceCell<GatewayClassVersion>> {
+        self.gateway_class_version.clone()
+    }
+
+    pub(super) async fn selected_gateway_class_version(&self) -> Result<GatewayClassVersion> {
+        self.gateway_class_version
+            .get_or_try_init(|| async {
+                probe_gateway_class_version(&self.client)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("GatewayClass CRD not found (expected v1 or v1beta1)"))
+            })
+            .await
+            .copied()
+    }
+
+    pub(super) fn selection(&self) -> Arc<OnceCell<ReferenceGrantVersion>> {
+        self.reference_grant_version.clone()
+    }
+
+    pub(super) async fn selected_reference_grant_version(&self) -> Result<ReferenceGrantVersion> {
+        self.reference_grant_version
+            .get_or_try_init(|| async {
+                probe_reference_grant_version(&self.client)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("ReferenceGrant CRD not found (expected v1 or v1beta1)"))
+            })
+            .await
+            .copied()
+    }
+
+    pub(super) async fn new_with_selection(
+        allowed_namespaces: Vec<String>,
+        selection: Arc<OnceCell<ReferenceGrantVersion>>,
+        gateway_class_selection: Arc<OnceCell<GatewayClassVersion>>,
+        gateway_selection: Arc<OnceCell<GatewayVersion>>,
+        http_route_selection: Arc<OnceCell<HTTPRouteVersion>>,
+    ) -> Result<Self> {
+        let mut storage = Self::new(allowed_namespaces).await?;
+        storage.reference_grant_version = selection;
+        storage.gateway_class_version = gateway_class_selection;
+        storage.gateway_version = gateway_selection;
+        storage.http_route_version = http_route_selection;
+        Ok(storage)
     }
 
     /// Test-only constructor backed by an in-process stub transport.
@@ -56,6 +145,10 @@ impl KubernetesStorage {
         Self {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         }
     }
 
@@ -67,161 +160,177 @@ impl KubernetesStorage {
 
         // Static mapping of resource kinds to their ApiResource and Scope
         // This avoids expensive Discovery calls on every API operation
-        let (ar, scope) = match kind {
-            // Gateway API resources (namespaced)
-            "Gateway" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "Gateway")),
-                Scope::Namespaced,
-            ),
-            "GatewayClass" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk(
-                    "gateway.networking.k8s.io",
-                    "v1",
-                    "GatewayClass",
-                )),
-                Scope::Cluster,
-            ),
-            "HTTPRoute" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "HTTPRoute")),
-                Scope::Namespaced,
-            ),
-            "GRPCRoute" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "GRPCRoute")),
-                Scope::Namespaced,
-            ),
-            "TCPRoute" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk(
-                    "gateway.networking.k8s.io",
-                    "v1alpha2",
-                    "TCPRoute",
-                )),
-                Scope::Namespaced,
-            ),
-            "UDPRoute" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk(
-                    "gateway.networking.k8s.io",
-                    "v1alpha2",
-                    "UDPRoute",
-                )),
-                Scope::Namespaced,
-            ),
-            "TLSRoute" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TLSRoute")),
-                Scope::Namespaced,
-            ),
-            "ReferenceGrant" => match probe_reference_grant_version(&self.client).await.map_err(|e| {
-                ConfWriterError::InternalError(format!("Failed to detect ReferenceGrant version: {}", e))
-            })? {
-                Some(ReferenceGrantVersion::V1Beta1) => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk(
-                        "gateway.networking.k8s.io",
-                        "v1beta1",
-                        "ReferenceGrant",
-                    )),
+        let (ar, scope) =
+            match kind {
+                // Gateway API resources (namespaced)
+                "Gateway" => {
+                    let version = self.selected_gateway_version().await.map_err(|e| {
+                        ConfWriterError::InternalError(format!("Failed to select Gateway version: {e}"))
+                    })?;
+                    let version = match version {
+                        GatewayVersion::V1 => "v1",
+                        GatewayVersion::V1Beta1 => "v1beta1",
+                    };
+                    (
+                        ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", version, "Gateway")),
+                        Scope::Namespaced,
+                    )
+                }
+                "GatewayClass" => {
+                    let version = self.selected_gateway_class_version().await.map_err(|e| {
+                        ConfWriterError::InternalError(format!("Failed to select GatewayClass version: {e}"))
+                    })?;
+                    let version = match version {
+                        GatewayClassVersion::V1 => "v1",
+                        GatewayClassVersion::V1Beta1 => "v1beta1",
+                    };
+                    (
+                        ApiResource::from_gvk(&GroupVersionKind::gvk(
+                            "gateway.networking.k8s.io",
+                            version,
+                            "GatewayClass",
+                        )),
+                        Scope::Cluster,
+                    )
+                }
+                "HTTPRoute" => {
+                    let version = self.selected_http_route_version().await.map_err(|e| {
+                        ConfWriterError::InternalError(format!("Failed to select HTTPRoute version: {e}"))
+                    })?;
+                    let version = match version {
+                        HTTPRouteVersion::V1 => "v1",
+                        HTTPRouteVersion::V1Beta1 => "v1beta1",
+                    };
+                    (
+                        ApiResource::from_gvk(&GroupVersionKind::gvk(
+                            "gateway.networking.k8s.io",
+                            version,
+                            "HTTPRoute",
+                        )),
+                        Scope::Namespaced,
+                    )
+                }
+                "GRPCRoute" => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "GRPCRoute")),
                     Scope::Namespaced,
                 ),
-                Some(ReferenceGrantVersion::V1) => (
+                "TCPRoute" => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TCPRoute")),
+                    Scope::Namespaced,
+                ),
+                "UDPRoute" => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "UDPRoute")),
+                    Scope::Namespaced,
+                ),
+                "TLSRoute" => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TLSRoute")),
+                    Scope::Namespaced,
+                ),
+                "ReferenceGrant" => {
+                    let version = self.selected_reference_grant_version().await.map_err(|e| {
+                        ConfWriterError::InternalError(format!("Failed to select ReferenceGrant version: {e}"))
+                    })?;
+                    let version = match version {
+                        ReferenceGrantVersion::V1 => "v1",
+                        ReferenceGrantVersion::V1Beta1 => "v1beta1",
+                    };
+                    (
+                        ApiResource::from_gvk(&GroupVersionKind::gvk(
+                            "gateway.networking.k8s.io",
+                            version,
+                            "ReferenceGrant",
+                        )),
+                        Scope::Namespaced,
+                    )
+                }
+                "BackendTLSPolicy" => (
                     ApiResource::from_gvk(&GroupVersionKind::gvk(
                         "gateway.networking.k8s.io",
                         "v1",
-                        "ReferenceGrant",
+                        "BackendTLSPolicy",
                     )),
                     Scope::Namespaced,
                 ),
-                None => {
-                    return Err(ConfWriterError::NotFound(
-                        "ReferenceGrant CRD not found (expected v1 or v1beta1)".to_string(),
-                    ))
+                // Core resources
+                "Secret" => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Secret")),
+                    Scope::Namespaced,
+                ),
+                "ConfigMap" => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "ConfigMap")),
+                    Scope::Namespaced,
+                ),
+                "Service" => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Service")),
+                    Scope::Namespaced,
+                ),
+                "EndpointSlice" => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("discovery.k8s.io", "v1", "EndpointSlice")),
+                    Scope::Namespaced,
+                ),
+                // Edgion CRDs.
+                //
+                // These CRDs declare non-conventional plurals (e.g. EdgionPlugins ->
+                // "edgionplugins", LinkSys -> "linksys"). `api_resource` pins the
+                // CRD-declared plural so admin list/get hits the correct resource;
+                // the conventional plural inferred by `from_gvk` ("edgionpluginses" /
+                // "linksyses") would not match the CRD, and the K8s API server would
+                // reject the request (403 from RBAC, since the ClusterRole grants
+                // only the real plural).
+                "EdgionTls" => (
+                    api_resource("edgion.io", "v1", "EdgionTls", "edgiontls"),
+                    Scope::Namespaced,
+                ),
+                "EdgionGatewayConfig" => (
+                    api_resource(
+                        "edgion.io",
+                        "v1alpha1",
+                        "EdgionGatewayConfig",
+                        "edgiongatewayclassconfigs",
+                    ),
+                    Scope::Cluster,
+                ),
+                "EdgionPlugins" => (
+                    api_resource("edgion.io", "v1", "EdgionPlugins", "edgionplugins"),
+                    Scope::Namespaced,
+                ),
+                "EdgionStreamPlugins" => (
+                    api_resource("edgion.io", "v1", "EdgionStreamPlugins", "edgionstreamplugins"),
+                    Scope::Namespaced,
+                ),
+                "EdgionConfigData" => (
+                    api_resource("edgion.io", "v1", "EdgionConfigData", "edgionconfigdata"),
+                    Scope::Namespaced,
+                ),
+                "LinkSys" => (api_resource("edgion.io", "v1", "LinkSys", "linksys"), Scope::Namespaced),
+                "EdgionBackend" => (
+                    api_resource("edgion.io", "v1", "EdgionBackend", "edgionbackends"),
+                    Scope::Namespaced,
+                ),
+                // EdgionAcme: the conventional plural ("edgionacmes") matches the CRD,
+                // so `from_gvk` resolves correctly without a plural override.
+                "EdgionAcme" => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionAcme")),
+                    Scope::Namespaced,
+                ),
+                // Non-conventional plural: naive pluralization would yield
+                // "edgionbackendtrafficpolicys", so an explicit plural is required.
+                "EdgionBackendTrafficPolicy" => (
+                    api_resource(
+                        "edgion.io",
+                        "v1",
+                        "EdgionBackendTrafficPolicy",
+                        "edgionbackendtrafficpolicies",
+                    ),
+                    Scope::Namespaced,
+                ),
+                _ => {
+                    return Err(ConfWriterError::InternalError(format!(
+                        "Unknown resource kind: {}",
+                        kind
+                    )))
                 }
-            },
-            "BackendTLSPolicy" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk(
-                    "gateway.networking.k8s.io",
-                    "v1",
-                    "BackendTLSPolicy",
-                )),
-                Scope::Namespaced,
-            ),
-            // Core resources
-            "Secret" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Secret")),
-                Scope::Namespaced,
-            ),
-            "ConfigMap" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "ConfigMap")),
-                Scope::Namespaced,
-            ),
-            "Service" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Service")),
-                Scope::Namespaced,
-            ),
-            "EndpointSlice" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("discovery.k8s.io", "v1", "EndpointSlice")),
-                Scope::Namespaced,
-            ),
-            // Edgion CRDs.
-            //
-            // These CRDs declare non-conventional plurals (e.g. EdgionPlugins ->
-            // "edgionplugins", LinkSys -> "linksys"). `api_resource` pins the
-            // CRD-declared plural so admin list/get hits the correct resource;
-            // the conventional plural inferred by `from_gvk` ("edgionpluginses" /
-            // "linksyses") would not match the CRD, and the K8s API server would
-            // reject the request (403 from RBAC, since the ClusterRole grants
-            // only the real plural).
-            "EdgionTls" => (
-                api_resource("edgion.io", "v1", "EdgionTls", "edgiontls"),
-                Scope::Namespaced,
-            ),
-            "EdgionGatewayConfig" => (
-                api_resource(
-                    "edgion.io",
-                    "v1alpha1",
-                    "EdgionGatewayConfig",
-                    "edgiongatewayclassconfigs",
-                ),
-                Scope::Cluster,
-            ),
-            "EdgionPlugins" => (
-                api_resource("edgion.io", "v1", "EdgionPlugins", "edgionplugins"),
-                Scope::Namespaced,
-            ),
-            "EdgionStreamPlugins" => (
-                api_resource("edgion.io", "v1", "EdgionStreamPlugins", "edgionstreamplugins"),
-                Scope::Namespaced,
-            ),
-            "EdgionConfigData" => (
-                api_resource("edgion.io", "v1", "EdgionConfigData", "edgionconfigdata"),
-                Scope::Namespaced,
-            ),
-            "LinkSys" => (api_resource("edgion.io", "v1", "LinkSys", "linksys"), Scope::Namespaced),
-            "EdgionBackend" => (
-                api_resource("edgion.io", "v1", "EdgionBackend", "edgionbackends"),
-                Scope::Namespaced,
-            ),
-            // EdgionAcme: the conventional plural ("edgionacmes") matches the CRD,
-            // so `from_gvk` resolves correctly without a plural override.
-            "EdgionAcme" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionAcme")),
-                Scope::Namespaced,
-            ),
-            // Non-conventional plural: naive pluralization would yield
-            // "edgionbackendtrafficpolicys", so an explicit plural is required.
-            "EdgionBackendTrafficPolicy" => (
-                api_resource(
-                    "edgion.io",
-                    "v1",
-                    "EdgionBackendTrafficPolicy",
-                    "edgionbackendtrafficpolicies",
-                ),
-                Scope::Namespaced,
-            ),
-            _ => {
-                return Err(ConfWriterError::InternalError(format!(
-                    "Unknown resource kind: {}",
-                    kind
-                )))
-            }
-        };
+            };
         Ok((ar, scope))
     }
 
@@ -284,7 +393,107 @@ impl KubernetesStorage {
                 .map_err(ConfWriterError::ValidationError)?;
         }
 
+        if kind == "Gateway" {
+            let canonical: edgion_resources::Gateway =
+                crate::conf_mgr::conf_center::common::parse_resource_content(content).map_err(|source| {
+                    ConfWriterError::ParseError {
+                        context: "Failed to parse Gateway source",
+                        source: source.into(),
+                    }
+                })?;
+            value = serde_json::to_value(canonical).map_err(|source| ConfWriterError::ParseError {
+                context: "Failed to serialize canonical Gateway",
+                source: source.into(),
+            })?;
+            // The canonical type also carries controller-only conf_sync fields.
+            // Kubernetes CRUD sends only operator fields from the source wire.
+            if let Some(spec) = value.get_mut("spec").and_then(Value::as_object_mut) {
+                for field in [
+                    "currentStatus",
+                    "resolvedInboundProxyProtocol",
+                    "resolvedAttachmentProof",
+                ] {
+                    spec.remove(field);
+                }
+                if let Some(backend) = spec
+                    .get_mut("tls")
+                    .and_then(|tls| tls.get_mut("backend"))
+                    .and_then(Value::as_object_mut)
+                {
+                    backend.remove("resolvedClientCertificate");
+                }
+                if let Some(listeners) = spec.get_mut("listeners").and_then(Value::as_array_mut) {
+                    for listener in listeners {
+                        if let Some(tls) = listener.get_mut("tls").and_then(Value::as_object_mut) {
+                            for field in [
+                                "resolvedCertificateRefs",
+                                "frontendValidation",
+                                "resolvedFrontendCaRefs",
+                                "frontendMatcherEligibility",
+                            ] {
+                                tls.remove(field);
+                            }
+                        }
+                    }
+                }
+            }
+            project_gateway_api_version(&mut value, &api_resource.kind, &api_resource.api_version);
+        }
+
+        if kind == "HTTPRoute" {
+            let _canonical: edgion_resources::HTTPRoute =
+                crate::conf_mgr::conf_center::common::parse_resource_content(content).map_err(|source| {
+                    ConfWriterError::ParseError {
+                        context: "Failed to parse HTTPRoute source",
+                        source: source.into(),
+                    }
+                })?;
+            // The beta and v1 operator wire fields have the same representation.
+            // Keep unknown future Standard fields in an Admin-to-Kubernetes
+            // write rather than erasing them during canonical serialization.
+            if let Some(spec) = value.get_mut("spec").and_then(Value::as_object_mut) {
+                for field in [
+                    "currentStatus",
+                    "resolvedStatusController",
+                    "resolvedHostnames",
+                    "resolvedListeners",
+                    "invalidRuleIndices",
+                    "resolvedRules",
+                    "delegationIssues",
+                ] {
+                    spec.remove(field);
+                }
+            }
+            project_gateway_api_version(&mut value, &api_resource.kind, &api_resource.api_version);
+        }
+
+        if kind == "GatewayClass" {
+            let canonical: edgion_resources::GatewayClass =
+                crate::conf_mgr::conf_center::common::parse_resource_content(content).map_err(|source| {
+                    ConfWriterError::ParseError {
+                        context: "Failed to parse GatewayClass source",
+                        source: source.into(),
+                    }
+                })?;
+            value = serde_json::to_value(canonical).map_err(|source| ConfWriterError::ParseError {
+                context: "Failed to serialize canonical GatewayClass",
+                source: source.into(),
+            })?;
+            project_gateway_api_version(&mut value, &api_resource.kind, &api_resource.api_version);
+        }
+
         if kind == "ReferenceGrant" {
+            let canonical: edgion_resources::ReferenceGrant =
+                crate::conf_mgr::conf_center::common::parse_resource_content(content).map_err(|source| {
+                    ConfWriterError::ParseError {
+                        context: "Failed to parse ReferenceGrant source",
+                        source: source.into(),
+                    }
+                })?;
+            value = serde_json::to_value(canonical).map_err(|source| ConfWriterError::ParseError {
+                context: "Failed to serialize canonical ReferenceGrant",
+                source: source.into(),
+            })?;
             project_gateway_api_version(&mut value, &api_resource.kind, &api_resource.api_version);
         }
 
@@ -944,6 +1153,460 @@ impl CenterApi for KubernetesStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn gateway_class_crud_uses_selected_transport_and_projects_beta_source() {
+        let storage = KubernetesStorage::new_unconnected_for_test();
+        storage.gateway_class_version.set(GatewayClassVersion::V1Beta1).unwrap();
+        let (transport, scope) = storage.resolve_api_resource("GatewayClass").await.unwrap();
+        assert_eq!(scope, Scope::Cluster);
+        assert_eq!(transport.api_version, "gateway.networking.k8s.io/v1beta1");
+        let source = json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "GatewayClass",
+            "metadata": {"name": "edge", "resourceVersion": "42"},
+            "spec": {"controllerName": "example.com/edge", "description": "edge"},
+            "status": {"supportedFeatures": [{"name": "Gateway"}]}
+        });
+        let object = storage
+            .parse_dynamic_object("GatewayClass", &source.to_string(), &transport)
+            .unwrap();
+        let projected = serde_json::to_value(object).unwrap();
+        assert_eq!(projected["apiVersion"], source["apiVersion"]);
+        assert_eq!(projected["metadata"], source["metadata"]);
+        assert_eq!(projected["spec"], source["spec"]);
+        assert_eq!(projected["status"], source["status"]);
+        let v1_transport = ApiResource::from_gvk(&GroupVersionKind::gvk(
+            "gateway.networking.k8s.io",
+            "v1",
+            "GatewayClass",
+        ));
+        let canonical = storage
+            .parse_dynamic_object("GatewayClass", &source.to_string(), &v1_transport)
+            .unwrap();
+        let canonical = serde_json::to_value(canonical).unwrap();
+        assert_eq!(canonical["apiVersion"], "gateway.networking.k8s.io/v1");
+        assert_eq!(canonical["metadata"], source["metadata"]);
+        assert_eq!(canonical["spec"], source["spec"]);
+        assert_eq!(canonical["status"], source["status"]);
+    }
+
+    #[tokio::test]
+    async fn gateway_class_beta_create_and_get_share_selected_endpoint() {
+        let source = json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "GatewayClass",
+            "metadata": {"name": "edge", "resourceVersion": "42"},
+            "spec": {"controllerName": "example.com/edge"}
+        });
+        let captured = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
+        let requests = captured.clone();
+        let object = source.clone();
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = captured.clone();
+            let object = object.clone();
+            async move {
+                let (parts, body) = request.into_parts();
+                let bytes = body.collect_bytes().await.unwrap();
+                let submitted = if bytes.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).unwrap()
+                };
+                captured
+                    .lock()
+                    .push((parts.method.clone(), parts.uri.path().into(), submitted.clone()));
+                let response = if parts.method == Method::POST {
+                    json_response(StatusCode::CREATED, submitted)
+                } else {
+                    json_response(StatusCode::OK, object)
+                };
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
+        };
+        storage.gateway_class_version.set(GatewayClassVersion::V1Beta1).unwrap();
+        storage
+            .create_one("GatewayClass", None, "edge", source.to_string())
+            .await
+            .unwrap();
+        let fetched: Value =
+            serde_yaml::from_str(&storage.get_one("GatewayClass", None, "edge").await.unwrap()).unwrap();
+        assert_eq!(fetched["apiVersion"], source["apiVersion"]);
+        let requests = requests.lock();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].1, "/apis/gateway.networking.k8s.io/v1beta1/gatewayclasses");
+        assert_eq!(requests[0].2["apiVersion"], source["apiVersion"]);
+        assert_eq!(
+            requests[1].1,
+            "/apis/gateway.networking.k8s.io/v1beta1/gatewayclasses/edge"
+        );
+    }
+    #[tokio::test]
+    async fn gateway_class_selection_prefers_v1_and_falls_back_only_when_absent() {
+        for served_v1 in [true, false] {
+            let visited = Arc::new(Mutex::new(Vec::<String>::new()));
+            let requests = visited.clone();
+            let service = service_fn(move |request: http::Request<Body>| {
+                let visited = visited.clone();
+                async move {
+                    let path = request.uri().path().to_string();
+                    visited.lock().push(path.clone());
+                    let version = path.rsplit('/').next().unwrap();
+                    let response = if version == "v1" && !served_v1 {
+                        not_found_response()
+                    } else {
+                        json_response(
+                            StatusCode::OK,
+                            json!({
+                                "kind": "APIResourceList", "apiVersion": "v1",
+                                "groupVersion": format!("gateway.networking.k8s.io/{version}"),
+                                "resources": [{"name": "gatewayclasses", "singularName": "gatewayclass",
+                                    "namespaced": false, "kind": "GatewayClass", "verbs": ["get", "list", "watch"]}]
+                            }),
+                        )
+                    };
+                    Ok::<_, Infallible>(response)
+                }
+            });
+            let storage = KubernetesStorage {
+                client: Client::new(service, "default"),
+                allowed_namespaces: BTreeSet::new(),
+                reference_grant_version: Arc::new(OnceCell::new()),
+                gateway_class_version: Arc::new(OnceCell::new()),
+                gateway_version: Arc::new(OnceCell::new()),
+                http_route_version: Arc::new(OnceCell::new()),
+            };
+            let selected = storage.selected_gateway_class_version().await.unwrap();
+            assert_eq!(
+                selected,
+                if served_v1 {
+                    GatewayClassVersion::V1
+                } else {
+                    GatewayClassVersion::V1Beta1
+                }
+            );
+            assert_eq!(storage.selected_gateway_class_version().await.unwrap(), selected);
+            assert_eq!(requests.lock().len(), if served_v1 { 1 } else { 2 });
+        }
+    }
+
+    #[tokio::test]
+    async fn http_route_selection_prefers_v1_and_falls_back_only_when_absent() {
+        for served_v1 in [true, false] {
+            let visited = Arc::new(Mutex::new(Vec::<String>::new()));
+            let requests = visited.clone();
+            let service = service_fn(move |request: http::Request<Body>| {
+                let visited = requests.clone();
+                async move {
+                    let path = request.uri().path().to_string();
+                    visited.lock().push(path.clone());
+                    let version = path.rsplit('/').next().unwrap();
+                    let response = if version == "v1" && !served_v1 {
+                        not_found_response()
+                    } else {
+                        json_response(
+                            StatusCode::OK,
+                            json!({
+                                "kind": "APIResourceList", "apiVersion": "v1",
+                                "groupVersion": format!("gateway.networking.k8s.io/{version}"),
+                                "resources": [{"name": "httproutes", "singularName": "httproute",
+                                    "namespaced": true, "kind": "HTTPRoute", "verbs": ["get", "list", "watch"]}]
+                            }),
+                        )
+                    };
+                    Ok::<_, Infallible>(response)
+                }
+            });
+            let storage = KubernetesStorage {
+                client: Client::new(service, "default"),
+                allowed_namespaces: BTreeSet::new(),
+                reference_grant_version: Arc::new(OnceCell::new()),
+                gateway_class_version: Arc::new(OnceCell::new()),
+                gateway_version: Arc::new(OnceCell::new()),
+                http_route_version: Arc::new(OnceCell::new()),
+            };
+            let selected = storage.selected_http_route_version().await.unwrap();
+            assert_eq!(
+                selected,
+                if served_v1 {
+                    HTTPRouteVersion::V1
+                } else {
+                    HTTPRouteVersion::V1Beta1
+                }
+            );
+            let (wire, _) = storage.resolve_api_resource("HTTPRoute").await.unwrap();
+            assert_eq!(
+                wire.api_version,
+                if served_v1 {
+                    "gateway.networking.k8s.io/v1"
+                } else {
+                    "gateway.networking.k8s.io/v1beta1"
+                }
+            );
+            assert_eq!(visited.lock().len(), if served_v1 { 1 } else { 2 });
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_crud_projects_beta_source_onto_selected_transport() {
+        let storage = KubernetesStorage::new_unconnected_for_test();
+        storage.gateway_version.set(GatewayVersion::V1).unwrap();
+        let (transport, scope) = storage.resolve_api_resource("Gateway").await.unwrap();
+        assert_eq!(scope, Scope::Namespaced);
+        assert_eq!(transport.api_version, "gateway.networking.k8s.io/v1");
+        let source = json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "Gateway",
+            "metadata": {"name": "edge", "namespace": "demo", "resourceVersion": "42"},
+            "spec": {"gatewayClassName": "edgion", "addresses": [{"value": "192.0.2.1"}],
+                "listeners": [{"name": "https", "hostname": "example.com", "port": 443,
+                    "protocol": "HTTPS", "tls": {"certificateRefs": [{"name": "server"}]},
+                    "allowedRoutes": {"namespaces": {"from": "All"}}}]},
+            "status": {"listeners": [{"name": "https", "supportedKinds": [],
+                                     "attachedRoutes": 2, "conditions": []}]}
+        });
+        let projected = serde_json::to_value(
+            storage
+                .parse_dynamic_object("Gateway", &source.to_string(), &transport)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(projected["apiVersion"], "gateway.networking.k8s.io/v1");
+        assert_eq!(projected["metadata"], source["metadata"]);
+        assert_eq!(projected["spec"], source["spec"]);
+        assert_eq!(projected["status"], source["status"]);
+        let beta_transport = ApiResource::from_gvk(&GroupVersionKind::gvk(
+            "gateway.networking.k8s.io",
+            "v1beta1",
+            "Gateway",
+        ));
+        let beta = serde_json::to_value(
+            storage
+                .parse_dynamic_object("Gateway", &source.to_string(), &beta_transport)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(beta, source);
+    }
+
+    #[tokio::test]
+    async fn http_route_beta_crud_projects_to_selected_wire_version() {
+        let storage = KubernetesStorage::new_unconnected_for_test();
+        storage.http_route_version.set(HTTPRouteVersion::V1Beta1).unwrap();
+        let (transport, scope) = storage.resolve_api_resource("HTTPRoute").await.unwrap();
+        assert_eq!(scope, Scope::Namespaced);
+        assert_eq!(transport.api_version, "gateway.networking.k8s.io/v1beta1");
+        let source = json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "HTTPRoute",
+            "metadata": {"name": "route", "namespace": "demo", "resourceVersion": "42"},
+            "spec": {"parentRefs": [{"name": "edge"}], "hostnames": ["example.com"],
+                "futureStandardField": {"mode": "future"},
+                "rules": [{"backendRefs": [{"name": "api", "port": 80}],
+                    "filters": [{"type": "ExternalAuth", "externalAuth": {
+                        "backendRef": {"name": "auth", "port": 8080}, "protocol": "HTTP", "http": {"path": "/check"}
+                    }}]}]},
+            "status": {"parents": [{"parentRef": {"name": "edge"}, "controllerName": "example.com/other",
+                "conditions": []}]}
+        });
+        let projected = serde_json::to_value(
+            storage
+                .parse_dynamic_object("HTTPRoute", &source.to_string(), &transport)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(projected["apiVersion"], source["apiVersion"]);
+        assert_eq!(projected["metadata"], source["metadata"]);
+        assert_eq!(projected["spec"], source["spec"]);
+        assert_eq!(projected["status"], source["status"]);
+
+        let v1 = ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "HTTPRoute"));
+        let projected = serde_json::to_value(
+            storage
+                .parse_dynamic_object("HTTPRoute", &source.to_string(), &v1)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(projected["apiVersion"], "gateway.networking.k8s.io/v1");
+        assert_eq!(projected["spec"], source["spec"]);
+    }
+
+    #[tokio::test]
+    async fn http_route_beta_create_and_get_use_selected_namespaced_endpoint() {
+        let source = json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "HTTPRoute",
+            "metadata": {"name": "route", "namespace": "demo", "resourceVersion": "42"},
+            "spec": {"parentRefs": [{"name": "edge"}], "rules": [{"backendRefs": [{"name": "api", "port": 80}]}]}
+        });
+        let captured = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
+        let requests = captured.clone();
+        let object = source.clone();
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = requests.clone();
+            let object = object.clone();
+            async move {
+                let (parts, body) = request.into_parts();
+                let bytes = body.collect_bytes().await.unwrap();
+                let submitted = if bytes.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).unwrap()
+                };
+                captured
+                    .lock()
+                    .push((parts.method.clone(), parts.uri.path().into(), submitted.clone()));
+                let response = if parts.method == Method::POST {
+                    json_response(StatusCode::CREATED, submitted)
+                } else {
+                    json_response(StatusCode::OK, object)
+                };
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
+        };
+        storage.http_route_version.set(HTTPRouteVersion::V1Beta1).unwrap();
+        storage
+            .create_one("HTTPRoute", Some("demo"), "route", source.to_string())
+            .await
+            .unwrap();
+        let fetched: Value =
+            serde_yaml::from_str(&storage.get_one("HTTPRoute", Some("demo"), "route").await.unwrap()).unwrap();
+        assert_eq!(fetched["apiVersion"], source["apiVersion"]);
+        let requests = captured.lock();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0].1,
+            "/apis/gateway.networking.k8s.io/v1beta1/namespaces/demo/httproutes"
+        );
+        assert_eq!(requests[0].2["spec"], source["spec"]);
+        assert_eq!(
+            requests[1].1,
+            "/apis/gateway.networking.k8s.io/v1beta1/namespaces/demo/httproutes/route"
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_beta_create_and_get_use_selected_namespaced_endpoint() {
+        let source = json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "Gateway",
+            "metadata": {"name": "edge", "namespace": "demo", "resourceVersion": "42"},
+            "spec": {"gatewayClassName": "edgion",
+                "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}]}
+        });
+        let captured = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
+        let requests = captured.clone();
+        let object = source.clone();
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = requests.clone();
+            let object = object.clone();
+            async move {
+                let (parts, body) = request.into_parts();
+                let bytes = body.collect_bytes().await.unwrap();
+                let submitted = if bytes.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).unwrap()
+                };
+                captured
+                    .lock()
+                    .push((parts.method.clone(), parts.uri.path().into(), submitted.clone()));
+                let response = if parts.method == Method::POST {
+                    json_response(StatusCode::CREATED, submitted)
+                } else {
+                    json_response(StatusCode::OK, object)
+                };
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
+        };
+        storage.gateway_version.set(GatewayVersion::V1Beta1).unwrap();
+        storage
+            .create_one("Gateway", Some("demo"), "edge", source.to_string())
+            .await
+            .unwrap();
+        let fetched: Value =
+            serde_yaml::from_str(&storage.get_one("Gateway", Some("demo"), "edge").await.unwrap()).unwrap();
+        assert_eq!(fetched["apiVersion"], source["apiVersion"]);
+        let requests = captured.lock();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0].1,
+            "/apis/gateway.networking.k8s.io/v1beta1/namespaces/demo/gateways"
+        );
+        assert_eq!(requests[0].2["spec"], source["spec"]);
+        assert_eq!(
+            requests[1].1,
+            "/apis/gateway.networking.k8s.io/v1beta1/namespaces/demo/gateways/edge"
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_selection_prefers_v1_and_falls_back_only_on_absence() {
+        for served_v1 in [true, false] {
+            let visited = Arc::new(Mutex::new(Vec::<String>::new()));
+            let requests = visited.clone();
+            let service = service_fn(move |request: http::Request<Body>| {
+                let visited = visited.clone();
+                async move {
+                    let path = request.uri().path().to_string();
+                    visited.lock().push(path.clone());
+                    let version = path.rsplit('/').next().unwrap();
+                    let response = if version == "v1" && !served_v1 {
+                        not_found_response()
+                    } else {
+                        json_response(
+                            StatusCode::OK,
+                            json!({
+                                "kind": "APIResourceList", "apiVersion": "v1",
+                                "groupVersion": format!("gateway.networking.k8s.io/{version}"),
+                                "resources": [{"name": "gateways", "singularName": "gateway",
+                                    "namespaced": true, "kind": "Gateway", "verbs": ["get", "list", "watch"]}]
+                            }),
+                        )
+                    };
+                    Ok::<_, Infallible>(response)
+                }
+            });
+            let storage = KubernetesStorage {
+                client: Client::new(service, "default"),
+                allowed_namespaces: BTreeSet::new(),
+                reference_grant_version: Arc::new(OnceCell::new()),
+                gateway_class_version: Arc::new(OnceCell::new()),
+                gateway_version: Arc::new(OnceCell::new()),
+                http_route_version: Arc::new(OnceCell::new()),
+            };
+            let selected = storage.selected_gateway_version().await.unwrap();
+            assert_eq!(
+                selected,
+                if served_v1 {
+                    GatewayVersion::V1
+                } else {
+                    GatewayVersion::V1Beta1
+                }
+            );
+            assert_eq!(storage.selected_gateway_version().await.unwrap(), selected);
+            assert_eq!(requests.lock().len(), if served_v1 { 1 } else { 2 });
+        }
+    }
+
     use http::{Method, Response, StatusCode};
     use kube::api::ObjectMeta;
     use kube::client::Body;
@@ -955,6 +1618,397 @@ mod tests {
     use tower::service_fn;
 
     #[tokio::test]
+    async fn canonical_crud_resolver_matches_the_typed_source_inventory() {
+        use edgion_resources::gateway_api_support::{canonical_sources, GROUP};
+        let service = service_fn(|_req: http::Request<Body>| async {
+            panic!("canonical CRUD resolution must not perform discovery");
+            #[allow(unreachable_code)]
+            Ok::<_, Infallible>(Response::new(Body::empty()))
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
+        };
+        storage.gateway_class_version.set(GatewayClassVersion::V1).unwrap();
+        storage.gateway_version.set(GatewayVersion::V1).unwrap();
+        for source in canonical_sources().filter(|source| source.kind != "ReferenceGrant") {
+            let (resolved, scope) = storage.resolve_api_resource(source.kind).await.unwrap();
+            assert_eq!(resolved.api_version, format!("{GROUP}/{}", source.version));
+            assert_eq!(resolved.kind, source.kind);
+            assert_eq!(
+                scope,
+                if source.kind == "GatewayClass" {
+                    Scope::Cluster
+                } else {
+                    Scope::Namespaced
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn reference_grant_crud_converts_beta_source_to_selected_transport() {
+        let storage = KubernetesStorage::new_unconnected_for_test();
+        let mut source = canonical_reference_grant_value();
+        source["apiVersion"] = json!("gateway.networking.k8s.io/v1beta1");
+        let transport = ApiResource::from_gvk(&GroupVersionKind::gvk(
+            "gateway.networking.k8s.io",
+            "v1",
+            "ReferenceGrant",
+        ));
+        let object = storage
+            .parse_dynamic_object("ReferenceGrant", &source.to_string(), &transport)
+            .unwrap();
+        let projected = serde_json::to_value(object).unwrap();
+        assert_eq!(projected["apiVersion"], "gateway.networking.k8s.io/v1");
+        assert_eq!(projected["spec"], source["spec"]);
+        let beta_transport = ApiResource::from_gvk(&GroupVersionKind::gvk(
+            "gateway.networking.k8s.io",
+            "v1beta1",
+            "ReferenceGrant",
+        ));
+        let beta_object = storage
+            .parse_dynamic_object("ReferenceGrant", &source.to_string(), &beta_transport)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(beta_object).unwrap()["apiVersion"],
+            "gateway.networking.k8s.io/v1beta1"
+        );
+        for invalid in [
+            {
+                let mut value = source.clone();
+                value["kind"] = json!("ReferenceGrantBeta");
+                value
+            },
+            {
+                let mut value = source.clone();
+                value["spec"].as_object_mut().unwrap().remove("from");
+                value
+            },
+        ] {
+            assert!(storage
+                .parse_dynamic_object("ReferenceGrant", &invalid.to_string(), &transport)
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn reference_grant_crud_resolver_follows_real_discovery() {
+        for served in ["v1", "v1beta1"] {
+            let service = service_fn(move |request: http::Request<Body>| async move {
+                let path = request.uri().path();
+                let response = if path == format!("/apis/gateway.networking.k8s.io/{served}") {
+                    json_response(
+                        StatusCode::OK,
+                        json!({
+                            "kind": "APIResourceList", "apiVersion": "v1",
+                            "groupVersion": format!("gateway.networking.k8s.io/{served}"),
+                            "resources": [{"name":"referencegrants", "singularName":"referencegrant",
+                                "namespaced":true, "kind":"ReferenceGrant", "verbs":["get","list","watch"]}]
+                        }),
+                    )
+                } else {
+                    not_found_response()
+                };
+                Ok::<_, Infallible>(response)
+            });
+            let storage = KubernetesStorage {
+                client: Client::new(service, "default"),
+                allowed_namespaces: BTreeSet::new(),
+                reference_grant_version: Arc::new(OnceCell::new()),
+                gateway_class_version: Arc::new(OnceCell::new()),
+                gateway_version: Arc::new(OnceCell::new()),
+                http_route_version: Arc::new(OnceCell::new()),
+            };
+            let (resolved, scope) = storage.resolve_api_resource("ReferenceGrant").await.unwrap();
+            assert_eq!(resolved.api_version, format!("gateway.networking.k8s.io/{served}"));
+            assert_eq!(resolved.kind, "ReferenceGrant");
+            assert_eq!(scope, Scope::Namespaced);
+        }
+    }
+
+    #[tokio::test]
+    async fn reference_grant_prefers_v1_when_both_versions_are_served() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let probes = Arc::new(AtomicUsize::new(0));
+        let count = probes.clone();
+        let service = service_fn(move |_request: http::Request<Body>| {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, Infallible>(reference_grant_discovery_response())
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
+        };
+        let (resource, _) = storage.resolve_api_resource("ReferenceGrant").await.unwrap();
+        assert_eq!(resource.api_version, "gateway.networking.k8s.io/v1");
+        let _ = storage.resolve_api_resource("ReferenceGrant").await.unwrap();
+        assert_eq!(probes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn reference_grant_selection_is_shared_and_pinned_after_discovery() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let v1_available = Arc::new(AtomicBool::new(false));
+        let probes = Arc::new(AtomicUsize::new(0));
+        let available = v1_available.clone();
+        let count = probes.clone();
+        let service = service_fn(move |request: http::Request<Body>| {
+            let available = available.clone();
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                let path = request.uri().path();
+                let served = path == "/apis/gateway.networking.k8s.io/v1beta1"
+                    || (path == "/apis/gateway.networking.k8s.io/v1" && available.load(Ordering::SeqCst));
+                Ok::<_, Infallible>(if served {
+                    reference_grant_discovery_response()
+                } else {
+                    not_found_response()
+                })
+            }
+        });
+        let client = Client::new(service, "default");
+        let selected = Arc::new(OnceCell::new());
+        let make_storage = || KubernetesStorage {
+            client: client.clone(),
+            allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: selected.clone(),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
+        };
+        let main = make_storage();
+        let runtime = make_storage();
+        assert_eq!(
+            main.selected_reference_grant_version().await.unwrap(),
+            ReferenceGrantVersion::V1Beta1
+        );
+        assert_eq!(probes.load(Ordering::SeqCst), 2);
+        v1_available.store(true, Ordering::SeqCst);
+        for storage in [&main, &runtime] {
+            let (resource, _) = storage.resolve_api_resource("ReferenceGrant").await.unwrap();
+            assert_eq!(resource.api_version, "gateway.networking.k8s.io/v1beta1");
+        }
+        assert_eq!(probes.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn shared_reference_grant_selection_pins_main_and_runtime_crud_paths() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let v1_available = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
+        let available = v1_available.clone();
+        let captured = requests.clone();
+        let service = service_fn(move |request: http::Request<Body>| {
+            let available = available.clone();
+            let captured = captured.clone();
+            async move {
+                let (parts, body) = request.into_parts();
+                let bytes = body.collect_bytes().await.expect("request body must be readable");
+                let value = if bytes.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).unwrap()
+                };
+                let path = parts.uri.path().to_string();
+                captured
+                    .lock()
+                    .push((parts.method.clone(), path.clone(), value.clone()));
+                let current = || {
+                    let mut resource = canonical_reference_grant_value();
+                    resource["apiVersion"] = json!("gateway.networking.k8s.io/v1beta1");
+                    resource["metadata"]["resourceVersion"] = json!("42");
+                    resource
+                };
+                let response = if path == "/apis/gateway.networking.k8s.io/v1" {
+                    if available.load(Ordering::SeqCst) {
+                        reference_grant_discovery_response()
+                    } else {
+                        not_found_response()
+                    }
+                } else if path == "/apis/gateway.networking.k8s.io/v1beta1" {
+                    reference_grant_discovery_response()
+                } else if parts.method == Method::GET && path.ends_with("/referencegrants") {
+                    json_response(
+                        StatusCode::OK,
+                        json!({
+                            "apiVersion": "gateway.networking.k8s.io/v1beta1",
+                            "kind": "ReferenceGrantList",
+                            "metadata": {"resourceVersion": "42"},
+                            "items": [current()]
+                        }),
+                    )
+                } else if parts.method == Method::GET || parts.method == Method::DELETE {
+                    json_response(StatusCode::OK, current())
+                } else {
+                    json_response(
+                        if parts.method == Method::POST {
+                            StatusCode::CREATED
+                        } else {
+                            StatusCode::OK
+                        },
+                        value,
+                    )
+                };
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let client = Client::new(service, "default");
+        let selection = Arc::new(OnceCell::new());
+        let storage = || KubernetesStorage {
+            client: client.clone(),
+            allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: selection.clone(),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
+        };
+        let main = storage();
+        let runtime = storage();
+        let mut beta_source = canonical_reference_grant_value();
+        beta_source["apiVersion"] = json!("gateway.networking.k8s.io/v1beta1");
+        main.create_one(
+            "ReferenceGrant",
+            Some("backend"),
+            "allow-route",
+            beta_source.to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            main.selected_reference_grant_version().await.unwrap(),
+            ReferenceGrantVersion::V1Beta1
+        );
+        v1_available.store(true, Ordering::SeqCst);
+        runtime
+            .update_one_if_version(
+                "ReferenceGrant",
+                Some("backend"),
+                "allow-route",
+                canonical_reference_grant_value().to_string(),
+                Some("42"),
+            )
+            .await
+            .unwrap();
+        let fetched = main
+            .get_one("ReferenceGrant", Some("backend"), "allow-route")
+            .await
+            .unwrap();
+        assert!(fetched.contains("gateway.networking.k8s.io/v1beta1"));
+        let listed = runtime
+            .get_list_by_kind_ns("ReferenceGrant", "backend", None)
+            .await
+            .unwrap();
+        assert_eq!(listed.items.len(), 1);
+        assert!(listed.items[0].content.contains("gateway.networking.k8s.io/v1beta1"));
+        main.delete_one_if_version("ReferenceGrant", Some("backend"), "allow-route", Some("42"))
+            .await
+            .unwrap();
+        let requests = requests.lock();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(_, path, _)| path == "/apis/gateway.networking.k8s.io/v1")
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(_, path, _)| path == "/apis/gateway.networking.k8s.io/v1beta1")
+                .count(),
+            1
+        );
+        let operations: Vec<_> = requests
+            .iter()
+            .filter(|(_, path, _)| path.contains("/referencegrants"))
+            .collect();
+        assert_eq!(
+            operations
+                .iter()
+                .map(|(method, _, _)| method)
+                .filter(|method| **method == Method::POST)
+                .count(),
+            1
+        );
+        assert_eq!(
+            operations
+                .iter()
+                .map(|(method, _, _)| method)
+                .filter(|method| **method == Method::PUT)
+                .count(),
+            1
+        );
+        assert_eq!(
+            operations
+                .iter()
+                .map(|(method, _, _)| method)
+                .filter(|method| **method == Method::DELETE)
+                .count(),
+            1
+        );
+        assert!(operations.iter().all(
+            |(_, path, _)| path.starts_with("/apis/gateway.networking.k8s.io/v1beta1/") && !path.ends_with("/status")
+        ));
+        for (method, _, value) in operations {
+            if method == Method::POST || method == Method::PUT {
+                assert_eq!(value["apiVersion"], "gateway.networking.k8s.io/v1beta1");
+                assert_eq!(value["kind"], "ReferenceGrant");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_reference_grant_discovery_failure_retries_before_selection() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let count = attempts.clone();
+        let service = service_fn(move |_request: http::Request<Body>| {
+            let count = count.clone();
+            async move {
+                let attempt = count.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, Infallible>(if attempt == 0 {
+                    json_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json!({
+                            "kind": "Status", "apiVersion": "v1", "status": "Failure",
+                            "reason": "ServiceUnavailable", "message": "temporarily unavailable", "code": 503
+                        }),
+                    )
+                } else {
+                    reference_grant_discovery_response()
+                })
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
+        };
+        assert!(storage.selected_reference_grant_version().await.is_err());
+        assert_eq!(
+            storage.selected_reference_grant_version().await.unwrap(),
+            ReferenceGrantVersion::V1
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
     async fn tls_route_storage_uses_v1_without_discovery_and_rejects_other_versions() {
         let service = service_fn(|_req: http::Request<Body>| async {
             panic!("TLSRoute endpoint selection and raw parsing must not perform discovery");
@@ -964,6 +2018,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
         let (api_resource, _) = storage.resolve_api_resource("TLSRoute").await.unwrap();
         assert_eq!(api_resource.api_version, "gateway.networking.k8s.io/v1");
@@ -1012,6 +2070,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
         let mut value = json!({
             "apiVersion": "gateway.networking.k8s.io/v1alpha3", "kind": "TLSRoute",
@@ -1233,6 +2295,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
 
         storage
@@ -1273,6 +2339,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::from(["allowed".to_string()]),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
 
         let first = storage
@@ -1500,6 +2570,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
 
         let error = storage
@@ -1550,6 +2624,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
 
         let error = storage
@@ -1599,6 +2677,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
 
         storage
@@ -1637,6 +2719,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
 
         let error = storage
@@ -1686,6 +2772,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
 
         storage
@@ -1699,6 +2789,7 @@ mod tests {
             .expect("v1beta1 create must succeed");
 
         let requests = requests.lock();
+        assert!(requests.iter().all(|(_, path, _)| !path.ends_with("/status")));
         assert_eq!(requests.len(), 3, "one v1 probe, one v1beta1 probe, and one create");
         let create = requests
             .iter()
@@ -1761,6 +2852,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
         let mut requested = canonical_reference_grant_value();
         requested["metadata"]["labels"] = json!({"edited": "true"});
@@ -1777,6 +2872,7 @@ mod tests {
             .expect("v1beta1 update must succeed");
 
         let requests = requests.lock();
+        assert!(requests.iter().all(|(_, path, _)| !path.ends_with("/status")));
         assert_eq!(
             requests.len(),
             4,
@@ -1820,6 +2916,10 @@ mod tests {
         let storage = KubernetesStorage {
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
+            reference_grant_version: Arc::new(OnceCell::new()),
+            gateway_class_version: Arc::new(OnceCell::new()),
+            gateway_version: Arc::new(OnceCell::new()),
+            http_route_version: Arc::new(OnceCell::new()),
         };
 
         let err = storage

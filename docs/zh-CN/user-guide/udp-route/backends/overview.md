@@ -5,7 +5,7 @@ UDPRoute 将 UDP 数据报转发到一个或多个 Kubernetes Service。来自�
 ## 基本示例
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: UDPRoute
 metadata:
   name: dns-route

@@ -155,6 +155,12 @@ impl BackendTlsPolicyHandler {
             .as_ref()
             .is_some_and(|refs| !refs.is_empty());
         let has_well_known = validation.well_known_ca_certificates.is_some();
+        if matches!(
+            validation.well_known_ca_certificates.as_ref(),
+            Some(edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::Other(_))
+        ) {
+            errors.push("validation.wellKnownCACertificates is unsupported; only System can be used".to_string());
+        }
 
         if has_ca_refs && has_well_known {
             errors.push("caCertificateRefs and wellKnownCACertificates are mutually exclusive".to_string());
@@ -334,7 +340,10 @@ impl BackendTlsPolicyHandler {
             }
         }
 
-        btp.spec.use_system_ca = btp.spec.validation.well_known_ca_certificates.is_some();
+        btp.spec.use_system_ca = matches!(
+            btp.spec.validation.well_known_ca_certificates.as_ref(),
+            Some(edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::System)
+        );
 
         let policy_ns = btp.metadata.namespace.as_ref();
         let mut resolved_ca_secrets = Vec::new();
@@ -1090,6 +1099,62 @@ mod tests {
         let errors = handler.validate(&policy, &ctx);
         assert!(errors.iter().any(|error| error.contains("exactly one")));
         assert!(errors.iter().any(|error| error.contains("must not specify namespace")));
+    }
+
+    #[tokio::test]
+    async fn unsupported_well_known_ca_gets_invalid_status_and_no_runtime_target() {
+        let (ctx, runtime) = make_ctx();
+        let handler = BackendTlsPolicyHandler::default();
+        runtime.service_ref_mgr.add_ref(
+            "ns/svc".to_string(),
+            ResourceRef::new(ResourceKind::HTTPRoute, Some("ns".to_string()), "route".to_string()),
+        );
+        runtime.gateway_route_index.update_route(
+            ResourceKind::HTTPRoute,
+            "ns/route",
+            &[ParentReference {
+                group: Some("gateway.networking.k8s.io".to_string()),
+                kind: Some("Gateway".to_string()),
+                namespace: Some("ns".to_string()),
+                name: "gateway".to_string(),
+                section_name: None,
+                port: None,
+            }],
+            "ns",
+        );
+        let mut policy = make_btp("ns", "tls", "svc", "2026-01-01T00:00:00+00:00");
+        policy.spec.validation.well_known_ca_certificates =
+            Some(WellKnownCACertificates::Other("example.com/Custom".to_string()));
+        let errors = handler.validate(&policy, &ctx);
+        assert!(errors.iter().any(|error| error.contains("only System")));
+        let ProcessResult::Continue(mut rejected) = handler.parse(policy, &ctx).await else {
+            panic!("unsupported CA name must remain available for status");
+        };
+        assert!(!rejected.spec.use_system_ca);
+        assert!(rejected.spec.resolved_target_class.is_none());
+        handler.update_status(&mut rejected, &ctx, &errors);
+        assert!(rejected.status.as_ref().unwrap().ancestors.iter().any(|ancestor| {
+            ancestor.conditions.iter().any(|condition| {
+                condition.type_ == "Accepted"
+                    && condition.status == "False"
+                    && condition.message.contains("only System")
+            })
+        }));
+
+        rejected.spec.validation.well_known_ca_certificates = Some(WellKnownCACertificates::System);
+        let errors = handler.validate(&rejected, &ctx);
+        assert!(errors.is_empty());
+        let ProcessResult::Continue(mut corrected) = handler.parse(rejected, &ctx).await else {
+            panic!("corrected CA name must parse");
+        };
+        assert!(corrected.spec.use_system_ca);
+        handler.update_status(&mut corrected, &ctx, &errors);
+        assert!(corrected.status.as_ref().unwrap().ancestors.iter().any(|ancestor| {
+            ancestor
+                .conditions
+                .iter()
+                .any(|condition| condition.type_ == "Accepted" && condition.status == "True")
+        }));
     }
 
     #[test]

@@ -11,6 +11,11 @@ pub fn validate_resource<T: serde::Serialize>(
     resource: &T,
     is_k8s_mode: bool,
 ) -> Result<(), StatusCode> {
+    // Gateway API input is checked against its source schema before typed
+    // deserialization; validating the serialized model loses authored fields.
+    if edgion_resources::gateway_api_support::canonical_sources().any(|source| source.kind == kind.as_str()) {
+        return Ok(());
+    }
     // Skip validation in K8s mode - K8s API Server will validate
     if is_k8s_mode {
         tracing::debug!(
@@ -43,11 +48,56 @@ pub fn validate_resource<T: serde::Serialize>(
     Ok(())
 }
 
+/// Validate the original Gateway API document before typed normalization.
+pub fn validate_gateway_api_raw(
+    validator: &crate::conf_mgr::SchemaValidator,
+    kind: ResourceKind,
+    content: &str,
+    is_k8s_mode: bool,
+) -> Result<(), StatusCode> {
+    let Some(source) =
+        edgion_resources::gateway_api_support::canonical_sources().find(|source| source.kind == kind.as_str())
+    else {
+        return Ok(());
+    };
+    let value: serde_json::Value = parse_resource(content)?;
+    let raw: serde_yaml::Value = serde_yaml::from_str(content).map_err(|_| StatusCode::BAD_REQUEST)?;
+    crate::conf_mgr::conf_center::common::validate_gateway_api_source(kind, &raw)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if is_k8s_mode {
+        return Ok(());
+    }
+    let version = if matches!(
+        kind,
+        ResourceKind::ReferenceGrant | ResourceKind::GatewayClass | ResourceKind::Gateway | ResourceKind::HTTPRoute
+    ) && raw.get("apiVersion").and_then(serde_yaml::Value::as_str)
+        == Some("gateway.networking.k8s.io/v1beta1")
+    {
+        "v1beta1"
+    } else {
+        source.version
+    };
+    validator
+        .validate_gateway_source(
+            edgion_resources::gateway_api_support::GROUP,
+            version,
+            source.kind,
+            &value,
+        )
+        .map_err(|_| {
+            tracing::warn!(component = "unified_api", kind = ?kind, "Gateway API schema validation failed");
+            StatusCode::BAD_REQUEST
+        })
+}
+
 /// Apply the shared Gateway API request-transform contract to authored rules.
 /// Admin writes reject the whole submitted document synchronously; the
 /// filesystem/etcd handler uses the same rule verdicts to retain valid
 /// siblings and report status asynchronously.
 pub fn validate_http_route_transforms(route: &edgion_resources::HTTPRoute) -> Result<(), StatusCode> {
+    if route.spec.unsupported_default_gateway_attachment().is_some() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     for rule in route.spec.rules.iter().flatten() {
         match edgion_resources::authored_request_transform_violations(rule) {
             Ok(violations) if violations.is_empty() => {}
@@ -300,7 +350,39 @@ where
         StatusCode::BAD_REQUEST
     })?;
 
-    let mut resource = parse_resource(body)?;
+    let mut resource = if matches!(
+        T::resource_kind(),
+        ResourceKind::ReferenceGrant | ResourceKind::GatewayClass | ResourceKind::Gateway | ResourceKind::HTTPRoute
+    ) {
+        let canonical: serde_json::Value = if T::resource_kind() == ResourceKind::GatewayClass {
+            serde_json::to_value(
+                crate::conf_mgr::conf_center::common::parse_resource_content::<edgion_resources::GatewayClass>(body)
+                    .map_err(|_| StatusCode::BAD_REQUEST)?,
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        } else if T::resource_kind() == ResourceKind::Gateway {
+            serde_json::to_value(
+                crate::conf_mgr::conf_center::common::parse_resource_content::<edgion_resources::Gateway>(body)
+                    .map_err(|_| StatusCode::BAD_REQUEST)?,
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        } else if T::resource_kind() == ResourceKind::HTTPRoute {
+            serde_json::to_value(
+                crate::conf_mgr::conf_center::common::parse_resource_content::<edgion_resources::HTTPRoute>(body)
+                    .map_err(|_| StatusCode::BAD_REQUEST)?,
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        } else {
+            serde_json::to_value(
+                crate::conf_mgr::conf_center::common::parse_resource_content::<edgion_resources::ReferenceGrant>(body)
+                    .map_err(|_| StatusCode::BAD_REQUEST)?,
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        };
+        serde_json::from_value(canonical).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    } else {
+        parse_resource(body)?
+    };
 
     if update_version {
         update_resource_version(&mut resource);
@@ -313,6 +395,18 @@ where
 mod tests {
     use super::*;
     use edgion_resources::prelude_resources::BackendTLSPolicy;
+
+    #[test]
+    fn admin_beta_http_route_rejects_unserved_default_gateway_attachment() {
+        let source = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "HTTPRoute",
+            "metadata": {"name": "route", "namespace": "demo"},
+            "spec": {"useDefaultGateways": "All", "rules": [{}]}
+        });
+        let route: edgion_resources::HTTPRoute = parse_resource_and_update_version(&source.to_string(), false).unwrap();
+        assert_eq!(route.spec.use_default_gateways.as_deref(), Some("All"));
+        assert_eq!(validate_http_route_transforms(&route), Err(StatusCode::BAD_REQUEST));
+    }
 
     fn backend_tls_policy_body(api_version: &str) -> String {
         format!(
@@ -329,6 +423,30 @@ mod tests {
                 }}
             }}"#
         )
+    }
+
+    #[test]
+    fn admin_parser_converts_reference_grant_beta_in_both_modes() {
+        let source = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1",
+            "kind": "ReferenceGrant",
+            "metadata": {"name": "allow", "namespace": "backend", "labels": {"team": "edge"}},
+            "spec": {
+                "from": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "namespace": "app"}],
+                "to": [{"group": "", "kind": "Service", "name": "api"}]
+            }
+        });
+        for update_version in [false, true] {
+            let grant: edgion_resources::ReferenceGrant =
+                parse_resource_and_update_version(&source.to_string(), update_version).unwrap();
+            assert_eq!(grant.metadata.labels.as_ref().unwrap()["team"], "edge");
+            assert_eq!(grant.spec.from[0].namespace, "app");
+            assert_eq!(grant.spec.to[0].name.as_deref(), Some("api"));
+            assert_eq!(
+                serde_json::to_value(grant).unwrap()["apiVersion"],
+                "gateway.networking.k8s.io/v1"
+            );
+        }
     }
 
     #[test]

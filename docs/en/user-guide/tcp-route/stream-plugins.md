@@ -126,7 +126,7 @@ spec:
 ### Step 2: Reference it from the route
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: redis-route
@@ -198,7 +198,7 @@ spec:
       active: open                      # switch to "open"; null/absent → base default (locked)
       description: "temporarily widen access"
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: gcir-route
@@ -225,7 +225,7 @@ the plugin falls back to the inline `activeProfile` (`locked`).
 Point at a plugin in another namespace using `namespace/name`:
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: app-route
@@ -251,7 +251,7 @@ the IP check is evaluated on the first datagram of each session (fail-close), so
 a denied client never establishes a session.
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: UDPRoute
 metadata:
   name: udp-route-with-plugins
@@ -427,7 +427,7 @@ spec:
 Attach to a route as with any stream plugin:
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: rate-limited-route

@@ -105,7 +105,7 @@ spec:
 ### 第二步：在路由中引用
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: redis-route
@@ -177,7 +177,7 @@ spec:
       active: open                      # 切换到 "open"；null/缺省 → base 默认（locked）
       description: "临时放宽访问"
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: gcir-route
@@ -203,7 +203,7 @@ spec:
 使用 `namespace/name` 格式指向其他命名空间的插件：
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: app-route
@@ -227,7 +227,7 @@ spec:
 `UDPRoute` 接受相同的注解。只有 Stage-1（`spec.plugins`）会执行；IP 检查在每个会话的第一个数据报上求值（fail-close），因此被拒绝的客户端永远无法建立会话。
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: UDPRoute
 metadata:
   name: udp-route-with-plugins
@@ -352,7 +352,7 @@ spec:
 像其它 stream 插件一样附加到路由上：
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: rate-limited-route

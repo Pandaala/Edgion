@@ -15,6 +15,19 @@ ReferenceGrant is a Gateway API standard resource that authorizes cross-namespac
 - Authorization store: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/`
 - Type definitions: `edgion-resources/src/resources/reference_grant.rs`
 
+## Source versions
+
+The canonical Controller type is ReferenceGrant v1. Kubernetes selects one
+transport version per center lifetime: v1 if served, otherwise v1beta1 only
+when v1 is absent. The v1beta1 watcher converts each event before the raw
+store and the single ReferenceGrant processor. FileSystem, etcd, and Admin
+input convert v1beta1 before typed processing. Kubernetes Admin writes preserve the authored version through source conversion,
+then submit through the selected transport. Direct Kubernetes API clients still
+require their submitted version to be served by the cluster.
+The beta Rust root is named
+`ReferenceGrantBeta`, but its wire kind is `ReferenceGrant`. ReferenceGrant
+has no native status subresource; the Controller does not issue status writes.
+
 ## Not synced to Gateway
 
 ReferenceGrant is included in `DEFAULT_NO_SYNC_KINDS` (`["ReferenceGrant", "Secret"]`) and is not synced to the Gateway via gRPC. Cross-namespace reference authorization decisions are made entirely on the Controller side, and the result is embedded as a `ref_denied` field on route resources synced to the Gateway.

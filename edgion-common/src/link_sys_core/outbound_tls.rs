@@ -258,6 +258,14 @@ pub fn resolve_outbound_tls_with_defaults(
         } else {
             (global.validation.as_ref(), global.resolved_ca_certificates.as_deref())
         };
+    if validation.is_some_and(|value| {
+        matches!(
+            value.well_known_ca_certificates.as_ref(),
+            Some(edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::Other(_))
+        )
+    }) {
+        return Err(EdgionErrorCode::OutboundTlsCaMissing);
+    }
     let (client_ref_configured, resolved_client_effective) = if local.client_certificate_ref.is_some() {
         (true, resolved_client)
     } else if global.client_certificate_ref.is_some() {
@@ -513,6 +521,19 @@ mod tests {
         };
         let r = resolve_outbound_tls(&local, None, None, true, "Test").unwrap();
         assert!(matches!(r.ca, EffectiveCa::System));
+    }
+
+    #[test]
+    fn unsupported_named_ca_never_falls_back_to_system() {
+        let local = OutboundTlsLocal {
+            validation: Some(OutboundTlsValidation {
+                well_known_ca_certificates: Some(WellKnownCACertificates::Other("example.com/Custom".to_string())),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = resolve_outbound_tls_with_defaults(&local, None, None, true, &OutboundTlsConfig::default());
+        assert!(matches!(result, Err(EdgionErrorCode::OutboundTlsCaMissing)));
     }
 
     #[test]

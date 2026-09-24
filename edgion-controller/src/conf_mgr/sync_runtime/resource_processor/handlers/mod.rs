@@ -57,7 +57,7 @@ pub use gateway_class::{GatewayClassHandler, GatewayClassOwnership};
 pub use grpc_route::GrpcRouteHandler;
 pub use http_route::HttpRouteHandler;
 pub use link_sys::LinkSysHandler;
-pub use reference_grant::{ReferenceGrantBetaHandler, ReferenceGrantHandler};
+pub use reference_grant::ReferenceGrantHandler;
 pub use secret::SecretHandler;
 pub use service::ServiceHandler;
 pub use tcp_route::TcpRouteHandler;

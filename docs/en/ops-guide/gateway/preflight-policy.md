@@ -128,7 +128,7 @@ the invalid rule; another valid rule may match, otherwise the response is `404`.
 Move the policy to rule scope to apply it to all backends of that rule. This also
 applies to delegated routes and updates without a Gateway restart.
 
-Native CORS configuration follows the Gateway API v1.5.0 admission limits on every
+Native CORS configuration follows the Gateway API v1.6.2 admission limits on every
 configuration backend, including file-system input. Origins must use `http` or `https`
 with a valid host and optional port from `1` through `65535`. Origin, method, and
 request-header wildcards cannot be combined with other entries in the same list;
@@ -146,7 +146,7 @@ same partial/whole-route rejection behavior described above. With `allowCredenti
 false or omitted, `exposeHeaders: ["*"]` continues to emit
 `Access-Control-Expose-Headers: *`; with credentials enabled, explicit names are
 emitted as a comma-separated list. An empty or omitted list emits no exposure header.
-This is an Edgion support restriction: Gateway API v1.5.0 forbids wildcard exposure
+This is an Edgion support restriction: Gateway API v1.6.2 forbids wildcard exposure
 for credentialed requests but does not mandate rejecting the configuration. Fetch
 does not expand this wildcard when the browser uses `credentials: "include"`.
 The policy is checked at configuration time, independent of Cookie or Authorization

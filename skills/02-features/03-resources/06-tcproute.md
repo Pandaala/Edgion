@@ -5,15 +5,15 @@ description: Full TCPRoute schema: TCP layer-4 routing.
 
 # TCPRoute Resource
 
-> API: `gateway.networking.k8s.io/v1alpha2` | Scope: Namespaced
-> Gateway API v1.5.0 Experimental resource
+> API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
+> Gateway API v1.6.2 Standard resource
 
 TCPRoute defines routing rules for raw TCP traffic. TCP routes do not perform any protocol parsing; they only forward by port.
 
 ## Full Schema
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: my-tcp-route

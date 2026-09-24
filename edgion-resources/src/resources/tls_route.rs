@@ -171,10 +171,10 @@ mod tests {
         assert_eq!(restored.resolved_listeners, value.resolved_listeners);
         let schema = serde_json::to_value(schemars::schema_for!(TLSRouteSpec)).unwrap();
         assert!(schema["properties"].get("resolvedListeners").is_none());
-        assert!(spec(serde_json::json!(vec!["a.example.com"; 16]))
+        assert!(spec(serde_json::json!(vec!["a.example.com"; 1024]))
             .validate_hostnames()
             .is_ok());
-        assert!(spec(serde_json::json!(vec!["a.example.com"; 17]))
+        assert!(spec(serde_json::json!(vec!["a.example.com"; 1025]))
             .validate_hostnames()
             .is_err());
     }

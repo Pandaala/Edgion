@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::super::ref_grant::ReferenceGrantChangedEvent;
 use super::super::{HandlerContext, ProcessResult, ProcessorHandler};
-use edgion_resources::prelude_resources::{ReferenceGrant, ReferenceGrantBeta};
+use edgion_resources::prelude_resources::ReferenceGrant;
 
 /// ReferenceGrant handler
 ///
@@ -155,109 +155,6 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
     }
 }
 
-// ---------------------------------------------------------------------------
-// v1beta1 compat handler — converts to v1 and delegates to the same store
-// ---------------------------------------------------------------------------
-
-/// ReferenceGrant v1beta1 handler
-///
-/// Converts v1beta1 resources to v1 before delegating to the same
-/// ReferenceGrantStore and event dispatcher used by the v1 handler.
-pub struct ReferenceGrantBetaHandler;
-
-impl ReferenceGrantBetaHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for ReferenceGrantBetaHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait::async_trait]
-impl ProcessorHandler<ReferenceGrantBeta> for ReferenceGrantBetaHandler {
-    async fn parse(&self, rg: ReferenceGrantBeta, _ctx: &HandlerContext) -> ProcessResult<ReferenceGrantBeta> {
-        // See `ReferenceGrantHandler::parse` for the rationale behind dispatching
-        // for orphaned namespaces (old - new) BEFORE the upsert overwrites the
-        // cached old grant. Without this, removing a from/to namespace from a
-        // grant would leave stale `ResolvedRefs=True` on the orphaned routes.
-        let v1: ReferenceGrant = rg.clone().into();
-        let key = ReferenceGrantHandler::build_key(&v1);
-        let store = &_ctx.runtime().ref_grant_store;
-
-        let new_affected = ReferenceGrantHandler::identify_affected_namespaces(&v1);
-        let orphaned_namespaces: HashSet<String> = match store.get(&key) {
-            Some(old) => ReferenceGrantHandler::identify_affected_namespaces(&old)
-                .difference(&new_affected)
-                .cloned()
-                .collect(),
-            None => HashSet::new(),
-        };
-
-        store.upsert(key.clone(), Arc::new(v1));
-
-        tracing::debug!(
-            component = "reference_grant_handler",
-            key = %key,
-            version = "v1beta1",
-            orphaned_ns_count = orphaned_namespaces.len(),
-            "Updated ReferenceGrant (v1beta1→v1) in store"
-        );
-
-        if !orphaned_namespaces.is_empty() {
-            tracing::info!(
-                component = "reference_grant_handler",
-                key = %key,
-                version = "v1beta1",
-                orphaned_ns_count = orphaned_namespaces.len(),
-                "ReferenceGrant (v1beta1) updated, dispatching event for orphaned namespaces"
-            );
-            ReferenceGrantHandler::dispatch_change_event(orphaned_namespaces, _ctx).await;
-        }
-
-        ProcessResult::Continue(rg)
-    }
-
-    async fn on_change(&self, obj: &ReferenceGrantBeta, _ctx: &HandlerContext) {
-        let v1: ReferenceGrant = obj.clone().into();
-        let affected_namespaces = ReferenceGrantHandler::identify_affected_namespaces(&v1);
-
-        let key = ReferenceGrantHandler::build_key(&v1);
-        tracing::info!(
-            component = "reference_grant_handler",
-            key = %key,
-            version = "v1beta1",
-            affected_ns_count = affected_namespaces.len(),
-            "ReferenceGrant (v1beta1) changed, dispatching event"
-        );
-
-        ReferenceGrantHandler::dispatch_change_event(affected_namespaces, _ctx).await;
-    }
-
-    async fn on_delete(&self, rg: &ReferenceGrantBeta, _ctx: &HandlerContext) {
-        let v1: ReferenceGrant = rg.clone().into();
-        let key = ReferenceGrantHandler::build_key(&v1);
-        let store = &_ctx.runtime().ref_grant_store;
-
-        let affected_namespaces = ReferenceGrantHandler::identify_affected_namespaces(&v1);
-
-        store.remove(&key);
-
-        tracing::info!(
-            component = "reference_grant_handler",
-            key = %key,
-            version = "v1beta1",
-            affected_ns_count = affected_namespaces.len(),
-            "ReferenceGrant (v1beta1) deleted, dispatching event"
-        );
-
-        ReferenceGrantHandler::dispatch_change_event(affected_namespaces, _ctx).await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,31 +218,6 @@ mod tests {
         }
     }
 
-    fn build_grant_beta(namespace: &str, name: &str, from_namespaces: &[&str]) -> ReferenceGrantBeta {
-        ReferenceGrantBeta {
-            metadata: ObjectMeta {
-                namespace: Some(namespace.to_string()),
-                name: Some(name.to_string()),
-                ..Default::default()
-            },
-            spec: ReferenceGrantBetaSpec {
-                from: from_namespaces
-                    .iter()
-                    .map(|ns| ReferenceGrantFrom {
-                        group: "gateway.networking.k8s.io".to_string(),
-                        kind: "HTTPRoute".to_string(),
-                        namespace: (*ns).to_string(),
-                    })
-                    .collect(),
-                to: vec![ReferenceGrantTo {
-                    group: "".to_string(),
-                    kind: "Service".to_string(),
-                    name: None,
-                }],
-            },
-        }
-    }
-
     fn make_ctx(runtime: Arc<ControllerRuntime>) -> HandlerContext {
         HandlerContext::new(
             None,
@@ -365,6 +237,40 @@ mod tests {
             acc.extend(ev.iter().cloned());
         }
         acc
+    }
+
+    #[tokio::test]
+    async fn beta_conversion_preserves_delete_recreate_dependency_dispatch() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let listener = RecordingListener::new();
+        runtime.ref_grant_dispatcher.register_listener(listener.clone());
+        let ctx = make_ctx(runtime.clone());
+        let handler = ReferenceGrantHandler::new();
+        let original = build_grant("backend", "grant", &["app-a"]);
+        let beta = ReferenceGrantBeta {
+            metadata: original.metadata.clone(),
+            spec: ReferenceGrantBetaSpec {
+                from: original.spec.from.clone(),
+                to: original.spec.to.clone(),
+            },
+        };
+        let canonical: ReferenceGrant = beta.into();
+        let key = ReferenceGrantHandler::build_key(&canonical);
+        match handler.parse(canonical.clone(), &ctx).await {
+            ProcessResult::Continue(grant) => handler.on_change(&grant, &ctx).await,
+            ProcessResult::Skip { .. } => panic!("unexpected skip"),
+        }
+        handler.on_delete(&canonical, &ctx).await;
+        assert!(runtime.ref_grant_store.get(&key).is_none());
+        let recreated = build_grant("backend", "grant", &["app-b"]);
+        match handler.parse(recreated, &ctx).await {
+            ProcessResult::Continue(grant) => handler.on_change(&grant, &ctx).await,
+            ProcessResult::Skip { .. } => panic!("unexpected skip"),
+        }
+        assert!(runtime.ref_grant_store.get(&key).is_some());
+        let events = listener.snapshot();
+        assert!(events.iter().any(|event| event.contains("app-a")));
+        assert!(events.iter().any(|event| event.contains("app-b")));
     }
 
     /// Regression: when a ReferenceGrant changes its `spec.from[*].namespace`,
@@ -478,45 +384,5 @@ mod tests {
         }
 
         assert_eq!(listener.snapshot().len(), 1);
-    }
-
-    /// v1beta1 handler must apply the same orphan-on-update behavior.
-    #[tokio::test]
-    async fn beta_parse_dispatches_orphaned_from_namespace_on_update() {
-        let runtime = Arc::new(ControllerRuntime::default());
-        let listener = RecordingListener::new();
-        runtime.ref_grant_dispatcher.register_listener(listener.clone());
-
-        let ctx = make_ctx(runtime.clone());
-        let handler = ReferenceGrantBetaHandler::new();
-
-        let grant_v1 = build_grant_beta("backend", "g1", &["app-a"]);
-        match handler.parse(grant_v1.clone(), &ctx).await {
-            ProcessResult::Continue(rg) => handler.on_change(&rg, &ctx).await,
-            ProcessResult::Skip { .. } => panic!("unexpected skip"),
-        }
-
-        let grant_v2 = build_grant_beta("backend", "g1", &["app-b"]);
-        match handler.parse(grant_v2.clone(), &ctx).await {
-            ProcessResult::Continue(rg) => handler.on_change(&rg, &ctx).await,
-            ProcessResult::Skip { .. } => panic!("unexpected skip"),
-        }
-
-        let events = listener.snapshot();
-        assert!(events.len() >= 3, "expected at least 3 dispatches, got {:?}", events);
-
-        let update_events = &events[1..];
-        let dispatched = union_dispatched(update_events);
-
-        assert!(
-            dispatched.contains("app-a"),
-            "OLD from-namespace `app-a` must be re-dispatched on v1beta1 update; got {:?}",
-            dispatched
-        );
-        assert!(
-            dispatched.contains("app-b"),
-            "NEW from-namespace `app-b` must be dispatched on v1beta1 update; got {:?}",
-            dispatched
-        );
     }
 }

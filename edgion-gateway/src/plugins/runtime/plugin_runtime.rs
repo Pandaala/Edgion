@@ -633,11 +633,13 @@ impl PluginRuntime {
                     }
                 }
                 HTTPRouteFilterType::ExternalAuth => {
-                    if let Some(config) = &filter.external_auth {
+                    if let Some(config) = filter.external_auth.as_ref().and_then(|source| source.edgion_config()) {
                         match ForwardAuth::new(config) {
                             Ok(fa) => self.add_request_filter(Box::new(fa)),
                             Err(_) => self.invalid_plugins.record_non_retainable("ForwardAuth"),
                         }
+                    } else {
+                        self.invalid_plugins.record_non_retainable("ForwardAuth");
                     }
                 }
                 HTTPRouteFilterType::ExtensionRef => {
@@ -4479,7 +4481,7 @@ mod ext_ref_index_tests {
             url_rewrite: None,
             request_mirror: None,
             cors: None,
-            external_auth: Some(config),
+            external_auth: Some(edgion_resources::HTTPRouteExternalAuth::Edgion(Box::new(config))),
             extension_ref: None,
         }
     }

@@ -141,6 +141,12 @@ impl ActiveHealthCheckConfig {
         if !valid_reference_name(hostname) || !matches!(url::Host::parse(hostname), Ok(url::Host::Domain(_))) {
             return Some("health check TLS hostname must be a DNS name");
         }
+        if matches!(
+            validation.well_known_ca_certificates.as_ref(),
+            Some(super::backend_tls_policy::WellKnownCACertificates::Other(_))
+        ) {
+            return Some("health check wellKnownCACertificates supports only System");
+        }
         if let Some(refs) = &validation.ca_certificate_refs {
             if refs.is_empty() || validation.well_known_ca_certificates.is_some() {
                 return Some("health check CA references must be nonempty and exclusive with system CA");

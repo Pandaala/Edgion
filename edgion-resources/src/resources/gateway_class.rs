@@ -68,9 +68,8 @@ pub struct SupportedFeature {
 ///   which the Go conformance suite reads so the controller status and the
 ///   conformance declaration cannot silently drift.
 ///
-/// Most entries are Gateway API conformance feature names. `TCPRoute` and
-/// `UDPRoute` are advertised here but are not part of any conformance profile,
-/// so the Go side keeps them in an explicit allowlist instead of declaring them.
+/// Entries are Gateway API conformance feature names. A resource may still be
+/// implemented without being advertised when its full profile has not passed.
 pub const SUPPORTED_FEATURES: &[&str] = &[
     "BackendTLSPolicy",
     "BackendTLSPolicySANValidation",
@@ -101,10 +100,7 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     "HTTPRouteResponseHeaderModification",
     "HTTPRouteSchemeRedirect",
     "ReferenceGrant",
-    "TCPRoute",
     "TLSRoute",
-    "TLSRouteModeTerminate",
-    "UDPRoute",
 ];
 
 /// Gateway API features Edgion has evaluated and intentionally does NOT
@@ -125,7 +121,14 @@ pub const UNSUPPORTED_OR_SKIPPED_FEATURES: &[&str] = &[
     "HTTPRouteParentRefPort",
     "HTTPRouteRequestMultipleMirrors",
     "ListenerSet",
+    // v1 typed routing works on preconfigured listeners, but the v1.6.2
+    // conformance profiles create new listener ports after process startup.
+    "TCPRoute",
     "TLSRouteModeMixed",
+    // A targeted TLS terminate case passes, but the full TLS profile still
+    // fails this extended case after the other tests have run.
+    "TLSRouteModeTerminate",
+    "UDPRoute",
 ];
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -143,6 +146,40 @@ pub struct ParametersReference {
     /// Namespace is the namespace of the referent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
+}
+
+/// The Standard v1beta1 wire shape. Conversion retains metadata and status.
+#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[kube(
+    group = "gateway.networking.k8s.io",
+    version = "v1beta1",
+    kind = "GatewayClass",
+    root = "GatewayClassBeta",
+    plural = "gatewayclasses",
+    status = "GatewayClassStatus"
+)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayClassBetaSpec {
+    pub controller_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters_ref: Option<ParametersReference>,
+}
+
+impl From<GatewayClassBeta> for GatewayClass {
+    fn from(beta: GatewayClassBeta) -> Self {
+        Self {
+            metadata: beta.metadata,
+            spec: GatewayClassSpec {
+                current_status: None,
+                controller_name: beta.spec.controller_name,
+                description: beta.spec.description,
+                parameters_ref: beta.spec.parameters_ref,
+            },
+            status: beta.status,
+        }
+    }
 }
 
 #[cfg(test)]

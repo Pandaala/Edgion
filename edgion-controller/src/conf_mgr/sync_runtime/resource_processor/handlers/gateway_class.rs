@@ -5,6 +5,7 @@
 #[cfg(test)]
 use crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME;
 use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::gateway_has_class_owner;
+use crate::conf_mgr::sync_runtime::resource_processor::status_utils::condition_unknown;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition, HandlerContext,
     ProcessResult, ProcessorHandler,
@@ -225,10 +226,10 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
 
         update_condition(
             &mut status.conditions,
-            condition_true(
+            condition_unknown(
                 "SupportedVersion",
-                "SupportedVersion",
-                "Gateway API version is supported",
+                "CompatibilityUnknown",
+                "Installed Gateway API CRD bundle and channel compatibility has not been verified",
                 generation,
             ),
         );

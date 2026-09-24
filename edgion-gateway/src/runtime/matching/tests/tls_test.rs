@@ -31,6 +31,9 @@ fn create_test_gateway(name: &str, namespace: &str, listeners: Vec<Listener>) ->
             listeners: Some(listeners),
             addresses: None,
             tls: None,
+            allowed_listeners: None,
+            infrastructure: None,
+            default_scope: None,
             resolved_inbound_proxy_protocol: Default::default(),
             resolved_attachment_proof: None,
         },
@@ -227,6 +230,39 @@ fn strict_frontend_deduplicates_ca_certificates_across_refs() {
             .frontend_mtls,
         FrontendMtlsOutcome::StrictEffective
     );
+}
+
+#[test]
+fn frontend_accepts_v16_ca_reference_count_in_strict_and_fallback_modes() {
+    let matcher = GatewayTlsMatcher::new();
+    for count in [9, 16] {
+        let refs = (0..count)
+            .map(|index| frontend_ref(&format!("ca-{index}")))
+            .collect::<Vec<_>>();
+        for (mode, expected) in [
+            (None, FrontendMtlsOutcome::StrictEffective),
+            (
+                Some(FrontendValidationMode::AllowInsecureFallback),
+                FrontendMtlsOutcome::InsecureFallback,
+            ),
+        ] {
+            let resolved = (0..count).map(|_| valid_ca_secret()).collect();
+            let tls = with_frontend(make_tls_config("server", None), mode, refs.clone(), Some(resolved));
+            let gateway = create_test_gateway(
+                "gw",
+                "default",
+                vec![create_test_listener("https", Some("limit.example.com"), Some(tls))],
+            );
+            matcher.rebuild_from_gateways(&[gateway]);
+            assert_eq!(
+                matcher
+                    .match_sni(&test_listener_key(443), "limit.example.com")
+                    .unwrap()
+                    .frontend_mtls,
+                expected,
+            );
+        }
+    }
 }
 
 #[test]

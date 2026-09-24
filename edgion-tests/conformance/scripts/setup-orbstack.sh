@@ -121,7 +121,7 @@ kubectl delete validatingadmissionpolicybinding safe-upgrades.gateway.networking
 for crd in $(kubectl get crd -o name 2>/dev/null | grep gateway.networking.k8s.io); do
   kubectl delete "$crd" 2>/dev/null || true
 done
-kubectl apply --server-side --force-conflicts -f "$CRD_ROOT/gateway-api/gateway-api-experimental-v1.5.0.yaml"
+kubectl apply --server-side --force-conflicts -f "$CRD_ROOT/gateway-api/gateway-api-experimental-v1.6.2.yaml"
 
 kubectl apply --server-side --force-conflicts -f "$CRD_ROOT/edgion-crd/"
 

@@ -5,7 +5,7 @@ A UDPRoute forwards UDP datagrams to one or more Kubernetes Services. Datagrams 
 ## Basic example
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: UDPRoute
 metadata:
   name: dns-route

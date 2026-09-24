@@ -6,7 +6,7 @@
 #
 # Options:
 #   --channel <standard|experimental>   Gateway API CRD channel (default: experimental)
-#   --gateway-api-version <ver>         Gateway API version (default: v1.5.0)
+#   --gateway-api-version <ver>         Gateway API version (default: v1.6.2)
 #   --edgion-version <ver>              Edgion git ref for CRD download (default: main)
 #   --delete                            Delete CRDs instead of applying
 
@@ -18,7 +18,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 EDGION_CRD_DIR="${REPO_ROOT}/config/crd/edgion-crd"
 
 CHANNEL="experimental"
-GATEWAY_API_VERSION="v1.5.0"
+GATEWAY_API_VERSION="v1.6.2"
 DELETE=false
 
 GATEWAY_API_BASE="https://github.com/kubernetes-sigs/gateway-api/releases/download"

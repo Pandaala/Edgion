@@ -215,10 +215,42 @@ pub enum SubjectAltNameType {
 }
 
 /// WellKnownCACertificates specifies whether system CA certificates may be used.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WellKnownCACertificates {
     /// System CA certificates
     System,
+    /// A Gateway API CA name accepted by newer CRDs but unsupported by Edgion.
+    Other(String),
+}
+
+impl Serialize for WellKnownCACertificates {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::System => serializer.serialize_str("System"),
+            Self::Other(name) => serializer.serialize_str(name),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WellKnownCACertificates {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Ok(if name == "System" {
+            Self::System
+        } else {
+            Self::Other(name)
+        })
+    }
+}
+
+impl JsonSchema for WellKnownCACertificates {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "WellKnownCACertificates".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        <String as JsonSchema>::json_schema(generator)
+    }
 }
 
 /// Runtime validation twin for BackendTLSPolicy hostname and SAN admission rules.
@@ -513,6 +545,14 @@ mod tests {
             Some(WellKnownCACertificates::System)
         );
         assert!(validation.ca_certificate_refs.is_none());
+    }
+
+    #[test]
+    fn named_well_known_ca_round_trips_without_becoming_system() {
+        let source = serde_json::json!("example.com/Custom");
+        let parsed: WellKnownCACertificates = serde_json::from_value(source.clone()).unwrap();
+        assert_eq!(parsed, WellKnownCACertificates::Other("example.com/Custom".to_string()));
+        assert_eq!(serde_json::to_value(parsed).unwrap(), source);
     }
 
     #[test]

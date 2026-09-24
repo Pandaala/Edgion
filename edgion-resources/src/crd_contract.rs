@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 const MAX_INPUT_BYTES: usize = 256 * 1024;
 const MAX_INPUT_DEPTH: usize = 64;
 const MAX_VIOLATIONS: usize = 32;
-const HTTP_ROUTE_TRANSFORM_CONTRACT_JSON: &str = include_str!("contracts/http_route_transform_v1_5.json");
+const HTTP_ROUTE_TRANSFORM_CONTRACT_JSON: &str = include_str!("contracts/http_route_transform_v1_6.json");
 
 /// A stable validation failure that never embeds the submitted value.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -200,7 +200,7 @@ impl HttpRouteTransformContract {
             || document.source.version != "v1"
             || document.source.kind != "HTTPRoute"
             || document.source.channel != "standard"
-            || document.source.gateway_api_version != "v1.5.0"
+            || document.source.gateway_api_version != "v1.6.2"
             || document.source.selected_sha256.len() != 64
         {
             return Err(CrdContractError::InvalidContract);

@@ -67,8 +67,8 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionBackendHandler,
     EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
     EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler,
-    GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler,
-    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
+    GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler,
+    TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
 /// Context for spawn functions
@@ -102,6 +102,7 @@ where
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
     H: ProcessorHandler<K> + 'static,
 {
+    edgion_resources::gateway_api_support::assert_canonical_type_identity::<K>(kind);
     // 1. Create ResourceProcessor with capacity from config
     let capacity = crate::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
@@ -137,6 +138,135 @@ where
     ctx.tracker.track_future(async move { rc.run_namespaced().await })
 }
 
+/// One canonical HTTPRoute processor with the selected namespaced wire source.
+fn spawn_http_route(
+    controller: &KubernetesController,
+    ctx: &SpawnContext,
+) -> impl std::future::Future<Output = Result<()>> + Send + 'static {
+    let kind = "HTTPRoute";
+    let processor = Arc::new(ResourceProcessor::new(
+        kind,
+        crate::config::get_cache_capacity(kind),
+        Arc::new(HttpRouteHandler::new(controller.controller_name.clone())),
+        ctx.runtime.clone(),
+    ));
+    if let Some(ref filter) = ctx.metadata_filter {
+        processor.set_metadata_filter(filter.clone());
+    }
+    ctx.runtime.processor_registry.register(processor.clone());
+    let mut rc = ResourceController::new(
+        kind,
+        controller.client.clone(),
+        processor,
+        ApiScope::Namespaced(controller.watch_mode.clone()),
+        ctx.watcher_config.clone(),
+    )
+    .with_shutdown(ctx.shutdown.clone())
+    .with_epoch(ctx.cancel.clone(), ctx.tracker.clone());
+    if let Some(ref leader) = ctx.leader_handle {
+        rc = rc.with_leader_handle(leader.clone());
+    }
+    let beta = matches!(
+        controller.http_route_version,
+        Some(super::version_detection::HTTPRouteVersion::V1Beta1)
+    );
+    if beta {
+        rc = rc.with_status_version("v1beta1");
+    }
+    ctx.tracker.track_future(async move {
+        if beta {
+            rc.run_http_route_beta().await
+        } else {
+            rc.run_namespaced().await
+        }
+    })
+}
+
+/// One canonical ReferenceGrant processor; only its Kubernetes source type varies.
+fn spawn_reference_grant(
+    controller: &KubernetesController,
+    ctx: &SpawnContext,
+    beta: bool,
+) -> impl std::future::Future<Output = Result<()>> + Send + 'static {
+    let kind = "ReferenceGrant";
+    let processor = Arc::new(ResourceProcessor::new(
+        kind,
+        crate::config::get_cache_capacity(kind),
+        Arc::new(ReferenceGrantHandler::new()),
+        ctx.runtime.clone(),
+    ));
+    if let Some(ref filter) = ctx.metadata_filter {
+        processor.set_metadata_filter(filter.clone());
+    }
+    ctx.runtime.processor_registry.register(processor.clone());
+    let mut rc = ResourceController::new(
+        kind,
+        controller.client.clone(),
+        processor,
+        ApiScope::Namespaced(controller.watch_mode.clone()),
+        ctx.watcher_config.clone(),
+    )
+    .with_shutdown(ctx.shutdown.clone())
+    .with_epoch(ctx.cancel.clone(), ctx.tracker.clone());
+    if let Some(ref leader) = ctx.leader_handle {
+        rc = rc.with_leader_handle(leader.clone());
+    }
+    ctx.tracker.track_future(async move {
+        if beta {
+            rc.run_reference_grant_beta().await
+        } else {
+            rc.run_namespaced().await
+        }
+    })
+}
+
+/// One canonical Gateway processor with the center-selected namespaced source.
+fn spawn_gateway(
+    controller: &KubernetesController,
+    ctx: &SpawnContext,
+) -> impl std::future::Future<Output = Result<()>> + Send + 'static {
+    let kind = "Gateway";
+    let processor = Arc::new(ResourceProcessor::new(
+        kind,
+        crate::config::get_cache_capacity(kind),
+        Arc::new(GatewayHandler::new(
+            Some(GatewayClassOwnership::new(controller.controller_name.clone())),
+            controller.gateway_address.clone(),
+        )),
+        ctx.runtime.clone(),
+    ));
+    if let Some(ref filter) = ctx.metadata_filter {
+        processor.set_metadata_filter(filter.clone());
+    }
+    ctx.runtime.processor_registry.register(processor.clone());
+    let mut rc = ResourceController::new(
+        kind,
+        controller.client.clone(),
+        processor,
+        ApiScope::Namespaced(controller.watch_mode.clone()),
+        ctx.watcher_config.clone(),
+    )
+    .with_shutdown(ctx.shutdown.clone())
+    .with_epoch(ctx.cancel.clone(), ctx.tracker.clone());
+    if let Some(ref leader) = ctx.leader_handle {
+        rc = rc.with_leader_handle(leader.clone());
+    }
+    let beta = matches!(
+        controller.gateway_version,
+        Some(super::version_detection::GatewayVersion::V1Beta1)
+    );
+    if beta {
+        rc = rc.with_status_version("v1beta1");
+    }
+    ctx.tracker.track_future(async move {
+        if beta {
+            rc.run_gateway_beta().await
+        } else {
+            rc.run_namespaced().await
+        }
+    })
+}
+
 /// GatewayClass reporting covers all classes with our controllerName, even if
 /// operator selectors exclude them from the rest of the deployment's view.
 fn cluster_watcher_config(kind: &str, config: &watcher::Config) -> watcher::Config {
@@ -167,6 +297,7 @@ where
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
     H: ProcessorHandler<K> + 'static,
 {
+    edgion_resources::gateway_api_support::assert_canonical_type_identity::<K>(kind);
     // 1. Create ResourceProcessor with capacity from config
     let capacity = crate::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
@@ -200,6 +331,52 @@ where
     }
 
     ctx.tracker.track_future(async move { rc.run_cluster_scoped().await })
+}
+
+/// One canonical GatewayClass processor with a selected cluster-scoped wire source.
+fn spawn_gateway_class(
+    controller: &KubernetesController,
+    ctx: &SpawnContext,
+) -> impl std::future::Future<Output = Result<()>> + Send + 'static {
+    let kind = "GatewayClass";
+    let processor = Arc::new(ResourceProcessor::new(
+        kind,
+        crate::config::get_cache_capacity(kind),
+        Arc::new(GatewayClassHandler::new(GatewayClassOwnership::new(
+            controller.controller_name.clone(),
+        ))),
+        ctx.runtime.clone(),
+    ));
+    if let Some(ref filter) = ctx.metadata_filter {
+        processor.set_metadata_filter(filter.clone());
+    }
+    ctx.runtime.processor_registry.register(processor.clone());
+    let mut rc = ResourceController::new(
+        kind,
+        controller.client.clone(),
+        processor,
+        ApiScope::ClusterScoped,
+        cluster_watcher_config(kind, &ctx.watcher_config),
+    )
+    .with_shutdown(ctx.shutdown.clone())
+    .with_epoch(ctx.cancel.clone(), ctx.tracker.clone());
+    if let Some(ref leader) = ctx.leader_handle {
+        rc = rc.with_leader_handle(leader.clone());
+    }
+    let beta = matches!(
+        controller.gateway_class_version,
+        Some(super::version_detection::GatewayClassVersion::V1Beta1)
+    );
+    if beta {
+        rc = rc.with_status_version("v1beta1");
+    }
+    ctx.tracker.track_future(async move {
+        if beta {
+            rc.run_gateway_class_beta().await
+        } else {
+            rc.run_cluster_scoped().await
+        }
+    })
 }
 
 /// Spawn a lightweight Namespace label watcher.
@@ -364,6 +541,10 @@ pub struct KubernetesController {
     cancel: CancellationToken,
     tracker: TaskTracker,
     phases_ready: Option<watch::Sender<bool>>,
+    pub(super) reference_grant_version: Option<super::version_detection::ReferenceGrantVersion>,
+    pub(super) gateway_class_version: Option<super::version_detection::GatewayClassVersion>,
+    pub(super) gateway_version: Option<super::version_detection::GatewayVersion>,
+    pub(super) http_route_version: Option<super::version_detection::HTTPRouteVersion>,
 }
 
 impl KubernetesController {
@@ -405,12 +586,45 @@ impl KubernetesController {
             cancel: CancellationToken::new(),
             tracker: TaskTracker::new(),
             phases_ready: None,
+            reference_grant_version: None,
+            gateway_class_version: None,
+            gateway_version: None,
+            http_route_version: None,
         })
     }
 
     pub(super) fn with_epoch(mut self, cancel: CancellationToken, tracker: TaskTracker) -> Self {
         self.cancel = cancel;
         self.tracker = tracker;
+        self
+    }
+
+    pub(super) fn with_reference_grant_version(
+        mut self,
+        version: Option<super::version_detection::ReferenceGrantVersion>,
+    ) -> Self {
+        self.reference_grant_version = version;
+        self
+    }
+
+    pub(super) fn with_gateway_class_version(
+        mut self,
+        version: Option<super::version_detection::GatewayClassVersion>,
+    ) -> Self {
+        self.gateway_class_version = version;
+        self
+    }
+
+    pub(super) fn with_gateway_version(mut self, version: Option<super::version_detection::GatewayVersion>) -> Self {
+        self.gateway_version = version;
+        self
+    }
+
+    pub(super) fn with_http_route_version(
+        mut self,
+        version: Option<super::version_detection::HTTPRouteVersion>,
+    ) -> Self {
+        self.http_route_version = version;
         self
     }
 
@@ -557,19 +771,19 @@ impl KubernetesController {
             runtime: runtime.clone(),
         };
 
-        // Resolve every multi-version API before spawning any watcher. Returning
-        // before startup ensures an API-resolution failure cannot leave partially
-        // registered resource controllers behind.
-        use super::version_detection::probe_reference_grant_version;
-        let reference_grant_version = if self.should_watch("ReferenceGrant") {
-            Some(
-                probe_reference_grant_version(&self.client)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("ReferenceGrant API disappeared after preflight"))?,
-            )
-        } else {
-            None
-        };
+        let reference_grant_version = self.reference_grant_version;
+        if self.should_watch("ReferenceGrant") {
+            anyhow::ensure!(
+                reference_grant_version.is_some(),
+                "ReferenceGrant transport was not selected"
+            );
+        }
+        if self.should_watch("GatewayClass") {
+            anyhow::ensure!(
+                self.gateway_class_version.is_some(),
+                "GatewayClass transport was not selected"
+            );
+        }
         let mut h = JoinSet::new();
 
         // ==================== Phase 1: Provider Resources ====================
@@ -581,12 +795,7 @@ impl KubernetesController {
 
         // Cluster-scoped foundation
         if self.should_watch("GatewayClass") {
-            h.spawn(spawn_cluster::<GatewayClass, _>(
-                self,
-                "GatewayClass",
-                GatewayClassHandler::new(GatewayClassOwnership::new(self.controller_name.clone())),
-                &ctx,
-            ));
+            h.spawn(spawn_gateway_class(self, &ctx));
         }
 
         // Secret (TLS certificates, auth credentials)
@@ -600,27 +809,12 @@ impl KubernetesController {
         }
 
         // ReferenceGrant (cross-namespace reference validation)
-        // Detect v1 vs v1beta1 at runtime without collapsing discovery failures.
         if self.should_watch("ReferenceGrant") {
-            use super::version_detection::ReferenceGrantVersion;
-            match reference_grant_version.expect("ReferenceGrant version is preflighted when watched") {
-                ReferenceGrantVersion::V1 => {
-                    h.spawn(spawn::<ReferenceGrant, _>(
-                        self,
-                        "ReferenceGrant",
-                        ReferenceGrantHandler::new(),
-                        &ctx,
-                    ));
-                }
-                ReferenceGrantVersion::V1Beta1 => {
-                    h.spawn(spawn::<ReferenceGrantBeta, _>(
-                        self,
-                        "ReferenceGrant",
-                        ReferenceGrantBetaHandler::new(),
-                        &ctx,
-                    ));
-                }
-            }
+            let beta = matches!(
+                reference_grant_version,
+                Some(super::version_detection::ReferenceGrantVersion::V1Beta1)
+            );
+            h.spawn(spawn_reference_grant(self, &ctx, beta));
         }
 
         // Service (Route backend references)
@@ -697,15 +891,8 @@ impl KubernetesController {
         // ==================== Phase 2: Gateway ====================
         tracing::info!(component = "k8s_controller", "Phase 2: Spawning Gateway controller");
         if self.should_watch("Gateway") {
-            h.spawn(spawn::<Gateway, _>(
-                self,
-                "Gateway",
-                GatewayHandler::new(
-                    Some(GatewayClassOwnership::new(self.controller_name.clone())),
-                    self.gateway_address.clone(),
-                ),
-                &ctx,
-            ));
+            assert!(self.gateway_version.is_some(), "Gateway transport was not selected");
+            h.spawn(spawn_gateway(self, &ctx));
         }
         let gateway_count = h.len();
         let gateway_kinds = if self.should_watch("Gateway") {
@@ -742,12 +929,7 @@ impl KubernetesController {
 
         // Route resources
         if self.should_watch("HTTPRoute") {
-            h.spawn(spawn::<HTTPRoute, _>(
-                self,
-                "HTTPRoute",
-                HttpRouteHandler::new(self.controller_name.clone()),
-                &ctx,
-            ));
+            h.spawn(spawn_http_route(self, &ctx));
         }
         if self.should_watch("GRPCRoute") {
             h.spawn(spawn::<GRPCRoute, _>(

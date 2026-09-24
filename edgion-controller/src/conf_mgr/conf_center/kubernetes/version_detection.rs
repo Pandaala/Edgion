@@ -4,6 +4,7 @@
 //! API versions for ReferenceGrant.
 
 use anyhow::Result;
+use edgion_resources::gateway_api_support::{canonical_sources, GROUP};
 use kube::core::GroupVersionKind;
 use kube::error::DiscoveryError;
 use kube::Client;
@@ -14,6 +15,63 @@ use std::collections::HashSet;
 pub enum ReferenceGrantVersion {
     V1,
     V1Beta1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayClassVersion {
+    V1,
+    V1Beta1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HTTPRouteVersion {
+    V1,
+    V1Beta1,
+}
+
+pub async fn probe_http_route_version(client: &Client) -> Result<Option<HTTPRouteVersion>> {
+    for (version, selected) in [("v1", HTTPRouteVersion::V1), ("v1beta1", HTTPRouteVersion::V1Beta1)] {
+        let gvk = GroupVersionKind::gvk(GROUP, version, "HTTPRoute");
+        match is_kind_served(client, &gvk).await {
+            Ok(true) => return Ok(Some(selected)),
+            Ok(false) => continue,
+            Err(error) => return Err(anyhow::anyhow!("Failed to probe HTTPRoute {version}: {error}")),
+        }
+    }
+    Ok(None)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayVersion {
+    V1,
+    V1Beta1,
+}
+
+pub async fn probe_gateway_version(client: &Client) -> Result<Option<GatewayVersion>> {
+    for (version, selected) in [("v1", GatewayVersion::V1), ("v1beta1", GatewayVersion::V1Beta1)] {
+        let gvk = GroupVersionKind::gvk(GROUP, version, "Gateway");
+        match is_kind_served(client, &gvk).await {
+            Ok(true) => return Ok(Some(selected)),
+            Ok(false) => continue,
+            Err(error) => return Err(anyhow::anyhow!("Failed to probe Gateway {version}: {error}")),
+        }
+    }
+    Ok(None)
+}
+
+pub async fn probe_gateway_class_version(client: &Client) -> Result<Option<GatewayClassVersion>> {
+    for (version, selected) in [
+        ("v1", GatewayClassVersion::V1),
+        ("v1beta1", GatewayClassVersion::V1Beta1),
+    ] {
+        let gvk = GroupVersionKind::gvk(GROUP, version, "GatewayClass");
+        match is_kind_served(client, &gvk).await {
+            Ok(true) => return Ok(Some(selected)),
+            Ok(false) => continue,
+            Err(error) => return Err(anyhow::anyhow!("Failed to probe GatewayClass {version}: {error}")),
+        }
+    }
+    Ok(None)
 }
 
 fn is_api_unavailable(error: &kube::Error) -> bool {
@@ -94,68 +152,9 @@ pub async fn probe_reference_grant_version(client: &Client) -> Result<Option<Ref
     Ok(None)
 }
 
-/// Gateway API resource definition for preflight CRD check.
-struct GatewayApiResource {
-    kind: &'static str,
-    group: &'static str,
-    version: &'static str,
-}
-
-/// All Gateway API resources that the controller watches.
-///
-/// This is the single source of truth for CRD preflight checks.
-/// Keep in sync with the spawn calls in `KubernetesController::run_controllers()`.
-const GATEWAY_API_RESOURCES: &[GatewayApiResource] = &[
-    GatewayApiResource {
-        kind: "GatewayClass",
-        group: "gateway.networking.k8s.io",
-        version: "v1",
-    },
-    GatewayApiResource {
-        kind: "Gateway",
-        group: "gateway.networking.k8s.io",
-        version: "v1",
-    },
-    GatewayApiResource {
-        kind: "HTTPRoute",
-        group: "gateway.networking.k8s.io",
-        version: "v1",
-    },
-    GatewayApiResource {
-        kind: "GRPCRoute",
-        group: "gateway.networking.k8s.io",
-        version: "v1",
-    },
-    GatewayApiResource {
-        kind: "TLSRoute",
-        group: "gateway.networking.k8s.io",
-        version: "v1", // preflight overrides via multi-version probe
-    },
-    GatewayApiResource {
-        kind: "ReferenceGrant",
-        group: "gateway.networking.k8s.io",
-        version: "v1",
-    },
-    GatewayApiResource {
-        kind: "TCPRoute",
-        group: "gateway.networking.k8s.io",
-        version: "v1alpha2",
-    },
-    GatewayApiResource {
-        kind: "UDPRoute",
-        group: "gateway.networking.k8s.io",
-        version: "v1alpha2",
-    },
-    GatewayApiResource {
-        kind: "BackendTLSPolicy",
-        group: "gateway.networking.k8s.io",
-        version: "v1",
-    },
-];
-
 /// All Gateway API kind names known to the preflight system.
 pub fn gateway_api_kind_names() -> HashSet<&'static str> {
-    GATEWAY_API_RESOURCES.iter().map(|r| r.kind).collect()
+    canonical_sources().map(|r| r.kind).collect()
 }
 
 fn other_known_kind_names() -> HashSet<&'static str> {
@@ -200,7 +199,14 @@ pub fn validate_no_watch_kinds(no_watch_kinds: &[String]) {
 /// For each Gateway API resource not in `no_watch_kinds`, queries API
 /// discovery. An unavailable GVK means the CRD is missing. All missing CRDs are
 /// collected and reported in a single error with install instructions.
-pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &HashSet<String>) -> Result<()> {
+pub async fn preflight_check_gateway_api_crds(
+    client: &Client,
+    no_watch_kinds: &HashSet<String>,
+    reference_grant_version: Option<ReferenceGrantVersion>,
+    gateway_class_version: Option<GatewayClassVersion>,
+    gateway_version: Option<GatewayVersion>,
+    http_route_version: Option<HTTPRouteVersion>,
+) -> Result<()> {
     tracing::info!(
         component = "k8s_controller",
         no_watch_kinds = ?no_watch_kinds,
@@ -209,7 +215,7 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
 
     let mut missing = Vec::new();
 
-    for res in GATEWAY_API_RESOURCES {
+    for res in canonical_sources() {
         if no_watch_kinds.contains(res.kind) {
             tracing::debug!(
                 component = "k8s_controller",
@@ -219,13 +225,31 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
             continue;
         }
 
+        if res.kind == "GatewayClass" {
+            if gateway_class_version.is_none() {
+                missing.push(res);
+            }
+            continue;
+        }
+        if res.kind == "Gateway" {
+            if gateway_version.is_none() {
+                missing.push(res);
+            }
+            continue;
+        }
+        if res.kind == "HTTPRoute" {
+            if http_route_version.is_none() {
+                missing.push(res);
+            }
+            continue;
+        }
         if res.kind == "ReferenceGrant" {
-            match probe_reference_grant_version(client).await? {
+            match reference_grant_version {
                 Some(version) => {
                     tracing::debug!(
                         component = "k8s_controller",
                         kind = res.kind,
-                        group = res.group,
+                        group = GROUP,
                         version = ?version,
                         "CRD available"
                     );
@@ -234,7 +258,7 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
                     tracing::warn!(
                         component = "k8s_controller",
                         kind = res.kind,
-                        group = res.group,
+                        group = GROUP,
                         versions = "v1,v1beta1",
                         "CRD not found"
                     );
@@ -244,13 +268,13 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
             continue;
         }
 
-        let gvk = GroupVersionKind::gvk(res.group, res.version, res.kind);
+        let gvk = GroupVersionKind::gvk(GROUP, res.version, res.kind);
         match is_kind_served(client, &gvk).await {
             Ok(true) => {
                 tracing::debug!(
                     component = "k8s_controller",
                     kind = res.kind,
-                    group = res.group,
+                    group = GROUP,
                     version = res.version,
                     "CRD available"
                 );
@@ -259,7 +283,7 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
                 tracing::warn!(
                     component = "k8s_controller",
                     kind = res.kind,
-                    group = res.group,
+                    group = GROUP,
                     version = res.version,
                     "CRD not found"
                 );
@@ -271,7 +295,7 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
                     "Failed to probe Gateway API CRD {} ({}/{}): {}. \
                      Check RBAC permissions and network connectivity.",
                     res.kind,
-                    res.group,
+                    GROUP,
                     res.version,
                     e
                 ));
@@ -287,10 +311,10 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
     let missing_list: Vec<String> = missing
         .iter()
         .map(|r| {
-            if r.kind == "ReferenceGrant" {
-                format!("{} ({}/v1 or v1beta1)", r.kind, r.group)
+            if matches!(r.kind, "ReferenceGrant" | "GatewayClass" | "Gateway" | "HTTPRoute") {
+                format!("{} ({}/v1 or v1beta1)", r.kind, GROUP)
             } else {
-                format!("{} ({}/{})", r.kind, r.group, r.version)
+                format!("{} ({}/{})", r.kind, GROUP, r.version)
             }
         })
         .collect();
@@ -299,9 +323,9 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
     Err(anyhow::anyhow!(
         "Gateway API CRDs not found: {}\n\n\
          Install missing CRDs:\n  \
-         kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml\n  \
+         kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml\n  \
          # Or, if you need the experimental Gateway API resources:\n  \
-         kubectl apply --server-side=true -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/experimental-install.yaml\n\n\
+         kubectl apply --server-side=true -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/experimental-install.yaml\n\n\
          Or skip these resources in config:\n  \
          conf_center.kubernetes.no_watch_kinds: {:?}",
         missing_list.join(", "),
@@ -317,13 +341,10 @@ mod tests {
     fn tls_route_preflight_matches_the_single_canonical_watch_and_status_type() {
         use edgion_resources::TLSRoute;
         use kube::Resource;
-        let entries: Vec<_> = GATEWAY_API_RESOURCES
-            .iter()
-            .filter(|entry| entry.kind == "TLSRoute")
-            .collect();
+        let entries: Vec<_> = canonical_sources().filter(|entry| entry.kind == "TLSRoute").collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].version, TLSRoute::version(&()));
-        assert_eq!(entries[0].group, TLSRoute::group(&()));
+        assert_eq!(GROUP, TLSRoute::group(&()));
         assert_eq!(TLSRoute::api_version(&()), "gateway.networking.k8s.io/v1");
     }
 

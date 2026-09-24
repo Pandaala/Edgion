@@ -120,6 +120,10 @@ fn hash_tls_policy(hasher: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
             match validation.well_known_ca_certificates {
                 None => hasher.tag(0),
                 Some(WellKnownCACertificates::System) => hasher.tag(1),
+                Some(WellKnownCACertificates::Other(ref name)) => {
+                    hasher.tag(2);
+                    hasher.bytes(name.as_bytes());
+                }
             }
             match validation.subject_alt_names.as_deref() {
                 None => hasher.tag(0),

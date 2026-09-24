@@ -1,11 +1,11 @@
 ---
 name: gateway-api-conformance
-description: Gateway API v1.5.0 conformance — supported resources, Edgion extension CRDs, conformance testing, extension points.
+description: Gateway API v1.6.2 version boundary — supported resources, Edgion extension CRDs, conformance testing, extension points.
 ---
 
 # Gateway API Conformance
 
-Edgion implements the Kubernetes Gateway API v1.5.0 specification, supporting HTTP, gRPC, TCP, TLS, and UDP routing protocols. On top of standard Gateway API, Edgion provides extension functionality through custom CRDs and annotations.
+Edgion vendors Gateway API v1.6.2 CRDs and supports HTTP, gRPC, TCP, TLS, and UDP routing protocols. On top of standard Gateway API, Edgion provides extension functionality through custom CRDs and annotations.
 
 ## Supported Gateway API Resources
 
@@ -15,9 +15,9 @@ Edgion implements the Kubernetes Gateway API v1.5.0 specification, supporting HT
 | **Gateway** | gateway.networking.k8s.io/v1 | Standard | Defines listeners, ports, and TLS configuration; one Gateway corresponds to one logical entry point |
 | **HTTPRoute** | gateway.networking.k8s.io/v1 | Standard | HTTP routing rules: hostname matching, path matching, header matching, request redirect/rewrite/mirror |
 | **GRPCRoute** | gateway.networking.k8s.io/v1 | Standard | gRPC routing rules: Service/Method matching, header matching |
-| **TCPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | TCP layer-4 routing, forwarded by port to backends |
+| **TCPRoute** | gateway.networking.k8s.io/v1 | Standard | TCP layer-4 routing, forwarded by port to backends |
 | **TLSRoute** | gateway.networking.k8s.io/v1 | Standard; canonical v1 contract | TLS passthrough routing; [canonical input enforcement](../02-features/03-resources/07-tlsroute.md#canonical-input-enforcement) |
-| **UDPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | UDP routing, forwarded by port |
+| **UDPRoute** | gateway.networking.k8s.io/v1 | Standard | UDP routing, forwarded by port |
 | **ReferenceGrant** | gateway.networking.k8s.io/v1 (v1beta1 compatible) | Standard | Cross-namespace reference authorization, used only on the Controller side (no_sync_kinds) |
 | **BackendTLSPolicy** | gateway.networking.k8s.io/v1 | Standard | Backend TLS policy, configures Gateway→Backend mTLS |
 
@@ -27,10 +27,10 @@ Standard Gateway API CRDs are installed via the official YAML:
 
 ```bash
 # Install Standard channel CRDs
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
 
-# Install Experimental channel CRDs (includes TCPRoute, UDPRoute, and older served versions of some resources)
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/experimental-install.yaml
+# Install Experimental channel CRDs (adds experimental fields and resources)
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/experimental-install.yaml
 ```
 
 Edgion extension CRDs are installed via Edgion's own deployment manifest.
@@ -51,7 +51,7 @@ Edgion extension CRDs are installed via Edgion's own deployment manifest.
 
 ## Conformance Testing
 
-Edgion uses the official Go test suite from `sigs.k8s.io/gateway-api/conformance` v1.5.1 for conformance testing.
+Edgion uses the official Go test suite from `sigs.k8s.io/gateway-api/conformance` v1.6.2 for conformance testing.
 
 ### How to Run
 

@@ -214,6 +214,13 @@ fn is_tcp_listener(listener: &GatewayListener) -> bool {
     )
 }
 
+fn is_supported_listener_protocol(protocol: &str) -> bool {
+    matches!(
+        protocol.to_ascii_uppercase().as_str(),
+        "HTTP" | "HTTPS" | "TLS" | "TCP" | "UDP"
+    )
+}
+
 fn tcp_listener_names(gateway: &Gateway) -> Vec<String> {
     gateway
         .spec
@@ -472,6 +479,22 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             )];
         }
         let mut errors = Vec::new();
+        if g.spec
+            .addresses
+            .as_deref()
+            .is_some_and(|addresses| addresses.iter().any(|address| address.value.is_none()))
+        {
+            errors.push("spec.addresses contains an address without value, which Edgion cannot bind".to_string());
+        }
+        for (present, name) in [
+            (g.spec.allowed_listeners.is_some(), "allowedListeners"),
+            (g.spec.infrastructure.is_some(), "infrastructure"),
+            (g.spec.default_scope.is_some(), "defaultScope"),
+        ] {
+            if present {
+                errors.push(format!("spec.{name} is unsupported"));
+            }
+        }
         if let Some(frontend) = g.spec.tls.as_ref().and_then(|tls| tls.frontend.as_ref()) {
             if let Some(per_port) = frontend.per_port.as_ref() {
                 if per_port.len() > edgion_resources::resources::gateway::MAX_GATEWAY_FRONTEND_PER_PORT {
@@ -559,6 +582,19 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
     async fn parse(&self, mut g: Gateway, ctx: &HandlerContext) -> ProcessResult<Gateway> {
         g.spec.resolved_attachment_proof = None;
+        // Reject the whole Gateway projection for unrepresented upstream fields.
+        // Keep the object in the processor so Accepted=False is persisted and
+        // other Gateways in the same watch continue to initialize.
+        if g.spec.allowed_listeners.is_some()
+            || g.spec.infrastructure.is_some()
+            || g.spec.default_scope.is_some()
+            || g.spec
+                .addresses
+                .as_deref()
+                .is_some_and(|addresses| addresses.iter().any(|address| address.value.is_none()))
+        {
+            g.spec.listeners = None;
+        }
         let resource_ref = ResourceRef::new(
             ResourceKind::Gateway,
             g.metadata.namespace.clone(),
@@ -887,6 +923,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
     }
 
     fn finalize_transport(&self, gateway: &mut Gateway, ctx: &HandlerContext) {
+        gateway.spec.allowed_listeners = None;
+        gateway.spec.infrastructure = None;
+        gateway.spec.default_scope = None;
         let epoch = ctx.runtime().next_gateway_attachment_epoch();
         gateway.spec.resolved_attachment_proof = Some(build_gateway_attachment_proof(
             gateway,
@@ -1186,13 +1225,35 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .as_ref()
             .filter(|(code, _)| is_proxy_protocol_reference_error(*code));
 
+        let unsupported_listener_count = listener_infos
+            .iter()
+            .filter(|info| !is_supported_listener_protocol(&info.protocol))
+            .count();
+        let all_listeners_unsupported =
+            !listener_infos.is_empty() && unsupported_listener_count == listener_infos.len();
+        let invalid_infrastructure_parameters = validation_errors == ["spec.infrastructure is unsupported"]
+            && gateway
+                .spec
+                .infrastructure
+                .as_ref()
+                .and_then(|infrastructure| infrastructure.get("parametersRef"))
+                .is_some();
+
         // Set Gateway-level conditions. Intrinsic PROXY annotation errors are
         // admission errors; reference failures are merged into ResolvedRefs.
-        if validation_errors.is_empty() && proxy_intrinsic_error.is_none() {
+        if validation_errors.is_empty() && proxy_intrinsic_error.is_none() && !all_listeners_unsupported {
             let cond = condition_true(
                 condition_types::ACCEPTED,
-                condition_reasons::ACCEPTED,
-                "Gateway accepted",
+                if unsupported_listener_count > 0 {
+                    condition_types::LISTENERS_NOT_VALID
+                } else {
+                    condition_reasons::ACCEPTED
+                },
+                if unsupported_listener_count > 0 {
+                    "Gateway accepted with unsupported listeners"
+                } else {
+                    "Gateway accepted"
+                },
                 generation,
             );
             update_gateway_condition(conditions, cond);
@@ -1206,10 +1267,22 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 generation,
             );
             update_gateway_condition(conditions, cond);
+        } else if all_listeners_unsupported && validation_errors.is_empty() {
+            let cond = condition_false(
+                condition_types::ACCEPTED,
+                condition_types::LISTENERS_NOT_VALID,
+                "No supported listeners",
+                generation,
+            );
+            update_gateway_condition(conditions, cond);
         } else {
             let cond = condition_false(
                 condition_types::ACCEPTED,
-                "Invalid",
+                if invalid_infrastructure_parameters {
+                    condition_reasons::INVALID_PARAMETERS
+                } else {
+                    "Invalid"
+                },
                 validation_errors.join("; "),
                 generation,
             );
@@ -1273,7 +1346,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Gateway-level Programmed condition:
         // - True when gateway-level validation passes (Accepted=True), meaning
         //   the controller has fully processed this Gateway at the current generation.
-        // - False only when there are gateway-level validation errors.
+        // - False when validation fails or no listener uses a supported protocol.
         //
         // Per Gateway API spec (GEP-1364): gateway-level Programmed indicates the
         // controller has processed the Gateway spec and sent configuration to the
@@ -1284,6 +1357,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // for Programmed=True on ALL infrastructure gateways).
         {
             if validation_errors.is_empty()
+                && !all_listeners_unsupported
                 && proxy_protocol_error
                     .as_ref()
                     .is_none_or(|(code, _)| is_proxy_protocol_shared_conflict(*code))
@@ -1305,7 +1379,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                         (!proxy_protocol_conflicts.is_empty())
                             .then(|| "Inbound PROXY protocol policies conflict on a shared listener".to_string())
                     })
-                    .unwrap_or_else(|| validation_errors.join("; "));
+                    .unwrap_or_else(|| {
+                        if all_listeners_unsupported {
+                            "No supported listeners".to_string()
+                        } else {
+                            validation_errors.join("; ")
+                        }
+                    });
                 let cond = condition_false(
                     condition_types::PROGRAMMED,
                     condition_reasons::INVALID_LISTENER,
@@ -1441,6 +1521,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     is_conflicted,
                     &resolved_refs_errors,
                     no_valid_ca_certificate,
+                    !is_supported_listener_protocol(&protocol),
                     unsupported_tls_mode,
                     mixed_tls_conflict,
                     proxy_listener_error,
@@ -1893,9 +1974,11 @@ fn derive_gateway_addresses(
     if let Some(spec_addresses) = gateway.spec.addresses.as_ref().filter(|a| !a.is_empty()) {
         return spec_addresses
             .iter()
-            .map(|address| GatewayStatusAddress {
-                address_type: address.address_type.clone(),
-                value: address.value.clone(),
+            .filter_map(|address| {
+                address.value.as_ref().map(|value| GatewayStatusAddress {
+                    address_type: address.address_type.clone(),
+                    value: value.clone(),
+                })
             })
             .collect();
     }
@@ -1978,6 +2061,7 @@ fn update_listener_conditions(
     is_conflicted: bool,
     resolved_refs_errors: &[GatewayResolvedRefsError],
     no_valid_ca_certificate: bool,
+    unsupported_protocol: bool,
     unsupported_tls_mode: bool,
     mixed_tls_conflict: bool,
     proxy_protocol_error: Option<&(ProxyProtocolConfigErrorCode, String)>,
@@ -1989,7 +2073,15 @@ fn update_listener_conditions(
         .filter(|(code, _)| !is_proxy_protocol_reference_error(*code) && !is_proxy_protocol_shared_conflict(*code));
     let proxy_reference_error = proxy_protocol_error.filter(|(code, _)| is_proxy_protocol_reference_error(*code));
 
-    if let Some((code, message)) = proxy_intrinsic_error {
+    if unsupported_protocol {
+        let cond = condition_false(
+            condition_types::ACCEPTED,
+            "UnsupportedProtocol",
+            "Listener protocol is not supported",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else if let Some((code, message)) = proxy_intrinsic_error {
         let reason = if is_udp_listener && *code == ProxyProtocolConfigErrorCode::InvalidListenerSelection {
             INVALID_PROXY_PROTOCOL_LISTENER
         } else {
@@ -2089,6 +2181,7 @@ fn update_listener_conditions(
         update_gateway_condition(&mut ls.conditions, cond);
     } else if has_unresolved_refs
         || !validation_errors.is_empty()
+        || unsupported_protocol
         || no_valid_ca_certificate
         || unsupported_tls_mode
         || mixed_tls_conflict
@@ -2643,6 +2736,216 @@ mod tests {
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
 
+    #[tokio::test]
+    async fn canonical_gateway_unsupported_field_sets_invalid_status_and_withdraws_listeners() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime);
+        let handler = GatewayHandler::new(None, None);
+        let gateway: Gateway = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+            "metadata": {"name": "edge", "namespace": "demo"},
+            "spec": {"gatewayClassName": "test",
+                "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}],
+                "infrastructure": {"labels": {"team": "web"}}}
+        }))
+        .unwrap();
+        let errors = handler.validate(&gateway, &ctx);
+        assert_eq!(errors, ["spec.infrastructure is unsupported"]);
+        let ProcessResult::Continue(mut gateway) = handler.parse(gateway, &ctx).await else {
+            panic!("Gateway parse must retain the object for status reporting");
+        };
+        assert!(gateway.spec.listeners.is_none());
+        handler.update_status(&mut gateway, &ctx, &errors);
+        assert!(gateway
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|condition| condition.type_ == "Accepted" && condition.status == "False"));
+        handler.finalize_transport(&mut gateway, &ctx);
+        assert!(gateway.spec.infrastructure.is_none());
+
+        gateway.spec.listeners = Some(vec![GatewayListener {
+            name: "http".into(),
+            hostname: None,
+            port: 80,
+            protocol: "HTTP".into(),
+            tls: None,
+            allowed_routes: None,
+        }]);
+        let errors = handler.validate(&gateway, &ctx);
+        assert!(errors.is_empty());
+        let ProcessResult::Continue(mut corrected) = handler.parse(gateway, &ctx).await else {
+            panic!("Corrected Gateway must parse");
+        };
+        handler.update_status(&mut corrected, &ctx, &errors);
+        assert!(corrected.spec.listeners.is_some());
+        assert!(corrected
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|condition| condition.type_ == "Accepted" && condition.status == "True"));
+    }
+
+    #[test]
+    fn invalid_infrastructure_parameters_use_gateway_api_reason() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime);
+        let handler = GatewayHandler::new(None, None);
+        let mut gateway: Gateway = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+            "metadata": {"name": "edge", "namespace": "demo"},
+            "spec": {"gatewayClassName": "test",
+                "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}],
+                "infrastructure": {"parametersRef": {"group": "invalid.io", "kind": "InvalidParameters", "name": "invalid"}}}
+        }))
+        .unwrap();
+        let errors = handler.validate(&gateway, &ctx);
+        handler.update_status(&mut gateway, &ctx, &errors);
+        let accepted = gateway
+            .status
+            .unwrap()
+            .conditions
+            .unwrap()
+            .into_iter()
+            .find(|condition| condition.type_ == "Accepted")
+            .unwrap();
+        assert_eq!(
+            (accepted.status.as_str(), accepted.reason.as_str()),
+            ("False", "InvalidParameters")
+        );
+    }
+
+    #[test]
+    fn unsupported_protocol_only_invalidates_its_listener() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime);
+        let handler = GatewayHandler::new(None, None);
+        for (with_http, expected_gateway_status) in [(false, "False"), (true, "True")] {
+            let mut listeners = vec![serde_json::json!({"name": "invalid", "port": 1111, "protocol": "INVALID"})];
+            if with_http {
+                listeners.push(serde_json::json!({"name": "http", "port": 80, "protocol": "HTTP"}));
+            }
+            let mut gateway: Gateway = serde_json::from_value(serde_json::json!({
+                "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+                "metadata": {"name": "edge", "namespace": "demo"},
+                "spec": {"gatewayClassName": "test", "listeners": listeners}
+            }))
+            .unwrap();
+            let errors = handler.validate(&gateway, &ctx);
+            assert!(errors.is_empty());
+            handler.update_status(&mut gateway, &ctx, &errors);
+            let status = gateway.status.unwrap();
+            let accepted = status
+                .conditions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|condition| condition.type_ == "Accepted")
+                .unwrap();
+            assert_eq!(
+                (accepted.status.as_str(), accepted.reason.as_str()),
+                (expected_gateway_status, "ListenersNotValid")
+            );
+            let programmed = status
+                .conditions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|condition| condition.type_ == "Programmed")
+                .unwrap();
+            assert_eq!(programmed.status, expected_gateway_status);
+            for listener in status.listeners.unwrap() {
+                let accepted = listener
+                    .conditions
+                    .iter()
+                    .find(|condition| condition.type_ == "Accepted")
+                    .unwrap();
+                if listener.name == "invalid" {
+                    assert_eq!(
+                        (accepted.status.as_str(), accepted.reason.as_str()),
+                        ("False", "UnsupportedProtocol")
+                    );
+                    assert!(listener.supported_kinds.is_empty());
+                } else {
+                    assert_eq!(
+                        (accepted.status.as_str(), accepted.reason.as_str()),
+                        ("True", "Accepted")
+                    );
+                }
+                let programmed = listener
+                    .conditions
+                    .iter()
+                    .find(|condition| condition.type_ == "Programmed")
+                    .unwrap();
+                assert_eq!(
+                    programmed.status,
+                    if listener.name == "invalid" { "False" } else { "True" }
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_address_without_value_is_status_rejected_and_recovers() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime);
+        let handler = GatewayHandler::new(None, None);
+        let source = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+            "metadata": {"name": "edge", "namespace": "demo"},
+            "spec": {"gatewayClassName": "test", "addresses": [{"type": "IPAddress"}],
+                "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}]}
+        });
+        let gateway: Gateway = serde_json::from_value(source.clone()).unwrap();
+        let errors = handler.validate(&gateway, &ctx);
+        assert_eq!(
+            errors,
+            ["spec.addresses contains an address without value, which Edgion cannot bind"]
+        );
+        let ProcessResult::Continue(mut rejected) = handler.parse(gateway, &ctx).await else {
+            panic!("unsupported address must remain available for status");
+        };
+        assert!(rejected.spec.listeners.is_none());
+        assert_eq!(ctx.runtime().listener_port_manager.stats().1, 0);
+        handler.update_status(&mut rejected, &ctx, &errors);
+        let status = rejected.status.as_ref().unwrap();
+        assert!(status
+            .conditions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|condition| condition.type_ == "Accepted" && condition.status == "False"));
+        assert!(status.addresses.as_ref().unwrap().is_empty());
+
+        let mut corrected_source = source;
+        corrected_source["spec"]["addresses"][0]["value"] = serde_json::json!("192.0.2.1");
+        let corrected: Gateway = serde_json::from_value(corrected_source).unwrap();
+        let errors = handler.validate(&corrected, &ctx);
+        assert!(errors.is_empty());
+        let ProcessResult::Continue(mut corrected) = handler.parse(corrected, &ctx).await else {
+            panic!("corrected Gateway must parse");
+        };
+        assert_eq!(ctx.runtime().listener_port_manager.stats().1, 1);
+        handler.update_status(&mut corrected, &ctx, &errors);
+        assert!(corrected
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|condition| condition.type_ == "Accepted" && condition.status == "True"));
+    }
+
     fn make_test_gateway(ns: &str) -> Gateway {
         Gateway {
             metadata: kube::core::ObjectMeta {
@@ -2655,6 +2958,9 @@ mod tests {
                 listeners: None,
                 addresses: None,
                 tls: None,
+                allowed_listeners: None,
+                infrastructure: None,
+                default_scope: None,
                 resolved_inbound_proxy_protocol: Default::default(),
                 resolved_attachment_proof: None,
             },
@@ -3900,6 +4206,60 @@ mod tests {
                 .get_refs(&FrontendCaSourceKey::new(FrontendCaSourceKind::ConfigMap, "gw-ns", "port-ca").index_key())
                 .len(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn frontend_projects_sixteen_ca_references_in_fallback_mode() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime);
+        let mut gateway = make_test_gateway("gw-ns");
+        let mut validation =
+            frontend_validation("ConfigMap", "ca-0", Some(FrontendValidationMode::AllowInsecureFallback));
+        validation.ca_certificate_refs = (0..16)
+            .map(|index| FrontendCACertificateRef {
+                group: String::new(),
+                kind: "ConfigMap".to_string(),
+                name: format!("ca-{index}"),
+                namespace: None,
+            })
+            .collect();
+        gateway.spec.tls = Some(GatewaySpecTLS {
+            backend: None,
+            frontend: Some(GatewayFrontendTLS {
+                default: GatewayFrontendTLSDefault {
+                    validation: Some(validation),
+                },
+                per_port: None,
+            }),
+        });
+        gateway.spec.listeners = Some(vec![GatewayListener {
+            name: "https".to_string(),
+            hostname: None,
+            port: 443,
+            protocol: "HTTPS".to_string(),
+            tls: Some(GatewayTLSConfig {
+                mode: Some(GatewayTlsMode::Terminate),
+                certificate_refs: None,
+                options: None,
+                resolved_certificate_refs: None,
+                frontend_validation: None,
+                resolved_frontend_ca_refs: None,
+                frontend_matcher_eligibility: None,
+            }),
+            allowed_routes: None,
+        }]);
+
+        let ProcessResult::Continue(parsed) = GatewayHandler::new(None, None).parse(gateway, &ctx).await else {
+            panic!("gateway parse unexpectedly stopped");
+        };
+        let listeners = parsed.spec.listeners.as_ref().unwrap();
+        let tls = listeners[0].tls.as_ref().unwrap();
+        assert_eq!(tls.frontend_validation.as_ref().unwrap().ca_certificate_refs.len(), 16);
+        assert_eq!(tls.resolved_frontend_ca_refs.as_ref().unwrap().len(), 16);
+        assert_ne!(
+            tls.frontend_matcher_eligibility,
+            Some(FrontendMatcherEligibility::StrictReject)
         );
     }
 

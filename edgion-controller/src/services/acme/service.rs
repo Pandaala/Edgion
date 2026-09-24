@@ -2091,6 +2091,9 @@ mod tests {
                 }]),
                 addresses: None,
                 tls: None,
+                allowed_listeners: None,
+                infrastructure: None,
+                default_scope: None,
                 resolved_inbound_proxy_protocol: Default::default(),
                 resolved_attachment_proof: Some(GatewayAttachmentProof {
                     instance: "test-instance".to_string(),

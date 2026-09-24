@@ -57,6 +57,14 @@ Raw payloads and value-bearing Serde Display strings are excluded, including
 List decoder errors reached during recovery. No new metrics or labels are added.
 Authority: [log safety](../../../03-coding/01-log-safety.md).
 
+The Gateway API List/Watch boundary additionally checks raw `apiVersion` and
+`kind` against the canonical source inventory before typed deserialization.
+A beta or malformed TypeMeta in a generic Watch is a decode failure and follows
+this same relist path; a List with such an item is rejected before publication.
+Focused 2026-09-24 tests cover missing/malformed/beta List TypeMeta and a
+beta Watch event followed by canonical recovery. This does not add a Gateway
+source-version converter or change the existing successful-prefix policy.
+
 ## Alternatives and limits
 
 Persistent producer/consumer schema mismatch can also prevent List from

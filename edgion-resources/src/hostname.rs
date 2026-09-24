@@ -30,7 +30,7 @@ impl fmt::Display for HostnameError {
             Self::InvalidLength => "hostnames must contain between 1 and 253 bytes",
             Self::IpLiteral => "hostnames must not be IP address literals",
             Self::MissingHostnames => "TLSRoute requires at least one hostname",
-            Self::TooManyHostnames => "routes support at most 16 hostnames",
+            Self::TooManyHostnames => "route hostname list exceeds its Gateway API limit",
         })
     }
 }
@@ -38,13 +38,13 @@ impl fmt::Display for HostnameError {
 impl Error for HostnameError {}
 
 /// Validate the entire authored list; invalid entries never become catch-all.
-/// HTTPRoute/GRPCRoute permit omitted or empty lists; TLSRoute requires 1..=16.
+/// HTTPRoute/GRPCRoute permit omitted or empty lists; TLSRoute requires 1..=1024.
 pub fn validate_route_hostnames(hostnames: Option<&[String]>, required: bool) -> Result<(), HostnameError> {
     let hostnames = hostnames.unwrap_or_default();
     if required && hostnames.is_empty() {
         return Err(HostnameError::MissingHostnames);
     }
-    if hostnames.len() > 16 {
+    if hostnames.len() > if required { 1024 } else { 16 } {
         return Err(HostnameError::TooManyHostnames);
     }
     for hostname in hostnames {
@@ -63,7 +63,11 @@ mod tests {
             assert_eq!(validate_route_hostnames(None, required).is_ok(), !required);
             assert_eq!(validate_route_hostnames(Some(&[]), required).is_ok(), !required);
             assert!(validate_route_hostnames(Some(&vec!["a".into(); 16]), required).is_ok());
-            assert!(validate_route_hostnames(Some(&vec!["a".into(); 17]), required).is_err());
+            assert_eq!(
+                validate_route_hostnames(Some(&vec!["a".into(); 17]), required).is_ok(),
+                required
+            );
+            assert!(validate_route_hostnames(Some(&vec!["a".into(); 1025]), required).is_err());
             assert!(validate_route_hostnames(Some(&["a".into(), "*".into()]), required).is_err());
         }
     }

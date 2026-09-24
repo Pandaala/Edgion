@@ -72,7 +72,7 @@ pub struct StrictPrivateKey {
     public_key_spki_der: Vec<u8>,
 }
 
-pub const MAX_CA_REFERENCE_COUNT: usize = 8;
+pub const MAX_CA_REFERENCE_COUNT: usize = 16;
 pub const MAX_CA_BUNDLE_BYTES_PER_REF: usize = 1024 * 1024;
 pub const MAX_CA_BUNDLE_BYTES_AGGREGATE: usize = 1024 * 1024;
 pub const MAX_CA_CERTIFICATES_PER_REF: usize = 1024;

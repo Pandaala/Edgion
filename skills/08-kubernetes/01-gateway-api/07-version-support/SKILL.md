@@ -38,19 +38,14 @@ Never use one of these as a synonym for another:
 Serde accepting a document after discarding `apiVersion`, or Kubernetes serving
 a version, is not sufficient evidence of Edgion support.
 
-## Current policy and open redesign
+## Current policy and staged implementation
 
-The active repository policy in
-[API version upgrades](../../04-api-version-upgrade.md) is one canonical version
-per resource and atomic upgrades. Current compatibility fallbacks that conflict
-with that policy are recorded as implementation debt.
-
-The user-authorized investigation in
-[`tasks/todo/gateway-api-version-compatibility-and-validation/`](../../../../tasks/todo/gateway-api-version-compatibility-and-validation/)
-will evaluate a broader model in which a source version is supported only when
-Edgion has a schema-backed decoder and an explicit conversion to its canonical
-model. Treat that as a design candidate until the task approves and implements
-the policy change; do not silently expand support from this documentation alone.
+The active [API version policy](../../04-api-version-upgrade.md) keeps one
+canonical model per kind and allows individually tested source adapters.
+The code-owned inventory is `edgion-resources/src/gateway_api_support.rs`.
+Its `Proposed` and `PartialKubernetes` entries are not support claims. The
+staged work in `tasks/todo/gateway-api-version-compatibility-and-validation/`
+must complete each adapter before changing that classification.
 
 ## Review checklist
 

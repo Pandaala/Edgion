@@ -9,9 +9,11 @@ knowledge_type: intentional-design
 **Audit date**: 2026-05-16
 **Linked finding**: c3a-013 (P2, architecture, confirmed → closed, accepted tradeoff)
 **Conclusion**: Retain the existing validation placement and availability checks.
-The accepted scope does not add live-schema discovery, bundle/channel locks, or
-non-Kubernetes GVK/schema compatibility checks. This is a bounded product choice,
-not proof that every admitted resource is supported or every schema constraint is covered.
+The accepted scope does not add live-schema discovery or bundle/channel locks.
+Its original broad exclusion of non-Kubernetes GVK/schema compatibility checks
+now has a narrow exception for explicitly registered source-version adapters.
+This is a bounded product choice, not proof that every admitted resource is
+supported or every schema constraint is covered.
 
 ## Why the asymmetry is fundamental
 
@@ -45,8 +47,11 @@ proposed enhancement, after discussing the following scope and tradeoffs:
   watch-error recovery, and initialization readiness deadlines.
 - Do not introduce live CRD schema discovery/caching, a bundle/channel compatibility
   startup gate, or an Edgion-owned CRD admission version lock and unlock workflow.
-- Do not add the proposed non-Kubernetes GVK, bundle/channel, or schema compatibility
-  checks. Existing Admin API schema validation and handler validation remain in place.
+- The then-proposed broad non-Kubernetes GVK, bundle/channel, and schema
+  compatibility gate was declined. Existing Admin API schema validation and
+  handler validation remain in place. The later source-adapter policy narrowly
+  reopens per-source TypeMeta and conversion checks, without live-schema
+  discovery or a bundle lock.
 
 Current source evidence:
 
@@ -68,12 +73,27 @@ compatibility: the same HTTPRoute v1 GVK can expose different fields across bund
 and channels. No live-schema compatibility or exact-bundle enforcement is claimed.
 The Rust JSON Schema validator does not execute arbitrary Kubernetes CEL.
 
-The local validator still indexes by `ResourceKind`, takes the first CRD version,
-and permits duplicate bundle entries to overwrite each other. This closure neither
-fixes nor disproves those limitations; the user declined expanding non-Kubernetes
-checks in this task. Broader Gateway API compatibility work retains separate
-support-matrix, status, and conformance questions. It must honor
-this scope decision rather than automatically reintroduce the declined mechanisms.
+The local validator still indexes Edgion resources by `ResourceKind`. The later
+Gateway API source-adapter work added a separate registry keyed by full source
+GVK, with an explicit Standard or Experimental profile for each kind. It rejects
+duplicate selected schemas and missing canonical schemas at startup. Admin
+Gateway API writes validate the authored document before typed parsing; direct
+FileSystem and etcd writes check source TypeMeta before typed parsing and retain
+their asynchronous handler/status lifecycle. This does not run full OpenAPI
+validation on watcher events. Broader Gateway API compatibility work retains
+separate support-matrix, status, and conformance questions and still excludes
+live discovery and bundle locks.
+
+The added watcher cost is one bounded source-identity check per Gateway API
+document, not a CRD schema pass. An unsupported or malformed identity follows
+the existing runtime-invalid withdrawal path; a recognized document with a
+semantic error still flows through the handler and status path. Admin create,
+update, and validate use the selected vendored OpenAPI schema on the original
+document, so schema-only failures are synchronous there. This is deliberately
+asymmetric because the controller cannot prevent a direct file or etcd write.
+The JSON Schema engine does not evaluate CEL. The existing shared
+RequestRedirect and URLRewrite transform contract covers its scoped rules;
+other CEL-only constraints are not claimed as validated by this registry.
 
 This decision was checked against current source; no new runtime behavior or
 cluster compatibility experiment is asserted. The 2026-05-16 finding above is

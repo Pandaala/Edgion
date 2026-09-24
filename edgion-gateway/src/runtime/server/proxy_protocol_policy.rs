@@ -587,6 +587,9 @@ mod tests {
                 }]),
                 addresses: None,
                 tls: None,
+                allowed_listeners: None,
+                infrastructure: None,
+                default_scope: None,
                 resolved_inbound_proxy_protocol: state,
                 resolved_attachment_proof: None,
             },
@@ -606,7 +609,7 @@ mod tests {
     fn with_address(mut gateway: Gateway, address: &str) -> Gateway {
         gateway.spec.addresses = Some(vec![GatewayAddress {
             address_type: None,
-            value: address.to_string(),
+            value: Some(address.to_string()),
         }]);
         gateway
     }

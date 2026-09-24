@@ -1,0 +1,7 @@
+case	kind	sourceGVKVersion	fieldPath	standardRelease	attribute	observed	expected
+added-parent-ref-port	HTTPRoute	v1	spec.parentRefs[].port	v1.0.0	type	null	null
+added-parent-ref-port	HTTPRoute	v1	spec.parentRefs[].port	v1.1.0	type	"integer"	"integer"
+corrected-listener-protocol-pattern	Gateway	v1	spec.listeners[].protocol	v1.1.1	pattern	"^[a-zA-Z0-9]([-a-zSA-Z0-9]*[a-zA-Z0-9])?$|[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*\\/[A-Za-z0-9]+$"	"^[a-zA-Z0-9]([-a-zSA-Z0-9]*[a-zA-Z0-9])?$|[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*\\/[A-Za-z0-9]+$"
+corrected-listener-protocol-pattern	Gateway	v1	spec.listeners[].protocol	v1.2.0	pattern	"^[a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?$|[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*\\/[A-Za-z0-9]+$"	"^[a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?$|[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*\\/[A-Za-z0-9]+$"
+added-mirror-denominator-default	HTTPRoute	v1	spec.rules[].filters[].requestMirror.fraction.denominator	v1.2.1	default	null	null
+added-mirror-denominator-default	HTTPRoute	v1	spec.rules[].filters[].requestMirror.fraction.denominator	v1.3.0	default	100	100

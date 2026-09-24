@@ -53,6 +53,50 @@ use tokio_util::{
     task::{AbortOnDropHandle, TaskTracker},
 };
 
+fn canonical_http_route_event(event: Event<edgion_resources::HTTPRouteBeta>) -> Event<edgion_resources::HTTPRoute> {
+    match event {
+        Event::Init => Event::Init,
+        Event::InitApply(route) => Event::InitApply(route.into()),
+        Event::InitDone => Event::InitDone,
+        Event::Apply(route) => Event::Apply(route.into()),
+        Event::Delete(route) => Event::Delete(route.into()),
+    }
+}
+
+fn canonical_gateway_event(event: Event<edgion_resources::GatewayBeta>) -> Event<edgion_resources::Gateway> {
+    match event {
+        Event::Init => Event::Init,
+        Event::InitApply(gateway) => Event::InitApply(gateway.into()),
+        Event::InitDone => Event::InitDone,
+        Event::Apply(gateway) => Event::Apply(gateway.into()),
+        Event::Delete(gateway) => Event::Delete(gateway.into()),
+    }
+}
+
+fn canonical_gateway_class_event(
+    event: Event<edgion_resources::GatewayClassBeta>,
+) -> Event<edgion_resources::GatewayClass> {
+    match event {
+        Event::Init => Event::Init,
+        Event::InitApply(class) => Event::InitApply(class.into()),
+        Event::InitDone => Event::InitDone,
+        Event::Apply(class) => Event::Apply(class.into()),
+        Event::Delete(class) => Event::Delete(class.into()),
+    }
+}
+
+fn canonical_reference_grant_event(
+    event: Event<edgion_resources::ReferenceGrantBeta>,
+) -> Event<edgion_resources::ReferenceGrant> {
+    match event {
+        Event::Init => Event::Init,
+        Event::InitApply(grant) => Event::InitApply(grant.into()),
+        Event::InitDone => Event::InitDone,
+        Event::Apply(grant) => Event::Apply(grant.into()),
+        Event::Delete(grant) => Event::Delete(grant.into()),
+    }
+}
+
 /// Generic ResourceController that encapsulates the complete lifecycle for a single resource type
 ///
 /// Source-owned native stores publish complete LISTs. The first committed union
@@ -83,6 +127,7 @@ where
 
     /// Leader handle for gating status writes (Phase 2 HA support)
     leader_handle: Option<LeaderHandle>,
+    status_version: Option<&'static str>,
 }
 
 /// API scope for resource (namespaced or cluster-scoped)
@@ -119,6 +164,147 @@ impl ApiScope {
     }
 }
 
+fn canonical_reference_grant_stream(
+    stream: NamespacedWatcher<edgion_resources::ReferenceGrantBeta>,
+) -> NamespacedWatcher<edgion_resources::ReferenceGrant> {
+    Box::pin(stream.map(|event| event.map(canonical_reference_grant_event)))
+}
+
+impl ResourceController<edgion_resources::HTTPRoute> {
+    pub async fn run_http_route_beta(self) -> Result<()> {
+        use edgion_resources::HTTPRouteBeta;
+        let client = self.client.clone();
+        let config = self.watcher_config.clone();
+        let stream = |api| -> NamespacedWatcher<edgion_resources::HTTPRoute> {
+            Box::pin(
+                watcher(api, config.clone())
+                    .default_backoff()
+                    .map(|event| event.map(canonical_http_route_event)),
+            )
+        };
+        let sources = match &self.api_scope {
+            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces) => {
+                vec![(WatchScope::AllNamespaces, stream(Api::<HTTPRouteBeta>::all(client)))]
+            }
+            ApiScope::Namespaced(NamespaceWatchMode::SingleNamespace(ns)) => {
+                vec![(
+                    WatchScope::Namespace(ns.clone()),
+                    stream(Api::<HTTPRouteBeta>::namespaced(client, ns)),
+                )]
+            }
+            ApiScope::Namespaced(NamespaceWatchMode::MultipleNamespaces(namespaces)) => {
+                let mut names = namespaces.clone();
+                names.sort();
+                names.dedup();
+                names
+                    .into_iter()
+                    .map(|ns| {
+                        let watched = stream(Api::<HTTPRouteBeta>::namespaced(client.clone(), &ns));
+                        (WatchScope::Namespace(ns), watched)
+                    })
+                    .collect()
+            }
+            ApiScope::ClusterScoped => anyhow::bail!("Cannot run cluster-scoped HTTPRoute"),
+        };
+        self.run_sources(sources).await
+    }
+}
+
+impl ResourceController<edgion_resources::Gateway> {
+    pub async fn run_gateway_beta(self) -> Result<()> {
+        use edgion_resources::GatewayBeta;
+        let client = self.client.clone();
+        let config = self.watcher_config.clone();
+        let stream = |api| -> NamespacedWatcher<edgion_resources::Gateway> {
+            Box::pin(
+                watcher(api, config.clone())
+                    .default_backoff()
+                    .map(|event| event.map(canonical_gateway_event)),
+            )
+        };
+        let sources = match &self.api_scope {
+            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces) => {
+                vec![(WatchScope::AllNamespaces, stream(Api::<GatewayBeta>::all(client)))]
+            }
+            ApiScope::Namespaced(NamespaceWatchMode::SingleNamespace(ns)) => {
+                vec![(
+                    WatchScope::Namespace(ns.clone()),
+                    stream(Api::<GatewayBeta>::namespaced(client, ns)),
+                )]
+            }
+            ApiScope::Namespaced(NamespaceWatchMode::MultipleNamespaces(namespaces)) => {
+                let mut names = namespaces.clone();
+                names.sort();
+                names.dedup();
+                names
+                    .into_iter()
+                    .map(|ns| {
+                        let watched = stream(Api::<GatewayBeta>::namespaced(client.clone(), &ns));
+                        (WatchScope::Namespace(ns), watched)
+                    })
+                    .collect()
+            }
+            ApiScope::ClusterScoped => anyhow::bail!("Cannot run cluster-scoped Gateway"),
+        };
+        self.run_sources(sources).await
+    }
+}
+
+impl ResourceController<edgion_resources::GatewayClass> {
+    pub async fn run_gateway_class_beta(self) -> Result<()> {
+        let stream: NamespacedWatcher<edgion_resources::GatewayClass> = Box::pin(
+            watcher(
+                Api::<edgion_resources::GatewayClassBeta>::all(self.client.clone()),
+                self.watcher_config.clone(),
+            )
+            .default_backoff()
+            .map(|event| event.map(canonical_gateway_class_event)),
+        );
+        self.run_sources(vec![(WatchScope::Cluster, stream)]).await
+    }
+}
+
+impl ResourceController<edgion_resources::ReferenceGrant> {
+    /// Watch the selected v1beta1 transport and convert before the canonical raw store.
+    pub async fn run_reference_grant_beta(self) -> Result<()> {
+        use edgion_resources::ReferenceGrantBeta;
+        let namespaces = match &self.api_scope {
+            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces) => {
+                let stream = canonical_reference_grant_stream(Box::pin(
+                    watcher(
+                        Api::<ReferenceGrantBeta>::all(self.client.clone()),
+                        self.watcher_config.clone(),
+                    )
+                    .default_backoff(),
+                ));
+                return self.run_sources(vec![(WatchScope::AllNamespaces, stream)]).await;
+            }
+            ApiScope::Namespaced(NamespaceWatchMode::SingleNamespace(ns)) => vec![ns.clone()],
+            ApiScope::Namespaced(NamespaceWatchMode::MultipleNamespaces(namespaces)) => {
+                let mut names = namespaces.clone();
+                names.sort();
+                names.dedup();
+                names
+            }
+            ApiScope::ClusterScoped => anyhow::bail!("Cannot run cluster-scoped ReferenceGrant"),
+        };
+        let sources = namespaces
+            .into_iter()
+            .map(|ns| {
+                let stream = canonical_reference_grant_stream(Box::pin(
+                    watcher(
+                        Api::<ReferenceGrantBeta>::namespaced(self.client.clone(), &ns),
+                        self.watcher_config.clone(),
+                    )
+                    .default_backoff(),
+                ));
+                (WatchScope::Namespace(ns), stream)
+            })
+            .collect();
+        self.run_sources(sources).await
+    }
+}
+
 impl<K> ResourceController<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -150,6 +336,7 @@ where
             cancel: CancellationToken::new(),
             tracker: TaskTracker::new(),
             leader_handle: None,
+            status_version: None,
         }
     }
 
@@ -162,6 +349,11 @@ where
     pub(super) fn with_epoch(mut self, cancel: CancellationToken, tracker: TaskTracker) -> Self {
         self.cancel = cancel;
         self.tracker = tracker;
+        self
+    }
+
+    pub fn with_status_version(mut self, version: &'static str) -> Self {
+        self.status_version = Some(version);
         self
     }
 
@@ -323,6 +515,7 @@ where
                             &self.client,
                             &self.api_scope,
                             &self.leader_handle,
+                            self.status_version,
                             &self.namespace_filter,
                             self.kind,
                             "init",
@@ -344,6 +537,7 @@ where
                         self.client.clone(),
                         self.api_scope.clone(),
                         self.leader_handle.clone(),
+                        self.status_version,
                         worker_cancel.clone(),
                         &self.tracker,
                     )));
@@ -405,6 +599,7 @@ fn spawn_worker<K>(
     client: Client,
     api_scope: ApiScope,
     leader_handle: Option<LeaderHandle>,
+    status_version: Option<&'static str>,
     cancel: CancellationToken,
     tracker: &TaskTracker,
 ) -> JoinHandle<()>
@@ -463,9 +658,10 @@ where
 
                                     match persisted_status {
                                         Some(status_value) => {
-                                            if let Err(e) = persist_k8s_status::<K>(
+                                            if let Err(e) = persist_k8s_status_version::<K>(
                                                 &client,
                                                 &api_scope,
+                                                status_version,
                                                 namespace,
                                                 name,
                                                 resource_version.as_deref(),
@@ -541,9 +737,11 @@ impl StatusWriteError {
 /// Persist status with an atomic precondition on the raw input resourceVersion.
 ///
 /// Uses DynamicObject to avoid the Scope type constraint issue.
-/// The `ApiResource` is built from K's `#[kube]`-derived GVK + plural metadata.
-/// All resource kinds inherit the guard. A conflict ends this attempt; recovery uses
+/// The `ApiResource` uses the selected GatewayClass transport when supplied;
+/// other kinds use K's `#[kube]`-derived GVK and plural metadata. All resource
+/// kinds inherit the guard. A conflict ends this attempt; recovery uses
 /// subsequent source events/requeues, never a fresh version attached to stale status.
+#[cfg(test)]
 async fn persist_k8s_status<K>(
     client: &Client,
     api_scope: &ApiScope,
@@ -556,14 +754,31 @@ where
     K: Resource + Clone + Debug + DeserializeOwned + Serialize,
     K::DynamicType: Default,
 {
+    persist_k8s_status_version::<K>(client, api_scope, None, namespace, name, resource_version, status_value).await
+}
+
+async fn persist_k8s_status_version<K>(
+    client: &Client,
+    api_scope: &ApiScope,
+    status_version: Option<&str>,
+    namespace: Option<&str>,
+    name: &str,
+    resource_version: Option<&str>,
+    status_value: &serde_json::Value,
+) -> Result<(), StatusWriteError>
+where
+    K: Resource + Clone + Debug + DeserializeOwned + Serialize,
+    K::DynamicType: Default,
+{
     use kube::core::DynamicObject;
     use kube::discovery::ApiResource;
 
+    edgion_resources::gateway_api_support::assert_canonical_type_identity::<K>(&K::kind(&K::DynamicType::default()));
     let dt = K::DynamicType::default();
     let api_resource = ApiResource::from_gvk_with_plural(
         &kube::core::GroupVersionKind {
             group: K::group(&dt).to_string(),
-            version: K::version(&dt).to_string(),
+            version: status_version.unwrap_or(&K::version(&dt)).to_string(),
             kind: K::kind(&dt).to_string(),
         },
         &K::plural(&dt),
@@ -648,6 +863,7 @@ async fn run_init_apply_once<K>(
     client: &Client,
     api_scope: &ApiScope,
     leader_handle: &Option<LeaderHandle>,
+    status_version: Option<&'static str>,
     namespace_filter: &Option<Vec<String>>,
     kind: &'static str,
     phase: &'static str,
@@ -675,9 +891,10 @@ where
         let name = obj.meta().name.as_deref().unwrap_or("");
         let namespace = obj.meta().namespace.as_deref();
         if let Some(status_value) = persisted_status {
-            if let Err(e) = persist_k8s_status::<K>(
+            if let Err(e) = persist_k8s_status_version::<K>(
                 client,
                 api_scope,
+                status_version,
                 namespace,
                 name,
                 resource_version.as_deref(),
@@ -718,6 +935,41 @@ mod status_persistence_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_class_beta_events_keep_one_canonical_lifecycle() {
+        use edgion_resources::{GatewayClassBeta, GatewayClassBetaSpec};
+        let class = GatewayClassBeta {
+            metadata: kube::api::ObjectMeta {
+                name: Some("edge".into()),
+                resource_version: Some("17".into()),
+                ..Default::default()
+            },
+            spec: GatewayClassBetaSpec {
+                controller_name: "example.com/edge".into(),
+                description: None,
+                parameters_ref: None,
+            },
+            status: None,
+        };
+        assert!(matches!(canonical_gateway_class_event(Event::Init), Event::Init));
+        assert!(matches!(
+            canonical_gateway_class_event(Event::InitDone),
+            Event::InitDone
+        ));
+        for event in [
+            Event::InitApply(class.clone()),
+            Event::Apply(class.clone()),
+            Event::Delete(class),
+        ] {
+            let canonical = canonical_gateway_class_event(event);
+            let (Event::InitApply(obj) | Event::Apply(obj) | Event::Delete(obj)) = canonical else {
+                unreachable!();
+            };
+            assert_eq!(obj.metadata.resource_version.as_deref(), Some("17"));
+            assert_eq!(obj.spec.controller_name, "example.com/edge");
+        }
+    }
     use crate::conf_mgr::sync_runtime::resource_processor::{
         HandlerContext, ProcessResult, ProcessorHandler, ProcessorObj,
     };
@@ -725,6 +977,209 @@ mod tests {
     use k8s_openapi::api::core::v1::ConfigMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::mpsc;
+
+    #[test]
+    fn beta_watch_events_enter_canonical_store_as_v1() {
+        use edgion_resources::resources::{ReferenceGrantBetaSpec, ReferenceGrantFrom, ReferenceGrantTo};
+        let beta = edgion_resources::ReferenceGrantBeta {
+            metadata: kube::api::ObjectMeta {
+                namespace: Some("backend".into()),
+                name: Some("allow".into()),
+                resource_version: Some("17".into()),
+                ..Default::default()
+            },
+            spec: ReferenceGrantBetaSpec {
+                from: vec![ReferenceGrantFrom {
+                    group: "gateway.networking.k8s.io".into(),
+                    kind: "HTTPRoute".into(),
+                    namespace: "app".into(),
+                }],
+                to: vec![ReferenceGrantTo {
+                    group: "".into(),
+                    kind: "Service".into(),
+                    name: Some("api".into()),
+                }],
+            },
+        };
+        for event in [
+            Event::InitApply(beta.clone()),
+            Event::Apply(beta.clone()),
+            Event::Delete(beta),
+        ] {
+            let canonical = canonical_reference_grant_event(event);
+            let (Event::InitApply(grant) | Event::Apply(grant) | Event::Delete(grant)) = canonical else {
+                panic!("object event must remain an object event");
+            };
+            assert_eq!(grant.metadata.resource_version.as_deref(), Some("17"));
+            assert_eq!(grant.spec.from[0].namespace, "app");
+            assert_eq!(grant.spec.to[0].name.as_deref(), Some("api"));
+            assert_eq!(<edgion_resources::ReferenceGrant as Resource>::version(&()), "v1");
+        }
+    }
+
+    #[derive(Default)]
+    struct GrantEvents(parking_lot::Mutex<Vec<std::collections::HashSet<String>>>);
+
+    #[async_trait::async_trait]
+    impl crate::conf_mgr::sync_runtime::resource_processor::ref_grant::events::RevalidationListener for GrantEvents {
+        async fn on_reference_grant_changed(
+            &self,
+            event: &crate::conf_mgr::sync_runtime::resource_processor::ref_grant::events::ReferenceGrantChangedEvent,
+        ) {
+            self.0.lock().push(event.affected_namespaces.clone());
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingGrantHandler {
+        inner: crate::conf_mgr::sync_runtime::resource_processor::ReferenceGrantHandler,
+        init_done: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl ProcessorHandler<edgion_resources::ReferenceGrant> for CountingGrantHandler {
+        async fn parse(
+            &self,
+            obj: edgion_resources::ReferenceGrant,
+            ctx: &HandlerContext,
+        ) -> ProcessResult<edgion_resources::ReferenceGrant> {
+            self.inner.parse(obj, ctx).await
+        }
+        async fn on_change(&self, obj: &edgion_resources::ReferenceGrant, ctx: &HandlerContext) {
+            self.inner.on_change(obj, ctx).await;
+        }
+        async fn on_delete(&self, obj: &edgion_resources::ReferenceGrant, ctx: &HandlerContext) {
+            self.inner.on_delete(obj, ctx).await;
+        }
+        fn on_init_done(&self, _ctx: &HandlerContext) {
+            self.init_done.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn beta_grant(from_namespace: &str) -> edgion_resources::ReferenceGrantBeta {
+        use edgion_resources::resources::{ReferenceGrantBetaSpec, ReferenceGrantFrom, ReferenceGrantTo};
+        edgion_resources::ReferenceGrantBeta {
+            metadata: kube::api::ObjectMeta {
+                namespace: Some("backend".into()),
+                name: Some("allow".into()),
+                resource_version: Some("17".into()),
+                ..Default::default()
+            },
+            spec: ReferenceGrantBetaSpec {
+                from: vec![ReferenceGrantFrom {
+                    group: "gateway.networking.k8s.io".into(),
+                    kind: "HTTPRoute".into(),
+                    namespace: from_namespace.into(),
+                }],
+                to: vec![ReferenceGrantTo {
+                    group: "".into(),
+                    kind: "Service".into(),
+                    name: Some("api".into()),
+                }],
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn beta_watch_stream_reconciles_canonical_raw_store_and_relist_without_status() {
+        let runtime = Arc::new(ControllerRuntime::new());
+        let events = Arc::new(GrantEvents::default());
+        runtime.ref_grant_dispatcher.register_listener(events.clone());
+        let handler = Arc::new(CountingGrantHandler::default());
+        let processor = Arc::new(ResourceProcessor::new(
+            "ReferenceGrant",
+            32,
+            handler.clone(),
+            runtime.clone(),
+        ));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let captured = requests.clone();
+        let client = Client::new(
+            tower::service_fn(move |_request: http::Request<kube::client::Body>| {
+                let captured = captured.clone();
+                async move {
+                    captured.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, std::convert::Infallible>(http::Response::new(kube::client::Body::empty()))
+                }
+            }),
+            "default",
+        );
+        let cancel = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let controller = ResourceController::new(
+            "ReferenceGrant",
+            client,
+            processor.clone(),
+            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces),
+            watcher::Config::default(),
+        )
+        .with_epoch(cancel.clone(), tracker.clone());
+        let (tx, beta_stream) = source_channel::<edgion_resources::ReferenceGrantBeta>();
+        let task = tracker.spawn(controller.run_sources(vec![(
+            WatchScope::AllNamespaces,
+            canonical_reference_grant_stream(beta_stream),
+        )]));
+        for event in [Event::Init, Event::InitApply(beta_grant("app-a")), Event::InitDone] {
+            tx.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| processor.get("backend/allow").is_some() && !events.0.lock().is_empty()).await;
+        let raw = processor.get_raw_any("backend/allow").unwrap();
+        let raw = raw.downcast::<edgion_resources::ReferenceGrant>().unwrap();
+        assert_eq!(raw.spec.from[0].namespace, "app-a");
+        assert_eq!(handler.init_done.load(Ordering::SeqCst), 1);
+        assert_eq!(tracker.len(), 2, "one source driver and one resource worker");
+
+        tx.send(Ok(Event::Apply(beta_grant("app-b")))).await.unwrap();
+        eventually(|| {
+            processor
+                .get("backend/allow")
+                .is_some_and(|grant| grant.spec.from[0].namespace == "app-b")
+                && events.0.lock().len() >= 3
+        })
+        .await;
+        let updates = events.0.lock().clone();
+        assert!(updates[1..].iter().any(|event| event.contains("app-a")));
+        assert!(updates[1..].iter().any(|event| event.contains("app-b")));
+
+        tx.send(Ok(Event::Delete(beta_grant("app-b")))).await.unwrap();
+        eventually(|| processor.get("backend/allow").is_none() && events.0.lock().len() >= 4).await;
+        tx.send(Ok(Event::Apply(beta_grant("app-c")))).await.unwrap();
+        eventually(|| {
+            processor
+                .get("backend/allow")
+                .is_some_and(|grant| grant.spec.from[0].namespace == "app-c")
+        })
+        .await;
+        tx.send(Err(watcher::Error::NoResourceVersion)).await.unwrap();
+        for event in [
+            Event::Init,
+            Event::InitApply(beta_grant("app-d")),
+            Event::InitDone,
+            Event::InitDone,
+        ] {
+            tx.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| {
+            processor
+                .get("backend/allow")
+                .is_some_and(|grant| grant.spec.from[0].namespace == "app-d")
+        })
+        .await;
+        assert!(events.0.lock().iter().any(|event| event.contains("app-c")));
+        assert!(events.0.lock().iter().any(|event| event.contains("app-d")));
+        assert_eq!(handler.init_done.load(Ordering::SeqCst), 1);
+        assert_eq!(tracker.len(), 2, "relist must not spawn another worker");
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "ReferenceGrant has no status endpoint"
+        );
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+        tracker.close();
+        tracker.wait().await;
+        assert!(processor.raw_keys().is_empty());
+    }
 
     struct RecordingHandler {
         completed: AtomicUsize,

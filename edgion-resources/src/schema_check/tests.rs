@@ -637,7 +637,7 @@ fn link_sys_schema_dispatches_all_provider_variants() {
 }
 
 #[test]
-fn link_sys_reports_deep_typo_and_keeps_open_boundaries_quiet() {
+fn link_sys_reports_deep_typo_and_removed_redis_observability() {
     let redis = json!({
         "type": "redis",
         "config": {
@@ -648,7 +648,7 @@ fn link_sys_reports_deep_typo_and_keeps_open_boundaries_quiet() {
     });
     assert_eq!(
         unknown_key_paths(&redis, link_sys_spec_schema()),
-        vec!["config.timeout.conect".to_string()]
+        vec!["config.observability".to_string(), "config.timeout.conect".to_string()]
     );
 
     let webhook = json!({

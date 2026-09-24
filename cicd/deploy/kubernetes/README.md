@@ -51,7 +51,7 @@ cicd/deploy/kubernetes/scripts/deploy.sh -y
 This single command will:
 
 1. Create the `edgion-system` namespace
-2. Install Gateway API CRDs (experimental channel, v1.5.0 by default) and Edgion CRDs
+2. Install Gateway API CRDs (experimental channel, v1.6.2 by default) and Edgion CRDs
 3. Deploy the controller (2 replicas with leader election)
 4. Deploy the gateway (2 replicas with readiness probes)
 5. Apply the default GatewayClass, EdgionGatewayConfig, and Gateway listeners (HTTP :80, HTTPS :443)

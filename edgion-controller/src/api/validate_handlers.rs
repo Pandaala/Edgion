@@ -9,14 +9,13 @@
 //! write:
 //! 1. [`extract_resource_metadata`] on the raw body (same early sanity check
 //!    the write path performs);
-//! 2. a typed parse via [`parse_resource_and_update_version`] with
-//!    `update_version: false` — no version bump, nothing persisted;
-//! 3. the CRD-schema validator (`conf_mgr::schema_validator::SchemaValidator`),
-//!    called directly (not through the `is_k8s_mode`-gated `validate_resource`
-//!    wrapper) so it always runs and so its error messages are captured, not
-//!    just collapsed to a `StatusCode`. Forcing it on regardless of mode is
-//!    deliberate: a validation *query* should answer fully regardless of who
-//!    else validates in production;
+//! 2. the original Gateway API source document is checked against its
+//!    registered schema before typed parsing; other kinds retain the existing
+//!    typed-then-schema order;
+//! 3. a typed parse via [`parse_resource_and_update_version`] with
+//!    `update_version: false` — no version bump, nothing persisted. The
+//!    CRD-schema validator (`conf_mgr::schema_validator::SchemaValidator`) is
+//!    called directly so schema diagnostics reach the query response;
 //! 4. the unknown-field walk on the raw document, via
 //!    [`unknown_field_warnings`] from the Admin write path (`api/common.rs`).
 //!
@@ -78,10 +77,49 @@ pub async fn validate_kind(
     // meaningfully validated any further.
     edgion_resources::resource::meta::extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
 
-    // Steps 2+3: typed parse (no version bump, nothing persisted) then
-    // schema validation, per concrete resource type. `update_version: false`
-    // is the `parse_resource_and_update_version` contract for a read-only
-    // caller.
+    // Gateway API source validation precedes typed parsing, which can discard
+    // authored fields or reject a field before its schema error is reported.
+    let gateway_source =
+        edgion_resources::gateway_api_support::canonical_sources().find(|source| source.kind == kind.as_str());
+    let gateway_schema_errors = if let Some(source) = gateway_source {
+        let raw_yaml: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|_| StatusCode::BAD_REQUEST)?;
+        crate::conf_mgr::conf_center::common::validate_gateway_api_source(kind, &raw_yaml)
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+        let raw_json: serde_json::Value = crate::api::common::parse_resource(&content)?;
+        let version = if matches!(
+            kind,
+            ResourceKind::ReferenceGrant | ResourceKind::GatewayClass | ResourceKind::Gateway | ResourceKind::HTTPRoute
+        ) && raw_yaml.get("apiVersion").and_then(serde_yaml::Value::as_str)
+            == Some("gateway.networking.k8s.io/v1beta1")
+        {
+            "v1beta1"
+        } else {
+            source.version
+        };
+        match state.schema_validator.validate_gateway_source(
+            edgion_resources::gateway_api_support::GROUP,
+            version,
+            source.kind,
+            &raw_json,
+        ) {
+            Ok(()) => Vec::new(),
+            Err(ValidationError::SchemaViolation(message)) => message.split("; ").map(str::to_string).collect(),
+        }
+    } else {
+        Vec::new()
+    };
+    if !gateway_schema_errors.is_empty() {
+        return Ok(Json(ApiResponse::ok_body(ValidateResponse {
+            ok: false,
+            unknown_field_check: "unsupported",
+            unknown_fields: Vec::new(),
+            schema_errors: gateway_schema_errors,
+            validation_errors: Vec::new(),
+        })));
+    }
+
+    // Non-Gateway API kinds retain their existing typed-then-schema flow.
+    // `update_version: false` keeps this read-only.
     let json_value: serde_json::Value = match kind {
         ResourceKind::HTTPRoute => parse_and_serialize::<HTTPRoute>(&content)?,
         ResourceKind::GRPCRoute => parse_and_serialize::<GRPCRoute>(&content)?,
@@ -108,7 +146,12 @@ pub async fn validate_kind(
         ResourceKind::Unspecified => return Err(StatusCode::BAD_REQUEST),
     };
 
-    let schema_errors: Vec<String> = match state.schema_validator.validate(kind, &json_value) {
+    let schema_result = if gateway_source.is_some() {
+        Ok(())
+    } else {
+        state.schema_validator.validate(kind, &json_value)
+    };
+    let schema_errors: Vec<String> = match schema_result {
         Ok(()) => Vec::new(),
         Err(ValidationError::SchemaViolation(msg)) => msg.split("; ").map(str::to_string).collect(),
     };
@@ -135,7 +178,7 @@ pub async fn validate_kind(
         }
         ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource_and_update_version(&content, false)?;
-            route
+            let mut errors = route
                 .spec
                 .rules
                 .iter()
@@ -152,7 +195,11 @@ pub async fn validate_kind(
                         )],
                     },
                 )
-                .collect()
+                .collect::<Vec<_>>();
+            if let Some(reason) = route.spec.unsupported_default_gateway_attachment() {
+                errors.push(reason.to_string());
+            }
+            errors
         }
         _ => Vec::new(),
     };
@@ -215,6 +262,45 @@ mod tests {
                 "spec": {}
             }"#,
         )
+    }
+
+    #[tokio::test]
+    async fn original_gateway_class_field_reports_schema_error() {
+        let (mut state, _tmp) = make_state().await;
+        let crd_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+        Arc::get_mut(&mut state).unwrap().schema_validator = Arc::new(SchemaValidator::from_crd_dir(&crd_dir).unwrap());
+        let body = Bytes::from(
+            r#"{"apiVersion":"gateway.networking.k8s.io/v1","kind":"GatewayClass","metadata":{"name":"gc-a"},"spec":{"controllerName":"invalid"}}"#,
+        );
+        let result = validate_kind(State(state), Path("GatewayClass".to_string()), body)
+            .await
+            .unwrap()
+            .0
+            .data
+            .unwrap();
+        assert!(!result.ok);
+        assert!(!result.schema_errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn gateway_schema_error_precedes_typed_deserialization_error() {
+        let (mut state, _tmp) = make_state().await;
+        let crd_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+        Arc::get_mut(&mut state).unwrap().schema_validator = Arc::new(SchemaValidator::from_crd_dir(&crd_dir).unwrap());
+        let body = Bytes::from(
+            r#"{"apiVersion":"gateway.networking.k8s.io/v1","kind":"GatewayClass","metadata":{"name":"gc-a"},"spec":{"controllerName":42}}"#,
+        );
+        let result = validate_kind(State(state), Path("GatewayClass".to_string()), body)
+            .await
+            .expect("schema verdict must be returned before typed parsing")
+            .0
+            .data
+            .unwrap();
+        assert!(!result.ok);
+        assert!(result
+            .schema_errors
+            .iter()
+            .any(|error| error.contains("/spec/controllerName")));
     }
 
     #[tokio::test]

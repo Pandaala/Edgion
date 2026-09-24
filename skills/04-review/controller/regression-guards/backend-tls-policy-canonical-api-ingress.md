@@ -15,20 +15,33 @@ non-v1 `apiVersion` before typed deserialization can discard the submitted
 TypeMeta. This is an ingress contract, not a promise that directly deserializing
 the generated Rust resource validates its submitted API version.
 
+The Standard v1.5.0 CRD also admits non-`System` names in
+`validation.wellKnownCACertificates`. The canonical source model retains an
+unrecognized name so one such object cannot fail the entire typed LIST.
+The Controller reports the policy invalid and does not publish a runtime
+target; the Gateway policy store and shared outbound TLS resolver reject it
+defensively. `System` keeps its existing behavior. This is not support for
+custom named trust stores. The exact v1.4.1→v1.5.0 OpenAPI fixture and
+mixed-object List/recovery checks are in
+`edgion-tests/gateway_api_bundles/` and Gateway conf-sync tests.
+
 `BackendTLSPolicySpec.target_refs` identifies the policy's backend targets;
 `validation` describes their server-certificate authentication. The API promotion
 does not change those fields, arbitration, requeue semantics, or Gateway TLS.
 
 ## Rationale and evidence
 
-The authority is `skills/00-design-rules.md` section L and
-`skills/08-kubernetes/04-api-version-upgrade.md`: one atomic API upgrade, without
-fallback probes, dual watchers, or legacy conversion shims.
+The authority for this correction was the then-current canonical-only policy
+and the resource's v1 promotion. The current
+`skills/08-kubernetes/04-api-version-upgrade.md` allows separately tested
+source adapters while preserving one canonical model. No BackendTLSPolicy
+alpha adapter has been implemented by that policy change.
 
 - `edgion-resources/src/resources/backend_tls_policy.rs`: the CustomResource
   declaration specifies group `gateway.networking.k8s.io` and version `v1`.
-- Controller `conf_mgr/conf_center/kubernetes/version_detection.rs` records v1
-  in `GATEWAY_API_RESOURCES`; `controller.rs` registers one typed watcher.
+- Controller `conf_mgr/conf_center/kubernetes/version_detection.rs` uses the
+  v1 row from `edgion-resources::gateway_api_support::SOURCES` for preflight;
+  `controller.rs` registers one typed watcher.
 - `kubernetes/storage.rs` constructs the v1 API resource and validates raw CRUD
   payload versions; `kubernetes/resource_controller.rs` derives the status-patch
   API from the same resource type's group/version/kind.
@@ -45,9 +58,10 @@ caught the Admin ingress gap and moved its validation ahead of typed parsing.
 ## Alternatives and limits
 
 Additional versions served by the pinned upstream CRD remain an API-server
-concern. They do not authorize fallback Edgion watchers. Do not edit upstream
-bundles just to hide their served versions. TLSRoute promotion and Gateway
-rustls support remain outside this correction.
+concern. They do not automatically authorize fallback Edgion watchers. A future
+explicit source adapter requires conversion and transport evidence. Do not edit
+upstream bundles just to hide their served versions. TLSRoute promotion and
+Gateway rustls support remain outside this correction.
 
 Static-input and Admin rejection tests do not establish Kubernetes admission or
 real TLS connectivity. Upstream conformance reports from filtered runs can list

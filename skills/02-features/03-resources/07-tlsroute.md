@@ -6,7 +6,7 @@ description: Full TLSRoute schema: SNI-based TLS routing.
 # TLSRoute Resource
 
 > Canonical API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.5.0 Standard resource
+> Gateway API v1.6.2 Standard resource
 
 TLSRoute routes based on the SNI (Server Name Indication) in the TLS ClientHello, supporting TLS passthrough or termination + forwarding.
 
@@ -19,12 +19,12 @@ writes, with noncanonical FileSystem/static input rejected before publication.
 Edgion does not promise older-version compatibility or authorize fallback
 watchers and conversion shims merely because an installed CRD serves them.
 
-The committed Gateway API v1.5.0 bundles declare:
+The committed Gateway API v1.6.2 bundles declare:
 
 | Bundle under `config/crd/gateway-api/` | TLSRoute versions served | Storage version |
 |-------------------------------------|--------------------------|-----------------|
-| `gateway-api-standard-v1.5.0.yaml` | `v1` | `v1` |
-| `gateway-api-experimental-v1.5.0.yaml` | `v1`, `v1alpha2`, `v1alpha3` | `v1` |
+| `gateway-api-standard-v1.6.2.yaml` | `v1` | `v1` |
+| `gateway-api-experimental-v1.6.2.yaml` | `v1`, `v1alpha2`, `v1alpha3` | `v1` |
 
 Upstream served versions describe the API Server's schema, not an Edgion
 multi-version support contract. Historical guidance advertised v1alpha3

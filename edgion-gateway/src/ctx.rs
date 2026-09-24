@@ -5498,7 +5498,6 @@ mod sp_config_tests {
         SessionPersistence {
             session_name: Some(name.to_string()),
             absolute_timeout: None,
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: None,
             strict: None,

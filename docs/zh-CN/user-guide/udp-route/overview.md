@@ -2,10 +2,15 @@
 
 UDPRoute 用于 UDP 流量转发，适合 DNS、日志采集、游戏通信等场景。
 
+Edgion 接受 UDPRoute v1，并能在 Gateway 进程启动时已绑定的监听端口上转发流量。
+启动后新增监听端口需要重启 Gateway 进程。Gateway API v1.6.2 的
+`GATEWAY-UDP` profile 会动态创建端口，因此 Edgion 暂不在
+`GatewayClass.status.supportedFeatures` 中声明完整的 `UDPRoute` feature。
+
 ## 基本结构
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: UDPRoute
 metadata:
   name: udp-route
@@ -78,7 +83,7 @@ spec:
       port: 514
 ---
 # DNS 路由
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: UDPRoute
 metadata:
   name: dns-route
@@ -93,7 +98,7 @@ spec:
           port: 53
 ---
 # Syslog 路由
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: UDPRoute
 metadata:
   name: syslog-route

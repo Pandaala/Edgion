@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use super::common::{
     expected_resource_version, map_writer_error, parse_kind, parse_resource_and_update_version, unknown_field_warnings,
-    validate_http_route_transforms, validate_resource,
+    validate_gateway_api_raw, validate_http_route_transforms, validate_resource,
 };
 use super::types::*;
 
@@ -104,6 +104,8 @@ pub async fn create_namespaced(
         StatusCode::BAD_REQUEST
     })?;
 
+    validate_gateway_api_raw(state.schema_validator.as_ref(), kind, &content, is_k8s)?;
+
     let metadata = edgion_resources::resource::meta::extract_resource_metadata(&content).ok_or_else(|| {
         tracing::warn!("Failed to extract metadata from request body");
         StatusCode::BAD_REQUEST
@@ -141,7 +143,13 @@ pub async fn create_namespaced(
             let route: HTTPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             validate_http_route_transforms(&route)?;
-            let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let json_content = if is_k8s {
+                // Preserve future source fields for the API server's selected
+                // version while still validating the canonical route above.
+                content.clone()
+            } else {
+                serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            };
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
@@ -303,7 +311,11 @@ pub async fn create_namespaced(
         edgion_resources::ResourceKind::ReferenceGrant => {
             let rg: ReferenceGrant = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &rg, is_k8s)?;
-            let json_content = serde_json::to_string(&rg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let json_content = if is_k8s {
+                content.clone()
+            } else {
+                serde_json::to_string(&rg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            };
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
@@ -408,6 +420,7 @@ pub async fn update_namespaced(
     let writer = state.conf_center();
 
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_gateway_api_raw(state.schema_validator.as_ref(), kind, &content, is_k8s)?;
     // Capture the client's precondition before non-Kubernetes parsing assigns
     // the new resourceVersion that will be persisted by this update.
     let expected_resource_version = expected_resource_version(&headers, &content)?;
@@ -441,7 +454,11 @@ pub async fn update_namespaced(
             let route: HTTPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             validate_http_route_transforms(&route)?;
-            let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let json_content = if is_k8s {
+                content.clone()
+            } else {
+                serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            };
             writer
                 .update_one_if_version(
                     kind.as_str(),
@@ -693,7 +710,11 @@ pub async fn update_namespaced(
         edgion_resources::ResourceKind::ReferenceGrant => {
             let rg: ReferenceGrant = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &rg, is_k8s)?;
-            let json_content = serde_json::to_string(&rg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let json_content = if is_k8s {
+                content.clone()
+            } else {
+                serde_json::to_string(&rg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            };
             writer
                 .update_one_if_version(
                     kind.as_str(),

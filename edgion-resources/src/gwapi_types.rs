@@ -6,7 +6,7 @@
 //! upstream Gateway API definitions.
 //!
 //! Patterns and bounds are copied verbatim from the committed upstream CRDs
-//! (`config/crd/gateway-api/gateway-api-*-v1.5.0.yaml`); do not "improve" them
+//! (`config/crd/gateway-api/gateway-api-*-v1.6.2.yaml`); do not "improve" them
 //! here — mirror upstream. The drift guard
 //! `edgion-resources/tests/crd_pattern_canonical.rs` asserts every inline
 //! regex `pattern:` in the edgion CRDs equals one of these constants.

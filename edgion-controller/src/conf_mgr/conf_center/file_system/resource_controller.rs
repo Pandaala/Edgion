@@ -1378,6 +1378,7 @@ mod tests {
                 rules: None,
                 resolved_rules: None,
                 delegation_issues: Vec::new(),
+                use_default_gateways: None,
             },
             status: None,
         }

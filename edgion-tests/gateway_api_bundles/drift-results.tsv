@@ -1,0 +1,9 @@
+case	kind	sourceGVKVersion	fieldPath	standardRelease	OpenAPIObserved	OpenAPIExpected
+loosened-match-limit	HTTPRoute	v1	spec.rules[].matches	v1.1.1	FAIL	FAIL
+loosened-match-limit	HTTPRoute	v1	spec.rules[].matches	v1.2.0	PASS	PASS
+newly-optional-address-value	Gateway	v1	spec.addresses[].value	v1.2.1	FAIL	FAIL
+newly-optional-address-value	Gateway	v1	spec.addresses[].value	v1.3.0	PASS	PASS
+loosened-well-known-ca	BackendTLSPolicy	v1	spec.validation.wellKnownCACertificates	v1.4.1	FAIL	FAIL
+loosened-well-known-ca	BackendTLSPolicy	v1	spec.validation.wellKnownCACertificates	v1.5.0	PASS	PASS
+loosened-hostname-limit	TLSRoute	v1	spec.hostnames	v1.5.1	FAIL	FAIL
+loosened-hostname-limit	TLSRoute	v1	spec.hostnames	v1.6.0	PASS	PASS

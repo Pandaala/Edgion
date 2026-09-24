@@ -54,7 +54,8 @@ impl AsRef<str> for ListenerKey {
 pub fn resolve_listener_addr(gateway_addresses: Option<&Vec<GatewayAddress>>, listener_port: i32) -> SocketAddr {
     let ip = gateway_addresses
         .and_then(|addrs| addrs.first())
-        .and_then(|a| a.value.parse::<IpAddr>().ok())
+        .and_then(|a| a.value.as_deref())
+        .and_then(|value| value.parse::<IpAddr>().ok())
         .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 
     SocketAddr::new(ip, listener_port as u16)
@@ -108,7 +109,7 @@ mod tests {
     fn test_resolve_listener_addr_with_ip() {
         let addrs = vec![GatewayAddress {
             address_type: None,
-            value: "192.168.1.1".to_string(),
+            value: Some("192.168.1.1".to_string()),
         }];
         let addr = resolve_listener_addr(Some(&addrs), 8080);
         assert_eq!(addr.to_string(), "192.168.1.1:8080");
@@ -118,7 +119,7 @@ mod tests {
     fn test_resolve_listener_addr_with_unparseable_value() {
         let addrs = vec![GatewayAddress {
             address_type: Some("Hostname".to_string()),
-            value: "my-gateway.example.com".to_string(),
+            value: Some("my-gateway.example.com".to_string()),
         }];
         let addr = resolve_listener_addr(Some(&addrs), 443);
         assert_eq!(addr, SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443));

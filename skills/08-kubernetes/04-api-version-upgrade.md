@@ -1,59 +1,66 @@
 ---
 name: api-version-upgrade
-description: Upgrade the pinned Kubernetes and Gateway API versions atomically in this pre-release workspace without adding fallback watchers or legacy conversion shims.
+description: Upgrade Gateway API bundles atomically while retaining one canonical model per kind and explicitly tested source-version adapters.
 ---
 
 # API Version Upgrade Strategy
 
-Edgion is pre-release and does not promise support for historical API versions.
-Treat a Gateway API or CRD version upgrade as an atomic repository change, not
-as a rolling compatibility program.
+Edgion processes each kind through one canonical typed model. Eligible kinds
+use `v1`, including TCPRoute and UDPRoute. A source GVK is a separately declared input
+contract, not a second runtime model. It needs a typed source representation,
+deterministic conversion, validation, status transport, and tests before
+support is advertised. A CRD serving a version does not register an adapter.
+
+Keep these axes separate: canonical model; submitted source GVK; installed
+CRD served/storage versions and conversion strategy; Gateway API bundle and
+Standard/Experimental channel; and individual Core/Extended/Experimental
+features. `SupportedVersion` and `supportedFeatures` require independent
+evidence. See the [inventory](01-gateway-api/07-version-support/01-current-support-matrix.md).
 
 ## Current version sources
 
 Before changing code, identify each independent version source:
 
 - committed Gateway API CRD bundle under `config/crd/gateway-api/`;
-- Rust `k8s-gateway-api` / `k8s-openapi` dependencies;
+- hand-written Rust Gateway API models and Kubernetes crate dependencies;
 - Go API and conformance modules under `edgion-tests/conformance/go.mod`;
 - resource `apiVersion` strings in fixtures, docs, Admin API payloads, and tests;
 - Controller watcher and status-patch types.
 
 Do not describe the CRD/API bundle version and the conformance module version as
-one value. For the current tree, the CRD/API bundle is v1.5.0 and the
-conformance module is v1.5.1.
+one value. For the current tree, the CRD/API bundle and Go conformance module are independently pinned to v1.6.2.
 
 ## Atomic upgrade contract
 
-1. Select the new canonical API version from the committed upstream release.
+1. Select the canonical API version per kind from the committed upstream release.
 2. Update the CRD bundle, Rust/Go dependencies, resource types, watchers,
    status writers, fixtures, and docs in the same change.
-3. Remove old watcher types, fallback probes, conversion structs, aliases, and
-   deprecated fixtures. Do not keep both versions "for migration" unless the
-   user explicitly requests a multi-version support feature.
-4. Keep watch, preflight, CRUD, and status patches on the same canonical
-   version. A mixed-version path is a bug.
-5. FileSystem/static inputs accept the canonical version only and reject other
-   `apiVersion` values before they enter the raw store or workqueue.
+3. Keep one canonical processing and conf-sync model. Retain an alternate
+   source adapter only when its conversion and transport contract is complete.
+4. Keep watch, preflight, CRUD, and status identities consistent for each
+   supported source path; a fallback probe alone is insufficient.
+5. Validate FileSystem/static input against its declared source version before
+   publication. Non-Kubernetes input cannot rely on API-server conversion.
 
 ## Kubernetes API Server conversion
 
-The API Server converts between versions only when the installed CRD explicitly
-serves those versions and has a valid conversion strategy. That upstream
-mechanism is not a reason for Edgion to add fallback watchers. Edgion watches
-the canonical version declared by its pinned bundle.
+The API server accepts only versions served by the installed CRD and converts
+according to that CRD's strategy. Edgion can explicitly support a broader
+source set for offline input with its own tested adapters. Kubernetes cluster
+compatibility remains conditional on the installed CRD. Served versions do not
+automatically become Edgion product claims.
 
-If multi-version cluster support is explicitly requested later, treat it as a
-new feature with a defined support matrix, conversion ownership, removal plan,
-and tests. Do not infer that requirement from an older fixture or from an
-upstream version still being served.
+The pinned CRD bundle and Go conformance dependency are both v1.6.2.
+Standard bundles v1.0.0 through v1.6.2 form a proposed three-year fixture
+window, not an automatic support promise. Experimental features need separate
+evidence even when they use a v1 GVK.
 
 ## Verification
 
 - Search the repository for the old `apiVersion`, dependency version, and type
   names; classify every remaining occurrence as historical prose or a bug.
-- Verify the Controller starts one watcher per kind and writes status through
-  the same version.
+- Verify the code-owned source inventory against typed resource GVKs and
+  Controller preflight, watchers, CRUD, and status types.
 - Run the relevant resource integration tests and Gateway API conformance
   profiles. HTTP/gRPC and TLS conformance remain separate runs because both
   upstream profiles reserve port 443.
@@ -62,8 +69,9 @@ upstream version still being served.
 
 ## Version-promotion examples
 
-- `ReferenceGrant v1beta1 -> v1`, `BackendTLSPolicy v1alpha3 -> v1`, and
-  `TLSRoute v1alpha3 -> v1` are useful search scopes, not permission to keep the
-  old Rust types or runtime fallbacks.
-- Historical release notes may explain the transition. Current architecture and
-  feature skills describe only the canonical version.
+- ReferenceGrant v1beta1 converts into the canonical v1 resource across
+  Kubernetes watch and offline/Admin input. Bundle and per-source conformance
+  evidence remains pending; Kubernetes input requires the CRD to serve v1beta1.
+- Earlier TLSRoute and BackendTLSPolicy canonical-only corrections remain
+  valid historical boundaries. They did not permanently prohibit a separately
+  authorized and tested alternate source adapter.

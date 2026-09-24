@@ -2,10 +2,16 @@
 
 TCPRoute is used for Layer 4 TCP traffic forwarding without parsing HTTP protocol semantics.
 
+Edgion accepts TCPRoute v1 and forwards traffic on listeners bound when the
+Gateway process starts. Adding a new listener port later requires a Gateway
+process restart. The Gateway API v1.6.2 `GATEWAY-TCP` profile creates ports
+dynamically, so Edgion does not advertise `TCPRoute` in
+`GatewayClass.status.supportedFeatures` yet.
+
 ## Basic Structure
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: tcp-route
@@ -78,7 +84,7 @@ spec:
       port: 3306
 ---
 # Redis route
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: redis-route
@@ -94,7 +100,7 @@ spec:
           weight: 100
 ---
 # MySQL route
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: mysql-route

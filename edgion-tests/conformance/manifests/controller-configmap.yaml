@@ -50,11 +50,6 @@ data:
     # conf_sync channel security. REQUIRED: omitting this section entirely makes the
     # process refuse to start (fail-close).
     #
-    # DELIBERATE: the conformance stack runs conf_sync in PLAINTEXT across pods, which is
-    # NOT what production does (cicd/deploy/kubernetes/ uses `auto_ca: true`). Conformance
-    # tests Gateway API semantics, not transport security, so plaintext keeps the fixture
-    # minimal -- but it means the auto_ca path gets no coverage here either.
-    # Tracked in tasks/todo/k8s-integration-cover-auto-ca-conf-sync.md.
+    # Match the Gateway fixture and production's automatic conf_sync CA.
     conf_sync_security:
-      tls:
-        skip_tls: true
+      auto_ca: true

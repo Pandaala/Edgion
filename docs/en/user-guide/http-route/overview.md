@@ -73,7 +73,7 @@ Each entry in `rules` is an independent routing decision unit containing match c
 
 `filters` run processing logic before the request reaches the backend or before the response returns to the client:
 
-- **Gateway API standard filters**: `RequestHeaderModifier`, `ResponseHeaderModifier`, `RequestRedirect`, `URLRewrite`, `RequestMirror`, native `CORS`, and `ExternalAuth`.
+- **Gateway API filters handled by Edgion**: `RequestHeaderModifier`, `ResponseHeaderModifier`, `RequestRedirect`, `URLRewrite`, `RequestMirror`, and native `CORS`. The upstream `ExternalAuth` `backendRef`/`protocol` form is rejected; use Edgion's separate ForwardAuth plugin for that behavior.
 - **Edgion extension plugins**: referenced through `ExtensionRef` pointing at an `EdgionPlugins` resource (rate limiting, authentication, DSL, and more).
 
 `URLRewrite` and `RequestRedirect` are mutually exclusive within the same rule. See [Filters](./filters/README.md).

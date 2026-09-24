@@ -77,7 +77,6 @@ rules:
 | sessionName | string | No | `edgion-session-affinity` | Session token name (Cookie name or Header name) |
 | type | string | No | Cookie | Session type: `Cookie` or `Header` |
 | absoluteTimeout | duration (GEP-2257) | No | — | Gateway-enforced session lifetime, embedded in the token (also maps to Cookie `Max-Age` in Permanent mode). See [Absolute Lifetime](#absolute-lifetime) |
-| idleTimeout | duration | No | — | Idle timeout (not supported in current version, reserved for Redis mode) |
 | cookieConfig | object | No | — | Cookie-specific configuration |
 | strict | bool | No | false | Edgion extension: strict mode (see below) |
 
@@ -193,8 +192,10 @@ spec:
 
 ## Limitations
 
+Gateway API v1.6.2 removed `sessionPersistence.idleTimeout` from HTTPRoute and
+GRPCRoute. Omit that field; the API server prunes it from the installed CRD.
+
 - **Multi-instance consistency**: The token derivation is deterministic (an unkeyed hash of the backend address), so as long as backend lists are identical across Gateway instances, the same token routes to the same backend with no server-side session storage. Removing the bound endpoint invalidates its sessions (fallback + token refresh); other endpoints' sessions are unaffected.
-- **idleTimeout**: Not supported in the current version (pure client-side Cookie approach cannot implement server-side idle tracking), reserved for future Redis mode.
 - **GRPCRoute**: Natively supported with the same configuration surface and verified by backend-identity integration tests. gRPC-specific semantics: with `strict: true`, an unavailable pinned backend fails closed with `grpc-status: 14` (UNAVAILABLE) rather than HTTP 503. Native gRPC clients (tonic, grpc-go) must echo the session cookie at the application layer; browser grpc-web clients send it automatically only for same-site requests with credentials enabled (the cookie carries `SameSite=Lax`), so cross-site grpc-web deployments should prefer `type: Header`. Session persistence requires EndpointSlice-backed Services (ClusterIP-kind backends bypass it, same as HTTPRoute).
 
 ## Related Documentation

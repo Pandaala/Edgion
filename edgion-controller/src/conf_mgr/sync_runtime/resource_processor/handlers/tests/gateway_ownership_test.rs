@@ -417,6 +417,18 @@ async fn every_matching_class_validates_parameters_and_preserves_foreign_conditi
             .unwrap();
         assert_eq!(accepted["status"], "False");
         assert_eq!(accepted["reason"], "InvalidParameters");
+        let supported_version = status["conditions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|condition| condition["type"] == "SupportedVersion")
+            .unwrap();
+        assert_eq!(supported_version["status"], "Unknown");
+        assert_eq!(supported_version["reason"], "CompatibilityUnknown");
+        assert_eq!(
+            supported_version["observedGeneration"],
+            serde_json::json!(obj.metadata.generation)
+        );
         assert!(!status["supportedFeatures"].as_array().unwrap().is_empty());
         assert!(f.classes.get("unassigned").is_some());
         assert!(f.gateways.workqueue().is_empty(), "unrelated Gateways are not requeued");

@@ -2,10 +2,16 @@
 
 UDPRoute is used for UDP traffic forwarding, suitable for scenarios such as DNS, log collection, and game communication.
 
+Edgion accepts UDPRoute v1 and forwards traffic on listeners bound when the
+Gateway process starts. Adding a new listener port later requires a Gateway
+process restart. The Gateway API v1.6.2 `GATEWAY-UDP` profile creates ports
+dynamically, so Edgion does not advertise `UDPRoute` in
+`GatewayClass.status.supportedFeatures` yet.
+
 ## Basic Structure
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: UDPRoute
 metadata:
   name: udp-route
@@ -78,7 +84,7 @@ spec:
       port: 514
 ---
 # DNS route
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: UDPRoute
 metadata:
   name: dns-route
@@ -93,7 +99,7 @@ spec:
           port: 53
 ---
 # Syslog route
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: UDPRoute
 metadata:
   name: syslog-route

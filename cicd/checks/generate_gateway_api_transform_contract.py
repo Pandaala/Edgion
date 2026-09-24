@@ -13,9 +13,9 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
-STANDARD = ROOT / "config/crd/gateway-api/gateway-api-standard-v1.5.0.yaml"
-EXPERIMENTAL = ROOT / "config/crd/gateway-api/gateway-api-experimental-v1.5.0.yaml"
-OUTPUT = ROOT / "edgion-resources/src/contracts/http_route_transform_v1_5.json"
+STANDARD = ROOT / "config/crd/gateway-api/gateway-api-standard-v1.6.2.yaml"
+EXPERIMENTAL = ROOT / "config/crd/gateway-api/gateway-api-experimental-v1.6.2.yaml"
+OUTPUT = ROOT / "edgion-resources/src/contracts/http_route_transform_v1_6.json"
 
 TRANSFORM_RULE_MARKERS = (
     "requestRedirect",
@@ -157,7 +157,7 @@ def generate() -> str:
             "version": "v1",
             "kind": "HTTPRoute",
             "channel": "standard",
-            "gatewayApiVersion": "v1.5.0",
+            "gatewayApiVersion": "v1.6.2",
             "selectedSha256": hashlib.sha256(canonical).hexdigest(),
             "scopeInventorySha256": {
                 "standard": hashlib.sha256(

@@ -50,6 +50,16 @@ selector. `requeue_all_keys` includes raw class keys on leader acquisition.
 The canonical conditions-and-fields comparator includes supportedFeatures;
 explicit empty-list serialization actually clears stale features in Merge Patch.
 
+The September 2026 Gateway API version work changed `SupportedVersion` from
+unconditional `True` to `Unknown/CompatibilityUnknown`: the Controller checks
+served GVK availability but does not discover and verify the installed CRD
+bundle/channel. Upstream's implementer guide defines `True` for a supported
+installed CRD version and `False` for an unsupported one; current evidence
+establishes neither conclusion for a live installation. The handler replaces
+a stale `True` condition, updates observedGeneration, and preserves foreign
+conditions. The offline release fixture matrix is bounded OpenAPI/model
+evidence and does not make `SupportedVersion=True` truthful for a cluster.
+
 ## Alternatives and limits
 
 Sharing one controllerName across independent deployments would allow opposing fresh writers. CAS prevents

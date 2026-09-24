@@ -32,33 +32,18 @@ const supportedFeaturesFile = "supported_features.txt"
 //go:embed supported_features.txt
 var supportedFeaturesData string
 
-// nonConformanceFeatures lists feature names Edgion advertises in
-// GatewayClass.status.supportedFeatures that are NOT part of any Gateway API
-// conformance profile (they are absent from features.AllFeatures), so they are
-// intentionally not declared to the conformance suite:
-//   - TCPRoute has no Gateway API feature constant at all.
-//   - UDPRoute has a feature constant but is not aggregated into AllFeatures
-//     and no conformance profile covers it.
-// Any other unrecognized name is treated as a typo and fails the test, which is
-// what keeps the shared list honest.
-var nonConformanceFeatures = map[string]struct{}{
-	"TCPRoute": {},
-	"UDPRoute": {},
-}
-
-func defaultConformanceProfiles() sets.Set[suite.ConformanceProfileName] {
-	return sets.New[suite.ConformanceProfileName](
+func defaultConformanceProfiles() []suite.ConformanceProfileName {
+	return []suite.ConformanceProfileName{
 		suite.GatewayHTTPConformanceProfileName,
 		suite.GatewayGRPCConformanceProfileName,
 		suite.GatewayTLSConformanceProfileName,
-	)
+	}
 }
 
 // declaredSupportedFeatures derives the conformance feature set from the
 // canonical shared list (supported_features.txt) instead of a hand-maintained
-// list, so it cannot drift from what the controller advertises. Names that are
-// not part of any conformance profile are either tolerated
-// (nonConformanceFeatures) or fail the test as a typo.
+// list, so it cannot drift from what the controller advertises. An unknown
+// feature name fails the test as a typo.
 func declaredSupportedFeatures(t *testing.T) sets.Set[features.FeatureName] {
 	t.Helper()
 
@@ -70,26 +55,16 @@ func declaredSupportedFeatures(t *testing.T) sets.Set[features.FeatureName] {
 			continue
 		}
 		fn := features.FeatureName(name)
-		switch {
-		case validNames.Has(fn):
-			supported.Insert(fn)
-		case isNonConformanceFeature(name):
-			// Advertised in GatewayClass status but not part of any conformance
-			// profile; intentionally not declared to the suite.
-		default:
-			t.Fatalf("supported feature %q in %s is not a known Gateway API conformance feature; fix the typo or add it to nonConformanceFeatures", name, supportedFeaturesFile)
+		if !validNames.Has(fn) {
+			t.Fatalf("supported feature %q in %s is not a known Gateway API conformance feature", name, supportedFeaturesFile)
 		}
+		supported.Insert(fn)
 	}
 	return supported
 }
 
-func isNonConformanceFeature(name string) bool {
-	_, ok := nonConformanceFeatures[name]
-	return ok
-}
-
 func ensureConformanceProfiles(opts *suite.ConformanceOptions) {
-	if opts.ConformanceProfiles == nil || opts.ConformanceProfiles.Len() == 0 {
+	if len(opts.ConformanceProfiles) == 0 {
 		opts.ConformanceProfiles = defaultConformanceProfiles()
 	}
 }
@@ -108,6 +83,14 @@ func featuresForProfile(profile suite.ConformanceProfileName) sets.Set[features.
 		return sets.New[features.FeatureName]().
 			Insert(suite.GatewayTLSConformanceProfile.CoreFeatures.UnsortedList()...).
 			Insert(suite.GatewayTLSConformanceProfile.ExtendedFeatures.UnsortedList()...)
+	case suite.GatewayTCPConformanceProfileName:
+		return sets.New[features.FeatureName]().
+			Insert(suite.GatewayTCPConformanceProfile.CoreFeatures.UnsortedList()...).
+			Insert(suite.GatewayTCPConformanceProfile.ExtendedFeatures.UnsortedList()...)
+	case suite.GatewayUDPConformanceProfileName:
+		return sets.New[features.FeatureName]().
+			Insert(suite.GatewayUDPConformanceProfile.CoreFeatures.UnsortedList()...).
+			Insert(suite.GatewayUDPConformanceProfile.ExtendedFeatures.UnsortedList()...)
 	case suite.MeshHTTPConformanceProfileName:
 		return sets.New[features.FeatureName]().
 			Insert(suite.MeshHTTPConformanceProfile.CoreFeatures.UnsortedList()...).
@@ -144,12 +127,12 @@ func filterSupportedFeaturesForProfiles(
 }
 
 func ensureSupportedFeatures(t *testing.T, opts *suite.ConformanceOptions) {
-	if opts.SupportedFeatures != nil && opts.SupportedFeatures.Len() > 0 {
+	if len(opts.SupportedFeatures) > 0 {
 		return
 	}
 
 	declared := declaredSupportedFeatures(t)
-	opts.SupportedFeatures = filterSupportedFeaturesForProfiles(declared, opts.ConformanceProfiles)
+	opts.SupportedFeatures = filterSupportedFeaturesForProfiles(declared, sets.New(opts.ConformanceProfiles...)).UnsortedList()
 }
 
 func TestConformance(t *testing.T) {

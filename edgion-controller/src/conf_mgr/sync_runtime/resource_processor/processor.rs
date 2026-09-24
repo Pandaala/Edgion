@@ -1468,10 +1468,10 @@ mod tests {
         );
         crate::conf_mgr::sync_runtime::resource_processor::update_condition(
             &mut status.conditions,
-            crate::conf_mgr::sync_runtime::resource_processor::condition_true(
+            crate::conf_mgr::sync_runtime::resource_processor::status_utils::condition_unknown(
                 "SupportedVersion",
-                "SupportedVersion",
-                "Gateway API version is supported",
+                "CompatibilityUnknown",
+                "Installed Gateway API CRD bundle and channel compatibility has not been verified",
                 gc_modified.metadata.generation,
             ),
         );

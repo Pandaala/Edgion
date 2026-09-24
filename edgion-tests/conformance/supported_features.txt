@@ -11,10 +11,9 @@
 # SUPPORTED_FEATURES (guarded by the `shared_list_file_matches_supported_features`
 # unit test in edgion-resources).
 #
-# Note: TCPRoute and UDPRoute are advertised by Edgion but are not part of any
-# Gateway API conformance profile (absent from features.AllFeatures), so the Go
-# suite keeps them in an explicit allowlist and does not declare them as
-# conformance features.
+# Gateway API v1.6.2 includes TCPRoute and UDPRoute profiles. Edgion supports
+# their v1 resources on preconfigured listeners but does not advertise the
+# complete features while dynamic listener ports remain unavailable.
 BackendTLSPolicy
 BackendTLSPolicySANValidation
 GRPCRoute
@@ -44,7 +43,4 @@ HTTPRouteRequestTimeout
 HTTPRouteResponseHeaderModification
 HTTPRouteSchemeRedirect
 ReferenceGrant
-TCPRoute
 TLSRoute
-TLSRouteModeTerminate
-UDPRoute

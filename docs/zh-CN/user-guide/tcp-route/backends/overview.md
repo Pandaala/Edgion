@@ -5,7 +5,7 @@ TCPRoute 将原始 TCP 流转发到一个或多个 Kubernetes Service。对 Serv
 ## 基本示例
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: database-route

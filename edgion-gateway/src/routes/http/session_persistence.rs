@@ -365,7 +365,6 @@ mod tests {
         let sp = SessionPersistence {
             session_name: Some("affinity".to_string()),
             absolute_timeout: None,
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: None,
             strict: None,
@@ -614,7 +613,6 @@ mod tests {
         let sp = SessionPersistence {
             session_name: None,
             absolute_timeout: None,
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: None,
             strict: None,
@@ -627,7 +625,6 @@ mod tests {
         let sp = SessionPersistence {
             session_name: Some("my-session".to_string()),
             absolute_timeout: None,
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: None,
             strict: None,
@@ -640,7 +637,6 @@ mod tests {
         let sp = SessionPersistence {
             session_name: None,
             absolute_timeout: None,
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: None,
             strict: None,
@@ -653,7 +649,6 @@ mod tests {
         let sp = SessionPersistence {
             session_name: None,
             absolute_timeout: None,
-            idle_timeout: None,
             persistence_type: Some(SessionPersistenceType::Header),
             cookie_config: None,
             strict: None,
@@ -666,7 +661,6 @@ mod tests {
         let sp = SessionPersistence {
             session_name: None,
             absolute_timeout: Some("1h".to_string()),
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: Some(CookieConfig {
                 lifetime_type: Some(CookieLifetimeType::Session),
@@ -687,7 +681,6 @@ mod tests {
         let sp = SessionPersistence {
             session_name: Some("my-sess".to_string()),
             absolute_timeout: Some("24h".to_string()),
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: Some(CookieConfig {
                 lifetime_type: Some(CookieLifetimeType::Permanent),
@@ -706,7 +699,6 @@ mod tests {
         let sp = SessionPersistence {
             session_name: None,
             absolute_timeout: Some("1h".to_string()),
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: None,
             strict: None,
@@ -721,7 +713,6 @@ mod tests {
         let sp = SessionPersistence {
             session_name: None,
             absolute_timeout: None,
-            idle_timeout: None,
             persistence_type: None,
             cookie_config: None,
             strict: None,

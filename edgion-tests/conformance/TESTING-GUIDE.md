@@ -18,13 +18,13 @@
 Edgion rejects `allowCredentials: true` combined with any exact `"*"` entry in
 `exposeHeaders`, including mixed lists, before the rule activates. Explicit names
 remain supported; false/omitted credentials preserve wildcard output. This is a
-documented support restriction, not a claim that Gateway API v1.5.0 mandates config
+documented support restriction, not a claim that Gateway API v1.6.2 mandates config
 rejection. `HTTPRouteCORS` remains enabled for the supported behavior; passing it
 does not establish support for this rejected combination. The focused cross-process
 client is `../integration/scripts/integration/test_native_cors_expose_headers.py`.
 Do not rewrite historical conformance reports as fresh verification.
 
-The module pins Gateway API types to v1.5.0 and the conformance suite to v1.5.1.
+The module pins Gateway API types to v1.6.2 and the conformance suite to v1.6.2.
 `HTTPRouteCORS` and `HTTPRouteCORSAllowCredentialsBehavior` use only rule-level
 `filters` (seven rules in their two manifests); neither exercises backendRef CORS.
 Keep these tests enabled for the supported rule-level behavior. There is no separate
@@ -32,7 +32,7 @@ backendRef CORS feature flag in this pinned suite. The existing `HTTPRouteCORS`
 declaration must not be read as evidence of complete backendRef coverage.
 
 Edgion explicitly rejects native CORS in `backendRefs[].filters`; Gateway API
-v1.5.0 defines that placement as an Extended capability, not a Core requirement.
+v1.6.2 defines that placement as an Extended capability, not a Core requirement.
 The API's generic backend-filter field also has an implementation-specific support
 annotation. Passing the current suite alone does not resolve that specification
 granularity or establish support for all placements. Recheck both the declaration
@@ -89,6 +89,11 @@ GO_RUN_FILTER="TestConformance/TLSRouteSimpleSameNamespace$" \
 # Run only the TLS profile
 ./scripts/run.sh --conformance-profiles GATEWAY-TLS \
   --supported-features "Gateway,TLSRoute,ReferenceGrant"
+
+# TCP and UDP are explicit profiles. Run them where the test runner can reach
+# the Gateway stream listener addresses and ports.
+./scripts/run.sh --conformance-profiles GATEWAY-TCP
+./scripts/run.sh --conformance-profiles GATEWAY-UDP
 
 # Multiple profiles
 ./scripts/run.sh --conformance-profiles "GATEWAY-HTTP,GATEWAY-GRPC"

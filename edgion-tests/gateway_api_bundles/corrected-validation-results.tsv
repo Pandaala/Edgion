@@ -1,0 +1,7 @@
+case	kind	sourceGVKVersion	fieldPath	standardRelease	fixtureValue	OpenAPIObserved	OpenAPIExpected
+listener-protocol-regex-correction	Gateway	v1	spec.listeners[].protocol	v1.1.1	HTTP	PASS	PASS
+listener-protocol-regex-correction	Gateway	v1	spec.listeners[].protocol	v1.1.1	example.com/Proto	PASS	PASS
+listener-protocol-regex-correction	Gateway	v1	spec.listeners[].protocol	v1.1.1	_	FAIL	FAIL
+listener-protocol-regex-correction	Gateway	v1	spec.listeners[].protocol	v1.2.0	HTTP	PASS	PASS
+listener-protocol-regex-correction	Gateway	v1	spec.listeners[].protocol	v1.2.0	example.com/Proto	PASS	PASS
+listener-protocol-regex-correction	Gateway	v1	spec.listeners[].protocol	v1.2.0	_	FAIL	FAIL

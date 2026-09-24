@@ -23,17 +23,26 @@ impl_resource_meta!(EndpointSlice, EndpointSlice, "EndpointSlice");
 // =============================================================================
 
 use crate::resources::{
-    BackendTLSPolicy, GRPCRoute, Gateway, GatewayClass, HTTPRoute, ReferenceGrant, ReferenceGrantBeta, TCPRoute,
-    TLSRoute, UDPRoute,
+    BackendTLSPolicy, GRPCRoute, Gateway, GatewayClass, HTTPRoute, ReferenceGrant, TCPRoute, TLSRoute, UDPRoute,
 };
 
 // Cluster-scoped
 impl_resource_meta!(GatewayClass, GatewayClass, "GatewayClass", cluster_scoped);
 
 // Namespaced
-impl_resource_meta!(Gateway, Gateway, "Gateway");
+impl_resource_meta!(Gateway, Gateway, "Gateway", |self| {
+    // A Standard v1.3+ address may omit value. Keep that Gateway decodable,
+    // but never let a forged conf-sync payload bind its listeners to wildcard.
+    if self
+        .spec
+        .addresses
+        .as_deref()
+        .is_some_and(|addresses| addresses.iter().any(|address| address.value.is_none()))
+    {
+        self.spec.listeners = None;
+    }
+});
 impl_resource_meta!(ReferenceGrant, ReferenceGrant, "ReferenceGrant");
-impl_resource_meta!(ReferenceGrantBeta, ReferenceGrant, "ReferenceGrant");
 impl_resource_meta!(BackendTLSPolicy, BackendTLSPolicy, "BackendTLSPolicy");
 
 // Routes (with pre_parse)

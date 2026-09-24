@@ -76,6 +76,131 @@ fn scope(cluster: bool) -> ApiScope {
     }
 }
 
+#[tokio::test]
+async fn gateway_class_beta_status_uses_selected_path_and_original_rv() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::{GatewayClassHandler, GatewayClassOwnership};
+    use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::KubernetesStatusIdentity;
+    let foreign = json!({"type": "Foreign", "status": "True", "reason": "OtherController",
+        "message": "retained", "lastTransitionTime": "2026-01-01T00:00:00Z"});
+    let initial = json!({
+        "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "GatewayClass",
+        "metadata": {"name": "edge", "uid": "uid-1", "resourceVersion": "init-rv", "generation": 1},
+        "spec": {"controllerName": "example.com/edge"},
+        "status": {"conditions": [foreign.clone()], "supportedFeatures": []}
+    });
+    let (client, state) = api_client(initial.clone());
+    let runtime = Arc::new(ControllerRuntime::default());
+    runtime.set_status_identity(KubernetesStatusIdentity {
+        controller_name: "example.com/edge".into(),
+    });
+    let processor = Arc::new(ResourceProcessor::new(
+        "GatewayClass",
+        8,
+        Arc::new(GatewayClassHandler::new(GatewayClassOwnership::new(
+            "example.com/edge".into(),
+        ))),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let cancel = CancellationToken::new();
+    let tracker = TaskTracker::new();
+    let controller = ResourceController::new(
+        "GatewayClass",
+        client,
+        processor.clone(),
+        scope(true),
+        watcher::Config::default(),
+    )
+    .with_epoch(cancel.clone(), tracker.clone())
+    .with_status_version("v1beta1");
+    let (tx, rx) = mpsc::channel::<watcher::Result<Event<GatewayClassBeta>>>(32);
+    let stream: NamespacedWatcher<GatewayClass> = Box::pin(futures::stream::unfold(rx, |mut rx| async {
+        rx.recv()
+            .await
+            .map(|event| (event.map(canonical_gateway_class_event), rx))
+    }));
+    let task = tracker.spawn(controller.run_sources(vec![(WatchScope::Cluster, stream)]));
+    let beta = |value: Value| serde_json::from_value::<GatewayClassBeta>(value).unwrap();
+    for event in [Event::Init, Event::InitApply(beta(initial)), Event::InitDone] {
+        tx.send(Ok(event)).await.unwrap();
+    }
+    eventually(|| processor.is_ready() && state.lock().requests.len() == 1).await;
+    assert!(processor.get("edge").is_some());
+    let raw = processor.get_raw_any("edge").unwrap();
+    let raw = raw.downcast::<GatewayClass>().unwrap();
+    assert_eq!(raw.metadata.resource_version.as_deref(), Some("init-rv"));
+    assert_eq!(raw.spec.controller_name, "example.com/edge");
+    {
+        let state = state.lock();
+        assert_eq!(
+            state.requests[0].0,
+            "/apis/gateway.networking.k8s.io/v1beta1/gatewayclasses/edge/status"
+        );
+        assert_eq!(state.requests[0].1["metadata"]["resourceVersion"], "init-rv");
+        assert!(state.object["status"]["conditions"]
+            .as_array()
+            .unwrap()
+            .contains(&foreign));
+    }
+
+    // A changed runtime snapshot must use its own original RV and retain the foreign condition.
+    let mut runtime_input = state.lock().object.clone();
+    runtime_input["metadata"]["resourceVersion"] = json!("runtime-rv");
+    runtime_input["metadata"]["generation"] = json!(2);
+    runtime_input["status"]["supportedFeatures"] = json!([]);
+    state.lock().object = runtime_input.clone();
+    tx.send(Ok(Event::Apply(beta(runtime_input)))).await.unwrap();
+    eventually(|| state.lock().requests.len() == 2).await;
+    {
+        let state = state.lock();
+        assert_eq!(
+            state.requests[1].0,
+            "/apis/gateway.networking.k8s.io/v1beta1/gatewayclasses/edge/status"
+        );
+        assert_eq!(state.requests[1].1["metadata"]["resourceVersion"], "runtime-rv");
+        assert!(state.object["status"]["conditions"]
+            .as_array()
+            .unwrap()
+            .contains(&foreign));
+    }
+
+    // A status echo and full relist converge through the same worker without another write.
+    let echo = state.lock().object.clone();
+    tx.send(Ok(Event::Apply(beta(echo.clone())))).await.unwrap();
+    eventually(|| {
+        processor
+            .get("edge")
+            .is_some_and(|obj| obj.metadata.resource_version.as_deref() == echo["metadata"]["resourceVersion"].as_str())
+    })
+    .await;
+    let mut relist = echo;
+    relist["metadata"]["resourceVersion"] = json!("relist-rv");
+    state.lock().object = relist.clone();
+    for event in [
+        Event::Init,
+        Event::InitApply(beta(relist)),
+        Event::InitDone,
+        Event::InitDone,
+    ] {
+        tx.send(Ok(event)).await.unwrap();
+    }
+    eventually(|| {
+        processor
+            .get("edge")
+            .is_some_and(|obj| obj.metadata.resource_version.as_deref() == Some("relist-rv"))
+    })
+    .await;
+    assert_eq!(state.lock().requests.len(), 2);
+    assert_eq!(
+        tracker.len(),
+        2,
+        "one source driver and one resource worker after relist"
+    );
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+    runtime.reset();
+}
+
 fn object(status: Value) -> Value {
     json!({"apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
         "metadata": {"name": "resource", "namespace": "apps", "uid": "original", "resourceVersion": "opaque-rv"},
@@ -303,9 +428,9 @@ async fn every_registered_status_kind_inherits_conditional_persistence() {
     }
     check!(HTTPRoute, "gateway.networking.k8s.io/v1", "httproutes", false);
     check!(GRPCRoute, "gateway.networking.k8s.io/v1", "grpcroutes", false);
-    check!(TCPRoute, "gateway.networking.k8s.io/v1alpha2", "tcproutes", false);
+    check!(TCPRoute, "gateway.networking.k8s.io/v1", "tcproutes", false);
     check!(TLSRoute, "gateway.networking.k8s.io/v1", "tlsroutes", false);
-    check!(UDPRoute, "gateway.networking.k8s.io/v1alpha2", "udproutes", false);
+    check!(UDPRoute, "gateway.networking.k8s.io/v1", "udproutes", false);
     check!(EdgionTls, "edgion.io/v1", "edgiontls", false);
     check!(
         BackendTLSPolicy,
@@ -694,6 +819,7 @@ async fn unchanged_status_and_non_leaders_skip_bootstrap_and_worker_writes() {
                 &client,
                 &scope(false),
                 &leadership,
+                None,
                 &None,
                 "HTTPRoute",
                 "test-init"
@@ -713,6 +839,7 @@ async fn unchanged_status_and_non_leaders_skip_bootstrap_and_worker_writes() {
             client,
             scope(false),
             leadership,
+            None,
             cancel.clone(),
             &tracker,
         );
@@ -814,4 +941,310 @@ async fn bootstrap_and_worker_use_input_version_and_recover_on_later_watch_event
     cancel.cancel();
     task.await.unwrap().unwrap();
     assert_eq!(state.lock().requests.len(), 4);
+}
+
+#[tokio::test]
+async fn gateway_beta_watcher_reports_unsupported_fields_and_recovers_on_selected_status_path() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::KubernetesStatusIdentity;
+    let foreign = json!({"type": "Foreign", "status": "True", "reason": "OtherController",
+        "message": "retained", "lastTransitionTime": "2026-01-01T00:00:00Z"});
+    let source = json!({
+        "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "Gateway",
+        "metadata": {"name": "edge", "namespace": "demo", "uid": "uid-1",
+                     "resourceVersion": "init-rv", "generation": 1},
+        "spec": {"gatewayClassName": "edgion",
+                 "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}]},
+        "status": {"conditions": [foreign.clone()]}
+    });
+    let (client, state) = api_client(source.clone());
+    let runtime = Arc::new(ControllerRuntime::default());
+    runtime.set_status_identity(KubernetesStatusIdentity {
+        controller_name: "example.com/edge".into(),
+    });
+    let processor = Arc::new(ResourceProcessor::new(
+        "Gateway",
+        8,
+        Arc::new(GatewayHandler::new(None, None)),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let cancel = CancellationToken::new();
+    let tracker = TaskTracker::new();
+    let controller = ResourceController::new(
+        "Gateway",
+        client,
+        processor.clone(),
+        scope(false),
+        watcher::Config::default(),
+    )
+    .with_epoch(cancel.clone(), tracker.clone())
+    .with_status_version("v1beta1");
+    let (tx, rx) = mpsc::channel::<watcher::Result<Event<GatewayBeta>>>(32);
+    let stream: NamespacedWatcher<Gateway> = Box::pin(futures::stream::unfold(rx, |mut rx| async {
+        rx.recv().await.map(|event| (event.map(canonical_gateway_event), rx))
+    }));
+    let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+    let beta = |value: Value| serde_json::from_value::<GatewayBeta>(value).unwrap();
+    for event in [Event::Init, Event::InitApply(beta(source)), Event::InitDone] {
+        tx.send(Ok(event)).await.unwrap();
+    }
+    eventually(|| processor.is_ready() && state.lock().requests.len() == 1).await;
+    assert_eq!(
+        state.lock().requests[0].0,
+        "/apis/gateway.networking.k8s.io/v1beta1/namespaces/demo/gateways/edge/status"
+    );
+    assert_eq!(state.lock().requests[0].1["metadata"]["resourceVersion"], "init-rv");
+    assert!(state.lock().object["status"]["conditions"]
+        .as_array()
+        .unwrap()
+        .contains(&foreign));
+    assert_eq!(
+        processor
+            .get("demo/edge")
+            .unwrap()
+            .spec
+            .listeners
+            .as_ref()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let mut unsupported = state.lock().object.clone();
+    unsupported["metadata"]["resourceVersion"] = json!("unsupported-rv");
+    unsupported["metadata"]["generation"] = json!(2);
+    unsupported["spec"]["allowedListeners"] = json!({"namespaces": {"from": "All"}});
+    state.lock().object = unsupported.clone();
+    tx.send(Ok(Event::Apply(beta(unsupported)))).await.unwrap();
+    eventually(|| state.lock().requests.len() == 2).await;
+    assert_eq!(
+        state.lock().requests[1].1["metadata"]["resourceVersion"],
+        "unsupported-rv"
+    );
+    assert!(state.lock().object["status"]["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|condition| condition["type"] == "Accepted" && condition["status"] == "False"));
+    assert!(state.lock().object["status"]["conditions"]
+        .as_array()
+        .unwrap()
+        .contains(&foreign));
+    let published = processor.get("demo/edge").unwrap();
+    assert!(published.spec.listeners.is_none());
+    assert!(published.spec.allowed_listeners.is_none());
+
+    let mut corrected = state.lock().object.clone();
+    corrected["metadata"]["resourceVersion"] = json!("corrected-rv");
+    corrected["metadata"]["generation"] = json!(3);
+    corrected["spec"] = json!({"gatewayClassName": "edgion",
+        "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}]});
+    state.lock().object = corrected.clone();
+    tx.send(Ok(Event::Apply(beta(corrected)))).await.unwrap();
+    eventually(|| state.lock().requests.len() == 3).await;
+    assert!(processor.get("demo/edge").unwrap().spec.listeners.is_some());
+    assert!(state.lock().object["status"]["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|condition| condition["type"] == "Accepted" && condition["status"] == "True"));
+    assert_eq!(tracker.len(), 2);
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+    runtime.reset();
+}
+
+#[tokio::test]
+async fn http_route_beta_status_preserves_foreign_parent_and_resource_version() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::HttpRouteHandler;
+
+    let foreign = json!({"parentRef": {"name": "other"}, "controllerName": "example.com/other",
+        "conditions": [{"type": "Accepted", "status": "True", "reason": "Accepted", "message": "foreign",
+            "lastTransitionTime": "2026-01-01T00:00:00Z"}]});
+    let source = json!({
+        "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "HTTPRoute",
+        "metadata": {"name": "route", "namespace": "demo", "uid": "uid-1", "resourceVersion": "init-rv", "generation": 1},
+        "spec": {"parentRefs": [{"name": "edge"}], "rules": [{"backendRefs": [{"name": "api", "port": 80}]}]},
+        "status": {"parents": [foreign.clone()]}
+    });
+    let (client, state) = api_client(source.clone());
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::new(
+        "HTTPRoute",
+        8,
+        Arc::new(HttpRouteHandler::new("example.com/edge".into())),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let cancel = CancellationToken::new();
+    let tracker = TaskTracker::new();
+    let controller = ResourceController::new(
+        "HTTPRoute",
+        client,
+        processor.clone(),
+        scope(false),
+        watcher::Config::default(),
+    )
+    .with_epoch(cancel.clone(), tracker.clone())
+    .with_status_version("v1beta1");
+    let (tx, rx) = mpsc::channel::<watcher::Result<Event<HTTPRouteBeta>>>(32);
+    let stream: NamespacedWatcher<HTTPRoute> = Box::pin(futures::stream::unfold(rx, |mut rx| async {
+        rx.recv().await.map(|event| (event.map(canonical_http_route_event), rx))
+    }));
+    let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+    let beta = |value: Value| serde_json::from_value::<HTTPRouteBeta>(value).unwrap();
+    for event in [Event::Init, Event::InitApply(beta(source)), Event::InitDone] {
+        tx.send(Ok(event)).await.unwrap();
+    }
+    eventually(|| processor.is_ready() && !state.lock().requests.is_empty()).await;
+    assert_eq!(
+        state.lock().requests[0].0,
+        "/apis/gateway.networking.k8s.io/v1beta1/namespaces/demo/httproutes/route/status"
+    );
+    assert_eq!(state.lock().requests[0].1["metadata"]["resourceVersion"], "init-rv");
+    assert!(state.lock().object["status"]["parents"]
+        .as_array()
+        .unwrap()
+        .contains(&foreign));
+
+    let mut changed = state.lock().object.clone();
+    changed["metadata"]["resourceVersion"] = json!("runtime-rv");
+    changed["metadata"]["generation"] = json!(2);
+    changed["spec"]["rules"][0]["filters"] = json!([{"type": "ExternalAuth", "externalAuth": {
+        "backendRef": {"name": "auth", "port": 8080}, "protocol": "HTTP", "http": {"path": "/check"}}}]);
+    state.lock().object = changed.clone();
+    tx.send(Ok(Event::Apply(beta(changed)))).await.unwrap();
+    eventually(|| {
+        state
+            .lock()
+            .requests
+            .iter()
+            .any(|(_, patch)| patch["metadata"]["resourceVersion"] == "runtime-rv")
+    })
+    .await;
+    assert_eq!(
+        state.lock().requests.last().unwrap().1["metadata"]["resourceVersion"],
+        "runtime-rv"
+    );
+    assert!(state.lock().object["status"]["parents"]
+        .as_array()
+        .unwrap()
+        .contains(&foreign));
+    assert!(processor.get("demo/route").unwrap().spec.invalid_rule_indices.is_some());
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+    runtime.reset();
+}
+
+#[tokio::test]
+async fn gateway_beta_init_list_isolates_unsupported_object_from_valid_peer() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::KubernetesStatusIdentity;
+    use std::collections::HashMap;
+
+    let source = |name: &str| {
+        json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1", "kind": "Gateway",
+            "metadata": {"name": name, "namespace": "demo", "uid": format!("uid-{name}"),
+                         "resourceVersion": "init-rv", "generation": 1},
+            "spec": {"gatewayClassName": "edgion",
+                     "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}]}
+        })
+    };
+    let mut invalid = source("invalid");
+    invalid["spec"]["infrastructure"] = json!({"labels": {"team": "web"}});
+    let valid = source("valid");
+    let objects = Arc::new(Mutex::new(HashMap::from([
+        ("invalid".to_string(), invalid.clone()),
+        ("valid".to_string(), valid.clone()),
+    ])));
+    let shared = objects.clone();
+    let transport = tower::service_fn(move |request: http::Request<kube::client::Body>| {
+        let shared = shared.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let patch: Value = serde_json::from_slice(&body.collect_bytes().await.unwrap()).unwrap();
+            let name = parts.uri.path().split('/').nth_back(1).unwrap().to_string();
+            let mut objects = shared.lock();
+            let object = objects.get_mut(&name).unwrap();
+            assert_eq!(
+                patch["metadata"]["resourceVersion"],
+                object["metadata"]["resourceVersion"]
+            );
+            json_patch::merge(object, &patch);
+            Ok::<_, Infallible>(
+                http::Response::builder()
+                    .status(200)
+                    .body(kube::client::Body::from(serde_json::to_vec(object).unwrap()))
+                    .unwrap(),
+            )
+        }
+    });
+    let client = Client::new(transport, "default");
+    let runtime = Arc::new(ControllerRuntime::default());
+    runtime.set_status_identity(KubernetesStatusIdentity {
+        controller_name: "example.com/edge".into(),
+    });
+    let processor = Arc::new(ResourceProcessor::new(
+        "Gateway",
+        8,
+        Arc::new(GatewayHandler::new(None, None)),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let cancel = CancellationToken::new();
+    let tracker = TaskTracker::new();
+    let controller = ResourceController::new(
+        "Gateway",
+        client,
+        processor.clone(),
+        scope(false),
+        watcher::Config::default(),
+    )
+    .with_epoch(cancel.clone(), tracker.clone())
+    .with_status_version("v1beta1");
+    let (tx, rx) = mpsc::channel::<watcher::Result<Event<GatewayBeta>>>(32);
+    let stream: NamespacedWatcher<Gateway> = Box::pin(futures::stream::unfold(rx, |mut rx| async {
+        rx.recv().await.map(|event| (event.map(canonical_gateway_event), rx))
+    }));
+    let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+    tx.send(Ok(Event::Init)).await.unwrap();
+    tx.send(Ok(Event::InitApply(serde_json::from_value(invalid).unwrap())))
+        .await
+        .unwrap();
+    tx.send(Ok(Event::InitApply(serde_json::from_value(valid).unwrap())))
+        .await
+        .unwrap();
+    tx.send(Ok(Event::InitDone)).await.unwrap();
+    eventually(|| {
+        processor.is_ready() && processor.get("demo/valid").is_some() && processor.get("demo/invalid").is_some()
+    })
+    .await;
+    assert!(processor.get("demo/invalid").unwrap().spec.listeners.is_none());
+    assert_eq!(
+        processor
+            .get("demo/valid")
+            .unwrap()
+            .spec
+            .listeners
+            .as_ref()
+            .unwrap()
+            .len(),
+        1
+    );
+    {
+        let objects = objects.lock();
+        for (name, expected) in [("invalid", "False"), ("valid", "True")] {
+            assert!(objects[name]["status"]["conditions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|condition| condition["type"] == "Accepted" && condition["status"] == expected));
+        }
+    }
+    assert_eq!(tracker.len(), 2);
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+    runtime.reset();
 }

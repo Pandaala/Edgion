@@ -1,0 +1,131 @@
+{
+  "BackendTLSPolicy": {
+    "targetRefs": [
+      {
+        "group": "",
+        "kind": "Service",
+        "name": "backend"
+      }
+    ],
+    "validation": {
+      "hostname": "backend.example.com",
+      "wellKnownCACertificates": "System"
+    }
+  },
+  "GRPCRoute": {
+    "parentRefs": [
+      {
+        "name": "edge"
+      }
+    ],
+    "rules": [
+      {
+        "backendRefs": [
+          {
+            "name": "backend",
+            "port": 80
+          }
+        ]
+      }
+    ]
+  },
+  "Gateway": {
+    "gatewayClassName": "edge",
+    "listeners": [
+      {
+        "name": "http",
+        "port": 80,
+        "protocol": "HTTP"
+      }
+    ]
+  },
+  "GatewayClass": {
+    "controllerName": "example.com/gateway"
+  },
+  "HTTPRoute": {
+    "parentRefs": [
+      {
+        "name": "edge"
+      }
+    ],
+    "rules": [
+      {
+        "backendRefs": [
+          {
+            "name": "backend",
+            "port": 80
+          }
+        ]
+      }
+    ]
+  },
+  "ReferenceGrant": {
+    "from": [
+      {
+        "group": "gateway.networking.k8s.io",
+        "kind": "HTTPRoute",
+        "namespace": "client"
+      }
+    ],
+    "to": [
+      {
+        "group": "",
+        "kind": "Service"
+      }
+    ]
+  },
+  "TCPRoute": {
+    "parentRefs": [
+      {
+        "name": "edge"
+      }
+    ],
+    "rules": [
+      {
+        "backendRefs": [
+          {
+            "name": "backend",
+            "port": 80
+          }
+        ]
+      }
+    ]
+  },
+  "TLSRoute": {
+    "hostnames": [
+      "backend.example.com"
+    ],
+    "parentRefs": [
+      {
+        "name": "edge"
+      }
+    ],
+    "rules": [
+      {
+        "backendRefs": [
+          {
+            "name": "backend",
+            "port": 443
+          }
+        ]
+      }
+    ]
+  },
+  "UDPRoute": {
+    "parentRefs": [
+      {
+        "name": "edge"
+      }
+    ],
+    "rules": [
+      {
+        "backendRefs": [
+          {
+            "name": "backend",
+            "port": 80
+          }
+        ]
+      }
+    ]
+  }
+}

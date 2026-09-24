@@ -64,7 +64,6 @@ rules:
 | sessionName | string | 否 | `edgion-session-affinity` | 会话 token 名称（Cookie 名或 Header 名） |
 | type | string | 否 | Cookie | 会话类型：`Cookie` 或 `Header` |
 | absoluteTimeout | duration | 否 | — | 绝对超时（Permanent Cookie 模式下映射为 `Max-Age`） |
-| idleTimeout | duration | 否 | — | 空闲超时（当前版本不支持，预留给 Redis 模式） |
 | cookieConfig | object | 否 | — | Cookie 特有配置 |
 | strict | bool | 否 | false | Edgion 扩展：strict 模式（见下方说明） |
 
@@ -180,8 +179,9 @@ spec:
 
 ## 限制
 
+Gateway API v1.6.2 已从 HTTPRoute 和 GRPCRoute 的 `sessionPersistence` 中移除 `idleTimeout`。请勿配置该字段；API Server 会按 CRD 将其剪除。
+
 - **多实例一致性**：会话标识派生是确定性的（后端地址的无密钥哈希），多 Gateway 实例间只要后端列表一致，同一 token 就路由到同一后端，无需服务端会话存储。删除绑定端点会使其会话失效（fallback + 标识刷新），其他端点的会话不受影响。
-- **idleTimeout**：当前版本不支持服务端 idle timeout（纯客户端 Cookie 方案无法实现），预留给后续 Redis 模式。
 - **GRPCRoute**：原生支持，配置方式与 HTTPRoute 相同，并有基于后端身份的集成测试验证。gRPC 特有语义：`strict: true` 时，粘性后端不可用将以 `grpc-status: 14`（UNAVAILABLE）失败关闭，而非 HTTP 503。原生 gRPC 客户端（tonic、grpc-go）需要在应用层自行回传会话 Cookie；浏览器 grpc-web 客户端仅在同站（same-site）且启用凭据（credentials）时自动携带（Cookie 带有 `SameSite=Lax`），跨站 grpc-web 部署建议使用 `type: Header`。会话保持依赖 EndpointSlice 类后端（ClusterIP 类后端会静默绕过，与 HTTPRoute 行为一致）。
 
 ## 相关文档

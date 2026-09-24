@@ -26,6 +26,20 @@ fn is_edgion_backend<T: ResourceMeta>() -> bool {
     T::kind_name() == EDGION_BACKEND_KIND
 }
 
+fn canonical_gateway_api_type_meta<T: ResourceMeta>(value: &serde_json::Value) -> bool {
+    let Some(source) =
+        edgion_resources::gateway_api_support::canonical_sources().find(|source| source.kind == T::kind_name())
+    else {
+        return true;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.get("kind").and_then(serde_json::Value::as_str) == Some(source.kind)
+        && object.get("apiVersion").and_then(serde_json::Value::as_str)
+            == Some(format!("{}/{}", edgion_resources::gateway_api_support::GROUP, source.version).as_str())
+}
+
 fn clear_backend_cache<T: ResourceMeta>(cache_data: &Arc<RwLock<CacheData<T>>>, sync_version: u64) {
     let mut cache = cache_data.write();
     cache.reset(Vec::new(), sync_version);
@@ -158,6 +172,14 @@ where
             }
         };
 
+        if !canonical_gateway_api_type_meta::<T>(&event_data) {
+            record_watch_parse_failure::<T>(
+                &identity,
+                event_sv,
+                "watch resource has noncanonical Gateway API TypeMeta",
+            );
+            return Err(());
+        }
         match serde_json::from_value::<T>(event_data) {
             Ok(mut resource) => {
                 resource.pre_parse();
@@ -193,6 +215,20 @@ fn decode_list_payload<T>(data: &[u8]) -> Result<Vec<T>, &'static str>
 where
     T: ResourceMeta + serde::de::DeserializeOwned,
 {
+    if edgion_resources::gateway_api_support::canonical_sources().any(|source| source.kind == T::kind_name()) {
+        let raw_resources: Vec<serde_json::Value> =
+            serde_json::from_slice(data).map_err(|_| "list payload must be a valid JSON resource array")?;
+        if raw_resources
+            .iter()
+            .any(|resource| !canonical_gateway_api_type_meta::<T>(resource))
+        {
+            return Err("list contains noncanonical Gateway API TypeMeta");
+        }
+        return raw_resources
+            .into_iter()
+            .map(|resource| serde_json::from_value(resource).map_err(|_| "list resource does not match the schema"))
+            .collect();
+    }
     if !is_edgion_backend::<T>() {
         return serde_json::from_slice(data).map_err(|_| "list payload does not match the resource array schema");
     }
@@ -720,7 +756,7 @@ mod tests {
     use crate::ai::AiBackendStore;
     use edgion_common::conf_sync::proto::{ListRequest, ListResponse, WatchResponse};
     use edgion_common::conf_sync::traits::{CacheEventDispatch, ConfHandler, ResourceChange};
-    use edgion_resources::resources::EdgionBackend;
+    use edgion_resources::resources::{BackendTLSPolicy, EdgionBackend, Gateway, GatewayClass};
     use k8s_openapi::api::core::v1::ConfigMap;
     use kube::core::ObjectMeta;
     use std::collections::{HashMap, HashSet};
@@ -1266,6 +1302,144 @@ mod tests {
     fn ordinary_resource_list_keeps_existing_identity_semantics() {
         let payload = serde_json::to_vec(&vec![serde_json::json!({"metadata": {"name": "cm"}})]).unwrap();
         assert_eq!(decode_list_payload::<ConfigMap>(&payload).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn gateway_api_list_rejects_noncanonical_type_meta_before_typed_parse() {
+        let valid = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "GatewayClass",
+            "metadata": {"name": "edge"},
+            "spec": {"controllerName": "example.com/gateway"}
+        });
+        assert_eq!(
+            decode_list_payload::<GatewayClass>(&serde_json::to_vec(&vec![valid.clone()]).unwrap())
+                .unwrap()
+                .len(),
+            1
+        );
+        for (field, replacement) in [
+            ("apiVersion", serde_json::json!("gateway.networking.k8s.io/v1beta1")),
+            ("apiVersion", serde_json::json!(1)),
+            ("kind", serde_json::json!("Gateway")),
+        ] {
+            let mut wrong = valid.clone();
+            wrong[field] = replacement;
+            assert!(decode_list_payload::<GatewayClass>(&serde_json::to_vec(&vec![wrong]).unwrap()).is_err());
+        }
+        for field in ["apiVersion", "kind"] {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(decode_list_payload::<GatewayClass>(&serde_json::to_vec(&vec![missing]).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn gateway_api_watch_rejects_beta_and_recovers_on_canonical_event() {
+        let cache = Arc::new(RwLock::new(CacheData::<GatewayClass>::new()));
+        let mut resource = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "GatewayClass",
+            "metadata": {"name": "edge"},
+            "spec": {"controllerName": "example.com/gateway"}
+        });
+        let event = |data| serde_json::to_string(&vec![serde_json::json!({"type": "add", "data": data})]).unwrap();
+        resource["apiVersion"] = serde_json::json!("gateway.networking.k8s.io/v1beta1");
+        assert!(apply_generic_watch_payload(&cache, &event(resource.clone()), 1).is_err());
+        assert!(cache.read().is_empty());
+        resource["apiVersion"] = serde_json::json!("gateway.networking.k8s.io/v1");
+        assert!(apply_generic_watch_payload(&cache, &event(resource), 2).is_ok());
+        assert_eq!(cache.read().len(), 1);
+    }
+
+    #[test]
+    fn gateway_list_retains_sibling_when_address_value_is_absent_and_recovers() {
+        let cache = Arc::new(RwLock::new(CacheData::<Gateway>::new()));
+        let gateway = |name: &str, address: serde_json::Value| {
+            serde_json::json!({
+                "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+                "metadata": {"name": name, "namespace": "demo"},
+                "spec": {"gatewayClassName": "edge", "addresses": [address],
+                    "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}]}
+            })
+        };
+        let valid = gateway("valid", serde_json::json!({"type": "IPAddress", "value": "192.0.2.1"}));
+        let absent = gateway("absent", serde_json::json!({"type": "IPAddress"}));
+        let mixed = serde_json::to_vec(&vec![valid.clone(), absent]).unwrap();
+        assert_eq!(publish_list_payload(&cache, &mixed, 1).unwrap(), 2);
+        assert_eq!(cache.read().len(), 2);
+        assert!(cache.read().get("demo/valid").is_some());
+        assert_eq!(
+            cache
+                .read()
+                .get("demo/absent")
+                .unwrap()
+                .spec
+                .addresses
+                .as_ref()
+                .unwrap()[0]
+                .value,
+            None
+        );
+        assert!(cache.read().get("demo/absent").unwrap().spec.listeners.is_none());
+
+        let repaired = gateway("absent", serde_json::json!({"type": "IPAddress", "value": "192.0.2.2"}));
+        let list = serde_json::to_vec(&vec![valid, repaired]).unwrap();
+        assert_eq!(publish_list_payload(&cache, &list, 2).unwrap(), 2);
+        assert_eq!(
+            cache
+                .read()
+                .get("demo/absent")
+                .unwrap()
+                .spec
+                .addresses
+                .as_ref()
+                .unwrap()[0]
+                .value
+                .as_deref(),
+            Some("192.0.2.2")
+        );
+        assert!(cache.read().get("demo/absent").unwrap().spec.listeners.is_some());
+    }
+
+    #[test]
+    fn backend_tls_list_retains_sibling_with_unsupported_ca_name_and_recovers() {
+        let cache = Arc::new(RwLock::new(CacheData::<BackendTLSPolicy>::new()));
+        let policy = |name: &str, ca: &str| {
+            serde_json::json!({
+                "apiVersion": "gateway.networking.k8s.io/v1", "kind": "BackendTLSPolicy",
+                "metadata": {"name": name, "namespace": "demo"},
+                "spec": {"targetRefs": [{"group": "", "kind": "Service", "name": "backend"}],
+                    "validation": {"hostname": "backend.example.com", "wellKnownCACertificates": ca}}
+            })
+        };
+        let valid = policy("valid", "System");
+        let unsupported = policy("unsupported", "example.com/Custom");
+        let mixed = serde_json::to_vec(&vec![valid.clone(), unsupported]).unwrap();
+        assert_eq!(publish_list_payload(&cache, &mixed, 1).unwrap(), 2);
+        assert_eq!(cache.read().len(), 2);
+        assert!(cache.read().get("demo/valid").is_some());
+        assert!(matches!(
+            cache
+                .read()
+                .get("demo/unsupported")
+                .unwrap()
+                .spec
+                .validation
+                .well_known_ca_certificates,
+            Some(edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::Other(_))
+        ));
+        let repaired = policy("unsupported", "System");
+        let list = serde_json::to_vec(&vec![valid, repaired]).unwrap();
+        assert_eq!(publish_list_payload(&cache, &list, 2).unwrap(), 2);
+        assert!(matches!(
+            cache
+                .read()
+                .get("demo/unsupported")
+                .unwrap()
+                .spec
+                .validation
+                .well_known_ca_certificates,
+            Some(edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::System)
+        ));
     }
 
     #[test]

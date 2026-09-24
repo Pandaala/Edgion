@@ -122,7 +122,7 @@ if [[ "${SKIP_CRD}" != "true" ]]; then
   kubectl delete validatingadmissionpolicy safe-upgrades.gateway.networking.k8s.io --ignore-not-found 2>/dev/null || true
   kubectl delete validatingadmissionpolicybinding safe-upgrades.gateway.networking.k8s.io --ignore-not-found 2>/dev/null || true
   # Apply experimental CRDs with VAP stripped out (VAP inside the file would re-block itself)
-  _exp_file="$CRD_ROOT/gateway-api/gateway-api-experimental-v1.5.0.yaml"
+  _exp_file="$CRD_ROOT/gateway-api/gateway-api-experimental-v1.6.2.yaml"
   if [[ -f "$_exp_file" ]]; then
     # Split multi-doc YAML, drop ValidatingAdmissionPolicy* kinds, re-apply
     awk '

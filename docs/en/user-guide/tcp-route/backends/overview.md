@@ -5,7 +5,7 @@ A TCPRoute forwards a raw TCP stream to one or more Kubernetes Services. Load ba
 ## Basic example
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
 metadata:
   name: database-route
