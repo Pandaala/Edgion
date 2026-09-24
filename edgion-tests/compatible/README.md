@@ -26,8 +26,13 @@ python3 -m pip install -r edgion-tests/gateway_api_bundles/requirements.txt
 
 Images must be pullable by the target cluster. The test server image defaults
 to the image in the Kubernetes fixture Deployment if no override is given.
+Install `grpcurl` on the runner host when testing a release with GRPCRoute;
+the runner uses a temporary Gateway Pod port-forward to send a unary gRPC
+health request.
 The runner also uses `python:3.12-alpine` for a temporary in-cluster
-HTTP/TCP/UDP/TLS probe. Use `--version v1.0.0` to narrow a run.
+HTTP/TCP/UDP/TLS probe. Use `--version v1.0.0` to narrow a run or
+`--from-version v1.3.0` to resume the remaining releases after a recovered
+interruption.
 
 An existing Edgion runtime with no Gateway API resource objects can be tested
 with `--reuse-cluster`. This mode snapshots the Gateway API CRDs, Controller
@@ -35,7 +40,18 @@ configuration, Deployment images, and replica counts; scales Controller and
 Gateway down while replacing CRDs; then restores the snapshot on exit. It
 requires the test namespaces to be absent and leaves existing Edgion CRDs,
 RBAC, and the `edgion-system` namespace untouched. The cluster is unavailable
-for ordinary Gateway traffic during the matrix.
+for ordinary Gateway traffic during the matrix. Reuse mode writes a private
+baseline snapshot to `tmp/compatible_testing/reuse-baseline-state.json` before
+changing the cluster and deletes it after successful restoration. If the
+runner is forcibly terminated, restore that snapshot before another run:
+
+```bash
+./edgion-tests/compatible/run_compatible_test.sh \
+  --context orbstack --restore-reuse-baseline
+```
+
+The snapshot contains the Controller ConfigMap and CRD specifications; treat
+it as private cluster configuration until restoration removes it.
 Results and failure logs are written under `tmp/compatible_testing/` by
 default; `--report-dir` changes that location. Every Standard release
 gets a `result.json`. Any failed release returns a nonzero exit code. A cleanup
@@ -89,17 +105,19 @@ Gateway, and HTTPRoute are submitted as v1beta1 and checked through a
 separate HTTP listener. The v1beta1 ReferenceGrant source is submitted where
 it is served.
 When the installed CRD serves them, it also creates and checks the implemented
-GRPCRoute, TCPRoute, UDPRoute, and TLSRoute source versions. TCP, UDP, and
-TLSRoute also forward probe traffic to the test backend. It exercises
-ReferenceGrant with a cross-namespace HTTPRoute and a second HTTP request,
-and checks BackendTLSPolicy status. Unsupported older served versions such as
+GRPCRoute, TCPRoute, UDPRoute, and TLSRoute source versions. GRPCRoute sends a
+unary gRPC health request; TCP, UDP, and TLSRoute forward probe traffic to
+the test backend. ReferenceGrant authorizes a cross-namespace HTTPRoute; when
+both v1 and v1beta1 are served, their grants authorize distinct backend
+Services and both cross-namespace requests are checked. BackendTLSPolicy
+forwards a request to a private-CA HTTPS backend with the expected hostname
+and rejects the same backend when the validation hostname is wrong.
+Unsupported older served versions such as
 TLSRoute/v1alpha2 remain outside Edgion's source-version contract; the result
 file records them as unavailable. The source selection follows
 `edgion-resources/src/gateway_api_support.rs`.
 
-Accepted status on GRPCRoute or BackendTLSPolicy is an attachment and
-reconciliation check, not a data-plane traffic assertion for that kind. The
-existing K8s integration and Gateway API conformance suites remain necessary
+The existing K8s integration and Gateway API conformance suites remain necessary
 for feature and protocol behavior. A passing compatibility run applies to the
 tested images, Kubernetes version, Standard CRD release, and fixtures; it does
 not establish support for every field in a served GVK.

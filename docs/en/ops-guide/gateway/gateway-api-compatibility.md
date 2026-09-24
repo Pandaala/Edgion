@@ -37,11 +37,13 @@ For each row, `run_compatible_test.sh` installs the pinned official Standard
 CRDs, starts the Edgion Controller and Gateway, applies the listed YAML
 resources, and waits for their `Accepted=True` status. It probes HTTP routing,
 cross-namespace access through ReferenceGrant, and the v1beta1 HTTP route.
-Where those resources are available, it also probes TCP, UDP, and TLS
-passthrough forwarding. GRPCRoute and BackendTLSPolicy are checked for
-reconciliation status; this suite does not send gRPC traffic or prove backend
-TLS verification. The suite also validates its YAML against each bundle's
-OpenAPI schema before a cluster run.
+Where both ReferenceGrant source versions are served, each authorizes a
+different backend Service and both cross-namespace requests are checked.
+Where those resources are available, the runner also probes unary gRPC health,
+TCP, UDP, and TLS passthrough forwarding. BackendTLSPolicy is checked against
+a private-CA HTTPS backend: a matching CA and hostname must succeed, while an
+incorrect validation hostname must fail. The suite also validates its YAML
+against each bundle's OpenAPI schema before a cluster run.
 
 All 13 Standard releases passed the compatibility suite on an OrbStack
 Kubernetes v1.33.9 arm64 cluster on 2026-09-24. This is a tested resource and
@@ -52,7 +54,8 @@ before using it.
 
 ## Run the matrix
 
-Use a disposable cluster and images that the cluster can pull:
+Use a disposable cluster, images that it can pull, and `grpcurl` installed on
+the runner host:
 
 ```bash
 python3 -m pip install -r edgion-tests/gateway_api_bundles/requirements.txt

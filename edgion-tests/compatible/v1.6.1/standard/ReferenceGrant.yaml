@@ -27,4 +27,4 @@ spec:
   to:
   - group: ''
     kind: Service
-    name: test-http
+    name: test-http-beta-grant

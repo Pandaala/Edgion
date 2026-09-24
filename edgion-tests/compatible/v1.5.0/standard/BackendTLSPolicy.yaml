@@ -10,5 +10,25 @@ spec:
     kind: Service
     name: test-tls-policy
   validation:
-    hostname: test-tls-policy.edgion-test.svc.cluster.local
-    wellKnownCACertificates: System
+    hostname: test-backend-tls.edgion-test.svc.cluster.local
+    caCertificateRefs:
+    - group: ''
+      kind: Secret
+      name: backend-ca
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: compatible-backend-tls-invalid
+  namespace: edgion-test
+spec:
+  targetRefs:
+  - group: ''
+    kind: Service
+    name: test-tls-policy-invalid
+  validation:
+    hostname: wrong.compatible.example
+    caCertificateRefs:
+    - group: ''
+      kind: Secret
+      name: backend-ca
