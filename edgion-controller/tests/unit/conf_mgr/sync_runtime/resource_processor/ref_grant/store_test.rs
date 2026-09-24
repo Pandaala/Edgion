@@ -1,0 +1,157 @@
+use super::*;
+use edgion_resources::resources::{ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+fn create_test_grant(
+    namespace: &str,
+    name: &str,
+    from_namespace: &str,
+    from_kind: &str,
+    to_kind: &str,
+) -> ReferenceGrant {
+    ReferenceGrant {
+        metadata: ObjectMeta {
+            namespace: Some(namespace.to_string()),
+            name: Some(name.to_string()),
+            ..Default::default()
+        },
+        spec: ReferenceGrantSpec {
+            from: vec![ReferenceGrantFrom {
+                group: "gateway.networking.k8s.io".to_string(),
+                kind: from_kind.to_string(),
+                namespace: from_namespace.to_string(),
+            }],
+            to: vec![ReferenceGrantTo {
+                group: "".to_string(),
+                kind: to_kind.to_string(),
+                name: None,
+            }],
+        },
+    }
+}
+
+#[test]
+fn test_basic_crud() {
+    let store = ReferenceGrantStore::new();
+    let grant = create_test_grant("ns-target", "test-grant", "ns-source", "HTTPRoute", "Service");
+
+    let mut grants = HashMap::new();
+    grants.insert("ns-target/test-grant".to_string(), Arc::new(grant));
+
+    store.replace_all(grants);
+
+    // Test get
+    assert!(store.get("ns-target/test-grant").is_some());
+    assert!(store.get("ns-target/nonexistent").is_none());
+
+    // Test get_by_ns_name
+    assert!(store.get_by_ns_name("ns-target", "test-grant").is_some());
+    assert!(store.get_by_ns_name("ns-target", "nonexistent").is_none());
+}
+
+#[test]
+fn test_upsert_and_remove() {
+    let store = ReferenceGrantStore::new();
+    let grant = create_test_grant("ns-target", "test-grant", "ns-source", "HTTPRoute", "Service");
+
+    // Upsert
+    store.upsert("ns-target/test-grant".to_string(), Arc::new(grant));
+    assert!(store.get("ns-target/test-grant").is_some());
+    assert_eq!(store.get_by_to_namespace("ns-target").len(), 1);
+
+    // Remove
+    let removed = store.remove("ns-target/test-grant");
+    assert!(removed.is_some());
+    assert!(store.get("ns-target/test-grant").is_none());
+    assert_eq!(store.get_by_to_namespace("ns-target").len(), 0);
+}
+
+#[test]
+fn test_index_query() {
+    let store = ReferenceGrantStore::new();
+
+    let grant1 = create_test_grant("ns1", "grant1", "ns-source", "HTTPRoute", "Service");
+    let grant2 = create_test_grant("ns1", "grant2", "ns-source2", "TCPRoute", "Service");
+    let grant3 = create_test_grant("ns2", "grant3", "ns-source", "HTTPRoute", "Secret");
+
+    let mut grants = HashMap::new();
+    grants.insert("ns1/grant1".to_string(), Arc::new(grant1));
+    grants.insert("ns1/grant2".to_string(), Arc::new(grant2));
+    grants.insert("ns2/grant3".to_string(), Arc::new(grant3));
+
+    store.replace_all(grants);
+
+    // Query by to_namespace
+    let ns1_grants = store.get_by_to_namespace("ns1");
+    assert_eq!(ns1_grants.len(), 2);
+
+    let ns2_grants = store.get_by_to_namespace("ns2");
+    assert_eq!(ns2_grants.len(), 1);
+
+    let ns_nonexistent = store.get_by_to_namespace("ns-nonexistent");
+    assert_eq!(ns_nonexistent.len(), 0);
+}
+
+#[test]
+fn test_check_reference_allowed_same_namespace() {
+    let store = ReferenceGrantStore::new();
+
+    // Same namespace references should always be allowed
+    assert!(store.check_reference_allowed(
+        "ns1",
+        "gateway.networking.k8s.io",
+        "HTTPRoute",
+        "ns1",
+        "",
+        "Service",
+        Some("my-service")
+    ));
+}
+
+#[test]
+fn test_check_reference_allowed_cross_namespace() {
+    let store = ReferenceGrantStore::new();
+
+    // Create a grant that allows HTTPRoute from ns-source to access Service in ns-target
+    let grant = create_test_grant("ns-target", "test-grant", "ns-source", "HTTPRoute", "Service");
+    let mut grants = HashMap::new();
+    grants.insert("ns-target/test-grant".to_string(), Arc::new(grant));
+    store.replace_all(grants);
+
+    // Should allow: grant exists
+    assert!(store.check_reference_allowed(
+        "ns-source",
+        "gateway.networking.k8s.io",
+        "HTTPRoute",
+        "ns-target",
+        "",
+        "Service",
+        Some("my-service")
+    ));
+
+    // Should deny: no grant for different source namespace
+    assert!(!store.check_reference_allowed(
+        "ns-other",
+        "gateway.networking.k8s.io",
+        "HTTPRoute",
+        "ns-target",
+        "",
+        "Service",
+        Some("my-service")
+    ));
+}
+
+impl ReferenceGrantStore {
+    /// Get a reference grant by namespace and name
+    #[cfg(test)]
+    pub fn get_by_ns_name(&self, namespace: &str, name: &str) -> Option<Arc<ReferenceGrant>> {
+        let key = format!("{}/{}", namespace, name);
+        self.get(&key)
+    }
+
+    /// Get all grants (for testing/debugging)
+    #[cfg(test)]
+    pub fn get_all(&self) -> HashMap<String, Arc<ReferenceGrant>> {
+        self.state.read().raw.clone()
+    }
+}

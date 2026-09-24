@@ -11,12 +11,19 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 CRATE = ROOT / "edgion-common"
-MIGRATED_CRATES = ("edgion-common", "edgion-dsl", "edgion-cli")
+MIGRATED_CRATES = ("edgion-common", "edgion-dsl", "edgion-cli", "edgion-controller")
 CFG = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 PATH = re.compile(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]')
 MODULE = re.compile(r"mod\s+([A-Za-z_][A-Za-z_0-9]*)\s*([;{])")
 TEST = re.compile(r"#\s*\[\s*(?:(?:tokio|async_std)\s*::\s*)?test\b")
-REEXPORT = re.compile(r"pub\s*\(\s*crate\s*\)\s+use\s+test_support::outbound_tls_test_guard\s*;")
+USE = re.compile(r"(?:pub\s*(?:\([^)]*\))?\s+)?use\s+")
+
+# Test execution needs the source-local CRD fallback; the branch is inside a
+# production function and cannot be represented by an external module mount.
+SCOPED_EXCEPTIONS = {
+    ("edgion-controller", Path("conf_mgr/conf_center/common.rs"), "let crd_dir"):
+        "test-only CRD path fallback inside parse_resource_content_offline",
+}
 
 
 def mask_non_code(text: str) -> str:
@@ -100,7 +107,20 @@ def check() -> list[str]:
                     cursor += 1
             module = MODULE.match(code, cursor)
             if not module:
-                if source.relative_to(CRATE / "src") == Path("link_sys_core/outbound_tls.rs") and REEXPORT.match(code, cursor):
+                if USE.match(code, cursor):
+                    # Imports and re-exports are declarations, not test bodies.
+                    continue
+                exception = next(
+                    (
+                        key
+                        for key in SCOPED_EXCEPTIONS
+                        if key[0] == CRATE.name
+                        and key[1] == relative
+                        and code[cursor:].lstrip().startswith(key[2])
+                    ),
+                    None,
+                )
+                if exception:
                     continue
                 line = original.count("\n", 0, match.start()) + 1
                 errors.append(f"{relative}:{line}: test-only implementation remains in src")
@@ -115,8 +135,13 @@ def check() -> list[str]:
                 continue
             actual = (source.parent / path_match.group(1)).resolve()
             base = CRATE / "tests" / "unit" / relative.parent / f"{relative.stem}_test"
-            if relative == Path("link_sys_core/outbound_tls.rs") and name == "test_support":
+            if name == "test_support" and CRATE.name == "edgion-common" and relative == Path("link_sys_core/outbound_tls.rs"):
                 expected = support
+            elif name == "test_support" and CRATE.name == "edgion-controller":
+                if relative == Path("conf_mgr/conf_center/file_system/center.rs"):
+                    expected = (CRATE / "tests" / "support" / "file_system_center.rs").resolve()
+                else:
+                    expected = (CRATE / "tests" / "support" / relative).resolve()
             else:
                 expected = (base.with_suffix(".rs") if name == "tests" else base / f"{name}.rs").resolve()
             if actual != expected:
@@ -133,8 +158,9 @@ def check() -> list[str]:
     for path in sorted((CRATE / "tests" / "unit").rglob("*.rs")):
         if path.resolve() not in mounts:
             errors.append(f"{path.relative_to(CRATE)}: orphan unit-test file")
-    if support.is_file() and support not in mounts:
-        errors.append(f"{support.relative_to(CRATE)}: orphan support file")
+    for path in sorted((CRATE / "tests" / "support").rglob("*.rs")):
+        if path.resolve() not in mounts:
+            errors.append(f"{path.relative_to(CRATE)}: orphan support file")
     return errors
 
 

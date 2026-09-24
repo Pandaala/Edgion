@@ -60,7 +60,7 @@ consequence of adding an ownership dependency.
 
 Implementation: `handlers/{gateway,gateway_class}.rs` and the contextual
 eligibility/deletion path in `resource_processor/processor.rs`.
-Controller-local coverage: `handlers/tests/gateway_ownership_test.rs` checks
+Controller-local coverage: `edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/mod_test/gateway_ownership_tests.rs` checks
 missing/deleted/recreated classes, independent owners/classes, namespace filtering,
 unpublished raw incarnations, UID/generation/Accepted boundaries, in-flight
 unpublication, cleanup and repeated status echoes. These tests do not start a

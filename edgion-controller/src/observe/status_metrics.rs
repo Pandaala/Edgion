@@ -108,13 +108,6 @@ pub(crate) fn renderers_slot() -> &'static Mutex<HashMap<&'static str, Renderer>
     RENDERERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Test-only module-level mutex. All tests in this file that mutate the
-/// global `snapshot_slot()` or `renderers_slot()` must lock this before
-/// touching state, to serialize otherwise parallel cargo test threads
-/// running in the same process.
-#[cfg(test)]
-static TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-
 /// A condition as observed from serialized resource JSON. Only the fields
 /// we actually classify on.
 #[derive(Debug, Clone)]
@@ -604,7 +597,13 @@ pub(crate) fn spawn_snapshot_loop(tick_secs: u64) {
     );
 }
 
-// Unit tests for this module live in `tests/status_metrics_test.rs`.
+// Unit tests for this module live in `tests/unit/observe/status_metrics_test.rs`.
 #[cfg(test)]
-#[path = "tests/status_metrics_test.rs"]
+#[path = "../../tests/unit/observe/status_metrics_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/support/observe/status_metrics.rs"]
+mod test_support;
+#[cfg(test)]
+use test_support::*;

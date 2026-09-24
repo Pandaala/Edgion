@@ -327,5 +327,5 @@ fn collect_ref_denied_list(route: &TCPRoute) -> Vec<Option<&RefDenied>> {
 }
 
 #[cfg(test)]
-#[path = "tests/coalesced_recreate_backend_tls_test.rs"]
+#[path = "../../../../../tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/tcp_route_test/coalesced_recreate_backend_tls_test.rs"]
 mod coalesced_recreate_backend_tls_test;

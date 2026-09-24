@@ -86,16 +86,6 @@ impl FileSystemCenter {
             conf_dir_abs,
         })
     }
-
-    #[cfg(test)]
-    pub(super) fn conf_dir_abs(&self) -> &std::path::Path {
-        &self.conf_dir_abs
-    }
-
-    #[cfg(test)]
-    pub(super) fn storage_root(&self) -> &std::path::Path {
-        self.writer.root().as_path()
-    }
 }
 
 // CenterApi implementation - delegates to `writer` via macro
@@ -200,30 +190,9 @@ impl CenterLifeCycle for FileSystemCenter {
 }
 
 #[cfg(test)]
-mod center_path_tests {
-    use super::*;
+#[path = "../../../../tests/unit/conf_mgr/conf_center/file_system/center_test/center_path_tests.rs"]
+mod center_path_tests;
 
-    #[test]
-    fn missing_or_blank_identity_fails_before_starting_the_source() {
-        assert!(FileSystemCenter::new(FileSystemConfig::default()).is_err());
-        assert!(FileSystemCenter::new(FileSystemConfig::default().with_controller_name(" ")).is_err());
-    }
-
-    #[test]
-    fn new_absolutizes_conf_dir_and_shares_base_with_storage() {
-        let center = FileSystemCenter::new(
-            FileSystemConfig::new(std::path::PathBuf::from("relative/conf"))
-                .with_controller_name("edgion.io/gateway-controller"),
-        )
-        .unwrap();
-        assert!(
-            center.conf_dir_abs().is_absolute(),
-            "conf_dir handed to the watcher must be absolute"
-        );
-        assert_eq!(
-            center.storage_root(),
-            center.conf_dir_abs(),
-            "storage scan base must equal the watcher base (design §0)"
-        );
-    }
-}
+#[cfg(test)]
+#[path = "../../../../tests/support/file_system_center.rs"]
+mod test_support;

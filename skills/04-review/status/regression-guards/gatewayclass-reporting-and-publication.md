@@ -84,11 +84,11 @@ one physical listener port across classes; existing conflict handling remains.
 
 ## Verification and re-evaluation
 
-Regression coverage: `handlers/tests/gateway_ownership_test.rs` covers two matching
+Regression coverage: `edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/mod_test/gateway_ownership_tests.rs` covers two matching
 classes with distinct parametersRef values, foreign non-publication, conditions,
 features-only drift, stale-cache withdrawal, recreation, raw-key leader recovery,
 independent identities, and multiple Gateways per class.
-`kubernetes/tests/status_persistence_test.rs` drives the real status
+`edgion-controller/tests/unit/conf_mgr/conf_center/kubernetes/resource_controller_test/status_persistence_tests.rs` drives the real status
 patch helper through an in-memory Merge Patch transport and checks WATCH convergence.
 Watcher selector tests and startup/identity tests cover configuration boundaries.
 

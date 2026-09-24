@@ -234,12 +234,6 @@ impl WorkqueueMetrics {
         self.depth.load(Ordering::Relaxed)
     }
 
-    /// Test-only: exercised by `tests/workqueue_test.rs`; no production caller.
-    #[cfg(test)]
-    pub fn get_adds_total(&self) -> u64 {
-        self.adds_total.load(Ordering::Relaxed)
-    }
-
     pub fn inc_delayed(&self) {
         self.delayed_total.fetch_add(1, Ordering::Relaxed);
     }
@@ -291,11 +285,6 @@ impl WorkqueueMetrics {
                 "Workqueue depth recovered below high-water mark"
             );
         }
-    }
-
-    #[cfg(test)]
-    fn is_high_water(&self) -> bool {
-        self.high_water_depth.load(Ordering::Relaxed)
     }
 }
 
@@ -509,13 +498,6 @@ async fn promote_delayed_item(
 }
 
 impl Workqueue {
-    /// Get metrics reference. Test-only: exercised by `tests/workqueue_test.rs`;
-    /// no production caller.
-    #[cfg(test)]
-    pub fn metrics(&self) -> Arc<WorkqueueMetrics> {
-        self.metrics.clone()
-    }
-
     /// Enqueue a key for immediate processing.
     ///
     /// Returns true if the key was added, false if it was already in the queue (deduplicated).
@@ -697,7 +679,7 @@ impl Workqueue {
     }
 }
 
-// Unit tests for this module live in `tests/workqueue_test.rs`.
+// Unit tests for this module live in `tests/unit/conf_mgr/sync_runtime/workqueue_test.rs`.
 #[cfg(test)]
-#[path = "tests/workqueue_test.rs"]
+#[path = "../../../tests/unit/conf_mgr/sync_runtime/workqueue_test.rs"]
 mod tests;

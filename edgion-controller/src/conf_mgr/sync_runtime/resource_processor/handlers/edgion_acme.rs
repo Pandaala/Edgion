@@ -515,7 +515,7 @@ fn outcome_to_resolved_refs_action<T>(
     }
 }
 
-// Unit tests for this module live in `tests/edgion_acme_test.rs`.
+// Unit tests for this module live in `tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_acme_test.rs`.
 #[cfg(test)]
-#[path = "tests/edgion_acme_test.rs"]
+#[path = "../../../../../tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_acme_test.rs"]
 mod tests;

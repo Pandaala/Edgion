@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused regression checks for the pilot unit-test layout guard."""
+"""Focused regression checks for the migrated unit-test layout guard."""
 
 import importlib.util
 from pathlib import Path
@@ -52,6 +52,23 @@ mod extra;
     def test_test_attribute_in_source_is_rejected(self):
         self.write("src/foo.rs", "#[test]\nfn escaped_case() {}\n")
         self.assertIn("test attribute remains in src", "\n".join(layout.check()))
+
+    def test_controller_support_mount_and_scoped_branch(self):
+        layout.CRATE = Path(self.temp.name) / "edgion-controller"
+        self.crate = layout.CRATE
+        self.write(
+            "src/conf_mgr/conf_center/common.rs",
+            "fn f() { #[cfg(test)]\nlet crd_dir = fallback; }\n",
+        )
+        self.write(
+            "src/api/mod.rs",
+            '#[cfg(test)]\n#[path = "../../tests/support/api/mod.rs"]\nmod test_support;\n',
+        )
+        self.write("tests/support/api/mod.rs", "pub(super) fn reset() {}\n")
+        self.assertEqual(layout.check(), [])
+
+        self.write("src/api/other.rs", "fn f() { #[cfg(test)]\nlet crd_dir = fallback; }\n")
+        self.assertIn("test-only implementation remains in src", "\n".join(layout.check()))
 
 
 if __name__ == "__main__":

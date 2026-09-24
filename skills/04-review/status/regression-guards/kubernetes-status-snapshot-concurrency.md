@@ -74,7 +74,7 @@ PATCH precondition is specific to Kubernetes.
 ## Verification and re-evaluation
 
 Controller-local regression coverage is in
-`edgion-controller/src/conf_mgr/conf_center/kubernetes/tests/status_persistence_test.rs`,
+`edgion-controller/tests/unit/conf_mgr/conf_center/kubernetes/resource_controller_test/status_persistence_tests.rs`,
 `status_diff.rs` and the EBTP handler's tests. The transport model covers real resource
 types, endpoint scope, version conditions, foreign writes, stale failures and later
 reconciliation; the kind inventory is compared with `ALL_RESOURCE_INFOS` to catch future
