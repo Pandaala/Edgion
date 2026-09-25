@@ -29,6 +29,12 @@ UTILS_DIR="${REPO_ROOT}/edgion-tests/integration/scripts/utils"
 CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$REPO_ROOT/target/debug/edgion-controller}"
 # shellcheck source=../utils/conf_sync_certs.sh
 source "${UTILS_DIR}/conf_sync_certs.sh"
+# shellcheck source=../utils/isolated_ports.sh
+source "${UTILS_DIR}/isolated_ports.sh"
+isolated_load_ports controller_auth
+isolated_require_ports \
+    NOAUTH_ADMIN_PORT NOAUTH_GRPC_PORT NOAUTH_PROBE_PORT NOAUTH_METRICS_PORT \
+    ENVAUTH_ADMIN_PORT ENVAUTH_GRPC_PORT ENVAUTH_PROBE_PORT ENVAUTH_METRICS_PORT
 
 # Ports chosen to avoid conflicts with the main integration stack (12101/12151)
 # and the Center no-auth test (58100/58110).
@@ -38,14 +44,6 @@ source "${UTILS_DIR}/conf_sync_certs.sh"
 # test-specific ports via --probe-listen / --metrics-listen so they do not fall
 # back to the shared defaults (0.0.0.0:12100 / 0.0.0.0:12190), which would
 # collide with the main integration controller.
-NOAUTH_ADMIN_PORT=58200
-NOAUTH_GRPC_PORT=58201
-NOAUTH_PROBE_PORT=58202
-NOAUTH_METRICS_PORT=58203
-ENVAUTH_ADMIN_PORT=58210
-ENVAUTH_GRPC_PORT=58211
-ENVAUTH_PROBE_PORT=58212
-ENVAUTH_METRICS_PORT=58213
 
 # =============================================================================
 # Prerequisites

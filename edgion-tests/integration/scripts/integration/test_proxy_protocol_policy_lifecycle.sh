@@ -8,20 +8,18 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 UTILS_DIR="${REPO_ROOT}/edgion-tests/integration/scripts/utils"
 # shellcheck source=../utils/conf_sync_certs.sh
 source "${UTILS_DIR}/conf_sync_certs.sh"
+# shellcheck source=../utils/isolated_ports.sh
+source "${UTILS_DIR}/isolated_ports.sh"
+isolated_load_ports proxy_protocol_policy_lifecycle
+isolated_require_ports \
+    CTRL_ADMIN_PORT CTRL_GRPC_PORT CTRL_PROBE_PORT GW_ADMIN_PORT \
+    GW_PROBE_PORT GW_METRICS_PORT CTRL_METRICS_PORT LISTENER_PORT \
+    TEST_SERVER_PORT
 
 BIN_DIR="${REPO_ROOT}/target/debug"
 GATEWAY_BIN="${EDGION_GATEWAY_BIN:-${BIN_DIR}/edgion-gateway}"
 CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-${BIN_DIR}/edgion-controller}"
 TEST_SERVER_BIN="${EDGION_TEST_SERVER_BIN:-${BIN_DIR}/test_server}"
-CTRL_ADMIN_PORT=58920
-CTRL_GRPC_PORT=58921
-CTRL_PROBE_PORT=58922
-GW_ADMIN_PORT=58923
-GW_PROBE_PORT=58924
-GW_METRICS_PORT=58925
-CTRL_METRICS_PORT=58926
-LISTENER_PORT=58930
-TEST_SERVER_PORT=30063
 
 for bin in "$GATEWAY_BIN" "$CONTROLLER_BIN" "$TEST_SERVER_BIN"; do
     [ -x "$bin" ] || { echo "ERROR: missing executable $bin" >&2; exit 1; }

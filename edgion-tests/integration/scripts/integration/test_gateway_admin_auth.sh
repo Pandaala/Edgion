@@ -30,6 +30,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 UTILS_DIR="${REPO_ROOT}/edgion-tests/integration/scripts/utils"
 # shellcheck source=../utils/conf_sync_certs.sh
 source "${UTILS_DIR}/conf_sync_certs.sh"
+# shellcheck source=../utils/isolated_ports.sh
+source "${UTILS_DIR}/isolated_ports.sh"
+isolated_load_ports gateway_admin_auth
+isolated_require_ports \
+    GW_ADMIN_PORT GW_PROBE_PORT GW_METRICS_PORT CTRL_ADMIN_PORT \
+    CTRL_GRPC_PORT CTRL_PROBE_PORT CTRL_METRICS_PORT GW_DATAPLANE_PORT
 
 GATEWAY_BIN="${EDGION_GATEWAY_BIN:-$REPO_ROOT/target/debug/edgion-gateway}"
 CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$REPO_ROOT/target/debug/edgion-controller}"
@@ -40,16 +46,8 @@ TEST_TOKEN="integration-gateway-admin-token-0123456789"
 # Ports chosen to avoid the main integration stack (12001 admin / 12000 probe /
 # 12090 metrics / 12101 controller-admin / 12151 controller-grpc) and the other
 # no-auth preflight tests (58xxx).
-GW_ADMIN_PORT=58300
-GW_PROBE_PORT=58301
-GW_METRICS_PORT=58302
-CTRL_ADMIN_PORT=58303
-CTRL_GRPC_PORT=58304
-CTRL_PROBE_PORT=58305
-CTRL_METRICS_PORT=58307
 # Data-plane listener port for the seeded Gateway. The gateway binds this when it
 # configures listeners during startup; it must be free but is never connected to.
-GW_DATAPLANE_PORT=58306
 
 # =============================================================================
 # Prerequisites

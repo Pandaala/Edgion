@@ -62,6 +62,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 UTILS_DIR="${REPO_ROOT}/edgion-tests/integration/scripts/utils"
 # shellcheck source=../utils/conf_sync_certs.sh
 source "${UTILS_DIR}/conf_sync_certs.sh"
+# shellcheck source=../utils/isolated_ports.sh
+source "${UTILS_DIR}/isolated_ports.sh"
+isolated_load_ports geoip_db_states
+isolated_require_ports \
+    CTRL_ADMIN_PORT CTRL_GRPC_PORT CTRL_PROBE_PORT GW_ADMIN_PORT \
+    GW_PROBE_PORT GW_METRICS_PORT GW_HTTP_PORT GW_TCP_DENY_PORT \
+    GW_TCP_ALLOW_PORT TCP_BACKEND_PORT UPDATE_SERVER_PORT HTTP_BACKEND_PORT \
+    GW_TCP_CIDR_PORT CTRL_METRICS_PORT
 
 GATEWAY_BIN="${EDGION_GATEWAY_BIN:-$REPO_ROOT/target/debug/edgion-gateway}"
 CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$REPO_ROOT/target/debug/edgion-controller}"
@@ -71,26 +79,6 @@ CITY_FIXTURE="${REPO_ROOT}/edgion-tests/geoip/edgion-test-city.mmdb"
 
 # A token >= 32 chars so the gateway does not also emit the weak-token WARN.
 TEST_TOKEN="integration-geoip-db-states-admin-token-0123456789"
-
-# Dedicated port block, clear of every other preflight's range (verified by
-# grepping every 58xxx literal across this directory before picking this
-# block): controller-noauth 58200-58213, gateway-admin-auth 58300-58307,
-# fips 58310-58317, plugin-policy 58320-58331, proxy-protocol 58420-58445,
-# proxy-protocol-chain 58520-58544/58592.
-CTRL_ADMIN_PORT=58600
-CTRL_GRPC_PORT=58601
-CTRL_PROBE_PORT=58602
-GW_ADMIN_PORT=58603
-GW_PROBE_PORT=58604
-GW_METRICS_PORT=58605
-GW_HTTP_PORT=58606
-GW_TCP_DENY_PORT=58607
-GW_TCP_ALLOW_PORT=58608
-TCP_BACKEND_PORT=58609
-UPDATE_SERVER_PORT=58610
-HTTP_BACKEND_PORT=58611
-GW_TCP_CIDR_PORT=58612
-CTRL_METRICS_PORT=58613
 
 # =============================================================================
 # Prerequisites
@@ -431,7 +419,10 @@ PY
 
     wait_for_tcp_port 127.0.0.1 "$HTTP_BACKEND_PORT"  "$HTTP_BACKEND_PID"  "local HTTP backend"  20 || return 1
     wait_for_tcp_port 127.0.0.1 "$TCP_BACKEND_PORT"   "$TCP_BACKEND_PID"   "local TCP backend"   20 || return 1
-    wait_for_tcp_port 127.0.0.1 "$UPDATE_SERVER_PORT" "$UPDATE_SERVER_PID" "local update server" 20 || return 1
+    if ! wait_for_tcp_port 127.0.0.1 "$UPDATE_SERVER_PORT" "$UPDATE_SERVER_PID" "local update server" 20; then
+        cat "${SCRATCH_DIR}/update_server.log" >&2
+        return 1
+    fi
 
     # Phase 4's update_url must NOT be a loopback literal: `geoip::init` (and
     # therefore `GeoIpUpdater::new` -> classify_literal_destination) runs

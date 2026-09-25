@@ -39,34 +39,20 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 UTILS_DIR="${REPO_ROOT}/edgion-tests/integration/scripts/utils"
 # shellcheck source=../utils/conf_sync_certs.sh
 source "${UTILS_DIR}/conf_sync_certs.sh"
+# shellcheck source=../utils/isolated_ports.sh
+source "${UTILS_DIR}/isolated_ports.sh"
+isolated_load_ports proxy_protocol_chain
+isolated_require_ports \
+    CTRL_ADMIN_PORT CTRL_GRPC_PORT CTRL_PROBE_PORT GW_ADMIN_PORT \
+    GW_PROBE_PORT GW_METRICS_PORT CTRL_METRICS_PORT GW_PP_PORT \
+    GW_HOP2_PORT LB_V2_PORT LB_V2_PROBE_PORT V2_DUMP_PORT \
+    TS_HTTP_PORT
 
 BIN_DIR="${REPO_ROOT}/target/debug"
 GATEWAY_BIN="${EDGION_GATEWAY_BIN:-$BIN_DIR/edgion-gateway}"
 CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$BIN_DIR/edgion-controller}"
 TEST_SERVER_BIN="${EDGION_TEST_SERVER_BIN:-$BIN_DIR/test_server}"
 FIXTURE_DIR="${REPO_ROOT}/edgion-tests/integration/conf/ProxyProtocolChain"
-
-# Dedicated port block (585xx: clear of the 12xxx shared stack, the 583xx
-# plugin-policy block, and the 584xx single-hop PROXY protocol block).
-CTRL_ADMIN_PORT=58520
-CTRL_GRPC_PORT=58521
-CTRL_PROBE_PORT=58522
-GW_ADMIN_PORT=58523
-GW_PROBE_PORT=58524
-GW_METRICS_PORT=58525
-CTRL_METRICS_PORT=58526
-GW_PP_PORT=58530      # hop 1: PROXY protocol required
-GW_HOP2_PORT=58531    # hop 2: plain HTTP, reached from hop 1
-# HAProxy fronts hop 1, speaking PROXY protocol v2.
-LB_V2_PORT=58540
-# Wire-version preflight: each leg gets a twin listener configured identically
-# but pointed at a byte dumper on the host, so what we observe is genuinely what
-# the real leg emits.
-LB_V2_PROBE_PORT=58542
-V2_DUMP_PORT=58544
-# Backend port: stays in the 3xxxx test_server range by convention, but off
-# the shared stack's numbers so the two can run in any order.
-TS_HTTP_PORT=30062
 
 # Private docker network. The client's pinned address is the assertion anchor.
 DOCKER_NET="edgion-ppchain-test"

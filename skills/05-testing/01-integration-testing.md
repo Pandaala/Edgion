@@ -34,9 +34,26 @@ Shared cross-platform operations live in `edgion-tests/integration/scripts/utils
 
 The standard `run_all_integration.sh` and `run_integration.sh` entry points source this library and export it through `BASH_ENV`, so every descendant Bash script receives the helpers automatically. A standalone script that must also work when invoked directly should source the library explicitly. Run `cicd/checks/tests/shell_compat_test.sh` after changing the shared behavior.
 
+## Fixed ports in isolated scenarios
+
+Standalone scenarios with fixed host ports load them from
+`edgion-tests/integration/scripts/utils/isolated_ports.sh` and check their required
+variables with `isolated_require_ports` before starting a process. Register a new
+fixed port there; do not duplicate its numeric value in the scenario script.
+`run_integration.sh` calls `check_isolated_ports.py` before building or starting
+dependencies. The check rejects duplicate assignments and probes each selected
+TCP port using its registered bind address and socket reuse policy. This avoids
+flagging unrelated outbound connections that do not block the real listener.
+Docker-only scenarios are probed after Docker
+availability is known, before those scenarios start. OIDC egress and UDP process
+shutdown choose ports dynamically and do not need fixed assignments.
+
+`conf/ports.json` has a different purpose: it maps shared Gateway test suites to
+their listeners. Keep isolated process ports out of that file.
+
 ## Preflight quality gates
 
-Integration is the project's key control point, so `run_integration.sh` enforces four repo-wide quality gates at the very top of `main()`, in order. **Any failure aborts with `exit 1` before any build or test runs**, and they run on every invocation — including `--no-prepare` (only the build step is gated by prepare, not these gates).
+Integration is the project's key control point, so `run_integration.sh` enforces four repo-wide quality gates near the top of `main()`, in order. **Any failure aborts with `exit 1` before any build or test runs**, and they run on every invocation — including `--no-prepare` (only the build step is gated by prepare, not these gates). The isolated-port preflight runs before these gates for a full sweep.
 
 | Gate | Entry point | Enforces |
 |------|-------------|----------|

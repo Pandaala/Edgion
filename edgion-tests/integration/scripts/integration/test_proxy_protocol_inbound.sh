@@ -59,6 +59,15 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 UTILS_DIR="${REPO_ROOT}/edgion-tests/integration/scripts/utils"
 # shellcheck source=../utils/conf_sync_certs.sh
 source "${UTILS_DIR}/conf_sync_certs.sh"
+# shellcheck source=../utils/isolated_ports.sh
+source "${UTILS_DIR}/isolated_ports.sh"
+isolated_load_ports proxy_protocol_inbound
+isolated_require_ports \
+    CTRL_ADMIN_PORT CTRL_GRPC_PORT CTRL_PROBE_PORT GW_ADMIN_PORT \
+    GW_PROBE_PORT GW_METRICS_PORT CTRL_METRICS_PORT GW_PP_PORT \
+    GW_PLAIN_PORT GW_TRUST_PORT LB_V2_PORT LB_V1_PORT \
+    LB_V2_PROBE_PORT LB_V1_PROBE_PORT V2_DUMP_PORT V1_DUMP_PORT \
+    TS_HTTP_PORT
 
 BIN_DIR="${REPO_ROOT}/target/debug"
 GATEWAY_BIN="${EDGION_GATEWAY_BIN:-$BIN_DIR/edgion-gateway}"
@@ -66,35 +75,10 @@ CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$BIN_DIR/edgion-controller}"
 TEST_SERVER_BIN="${EDGION_TEST_SERVER_BIN:-$BIN_DIR/test_server}"
 FIXTURE_DIR="${REPO_ROOT}/edgion-tests/integration/conf/ProxyProtocolInbound"
 
-# Dedicated port block (584xx: clear of the 12xxx shared stack and the 583xx
-# plugin-policy block).
-CTRL_ADMIN_PORT=58420
-CTRL_GRPC_PORT=58421
-CTRL_PROBE_PORT=58422
-GW_ADMIN_PORT=58423
-GW_PROBE_PORT=58424
-GW_METRICS_PORT=58425
-CTRL_METRICS_PORT=58426
-GW_PP_PORT=58430      # selected by a required policy
-GW_PLAIN_PORT=58431   # unselected and therefore disabled
-GW_TRUST_PORT=58432   # trustedSources: only 127.0.0.1 may supply a header
 # One HAProxy serves both legs. Keeping the sender, image, and topology identical
 # means the v1 and v2 legs differ in exactly one variable — the `send-proxy` vs
 # `send-proxy-v2` flag — so a failure on either is attributable to the protocol
 # version and nothing else.
-LB_V2_PORT=58440
-LB_V1_PORT=58441
-# Wire-version preflight: each leg gets a twin listener configured identically
-# but pointed at a byte dumper on the host, so what we observe is genuinely what
-# the real leg emits.
-LB_V2_PROBE_PORT=58442
-LB_V1_PROBE_PORT=58443
-V2_DUMP_PORT=58444
-V1_DUMP_PORT=58445
-# Backend port: stays in the 3xxxx test_server range by convention, but off
-# the shared stack's numbers so the two can run in any order.
-TS_HTTP_PORT=30061
-
 # Private docker network. The client's pinned address is the assertion anchor.
 DOCKER_NET="edgion-ppin-test"
 DOCKER_SUBNET="172.28.0.0/16"

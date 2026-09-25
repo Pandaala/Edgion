@@ -674,6 +674,13 @@ run_isolated_scenarios() {
         && command -v docker >/dev/null 2>&1 \
         && python3 "$DEADLINE_RUNNER" --timeout-secs "$docker_probe_timeout" --grace-secs "$DEADLINE_GRACE_SECONDS" -- \
             docker info >/dev/null 2>&1; then
+        if ! python3 "${UTILS_DIR}/check_isolated_ports.py" \
+            --scenario proxy_protocol_inbound \
+            --scenario proxy_protocol_chain; then
+            report_test "Preflight_IsolatedDockerPorts" "FAIL" "0"
+            return 1
+        fi
+        report_test "Preflight_IsolatedDockerPorts" "PASS" "0"
         names+=("proxy_protocol_inbound" "proxy_protocol_chain")
         commands+=(
             "${SCRIPT_DIR}/test_proxy_protocol_inbound.sh"
@@ -2399,6 +2406,24 @@ main() {
 
     # Setup cleanup on exit
     trap cleanup EXIT
+
+    # Fail before building or starting dependencies if a fixed isolated port
+    # cannot be bound. Docker-only scenarios are checked after Docker probing.
+    if [ -z "$G_RESOURCE" ]; then
+        REPORT_PHASE="isolated port preflight"
+        log_section "Pre-flight Check: Isolated Ports"
+        if ! python3 "${UTILS_DIR}/check_isolated_ports.py" \
+            --scenario controller_auth \
+            --scenario gateway_admin_auth \
+            --scenario fips_policy \
+            --scenario geoip_db_states \
+            --scenario unknown_config_fields \
+            --scenario proxy_protocol_policy_lifecycle; then
+            report_test "Preflight_IsolatedPorts" "FAIL" "0"
+            exit 1
+        fi
+        report_test "Preflight_IsolatedPorts" "PASS" "0"
+    fi
     
     # Auto-infer suites from resource/item if not explicitly specified
     if [ -z "$suites" ] && [ -n "$G_RESOURCE" ]; then

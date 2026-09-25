@@ -31,6 +31,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 UTILS_DIR="${REPO_ROOT}/edgion-tests/integration/scripts/utils"
 # shellcheck source=../utils/conf_sync_certs.sh
 source "${UTILS_DIR}/conf_sync_certs.sh"
+# shellcheck source=../utils/isolated_ports.sh
+source "${UTILS_DIR}/isolated_ports.sh"
+isolated_load_ports fips_policy
+isolated_require_ports \
+    GW_ADMIN_PORT GW_PROBE_PORT GW_METRICS_PORT CTRL_ADMIN_PORT \
+    CTRL_GRPC_PORT CTRL_PROBE_PORT GW_HTTPS_PORT CTRL_METRICS_PORT
 
 GATEWAY_BIN="${EDGION_GATEWAY_BIN:-$REPO_ROOT/target/debug/edgion-gateway}"
 CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$REPO_ROOT/target/debug/edgion-controller}"
@@ -45,17 +51,6 @@ case "$EXPECT_FIPS_MODULE" in
 esac
 
 TLS_HOST="fips.example.com"
-
-# Ports chosen to avoid the main integration stack (12xxx) and the other 58xxx
-# preflight tests (controller-noauth 58200-58213, gateway-admin-auth 58300-58307).
-GW_ADMIN_PORT=58310
-GW_PROBE_PORT=58311
-GW_METRICS_PORT=58312
-CTRL_ADMIN_PORT=58313
-CTRL_GRPC_PORT=58314
-CTRL_PROBE_PORT=58315
-GW_HTTPS_PORT=58316
-CTRL_METRICS_PORT=58317
 
 # =============================================================================
 # Prerequisites

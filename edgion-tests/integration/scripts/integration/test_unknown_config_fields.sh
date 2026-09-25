@@ -55,6 +55,11 @@ UTILS_DIR="${PROJECT_ROOT}/edgion-tests/integration/scripts/utils"
 FIXTURE_DIR="${PROJECT_ROOT}/edgion-tests/integration/fixtures/unknown-config-fields"
 # shellcheck source=../utils/conf_sync_certs.sh
 source "${UTILS_DIR}/conf_sync_certs.sh"
+# shellcheck source=../utils/isolated_ports.sh
+source "${UTILS_DIR}/isolated_ports.sh"
+isolated_load_ports unknown_config_fields
+isolated_require_ports \
+    CONTROLLER_ADMIN_PORT CONTROLLER_GRPC_PORT CONTROLLER_PROBE_PORT CONTROLLER_METRICS_PORT
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/unknown_config_fields_${TIMESTAMP}"
@@ -63,10 +68,6 @@ CONF_WATCH_DIR="${WORK_DIR}/conf"
 LOG_DIR="${WORK_DIR}/logs"
 PID_DIR="${WORK_DIR}/pids"
 
-CONTROLLER_ADMIN_PORT=58700
-CONTROLLER_GRPC_PORT=58701
-CONTROLLER_PROBE_PORT=58702
-CONTROLLER_METRICS_PORT=58703
 ADMIN_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"
 
 # Fixed test-only admin token, not a real credential (same convention as
