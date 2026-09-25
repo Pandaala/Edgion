@@ -1985,6 +1985,7 @@ name = "edgion-waf"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "memchr",
  "regex-automata",
  "regex-syntax",
  "serde",

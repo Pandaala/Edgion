@@ -1385,6 +1385,39 @@ fn request_body_processor_is_available_from_content_type_in_phase_one() {
 }
 
 #[test]
+fn multipart_boundary_search_preserves_phase_two_decisions_in_both_modes() {
+    let generation = generation("SecRule ARGS:field \"@streq value\" \"id:80,phase:2,deny,status:403\"\n");
+    let headers = [RequestHeader::new(
+        b"Content-Type",
+        b"multipart/form-data; boundary=edge",
+    )];
+    let body = b"--edge\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nvalue\r\n--edge--\r\n";
+    for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+        let mut transaction = Transaction::new_with_modes(
+            &generation,
+            request(&headers, b"/"),
+            RuntimeLimits::default(),
+            EvaluationMode::Accelerated,
+            mode,
+        )
+        .unwrap();
+        transaction.execute_request_headers().unwrap();
+        transaction
+            .publish_request_body(RequestBody::new(
+                body,
+                super::super::super::BodyProcessorSelection::Auto,
+            ))
+            .unwrap();
+        let outcome = transaction.execute_request_body().unwrap();
+        assert_eq!(outcome.findings()[0].rule_id(), 80);
+        assert_eq!(
+            outcome.intervention().map(Intervention::status),
+            (mode == RuleEngineMode::On).then_some(403)
+        );
+    }
+}
+
+#[test]
 fn json_and_xml_body_views_feed_args_and_selected_xml_paths() {
     let json_generation = generation(concat!(
         "SecRule ARGS:json.user.name \"@streq alice\" \"id:64,phase:2,pass\"\n",

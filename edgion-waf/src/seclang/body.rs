@@ -1,3 +1,4 @@
+use memchr::memmem::Finder;
 use thiserror::Error;
 
 use super::CollectionKind;
@@ -475,15 +476,21 @@ fn parse_multipart(input: &[u8], content_type: Option<&[u8]>, builder: &mut Body
     if boundary.is_empty() || boundary.len() > 200 {
         return Err(BodyError::MultipartBoundary);
     }
-    let mut delimiter = Vec::new();
-    delimiter
-        .try_reserve_exact(boundary.len() + 2)
-        .map_err(|_| BodyError::Allocation)?;
-    delimiter.extend_from_slice(b"--");
-    delimiter.extend_from_slice(boundary);
+    let mut delimiter_bytes = [0_u8; 202];
+    delimiter_bytes[..2].copy_from_slice(b"--");
+    delimiter_bytes[2..boundary.len() + 2].copy_from_slice(boundary);
+    let delimiter = &delimiter_bytes[..boundary.len() + 2];
+    let mut line_delimiter = [0_u8; 204];
+    line_delimiter[..2].copy_from_slice(b"\r\n");
+    line_delimiter[2..delimiter.len() + 2].copy_from_slice(delimiter);
+    let searcher = if boundary.contains(&b'\r') || boundary.contains(&b'\n') {
+        MultipartBoundarySearcher::Overlapping(multipart_prefix_table(delimiter))
+    } else {
+        MultipartBoundarySearcher::Line(Finder::new(&line_delimiter[..delimiter.len() + 2]))
+    };
     let mut combined_size = 0_usize;
     let mut cursor = 0_usize;
-    while let Some(boundary_start) = find_multipart_boundary(input, &delimiter, cursor) {
+    while let Some(boundary_start) = find_multipart_boundary(input, delimiter, &searcher, cursor) {
         let after = boundary_start
             .checked_add(delimiter.len())
             .ok_or(BodyError::Arithmetic)?;
@@ -499,7 +506,7 @@ fn parse_multipart(input: &[u8], content_type: Option<&[u8]>, builder: &mut Body
                 processor: BodyProcessorSelection::Multipart,
             });
         };
-        let Some(next_boundary) = find_multipart_boundary(input, &delimiter, part_start) else {
+        let Some(next_boundary) = find_multipart_boundary(input, delimiter, &searcher, part_start) else {
             return Err(BodyError::Malformed {
                 processor: BodyProcessorSelection::Multipart,
             });
@@ -565,17 +572,72 @@ fn parse_multipart_part(part: &[u8], builder: &mut BodyBuilder) -> Result<usize,
     Ok(content.len())
 }
 
-fn find_multipart_boundary(input: &[u8], delimiter: &[u8], mut cursor: usize) -> Option<usize> {
-    while cursor <= input.len() {
-        let relative = find_bytes(input.get(cursor..)?, delimiter)?;
-        let found = cursor.checked_add(relative)?;
-        let starts_line = found == 0 || input.get(found.saturating_sub(2)..found) == Some(b"\r\n");
-        let after = found.checked_add(delimiter.len())?;
-        let ends_line = input.get(after..after + 2) == Some(b"\r\n") || input.get(after..after + 2) == Some(b"--");
-        if starts_line && ends_line {
-            return Some(found);
+enum MultipartBoundarySearcher<'a> {
+    // Without CR/LF inside the boundary, complete line delimiters cannot overlap.
+    Line(Finder<'a>),
+    // The accepted boundary syntax also permits overlapping malformed values.
+    Overlapping([u8; 202]),
+}
+
+fn multipart_prefix_table(delimiter: &[u8]) -> [u8; 202] {
+    let mut prefix = [0; 202];
+    let mut matched = 0;
+    for index in 1..delimiter.len() {
+        while matched > 0 && delimiter[index] != delimiter[matched] {
+            matched = usize::from(prefix[matched - 1]);
         }
-        cursor = found.checked_add(1)?;
+        if delimiter[index] == delimiter[matched] {
+            matched += 1;
+        }
+        // The delimiter is at most 202 bytes, so each proper prefix fits in u8.
+        prefix[index] = matched as u8;
+    }
+    prefix
+}
+
+fn find_multipart_boundary(
+    input: &[u8],
+    delimiter: &[u8],
+    searcher: &MultipartBoundarySearcher<'_>,
+    cursor: usize,
+) -> Option<usize> {
+    let valid_suffix = |found: usize| {
+        let after = found + delimiter.len();
+        input.get(after..after + 2) == Some(b"\r\n") || input.get(after..after + 2) == Some(b"--")
+    };
+    match searcher {
+        MultipartBoundarySearcher::Line(finder) => {
+            if cursor == 0 && input.starts_with(delimiter) && valid_suffix(0) {
+                return Some(0);
+            }
+            // Cursor bounds the "--boundary" start; include its preceding CRLF.
+            let scan_start = cursor.saturating_sub(2);
+            for relative in finder.find_iter(input.get(scan_start..)?) {
+                let found = scan_start + relative + 2;
+                if found >= cursor && valid_suffix(found) {
+                    return Some(found);
+                }
+            }
+        }
+        MultipartBoundarySearcher::Overlapping(prefix) => {
+            let mut matched = 0;
+            for (relative, &byte) in input.get(cursor..)?.iter().enumerate() {
+                while matched > 0 && byte != delimiter[matched] {
+                    matched = usize::from(prefix[matched - 1]);
+                }
+                if byte == delimiter[matched] {
+                    matched += 1;
+                }
+                if matched == delimiter.len() {
+                    let found = cursor + relative + 1 - delimiter.len();
+                    let starts_line = found == 0 || input.get(found.saturating_sub(2)..found) == Some(b"\r\n");
+                    if starts_line && valid_suffix(found) {
+                        return Some(found);
+                    }
+                    matched = usize::from(prefix[matched - 1]);
+                }
+            }
+        }
     }
     None
 }

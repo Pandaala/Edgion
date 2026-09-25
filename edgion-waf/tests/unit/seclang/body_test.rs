@@ -109,6 +109,152 @@ fn multipart_publishes_fields_filenames_and_part_headers() {
 }
 
 #[test]
+fn multipart_boundary_search_preserves_candidate_order_and_overlap() {
+    fn old_search(input: &[u8], delimiter: &[u8], mut cursor: usize) -> Option<usize> {
+        while cursor <= input.len() {
+            let relative = find_bytes(input.get(cursor..)?, delimiter)?;
+            let found = cursor + relative;
+            let starts_line = found == 0 || input.get(found.saturating_sub(2)..found) == Some(b"\r\n");
+            let after = found + delimiter.len();
+            let ends_line = input.get(after..after + 2) == Some(b"\r\n") || input.get(after..after + 2) == Some(b"--");
+            if starts_line && ends_line {
+                return Some(found);
+            }
+            cursor = found + 1;
+        }
+        None
+    }
+
+    for boundary in [
+        b"x".as_slice(),
+        b"a\r\n--".as_slice(),
+        b"---".as_slice(),
+        b"\r".as_slice(),
+        b"\n".as_slice(),
+        b"\xffx".as_slice(),
+        &[b'a'; 70],
+        &[b'a'; 200],
+    ] {
+        let mut delimiter = b"--".to_vec();
+        delimiter.extend_from_slice(boundary);
+        let mut line_delimiter = b"\r\n".to_vec();
+        line_delimiter.extend_from_slice(&delimiter);
+        let searcher = if boundary.contains(&b'\r') || boundary.contains(&b'\n') {
+            MultipartBoundarySearcher::Overlapping(multipart_prefix_table(&delimiter))
+        } else {
+            MultipartBoundarySearcher::Line(Finder::new(&line_delimiter))
+        };
+        let mut input = b"preamble\r\n".to_vec();
+        input.extend_from_slice(&delimiter);
+        input.extend_from_slice(b"X\r\n");
+        input.extend_from_slice(&delimiter);
+        input.extend_from_slice(b"\r\npart\r\n");
+        input.extend_from_slice(&delimiter);
+        input.extend_from_slice(b"--epilogue");
+        for cursor in 0..=input.len() {
+            assert_eq!(
+                find_multipart_boundary(&input, &delimiter, &searcher, cursor),
+                old_search(&input, &delimiter, cursor),
+                "boundary={boundary:?}, cursor={cursor}"
+            );
+        }
+    }
+
+    let input = b"\r\n--a\r\n--a\r\n----";
+    let delimiter = b"--a\r\n--";
+    let prefix = multipart_prefix_table(delimiter);
+    let searcher = MultipartBoundarySearcher::Overlapping(prefix);
+    assert_eq!(find_multipart_boundary(input, delimiter, &searcher, 0), Some(7));
+
+    let alphabet = [b'-', b'\r', b'\n', b'a', b'b', b'x'];
+    let mut state = 1_u32;
+    for _ in 0..256 {
+        let mut next = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            alphabet[(state as usize) % alphabet.len()]
+        };
+        let boundary: Vec<u8> = (0..(next() as usize % 8 + 1)).map(|_| next()).collect();
+        let input: Vec<u8> = (0..96).map(|_| next()).collect();
+        let mut delimiter = b"--".to_vec();
+        delimiter.extend_from_slice(&boundary);
+        let mut line = b"\r\n".to_vec();
+        line.extend_from_slice(&delimiter);
+        let searcher = if boundary.contains(&b'\r') || boundary.contains(&b'\n') {
+            MultipartBoundarySearcher::Overlapping(multipart_prefix_table(&delimiter))
+        } else {
+            MultipartBoundarySearcher::Line(Finder::new(&line))
+        };
+        for cursor in 0..=input.len() {
+            assert_eq!(
+                find_multipart_boundary(&input, &delimiter, &searcher, cursor),
+                old_search(&input, &delimiter, cursor),
+                "boundary={boundary:?}, cursor={cursor}"
+            );
+        }
+    }
+}
+
+#[test]
+fn multipart_long_near_matches_preserve_fields_and_limits() {
+    for boundary_len in [70, 200] {
+        let boundary = vec![b'a'; boundary_len];
+        let mut content_type = b"multipart/form-data; boundary=".to_vec();
+        content_type.extend_from_slice(&boundary);
+        let mut body = b"--".to_vec();
+        body.extend_from_slice(&boundary);
+        body.extend_from_slice(b"\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n");
+        for _ in 0..1024 {
+            body.extend_from_slice(b"\r\n--");
+            body.extend_from_slice(&boundary[..boundary_len - 1]);
+            body.push(b'b');
+        }
+        body.extend_from_slice(b"\r\n--");
+        body.extend_from_slice(&boundary);
+        body.extend_from_slice(b"--\r\n");
+        let publication = publication(&body, BodyProcessorSelection::Multipart, Some(&content_type));
+        assert_eq!(values(&publication, CollectionKind::Args).len(), 1);
+        assert!(matches!(
+            build_publication(
+                RequestBody::new(&body, BodyProcessorSelection::Multipart),
+                Some(&content_type),
+                0,
+                BodyLimits {
+                    max_work_bytes: body.len(),
+                    ..BodyLimits::default()
+                },
+            ),
+            Err(BodyError::WorkLimit { .. })
+        ));
+    }
+    let too_long = [b'a'; 201];
+    let mut content_type = b"multipart/form-data; boundary=".to_vec();
+    content_type.extend_from_slice(&too_long);
+    assert!(matches!(
+        build_publication(
+            RequestBody::new(b"--x--\r\n", BodyProcessorSelection::Multipart),
+            Some(&content_type),
+            0,
+            BodyLimits::default(),
+        ),
+        Err(BodyError::MultipartBoundary)
+    ));
+    assert!(matches!(
+        build_publication(
+            RequestBody::new(
+                b"--x\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nv",
+                BodyProcessorSelection::Multipart
+            ),
+            Some(b"multipart/form-data; boundary=x"),
+            0,
+            BodyLimits::default(),
+        ),
+        Err(BodyError::Malformed {
+            processor: BodyProcessorSelection::Multipart
+        })
+    ));
+}
+
+#[test]
 fn multipart_disposition_keeps_semicolons_inside_quoted_parameters() {
     let disposition = b"form-data; name=\"prefix&amp;suffix\"; filename=\"safe.txt\"";
     assert_eq!(
