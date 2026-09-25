@@ -165,9 +165,14 @@ impl TestSuite for TlsDeniedBackendRefTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_terminate_denied_ref_fail_closed(),
-            Self::test_passthrough_denied_ref_fail_closed(),
-        ]
+        let mut cases = vec![Self::test_passthrough_denied_ref_fail_closed()];
+        if crate::suites::tls_route::tls_route_terminate_tests_enabled() {
+            cases.push(Self::test_terminate_denied_ref_fail_closed());
+        } else {
+            crate::suites::tls_route::report_terminate_deferred(
+                "DeniedBackendRef/terminate_denied_cross_ns_ref_fail_closed",
+            );
+        }
+        cases
     }
 }

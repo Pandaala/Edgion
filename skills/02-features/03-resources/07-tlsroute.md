@@ -8,7 +8,9 @@ description: Full TLSRoute schema: SNI-based TLS routing.
 > Canonical API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
 > Gateway API v1.6.2 Standard resource
 
-TLSRoute routes based on the SNI (Server Name Indication) in the TLS ClientHello, supporting TLS passthrough or termination + forwarding.
+TLSRoute routes based on the SNI (Server Name Indication) in the TLS ClientHello.
+TLS passthrough is enabled. Explicit TLS/Terminate listeners are currently rejected
+with `Accepted=False/UnsupportedValue`; termination forwarding remains deferred.
 
 ## API version contract
 
@@ -114,12 +116,14 @@ spec:
 | Gateway Listener TLS Mode | TLSRoute Behavior |
 |---------------------------|-------------------|
 | `Passthrough` | TLS passthrough: the Gateway does not terminate TLS and routes to the backend by SNI |
-| `Terminate` | TLS termination: after decryption, the Gateway routes to the backend by SNI |
+| `Terminate` | Deferred: Controller rejects this listener mode with `UnsupportedValue` |
 
 Current product boundaries in Edgion:
 
 - Standard `Passthrough` is supported.
-- Standard `Terminate` is supported.
+- Standard `Terminate` is deferred until the full TLS conformance profile passes
+  and `TLSRouteModeTerminate` is declared; see the
+  [follow-up](../../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md).
 - `TLSRouteModeMixed` is not supported.
 - BackendTLSPolicy does not apply to TLSRoute (Passthrough forwards the original TLS, and Terminate goes through the stream layer; use HTTPRoute/GRPCRoute when backend TLS is required).
 

@@ -1211,10 +1211,23 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_upstream_host(&mut self, host: &str) -> PluginSessionResult<()> {
+        let authority = host
+            .parse::<http::uri::Authority>()
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        let updated_uri = if self.inner.req_header().uri.authority().is_some() {
+            let mut parts = self.inner.req_header().uri.clone().into_parts();
+            parts.authority = Some(authority);
+            Some(Uri::from_parts(parts).map_err(|e| Box::new(e) as PluginSessionError)?)
+        } else {
+            None
+        };
         self.inner
             .req_header_mut()
             .insert_header("Host".to_string(), host.to_string())
             .map_err(|e| Box::new(e) as PluginSessionError)?;
+        if let Some(uri) = updated_uri {
+            self.inner.req_header_mut().set_uri(uri);
+        }
         Ok(())
     }
 

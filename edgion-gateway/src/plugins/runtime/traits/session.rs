@@ -418,7 +418,8 @@ pub trait PluginSession: Send + Sync {
     /// Set the upstream URI (for proxy rewrite)
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()>;
 
-    /// Set the upstream host (for proxy rewrite)
+    /// Set the upstream Host and replace an existing URI authority (for proxy rewrite).
+    /// HTTP/2 uses the URI authority for `:authority` even when Host is present.
     fn set_upstream_host(&mut self, host: &str) -> PluginSessionResult<()>;
 
     /// Set the upstream HTTP method (for proxy rewrite)

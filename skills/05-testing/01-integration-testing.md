@@ -83,6 +83,16 @@ Capability-dependent suites and dynamic scenarios are registered in
 capability, which every build now reports). An exact unsupported
 `-r <Resource> -i <Item>` request fails instead of succeeding as a no-op.
 
+TLSRoute Terminate positive tests have a separate product-support boundary:
+the Controller currently rejects explicit TLS/Terminate listeners and does not
+declare `TLSRouteModeTerminate`. Pure Terminate suites report SKIP in sweeps
+(explicit requests fail); mixed suites retain supported protocol checks and
+record DEFERRED subcases in the final report. The status suite verifies
+`Accepted=False/UnsupportedValue` and empty `supportedKinds`. See the
+[full-profile follow-up](../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md)
+for the coverage inventory and re-enable gate. This is not a Gateway build
+capability and must not be inferred from the presence of termination proxy code.
+
 ### Run every integration test in one shot
 
 `run_integration.sh` covers suites sharing one Controller/Gateway topology. The in-repo

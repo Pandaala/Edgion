@@ -20,3 +20,16 @@ pub use proxy_protocol::TlsProxyProtocolTestSuite;
 pub(crate) use stream_plugins::stream_plugins::probe_tls_policy;
 pub use stream_plugins::TlsStreamPluginsTestSuite;
 pub use unknown_kind_backend::TlsUnknownKindBackendTestSuite;
+
+/// This test boundary follows the current explicit TLS/Terminate rejection and
+/// undeclared feature. Restore both implementation and full TLS conformance
+/// before advertising the feature; the positive integration cases then resume.
+pub fn tls_route_terminate_tests_enabled() -> bool {
+    edgion_resources::resources::gateway_class::SUPPORTED_FEATURES.contains(&"TLSRouteModeTerminate")
+}
+
+pub fn report_terminate_deferred(scope: &str) {
+    println!(
+        "DEFERRED: {scope}: TLSRouteModeTerminate positive checks await gateway-api-v16-tls-terminate-full-profile"
+    );
+}

@@ -769,13 +769,19 @@ start_gateway() {
     done
     log_info "caches ready (waited ${lb_waited}s)"
 
-    # Wait for Pingora server to finish binding all listener ports
-    # After caches are ready, the server still needs time to process gateways and bind ports
+    # Listener configuration may take longer than the early cache-ready signal.
+    # Wait until all listeners are configured and Pingora actually starts;
+    # "Processing gateway" precedes binding and is not a readiness signal.
     local listener_wait=0
-    local listener_max=10
-    while ! grep -q "Listener configured\|Processing gateway.*listeners\b" "${LOG_DIR}/gateway.log" 2>/dev/null; do
+    local listener_max=60
+    while ! grep -q "Starting Pingora server" "${LOG_DIR}/gateway.log" 2>/dev/null; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            log_error "edgion-gateway exited before starting Pingora"
+            return 1
+        fi
         if [ $listener_wait -ge $listener_max ]; then
-            break
+            log_error "edgion-gateway listener setup timed out after ${listener_max}s"
+            return 1
         fi
         sleep 1
         # Same bash-3.2-vs-5 `set -e` trap as lb_waited above.

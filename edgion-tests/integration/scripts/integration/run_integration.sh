@@ -3051,11 +3051,18 @@ main() {
             local duration=$((end_time - start_time))
             if grep -q '^SKIPPED:' "$log_file"; then
                 log_warn "${name} test skipped"
-                report_test "$name" "SKIP" "$duration"
+                local skip_detail
+                skip_detail=$(grep '^SKIPPED:' "$log_file" | sort -u)
+                report_test "$name" "SKIP" "$duration" "$skip_detail"
                 return 0
             fi
+            local deferred_detail
+            deferred_detail=$(grep '^DEFERRED:' "$log_file" | sort -u || true)
+            if [ -n "$deferred_detail" ]; then
+                log_warn "$deferred_detail"
+            fi
             log_success "${name} test passed"
-            report_test "$name" "PASS" "$duration"
+            report_test "$name" "PASS" "$duration" "$deferred_detail"
             return 0
         else
             local end_time=$(date +%s)

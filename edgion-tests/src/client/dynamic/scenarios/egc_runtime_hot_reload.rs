@@ -118,6 +118,9 @@ async fn assert_generation(ctx: &TestContext, generation: Generation) -> Result<
         );
     }
 
+    if !crate::suites::tls_route::tls_route_terminate_tests_enabled() {
+        return Ok(());
+    }
     if matches!(generation, Generation::Initial) {
         echo(&mut no_sni_connection(ctx).await?).await?;
     } else {
@@ -195,13 +198,23 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             // The static loader can preload any generation. Restore and prove
             // the initial runtime policy before holding the old connection.
             restore(&ctx).await?;
-            let mut old = no_sni_connection(&ctx.test_ctx).await?;
-            echo(&mut old).await?;
+            let mut old = if crate::suites::tls_route::tls_route_terminate_tests_enabled() {
+                let mut stream = no_sni_connection(&ctx.test_ctx).await?;
+                echo(&mut stream).await?;
+                Some(stream)
+            } else {
+                crate::suites::tls_route::report_terminate_deferred(
+                    "EgcRuntimeHotReload/no-SNI handshake and retained TLS connection",
+                );
+                None
+            };
             ctx.apply_dir("updates").await?;
             ctx.wait_phase(SCENARIO, "updated", CONVERGENCE).await?;
-            echo(&mut old)
-                .await
-                .context("old TLS connection changed during EGC update")?;
+            if let Some(old) = old.as_mut() {
+                echo(old)
+                    .await
+                    .context("old TLS connection changed during EGC update")?;
+            }
             restore(&ctx).await?;
             let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
             let response = client.delete("EdgionGatewayConfig", None, EGC).await?;
@@ -211,9 +224,11 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
                 response.status()
             );
             ctx.wait_phase(SCENARIO, "deleted", CONVERGENCE).await?;
-            echo(&mut old)
-                .await
-                .context("old TLS connection changed during EGC deletion")?;
+            if let Some(old) = old.as_mut() {
+                echo(old)
+                    .await
+                    .context("old TLS connection changed during EGC deletion")?;
+            }
             Ok(())
         }
         .await;

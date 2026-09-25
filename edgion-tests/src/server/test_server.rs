@@ -2204,6 +2204,7 @@ fn anthropic_provider_observation(
         host_valid: headers
             .get(axum::http::header::HOST)
             .and_then(|value| value.to_str().ok())
+            .or_else(|| uri.authority().map(|authority| authority.as_str()))
             .is_some_and(|host| ANTHROPIC_PROVIDER_EXPECTED_HOSTS.contains(&host)),
         path_valid: path == "prefix/v1/messages",
         query_absent: uri.query().is_none(),
@@ -4386,6 +4387,13 @@ mod tests {
 
         headers.insert(axum::http::header::HOST, "unexpected.example.com".parse().unwrap());
         assert!(!anthropic_provider_observation("prefix/v1/messages", &uri, &headers, &body).host_valid);
+
+        headers.remove(axum::http::header::HOST);
+        let h2_uri = "https://127.0.0.1:30001/prefix/v1/messages".parse().unwrap();
+        assert!(anthropic_provider_observation("prefix/v1/messages", &h2_uri, &headers, &body).host_valid);
+
+        let invalid_h2_uri = "https://unexpected.example.com/prefix/v1/messages".parse().unwrap();
+        assert!(!anthropic_provider_observation("prefix/v1/messages", &invalid_h2_uri, &headers, &body).host_valid);
     }
 
     #[test]

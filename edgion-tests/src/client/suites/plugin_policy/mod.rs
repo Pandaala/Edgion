@@ -256,10 +256,12 @@ impl TestSuite for PolicySuite {
                             );
                             let udp = udp_socket(&ctx, if label == "a" { 58338 } else { 58339 }).await?;
                             udp_echo(&udp, allowed).await?;
-                            ensure!(
-                                probe_tls_policy(&ctx, tls, host, false).await? == allowed,
-                                "{label}: incorrect TLS terminate admission"
-                            );
+                            if crate::suites::tls_route::tls_route_terminate_tests_enabled() {
+                                ensure!(
+                                    probe_tls_policy(&ctx, tls, host, false).await? == allowed,
+                                    "{label}: incorrect TLS terminate admission"
+                                );
+                            }
                             ensure!(
                                 probe_tls_policy(&ctx, passthrough, host, true).await? == allowed,
                                 "{label}: incorrect TLS passthrough admission"

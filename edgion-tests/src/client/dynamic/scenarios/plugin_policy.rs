@@ -114,17 +114,33 @@ async fn policy(ctx: &ScenarioCtx, action: Option<&str>, status: u16) -> Result<
     apply_value(ctx, value).await
 }
 
+const INVALID_SOURCE_TARGETS: &[(&str, &str, &str)] = &[
+    (
+        "EdgionPlugins_pp-dsl.yaml",
+        "/spec/requestPlugins/1/config/source",
+        "let invalid =",
+    ),
+    (
+        "EdgionConfigData_pp-waf-policy.yaml",
+        "/spec/data/config/profiles/baseline/bundleRefs/0/expectedDigest",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    ),
+];
+
+fn invalidate_source(input: &str, pointer: &str, invalid: &str) -> Result<serde_json::Value> {
+    let mut value: serde_json::Value = serde_yaml::from_str(input)?;
+    let target = value
+        .pointer_mut(pointer)
+        .with_context(|| format!("fixture missing {pointer}"))?;
+    ensure!(target.is_string(), "fixture {pointer} must be a string");
+    *target = json!(invalid);
+    Ok(value)
+}
+
 async fn invalid_sources(ctx: &ScenarioCtx) -> Result<()> {
-    for name in ["dsl", "waf"] {
-        let mut value: serde_json::Value = serde_yaml::from_str(
-            &tokio::fs::read_to_string(ctx.resolve(&format!("initial/EdgionPlugins_pp-{name}.yaml"))).await?,
-        )?;
-        if name == "dsl" {
-            value["spec"]["requestPlugins"][1]["config"]["source"] = json!("let invalid =");
-        } else {
-            value["spec"]["waf"]["profiles"]["baseline"]["bundleRefs"][0]["expectedDigest"] =
-                json!("0000000000000000000000000000000000000000000000000000000000000000");
-        }
+    for (file, pointer, invalid) in INVALID_SOURCE_TARGETS {
+        let input = tokio::fs::read_to_string(ctx.resolve(&format!("initial/{file}"))).await?;
+        let value = invalidate_source(&input, pointer, invalid)?;
         apply_value(ctx, value).await?;
     }
     Ok(())
@@ -177,6 +193,11 @@ async fn process_identity() -> Result<Option<Vec<(PathBuf, String, Vec<u8>)>>> {
 
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
+        if !crate::suites::tls_route::tls_route_terminate_tests_enabled() {
+            crate::suites::tls_route::report_terminate_deferred(
+                "PluginPolicyDynamic/TLS terminate admission across both classes and all phases",
+            );
+        }
         let before = process_identity().await?;
         let result = async {
             // The shared harness preloads listeners before Gateway startup.
@@ -225,6 +246,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             policy(&ctx, Some("bypass"), 503).await?;
             phase(&ctx, "invalid-bypass").await?;
             ctx.apply_dir("initial/EdgionPlugins_pp-dsl.yaml").await?;
+            ctx.apply_dir("initial/EdgionConfigData_pp-waf-policy.yaml").await?;
             ctx.apply_dir("initial/EdgionPlugins_pp-waf.yaml").await?;
             policy(&ctx, Some("block"), 451).await?;
             phase(&ctx, "recovered").await?;
@@ -267,6 +289,23 @@ pub static SCENARIO: &Scenario = &Scenario {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn invalid_source_targets_match_current_fixtures() {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("integration/conf/PluginPolicy/DynamicTest/initial");
+        for (file, pointer, invalid) in super::INVALID_SOURCE_TARGETS {
+            let input = std::fs::read_to_string(root.join(file)).unwrap();
+            let original: serde_json::Value = serde_yaml::from_str(&input).unwrap();
+            let changed = super::invalidate_source(&input, pointer, invalid).unwrap();
+            assert_ne!(original.pointer(pointer), changed.pointer(pointer), "{file}");
+            assert_eq!(
+                changed.pointer(pointer).and_then(serde_json::Value::as_str),
+                Some(*invalid)
+            );
+        }
+        assert!(super::invalidate_source("{}", "/missing/0", "invalid").is_err());
+    }
+
     #[test]
     fn phase_fixtures_use_real_schema_validation() {
         let root =

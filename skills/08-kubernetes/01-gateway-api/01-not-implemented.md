@@ -112,10 +112,10 @@ Therefore:
 
 **Decision: not implemented**
 
-Edgion supports:
-
-- `TLSRoute` + `TLS listener(mode=Passthrough)`
-- `TLSRoute` + `TLS listener(mode=Terminate)`
+Edgion currently enables `TLSRoute` + `TLS listener(mode=Passthrough)`.
+The Controller rejects explicit `TLS listener(mode=Terminate)` with
+`Accepted=False/UnsupportedValue` while `TLSRouteModeTerminate` is undeclared.
+Termination proxy code is retained for the full-profile follow-up below.
 
 But explicitly does not support `TLSRouteModeMixed`, that is:
 
@@ -125,7 +125,7 @@ Reasons:
 
 - Requires a single TCP listener to first read `ClientHello` and then dynamically switch the processing path; architectural complexity rises significantly
 - Mixing passthrough / terminate on the same entry point increases the troubleshooting complexity of certificate selection, traffic flow, and security boundaries
-- For Edgion's current target scenarios, the standard `Passthrough` and standard `Terminate` already cover the major needs
+- Standard Passthrough and the deferred standard Terminate mode cover the intended scenarios without mixed-mode dispatch
 
 Therefore:
 

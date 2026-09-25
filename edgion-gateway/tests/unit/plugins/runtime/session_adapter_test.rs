@@ -78,6 +78,86 @@ async fn path_only_rewrite_keeps_h2_authority_without_host() {
     assert!(ctx.uri_finalized);
 }
 
+#[tokio::test]
+async fn upstream_host_rewrite_updates_h2_authority_and_host() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: placeholder\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    session
+        .req_header_mut()
+        .set_uri("https://downstream.example.com/original?scope=read".parse().unwrap());
+    session.req_header_mut().set_version(http::Version::HTTP_2);
+    session.req_header_mut().remove_header("Host");
+    let mut ctx = EdgionHttpContext::default();
+
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    adapter.set_upstream_uri("/rewritten?scope=read").unwrap();
+    adapter.set_upstream_host("127.0.0.1:30001").unwrap();
+
+    let header = session.req_header();
+    assert_eq!(header.uri.to_string(), "https://127.0.0.1:30001/rewritten?scope=read");
+    assert_eq!(header.headers.get("Host").unwrap(), "127.0.0.1:30001");
+}
+
+#[tokio::test]
+async fn invalid_upstream_host_leaves_uri_and_header_unchanged() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: original.example.com\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    session
+        .req_header_mut()
+        .set_uri("https://original.example.com/original".parse().unwrap());
+    let mut ctx = EdgionHttpContext::default();
+
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert!(adapter.set_upstream_host("bad host").is_err());
+
+    let header = session.req_header();
+    assert_eq!(header.uri.to_string(), "https://original.example.com/original");
+    assert_eq!(header.headers.get("Host").unwrap(), "original.example.com");
+}
+
+#[tokio::test]
+async fn upstream_host_rewrite_preserves_h1_absolute_target() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(
+            b"GET http://original.example.com/raw%2Fpath?scope=read HTTP/1.1\r\nHost: original.example.com\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    let mut ctx = EdgionHttpContext::default();
+
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    adapter.set_upstream_host("backend.example.com:8443").unwrap();
+
+    assert_eq!(
+        session.req_header().raw_path(),
+        b"http://original.example.com/raw%2Fpath?scope=read"
+    );
+    assert_eq!(
+        session.req_header().headers.get("Host").unwrap(),
+        "backend.example.com:8443"
+    );
+    assert!(!ctx.uri_finalized);
+}
+
 #[test]
 fn request_body_buffer_install_failure_is_storage_failure() {
     assert_eq!(body_buffer_install_error(), BodyReadError::StorageFailure);

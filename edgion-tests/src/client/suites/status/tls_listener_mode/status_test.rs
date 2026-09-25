@@ -3,7 +3,7 @@
 //! Tests that Gateway listener status correctly reflects TLS mode support:
 //! 1. TLS/Passthrough → Accepted=True
 //! 2. HTTPS/Passthrough → Accepted=False, reason=UnsupportedValue (HTTPS only supports Terminate)
-//! 3. TLS/Terminate → Accepted=True
+//! 3. TLS/Terminate → Accepted=False, reason=UnsupportedValue until enabled
 //! 4. Two TLS listeners on the same port with different modes → Accepted=False, reason=ProtocolConflict
 
 use super::super::helpers;
@@ -198,10 +198,10 @@ impl TlsListenerModeStatusTestSuite {
         )
     }
 
-    fn test_terminate_accepted() -> TestCase {
+    fn test_terminate_unsupported() -> TestCase {
         TestCase::new(
-            "terminate_accepted",
-            "TLS Terminate listener should have Accepted=True (defaults to TCP backend)",
+            "terminate_unsupported",
+            "TLS Terminate listener should have Accepted=False/UnsupportedValue and no supported kinds",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -211,15 +211,20 @@ impl TlsListenerModeStatusTestSuite {
                         Ok(gateway) => {
                             let cond = Self::find_listener_condition(&gateway, "terminate", "Accepted");
                             match cond {
-                                Some(c) if c["status"].as_str() == Some("True") => TestResult::passed_with_message(
+                                Some(c) if c["status"] == "False"
+                                    && c["reason"] == "UnsupportedValue"
+                                    && gateway["status"]["listeners"].as_array().is_some_and(|listeners| {
+                                        listeners.iter().any(|listener| listener["name"] == "terminate"
+                                            && listener["supportedKinds"].as_array().is_some_and(Vec::is_empty))
+                                    }) => TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "terminate listener: Accepted=True".to_string(),
+                                    "terminate listener: Accepted=False/UnsupportedValue, supportedKinds=[]".to_string(),
                                 ),
-                                Some(c) => TestResult::failed(
+                                Some(_) => TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "terminate listener: expected Accepted=True, got: {}",
-                                        serde_json::to_string_pretty(c).unwrap_or_default()
+                                        "terminate listener: expected UnsupportedValue and empty supportedKinds, got: {}",
+                                        serde_json::to_string_pretty(&gateway["status"]["listeners"]).unwrap_or_default()
                                     ),
                                 ),
                                 None => TestResult::failed(
@@ -250,7 +255,7 @@ impl TestSuite for TlsListenerModeStatusTestSuite {
         vec![
             Self::test_passthrough_accepted(),
             Self::test_https_passthrough_unsupported(),
-            Self::test_terminate_accepted(),
+            Self::test_terminate_unsupported(),
             Self::test_mixed_tls_conflict(),
         ]
     }

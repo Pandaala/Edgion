@@ -196,10 +196,17 @@ impl TestSuite for TlsUnknownKindBackendTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_unknown_kind_only_rejected(),
-            Self::test_mixed_backend_keeps_invalid_share(),
-            Self::test_unknown_kind_status_invalid_kind(),
-        ]
+        let mut cases = vec![Self::test_unknown_kind_status_invalid_kind()];
+        if crate::suites::tls_route::tls_route_terminate_tests_enabled() {
+            cases.extend([
+                Self::test_unknown_kind_only_rejected(),
+                Self::test_mixed_backend_keeps_invalid_share(),
+            ]);
+        } else {
+            crate::suites::tls_route::report_terminate_deferred(
+                "UnknownKindBackend/unknown_kind_only_rejected,mixed_backend_keeps_invalid_share",
+            );
+        }
+        cases
     }
 }

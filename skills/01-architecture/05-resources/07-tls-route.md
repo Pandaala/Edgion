@@ -7,7 +7,11 @@ description: TLSRoute resource — TLS SNI routing, passthrough/terminate modes,
 
 > **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-TLSRoute defines TLS-layer routing rules, supporting both TLS passthrough and terminate modes. Routing matches by SNI (Server Name Indication); each port maintains its own route table.
+TLSRoute defines TLS-layer routing rules. Routing matches by SNI (Server Name
+Indication); each port maintains its own route table. TLS Passthrough is enabled;
+explicit TLS/Terminate listeners are currently rejected with
+`Accepted=False/UnsupportedValue` pending the
+[full-profile follow-up](../../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md).
 
 The sole Controller API identity is `gateway.networking.k8s.io/v1` across
 preflight, watches, CRUD, and status. FileSystem, etcd, and Admin input reject

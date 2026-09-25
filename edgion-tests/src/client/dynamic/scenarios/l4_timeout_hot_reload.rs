@@ -67,8 +67,12 @@ impl PathKind {
         }
     }
 
-    fn all() -> [Self; 3] {
-        [Self::Tcp, Self::Terminate, Self::Passthrough]
+    fn all() -> Vec<Self> {
+        let mut paths = vec![Self::Tcp, Self::Passthrough];
+        if crate::suites::tls_route::tls_route_terminate_tests_enabled() {
+            paths.push(Self::Terminate);
+        }
+        paths
     }
 }
 
@@ -349,6 +353,11 @@ async fn restore_long(ctx: &ScenarioCtx) -> Result<()> {
 
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
+        if !crate::suites::tls_route::tls_route_terminate_tests_enabled() {
+            crate::suites::tls_route::report_terminate_deferred(
+                "L4TimeoutHotReload/TLS terminate new and retained connections",
+            );
+        }
         let result = async {
             ctx.apply_dir("initial").await?;
             ctx.wait_phase(SCENARIO, "ready", CONVERGE_DEADLINE).await?;

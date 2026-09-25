@@ -3567,6 +3567,28 @@ async fn main() -> Result<()> {
         cli.legacy_command.as_deref(),
     );
 
+    if !suites::tls_route::tls_route_terminate_tests_enabled()
+        && matches!(
+            suite.as_str(),
+            "TLSRoute"
+                | "TLSRoute/Basic"
+                | "TLSRoute/ProxyProtocol"
+                | "TLSRoute/StreamPlugins"
+                | "TLSRoute/MultiSNI"
+                | "TLSRoute/BothAbsentParentRef"
+                | "TLSRoute/GeoRestriction"
+        )
+    {
+        let reason = format!(
+            "suite `{suite}` requires deferred TLSRouteModeTerminate; see tasks/pending/gateway-api-v16-tls-terminate-full-profile.md"
+        );
+        if std::env::var("EDGION_INTEGRATION_EXPLICIT_TARGET").as_deref() != Ok("0") {
+            anyhow::bail!(reason);
+        }
+        println!("SKIPPED: {reason}");
+        return Ok(());
+    }
+
     if let Some(capability) = missing_capability("suite", &suite)? {
         if std::env::var("EDGION_INTEGRATION_EXPLICIT_TARGET").as_deref() != Ok("0") {
             anyhow::bail!("suite `{suite}` requires Gateway capability `{capability}`");

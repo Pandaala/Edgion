@@ -37,6 +37,9 @@ impl TestSuite for AdmissionSuite {
             ),
         ]
         .into_iter()
+        .filter(|(_, _, _, _, passthrough)| {
+            *passthrough || crate::suites::tls_route::tls_route_terminate_tests_enabled()
+        })
         .map(|(name, port, hostname, control, passthrough)| {
             TestCase::new(
                 name,
@@ -151,6 +154,11 @@ async fn phase(ctx: &ScenarioCtx, allowed: bool) -> Result<()> {
 
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
+        if !crate::suites::tls_route::tls_route_terminate_tests_enabled() {
+            crate::suites::tls_route::report_terminate_deferred(
+                "TlsRoutePluginsReload/terminate target and healthy control",
+            );
+        }
         let result = async {
             cleanup(&ctx).await?;
             ctx.apply_dir("routes").await?;

@@ -397,6 +397,14 @@ impl TestSuite for L4DuplexTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         let mut cases = Vec::new();
         for transport in [Transport::Tcp, Transport::Terminate, Transport::Passthrough] {
+            if matches!(transport, Transport::Terminate)
+                && !crate::suites::tls_route::tls_route_terminate_tests_enabled()
+            {
+                crate::suites::tls_route::report_terminate_deferred(
+                    "DuplexBackpressure/Terminate upload,download,idle_close,reverse_progress",
+                );
+                continue;
+            }
             for download in [false, true] {
                 for idle in [false, true] {
                     cases.push(

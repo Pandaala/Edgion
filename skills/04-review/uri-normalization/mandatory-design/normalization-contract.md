@@ -85,7 +85,7 @@ self.inner.req_header_mut().set_uri(parsed);
 
 **Consequence**: ctx cache (`normalized_current_path`) becomes inconsistent with pingora uri, causing ACL / access_log / routing decisions to read a stale path.
 
-**Two legal locations starting from v4** (and each must be immediately followed by `ctx.uri_finalized = true`):
+**Path-changing locations** (each must be immediately followed by `ctx.uri_finalized = true`):
 
 1. `edgion-gateway/src/plugins/runtime/session_adapter.rs::set_upstream_uri`
    - Triggered by rewrite plugins (url_rewrite / proxy_rewrite / DSL `req.set_uri` / Gateway API URLRewrite filter)
@@ -98,7 +98,14 @@ self.inner.req_header_mut().set_uri(parsed);
      current scheme/authority while replacing the normalized path/query,
      `set_uri(normalized)` → `uri_finalized = true` (set unconditionally)
 
-**Rule 2.1** (v4): If `set_uri` calls at the two legal locations above are not immediately followed by `uri_finalized = true` → report mandatorily.
+**Authority-only exception**: `session_adapter.rs::set_upstream_host` may call
+`set_uri` to replace an existing URI authority alongside the Host header. This
+keeps HTTP/2 `:authority` aligned with an explicit upstream Host rewrite. It
+does not change the path or query, so it neither refreshes the normalized path
+nor sets `uri_finalized`; the path forwarding decision still runs normally.
+
+**Rule 2.1**: If `set_uri` calls at the path-changing locations above are not
+immediately followed by `uri_finalized = true` → report mandatorily.
 
 **All rewrite plugins** must change paths via the trait method `session.set_upstream_uri()`; bare calls are not allowed.
 
