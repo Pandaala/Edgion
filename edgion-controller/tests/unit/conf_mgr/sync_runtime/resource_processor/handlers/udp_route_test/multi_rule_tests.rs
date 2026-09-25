@@ -33,6 +33,7 @@ async fn invalid_updates_withdraw_old_route_without_dependency_residue() {
             resolved_status_controller: None,
             rules: Some(vec![rule("svc-a")]),
             resolved_listeners: None,
+            resolved_listener_attachments: None,
         },
         status: None,
     };

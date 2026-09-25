@@ -28,6 +28,7 @@ fn create_test_tcp_route(namespace: &str, name: &str, listener_key: ListenerKey)
             }]),
             rules: Some(vec![]),
             resolved_listeners: Some(vec![listener_key]),
+            resolved_listener_attachments: None,
         },
         status: None,
     })

@@ -23,6 +23,18 @@ impl ServiceHandler {
         let svc_name = svc.metadata.name.as_deref().unwrap_or("");
         let service_key = format!("{}/{}", svc_ns, svc_name);
 
+        // Gateway status advertises its dedicated Service address. Re-evaluate
+        // it when the Service is assigned an ingress address or removed.
+        ctx.requeue("Gateway", service_key.clone()).await;
+        let dedicated = svc_ns == "edgion-system" && svc_name.starts_with("edgion-gw-");
+        if dedicated || service_key == "edgion-system/edgion-gateway" {
+            if let Some(gateways) = ctx.runtime().processor_registry.get("Gateway") {
+                for key in gateways.list_keys() {
+                    ctx.requeue("Gateway", key).await;
+                }
+            }
+        }
+
         let refs = crate::conf_mgr::sync_runtime::resource_processor::service_ref::service_event_refs(
             &ctx.runtime().service_ref_mgr,
             &service_key,

@@ -42,6 +42,7 @@ pub struct ListenerContext {
     pub gateway_key: String,
     pub listener: Listener,
     pub listener_key: ListenerKey,
+    pub bind_ip: std::net::IpAddr,
     pub access_logger: Arc<AccessLogger>,
     /// Shared binding to the GatewayClass EGC, or the distinct built-in default.
     pub egc: Arc<crate::config::GatewayConfigHandle>,
@@ -186,8 +187,7 @@ pub fn add_http_listener(
     offload_budget: &mut TlsOffloadBudget,
 ) -> Result<()> {
     let listener_name = context.listener.name.clone();
-    // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
-    let addr = format!("0.0.0.0:{}", context.listener.port);
+    let addr = std::net::SocketAddr::new(context.bind_ip, context.listener.port as u16).to_string();
 
     // Check if HTTP to HTTPS redirect is enabled (only for non-TLS listeners)
     let http_to_https_redirect = !enable_tls
@@ -323,7 +323,7 @@ pub fn add_http_listener(
 pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Result<()> {
     let listener_name = context.listener.name.clone();
     // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
-    let addr = format!("0.0.0.0:{}", context.listener.port);
+    let addr = std::net::SocketAddr::new(context.bind_ip, context.listener.port as u16).to_string();
     let port = context.listener.port as u16;
 
     let tcp_route_manager = get_global_tcp_route_managers().get_or_create_listener_manager(&context.listener_key);
@@ -365,7 +365,7 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
 /// (mirroring TLS pattern) and a `CancellationToken` for graceful shutdown.
 pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Result<()> {
     let listener_name = context.listener.name.clone();
-    let addr = format!("0.0.0.0:{}", context.listener.port);
+    let addr = std::net::SocketAddr::new(context.bind_ip, context.listener.port as u16).to_string();
     let port = context.listener.port as u16;
 
     let udp_route_manager = get_global_udp_route_managers().get_or_create_listener_manager(&context.listener_key);
@@ -414,7 +414,7 @@ pub fn add_tls_terminate_to_tcp_listener(
 ) -> Result<()> {
     let listener_name = context.listener.name.clone();
     // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
-    let addr = format!("0.0.0.0:{}", context.listener.port);
+    let addr = std::net::SocketAddr::new(context.bind_ip, context.listener.port as u16).to_string();
     let port = context.listener.port as u16;
 
     let tls_route_manager = get_global_tls_route_managers().get_or_create_listener_manager(&context.listener_key);
@@ -463,7 +463,7 @@ pub fn add_tls_terminate_to_tcp_listener(
 /// relays the encrypted traffic to the matched backend.
 pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerContext) -> Result<()> {
     let listener_name = context.listener.name.clone();
-    let addr = format!("0.0.0.0:{}", context.listener.port);
+    let addr = std::net::SocketAddr::new(context.bind_ip, context.listener.port as u16).to_string();
     let port = context.listener.port as u16;
 
     let tls_route_manager = get_global_tls_route_managers().get_or_create_listener_manager(&context.listener_key);

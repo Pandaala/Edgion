@@ -1,8 +1,8 @@
-# Rust build artifacts (keep target/release for local builds)
-target/debug/
-target/release/
-target/.rustc_info.json
-target/.cargo-lock
+# Rust build artifacts
+target/
+tmp/
+.claude/
+.superpowers/
 **/*.rs.bk
 **/*.pdb
 

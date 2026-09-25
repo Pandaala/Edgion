@@ -550,7 +550,7 @@ impl GatewayTlsMatcher {
                     _ => continue,
                 };
 
-                let addr = resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port);
+                let addr = resolve_listener_addr(gateway, listener.port);
                 let listener_key = ListenerKey::new(addr, &listener.protocol);
                 let compiled_serving = compile_serving_certificates(
                     &cert_refs,

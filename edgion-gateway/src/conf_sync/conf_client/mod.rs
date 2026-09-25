@@ -2,6 +2,7 @@ pub mod cert_watch;
 mod config_client;
 mod grpc_client;
 mod rotation;
+pub(crate) mod scoped_handler;
 
 use std::sync::{Arc, LazyLock};
 use tokio_util::sync::CancellationToken;

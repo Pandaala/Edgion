@@ -5,6 +5,7 @@ fn contribution(name: &str, declaration: ProxyProtocolPolicyDeclaration) -> Prox
     ProxyProtocolListenerContribution {
         listener_name: name.to_string(),
         listener_key: ListenerKey::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 80), "HTTP"),
+        deployment_scope: String::new(),
         declaration,
     }
 }
@@ -17,6 +18,19 @@ fn exact_replay_has_no_dirty_peers() {
         .replace_gateway_contributions("default/a", entries.clone())
         .is_empty());
     assert!(manager.replace_gateway_contributions("default/a", entries).is_empty());
+}
+
+#[test]
+fn dedicated_gateways_do_not_share_proxy_policy_conflicts() {
+    let manager = ProxyProtocolListenerPolicyManager::new();
+    let mut first = contribution("http", ProxyProtocolPolicyDeclaration::Required);
+    first.deployment_scope = "default/a".to_string();
+    let mut second = contribution("http", ProxyProtocolPolicyDeclaration::Disabled);
+    second.deployment_scope = "default/b".to_string();
+    manager.replace_gateway_contributions("default/a", vec![first]);
+    manager.replace_gateway_contributions("default/b", vec![second]);
+    assert!(manager.conflicting_listener_names("default/a").is_empty());
+    assert!(manager.conflicting_listener_names("default/b").is_empty());
 }
 
 #[test]

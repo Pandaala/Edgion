@@ -100,6 +100,7 @@ fn create_test_tcp_route(
                 }]),
             }]),
             resolved_listeners: Some(vec![listener_key]),
+            resolved_listener_attachments: None,
         },
         status: None,
     })

@@ -38,6 +38,7 @@ fn route_unit(name: &str) -> Arc<TcpRouteUnit> {
                 parent_refs: None,
                 rules: None,
                 resolved_listeners: None,
+                resolved_listener_attachments: None,
             },
             status: None,
         }),

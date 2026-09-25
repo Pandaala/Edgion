@@ -1,4 +1,5 @@
 use crate::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
+use crate::conf_sync::conf_client::scoped_handler::SharedScopeRegistry;
 use crate::routes::grpc::get_global_grpc_route_managers;
 use crate::routes::http::get_global_http_route_managers;
 use crate::routes::tcp::get_global_tcp_route_managers;
@@ -31,18 +32,65 @@ use std::sync::Arc;
 /// only rebuilt when the listener key set actually changes.
 pub struct GatewayHandler {
     policy_runtime: Arc<ProxyProtocolPolicyRuntime>,
+    gateway_scope: Option<String>,
+    gateway_uid: Option<String>,
+    shared: Arc<SharedScopeRegistry>,
 }
 
 impl GatewayHandler {
     pub fn new() -> Self {
+        Self::new_scoped(None)
+    }
+
+    pub fn new_scoped(gateway_scope: Option<String>) -> Self {
+        Self::new_with_identity(gateway_scope, None, Arc::default())
+    }
+
+    pub(crate) fn new_with_identity(
+        gateway_scope: Option<String>,
+        gateway_uid: Option<String>,
+        shared: Arc<SharedScopeRegistry>,
+    ) -> Self {
         Self {
             policy_runtime: get_global_proxy_protocol_policy_runtime(),
+            gateway_scope,
+            gateway_uid,
+            shared,
         }
     }
 }
 
+fn gateway_in_scope(scope: Option<&str>, uid: Option<&str>, key: &str, gateway: &Gateway) -> bool {
+    match scope {
+        Some(scope) => scope == key && uid.is_none_or(|uid| gateway.metadata.uid.as_deref() == Some(uid)),
+        None => !is_dedicated_gateway(gateway),
+    }
+}
+
+fn is_dedicated_gateway(gateway: &Gateway) -> bool {
+    gateway
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|value| value.get(edgion_resources::constants::annotations::edgion::DEDICATED_GATEWAY_INSTANCE))
+        .is_some_and(|value| value == "true")
+}
+
 impl ConfHandler<Gateway> for GatewayHandler {
     fn full_set(&self, data: &HashMap<String, Arc<Gateway>>) {
+        let dedicated: HashSet<String> = data
+            .iter()
+            .filter(|(_, gateway)| is_dedicated_gateway(gateway))
+            .map(|(key, _)| key.clone())
+            .collect();
+        let scoped_data: HashMap<String, Arc<Gateway>> = data
+            .iter()
+            .filter(|(key, gateway)| {
+                gateway_in_scope(self.gateway_scope.as_deref(), self.gateway_uid.as_deref(), key, gateway)
+            })
+            .map(|(key, gateway)| (key.clone(), Arc::clone(gateway)))
+            .collect();
+        let data = &scoped_data;
         if matches!(
             self.policy_runtime.observe_snapshot(data.values().map(Arc::as_ref)),
             SnapshotDisposition::RejectFatal
@@ -59,6 +107,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
         let gateways = {
             let global_store = get_global_gateway_store();
             let mut store = global_store.write();
+            for old in store.list_gateways() {
+                get_global_gateway_backend_tls_store().remove(&old.key_name());
+            }
             store.clear();
 
             for (key, gateway) in data {
@@ -115,14 +166,50 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 .collect(),
         );
         crate::ai::reconcile_all_adaptive_plugin_dependents();
+        if self.gateway_scope.is_none() {
+            self.shared.replace(dedicated);
+        } else {
+            self.shared.set_active(!data.is_empty());
+        }
     }
 
     fn partial_update(
         &self,
-        add: HashMap<String, Arc<Gateway>>,
-        update: HashMap<String, Arc<Gateway>>,
-        remove: HashSet<String>,
+        mut add: HashMap<String, Arc<Gateway>>,
+        mut update: HashMap<String, Arc<Gateway>>,
+        mut remove: HashSet<String>,
     ) {
+        let mut dedicated = self.shared.snapshot();
+        if self.gateway_scope.is_none() {
+            for (key, gateway) in add.iter().chain(update.iter()) {
+                if is_dedicated_gateway(gateway) {
+                    dedicated.insert(key.clone());
+                } else {
+                    dedicated.remove(key);
+                }
+            }
+            for key in &remove {
+                dedicated.remove(key);
+            }
+        }
+        if let Some(scope) = self.gateway_scope.as_deref() {
+            if add.iter().chain(update.iter()).any(|(key, gateway)| {
+                key == scope && !gateway_in_scope(Some(scope), self.gateway_uid.as_deref(), key, gateway)
+            }) {
+                remove.insert(scope.to_string());
+            }
+            add.retain(|key, gateway| gateway_in_scope(Some(scope), self.gateway_uid.as_deref(), key, gateway));
+            update.retain(|key, gateway| gateway_in_scope(Some(scope), self.gateway_uid.as_deref(), key, gateway));
+            remove.retain(|key| key == scope);
+        } else {
+            for (key, gateway) in add.iter().chain(update.iter()) {
+                if is_dedicated_gateway(gateway) {
+                    remove.insert(key.clone());
+                }
+            }
+            add.retain(|_, gateway| !is_dedicated_gateway(gateway));
+            update.retain(|_, gateway| !is_dedicated_gateway(gateway));
+        }
         let policy_inputs = add
             .iter()
             .chain(update.iter())
@@ -275,6 +362,16 @@ impl ConfHandler<Gateway> for GatewayHandler {
         }
         crate::plugins::publication::global_publisher().update_gateways(policy_inputs, &policy_removed);
         crate::ai::reconcile_all_adaptive_plugin_dependents();
+        if self.gateway_scope.is_none() {
+            self.shared.replace(dedicated);
+        } else if let Some(scope) = self.gateway_scope.as_deref() {
+            let active = get_global_gateway_store()
+                .read()
+                .list_gateways()
+                .iter()
+                .any(|gateway| gateway.key_name() == scope);
+            self.shared.set_active(active);
+        }
     }
 }
 
@@ -336,6 +433,14 @@ fn listeners_changed(before: &[ListenerKey], after: &[ListenerKey]) -> bool {
 
 pub fn create_gateway_handler() -> Box<dyn ConfHandler<Gateway> + Send + Sync> {
     Box::new(GatewayHandler::new())
+}
+
+pub(crate) fn create_scoped_gateway_handler(
+    scope: Option<String>,
+    uid: Option<String>,
+    shared: Arc<SharedScopeRegistry>,
+) -> Box<dyn ConfHandler<Gateway> + Send + Sync> {
+    Box::new(GatewayHandler::new_with_identity(scope, uid, shared))
 }
 
 #[cfg(test)]

@@ -23,8 +23,8 @@ use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::common::is_core_api_group;
 use edgion_resources::resources::gateway::{
     FrontendCACertificateRef, FrontendCAResolutionError, FrontendCASourceIdentity, FrontendCASourceKind,
-    FrontendMatcherEligibility, FrontendValidationMode, GatewayAddress, GatewayStatus, GatewayStatusAddress,
-    GatewayTLSConfig, GatewayTlsMode, Listener as GatewayListener, ListenerStatus, ResolvedFrontendCAReference,
+    FrontendMatcherEligibility, FrontendValidationMode, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig,
+    GatewayTlsMode, Listener as GatewayListener, ListenerStatus, ResolvedFrontendCAReference,
     ResolvedServingCertificateReference, RouteGroupKind, ServingCertificateResolutionError,
     ServingCertificateSourceIdentity,
 };
@@ -32,7 +32,7 @@ use edgion_resources::resources::proxy_protocol::{
     BoundedProxyProtocolReferenceIdentity, InboundProxyProtocolAnnotation, ProxyProtocolConfigErrorCode,
     ProxyProtocolPolicySourceKind, ResolvedInboundProxyProtocol,
 };
-use edgion_resources::ResourceKind;
+use edgion_resources::{ResourceKind, ResourceMeta};
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::ByteString;
 use sha2::{Digest, Sha256};
@@ -421,10 +421,12 @@ fn proxy_protocol_contributions(gateway: &Gateway) -> Vec<ProxyProtocolListenerC
             };
             Some(ProxyProtocolListenerContribution {
                 listener_name: listener.name.clone(),
-                listener_key: ListenerKey::new(
-                    resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port),
-                    &listener.protocol,
-                ),
+                listener_key: ListenerKey::new(resolve_listener_addr(gateway, listener.port), &listener.protocol),
+                deployment_scope: if has_dedicated_gateway_instance(gateway) {
+                    gateway.key_name()
+                } else {
+                    String::new()
+                },
                 declaration,
             })
         })
@@ -479,12 +481,15 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             )];
         }
         let mut errors = Vec::new();
+        if edgion_resources::listener_key::gateway_local_bind_ip(g).is_err() {
+            errors.push("metadata.annotations[edgion.io/local-bind-ip] must be an IP address".to_string());
+        }
         if g.spec
             .addresses
             .as_deref()
             .is_some_and(|addresses| addresses.iter().any(|address| address.value.is_none()))
         {
-            errors.push("spec.addresses contains an address without value, which Edgion cannot bind".to_string());
+            errors.push("spec.addresses contains an address without value, which Edgion cannot advertise".to_string());
         }
         for (present, name) in [
             (g.spec.allowed_listeners.is_some(), "allowedListeners"),
@@ -588,6 +593,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         if g.spec.allowed_listeners.is_some()
             || g.spec.infrastructure.is_some()
             || g.spec.default_scope.is_some()
+            || edgion_resources::listener_key::gateway_local_bind_ip(&g).is_err()
             || g.spec
                 .addresses
                 .as_deref()
@@ -735,7 +741,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .unwrap_or_default()
             .iter()
             .map(|l| {
-                let addr = resolve_listener_addr(g.spec.addresses.as_ref(), l.port);
+                let addr = resolve_listener_addr(&g, l.port);
                 let conflict_key = make_conflict_key(addr);
                 (l.name.clone(), conflict_key, l.hostname.clone())
             })
@@ -1045,7 +1051,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Pre-compute per-listener info while gateway is only immutably borrowed.
         let listeners_slice = gateway.spec.listeners.as_deref().unwrap_or_default();
 
-        let mixed_tls_listeners = detect_mixed_tls_mode_listeners(listeners_slice, gateway.spec.addresses.as_ref());
+        let mixed_tls_listeners = detect_mixed_tls_mode_listeners(listeners_slice);
         let gateway_key = format!(
             "{}/{}",
             gateway.metadata.namespace.as_deref().unwrap_or(""),
@@ -1152,7 +1158,17 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             })
             .collect();
 
-        let derived_addresses = derive_gateway_addresses(gateway, self.default_address.as_deref(), _ctx.runtime());
+        let dedicated_address_state = dedicated_gateway_address_state(gateway, _ctx.runtime());
+        let derived_addresses = match &dedicated_address_state {
+            Some(DedicatedAddressState::Assigned(addresses) | DedicatedAddressState::Unusable(addresses)) => {
+                addresses.clone()
+            }
+            Some(DedicatedAddressState::Pending) => Vec::new(),
+            None => derive_gateway_addresses(gateway, self.default_address.as_deref(), _ctx.runtime()),
+        };
+        let address_unavailable = dedicated_address_state
+            .as_ref()
+            .is_some_and(|state| !matches!(state, DedicatedAddressState::Assigned(_)));
 
         // Pre-compute stream plugin ref validation before taking a mutable borrow of gateway.
         let stream_plugin_ref_error = validate_gateway_stream_plugin_ref(gateway, _ctx.runtime());
@@ -1358,6 +1374,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         {
             if validation_errors.is_empty()
                 && !all_listeners_unsupported
+                && !address_unavailable
                 && proxy_protocol_error
                     .as_ref()
                     .is_none_or(|(code, _)| is_proxy_protocol_shared_conflict(*code))
@@ -1380,7 +1397,11 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                             .then(|| "Inbound PROXY protocol policies conflict on a shared listener".to_string())
                     })
                     .unwrap_or_else(|| {
-                        if all_listeners_unsupported {
+                        if matches!(dedicated_address_state, Some(DedicatedAddressState::Pending)) {
+                            "Dedicated Gateway Service has no assigned external address".to_string()
+                        } else if matches!(dedicated_address_state, Some(DedicatedAddressState::Unusable(_))) {
+                            "Dedicated Gateway Service does not have every requested external address".to_string()
+                        } else if all_listeners_unsupported {
                             "No supported listeners".to_string()
                         } else {
                             validation_errors.join("; ")
@@ -1388,7 +1409,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     });
                 let cond = condition_false(
                     condition_types::PROGRAMMED,
-                    condition_reasons::INVALID_LISTENER,
+                    if matches!(dedicated_address_state, Some(DedicatedAddressState::Pending)) {
+                        "AddressNotAssigned"
+                    } else if matches!(dedicated_address_state, Some(DedicatedAddressState::Unusable(_))) {
+                        "AddressNotUsable"
+                    } else {
+                        condition_reasons::INVALID_LISTENER
+                    },
                     message,
                     generation,
                 );
@@ -1971,6 +1998,12 @@ fn derive_gateway_addresses(
     default_address: Option<&str>,
     runtime: &ControllerRuntime,
 ) -> Vec<GatewayStatusAddress> {
+    if let Some(state) = dedicated_gateway_address_state(gateway, runtime) {
+        return match state {
+            DedicatedAddressState::Assigned(addresses) | DedicatedAddressState::Unusable(addresses) => addresses,
+            DedicatedAddressState::Pending => Vec::new(),
+        };
+    }
     if let Some(spec_addresses) = gateway.spec.addresses.as_ref().filter(|a| !a.is_empty()) {
         return spec_addresses
             .iter()
@@ -1986,11 +2019,8 @@ fn derive_gateway_addresses(
     let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
     let gateway_name = gateway.metadata.name.as_deref().unwrap_or("");
     for (service_ns, service_name) in gateway_service_lookup_candidates(gateway_ns, gateway_name) {
-        if let Some(cluster_ip) = lookup_service_cluster_ip(&service_ns, &service_name, runtime) {
-            return vec![GatewayStatusAddress {
-                address_type: Some("IPAddress".to_string()),
-                value: cluster_ip,
-            }];
+        if let Some(address) = lookup_service_address(&service_ns, &service_name, runtime) {
+            return vec![address];
         }
     }
 
@@ -2001,15 +2031,105 @@ fn derive_gateway_addresses(
         }];
     }
 
-    vec![GatewayStatusAddress {
-        address_type: Some("IPAddress".to_string()),
-        value: "0.0.0.0".to_string(),
-    }]
+    Vec::new()
+}
+
+#[derive(Debug)]
+enum DedicatedAddressState {
+    Pending,
+    Unusable(Vec<GatewayStatusAddress>),
+    Assigned(Vec<GatewayStatusAddress>),
+}
+
+fn dedicated_gateway_address_state(gateway: &Gateway, runtime: &ControllerRuntime) -> Option<DedicatedAddressState> {
+    if !has_dedicated_gateway_instance(gateway) {
+        return None;
+    }
+    let addresses = lookup_dedicated_gateway_service_addresses(gateway, runtime).unwrap_or_default();
+    Some(classify_dedicated_addresses(gateway, addresses))
+}
+
+fn classify_dedicated_addresses(gateway: &Gateway, addresses: Vec<GatewayStatusAddress>) -> DedicatedAddressState {
+    if addresses.is_empty() {
+        DedicatedAddressState::Pending
+    } else if requested_addresses_match_assigned(gateway, &addresses) {
+        DedicatedAddressState::Assigned(addresses)
+    } else {
+        DedicatedAddressState::Unusable(addresses)
+    }
+}
+
+fn requested_addresses_match_assigned(gateway: &Gateway, assigned: &[GatewayStatusAddress]) -> bool {
+    gateway
+        .spec
+        .addresses
+        .as_ref()
+        .filter(|addresses| !addresses.is_empty())
+        .is_none_or(|requested| {
+            requested.iter().all(|address| {
+                let Some(value) = address.value.as_deref() else {
+                    return false;
+                };
+                let address_type = address.address_type.as_deref().unwrap_or("IPAddress");
+                assigned.iter().any(|actual| {
+                    if address_type != actual.address_type.as_deref().unwrap_or("IPAddress") {
+                        return false;
+                    }
+                    if address_type == "IPAddress" {
+                        match (
+                            value.parse::<std::net::IpAddr>(),
+                            actual.value.parse::<std::net::IpAddr>(),
+                        ) {
+                            (Ok(requested), Ok(assigned)) => requested == assigned,
+                            _ => value == actual.value,
+                        }
+                    } else {
+                        value.eq_ignore_ascii_case(&actual.value)
+                    }
+                })
+            })
+        })
+}
+
+fn has_dedicated_gateway_instance(gateway: &Gateway) -> bool {
+    gateway.metadata.annotations.as_ref().is_some_and(|annotations| {
+        annotations
+            .get(edgion_resources::constants::annotations::edgion::DEDICATED_GATEWAY_INSTANCE)
+            .is_some_and(|value| value == "true")
+    })
+}
+
+/// `None` means no dedicated Service exists; an empty list means its claimed
+/// Gateway identity is stale or its external address is not assigned yet.
+fn lookup_dedicated_gateway_service_addresses(
+    gateway: &Gateway,
+    runtime: &ControllerRuntime,
+) -> Option<Vec<GatewayStatusAddress>> {
+    use edgion_resources::constants::annotations::edgion::{GATEWAY_SERVICE_REF, GATEWAY_SERVICE_UID};
+
+    let uid = gateway.metadata.uid.as_deref()?;
+    let gateway_key = gateway.key_name();
+    let service_name = dedicated_gateway_service_name(&gateway_key, uid);
+    let processor = runtime.processor_registry.get("Service")?;
+    let key = format!("{GATEWAY_SYSTEM_NAMESPACE}/{service_name}");
+    let svc: Arc<Service> = processor.get_raw_any(&key)?.downcast::<Service>().ok()?;
+    let annotations = svc.metadata.annotations.as_ref();
+    if annotations.and_then(|a| a.get(GATEWAY_SERVICE_REF)).map(String::as_str) != Some(gateway_key.as_str())
+        || annotations.and_then(|a| a.get(GATEWAY_SERVICE_UID)).map(String::as_str) != Some(uid)
+    {
+        return Some(Vec::new());
+    }
+    Some(assigned_service_addresses(&svc))
+}
+
+fn dedicated_gateway_service_name(gateway_key: &str, uid: &str) -> String {
+    let digest = format!("{:x}", Sha256::digest(format!("{gateway_key}/{uid}").as_bytes()));
+    format!("edgion-gw-{}", &digest[..16])
 }
 
 fn gateway_service_lookup_candidates(gateway_ns: &str, gateway_name: &str) -> Vec<(String, String)> {
-    let mut candidates = vec![(GATEWAY_SYSTEM_NAMESPACE.to_string(), GATEWAY_NAME.to_string())];
-
+    let mut candidates = Vec::with_capacity(2);
+    candidates.push((GATEWAY_SYSTEM_NAMESPACE.to_string(), GATEWAY_NAME.to_string()));
     if !gateway_name.is_empty() && (gateway_ns != GATEWAY_SYSTEM_NAMESPACE || gateway_name != GATEWAY_NAME) {
         candidates.push((gateway_ns.to_string(), gateway_name.to_string()));
     }
@@ -2017,14 +2137,61 @@ fn gateway_service_lookup_candidates(gateway_ns: &str, gateway_name: &str) -> Ve
     candidates
 }
 
-fn lookup_service_cluster_ip(namespace: &str, name: &str, runtime: &ControllerRuntime) -> Option<String> {
+fn lookup_service_address(namespace: &str, name: &str, runtime: &ControllerRuntime) -> Option<GatewayStatusAddress> {
     let processor = runtime.processor_registry.get("Service")?;
     let key = format!("{}/{}", namespace, name);
     let svc: Arc<Service> = processor.get_raw_any(&key)?.downcast::<Service>().ok()?;
-    svc.spec
+    assigned_service_addresses(&svc).into_iter().next()
+}
+
+fn assigned_service_addresses(svc: &Service) -> Vec<GatewayStatusAddress> {
+    let Some(spec) = svc.spec.as_ref() else {
+        return Vec::new();
+    };
+    if spec.type_.as_deref() == Some("LoadBalancer") {
+        let mut addresses = Vec::new();
+        for ingress in svc
+            .status
+            .as_ref()
+            .and_then(|status| status.load_balancer.as_ref())
+            .and_then(|load_balancer| load_balancer.ingress.as_ref())
+            .into_iter()
+            .flatten()
+        {
+            let address = if let Some(ip) = ingress.ip.as_ref().filter(|ip| !ip.is_empty()) {
+                Some(GatewayStatusAddress {
+                    address_type: Some("IPAddress".to_string()),
+                    value: ip.clone(),
+                })
+            } else {
+                ingress
+                    .hostname
+                    .as_ref()
+                    .filter(|hostname| !hostname.is_empty())
+                    .map(|hostname| GatewayStatusAddress {
+                        address_type: Some("Hostname".to_string()),
+                        value: hostname.clone(),
+                    })
+            };
+            if let Some(address) = address {
+                if !addresses.iter().any(|existing: &GatewayStatusAddress| {
+                    existing.address_type == address.address_type && existing.value == address.value
+                }) {
+                    addresses.push(address);
+                }
+            }
+        }
+        return addresses;
+    }
+    spec.cluster_ip
         .as_ref()
-        .and_then(|spec| spec.cluster_ip.clone())
-        .filter(|cluster_ip| !cluster_ip.is_empty() && cluster_ip != "None")
+        .filter(|ip| !ip.is_empty() && *ip != "None")
+        .map(|ip| GatewayStatusAddress {
+            address_type: Some("IPAddress".to_string()),
+            value: ip.clone(),
+        })
+        .into_iter()
+        .collect()
 }
 
 /// Update or insert a condition in Gateway conditions list
@@ -2500,10 +2667,7 @@ fn has_all_ca_refs_invalid(listener: &GatewayListener, gateway_namespace: &str) 
 /// Returns the set of listener names that participate in a mixed TLS termination
 /// conflict — i.e. TLS listeners on the same port with different modes
 /// (e.g. one Terminate and one Passthrough).
-fn detect_mixed_tls_mode_listeners(
-    listeners: &[GatewayListener],
-    addresses: Option<&Vec<GatewayAddress>>,
-) -> std::collections::HashSet<String> {
+fn detect_mixed_tls_mode_listeners(listeners: &[GatewayListener]) -> std::collections::HashSet<String> {
     use std::collections::HashMap;
     let mut port_modes: HashMap<u16, Vec<(String, GatewayTlsMode)>> = HashMap::new();
 
@@ -2512,8 +2676,10 @@ fn detect_mixed_tls_mode_listeners(
             continue;
         }
         let mode = l.tls.as_ref().and_then(|t| t.mode).unwrap_or_default();
-        let addr = resolve_listener_addr(addresses, l.port);
-        port_modes.entry(addr.port()).or_default().push((l.name.clone(), mode));
+        port_modes
+            .entry(l.port as u16)
+            .or_default()
+            .push((l.name.clone(), mode));
     }
 
     let mut result = std::collections::HashSet::new();

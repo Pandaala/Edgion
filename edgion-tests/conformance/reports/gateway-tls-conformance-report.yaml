@@ -1,7 +1,7 @@
 apiVersion: gateway.networking.k8s.io/v1
-date: "2026-06-18T13:17:59Z"
-gatewayAPIChannel: UNDEFINED
-gatewayAPIVersion: UNDEFINED
+date: "2026-09-25T03:37:18Z"
+gatewayAPIChannel: standard
+gatewayAPIVersion: v1.6.2
 implementation:
   contact:
   - '@edgion'
@@ -16,29 +16,7 @@ profiles:
     result: success
     statistics:
       Failed: 0
-      Passed: 18
+      Passed: 20
       Skipped: 0
-  extended:
-    result: success
-    statistics:
-      Failed: 0
-      Passed: 3
-      Skipped: 0
-    supportedFeatures:
-    - GatewayFrontendClientCertificateValidation
-    - GatewayHTTPListenerIsolation
-    - GatewayHTTPSListenerDetectMisdirectedRequests
-    - TLSRouteModeTerminate
-    unsupportedFeatures:
-    - GatewayAddressEmpty
-    - GatewayBackendClientCertificate
-    - GatewayFrontendClientCertificateValidationInsecureFallback
-    - GatewayInfrastructurePropagation
-    - GatewayPort8080
-    - GatewayStaticAddresses
-    - ListenerSet
-    - TLSRouteModeMixed
   name: GATEWAY-TLS
-  summary: Core tests succeeded. Extended tests succeeded.
-succeededProvisionalTests:
-- TLSRouteTerminateSimpleSameNamespace
+  summary: Core tests succeeded.

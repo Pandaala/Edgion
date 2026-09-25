@@ -1,7 +1,7 @@
 apiVersion: gateway.networking.k8s.io/v1
-date: "2026-06-18T13:54:50Z"
-gatewayAPIChannel: UNDEFINED
-gatewayAPIVersion: UNDEFINED
+date: "2026-09-25T03:35:54Z"
+gatewayAPIChannel: standard
+gatewayAPIVersion: v1.6.2
 implementation:
   contact:
   - '@edgion'
@@ -16,13 +16,13 @@ profiles:
     result: success
     statistics:
       Failed: 0
-      Passed: 33
+      Passed: 37
       Skipped: 0
   extended:
     result: success
     statistics:
       Failed: 0
-      Passed: 31
+      Passed: 30
       Skipped: 0
     supportedFeatures:
     - BackendTLSPolicy
@@ -60,6 +60,9 @@ profiles:
     - GatewayStaticAddresses
     - HTTPRouteParentRefPort
     - HTTPRouteRequestMultipleMirrors
+    - HTTPRouteRetry
+    - HTTPRouteRetryBackendTimeout
+    - HTTPRouteRetryConnectionError
     - ListenerSet
   name: GATEWAY-HTTP
   summary: Core tests succeeded. Extended tests succeeded.
@@ -67,7 +70,7 @@ profiles:
     result: success
     statistics:
       Failed: 0
-      Passed: 13
+      Passed: 15
       Skipped: 0
   name: GATEWAY-GRPC
   summary: Core tests succeeded.

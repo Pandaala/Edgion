@@ -6,7 +6,7 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::common::{ParentReference, RefDenied};
+use super::common::{ParentReference, RefDenied, RouteListenerAttachment};
 use crate::ListenerKey;
 
 /// TCPRoute defines TCP rules for mapping requests to backends
@@ -46,6 +46,11 @@ pub struct TCPRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_listeners: Option<Vec<ListenerKey>>,
+
+    /// Exact Controller-resolved Gateway attachments for scoped data planes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_listener_attachments: Option<Vec<RouteListenerAttachment>>,
 }
 
 /// TCPRouteRule defines TCP routing rules

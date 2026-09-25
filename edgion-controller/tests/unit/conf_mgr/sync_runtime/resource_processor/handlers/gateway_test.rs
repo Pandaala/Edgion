@@ -1,8 +1,9 @@
 use super::{
-    build_gateway_attachment_proof, compute_supported_kinds, gateway_service_lookup_candidates,
-    has_all_ca_refs_invalid, resolve_gateway_stream_plugin_ref, resolve_inbound_proxy_protocol,
-    validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref,
-    validate_listener_resolved_refs, GatewayHandler,
+    assigned_service_addresses, build_gateway_attachment_proof, classify_dedicated_addresses, compute_supported_kinds,
+    dedicated_gateway_service_name, derive_gateway_addresses, gateway_service_lookup_candidates,
+    has_all_ca_refs_invalid, requested_addresses_match_assigned, resolve_gateway_stream_plugin_ref,
+    resolve_inbound_proxy_protocol, validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref,
+    validate_gateway_stream_plugin_ref, validate_listener_resolved_refs, DedicatedAddressState, GatewayHandler,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     frontend_ca_ref::{FrontendCaSourceKey, FrontendCaSourceKind},
@@ -29,6 +30,26 @@ use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use k8s_openapi::ByteString;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+
+#[tokio::test]
+async fn gateway_rejects_invalid_local_bind_ip() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime);
+    let gateway: Gateway = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "edge", "namespace": "demo", "annotations": {"edgion.io/local-bind-ip": "not-an-ip"}},
+        "spec": {"gatewayClassName": "test", "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}]}
+    }))
+    .unwrap();
+    let handler = GatewayHandler::new(None, None);
+    assert!(handler
+        .validate(&gateway, &ctx)
+        .iter()
+        .any(|error| error.contains("local-bind-ip")));
+    let ProcessResult::Continue(gateway) = handler.parse(gateway, &ctx).await else {
+        panic!("invalid Gateway must be retained for status reporting");
+    };
+    assert!(gateway.spec.listeners.is_none());
+}
 
 #[tokio::test]
 async fn canonical_gateway_unsupported_field_sets_invalid_status_and_withdraws_listeners() {
@@ -234,7 +255,7 @@ async fn gateway_address_without_value_is_status_rejected_and_recovers() {
     let errors = handler.validate(&gateway, &ctx);
     assert_eq!(
         errors,
-        ["spec.addresses contains an address without value, which Edgion cannot bind"]
+        ["spec.addresses contains an address without value, which Edgion cannot advertise"]
     );
     let ProcessResult::Continue(mut rejected) = handler.parse(gateway, &ctx).await else {
         panic!("unsupported address must remain available for status");
@@ -1021,7 +1042,7 @@ fn listener_with_ca_refs(refs: Vec<(&str, &str)>) -> GatewayListener {
 }
 
 #[test]
-fn gateway_service_lookup_prefers_fixed_edgion_gateway_service() {
+fn gateway_service_lookup_prefers_shared_service_over_unrelated_same_named_service() {
     let candidates = gateway_service_lookup_candidates("gateway-conformance-infra", "same-namespace");
 
     assert_eq!(
@@ -1041,6 +1062,116 @@ fn gateway_service_lookup_avoids_duplicate_fixed_service_candidate() {
         candidates,
         vec![("edgion-system".to_string(), GATEWAY_NAME.to_string())]
     );
+}
+
+#[test]
+fn gateway_service_address_uses_assigned_load_balancer_ingress() {
+    let service: k8s_openapi::api::core::v1::Service = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "edge", "namespace": "demo"},
+        "spec": {"type": "LoadBalancer", "clusterIP": "10.96.0.20"},
+        "status": {"loadBalancer": {"ingress": [{"hostname": "edge.example.com"}]}}
+    }))
+    .unwrap();
+    let addresses = assigned_service_addresses(&service);
+    let address = &addresses[0];
+    assert_eq!(address.address_type.as_deref(), Some("Hostname"));
+    assert_eq!(address.value, "edge.example.com");
+
+    let mut pending = service;
+    pending.status = None;
+    assert!(assigned_service_addresses(&pending).is_empty());
+}
+
+#[test]
+fn dedicated_gateway_accepts_all_assigned_load_balancer_ingresses() {
+    let service: k8s_openapi::api::core::v1::Service = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "edge", "namespace": "demo"},
+        "spec": {"type": "LoadBalancer", "clusterIP": "10.96.0.20"},
+        "status": {"loadBalancer": {"ingress": [
+            {"ip": "192.0.2.10"}, {"ip": "192.0.2.11"},
+            {"ip": "2001:0db8::1"}, {"hostname": "edge.example.com"}
+        ]}}
+    }))
+    .unwrap();
+    let assigned = assigned_service_addresses(&service);
+    assert_eq!(assigned.len(), 4);
+
+    let gateway: Gateway = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "edge", "namespace": "demo"},
+        "spec": {"gatewayClassName": "test", "addresses": [
+            {"type": "IPAddress", "value": "192.0.2.11"},
+            {"type": "IPAddress", "value": "2001:db8::1"},
+            {"type": "Hostname", "value": "edge.example.com"}
+        ], "listeners": []}
+    }))
+    .unwrap();
+    assert!(requested_addresses_match_assigned(&gateway, &assigned));
+    assert!(matches!(
+        classify_dedicated_addresses(&gateway, assigned),
+        DedicatedAddressState::Assigned(addresses) if addresses.len() == 4
+    ));
+    assert!(matches!(
+        classify_dedicated_addresses(&gateway, Vec::new()),
+        DedicatedAddressState::Pending
+    ));
+}
+
+#[test]
+fn dedicated_gateway_service_name_matches_provisioner() {
+    assert_eq!(
+        dedicated_gateway_service_name(
+            "gateway-conformance-infra/same-namespace",
+            "e78e966c-29ec-4827-8a1d-a4c3b07d1169"
+        ),
+        "edgion-gw-ffb7d8f091282df4"
+    );
+}
+
+#[test]
+fn dedicated_gateway_without_service_does_not_advertise_shared_address() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, Arc::clone(&runtime));
+    let handler = GatewayHandler::new(None, None);
+    let mut gateway: Gateway = serde_json::from_value(serde_json::json!({
+        "metadata": {
+            "name": "edge", "namespace": "demo", "uid": "uid-1",
+            "annotations": {"edgion.io/dedicated-gateway-instance": "true"}
+        },
+        "spec": {
+            "gatewayClassName": "test",
+            "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}]
+        }
+    }))
+    .unwrap();
+    assert!(derive_gateway_addresses(&gateway, None, &runtime).is_empty());
+    handler.update_status(&mut gateway, &ctx, &[]);
+    let status = gateway.status.unwrap();
+    assert!(status.addresses.unwrap().is_empty());
+    assert!(status.conditions.unwrap().iter().any(|condition| {
+        condition.type_ == "Programmed" && condition.status == "False" && condition.reason == "AddressNotAssigned"
+    }));
+}
+
+#[test]
+fn dedicated_gateway_requested_address_must_match_service_assignment() {
+    let mut gateway: Gateway = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "edge", "namespace": "demo"},
+        "spec": {"gatewayClassName": "test", "addresses": [{"type": "IPAddress", "value": "192.0.2.10"}], "listeners": []}
+    })).unwrap();
+    let assigned = edgion_resources::resources::gateway::GatewayStatusAddress {
+        address_type: Some("IPAddress".into()),
+        value: "192.0.2.11".into(),
+    };
+    assert!(!requested_addresses_match_assigned(
+        &gateway,
+        std::slice::from_ref(&assigned)
+    ));
+    assert!(matches!(
+        classify_dedicated_addresses(&gateway, vec![assigned.clone()]),
+        DedicatedAddressState::Unusable(addresses) if addresses.len() == 1
+    ));
+    gateway.spec.addresses = None;
+    assert!(requested_addresses_match_assigned(&gateway, &[assigned]));
 }
 
 #[test]

@@ -12,11 +12,13 @@ use edgion_resources::resources::proxy_protocol::ResolvedInboundProxyProtocol;
 use edgion_resources::{Gateway, ResourceMeta};
 use kube::ResourceExt;
 use pingora_core::server::Server;
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 pub struct GatewayBase {
     config_client: Arc<ConfigClient>,
+    bind_ip: IpAddr,
 }
 
 /// Parse HTTP/2 enable flag from Gateway annotation.
@@ -33,8 +35,11 @@ fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
 }
 
 impl GatewayBase {
-    pub fn new(config_client: Arc<ConfigClient>) -> Self {
-        Self { config_client }
+    pub fn new(config_client: Arc<ConfigClient>, bind_ip: Option<IpAddr>) -> Self {
+        Self {
+            config_client,
+            bind_ip: bind_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+        }
     }
 
     /// Get the access logger
@@ -92,7 +97,7 @@ impl GatewayBase {
         let mut offload_budget = listener_builder::TlsOffloadBudget::new(&server_conf_arc)?;
 
         // Track bound listeners to avoid duplicate physical bindings
-        let mut bound_listeners: HashSet<ListenerKey> = HashSet::new();
+        let mut bound_listeners: HashMap<ListenerKey, (std::net::SocketAddr, bool)> = HashMap::new();
 
         // Process each Gateway and configure listeners
         for gateway in gateways.iter() {
@@ -134,6 +139,14 @@ impl GatewayBase {
 
             // Process listeners for this Gateway
             if let Some(listeners) = &gateway.spec.listeners {
+                let gateway_bind_ip = edgion_resources::listener_key::gateway_local_bind_ip(gateway)
+                    .with_context(|| {
+                        format!(
+                            "Gateway '{}' has an invalid edgion.io/local-bind-ip annotation",
+                            gateway.key_name()
+                        )
+                    })?
+                    .unwrap_or(self.bind_ip);
                 tracing::info!(
                     "Processing gateway {} with {} listeners",
                     gateway.name_any(),
@@ -163,10 +176,21 @@ impl GatewayBase {
                 }
 
                 for listener in listeners {
-                    let addr = resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port);
+                    let addr = resolve_listener_addr(gateway, listener.port);
                     let listener_key = ListenerKey::new(addr, &listener.protocol);
+                    let socket_addr = std::net::SocketAddr::new(gateway_bind_ip, listener.port as u16);
+                    let is_udp = listener.protocol.eq_ignore_ascii_case("UDP");
 
-                    if bound_listeners.contains(&listener_key) {
+                    if let Some((previous_addr, _)) = bound_listeners.get(&listener_key) {
+                        anyhow::ensure!(
+                            *previous_addr == socket_addr,
+                            "Gateway '{}' listener '{}' shares logical listener '{}' but binds {} instead of {}",
+                            gateway.key_name(),
+                            listener.name,
+                            listener_key,
+                            socket_addr,
+                            previous_addr
+                        );
                         tracing::info!(
                             gateway = %gateway.key_name(),
                             listener = %listener.name,
@@ -186,6 +210,21 @@ impl GatewayBase {
                         continue;
                     }
 
+                    if let Some((previous_key, (previous_addr, _))) =
+                        bound_listeners.iter().find(|(_, (previous_addr, previous_udp))| {
+                            socket_bindings_overlap(*previous_addr, *previous_udp, socket_addr, is_udp)
+                        })
+                    {
+                        anyhow::bail!(
+                            "Gateway '{}' listener '{}' binds {} which overlaps listener '{}' on {}",
+                            gateway.key_name(),
+                            listener.name,
+                            socket_addr,
+                            previous_key,
+                            previous_addr
+                        );
+                    }
+
                     tracing::info!(
                         "  Listener: name={}, protocol={}, port={}",
                         listener.name,
@@ -199,6 +238,7 @@ impl GatewayBase {
                         gateway_key: gateway.key_name(),
                         listener: listener.clone(),
                         listener_key: listener_key.clone(),
+                        bind_ip: gateway_bind_ip,
                         access_logger: self.get_access_logger(),
                         egc: Arc::clone(&egc),
                         server_conf: server_conf_arc.clone(),
@@ -228,7 +268,7 @@ impl GatewayBase {
 
                     // Add listener to pingora_server
                     listener_builder::add_listener(pingora_server, context, &mut offload_budget)?;
-                    bound_listeners.insert(listener_key);
+                    bound_listeners.insert(listener_key, (socket_addr, is_udp));
                 }
             }
         }
@@ -255,3 +295,24 @@ impl GatewayBase {
         Ok(())
     }
 }
+
+fn socket_bindings_overlap(previous: SocketAddr, previous_udp: bool, current: SocketAddr, current_udp: bool) -> bool {
+    if previous_udp != current_udp || previous.port() != current.port() {
+        return false;
+    }
+    let normalized = |ip: IpAddr| match ip {
+        IpAddr::V6(ipv6) => ipv6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(ipv6)),
+        other => other,
+    };
+    match (normalized(previous.ip()), normalized(current.ip())) {
+        (IpAddr::V4(a), IpAddr::V4(b)) => a == b || a.is_unspecified() || b.is_unspecified(),
+        (IpAddr::V6(a), IpAddr::V6(b)) => a == b || a.is_unspecified() || b.is_unspecified(),
+        // Pingora leaves IPV6_V6ONLY at the OS default. An IPv6 wildcard may
+        // also claim IPv4, so reject that pairing until socket options fix it.
+        (IpAddr::V6(a), IpAddr::V4(_)) | (IpAddr::V4(_), IpAddr::V6(a)) => a.is_unspecified(),
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../tests/unit/runtime/server/base_test.rs"]
+mod tests;

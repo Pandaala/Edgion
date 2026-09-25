@@ -33,6 +33,7 @@ fn make_route(annotations: Option<std::collections::BTreeMap<String, String>>) -
                 }]),
             }]),
             resolved_listeners: None,
+            resolved_listener_attachments: None,
         },
         status: None,
     }))

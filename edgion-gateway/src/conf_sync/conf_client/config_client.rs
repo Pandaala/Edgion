@@ -12,9 +12,14 @@ use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use super::scoped_handler::{ScopedHandler, SharedScopeRegistry};
+
 pub struct ConfigClient {
     /// Current server_id from Controller (updated on each list/watch response)
     current_server_id: RwLock<String>,
+    gateway_scope: Option<String>,
+    gateway_uid: Option<String>,
+    shared_scope: Arc<SharedScopeRegistry>,
     gateway_classes: ClientCache<GatewayClass>,
     gateways: ClientCache<Gateway>,
     edgion_gateway_configs: ClientCache<EdgionGatewayConfig>,
@@ -53,9 +58,23 @@ impl ConfigClient {
     /// * `client_id` - Unique identifier for this client
     /// * `client_name` - Human-readable name for this client
     pub fn new(client_id: String, client_name: String) -> Self {
+        Self::new_scoped(client_id, client_name, None, None)
+    }
+
+    pub fn new_scoped(
+        client_id: String,
+        client_name: String,
+        gateway_scope: Option<String>,
+        gateway_uid: Option<String>,
+    ) -> Self {
+        let shared_scope = Arc::new(SharedScopeRegistry::default());
         let routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let route_handler = create_route_manager_handler();
-        routes_cache.set_conf_processor(route_handler);
+        routes_cache.set_conf_processor(ScopedHandler::wrap(
+            route_handler,
+            gateway_scope.clone(),
+            Arc::clone(&shared_scope),
+        ));
 
         let service_discovery = get_service_discovery_coordinator();
         let services_cache = ClientCache::new(client_id.clone(), client_name.clone());
@@ -72,23 +91,43 @@ impl ConfigClient {
 
         let tcp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tcp_route_handler = crate::routes::tcp::create_tcp_route_handler();
-        tcp_routes_cache.set_conf_processor(tcp_route_handler);
+        tcp_routes_cache.set_conf_processor(ScopedHandler::wrap(
+            tcp_route_handler,
+            gateway_scope.clone(),
+            Arc::clone(&shared_scope),
+        ));
 
         let udp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let udp_route_handler = crate::routes::udp::create_udp_route_handler();
-        udp_routes_cache.set_conf_processor(udp_route_handler);
+        udp_routes_cache.set_conf_processor(ScopedHandler::wrap(
+            udp_route_handler,
+            gateway_scope.clone(),
+            Arc::clone(&shared_scope),
+        ));
 
         let grpc_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let grpc_route_handler = crate::routes::grpc::create_grpc_route_handler();
-        grpc_routes_cache.set_conf_processor(grpc_route_handler);
+        grpc_routes_cache.set_conf_processor(ScopedHandler::wrap(
+            grpc_route_handler,
+            gateway_scope.clone(),
+            Arc::clone(&shared_scope),
+        ));
 
         let tls_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_route_handler = crate::routes::tls::create_tls_route_handler();
-        tls_routes_cache.set_conf_processor(tls_route_handler);
+        tls_routes_cache.set_conf_processor(ScopedHandler::wrap(
+            tls_route_handler,
+            gateway_scope.clone(),
+            Arc::clone(&shared_scope),
+        ));
 
         let edgion_tls_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_handler = crate::tls::create_tls_handler();
-        edgion_tls_cache.set_conf_processor(tls_handler);
+        edgion_tls_cache.set_conf_processor(ScopedHandler::wrap(
+            tls_handler,
+            gateway_scope.clone(),
+            Arc::clone(&shared_scope),
+        ));
 
         let stream_plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let stream_plugin_handler = crate::plugins::stream::create_stream_plugin_handler();
@@ -103,7 +142,11 @@ impl ConfigClient {
         gateway_classes_cache.set_conf_processor(gateway_class_handler);
 
         let gateways_cache = ClientCache::new(client_id.clone(), client_name.clone());
-        let gateway_handler = crate::runtime::create_gateway_handler();
+        let gateway_handler = crate::runtime::create_scoped_gateway_handler(
+            gateway_scope.clone(),
+            gateway_uid.clone(),
+            Arc::clone(&shared_scope),
+        );
         gateways_cache.set_conf_processor(gateway_handler);
 
         let edgion_gateway_configs_cache = ClientCache::new(client_id.clone(), client_name.clone());
@@ -112,7 +155,11 @@ impl ConfigClient {
 
         let edgion_acme_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let acme_handler = crate::services::acme::create_acme_handler();
-        edgion_acme_cache.set_conf_processor(acme_handler);
+        edgion_acme_cache.set_conf_processor(ScopedHandler::wrap(
+            acme_handler,
+            gateway_scope.clone(),
+            Arc::clone(&shared_scope),
+        ));
 
         let edgion_backend_traffic_policy_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let backend_traffic_policy_handler = crate::backends::policy::create_backend_traffic_policy_handler();
@@ -120,6 +167,9 @@ impl ConfigClient {
 
         Self {
             current_server_id: RwLock::new(String::new()),
+            gateway_scope,
+            gateway_uid,
+            shared_scope,
             gateway_classes: gateway_classes_cache,
             gateways: gateways_cache,
             edgion_gateway_configs: edgion_gateway_configs_cache,
@@ -341,7 +391,20 @@ impl ConfigClient {
 
     /// List Gateways
     pub fn list_gateways(&self) -> ListData<Gateway> {
-        self.gateways.list_owned()
+        let mut gateways = self.gateways.list_owned();
+        if let Some(scope) = self.gateway_scope.as_deref() {
+            gateways.data.retain(|gateway| {
+                gateway.key_name() == scope
+                    && self
+                        .gateway_uid
+                        .as_deref()
+                        .is_none_or(|uid| gateway.metadata.uid.as_deref() == Some(uid))
+            });
+        } else {
+            let dedicated = self.shared_scope.snapshot();
+            gateways.data.retain(|gateway| !dedicated.contains(&gateway.key_name()));
+        }
+        gateways
     }
 
     /// List EdgionGatewayConfigs

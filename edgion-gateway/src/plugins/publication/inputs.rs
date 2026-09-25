@@ -64,10 +64,7 @@ impl GatewayInput {
             })
             .map(|listener| GatewayListener {
                 port: listener.port,
-                key: ListenerKey::new(
-                    resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port),
-                    &listener.protocol,
-                ),
+                key: ListenerKey::new(resolve_listener_addr(gateway, listener.port), &listener.protocol),
                 name: listener.name.clone(),
                 hostname: listener.hostname.clone(),
                 allowed_routes: listener.allowed_routes.clone(),

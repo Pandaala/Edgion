@@ -413,10 +413,7 @@ fn add_gateway_contributions(
         } else {
             ProxyProtocolPolicyDeclaration::Disabled
         };
-        let listener_key = ListenerKey::new(
-            resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port),
-            &listener.protocol,
-        );
+        let listener_key = ListenerKey::new(resolve_listener_addr(gateway, listener.port), &listener.protocol);
         let contributor = ContributorIdentity {
             gateway_key: gateway_key.clone(),
             listener_name: listener.name.clone(),

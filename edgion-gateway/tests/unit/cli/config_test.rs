@@ -142,12 +142,13 @@ fn process_config_load_preserves_cli_precedence_and_unknown_diagnostics() {
     use std::io::Write;
 
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"gateway:\n  admin_listen: 127.0.0.1:12002\nroot_typo: ignored\n")
+    file.write_all(b"gateway:\n  admin_listen: 127.0.0.1:12002\n  bind_ip: 127.0.0.1\nroot_typo: ignored\n")
         .unwrap();
     let cli = EdgionGatewayConfig {
         config_file: Some(file.path().to_string_lossy().into_owned()),
         gateway: GatewayConfig {
             admin_listen: Some("127.0.0.1:12003".to_string()),
+            bind_ip: Some("::1".parse().unwrap()),
             ..Default::default()
         },
         ..Default::default()
@@ -155,6 +156,7 @@ fn process_config_load_preserves_cli_precedence_and_unknown_diagnostics() {
 
     let loaded = EdgionGatewayConfig::load(cli).unwrap();
     assert_eq!(loaded.config.gateway.admin_listen.as_deref(), Some("127.0.0.1:12003"));
+    assert_eq!(loaded.config.gateway.bind_ip, Some("::1".parse().unwrap()));
     assert_eq!(loaded.unknown_fields.paths().collect::<Vec<_>>(), vec!["root_typo"]);
 }
 

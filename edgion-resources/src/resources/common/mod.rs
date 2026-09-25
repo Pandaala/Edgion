@@ -62,6 +62,17 @@ pub fn api_groups_match(a: &str, b: &str) -> bool {
     is_core_api_group(a) && is_core_api_group(b)
 }
 
+/// Controller-resolved route attachment used to preserve Gateway identity
+/// when distinct Gateway processes listen on the same local port.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Ord, PartialOrd)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteListenerAttachment {
+    pub gateway_namespace: String,
+    pub gateway_name: String,
+    pub listener_name: String,
+    pub listener_key: crate::ListenerKey,
+}
+
 /// ParentReference identifies a parent resource (usually Gateway)
 ///
 /// This type is shared across all route resources and follows the

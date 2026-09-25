@@ -162,17 +162,21 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
         // Treat resolved_listeners as controller-derived state.
         // Clear any stale value before recomputing from current parentRefs.
         route.spec.resolved_listeners = None;
+        route.spec.resolved_listener_attachments = None;
 
         // Resolve listener keys from parentRefs for per-listener route isolation
         if let Some(parent_refs) = &route.spec.parent_refs {
-            let listener_keys = super::route_utils::resolve_listener_keys(
-                parent_refs,
-                route_ns,
-                route.metadata.namespace.as_deref(),
-                _ctx.runtime(),
-            );
-            if !listener_keys.is_empty() {
-                route.spec.resolved_listeners = Some(listener_keys);
+            let attachments =
+                super::route_utils::resolve_route_listener_attachments(parent_refs, route_ns, _ctx.runtime());
+            if !attachments.is_empty() {
+                let mut keys: Vec<_> = attachments
+                    .iter()
+                    .map(|attachment| attachment.listener_key.clone())
+                    .collect();
+                keys.sort();
+                keys.dedup();
+                route.spec.resolved_listeners = Some(keys);
+                route.spec.resolved_listener_attachments = Some(attachments);
             }
         }
 

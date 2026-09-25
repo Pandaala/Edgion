@@ -2,6 +2,15 @@
 
 /// Edgion-specific annotations
 pub mod edgion {
+    /// Gateway-local traffic socket IP, independent of Gateway API external addresses.
+    pub const LOCAL_BIND_IP: &str = "edgion.io/local-bind-ip";
+    /// Service annotation naming the Gateway whose external address it serves.
+    /// The value is `namespace/name`; the matching Gateway UID is required too.
+    pub const GATEWAY_SERVICE_REF: &str = "edgion.io/gateway-service-ref";
+    /// Service annotation binding an ingress Service to one Gateway instance.
+    pub const GATEWAY_SERVICE_UID: &str = "edgion.io/gateway-service-uid";
+    /// Gateway annotation requiring its UID-bound dedicated ingress Service.
+    pub const DEDICATED_GATEWAY_INSTANCE: &str = "edgion.io/dedicated-gateway-instance";
     /// Enable HTTP/2 support on the listener
     pub const ENABLE_HTTP2: &str = "edgion.io/enable-http2";
     /// Enable automatic HTTP to HTTPS redirect

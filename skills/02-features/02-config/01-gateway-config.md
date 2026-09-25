@@ -23,6 +23,7 @@ work_dir: "."
 
 gateway:
   server_addrs: ["http://127.0.0.1:12151"]  # Required: Controller gRPC address
+  # bind_ip: "0.0.0.0"                   # Local traffic socket IP; independent of Gateway.spec.addresses
   admin_listen: "127.0.0.1:12001"         # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
   # probe_listen: "0.0.0.0:12000"         # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
   # admin_token: "edg_..."                # Prefer EDGION_GATEWAY_ADMIN_TOKEN from a Secret
@@ -225,6 +226,8 @@ behavior and are configured per Gateway process; there is no
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `server_addrs` | `Array<String>` | **Required** | Controller gRPC addresses. Single-address reconnect or multi-address candidate failover; see [Gateway-side recovery](../../01-architecture/03-controller-gateway-link/02-gateway-side.md). |
+| `bind_ip` | `IP address` | `0.0.0.0` | Local traffic listener IP. Use an address owned by this Pod or host. `Gateway.spec.addresses` remains the external ingress address and does not determine this bind. CLI: `--bind-ip`. |
+
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback — sensitive endpoints not reachable cluster-wide. Remote access: `kubectl port-forward pod/<name> 12001:12001`. |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Probe listen address. Serves `/health` and `/ready` only. Binds all interfaces so kubelet can probe the pod IP directly. Not included in the gateway Service. |
 | `admin_token` | `String?` | — | Shared Gateway Admin API bearer token. Config-file only; `EDGION_GATEWAY_ADMIN_TOKEN` takes precedence. Keep it in a Secret. No token means Admin business routes fail closed with 503. |
@@ -240,6 +243,40 @@ behavior and are configured per Gateway process; there is no
 | `wasm_oci_pull_timeout_secs` | `u64` | `60` | Per-request timeout for OCI pull requests (manifest, token, and blob alike). Istio-agent `WASM_HTTP_REQUEST_TIMEOUT` parity. |
 | `wasm_oci_pull_attempts` | `u32` | `3` | Total attempts (including the first) for each OCI pull request; transport errors and `5xx` retry, `4xx` never does. Istio-agent `WASM_HTTP_REQUEST_MAX_RETRIES` parity. |
 | `geoip` | `GeoIpConfig` | *(empty)* | GeoIP database + background updater. **Sub-block of `gateway:`, snake_case, `deny_unknown_fields`.** See [`### geoip`](#geoip) below. |
+
+`EDGION_GATEWAY_SCOPE=namespace/name` limits one Gateway process to one Gateway
+and projects attached Routes and EdgionTls to that instance. Set
+`EDGION_GATEWAY_UID=<Gateway UID>` for a Kubernetes dedicated instance so a
+same-named replacement Gateway cannot reuse the old process.
+Use it with a dedicated Deployment and Service for each Gateway that needs
+independent traffic on a shared external port. The Service must carry
+`edgion.io/gateway-service-ref: namespace/name` and
+`edgion.io/gateway-service-uid: <Gateway UID>`. The Gateway must carry
+`edgion.io/dedicated-gateway-instance: "true"`; without its dedicated Service,
+it publishes no address and reports `Programmed=False`. The Controller
+publishes the Service's assigned ClusterIP or all LoadBalancer ingress addresses.
+`cicd/deploy/kubernetes/gateway/provision-instance.py namespace/name` creates
+the dedicated Deployment and Service from the installed shared Deployment
+template and marks the Gateway. Use `--service-type LoadBalancer` for a cloud
+load balancer or NLB; configure provider-specific Service annotations on the
+generated Service. If `Gateway.spec.addresses` requests a fixed address, it
+must match the address actually assigned to that Service. Re-run the script
+after listener edits; `--restart` rolls the data plane. For a deleted Gateway, use
+`--delete --uid <old Gateway UID>` to remove that instance. Kubernetes does not
+permit a cross-namespace ownerReference from a system Deployment to a Gateway
+in another namespace, so cleanup is explicit in this manual deployment mode.
+The manual script keeps generated resources in `edgion-system`; it does not
+claim `GatewayInfrastructurePropagation` support or GEP-1762 infrastructure
+layout compliance. For a physical deployment, set `gateway.bind_ip` for the
+process default. A shared process can use different local IPs for same-port
+Gateways through each Gateway's `edgion.io/local-bind-ip` annotation. Map each
+external VIP or load balancer frontend to the matching local IP. A Gateway can
+also be isolated in its own scoped process. Changing a local bind IP or the
+listener set requires a process restart. Gateways that share one local socket
+must use the same bind representation: leave `local-bind-ip` absent on all of
+them, or set the same explicit IP on all of them. Mixing an inherited
+`gateway.bind_ip` with an explicit annotation for that same IP creates
+different logical listener keys and is rejected at startup.
 
 ### conf_sync_security
 

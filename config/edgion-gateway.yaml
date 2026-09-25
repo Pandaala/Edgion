@@ -51,6 +51,11 @@ gateway:
   # bottom of this file); http:// only under an explicit `skip_tls: true`.
   server_addrs: ["https://127.0.0.1:12151"]
 
+  # IP of this process's traffic listener sockets (default: 0.0.0.0).
+  # Use a host-owned address on physical machines when sharing listener ports.
+  # Gateway.spec.addresses describes the external load balancer/VIP instead.
+  # bind_ip: "0.0.0.0"
+
   # Decoded HTTP/2 response-header-list limit for Gateway-initiated reqwest calls.
   # Valid range: 16384..=65536 bytes. Changes require a Gateway restart.
   # outbound_http2_max_header_list_size: 16384

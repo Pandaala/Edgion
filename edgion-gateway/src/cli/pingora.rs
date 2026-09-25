@@ -99,7 +99,7 @@ pub fn create_and_configure_server(
     tracing::info!("Pingora server initialized");
 
     // 3. Create GatewayBase (only for Gateway logic, doesn't own pingora_server)
-    let gateway_base = GatewayBase::new(config_client.clone());
+    let gateway_base = GatewayBase::new(config_client.clone(), gateway_config.gateway.bind_ip);
 
     // 4. Fetch Gateway resources
     let gateways = config_client.list_gateways().data;

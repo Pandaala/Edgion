@@ -65,12 +65,12 @@ fn preflight_mapping_and_trusted_matcher_are_exact() {
     ));
     let prepared = runtime.preflight_and_freeze([&required, &trusted]).unwrap();
 
-    let required_key = ListenerKey::new(resolve_listener_addr(None, 18080), "TCP");
+    let required_key = ListenerKey::new(resolve_listener_addr(&required, 18080), "TCP");
     assert!(matches!(
         prepared.get(&required_key),
         Some(PreparedProxyProtocolPolicy::Required)
     ));
-    let trusted_key = ListenerKey::new(resolve_listener_addr(None, 18081), "TCP");
+    let trusted_key = ListenerKey::new(resolve_listener_addr(&trusted, 18081), "TCP");
     let Some(PreparedProxyProtocolPolicy::TrustedSources { trust, cidr_count }) = prepared.get(&trusted_key) else {
         panic!("trustedSources must prepare a matcher")
     };

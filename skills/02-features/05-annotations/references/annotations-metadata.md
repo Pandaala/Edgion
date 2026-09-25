@@ -20,6 +20,7 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
+| `edgion.io/local-bind-ip` | IP address | process `gateway.bind_ip` or `0.0.0.0` | Binds this Gateway's traffic listeners to a local interface and gives same-port Gateways on distinct host IPs separate listener identities. It never sets `Gateway.status.addresses`; changes require a process restart. Invalid IP values are rejected. |
 | `edgion.io/enable-http2` | string | enabled | Frontend only. Case-insensitive `false`/`0`/`no`/`off` disables; any other present value enables. HTTP listeners use h2c and HTTPS listeners advertise ALPN h2. Backend protocol uses Service `appProtocol`. |
 | `edgion.io/http-to-https-redirect` | string | disabled | On non-TLS listeners, only case-insensitive `true` enables redirect. |
 | `edgion.io/https-redirect-port` | integer string | `443` | Target port used when HTTP-to-HTTPS redirect is enabled. |

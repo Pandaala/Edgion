@@ -301,7 +301,7 @@ impl ListenerGatewayInfoStore {
                     continue;
                 }
 
-                let addr = resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port);
+                let addr = resolve_listener_addr(gateway, listener.port);
                 let key = ListenerKey::new(addr, &listener.protocol);
                 let gi = Arc::new(GatewayInfo::new(
                     gateway_namespace.clone(),

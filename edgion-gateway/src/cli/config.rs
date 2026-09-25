@@ -253,6 +253,12 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub server_addrs: Vec<String>,
 
+    /// Process-local IP used for Gateway listener sockets. External Gateway
+    /// addresses belong to the Service or load balancer, never to this bind.
+    #[arg(long = "bind-ip", value_name = "IP")]
+    #[serde(default)]
+    pub bind_ip: Option<std::net::IpAddr>,
+
     /// Gateway admin HTTP listen address
     #[arg(long = "admin-listen", value_name = "ADDR")]
     #[serde(default)]
@@ -400,6 +406,7 @@ impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             server_addrs: Vec::new(),
+            bind_ip: None,
             admin_listen: None,
             probe_listen: None,
             admin_token: None,
@@ -1164,6 +1171,9 @@ impl EdgionGatewayConfig {
         // flag was not passed and must not clobber the file value (spec §7.1).
         if !cli.gateway.server_addrs.is_empty() {
             base.gateway.server_addrs = cli.gateway.server_addrs.clone();
+        }
+        if cli.gateway.bind_ip.is_some() {
+            base.gateway.bind_ip = cli.gateway.bind_ip;
         }
         if cli.gateway.admin_listen.is_some() {
             base.gateway.admin_listen = cli.gateway.admin_listen.clone();

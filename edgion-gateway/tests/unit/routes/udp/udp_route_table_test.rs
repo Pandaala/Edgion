@@ -22,6 +22,7 @@ fn create_test_udp_route(namespace: &str, name: &str, port: u16) -> UDPRoute {
             }]),
             rules: Some(vec![]),
             resolved_listeners: None,
+            resolved_listener_attachments: None,
         },
         status: None,
     })

@@ -16,6 +16,7 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 
 | Annotation | Value | Description |
 |------------|-------|-------------|
+| `edgion.io/local-bind-ip` | IP address | Gateway-local traffic bind IP; separates same-port Gateways on different physical host IPs; independent of `spec.addresses` |
 | `edgion.io/enable-http2` | `"true"\|"false"` | Listener-side HTTP/2 (default true): HTTP→h2c, HTTPS→ALPN h2 |
 | `edgion.io/http-to-https-redirect` | `"true"\|"false"` | HTTP→HTTPS redirect |
 | `edgion.io/https-redirect-port` | `port` | HTTPS redirect port |

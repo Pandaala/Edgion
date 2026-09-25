@@ -11,6 +11,8 @@ set -euo pipefail
 #   ./scripts/in-cluster-runner.sh --cleanup          # Tear down runner pod + RBAC
 #   ./scripts/in-cluster-runner.sh --force-recreate   # Recreate runner pod even if Ready
 #   ./scripts/in-cluster-runner.sh --clean-slate      # Nuke all non-base resources, re-apply manifests, then run
+# HTTP/GRPC runs need --clean-slate once to provision the dedicated base
+# Gateways; later runs may reuse instances for the same Gateway UIDs.
 #
 # Split-profile running (required — Edgion cannot mix HTTPS Terminate and TLS
 # Passthrough on port 443):
@@ -313,6 +315,17 @@ HTTP_GRPC_BASE_GATEWAYS=(
   "all-namespaces"
   "backend-namespaces"
 )
+# These two Gateways share port 80 in HTTPRouteMultipleGateways but need
+# independent ingress identities. Keep the other base Gateways on the shared
+# Pod so dynamically created Gateways can reuse its prebound 80/443 sockets.
+HTTP_GRPC_DEDICATED_GATEWAYS=(
+  "same-namespace"
+  "all-namespaces"
+)
+HTTP_GRPC_SHARED_GATEWAYS=(
+  "same-namespace-with-https-listener"
+  "backend-namespaces"
+)
 # TLS manifests (conformance-gateway-tls.yaml):
 TLS_BASE_GATEWAYS=(
   "gateway-tlsroute"
@@ -405,7 +418,11 @@ wait_controller_gateway_sync() {
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
   [[ -z "$ctrl_pod" ]] && { echo "    WARNING: no controller pod, skipping sync wait"; return; }
 
-  gw_count=$(kubectl get gateway -n gateway-conformance-infra --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  if has_http_grpc_profile && ! has_tls_profile; then
+    gw_count=${#HTTP_GRPC_SHARED_GATEWAYS[@]}
+  else
+    gw_count=$(kubectl get gateway -n gateway-conformance-infra --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  fi
   echo "    Waiting for controller to sync $gw_count Gateway(s) to gateway..."
 
   local gw_pod
@@ -563,6 +580,19 @@ if [[ "$CLEAN_SLATE" == "true" ]]; then
   if has_http_grpc_profile; then
     echo "    → conformance-gateway.yaml (HTTP/GRPC)"
     kubectl apply -f "$CONFORMANCE_ROOT/manifests/conformance-gateway.yaml"
+    # Restore shared base Gateways if an earlier run provisioned them.
+    for gateway_name in "${HTTP_GRPC_SHARED_GATEWAYS[@]}"; do
+      python3 "$PROJECT_ROOT/cicd/deploy/kubernetes/gateway/provision-instance.py" \
+        "gateway-conformance-infra/$gateway_name" --delete
+      kubectl annotate gateway "$gateway_name" -n gateway-conformance-infra \
+        edgion.io/dedicated-gateway-instance- 2>/dev/null || true
+    done
+    # Distinct Services targeting the same Pod/port collapse after kube-proxy
+    # DNAT, so the multi-Gateway test needs separate data plane instances.
+    for gateway_name in "${HTTP_GRPC_DEDICATED_GATEWAYS[@]}"; do
+      python3 "$PROJECT_ROOT/cicd/deploy/kubernetes/gateway/provision-instance.py" \
+        "gateway-conformance-infra/$gateway_name" --restart --wait
+    done
   fi
   if has_tls_profile; then
     echo "    → conformance-gateway-tls.yaml (TLS)"
@@ -612,6 +642,29 @@ else
   echo "=== Pre-run cleanup: removing stale ConfigMaps ==="
   delete_non_base configmap "gateway-conformance-infra" "${BASE_CONFIGMAPS[@]}"
   echo "  Pre-run cleanup done."
+fi
+
+if has_http_grpc_profile && ! has_tls_profile && [[ "$CLEAN_SLATE" != "true" ]]; then
+  # The suite's base manifest marks two Gateways as dedicated. Require their
+  # UID-scoped infrastructure before applying that manifest, so a normal
+  # rerun never withdraws shared routing and then waits for absent Services.
+  for gateway_name in "${HTTP_GRPC_DEDICATED_GATEWAYS[@]}"; do
+    gateway_ref="gateway-conformance-infra/$gateway_name"
+    gateway_uid=$(kubectl get gateway "$gateway_name" -n gateway-conformance-infra \
+      -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
+    if [[ -z "$gateway_uid" ]]; then
+      echo "ERROR: $gateway_ref is missing; run with --clean-slate to provision dedicated Gateways." >&2
+      exit 1
+    fi
+    instance="edgion-gw-$(python3 -c 'import hashlib,sys; print(hashlib.sha256((sys.argv[1]+"/"+sys.argv[2]).encode()).hexdigest()[:16])' "$gateway_ref" "$gateway_uid")"
+    if ! kubectl get deployment "$instance" -n "$NAMESPACE" >/dev/null 2>&1 \
+      || ! kubectl get service "$instance" -n "$NAMESPACE" >/dev/null 2>&1; then
+      echo "ERROR: $gateway_ref lacks its UID-scoped Deployment/Service; run with --clean-slate." >&2
+      exit 1
+    fi
+    python3 "$PROJECT_ROOT/cicd/deploy/kubernetes/gateway/provision-instance.py" \
+      "$gateway_ref" --dry-run >/dev/null
+  done
 fi
 
 # ── Run tests inside the pod ─────────────────────────────────────────────────
@@ -664,6 +717,11 @@ if has_tls_profile && ! has_http_grpc_profile; then
   kubectl cp "$CONFORMANCE_ROOT/manifests/base-manifests-tls-only.yaml" \
     "$NAMESPACE/$RUNNER_POD:$TEST_DIR/base-manifests-tls-only.yaml"
   ENV_ARGS+=("EDGION_BASE_MANIFESTS=$TEST_DIR/base-manifests-tls-only.yaml")
+elif has_http_grpc_profile && ! has_tls_profile; then
+  echo "  [split-profile] HTTP/GRPC: using base-manifests-http-grpc-scoped.yaml"
+  kubectl cp "$CONFORMANCE_ROOT/manifests/base-manifests-http-grpc-scoped.yaml" \
+    "$NAMESPACE/$RUNNER_POD:$TEST_DIR/base-manifests-http-grpc-scoped.yaml"
+  ENV_ARGS+=("EDGION_BASE_MANIFESTS=$TEST_DIR/base-manifests-http-grpc-scoped.yaml")
 fi
 
 # Run inside the pod, streaming stdout/stderr back.

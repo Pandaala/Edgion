@@ -35,27 +35,32 @@ fn test_as_ref() {
 }
 
 #[test]
-fn test_resolve_listener_addr_no_addresses() {
-    let addr = resolve_listener_addr(None, 80);
+fn test_resolve_listener_addr_uses_local_wildcard() {
+    let gateway: Gateway = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "edge", "namespace": "default"},
+        "spec": {"gatewayClassName": "edgion", "addresses": [{"type": "IPAddress", "value": "198.51.100.7"}], "listeners": []}
+    }))
+    .unwrap();
+    let addr = resolve_listener_addr(&gateway, 80);
     assert_eq!(addr, SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 80));
 }
 
 #[test]
-fn test_resolve_listener_addr_with_ip() {
-    let addrs = vec![GatewayAddress {
-        address_type: None,
-        value: Some("192.168.1.1".to_string()),
-    }];
-    let addr = resolve_listener_addr(Some(&addrs), 8080);
-    assert_eq!(addr.to_string(), "192.168.1.1:8080");
-}
-
-#[test]
-fn test_resolve_listener_addr_with_unparseable_value() {
-    let addrs = vec![GatewayAddress {
-        address_type: Some("Hostname".to_string()),
-        value: Some("my-gateway.example.com".to_string()),
-    }];
-    let addr = resolve_listener_addr(Some(&addrs), 443);
-    assert_eq!(addr, SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443));
+fn test_local_bind_ip_distinguishes_same_port_gateways() {
+    let make_gateway = |ip: &str| -> Gateway {
+        serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "edge", "namespace": "default", "annotations": {"edgion.io/local-bind-ip": ip}},
+            "spec": {"gatewayClassName": "edgion", "listeners": []}
+        }))
+        .unwrap()
+    };
+    let first = make_gateway("192.0.2.10");
+    let second = make_gateway("192.0.2.11");
+    assert_eq!(resolve_listener_addr(&first, 80), make_addr("192.0.2.10", 80));
+    assert_ne!(resolve_listener_addr(&first, 80), resolve_listener_addr(&second, 80));
+    assert_eq!(
+        resolve_listener_addr(&make_gateway("::ffff:192.0.2.10"), 80),
+        resolve_listener_addr(&first, 80)
+    );
+    assert!(gateway_local_bind_ip(&make_gateway("not-an-ip")).is_err());
 }

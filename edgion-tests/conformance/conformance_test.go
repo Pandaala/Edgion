@@ -197,9 +197,9 @@ func TestConformance(t *testing.T) {
 		t.Fatal("GATEWAY_PROXY_ENABLE_GRPC requires GATEWAY_PROXY_HOST to be set")
 	}
 
-	// Allow overriding base manifests for split-profile runs.
-	// When running TLS-only, the default base/manifests.yaml creates HTTP
-	// Gateways on port 443 that conflict with TLS Passthrough listeners.
+	// Allow overriding base manifests for split-profile runs. TLS-only excludes
+	// HTTP Gateways that conflict on port 443; HTTP/GRPC keeps dedicated Gateway
+	// annotations present when the suite reapplies its base resources.
 	if bm := os.Getenv("EDGION_BASE_MANIFESTS"); bm != "" {
 		t.Logf("Using custom base manifests: %s", bm)
 		opts.BaseManifests = bm

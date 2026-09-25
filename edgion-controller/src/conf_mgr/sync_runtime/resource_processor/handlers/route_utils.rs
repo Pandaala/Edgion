@@ -128,10 +128,7 @@ pub(crate) fn resolve_acme_listener_attachments(
             gateway_namespace: gateway_namespace.to_string(),
             gateway_name: parent_ref.name.clone(),
             listener_name: listener.name.clone(),
-            listener_key: ListenerKey::new(
-                resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port),
-                &listener.protocol,
-            ),
+            listener_key: ListenerKey::new(resolve_listener_addr(&gateway, listener.port), &listener.protocol),
             gateway_proof: proof.clone(),
         })
         .collect();
@@ -742,6 +739,36 @@ pub fn resolve_listener_keys(
     keys
 }
 
+/// Preserve Gateway ownership alongside the local listener key for TCP/UDP
+/// route projection into a dedicated data-plane process.
+pub fn resolve_route_listener_attachments(
+    parent_refs: &[ParentReference],
+    route_namespace: &str,
+    runtime: &ControllerRuntime,
+) -> Vec<edgion_resources::resources::common::RouteListenerAttachment> {
+    use edgion_resources::resources::common::RouteListenerAttachment;
+    let (_, _, attachments) = resolve_listeners_inner(
+        parent_refs,
+        route_namespace,
+        Some(route_namespace),
+        runtime,
+        None,
+        false,
+    );
+    let mut result: Vec<RouteListenerAttachment> = attachments
+        .into_iter()
+        .map(|attachment| RouteListenerAttachment {
+            gateway_namespace: attachment.gateway_namespace,
+            gateway_name: attachment.gateway_name,
+            listener_name: attachment.listener_name,
+            listener_key: attachment.listener_key,
+        })
+        .collect();
+    result.sort();
+    result.dedup();
+    result
+}
+
 /// Resolve TLSRoute hostnames independently for each exact listener attachment.
 pub fn resolve_tls_listener_hostnames(
     parent_refs: &[ParentReference],
@@ -861,7 +888,6 @@ fn resolve_listeners_inner(
             );
             continue;
         };
-        let gw_addresses = gateway.spec.addresses.as_ref();
         let Some(listeners) = &gateway.spec.listeners else {
             tracing::info!(
                 component = "resolve_listener_keys",
@@ -897,7 +923,7 @@ fn resolve_listeners_inner(
                 return;
             }
             if listener_allows_route_namespace(&l.allowed_routes, route_namespace, gw_ns, runtime) {
-                let addr = resolve_listener_addr(gw_addresses, l.port);
+                let addr = resolve_listener_addr(&gateway, l.port);
                 let listener_key = ListenerKey::new(addr, &l.protocol);
                 listener_keys.push(listener_key.clone());
                 listener_hostnames.push(l.hostname.clone());

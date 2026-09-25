@@ -53,21 +53,15 @@ Keeping construction-time handles avoids a write-acquiring global lookup on
 every request/connection. Empty publication and reclamation of removed route
 contents remain required; retaining stale routes is not an availability fix.
 
-The same boundary applies to the Gateway-level backend TLS identity fallback.
-`GatewayHandler::full_set` updates `GatewayBackendTlsStore` for Gateway keys in
-the incoming snapshot but does not prune identities for omitted Gateway keys.
-Removing a client certificate or its Secret while the Gateway remains present
-still publishes that Gateway and removes or replaces the identity normally.
-Only omitting the Gateway key from a later authoritative snapshot can leave the
-identity store-owned until the required data-plane restart. Resource deletion,
-GatewayClass or namespace filtering, and runtime ownership reassignment are
-examples of that unsupported logical removal. The Admin API's
-`gateway_backend_tls_store.count` can consequently exceed the current Gateway
-snapshot size until restart. Removing that store owner would not erase
-outstanding `Arc<Secret>` readers or cryptographic copies, and it does not make
-dynamic Gateway removal/recreation supported. The proposed authoritative
-replacement was therefore declined as unnecessary work for the unsupported
-lifecycle, not because the residual owner or count divergence was disproved.
+The Gateway-level backend TLS identity fallback now has a narrower cleanup
+rule. `GatewayHandler::full_set` removes store entries owned by the previous
+Gateway snapshot before publishing the new one. This prevents a Gateway
+process scoped to an old UID from retaining a backend client identity after
+the Gateway disappears or is recreated. Outstanding `Arc<Secret>` readers and
+cryptographic copies still live until their request or session ends, and this
+store cleanup does not make dynamic Gateway removal/recreation supported.
+Removal and recreation still require a data-plane restart for physical socket
+ownership and serving-handle recovery.
 
 A serving-owned stable handle or recoverable registration could implement
 same-socket recovery, but requires an explicitly scoped lifecycle design across

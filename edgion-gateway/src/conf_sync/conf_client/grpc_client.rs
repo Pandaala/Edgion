@@ -164,7 +164,29 @@ impl ConfigSyncClient {
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(!server_addrs.is_empty(), "server_addrs must not be empty");
         let client_id = Uuid::new_v4().to_string();
-        let config_client = Arc::new(ConfigClient::new(client_id.clone(), client_name.clone()));
+        let gateway_scope = std::env::var("EDGION_GATEWAY_SCOPE").ok();
+        let gateway_uid = std::env::var("EDGION_GATEWAY_UID").ok();
+        anyhow::ensure!(
+            gateway_uid
+                .as_ref()
+                .is_none_or(|uid| !uid.is_empty() && gateway_scope.is_some()),
+            "EDGION_GATEWAY_UID requires EDGION_GATEWAY_SCOPE"
+        );
+        if let Some(scope) = gateway_scope.as_deref() {
+            let Some((namespace, name)) = scope.split_once('/') else {
+                anyhow::bail!("EDGION_GATEWAY_SCOPE must have namespace/name format");
+            };
+            anyhow::ensure!(
+                !namespace.is_empty() && !name.is_empty() && !name.contains('/'),
+                "EDGION_GATEWAY_SCOPE must have namespace/name format"
+            );
+        }
+        let config_client = Arc::new(ConfigClient::new_scoped(
+            client_id.clone(),
+            client_name.clone(),
+            gateway_scope,
+            gateway_uid,
+        ));
 
         // Shuffled per gateway (spec §7.5); the initial channel points at the
         // rotator's current address.

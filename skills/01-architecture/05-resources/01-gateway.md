@@ -77,7 +77,15 @@ cache mutation, so ownership checks see the published incarnation or its absence
     `ProxyProtocolPolicyConflict`. Programmed remains false for every invalid case.
   - `supportedKinds`: computes the supported route types based on the protocol (HTTP/HTTPS → HTTPRoute+GRPCRoute, TCP → TCPRoute, UDP → UDPRoute, TLS → TLSRoute); if `allowedRoutes.kinds` contains any unmatched type, reports InvalidRouteKind
   - `attachedRoutes`: obtained from AttachedRouteTracker as the number of attached routes
-- **Addresses**: derived in priority order: spec.addresses > ClusterIP of a Service with the same name > the default address configuration > "0.0.0.0"
+- **Addresses**: for a dedicated Gateway, report the assigned addresses of its
+  UID-matched Service (all LoadBalancer ingress addresses or the ClusterIP).
+  A Service still awaiting an address sets `Programmed=False` with
+  `AddressNotAssigned`; a requested address not present on the Service sets
+  `AddressNotUsable` while still reporting the addresses actually assigned.
+  For a shared Gateway, use
+  `spec.addresses` when present; otherwise prefer the shared gateway Service,
+  then a same-named Service, then the configured default address. Local socket
+  binding is independent of these external addresses.
 
 ## Gateway-side processing
 

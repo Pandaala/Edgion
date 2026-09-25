@@ -45,6 +45,7 @@ fn tcp_route_with_backend(svc: &str) -> TCPRoute {
                 }]),
             }]),
             resolved_listeners: None,
+            resolved_listener_attachments: None,
         },
         status: None,
     }

@@ -34,7 +34,15 @@ impl From<&CanonicalProxyProtocolTrustPolicy> for ProxyProtocolPolicyDeclaration
 pub struct ProxyProtocolListenerContribution {
     pub listener_name: String,
     pub listener_key: ListenerKey,
+    /// Empty for the shared process; a Gateway key for a dedicated process.
+    pub deployment_scope: String,
     pub declaration: ProxyProtocolPolicyDeclaration,
+}
+
+type ScopedListenerKey = (String, ListenerKey);
+
+fn scoped_key(contribution: &ProxyProtocolListenerContribution) -> ScopedListenerKey {
+    (contribution.deployment_scope.clone(), contribution.listener_key.clone())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -46,7 +54,7 @@ struct ContributorKey {
 #[derive(Default)]
 struct PolicyIndexes {
     by_gateway: HashMap<String, Vec<ProxyProtocolListenerContribution>>,
-    by_listener: HashMap<ListenerKey, BTreeMap<ContributorKey, ProxyProtocolPolicyDeclaration>>,
+    by_listener: HashMap<ScopedListenerKey, BTreeMap<ContributorKey, ProxyProtocolPolicyDeclaration>>,
 }
 
 #[derive(Default)]
@@ -93,10 +101,11 @@ impl ProxyProtocolListenerPolicyManager {
                 gateway_key: gateway_key.to_string(),
                 listener_name: contribution.listener_name.clone(),
             };
-            if let Some(contributors) = indexes.by_listener.get_mut(&contribution.listener_key) {
+            let key = scoped_key(contribution);
+            if let Some(contributors) = indexes.by_listener.get_mut(&key) {
                 contributors.remove(&contributor);
                 if contributors.is_empty() {
-                    indexes.by_listener.remove(&contribution.listener_key);
+                    indexes.by_listener.remove(&key);
                 }
             }
         }
@@ -105,17 +114,13 @@ impl ProxyProtocolListenerPolicyManager {
             indexes.by_gateway.remove(gateway_key);
         } else {
             for contribution in &new_contributions {
-                indexes
-                    .by_listener
-                    .entry(contribution.listener_key.clone())
-                    .or_default()
-                    .insert(
-                        ContributorKey {
-                            gateway_key: gateway_key.to_string(),
-                            listener_name: contribution.listener_name.clone(),
-                        },
-                        contribution.declaration.clone(),
-                    );
+                indexes.by_listener.entry(scoped_key(contribution)).or_default().insert(
+                    ContributorKey {
+                        gateway_key: gateway_key.to_string(),
+                        listener_name: contribution.listener_name.clone(),
+                    },
+                    contribution.declaration.clone(),
+                );
             }
             indexes.by_gateway.insert(gateway_key.to_string(), new_contributions);
         }
@@ -153,7 +158,7 @@ fn peer_gateways_for_contributions(
 ) -> BTreeSet<String> {
     contributions
         .iter()
-        .filter_map(|contribution| indexes.by_listener.get(&contribution.listener_key))
+        .filter_map(|contribution| indexes.by_listener.get(&scoped_key(contribution)))
         .flat_map(|contributors| contributors.keys())
         .filter(|contributor| contributor.gateway_key != gateway_key)
         .map(|contributor| contributor.gateway_key.clone())
@@ -169,7 +174,7 @@ fn conflicting_listener_names_locked(indexes: &PolicyIndexes, gateway_key: &str)
         .filter(|contribution| {
             indexes
                 .by_listener
-                .get(&contribution.listener_key)
+                .get(&scoped_key(contribution))
                 .is_some_and(|contributors| {
                     let mut declarations = contributors.values();
                     let Some(first) = declarations.next() else {

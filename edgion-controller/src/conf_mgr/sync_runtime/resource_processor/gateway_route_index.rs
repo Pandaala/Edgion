@@ -159,10 +159,7 @@ impl ListenerRouteConfig {
             .map(|listener| Self {
                 name: listener.name.clone(),
                 hostname: listener.hostname.clone(),
-                listener_key: ListenerKey::new(
-                    resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port),
-                    &listener.protocol,
-                ),
+                listener_key: ListenerKey::new(resolve_listener_addr(gateway, listener.port), &listener.protocol),
                 port: listener.port,
                 protocol: listener.protocol.clone(),
                 allowed_routes: listener.allowed_routes.clone(),
