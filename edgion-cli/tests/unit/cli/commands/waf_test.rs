@@ -18,11 +18,8 @@ fn inspect_is_local_and_text_output_is_value_free() {
     ])
     .unwrap();
     assert!(matches!(cli.command, crate::cli::Commands::Waf(_)));
-    let report = WafConfig {
-        rules: "SecRule RESPONSE_BODY \"@rx secret-pattern\" \"id:2,phase:4,pass\"\n".to_string(),
-        ..WafConfig::default()
-    }
-    .inspect_support();
+    let report =
+        WafConfig::inspect_inline_source("SecRule RESPONSE_BODY \"@rx secret-pattern\" \"id:2,phase:4,pass\"\n");
     let rendered = render_text(&report);
     assert!(rendered.contains("strictValidationPassed: false"));
     assert!(rendered.contains("full_response_body"));
@@ -30,9 +27,9 @@ fn inspect_is_local_and_text_output_is_value_free() {
 }
 
 #[test]
-fn inspect_reads_one_resource_and_returns_strict_result() {
+fn inspect_reads_one_rule_source_and_returns_strict_result() {
     let mut valid = tempfile::NamedTempFile::new().unwrap();
-    write!(valid, "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: example\nspec:\n  waf:\n    rules: 'SecRule REQUEST_URI \"@contains marker\" \"id:1,phase:1,pass\"'\n").unwrap();
+    writeln!(valid, "SecRule REQUEST_URI \"@contains marker\" \"id:1,phase:1,pass\"").unwrap();
     assert!(execute(&WafArgs {
         command: WafCommand::Inspect {
             file: valid.path().to_path_buf(),
@@ -42,7 +39,11 @@ fn inspect_reads_one_resource_and_returns_strict_result() {
     .is_ok());
 
     let mut rejected = tempfile::NamedTempFile::new().unwrap();
-    write!(rejected, "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: example\nspec:\n  waf:\n    rules: 'SecRule RESPONSE_BODY \"@contains secret-marker\" \"id:2,phase:4,pass\"'\n").unwrap();
+    writeln!(
+        rejected,
+        "SecRule RESPONSE_BODY \"@contains secret-marker\" \"id:2,phase:4,pass\""
+    )
+    .unwrap();
     assert!(execute(&WafArgs {
         command: WafCommand::Inspect {
             file: rejected.path().to_path_buf(),
@@ -52,11 +53,7 @@ fn inspect_reads_one_resource_and_returns_strict_result() {
     .is_err());
 
     let mut malformed = tempfile::NamedTempFile::new().unwrap();
-    write!(
-        malformed,
-        "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nspec: [secret-marker"
-    )
-    .unwrap();
+    write!(malformed, "SecRule invalid-secret-marker-(").unwrap();
     let error = execute(&WafArgs {
         command: WafCommand::Inspect {
             file: malformed.path().to_path_buf(),

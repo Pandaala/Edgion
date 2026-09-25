@@ -120,11 +120,8 @@ async fn request_extension_suppresses_inner_waf_plugin_log() {
     let mut inner = crate::plugins::runtime::PluginRuntime::new();
     inner
         .add_waf(&edgion_resources::resources::edgion_plugins::WafConfig {
-            rules: "SecAction \"id:1,phase:1,pass,log\"\n".to_string(),
             mode: edgion_resources::resources::edgion_plugins::WafMode::On,
-            priority: 0,
-            request_body: Default::default(),
-            ..edgion_resources::resources::edgion_plugins::WafConfig::default()
+            ..crate::plugins::http::waf::fixture::config("SecAction \"id:1,phase:1,pass,log\"\n")
         })
         .unwrap();
     let inner = Arc::new(inner);

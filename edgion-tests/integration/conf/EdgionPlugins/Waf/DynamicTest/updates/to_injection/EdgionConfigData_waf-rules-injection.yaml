@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-rules-injection
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: "1"
+      profile: injection
+      provenance: edgion-tests/waf-dynamic
+      digest: 04938fa8b62babcab92994cf5e5c3c4896f30b48121085d927ff400b851e7fdd
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            SecRule REQUEST_HEADERS:X-Waf-Sql "@detectSQLi" "id:3501,phase:1,deny,status:403,t:urlDecodeUni,capture"
+            SecRule REQUEST_HEADERS:X-Waf-Xss "@detectXSS" "id:3502,phase:1,deny,status:406,t:urlDecodeUni"

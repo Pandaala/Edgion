@@ -473,3 +473,7 @@ impl UpstreamResponse for WafPlugin {
 #[cfg(test)]
 #[path = "../../../../tests/unit/plugins/http/waf/mod_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/plugins/http/waf/mod_test/fixture.rs"]
+pub(crate) mod fixture;

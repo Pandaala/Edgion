@@ -6,5 +6,5 @@ metadata:
 spec:
   waf:
     mode: detectionOnly
-    rules: |
-      SecRule REQUEST_BODY "@contains blocked" "id:2501,phase:2,deny,status:406"
+    policyRef:
+      name: waf-policy

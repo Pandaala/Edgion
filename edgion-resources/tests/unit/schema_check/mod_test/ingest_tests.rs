@@ -101,7 +101,7 @@ fn gate_on_reports_exact_path_for_plugin_config_typo() {
 fn waf_schema_walk_reports_nested_unknown_field() {
     let doc = json!({
         "waf": {
-            "rules": "SecAction \"id:1,phase:1,pass\"",
+            "policyRef": {"name": "application-waf"},
             "unexpected": true
         }
     });

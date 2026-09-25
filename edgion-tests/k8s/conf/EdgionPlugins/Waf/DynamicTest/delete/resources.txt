@@ -1,1 +1,8 @@
 EdgionPlugins/edgion-default/waf-dynamic
+EdgionConfigData/edgion-default/waf-policy
+EdgionConfigData/edgion-default/waf-rules-initial
+EdgionConfigData/edgion-default/waf-rules-v2
+EdgionConfigData/edgion-default/waf-rules-injection
+EdgionConfigData/edgion-default/waf-rules-prefix_1m
+EdgionConfigData/edgion-default/waf-rules-detection
+EdgionConfigData/edgion-default/waf-rules-recovered

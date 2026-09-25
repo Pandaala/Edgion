@@ -6,7 +6,8 @@ metadata:
 spec:
   waf:
     mode: 'on'
-    rules: SecRule REQUEST_HEADERS:X-Policy-Waf "@streq blocked" "id:940001,phase:1,deny,status:403"
+    policyRef:
+      name: pp-waf-policy
   requestPlugins:
   - type: Mock
     config:

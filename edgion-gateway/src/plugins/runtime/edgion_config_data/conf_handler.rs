@@ -244,6 +244,9 @@ impl EdgionConfigDataStore {
                     // The Controller embeds the pinned source in EdgionPlugins;
                     // the Gateway compiles it with the complete WAF generation.
                 }
+                ConfigEntry::WafPolicy(_) => {
+                    // The Controller resolves the selected policy into EdgionPlugins.
+                }
             }
         }
 
@@ -339,7 +342,8 @@ impl EdgionConfigDataStore {
             | ConfigEntry::Selector(_)
             | ConfigEntry::Misc(_)
             | ConfigEntry::ProxyProtocolTrust(_)
-            | ConfigEntry::WafRuleBundle(_) => {}
+            | ConfigEntry::WafRuleBundle(_)
+            | ConfigEntry::WafPolicy(_) => {}
         }
     }
 

@@ -14,7 +14,7 @@ The next reload selects detection-only prefix inspection and proves a matching
 body larger than the window is forwarded unchanged across the same protocol matrix.
 
 This scenario proves initial publication, a valid generation swap, retention of
-the last valid generation after invalid SecLang, recovery with a later valid
+the last valid generation after a non-final WAF deny status, recovery with a later valid
 generation, deletion fail-close behavior for the dangling ExtensionRef, and
 re-creation. The initial phase also proves a phase-2 body denial before the
 request reaches the backend.
@@ -22,3 +22,9 @@ request reaches the backend.
 A configured-prefix reload sets `prefixSize: 1m` and repeats the H1/H2 matrix
 at the 1 MiB boundary, verifying that the new window takes effect before the
 subsequent detection-only reload.
+
+Each phase publishes digest-pinned `WafRuleBundle` resources through one
+`WafPolicy` EdgionConfigData. The plugin keeps the same `policyRef` while the
+policy selects the phase's bundle. An invalid policy references a missing bundle
+and preserves the last valid generation. Deletion removes the policy and all
+rule bundles as well as the plugin.

@@ -156,7 +156,7 @@ pub use tiny_ufo_ttl_cache_config::{
 };
 pub use upstream_fallback::UpstreamFallback;
 pub use waf::{
-    ResolvedWafBundle, WafBundleRef, WafBundleResolutionError, WafBundleResolutionKind, WafConfig, WafMode,
+    ResolvedWafBundle, WafBundleRef, WafBundleResolutionError, WafBundleResolutionKind, WafConfig, WafMode, WafProfile,
     WafRequestBodyConfig, WafRequestBodyInspection, WafSupportFailure, WafSupportFinding, WafSupportReport,
 };
 pub use wasm::{

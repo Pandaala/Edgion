@@ -15,6 +15,11 @@ impl ProcessorHandler<EdgionPlugins> for PluginsNoop {}
 
 struct GatewayNoop;
 
+struct ConfigDataNoop;
+
+#[async_trait::async_trait]
+impl ProcessorHandler<EdgionConfigData> for ConfigDataNoop {}
+
 #[async_trait::async_trait]
 impl ProcessorHandler<Gateway> for GatewayNoop {}
 
@@ -70,7 +75,10 @@ async fn config_data_apply_and_delete_requeue_request_access_policy_dependents()
     runtime.edgion_config_data_refs.add_ref(source_key, dependent_key);
     EdgionConfigDataHandler::new().on_delete(&resource, &ctx).await;
     assert_plugins_requeued(&processor).await;
-    assert!(runtime.edgion_config_data_refs.get_refs("default/url-list").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/url-list"),
+        ["EdgionPlugins:default/policy"]
+    );
 }
 
 #[tokio::test]
@@ -97,5 +105,109 @@ async fn proxy_protocol_config_data_apply_and_delete_requeue_gateway() {
     runtime.edgion_config_data_refs.add_ref(source_key, dependent_key);
     EdgionConfigDataHandler::new().on_delete(&resource, &ctx).await;
     assert_gateway_requeued(&processor).await;
-    assert!(runtime.edgion_config_data_refs.get_refs("default/url-list").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/url-list"),
+        ["Gateway:default/gateway"]
+    );
+}
+
+fn waf_policy() -> EdgionConfigData {
+    let spec: EdgionConfigDataSpec = serde_json::from_value(serde_json::json!({
+        "data": {
+            "type": "WafPolicy",
+            "config": {
+                "profiles": {
+                    "base": {"bundleRefs": [{"name": "rules", "expectedDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}
+                },
+                "defaultProfile": "base"
+            }
+        }
+    }))
+    .expect("WAF policy spec");
+    let mut resource = EdgionConfigData::new("policy", spec);
+    resource.metadata.namespace = Some("default".to_string());
+    resource
+}
+
+#[tokio::test]
+async fn waf_policy_dependency_requeues_before_plugin_and_type_switch_clears_edges() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let data_processor = Arc::new(ResourceProcessor::<EdgionConfigData>::new(
+        "EdgionConfigData",
+        100,
+        Arc::new(ConfigDataNoop),
+        runtime.clone(),
+    ));
+    let plugin_processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        100,
+        Arc::new(PluginsNoop),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(data_processor.clone());
+    runtime.processor_registry.register(plugin_processor.clone());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let handler = EdgionConfigDataHandler::new();
+    let policy = waf_policy();
+    let _ = handler.parse(policy.clone(), &ctx).await;
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/rules"),
+        vec!["EdgionConfigData:default/policy"]
+    );
+
+    runtime
+        .edgion_config_data_refs
+        .add_ref("default/policy".into(), "EdgionPlugins:default/plugin".into());
+    let mut child = resource();
+    child.metadata.name = Some("rules".into());
+    handler.on_change(&child, &ctx).await;
+    let item = tokio::time::timeout(Duration::from_secs(1), data_processor.workqueue().dequeue())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.key, "default/policy");
+    data_processor.workqueue().done(&item.key);
+    handler.on_change(&policy, &ctx).await;
+    let item = tokio::time::timeout(Duration::from_secs(1), plugin_processor.workqueue().dequeue())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.key, "default/plugin");
+    plugin_processor.workqueue().done(&item.key);
+
+    let mut replacement = resource();
+    replacement.metadata.name = Some("policy".into());
+    let _ = handler.parse(replacement, &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("default/rules").is_empty());
+}
+
+#[test]
+fn waf_policy_required_failure_sets_resolved_refs_without_partial_warning() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime);
+    let handler = EdgionConfigDataHandler::new();
+    let mut policy = waf_policy();
+    handler.update_status(&mut policy, &ctx, &[]);
+    let conditions = &policy.status.as_ref().unwrap().conditions;
+    let refs = conditions
+        .iter()
+        .find(|condition| condition.type_ == condition_types::RESOLVED_REFS)
+        .unwrap();
+    assert_eq!(refs.status, "False");
+    assert!(refs.message.contains("WafRuleBundle default/rules is unavailable"));
+    let partial = conditions
+        .iter()
+        .find(|condition| condition.type_ == condition_types::PARTIALLY_INVALID)
+        .unwrap();
+    assert_eq!(partial.status, "False");
+
+    policy.spec.data = resource().spec.data;
+    handler.update_status(&mut policy, &ctx, &[]);
+    assert!(policy
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .all(|condition| condition.type_ != condition_types::PARTIALLY_INVALID));
 }

@@ -34,25 +34,36 @@ use super::san_guard;
 pub struct EdgionPluginsHandler;
 
 impl EdgionPluginsHandler {
-    fn get_waf_ref_keys(ep: &EdgionPlugins) -> Vec<String> {
+    fn get_waf_policy_ref_key(ep: &EdgionPlugins) -> Option<String> {
         let namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
         ep.spec
             .waf
             .as_ref()
             .filter(|waf| waf.validate_shape().is_ok())
             .map(|waf| {
-                waf.bundle_refs
-                    .iter()
-                    .map(|reference| {
-                        format!(
-                            "{}/{}",
-                            reference.target.namespace.as_deref().unwrap_or(namespace),
-                            reference.target.name
-                        )
-                    })
-                    .collect()
+                format!(
+                    "{}/{}",
+                    waf.policy_ref.namespace.as_deref().unwrap_or(namespace),
+                    waf.policy_ref.name
+                )
             })
-            .unwrap_or_default()
+    }
+
+    fn get_waf_selector_ref_key(ep: &EdgionPlugins) -> Option<String> {
+        let namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
+        ep.spec
+            .waf
+            .as_ref()
+            .filter(|waf| waf.validate_shape().is_ok())
+            .and_then(|waf| {
+                waf.active_profile_ref.as_ref().map(|reference| {
+                    format!(
+                        "{}/{}",
+                        reference.namespace.as_deref().unwrap_or(namespace),
+                        reference.name
+                    )
+                })
+            })
     }
 
     pub fn new() -> Self {
@@ -299,9 +310,18 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         }
 
         if let Some(waf) = ep.spec.waf.as_mut() {
+            waf.policy_ref.ref_denied = None;
+            if let Some(reference) = waf.active_profile_ref.as_mut() {
+                reference.ref_denied = None;
+            }
+            waf.resolved_policy = None;
+            waf.selected_profile = None;
+            waf.resolved_ref_indices.clear();
             waf.resolved_bundles = None;
             waf.resolution_errors.clear();
-            waf.owner_namespace = Some(ep.metadata.namespace.as_deref().unwrap_or("default").to_string());
+            waf.resolution_warnings.clear();
+            waf.selector_resolved = None;
+            waf.owner_namespace = None;
         }
         let mut errors = ep.validate_plugins_before_waf_resolution();
         if let Some(waf) = ep.spec.waf.as_ref() {
@@ -388,10 +408,15 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                 .add_ref(canary_key, ep_key.clone());
         }
 
-        for bundle_key in Self::get_waf_ref_keys(&ep) {
+        if let Some(policy_key) = Self::get_waf_policy_ref_key(&ep) {
             ctx.runtime()
                 .edgion_config_data_refs
-                .add_ref(bundle_key, ep_key.clone());
+                .add_ref(policy_key, ep_key.clone());
+        }
+        if let Some(selector_key) = Self::get_waf_selector_ref_key(&ep) {
+            ctx.runtime()
+                .edgion_config_data_refs
+                .add_ref(selector_key, ep_key.clone());
         }
 
         // Grant-change revalidation: register cross-ns EdgionConfigData ref target namespaces
@@ -404,7 +429,8 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             .chain(Self::get_ip_list_ref_keys(&ep))
             .chain(Self::get_active_profile_ref_keys(&ep))
             .chain(Self::get_canary_active_profile_ref_keys(&ep))
-            .chain(Self::get_waf_ref_keys(&ep))
+            .chain(Self::get_waf_policy_ref_key(&ep))
+            .chain(Self::get_waf_selector_ref_key(&ep))
         {
             if let Some((target_ns, _)) = key.split_once('/') {
                 if target_ns != ns {
@@ -494,18 +520,44 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         }
 
         // Accepted reflects preparse + validate errors (already merged by processor).
+        let candidate_identity = ep.spec.waf.as_ref().and_then(|waf| {
+            let name = waf.selected_profile.as_deref()?;
+            let bundles = waf.resolved_bundles.as_deref().unwrap_or_default();
+            let identities = bundles
+                .iter()
+                .take(16)
+                .map(|bundle| {
+                    format!(
+                        "{}@{}:{}",
+                        bundle.identity,
+                        bundle.data.version.chars().take(64).collect::<String>(),
+                        bundle.data.profile.chars().take(64).collect::<String>()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            Some(format!("; WAF candidateProfile={name} bundles={identities}"))
+        });
         let accepted = if validation_errors.is_empty() {
+            let mut message = "Resource accepted".to_string();
+            if let Some(identity) = candidate_identity.as_deref() {
+                message.push_str(identity);
+            }
             condition_true(
                 condition_types::ACCEPTED,
                 condition_reasons::ACCEPTED,
-                "Resource accepted",
+                message,
                 generation,
             )
         } else {
+            let mut message = validation_errors.join("; ");
+            if let Some(identity) = candidate_identity.as_deref() {
+                message.push_str(identity);
+            }
             condition_false(
                 condition_types::ACCEPTED,
                 condition_reasons::INVALID,
-                validation_errors.join("; "),
+                message,
                 generation,
             )
         };
@@ -525,12 +577,14 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         resolved_errors.extend(resolve_ip_list_refs(ep, ctx));
         resolved_errors.extend(resolve_active_profile_refs(ep, ctx));
         resolved_errors.extend(resolve_canary_active_profile_refs(ep, ctx));
+        resolved_errors.extend(resolve_waf_policy_ref(ep));
+        resolved_errors.extend(resolve_waf_active_profile_ref(ep));
         if let Some(waf) = ep.spec.waf.as_ref() {
             for error in &waf.resolution_errors {
                 resolved_errors.push(match error.kind {
                     WafBundleResolutionKind::Denied => ResolvedRefsError::RefNotPermitted {
-                        from_namespace: ep.metadata.namespace.clone().unwrap_or_else(|| "default".to_string()),
-                        from_kind: "EdgionPlugins",
+                        from_namespace: waf.owner_namespace.clone().unwrap_or_else(|| "default".to_string()),
+                        from_kind: "EdgionConfigData",
                         target_namespace: error.namespace.clone(),
                         target_name: error.name.clone(),
                     },
@@ -546,7 +600,10 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                     | WafBundleResolutionKind::DigestMismatch => ResolvedRefsError::EdgionConfigDataInvalid {
                         namespace: error.namespace.clone(),
                         name: error.name.clone(),
-                        detail: format!("WafRuleBundle reference {} is {:?}", error.index, error.kind),
+                        detail: format!(
+                            "WafRuleBundle profile {} reference {} is {:?}",
+                            error.profile, error.index, error.kind
+                        ),
                     },
                 });
             }
@@ -599,6 +656,9 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ));
         }
         partial_messages.extend(request_access_policy_resolution_warnings(ep));
+        if let Some(waf) = ep.spec.waf.as_ref() {
+            partial_messages.extend(waf.resolution_warnings.iter().cloned());
+        }
         let partially_invalid = if partial_messages.is_empty() {
             partially_invalid_condition(None, generation)
         } else {
@@ -1004,98 +1064,362 @@ fn classify_pull_secret_ref(
     None
 }
 
-/// Bind one complete WAF source set from a single capture of the referenced data.
-/// Registration happens before this read so later updates requeue the owner.
+/// Resolve every named WAF profile. Required sources are atomic; optional sources
+/// join only when the resulting complete generation passes strict compilation.
 fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
     let namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
-    let keys = EdgionPluginsHandler::get_waf_ref_keys(ep);
     let Some(waf) = ep.spec.waf.as_mut() else {
         return;
     };
-    waf.owner_namespace = Some(namespace.to_string());
-    waf.resolved_bundles = None;
-    waf.resolution_errors.clear();
-    for reference in &mut waf.bundle_refs {
-        reference.target.ref_denied = None;
+    let policy_namespace = waf.policy_ref.namespace.as_deref().unwrap_or(namespace).to_string();
+    let policy_key = format!("{policy_namespace}/{}", waf.policy_ref.name);
+    let selector_key = waf.active_profile_ref.as_ref().map(|reference| {
+        format!(
+            "{}/{}",
+            reference.namespace.as_deref().unwrap_or(namespace),
+            reference.name
+        )
+    });
+    waf.policy_ref.ref_denied = None;
+    if let Some(reference) = waf.active_profile_ref.as_mut() {
+        reference.ref_denied = None;
     }
+    waf.policy_resolved = Some(false);
+    waf.resolved_policy = None;
+    waf.owner_namespace = None;
+    waf.selected_profile = None;
+    waf.resolved_bundles = None;
+    waf.resolved_ref_indices.clear();
+    waf.resolution_errors.clear();
+    waf.resolution_warnings.clear();
+    waf.selector_resolved = None;
     if waf.validate_shape().is_err() {
         return;
     }
-    if keys.is_empty() {
+    let (policy_target, captured) = ctx
+        .runtime()
+        .edgion_config_data_store
+        .get_waf_policy_snapshot(&policy_key, selector_key.as_deref());
+    let Some(policy_target) = policy_target else {
+        return;
+    };
+    let ConfigEntry::WafPolicy(mut policy) = policy_target.spec.data else {
+        return;
+    };
+    let allowed = crate::conf_mgr::sync_runtime::resource_processor::ref_grant::is_edgion_config_data_ref_allowed(
+        ctx.runtime(),
+        namespace,
+        "EdgionPlugins",
+        &policy_namespace,
+        &waf.policy_ref.name,
+        policy_target.spec.visibility,
+    );
+    if !allowed {
+        waf.policy_ref.ref_denied = Some(RefDenied {
+            target_namespace: policy_namespace,
+            target_name: waf.policy_ref.name.clone(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        });
         return;
     }
-    let mut seen = std::collections::HashSet::new();
-    for (index, (reference, key)) in waf.bundle_refs.iter().zip(&keys).enumerate() {
-        if !seen.insert(key.as_str()) {
-            waf.resolution_errors.push(WafBundleResolutionError {
-                index,
-                namespace: reference.target.namespace.as_deref().unwrap_or(namespace).to_string(),
-                name: reference.target.name.clone(),
-                kind: WafBundleResolutionKind::Invalid,
-            });
-            return;
-        }
+    if !policy_target.spec.enable
+        || policy_target.spec.active.is_some()
+        || policy_target
+            .spec
+            .unknown_fields
+            .iter()
+            .any(|path| path.starts_with("data.config"))
+        || policy.validate_shape().is_err()
+    {
+        return;
     }
-    let targets = ctx.runtime().edgion_config_data_store.get_many(&keys);
-    let mut resolved = Vec::with_capacity(keys.len());
-    for (index, ((reference, key), target)) in waf.bundle_refs.iter_mut().zip(&keys).zip(targets).enumerate() {
-        let target_namespace = reference.target.namespace.as_deref().unwrap_or(namespace).to_string();
-        reference.target.ref_denied = None;
-        let kind = if let Some(target) = target {
-            if let ConfigEntry::WafRuleBundle(data) = &target.spec.data {
-                let allowed =
-                    crate::conf_mgr::sync_runtime::resource_processor::ref_grant::is_edgion_config_data_ref_allowed(
-                        ctx.runtime(),
-                        namespace,
-                        "EdgionPlugins",
-                        &target_namespace,
-                        &reference.target.name,
-                        target.spec.visibility,
-                    );
-                if !allowed {
-                    reference.target.ref_denied = Some(RefDenied {
-                        target_namespace: target_namespace.clone(),
-                        target_name: reference.target.name.clone(),
-                        reason: Some("NoMatchingReferenceGrant".to_string()),
-                    });
-                    Some(WafBundleResolutionKind::Denied)
-                } else if !target.spec.enable || target.spec.active.is_some() {
-                    Some(WafBundleResolutionKind::Disabled)
-                } else if target
-                    .spec
-                    .unknown_fields
-                    .iter()
-                    .any(|path| path.starts_with("data.config"))
-                    || data.validate().is_err()
-                {
+    waf.policy_resolved = Some(true);
+    waf.owner_namespace = Some(policy_namespace.clone());
+    let selector_target = waf.active_profile_ref.as_mut().and_then(|reference| {
+        reference.ref_denied = None;
+        let target_namespace = reference.namespace.as_deref().unwrap_or(namespace);
+        let target = captured
+            .get(&format!("{target_namespace}/{}", reference.name))
+            .and_then(Option::as_ref)?;
+        let allowed = crate::conf_mgr::sync_runtime::resource_processor::ref_grant::is_edgion_config_data_ref_allowed(
+            ctx.runtime(),
+            namespace,
+            "EdgionPlugins",
+            target_namespace,
+            &reference.name,
+            target.spec.visibility,
+        );
+        if !allowed {
+            reference.ref_denied = Some(RefDenied {
+                target_namespace: target_namespace.to_string(),
+                target_name: reference.name.clone(),
+                reason: Some("NoMatchingReferenceGrant".to_string()),
+            });
+            return None;
+        }
+        target.spec.enable.then_some(target)
+    });
+    let selector_usable = selector_target
+        .as_ref()
+        .is_some_and(|target| matches!(&target.spec.data, ConfigEntry::Selector(_)));
+    if waf.active_profile_ref.is_some() {
+        waf.selector_resolved = Some(selector_usable);
+    }
+    let selector_active = selector_target.and_then(|target| match &target.spec.data {
+        ConfigEntry::Selector(selector) => selector.active.clone(),
+        _ => None,
+    });
+    if let Some(name) = selector_active.as_deref() {
+        if !policy.profiles.contains_key(name) {
+            waf.resolution_warnings
+                .push("WAF Selector names an unknown profile; using defaultProfile".to_string());
+        }
+    } else if waf.active_profile_ref.is_some() && !selector_usable {
+        waf.resolution_warnings
+            .push("WAF Selector unavailable or inactive; using defaultProfile".to_string());
+    }
+    let requested = selector_active.filter(|name| policy.profiles.contains_key(name));
+    let desired_profile = requested.unwrap_or_else(|| policy.default_profile.clone());
+
+    let mut usable = std::collections::BTreeMap::new();
+    let mut failures = std::collections::BTreeMap::new();
+    let names: Vec<_> = policy.profiles.keys().cloned().collect();
+    for profile_name in names {
+        let mut required_indices = Vec::new();
+        let mut required_bundles = Vec::new();
+        let mut optional = Vec::new();
+        let mut errors = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let profile = policy
+            .profiles
+            .get_mut(&profile_name)
+            .expect("profile key was collected");
+        for (index, reference) in profile.bundle_refs.iter_mut().enumerate() {
+            let target_namespace = reference
+                .target
+                .namespace
+                .as_deref()
+                .unwrap_or(&policy_namespace)
+                .to_string();
+            let key = format!("{}/{}", target_namespace, reference.target.name);
+            reference.target.ref_denied = None;
+            let mut resolved = None;
+            let kind =
+                if !seen.insert(key.clone()) {
                     Some(WafBundleResolutionKind::Invalid)
-                } else if data.digest != reference.expected_digest {
-                    Some(WafBundleResolutionKind::DigestMismatch)
+                } else if let Some(target) = captured.get(&key).and_then(Option::as_ref) {
+                    if let ConfigEntry::WafRuleBundle(data) = &target.spec.data {
+                        let allowed =
+                        crate::conf_mgr::sync_runtime::resource_processor::ref_grant::is_edgion_config_data_ref_allowed(
+                            ctx.runtime(), &policy_namespace, "EdgionConfigData", &target_namespace,
+                            &reference.target.name, target.spec.visibility,
+                        );
+                        if !allowed {
+                            reference.target.ref_denied = Some(RefDenied {
+                                target_namespace: target_namespace.clone(),
+                                target_name: reference.target.name.clone(),
+                                reason: Some("NoMatchingReferenceGrant".to_string()),
+                            });
+                            Some(WafBundleResolutionKind::Denied)
+                        } else if !target.spec.enable || target.spec.active.is_some() {
+                            Some(WafBundleResolutionKind::Disabled)
+                        } else if target
+                            .spec
+                            .unknown_fields
+                            .iter()
+                            .any(|path| path.starts_with("data.config"))
+                            || data.validate().is_err()
+                        {
+                            Some(WafBundleResolutionKind::Invalid)
+                        } else if data.digest != reference.expected_digest {
+                            Some(WafBundleResolutionKind::DigestMismatch)
+                        } else {
+                            resolved = Some(ResolvedWafBundle {
+                                identity: key,
+                                digest: data.digest.clone(),
+                                data: data.clone(),
+                            });
+                            None
+                        }
+                    } else {
+                        Some(WafBundleResolutionKind::WrongType)
+                    }
                 } else {
-                    resolved.push(ResolvedWafBundle {
-                        identity: key.clone(),
-                        digest: data.digest.clone(),
-                        data: data.clone(),
+                    Some(WafBundleResolutionKind::Missing)
+                };
+            if let Some(kind) = kind {
+                if reference.optional {
+                    if waf.resolution_warnings.len() < 16 {
+                        waf.resolution_warnings.push(format!(
+                            "waf profile {profile_name} optional bundleRefs[{index}] skipped: {kind:?}"
+                        ));
+                    }
+                } else {
+                    errors.push(WafBundleResolutionError {
+                        profile: profile_name.clone(),
+                        index,
+                        namespace: target_namespace,
+                        name: reference.target.name.clone(),
+                        kind,
                     });
-                    None
                 }
-            } else {
-                Some(WafBundleResolutionKind::WrongType)
+            } else if let Some(bundle) = resolved {
+                if reference.optional {
+                    optional.push((index, bundle));
+                } else {
+                    required_indices.push(index);
+                    required_bundles.push(bundle);
+                }
             }
-        } else {
-            Some(WafBundleResolutionKind::Missing)
-        };
-        if let Some(kind) = kind {
-            waf.resolution_errors.push(WafBundleResolutionError {
-                index,
-                namespace: target_namespace,
-                name: reference.target.name.clone(),
-                kind,
-            });
+        }
+        if errors.is_empty() {
+            let mut candidate = waf.clone();
+            candidate.resolved_policy = Some(policy.clone());
+            candidate.selected_profile = Some(profile_name.clone());
+            candidate.resolved_ref_indices = required_indices.clone();
+            candidate.resolved_bundles = Some(required_bundles.clone());
+            if candidate.compile_generation().is_err() {
+                let reference = &policy.profiles[&profile_name].bundle_refs[0];
+                errors.push(WafBundleResolutionError {
+                    profile: profile_name.clone(),
+                    index: 0,
+                    namespace: reference
+                        .target
+                        .namespace
+                        .as_deref()
+                        .unwrap_or(&policy_namespace)
+                        .to_string(),
+                    name: reference.target.name.clone(),
+                    kind: WafBundleResolutionKind::Invalid,
+                });
+            } else {
+                for (index, bundle) in optional {
+                    let mut trial_indices = required_indices.clone();
+                    let mut trial_bundles = required_bundles.clone();
+                    let position = trial_indices.partition_point(|previous| *previous < index);
+                    trial_indices.insert(position, index);
+                    trial_bundles.insert(position, bundle);
+                    candidate.resolved_ref_indices = trial_indices.clone();
+                    candidate.resolved_bundles = Some(trial_bundles.clone());
+                    if candidate.compile_generation().is_ok() {
+                        required_indices = trial_indices;
+                        required_bundles = trial_bundles;
+                    } else if waf.resolution_warnings.len() < 16 {
+                        waf.resolution_warnings.push(format!(
+                            "waf profile {profile_name} optional bundleRefs[{index}] skipped: compile failed"
+                        ));
+                    }
+                }
+                // Keep only the accepted positions for inactive profiles. Retaining
+                // their owned source copies multiplies memory by profile count.
+                usable.insert(profile_name.clone(), required_indices);
+            }
+        }
+        if !errors.is_empty() {
+            failures.insert(profile_name, errors);
         }
     }
-    if waf.resolution_errors.is_empty() {
-        waf.resolved_bundles = Some(resolved);
+    if let Some(errors) = failures.remove(&policy.default_profile) {
+        waf.resolution_errors = errors;
+        waf.resolved_policy = Some(policy);
+        return;
+    }
+    for (name, errors) in failures {
+        if waf.resolution_warnings.len() < 16 {
+            waf.resolution_warnings
+                .push(format!("waf profile {name} unavailable: {:?}", errors[0].kind));
+        }
+    }
+    let selected = if usable.contains_key(&desired_profile) {
+        desired_profile
+    } else {
+        if waf.resolution_warnings.len() < 16 {
+            waf.resolution_warnings
+                .push("selected WAF profile unavailable; using defaultProfile".to_string());
+        }
+        policy.default_profile.clone()
+    };
+    if let Some(indices) = usable.remove(&selected) {
+        let profile = &policy.profiles[&selected];
+        let bundles: Option<Vec<_>> = indices
+            .iter()
+            .map(|&index| {
+                let reference = profile.bundle_refs.get(index)?;
+                let target_namespace = reference.target.namespace.as_deref().unwrap_or(&policy_namespace);
+                let identity = format!("{target_namespace}/{}", reference.target.name);
+                let target = captured.get(&identity)?.as_ref()?;
+                let ConfigEntry::WafRuleBundle(data) = &target.spec.data else {
+                    return None;
+                };
+                Some(ResolvedWafBundle {
+                    identity,
+                    digest: data.digest.clone(),
+                    data: data.clone(),
+                })
+            })
+            .collect();
+        if let Some(bundles) = bundles {
+            waf.selected_profile = Some(selected);
+            waf.resolved_ref_indices = indices;
+            waf.resolved_bundles = Some(bundles);
+        }
+    }
+    waf.resolved_policy = Some(policy);
+}
+
+fn resolve_waf_active_profile_ref(ep: &EdgionPlugins) -> Vec<ResolvedRefsError> {
+    let Some(waf) = ep.spec.waf.as_ref() else {
+        return Vec::new();
+    };
+    if waf.selector_resolved.is_none() {
+        return Vec::new();
+    }
+    let Some(reference) = waf.active_profile_ref.as_ref() else {
+        return Vec::new();
+    };
+    let namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
+    let target_namespace = reference.namespace.as_deref().unwrap_or(namespace);
+    if reference.ref_denied.is_some() {
+        return vec![ResolvedRefsError::RefNotPermitted {
+            from_namespace: namespace.to_string(),
+            from_kind: "EdgionPlugins",
+            target_namespace: target_namespace.to_string(),
+            target_name: reference.name.clone(),
+        }];
+    }
+    if waf.selector_resolved == Some(true) {
+        Vec::new()
+    } else {
+        vec![ResolvedRefsError::EdgionConfigDataNotFound {
+            namespace: target_namespace.to_string(),
+            name: reference.name.clone(),
+            expected_type: "Selector".to_string(),
+        }]
+    }
+}
+
+fn resolve_waf_policy_ref(ep: &EdgionPlugins) -> Vec<ResolvedRefsError> {
+    let Some(waf) = ep.spec.waf.as_ref() else {
+        return Vec::new();
+    };
+    let namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
+    let target_namespace = waf.policy_ref.namespace.as_deref().unwrap_or(namespace);
+    if waf.policy_ref.ref_denied.is_some() {
+        return vec![ResolvedRefsError::RefNotPermitted {
+            from_namespace: namespace.to_string(),
+            from_kind: "EdgionPlugins",
+            target_namespace: target_namespace.to_string(),
+            target_name: waf.policy_ref.name.clone(),
+        }];
+    }
+    if waf.policy_resolved == Some(true) {
+        Vec::new()
+    } else {
+        vec![ResolvedRefsError::EdgionConfigDataNotFound {
+            namespace: target_namespace.to_string(),
+            name: waf.policy_ref.name.clone(),
+            expected_type: "WafPolicy".to_string(),
+        }]
     }
 }
 

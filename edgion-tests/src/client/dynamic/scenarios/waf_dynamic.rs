@@ -50,6 +50,10 @@ fn bundle_v2() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicBundleV2TestSuite)
 }
 
+fn selector_high() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicSelectorHighTestSuite)
+}
+
 async fn plugin_resource(ctx: &ScenarioCtx, gateway: bool) -> Result<Value> {
     let (base, prefix) = if gateway {
         (&ctx.gateway_url, "configclient")
@@ -97,6 +101,26 @@ async fn publication_generations(ctx: &ScenarioCtx) -> Result<Vec<String>> {
         .filter(|value| value.starts_with("edgion-default/waf-dynamic@"))
         .map(str::to_string)
         .collect())
+}
+
+async fn wait_optional_bundle_warning(ctx: &ScenarioCtx) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(resource) = plugin_resource(ctx, false).await {
+            let conditions = crate::dynamic::status::conditions(&resource)?;
+            if conditions.iter().any(|condition| {
+                condition["type"] == "PartiallyInvalid"
+                    && condition["status"] == "True"
+                    && condition["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("optional bundleRefs"))
+            }) {
+                return Ok(());
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    anyhow::bail!("optional WAF bundle did not report PartiallyInvalid=True")
 }
 
 async fn assert_tampered_bundle_processed(ctx: &ScenarioCtx, prior_generations: &[String]) -> Result<()> {
@@ -194,6 +218,18 @@ static PHASES: &[PhaseSuite] = &[
         name: "bundle-rollback",
         factory: bundle_v1,
     },
+    PhaseSuite {
+        name: "selector-low",
+        factory: bundle_v1,
+    },
+    PhaseSuite {
+        name: "selector-high",
+        factory: selector_high,
+    },
+    PhaseSuite {
+        name: "selector-unknown-default",
+        factory: bundle_v1,
+    },
 ];
 
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
@@ -228,6 +264,19 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         ctx.wait_phase(scenario, "bundle-v2", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/to_bundle_rollback").await?;
         ctx.wait_phase(scenario, "bundle-rollback", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_selector_initial").await?;
+        ctx.wait_phase(scenario, "selector-low", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_selector_high").await?;
+        ctx.wait_phase(scenario, "selector-high", Duration::from_secs(15))
+            .await?;
+        wait_optional_bundle_warning(&ctx).await?;
+        ctx.apply_dir("updates/to_selector_unknown").await?;
+        ctx.wait_phase(scenario, "selector-unknown-default", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_selector_high").await?;
+        ctx.wait_phase(scenario, "selector-high", Duration::from_secs(15))
             .await?;
         ctx.delete_resources("delete/resources.txt").await?;
         ctx.wait_phase(scenario, "deleted", Duration::from_secs(15)).await?;

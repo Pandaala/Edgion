@@ -4,23 +4,25 @@
 //!
 //! Responsibilities:
 //! - Maintain EdgionConfigDataStore in ControllerRuntime (parse + on_delete)
-//! - Register cross-EdgionConfigData references (overrideRef → RegionRouteOverride for EdgionPlugins;
-//!   activeProfileRef → Selector for EdgionStreamPlugins GlobalConnectionIpRestriction)
-//!   so a change to a referenced EdgionConfigData requeues the dependent EdgionPlugins/EdgionStreamPlugins.
-//! - On change: requeue referencing Gateways/EdgionPlugins/EdgionStreamPlugins
+//! - Register WafPolicy bundle references so child changes requeue the policy.
+//! - On change: requeue referencing Gateways, plugins, and WafPolicy resources
 //!   so they pick up updated data.
 //! - On update_status: set `Accepted` (from preparse errors) and `ResolvedRefs`
 //!   (from ref resolution) conditions per Gateway API conventions.
 
+use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::is_edgion_config_data_ref_allowed;
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, partially_invalid_condition, update_condition,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler,
+    EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::prelude_resources::EdgionConfigData;
-use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataStatus};
+use edgion_resources::resources::edgion_config_data::{
+    ConfigEntry, EdgionConfigDataRef, EdgionConfigDataStatus, WafPolicyData,
+};
+use edgion_resources::ResourceKind;
 
 /// Kind string used when an EdgionConfigData registers a cross-EdgionConfigData reference in the shared
 /// `edgion_config_data_refs` manager. The existing `requeue_edgion_config_data_referrers` splits refs on `:`
@@ -40,6 +42,112 @@ impl EdgionConfigDataHandler {
         let name = ed.metadata.name.as_deref().unwrap_or("");
         format!("{}:{}/{}", SELF_KIND, ns, name)
     }
+
+    fn resource_ref(ed: &EdgionConfigData) -> ResourceRef {
+        ResourceRef::new(
+            ResourceKind::EdgionConfigData,
+            ed.metadata.namespace.clone(),
+            ed.metadata.name.clone().unwrap_or_default(),
+        )
+    }
+}
+
+fn policy_refs(policy: &WafPolicyData) -> impl Iterator<Item = &EdgionConfigDataRef> {
+    policy
+        .profiles
+        .values()
+        .flat_map(|profile| profile.bundle_refs.iter().map(|reference| &reference.target))
+}
+
+fn register_policy_refs(ed: &EdgionConfigData, ctx: &HandlerContext) {
+    let owner = EdgionConfigDataHandler::resource_ref(ed);
+    ctx.runtime()
+        .edgion_config_data_refs
+        .clear_refs_from(&EdgionConfigDataHandler::self_ref_key(ed));
+    ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&owner);
+    let ConfigEntry::WafPolicy(policy) = &ed.spec.data else {
+        return;
+    };
+    if policy.validate_shape().is_err() {
+        return;
+    }
+    let namespace = ed.metadata.namespace.as_deref().unwrap_or("default");
+    let own_key = EdgionConfigDataStore::make_key(Some(namespace), ed.metadata.name.as_deref().unwrap_or(""));
+    for reference in policy_refs(policy) {
+        let target_ns = reference.namespace.as_deref().unwrap_or(namespace);
+        let target_key = EdgionConfigDataStore::make_key(Some(target_ns), &reference.name);
+        if target_key != own_key {
+            ctx.runtime()
+                .edgion_config_data_refs
+                .add_ref(target_key, EdgionConfigDataHandler::self_ref_key(ed));
+        }
+        if target_ns != namespace {
+            ctx.runtime()
+                .cross_ns_ref_mgr
+                .add_ref(target_ns.to_string(), owner.clone());
+        }
+    }
+}
+
+fn policy_ref_error(
+    reference: &EdgionConfigDataRef,
+    namespace: &str,
+    expected_digest: &str,
+    ctx: &HandlerContext,
+) -> Option<String> {
+    let target_ns = reference.namespace.as_deref().unwrap_or(namespace);
+    // Names are bounded here because they originate in operator-authored data.
+    let label = format!(
+        "{}/{}",
+        target_ns.chars().take(64).collect::<String>(),
+        reference.name.chars().take(64).collect::<String>()
+    );
+    let Some(target) = ctx
+        .runtime()
+        .edgion_config_data_store
+        .get(Some(target_ns), &reference.name)
+    else {
+        return Some(format!("WafRuleBundle {label} is unavailable"));
+    };
+    if !target.spec.enable {
+        return Some(format!("WafRuleBundle {label} is disabled"));
+    }
+    if !matches!(&target.spec.data, ConfigEntry::WafRuleBundle(_)) {
+        return Some(format!("WafRuleBundle {label} has the wrong type"));
+    }
+    if !is_edgion_config_data_ref_allowed(
+        ctx.runtime(),
+        namespace,
+        SELF_KIND,
+        target_ns,
+        &reference.name,
+        target.spec.visibility,
+    ) {
+        return Some(format!("WafRuleBundle {label} is not permitted"));
+    }
+    if !target.validate_pre_parse().is_empty() {
+        return Some(format!("WafRuleBundle {label} is invalid"));
+    }
+    match &target.spec.data {
+        ConfigEntry::WafRuleBundle(bundle) => {
+            if bundle.validate().is_err() {
+                return Some(format!("WafRuleBundle {label} is invalid"));
+            }
+            if expected_digest != bundle.digest {
+                return Some(format!("WafRuleBundle {label} has a digest mismatch"));
+            }
+        }
+        _ => unreachable!(),
+    }
+    None
+}
+
+fn bounded_ref_errors(errors: &[String]) -> String {
+    let mut message = errors.iter().take(8).cloned().collect::<Vec<_>>().join("; ");
+    if errors.len() > 8 {
+        message.push_str(&format!("; {} more reference errors", errors.len() - 8));
+    }
+    message
 }
 
 impl Default for EdgionConfigDataHandler {
@@ -69,12 +177,14 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
     fn preparse(&self, ed: &mut EdgionConfigData, _ctx: &HandlerContext) -> Vec<String> {
         if !ed.spec.unknown_fields.is_empty() {
             let paths = bounded_unknown_field_paths(&ed.spec.unknown_fields);
-            if matches!(ed.spec.data, ConfigEntry::ProxyProtocolTrust(_))
-                && ed
-                    .spec
-                    .unknown_fields
-                    .iter()
-                    .any(|path| path == "data.config" || path.starts_with("data.config."))
+            if matches!(
+                ed.spec.data,
+                ConfigEntry::ProxyProtocolTrust(_) | ConfigEntry::WafPolicy(_)
+            ) && ed
+                .spec
+                .unknown_fields
+                .iter()
+                .any(|path| path == "data.config" || path.starts_with("data.config."))
             {
                 tracing::warn!(
                     component = "conf_mgr",
@@ -83,7 +193,7 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
                     namespace = %ed.metadata.namespace.as_deref().unwrap_or("default"),
                     name = %ed.metadata.name.as_deref().unwrap_or(""),
                     paths = ?paths,
-                    "ProxyProtocolTrust config contains unknown fields and is rejected"
+                    "Security-sensitive ConfigData contains unknown fields and is rejected"
                 );
             } else {
                 tracing::warn!(
@@ -101,6 +211,7 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
     }
 
     async fn parse(&self, ed: EdgionConfigData, ctx: &HandlerContext) -> ProcessResult<EdgionConfigData> {
+        register_policy_refs(&ed, ctx);
         let key = EdgionConfigDataStore::make_key(
             ed.metadata.namespace.as_deref(),
             ed.metadata.name.as_deref().unwrap_or(""),
@@ -125,16 +236,19 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
             .edgion_config_data_store
             .update(Default::default(), &[key.clone()].into_iter().collect());
 
-        // Clear any outgoing refs this EdgionConfigData registered (none currently for data-side),
-        // then requeue all resources that referenced this EdgionConfigData.
+        // Clear outgoing policy refs, then requeue all resources that referenced this object.
         ctx.runtime()
             .edgion_config_data_refs
             .clear_refs_from(&EdgionConfigDataHandler::self_ref_key(ed));
+        ctx.runtime()
+            .cross_ns_ref_mgr
+            .clear_value_refs(&EdgionConfigDataHandler::resource_ref(ed));
         requeue_edgion_config_data_referrers(ed, ctx).await;
-        ctx.runtime().edgion_config_data_refs.remove_edgion_config_data(&key);
+        // Keep incoming refs: a deleted child may be recreated without its
+        // parent changing, and that create must requeue the parent again.
     }
 
-    fn update_status(&self, ed: &mut EdgionConfigData, _ctx: &HandlerContext, validation_errors: &[String]) {
+    fn update_status(&self, ed: &mut EdgionConfigData, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = ed.metadata.generation;
 
         // Compute both conditions first (both need immutable access to `ed` / `ctx`),
@@ -155,21 +269,50 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
             )
         };
 
-        // ResolvedRefs: EdgionConfigData resources generally carry no cross-resource refs.
-        // All variants resolve to True (no external references to validate at the EdgionConfigData level).
-        // Consumers (EdgionPlugins/EdgionStreamPlugins) validate their `overrideRef` in their own handlers.
-        let resolved_refs = condition_true(
-            condition_types::RESOLVED_REFS,
-            condition_reasons::RESOLVED_REFS,
-            "All references resolved",
-            generation,
-        );
+        let mut required_errors = Vec::new();
+        let mut optional_errors = Vec::new();
+        if let ConfigEntry::WafPolicy(policy) = &ed.spec.data {
+            if policy.validate_shape().is_ok() {
+                let namespace = ed.metadata.namespace.as_deref().unwrap_or("default");
+                for profile in policy.profiles.values() {
+                    for reference in &profile.bundle_refs {
+                        if let Some(error) =
+                            policy_ref_error(&reference.target, namespace, &reference.expected_digest, ctx)
+                        {
+                            if reference.optional {
+                                optional_errors.push(error);
+                            } else {
+                                required_errors.push(error);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let resolved_refs = if required_errors.is_empty() {
+            condition_true(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::RESOLVED_REFS,
+                "All required references resolved",
+                generation,
+            )
+        } else {
+            let reason = if required_errors.iter().any(|error| error.ends_with("is not permitted")) {
+                condition_reasons::REF_NOT_PERMITTED
+            } else {
+                condition_reasons::INVALID_EDGION_CONFIG_DATA_REF
+            };
+            condition_false(
+                condition_types::RESOLVED_REFS,
+                reason,
+                bounded_ref_errors(&required_errors),
+                generation,
+            )
+        };
 
-        // PartiallyInvalid: IpList ONLY (partial-good compilation applies to nothing else).
-        // For an IpList we list every skipped/invalid entry; Accepted stays True and this
-        // condition is the operator's signal that some entries dropped. For non-IpList
-        // variants (KeyList/Selector/RegionRouteOverride) we write NO PartiallyInvalid
-        // condition at all — there is no partial-good notion for them.
+        // IpList reports invalid entries; WafPolicy reports skipped optional
+        // references. Other variants have no partial-good
+        // status.
         let partially_invalid = if let ConfigEntry::IpList(ip_list) = &ed.spec.data {
             let entry_errors = edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors(&ip_list.items);
             if entry_errors.is_empty() {
@@ -178,6 +321,11 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
                 let msg = edgion_resources::matcher::ip_cidr_helpers::format_entry_errors(&entry_errors);
                 Some(partially_invalid_condition(Some(msg), generation))
             }
+        } else if matches!(ed.spec.data, ConfigEntry::WafPolicy(_)) {
+            Some(partially_invalid_condition(
+                (!optional_errors.is_empty()).then(|| bounded_ref_errors(&optional_errors)),
+                generation,
+            ))
         } else {
             None
         };
@@ -186,6 +334,10 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
         update_condition(&mut status.conditions, resolved_refs);
         if let Some(partially_invalid) = partially_invalid {
             update_condition(&mut status.conditions, partially_invalid);
+        } else {
+            status
+                .conditions
+                .retain(|condition| condition.type_ != condition_types::PARTIALLY_INVALID);
         }
         super::super::unknown_fields_stamp::apply_unknown_fields_condition(
             &mut status.conditions,

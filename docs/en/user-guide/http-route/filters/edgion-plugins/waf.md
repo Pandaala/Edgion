@@ -5,8 +5,10 @@ bounded SecLang compilation and transaction execution and does not link to an
 external WAF engine. Coraza, ModSecurity, and OWASP CRS are compatibility
 references and test inputs only.
 
-The WAF is one top-level `spec.waf` configuration. Do not copy it into the four
-ordinary plugin stage arrays.
+The WAF is one top-level `spec.waf` configuration. Rules live in typed
+`WafRuleBundle` EdgionConfigData resources; the plugin references a typed `WafPolicy` EdgionConfigData that selects one
+named profile of ordered bundle references. Do not copy the WAF into the four ordinary
+plugin stage arrays.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -21,9 +23,28 @@ spec:
     requestBody:
       inspection: prefix
       prefixSize: 64KiB
-    rules: |
-      SecRule REQUEST_URI "@contains /admin" "id:1001,phase:1,deny,status:403"
-      SecRule REQUEST_BODY "@contains forbidden" "id:1002,phase:2,deny,status:406"
+    policyRef:
+      name: application-waf-policy
+    activeProfileRef:
+      name: application-waf-selector
+```
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: application-waf-policy
+  namespace: default
+spec:
+  data:
+    type: WafPolicy
+    config:
+      profiles:
+        baseline:
+          bundleRefs:
+            - name: application-rules-v1
+              expectedDigest: a30e47998cace9b73f037d44f3fc9f0a29614e1753e07e6ea9f5c4e4c4d6b22d
+      defaultProfile: baseline
 ```
 
 Reference this resource from an `HTTPRoute` with the usual Gateway API
@@ -33,13 +54,17 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 
 | Field | Required | Default | Meaning |
 |-------|----------|---------|---------|
-| `rules` | no | empty | Inline SecLang source compiled after the referenced bundle roots; provide this field, `bundleRefs`, or both |
-| `bundleRefs` | no | `[]` | Up to 16 ordered references to digest-pinned `WafRuleBundle` EdgionConfigData resources |
-| `bundleRefs[].name` | with each reference | — | Target EdgionConfigData name |
-| `bundleRefs[].namespace` | no | EdgionPlugins namespace | Target namespace; cross-namespace use follows `visibility` and `ReferenceGrant` |
-| `bundleRefs[].expectedDigest` | with each reference | — | Exact lowercase SHA-256 digest of the selected bundle |
+| `policyRef.name` | yes | — | Fixed reference to a `WafPolicy` EdgionConfigData |
+| `policyRef.namespace` | no | EdgionPlugins namespace | Policy namespace; cross-namespace use requires visibility or ReferenceGrant |
+| `WafPolicy.profiles` | yes | — | One to 16 named profiles; each contains one to 16 ordered `bundleRefs`, with at least one required reference |
+| `WafPolicy.defaultProfile` | yes | — | Profile used without a usable Selector choice |
+| `activeProfileRef` | no | — | Per-plugin reference to a typed `Selector` EdgionConfigData for hot switching among configured profiles |
+| `WafPolicy.profiles.<name>.bundleRefs[].name` | with each reference | — | Target WafRuleBundle EdgionConfigData name |
+| `WafPolicy.profiles.<name>.bundleRefs[].namespace` | no | WafPolicy namespace | Target namespace; cross-namespace use follows `visibility` and `ReferenceGrant` |
+| `WafPolicy.profiles.<name>.bundleRefs[].expectedDigest` | with each reference | — | Exact lowercase SHA-256 digest of the selected bundle |
+| `WafPolicy.profiles.<name>.bundleRefs[].optional` | no | `false` | Skip a missing or invalid independent addition and report `PartiallyInvalid`; never mark the base bundle optional |
 | `mode` | no | `on` | `on` enforces disruptive actions; `detectionOnly` records matches without blocking |
-| `priority` | no | `0` | Owner-selection priority from `0` through `65535`; a larger value wins |
+| `priority` | no | `0` | Tie breaker within one attachment scope from `0` through `65535`; a larger value wins |
 | `requestBody.inspection` | no | `prefix` | Inspect a bounded prefix before backend dispatch, or use `full` for complete-body inspection |
 | `requestBody.prefixSize` | no | `64KiB` | Prefix window from 1 byte through `1MiB`, using size strings such as `16KiB`, `100k`, or `1m`; only valid with `prefix` |
 
@@ -97,9 +122,8 @@ metadata:
   namespace: default
 spec:
   waf:
-    bundleRefs:
-      - name: application-rules-v1
-        expectedDigest: a30e47998cace9b73f037d44f3fc9f0a29614e1753e07e6ea9f5c4e4c4d6b22d
+    policyRef:
+      name: application-waf-policy
 ```
 
 | Bundle field | Required | Meaning |
@@ -119,17 +143,46 @@ backslash, colon, or control character. Names are unique across rule and asset
 members; every root names a rule member. The bundle has fixed member and byte
 limits, and the complete selected generation must pass strict compilation.
 
-Bundles compile in `bundleRefs` order, each bundle's `roots` order, then the
-optional inline `rules`. Includes and phrase assets resolve only within the
-bundle that contains the requesting rule. Inline `rules` cannot read bundle
-members. Duplicate rule IDs across all sources reject the entire generation.
+The selected profile compiles bundles in `bundleRefs` order and each bundle's
+`roots` order. Includes and phrase assets resolve only within the bundle that
+contains the requesting rule. Duplicate rule IDs across all selected bundles
+reject the entire generation.
 The Controller checks each reference and its digest, and the Gateway checks the
 transported contents again before publishing the generation. An invalid,
 missing, disabled, wrong-type, or unauthorized reference cannot publish a
-partial ruleset. `WafRuleBundle` does not use the fail-to-base overlay policy.
+partial base ruleset. An optional addition can be skipped with
+`PartiallyInvalid=True` when absent or invalid; the combined generation still
+must compile strictly. A broken required bundle retains the last valid
+generation. `WafRuleBundle` does not use the fail-to-base overlay policy.
+
+To keep several versions or sensitivity levels available, give each combination
+a named profile. For example, `low`, `mid`, and `high` can reference
+different versioned bundles and scoring parameters. These names are operator
+choices, not built-in CRS levels; review the exact rule IDs and thresholds in
+each bundle. Multiple bundle references in one profile aggregate in declaration
+order. Only the selected profile runs for any request.
+
+For dynamic selection, set `activeProfileRef: {name: application-waf-selector}`
+on `EdgionPlugins.spec.waf` and create an EdgionConfigData with `data.type: Selector` and
+`data.config.active: high`. Changing `active` switches to another configured
+profile after Controller validation. A missing, disabled, wrong-type, or unknown
+selection falls back to `defaultProfile`; it cannot disable WAF.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: application-waf-selector
+  namespace: default
+spec:
+  data:
+    type: Selector
+    config:
+      active: high
+```
 
 Bundle content changes do not activate automatically: create a new versioned
-bundle resource, calculate its digest, then update each consumer's `name` and
+bundle resource, calculate its digest, then update each WafPolicy reference's `name` and
 `expectedDigest` to opt in. Keep the prior versioned resource while any
 consumer still pins it.
 When cross-namespace reference validation is enabled, a target with
@@ -153,7 +206,7 @@ the compatibility analysis stage; it does **not** mean the rules can be
 published. Only `strictValidationPassed: true` means the exact WAF configuration
 passed the same strict compiler and request-body inspection checks used by the
 Controller and Gateway. The command exits nonzero otherwise.
-For `bundleRefs`, the local command has no Controller-resolved bundle contents:
+For profile `bundleRefs`, the local command has no Controller-resolved bundle contents:
 it reports an unresolved-reference failure rather than claiming publication
 readiness. Apply the resources and inspect their status for the full result.
 
@@ -183,12 +236,12 @@ Edgion's native Rust implementation of the libinjection-go v0.3.2 behavior.
 They inspect each selected value after its configured transformations. For
 example:
 
-```yaml
-requestBody:
-  inspection: full
-rules: |
-  SecRule ARGS_GET "@detectSQLi" "id:1101,phase:1,deny,status:403,t:urlDecodeUni,capture"
-  SecRule ARGS_GET "@detectXSS" "id:1102,phase:1,deny,status:403,t:urlDecodeUni"
+Put these directives in a referenced WafRuleBundle member and set
+`requestBody.inspection: full` on the WAF plugin:
+
+```text
+SecRule ARGS_GET "@detectSQLi" "id:1101,phase:1,deny,status:403,t:urlDecodeUni,capture"
+SecRule ARGS_GET "@detectXSS" "id:1102,phase:1,deny,status:403,t:urlDecodeUni"
 ```
 
 When `capture` is set on a positive SQL injection match, the detected
@@ -231,12 +284,12 @@ target of later tagged rules, including chain members. Failed chains commit no
 controls. Each transaction has a bounded control-entry count and work budget;
 exhaustion follows the normal WAF runtime failure policy.
 
-```yaml
-requestBody:
-  inspection: full
-rules: |
-  SecRule REQUEST_HEADERS:X-Waf-Exempt "@streq yes" "id:1201,phase:1,pass,ctl:ruleRemoveByTag=managed-check"
-  SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-check"
+Put these directives in a referenced WafRuleBundle member and set
+`requestBody.inspection: full` on the WAF plugin:
+
+```text
+SecRule REQUEST_HEADERS:X-Waf-Exempt "@streq yes" "id:1201,phase:1,pass,ctl:ruleRemoveByTag=managed-check"
+SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-check"
 ```
 
 - Phase 1 inspects the entry request URI, method/protocol, client address, and
@@ -296,8 +349,8 @@ keeps the last activatable generation; deleting the EdgionPlugins resource
 removes it for new resolution without invalidating already-held runtime arcs.
 
 Only one WAF generation owns a request. Edgion selects it before phase 1 from
-the global, Gateway, and Route candidates. Larger `priority` wins; equal
-priorities use Route over Gateway over global, and then declaration order.
+Route, Gateway, then global candidates. Within the selected scope, larger
+`priority` wins; equal priorities use declaration order.
 Backend-scoped WAF configuration is rejected because backend selection happens
 after the request WAF phase. The Controller reports the owning HTTPRoute or
 GRPCRoute as `Accepted=False` with reason `UnsupportedValue`; changing the

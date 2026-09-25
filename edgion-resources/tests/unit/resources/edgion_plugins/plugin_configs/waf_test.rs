@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 
 fn test_bundle(name: &str, id: u64) -> (WafBundleRef, ResolvedWafBundle) {
     use crate::resources::edgion_config_data::WafBundleMember;
@@ -24,6 +25,7 @@ fn test_bundle(name: &str, id: u64) -> (WafBundleRef, ResolvedWafBundle) {
                 ref_denied: None,
             },
             expected_digest: data.digest.clone(),
+            optional: false,
         },
         ResolvedWafBundle {
             identity: format!("default/{name}"),
@@ -38,7 +40,21 @@ fn bundle_refs_require_complete_pinned_sources_and_redact_content() {
     let (first_ref, first) = test_bundle("first", 10);
     let (second_ref, second) = test_bundle("second", 11);
     let config = WafConfig {
-        bundle_refs: vec![first_ref, second_ref],
+        policy_ref: EdgionConfigDataRef {
+            name: "policy".into(),
+            ..Default::default()
+        },
+        resolved_policy: Some(WafPolicyData {
+            profiles: BTreeMap::from([(
+                "default".into(),
+                WafProfile {
+                    bundle_refs: vec![first_ref, second_ref],
+                },
+            )]),
+            default_profile: "default".into(),
+        }),
+        selected_profile: Some("default".into()),
+        resolved_ref_indices: vec![0, 1],
         resolved_bundles: Some(vec![first, second]),
         owner_namespace: Some("default".into()),
         ..WafConfig::default()
@@ -56,7 +72,15 @@ fn bundle_refs_require_complete_pinned_sources_and_redact_content() {
     assert!(tampered.compile_generation().is_err());
 
     let mut mismatch = config.clone();
-    mismatch.bundle_refs[0].expected_digest = "0".repeat(64);
+    mismatch
+        .resolved_policy
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("default")
+        .unwrap()
+        .bundle_refs[0]
+        .expected_digest = "0".repeat(64);
     assert!(mismatch.compile_generation().is_err());
 
     let mut missing = config.clone();
@@ -213,11 +237,12 @@ fn support_report_preserves_available_locations_and_resource_categories() {
 #[test]
 fn prefix_size_is_bounded_and_round_trips_without_changing_full_defaults() {
     for (size, bytes) in [("1", 1), ("16KiB", 16384), ("100k", 102400), ("1m", 1048576)] {
-        let config: WafConfig = serde_json::from_value(serde_json::json!({
-            "rules": "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny\"",
+        let mut config: WafConfig = serde_json::from_value(serde_json::json!({
+            "policyRef": {"name": "policy"},
             "requestBody": {"prefixSize": size}
         }))
         .unwrap();
+        config.rules = "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny\"".into();
         assert_eq!(config.request_body.prefix_size_bytes().unwrap(), bytes);
         assert_eq!(config.validation_error(), None);
         let encoded = serde_json::to_value(&config).unwrap();
@@ -251,10 +276,10 @@ fn prefix_size_is_bounded_and_round_trips_without_changing_full_defaults() {
 
 #[test]
 fn prefix_defaults_and_full_validation_share_the_same_compiler() {
-    let mut config: WafConfig = serde_json::from_value(serde_json::json!({
-        "rules": "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny\""
-    }))
-    .unwrap();
+    let mut config = WafConfig {
+        rules: "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny\"".into(),
+        ..WafConfig::default()
+    };
     assert_eq!(config.request_body.inspection, WafRequestBodyInspection::Prefix);
     assert_eq!(config.validation_error(), None);
     config.request_body.inspection = WafRequestBodyInspection::Full;
@@ -262,7 +287,7 @@ fn prefix_defaults_and_full_validation_share_the_same_compiler() {
     assert_eq!(serialized["requestBody"]["inspection"], "full");
     let restored: WafConfig = serde_json::from_value(serialized).unwrap();
     assert_eq!(restored.request_body.inspection, WafRequestBodyInspection::Full);
-    assert_eq!(restored.validation_error(), None);
+    assert!(restored.validation_error().is_some());
 }
 
 #[test]
@@ -349,7 +374,7 @@ fn prefix_rejects_whole_body_and_control_dependencies_across_generation() {
 }
 
 #[test]
-fn blank_rules_are_rejected_by_the_shared_compile_entry() {
+fn blank_local_source_requires_policy_reference() {
     let config = WafConfig {
         rules: " \n\t".to_string(),
         mode: WafMode::On,
@@ -360,11 +385,11 @@ fn blank_rules_are_rejected_by_the_shared_compile_entry() {
 
     assert_eq!(
         config.compile_generation().err().as_deref(),
-        Some("rules or bundleRefs must be provided")
+        Some("policyRef requires a valid name")
     );
     assert_eq!(
         config.validation_error().as_deref(),
-        Some("rules or bundleRefs must be provided")
+        Some("policyRef requires a valid name")
     );
 }
 
@@ -422,6 +447,7 @@ fn validation_errors_do_not_render_rule_content() {
 
 #[test]
 fn rules_round_trip_for_transport_but_redact_from_admin_and_debug_output() {
+    assert!(serde_json::from_str::<WafConfig>(r#"{"rules":"SecAction \"id:1,phase:1,pass\""}"#).is_err());
     let config = WafConfig {
         rules: "SecAction \"id:1,phase:1,pass,msg:'private'\"".to_string(),
         mode: WafMode::On,
@@ -431,32 +457,28 @@ fn rules_round_trip_for_transport_but_redact_from_admin_and_debug_output() {
     };
 
     let transport = serde_json::to_value(&config).expect("transport serialization succeeds");
-    assert!(transport["rules"]
-        .as_str()
-        .is_some_and(|rules| rules.contains("private")));
+    assert!(transport.get("rules").is_none());
 
     let admin = {
         let _guard = crate::redact::AdminRedactGuard::new();
         serde_json::to_value(&config).expect("admin serialization succeeds")
     };
-    assert_eq!(admin["rules"], "[redacted]");
+    assert!(admin.get("rules").is_none());
     assert_eq!(admin["priority"], 17);
     assert!(!format!("{config:?}").contains("private"));
 }
 
 #[test]
 fn priority_defaults_to_zero_and_rejects_out_of_range_values() {
-    let base = r#"{"rules":"SecAction \"id:1,phase:1,pass\""}"#;
+    let base = r#"{"policyRef":{"name":"policy"}}"#;
     let parsed: WafConfig = serde_json::from_str(base).expect("missing priority uses its default");
     assert_eq!(parsed.priority, 0);
 
-    let maximum: WafConfig = serde_json::from_str(r#"{"rules":"SecAction \"id:1,phase:1,pass\"","priority":65535}"#)
-        .expect("u16 maximum is accepted");
+    let maximum: WafConfig =
+        serde_json::from_str(r#"{"policyRef":{"name":"policy"},"priority":65535}"#).expect("u16 maximum is accepted");
     assert_eq!(maximum.priority, u16::MAX);
-    assert!(serde_json::from_str::<WafConfig>(r#"{"rules":"SecAction \"id:1,phase:1,pass\"","priority":-1}"#).is_err());
-    assert!(
-        serde_json::from_str::<WafConfig>(r#"{"rules":"SecAction \"id:1,phase:1,pass\"","priority":65536}"#).is_err()
-    );
+    assert!(serde_json::from_str::<WafConfig>(r#"{"policyRef":{"name":"policy"},"priority":-1}"#).is_err());
+    assert!(serde_json::from_str::<WafConfig>(r#"{"policyRef":{"name":"policy"},"priority":65536}"#).is_err());
 }
 
 #[test]
@@ -481,5 +503,32 @@ fn dynamic_integration_generations_compile_with_the_production_profile() {
             ..WafConfig::default()
         };
         assert_eq!(config.validation_error(), None, "fixture must compile: {rules}");
+    }
+}
+
+#[test]
+fn plugin_requires_one_policy_reference_and_rejects_inline_profile_fields() {
+    assert!(serde_json::from_value::<WafConfig>(serde_json::json!({})).is_err());
+    for field in ["profiles", "defaultProfile", "bundleRefs"] {
+        let mut value = serde_json::json!({"policyRef": {"name": "policy"}});
+        value[field] = serde_json::json!({});
+        assert!(serde_json::from_value::<WafConfig>(value).is_err(), "{field}");
+    }
+    let config: WafConfig = serde_json::from_value(serde_json::json!({"policyRef": {"name": "policy"}})).unwrap();
+    assert!(config.validate_shape().is_ok());
+    assert!(config.compile_generation().is_err());
+    let selected: WafConfig = serde_json::from_value(serde_json::json!({
+        "policyRef": {"name": "policy"},
+        "activeProfileRef": {"name": "business-selector"}
+    }))
+    .unwrap();
+    assert_eq!(selected.active_profile_ref.as_ref().unwrap().name, "business-selector");
+    assert!(selected.validate_shape().is_ok());
+    let schema = serde_json::to_value(schemars::schema_for!(WafConfig)).unwrap();
+    let properties = schema["properties"].as_object().unwrap();
+    assert!(properties.contains_key("policyRef"));
+    assert!(properties.contains_key("activeProfileRef"));
+    for field in ["resolvedPolicy", "resolvedBundles", "selectedProfile", "policyResolved"] {
+        assert!(!properties.contains_key(field), "{field}");
     }
 }

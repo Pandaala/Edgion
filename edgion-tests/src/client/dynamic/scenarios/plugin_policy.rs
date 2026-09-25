@@ -122,7 +122,8 @@ async fn invalid_sources(ctx: &ScenarioCtx) -> Result<()> {
         if name == "dsl" {
             value["spec"]["requestPlugins"][1]["config"]["source"] = json!("let invalid =");
         } else {
-            value["spec"]["waf"]["rules"] = json!("SecRule REQUEST_URI");
+            value["spec"]["waf"]["profiles"]["baseline"]["bundleRefs"][0]["expectedDigest"] =
+                json!("0000000000000000000000000000000000000000000000000000000000000000");
         }
         apply_value(ctx, value).await?;
     }

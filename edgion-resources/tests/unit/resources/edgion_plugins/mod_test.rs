@@ -47,8 +47,8 @@ fn test_has_plugins_with_empty_vec() {
 fn waf_is_one_top_level_logical_plugin_and_round_trips() {
     let yaml = r#"
 waf:
-  rules: |
-    SecRule REQUEST_URI "@contains /blocked" "id:1,phase:1,deny,status:403"
+  policyRef:
+    name: application-waf
   mode: detectionOnly
 "#;
     let spec: EdgionPluginsSpec = serde_yaml::from_str(yaml).expect("WAF configuration parses");
@@ -61,7 +61,11 @@ waf:
     assert!(ep.has_plugins());
     assert_eq!(ep.plugin_count(), 1);
     assert_eq!(ep.waf().map(|waf| waf.mode), Some(WafMode::DetectionOnly));
-    assert!(ep.validate_plugins().is_empty());
+    assert!(ep.validate_plugins_before_waf_resolution().is_empty());
+    assert!(
+        !ep.validate_plugins().is_empty(),
+        "policy references require Controller resolution"
+    );
 
     let serialized = serde_json::to_value(&ep.spec).expect("WAF configuration serializes");
     assert_eq!(serialized["waf"]["mode"], "detectionOnly");
@@ -72,7 +76,8 @@ waf:
 fn waf_rejects_unknown_configuration_fields() {
     let yaml = r#"
 waf:
-  rules: 'SecAction "id:1,phase:1,pass"'
+  policyRef:
+    name: application-waf
   unexpected: true
 "#;
     assert!(serde_yaml::from_str::<EdgionPluginsSpec>(yaml).is_err());

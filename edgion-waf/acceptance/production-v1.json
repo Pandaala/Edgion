@@ -6,32 +6,143 @@
     {
       "name": "initial",
       "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/initial/EdgionPlugins_waf-dynamic.yaml",
-      "sha256": "996ff05af40f26757c996595cd62639f69dbddaeeb6aa582f98522db169d2a48",
-      "rule_ids": [1001, 1002, 1003]
+      "sha256": "28e377f5f797f257f9679e032b45e0f03b940da51d6751d65e92990732f6a5bb",
+      "bundles": [
+        {
+          "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/initial/EdgionConfigData_waf-rules-initial.yaml",
+          "sha256": "bc16ff3269879be2e9dae843f5e4f1330eee6e59f87709677aeead68186625b3"
+        }
+      ],
+      "rule_ids": [
+        1001,
+        1002,
+        1003
+      ],
+      "policy": {
+        "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/initial/EdgionConfigData_waf-policy.yaml",
+        "sha256": "48c294c62b34f170b692ebf95e20ae712a4141c84c462dd547ffdd9feeeb0429"
+      }
     },
     {
       "name": "updated",
       "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/updates/to_v2/EdgionPlugins_waf-dynamic.yaml",
-      "sha256": "0341533cc4a53eea1449be11c750baa61c89c3974b8c170e0516e030f6b21683",
-      "rule_ids": [2001, 2002]
+      "sha256": "7be2c0c2f38d46815e139afb078f3771f8fc12ec8aa45972171a6fd1af9f82c3",
+      "bundles": [
+        {
+          "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/updates/to_v2/EdgionConfigData_waf-rules-v2.yaml",
+          "sha256": "f4c7821112665092f236fd030cc0dc093d91600f9fba8406631f608e9e88fd9e"
+        }
+      ],
+      "rule_ids": [
+        2001,
+        2002
+      ],
+      "policy": {
+        "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/updates/to_v2/EdgionConfigData_waf-policy.yaml",
+        "sha256": "af196e2f6f33d5119d88c836edd3cf8cbdde937e329905b1a91625ef3f646e15"
+      }
     },
     {
       "name": "detection",
       "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/updates/to_detection/EdgionPlugins_waf-dynamic.yaml",
-      "sha256": "7e8fb8feb000851f411984de78faf738ee8810e52e7c698f46ba81aa2c6ca078",
-      "rule_ids": [2501]
+      "sha256": "5992968c5db9a67b6ffcc658ef382d7ca4e17dc77746e5988eacaca632e6a331",
+      "bundles": [
+        {
+          "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/updates/to_detection/EdgionConfigData_waf-rules-detection.yaml",
+          "sha256": "043a1aceb0afdd600529c1a5193f56680139f31b3ccffe1779fb97b744838fe9"
+        }
+      ],
+      "rule_ids": [
+        2501
+      ],
+      "policy": {
+        "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/updates/to_detection/EdgionConfigData_waf-policy.yaml",
+        "sha256": "856343f7982dda1cc3e9e790e8c77402cecd9c3ee689844fd163d39a052095ea"
+      }
     }
   ],
   "cases": [
-    {"id": "initial-allow", "profile": "initial", "version": "v1", "body": "clean", "response_deny": false, "expected_status": 200, "expected_rule_id": null},
-    {"id": "initial-header-deny", "profile": "initial", "version": "v2", "body": "clean", "response_deny": false, "expected_status": 403, "expected_rule_id": 1001},
-    {"id": "initial-body-deny", "profile": "initial", "version": "v1", "body": "blocked", "response_deny": false, "expected_status": 406, "expected_rule_id": 1002},
-    {"id": "initial-response-deny", "profile": "initial", "version": "v1", "body": "clean", "response_deny": true, "expected_status": 403, "expected_rule_id": 1003},
-    {"id": "updated-allow", "profile": "updated", "version": "v2", "body": "clean", "response_deny": false, "expected_status": 200, "expected_rule_id": null},
-    {"id": "updated-header-deny", "profile": "updated", "version": "v1", "body": "clean", "response_deny": false, "expected_status": 451, "expected_rule_id": 2001},
-    {"id": "updated-body-deny", "profile": "updated", "version": "v2", "body": "blocked", "response_deny": false, "expected_status": 406, "expected_rule_id": 2002},
-    {"id": "detection-allow", "profile": "detection", "version": "v1", "body": "clean", "response_deny": false, "expected_status": 200, "expected_rule_id": null},
-    {"id": "detection-match", "profile": "detection", "version": "v1", "body": "blocked", "response_deny": false, "expected_status": 200, "expected_rule_id": 2501}
+    {
+      "id": "initial-allow",
+      "profile": "initial",
+      "version": "v1",
+      "body": "clean",
+      "response_deny": false,
+      "expected_status": 200,
+      "expected_rule_id": null
+    },
+    {
+      "id": "initial-header-deny",
+      "profile": "initial",
+      "version": "v2",
+      "body": "clean",
+      "response_deny": false,
+      "expected_status": 403,
+      "expected_rule_id": 1001
+    },
+    {
+      "id": "initial-body-deny",
+      "profile": "initial",
+      "version": "v1",
+      "body": "blocked",
+      "response_deny": false,
+      "expected_status": 406,
+      "expected_rule_id": 1002
+    },
+    {
+      "id": "initial-response-deny",
+      "profile": "initial",
+      "version": "v1",
+      "body": "clean",
+      "response_deny": true,
+      "expected_status": 403,
+      "expected_rule_id": 1003
+    },
+    {
+      "id": "updated-allow",
+      "profile": "updated",
+      "version": "v2",
+      "body": "clean",
+      "response_deny": false,
+      "expected_status": 200,
+      "expected_rule_id": null
+    },
+    {
+      "id": "updated-header-deny",
+      "profile": "updated",
+      "version": "v1",
+      "body": "clean",
+      "response_deny": false,
+      "expected_status": 451,
+      "expected_rule_id": 2001
+    },
+    {
+      "id": "updated-body-deny",
+      "profile": "updated",
+      "version": "v2",
+      "body": "blocked",
+      "response_deny": false,
+      "expected_status": 406,
+      "expected_rule_id": 2002
+    },
+    {
+      "id": "detection-allow",
+      "profile": "detection",
+      "version": "v1",
+      "body": "clean",
+      "response_deny": false,
+      "expected_status": 200,
+      "expected_rule_id": null
+    },
+    {
+      "id": "detection-match",
+      "profile": "detection",
+      "version": "v1",
+      "body": "blocked",
+      "response_deny": false,
+      "expected_status": 200,
+      "expected_rule_id": 2501
+    }
   ],
   "exclusions": []
 }

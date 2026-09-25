@@ -9,6 +9,7 @@ use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 
 use edgion_resources::prelude_resources::EdgionConfigData;
+use edgion_resources::resources::edgion_config_data::ConfigEntry;
 
 /// Store for EdgionConfigData resources (controller-side, low-frequency access).
 ///
@@ -31,10 +32,37 @@ impl EdgionConfigDataStore {
         map.get(&key).cloned()
     }
 
-    /// Capture an ordered set of references while holding one read guard.
-    pub fn get_many(&self, keys: &[String]) -> Vec<Option<EdgionConfigData>> {
+    /// Capture a WAF policy, its bundles, and the consumer's optional Selector
+    /// under one read guard. Compilation runs after the guard drops.
+    pub fn get_waf_policy_snapshot(
+        &self,
+        policy_key: &str,
+        selector_key: Option<&str>,
+    ) -> (Option<EdgionConfigData>, HashMap<String, Option<EdgionConfigData>>) {
         let map = self.data.read();
-        keys.iter().map(|key| map.get(key).cloned()).collect()
+        let policy_source = map.get(policy_key);
+        let mut children = HashMap::new();
+        if let Some(ed) = policy_source {
+            if let ConfigEntry::WafPolicy(data) = &ed.spec.data {
+                if data.validate_shape().is_err() {
+                    return (policy_source.cloned(), children);
+                }
+                let namespace = ed.metadata.namespace.as_deref().unwrap_or("default");
+                let references = data
+                    .profiles
+                    .values()
+                    .flat_map(|profile| profile.bundle_refs.iter().map(|reference| &reference.target));
+                for reference in references {
+                    let target_namespace = reference.namespace.as_deref().unwrap_or(namespace);
+                    let key = format!("{target_namespace}/{}", reference.name);
+                    children.entry(key.clone()).or_insert_with(|| map.get(&key).cloned());
+                }
+            }
+        }
+        if let Some(key) = selector_key {
+            children.entry(key.to_string()).or_insert_with(|| map.get(key).cloned());
+        }
+        (policy_source.cloned(), children)
     }
 
     /// Replace all entries (used during reset).

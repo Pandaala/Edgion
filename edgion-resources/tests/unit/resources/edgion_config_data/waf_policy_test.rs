@@ -1,0 +1,75 @@
+use super::*;
+use crate::resources::edgion_config_data::{ConfigEntry, EdgionConfigData, EdgionConfigDataSpec};
+
+fn policy() -> WafPolicyData {
+    WafPolicyData {
+        default_profile: "low".into(),
+        profiles: BTreeMap::from([(
+            "low".into(),
+            WafProfile {
+                bundle_refs: vec![WafBundleRef {
+                    target: EdgionConfigDataRef {
+                        name: "base".into(),
+                        ..Default::default()
+                    },
+                    expected_digest: "a".repeat(64),
+                    optional: false,
+                }],
+            },
+        )]),
+    }
+}
+
+#[test]
+fn profiles_require_a_named_default_and_required_base() {
+    let value = policy();
+    assert!(value.validate_shape().is_ok());
+    let mut missing_default = value.clone();
+    missing_default.default_profile = "missing".into();
+    assert!(missing_default.validate_shape().is_err());
+    let mut optional_only = value.clone();
+    optional_only.profiles.get_mut("low").unwrap().bundle_refs[0].optional = true;
+    assert!(optional_only.validate_shape().is_err());
+    let mut unpinned = value;
+    unpinned.profiles.get_mut("low").unwrap().bundle_refs[0]
+        .expected_digest
+        .clear();
+    assert!(unpinned.validate_shape().is_err());
+}
+
+#[test]
+fn policy_transport_preserves_profiles_and_rejects_unknown_config() {
+    let value = policy();
+    let encoded = serde_json::to_value(&value).unwrap();
+    let decoded: WafPolicyData = serde_json::from_value(encoded.clone()).unwrap();
+    assert_eq!(decoded.default_profile, "low");
+    assert!(decoded.profiles.contains_key("low"));
+    let mut invalid = encoded;
+    invalid["activeProfileRef"] = serde_json::json!({"name": "selector"});
+    assert!(serde_json::from_value::<WafPolicyData>(invalid).is_err());
+}
+
+#[test]
+fn policy_resource_requires_enabled_unambiguous_envelope() {
+    let mut resource = EdgionConfigData::new(
+        "policy",
+        EdgionConfigDataSpec {
+            current_status: None,
+            enable: true,
+            active: None,
+            visibility: Default::default(),
+            data: ConfigEntry::WafPolicy(policy()),
+            unknown_fields: vec![],
+        },
+    );
+    assert_eq!(resource.data_type(), "WafPolicy");
+    assert!(resource.validate_pre_parse().is_empty());
+    resource.spec.enable = false;
+    assert!(!resource.validate_pre_parse().is_empty());
+    resource.spec.enable = true;
+    resource.spec.active = Some("low".into());
+    assert!(!resource.validate_pre_parse().is_empty());
+    resource.spec.active = None;
+    resource.spec.unknown_fields.push("data.config.defaultProfiles".into());
+    assert!(!resource.validate_pre_parse().is_empty());
+}

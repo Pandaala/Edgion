@@ -1,7 +1,8 @@
 # 原生 WAF
 
-Edgion 使用 Rust 实现有界 SecLang 编译和 WAF 事务执行。WAF 配置位于
-`EdgionPlugins.spec.waf`，通过 HTTPRoute 的 ExtensionRef 引用。
+Edgion 使用 Rust 实现有界 SecLang 编译和 WAF 事务执行。规则放在有类型的
+`WafRuleBundle` EdgionConfigData 中；`WafPolicy` EdgionConfigData 聚合并选择规则包；`EdgionPlugins.spec.waf` 固定引用该策略，
+通过 HTTPRoute 的 ExtensionRef 引用。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -16,22 +17,45 @@ spec:
     requestBody:
       inspection: prefix
       prefixSize: 64KiB
-    rules: |
-      SecRule REQUEST_URI "@contains /admin" "id:1001,phase:1,deny,status:403"
-      SecRule REQUEST_BODY "@contains forbidden" "id:1002,phase:2,deny,status:406"
+    policyRef:
+      name: application-waf-policy
+    activeProfileRef:
+      name: application-waf-selector
+```
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: application-waf-policy
+  namespace: default
+spec:
+  data:
+    type: WafPolicy
+    config:
+      profiles:
+        baseline:
+          bundleRefs:
+            - name: application-rules-v1
+              expectedDigest: a30e47998cace9b73f037d44f3fc9f0a29614e1753e07e6ea9f5c4e4c4d6b22d
+      defaultProfile: baseline
 ```
 
 ## 配置
 
 | 字段 | 必填 | 默认值 | 含义 |
 |------|------|--------|------|
-| `rules` | 否 | 空 | 内联 SecLang 源码，在引用的规则包之后编译；`rules` 与 `bundleRefs` 至少提供一项 |
-| `bundleRefs` | 否 | `[]` | 最多 16 个按顺序使用、以摘要固定版本的 `WafRuleBundle` 引用 |
-| `bundleRefs[].name` | 每个引用必填 | — | 目标 EdgionConfigData 名称 |
-| `bundleRefs[].namespace` | 否 | EdgionPlugins 的命名空间 | 目标命名空间；跨命名空间引用遵守 `visibility` 和 `ReferenceGrant` |
-| `bundleRefs[].expectedDigest` | 每个引用必填 | — | 目标规则包的完整小写 SHA-256 摘要 |
+| `policyRef.name` | 是 | — | 固定引用 `WafPolicy` EdgionConfigData |
+| `policyRef.namespace` | 否 | EdgionPlugins 的命名空间 | 策略所在命名空间；跨命名空间需满足可见性或 ReferenceGrant |
+| `WafPolicy.profiles` | 是 | — | 1–16 个具名配置，每个配置包含 1–16 个有序 `bundleRefs`，至少一个为必需引用 |
+| `WafPolicy.defaultProfile` | 是 | — | 没有可用 Selector 选择时使用的配置 |
+| `activeProfileRef` | 否 | — | 插件引用有类型的 `Selector` EdgionConfigData，独立切换已配置的 profile |
+| `WafPolicy.profiles.<name>.bundleRefs[].name` | 每个引用必填 | — | 目标规则包 EdgionConfigData 名称 |
+| `WafPolicy.profiles.<name>.bundleRefs[].namespace` | 否 | WafPolicy 的命名空间 | 目标命名空间；跨命名空间引用遵守 `visibility` 和 `ReferenceGrant` |
+| `WafPolicy.profiles.<name>.bundleRefs[].expectedDigest` | 每个引用必填 | — | 目标规则包的完整小写 SHA-256 摘要 |
+| `WafPolicy.profiles.<name>.bundleRefs[].optional` | 否 | `false` | 独立附加包缺失或无效时跳过并报告 `PartiallyInvalid`；基础包不可设为可选 |
 | `mode` | 否 | `on` | `on` 执行规则阻断；`detectionOnly` 仅记录规则命中 |
-| `priority` | 否 | `0` | 0–65535，较大值优先；相同时 Route、Gateway、全局依次优先 |
+| `priority` | 否 | `0` | 0–65535，仅在同一挂载范围内按较大值优先 |
 | `requestBody.inspection` | 否 | `prefix` | `prefix` 提前检查指定窗口；`full` 检查完整有界请求体 |
 | `requestBody.prefixSize` | 否 | `64KiB` | 前缀窗口，1 字节至 `1MiB`，支持 `16KiB`、`100k`、`1m` 等大小字符串；仅用于 `prefix` |
 
@@ -78,9 +102,8 @@ metadata:
   namespace: default
 spec:
   waf:
-    bundleRefs:
-      - name: application-rules-v1
-        expectedDigest: a30e47998cace9b73f037d44f3fc9f0a29614e1753e07e6ea9f5c4e4c4d6b22d
+    policyRef:
+      name: application-waf-policy
 ```
 
 | 规则包字段 | 必填 | 含义 |
@@ -97,13 +120,37 @@ spec:
 路径段、反斜杠、冒号或控制字符。规则和词组成员名称不能重复，所有入口必须指向规则成员。
 规则包有固定的成员数及字节数上限，最终组合还必须通过严格编译。
 
-编译顺序为 `bundleRefs` 顺序、每个包的 `roots` 顺序，最后是可选的内联 `rules`。
-`Include` 和词组资源只能读取发起规则所属包中的成员；内联 `rules` 不能读取包内成员。
-所有来源中的规则 ID 重复会使整个版本编译失败。控制面（Controller）校验引用及摘要，
+所选 profile 按 `bundleRefs` 顺序、每个包的 `roots` 顺序编译。
+`Include` 和词组资源只能读取发起规则所属包中的成员。
+所选包中的规则 ID 重复会使整个版本编译失败。控制面（Controller）校验引用及摘要，
 数据面（Gateway）在发布前重新校验收到的内容。引用缺失、被禁用、类型不符、未授权或内容无效时，
-不能发布部分规则；`WafRuleBundle` 不采用 overlay 的 fail-to-base 策略。
+不能发布不完整的基础规则。独立附加包可标记 `optional: true`，缺失或无效时跳过，
+并报告 `PartiallyInvalid=True`；最终组合仍须严格编译。必需包失效时保留上一有效版本。
+`WafRuleBundle` 不采用 overlay 的 fail-to-base 策略。
 
-修改规则包内容不会自动启用新版本：先创建新的版本化规则包并计算摘要，再更新各使用者的
+需要多个版本或敏感等级时，分别建立具名 profile，例如 `low`、`mid`、`high`。
+每个 profile 显式列出规则包和评分参数；这些名称不是内置 CRS 等级，须逐组合核验
+规则 ID 和阈值。同一个 profile 可按顺序聚合多个包，但每个请求只运行被选中的一个 profile。
+
+动态切换时，在 `EdgionPlugins.spec.waf` 中设置 `activeProfileRef: {name: application-waf-selector}`，
+再创建 `data.type: Selector`、`data.config.active: high` 的 EdgionConfigData。
+修改 `active` 可在控制面校验后切换；引用缺失、禁用、类型不符或选择未知 profile
+时回到 `defaultProfile`，不会关闭 WAF。
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: application-waf-selector
+  namespace: default
+spec:
+  data:
+    type: Selector
+    config:
+      active: high
+```
+
+修改规则包内容不会自动启用新版本：先创建新的版本化规则包并计算摘要，再更新各 WafPolicy 引用的
 `name` 和 `expectedDigest`。还有使用者固定旧版本时，应保留旧资源。启用跨命名空间引用校验时，
 目标资源的 `visibility: Namespace` 需要在目标命名空间配置对应 `ReferenceGrant`；
 `visibility: Cluster` 允许所有命名空间引用。可以写入被引用规则包的主体也能改变 WAF 执行策略，
@@ -121,7 +168,7 @@ edgion-cli waf inspect --file application-waf.yaml --format json
 `analysisComplete` 只表示 SecLang 源码完成了兼容性分析，**不表示可以发布**；
 只有 `strictValidationPassed: true` 才表示该 WAF 配置通过与 Controller、Gateway
 相同的严格编译及请求体检查。未通过时命令以非零状态退出。
-配置含 `bundleRefs` 时，本地命令没有 Controller 解析后的规则包内容，
+配置含 profile `bundleRefs` 时，本地命令没有 Controller 解析后的规则包内容，
 因此会报告引用尚未解析，不会声称该配置可发布。提交资源后查看其状态以获得完整结果。
 
 例如，需要聚合完整上游响应体的规则会产生 `full_response_body` 条目，包含规则 ID、
@@ -141,12 +188,12 @@ EdgionCenter 等工具可以复用它，无需另写 SecLang 解析器；调用�
 `@detectSQLi` 和 `@detectXSS` 是无参数 SecLang 操作符。Edgion 用原生 Rust 实现
 libinjection-go v0.3.2 的检测行为，对规则选中的每个值先执行已配置的变换，再进行检测。
 
-```yaml
-requestBody:
-  inspection: full
-rules: |
-  SecRule ARGS_GET "@detectSQLi" "id:1101,phase:1,deny,status:403,t:urlDecodeUni,capture"
-  SecRule ARGS_GET "@detectXSS" "id:1102,phase:1,deny,status:403,t:urlDecodeUni"
+将这些指令放入 profile 引用的 WafRuleBundle 成员中，并在 WAF 插件中设置
+`requestBody.inspection: full`：
+
+```text
+SecRule ARGS_GET "@detectSQLi" "id:1101,phase:1,deny,status:403,t:urlDecodeUni,capture"
+SecRule ARGS_GET "@detectXSS" "id:1102,phase:1,deny,status:403,t:urlDecodeUni"
 ```
 
 SQL 注入规则设置 `capture` 且正向命中时，指纹写入 `TX.0`，供本规则动作和后续规则使用。
@@ -177,12 +224,12 @@ XSS 检测不会新增捕获，也不会覆盖已有的 `TX.0`。取反匹配不
 目标排除仅作用于后续带相应标签的规则及其链成员中的指定集合和目标。
 失败的规则链不会提交控制动作。控制条目数和工作量均有限额，超限按 WAF 运行时错误策略处理。
 
-```yaml
-requestBody:
-  inspection: full
-rules: |
-  SecRule REQUEST_HEADERS:X-Waf-Exempt "@streq yes" "id:1201,phase:1,pass,ctl:ruleRemoveByTag=managed-check"
-  SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-check"
+将这些指令放入 profile 引用的 WafRuleBundle 成员中，并在 WAF 插件中设置
+`requestBody.inspection: full`：
+
+```text
+SecRule REQUEST_HEADERS:X-Waf-Exempt "@streq yes" "id:1201,phase:1,pass,ctl:ruleRemoveByTag=managed-check"
+SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-check"
 ```
 
 Phase 1 在读取正文前检查请求头等信息。默认的 `prefix` 模式在选择或连接后端前，
@@ -214,6 +261,8 @@ Phase 3 在响应头发送给客户端前执行。主上游响应始终流式处
 
 新配置先完整编译再原子发布；进行中的请求保留原规则版本。无效更新报告
 `Accepted=False` 并保留最近可用版本。删除资源后，新请求不能继续解析该资源。
+同一请求按 Route、Gateway、全局依次选择 WAF；仅在同一范围内比较 `priority`，
+相同优先级按声明顺序决定。
 后端级 WAF 配置不受支持，因为 WAF 请求阶段先于后端选择。
 
 编译器严格拒绝未实现的指令、操作符、动作、无法解析的外部资源及完整响应体要求，

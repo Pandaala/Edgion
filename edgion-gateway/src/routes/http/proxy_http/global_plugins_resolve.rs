@@ -67,8 +67,8 @@ enum WafScope {
 
 /// Select one request-wide WAF without allocating a candidate list.
 ///
-/// Higher configured priority wins. Equal priority prefers the more specific
-/// scope; equal priority and scope retains the first declaration.
+/// The more specific scope wins. Within one scope, higher configured priority
+/// wins; equal priority retains the first declaration.
 pub(crate) fn select_waf_owner(
     global: &[Arc<PluginRuntime>],
     gateway: &[Arc<PluginRuntime>],
@@ -90,8 +90,8 @@ pub(crate) fn select_waf_owner(
             continue;
         };
         let replace = winner.as_ref().is_none_or(|(priority, selected_scope, _, _)| {
-            candidate.priority() > *priority
-                || (candidate.priority() == *priority && scope as u8 > *selected_scope as u8)
+            scope as u8 > *selected_scope as u8
+                || (scope as u8 == *selected_scope as u8 && candidate.priority() > *priority)
         });
         if replace {
             winner = Some((candidate.priority(), scope, candidate.mode(), candidate.owner()));

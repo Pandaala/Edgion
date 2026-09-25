@@ -8,6 +8,5 @@ spec:
     mode: on
     requestBody:
       inspection: full
-    rules: |
-      SecRule REQUEST_HEADERS:X-Waf-Version "!@streq v2" "id:2001,phase:1,deny,status:451"
-      SecRule REQUEST_BODY "@contains blocked" "id:2002,phase:2,deny,status:406"
+    policyRef:
+      name: waf-policy

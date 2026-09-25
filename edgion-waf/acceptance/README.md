@@ -3,7 +3,8 @@
 `production-v1.json` is a repository-tracked acceptance corpus for the three
 `EdgionPlugins/Waf/DynamicTest` configurations submitted to the Gateway. It is
 an intentionally narrow selected profile, not a CRS compatibility claim. The
-YAML paths and SHA-256 values pin the exact production configuration; the
+plugin, policy, and referenced bundle YAML paths and SHA-256 values pin the exact
+production configuration; the
 acceptance executable pins the complete manifest digest and baseline case
 expectations. No external WAF oracle is used.
 
@@ -30,7 +31,7 @@ excluded`, `executed = passed + failed`, and `false_positives` and
 `false_negatives` count incorrect blocking decisions. Rule IDs and expected
 HTTP statuses are asserted independently. The initial profile has three
 configurations, nine cases, and no exclusions. The gate refuses fewer than
-nine frozen baseline cases, missing or changed YAML, changed rule IDs, duplicate case IDs,
+nine frozen baseline cases, missing or changed plugin/policy/bundle YAML, changed rule IDs, duplicate case IDs,
 unexpected exclusions, and incorrect outcomes. Extend the profile by reviewing
 new cases and updating the reviewed manifest digest and recorded YAML digests.
 Any exclusion needs a case ID,

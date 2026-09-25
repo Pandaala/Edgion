@@ -11,14 +11,12 @@ fn plugin(rules: &str, mode: WafMode) -> WafPlugin {
 
 fn plugin_with_inspection(rules: &str, mode: WafMode, inspection: WafRequestBodyInspection) -> WafPlugin {
     WafPlugin::try_new(&WafConfig {
-        rules: rules.to_string(),
         mode,
-        priority: 0,
         request_body: edgion_resources::resources::edgion_plugins::WafRequestBodyConfig {
             inspection,
             ..Default::default()
         },
-        ..WafConfig::default()
+        ..super::fixture::config(rules)
     })
     .expect("test WAF compiles")
 }
@@ -32,18 +30,12 @@ fn dedicated_summary_suppresses_all_generic_stage_logs() {
 }
 
 #[test]
-fn blank_rules_are_rejected_by_the_gateway_constructor() {
-    let config = WafConfig {
-        rules: " \n\t".to_string(),
-        mode: WafMode::On,
-        priority: 0,
-        request_body: Default::default(),
-        ..WafConfig::default()
-    };
+fn missing_policy_ref_is_rejected_by_the_gateway_constructor() {
+    let config = WafConfig::default();
 
     assert_eq!(
         WafPlugin::try_new(&config).err().as_deref(),
-        Some("rules or bundleRefs must be provided")
+        Some("policyRef requires a valid name")
     );
 }
 
@@ -202,12 +194,11 @@ async fn raw_phrase_prefix_is_decided_before_returning_to_dispatch() {
 #[tokio::test]
 async fn configured_prefix_size_reaches_capture_and_engine() {
     let plugin = WafPlugin::try_new(&WafConfig {
-        rules: "SecRule REQUEST_BODY \"@contains blocked\" \"id:21,phase:2,deny,status:409\"".to_string(),
         request_body: edgion_resources::resources::edgion_plugins::WafRequestBodyConfig {
             prefix_size: Some("1m".to_string()),
             ..Default::default()
         },
-        ..Default::default()
+        ..super::fixture::config("SecRule REQUEST_BODY \"@contains blocked\" \"id:21,phase:2,deny,status:409\"")
     })
     .unwrap();
     let mut session = MockPluginSession::new();

@@ -16,7 +16,7 @@ spec:
               type: object
               required:
                 - data
-              description: "EdgionConfigData defines named typed data resources. Exactly one ConfigEntry variant (KeyList, IpList, RequestAccessUrlAllowList, ProxyProtocolTrust, Selector, RegionRouteOverride, WafRuleBundle, Misc) is selected by `data.type`. ProxyProtocolTrust and WafRuleBundle are strict, non-overlay data and require enable=true with active absent. WafRuleBundle may change executable WAF policy; writing it grants control over WAF rules used by its consumers."
+              description: "EdgionConfigData defines named typed data resources. Exactly one ConfigEntry variant (KeyList, IpList, RequestAccessUrlAllowList, ProxyProtocolTrust, Selector, RegionRouteOverride, WafRuleBundle, WafPolicy, Misc) is selected by `data.type`. ProxyProtocolTrust, WafRuleBundle and WafPolicy are strict, non-overlay data and require enable=true with active absent. WafRuleBundle may change executable WAF policy; writing it grants control over WAF rules used by its consumers."
               properties:
                 enable:
                   type: boolean
@@ -50,6 +50,7 @@ spec:
                         - Selector
                         - RegionRouteOverride
                         - WafRuleBundle
+                        - WafPolicy
                         - Misc
                     config:
                       type: object
@@ -59,9 +60,10 @@ spec:
                           - IpList: { items: [{ name, description?, cidrs: string[] }] }   (grouped CIDRs / bare IPs, v4/v6)
                           - RequestAccessUrlAllowList: { items: [{ name, hosts?, paths, allOf? }] }; data-only URL allow candidates bound and expanded by the referring RequestAccessPolicy. allOf uses the same Condition enum as plugin conditions (keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth)
                           - ProxyProtocolTrust: strict non-overlay inbound PROXY sender trust policy — { mode: "required" } or { mode: "trustedSources", trustedCidrs: string[] }; invalid or unknown fields reject the policy
-                          - Selector: active-profile selector — { active?: string, description?: string }; referenced via activeProfileRef in EdgionStreamPlugins GlobalConnectionIpRestriction configs. `active` names one of the plugin's git-owned profiles; `active: null`/absent is a no-op (base default). Switches among profiles only — never disables filtering
+                          - Selector: active-profile selector — { active?: string, description?: string }; referenced via activeProfileRef in plugin configs. `active` names one of the consumer's configured profiles; `active: null`/absent uses its default. Switches among profiles only — never disables filtering
                           - RegionRouteOverride: all-Optional overlay for RegionRoute — { enable?, active?, regions? }; referenced via overrideRef in EdgionPlugins RegionRoute configs
-                          - WafRuleBundle: strict non-overlay WAF inputs — { version, profile, provenance, digest, roots: string[], rules: [{ name, content }], phraseAssets?: [{ name, content }] }; digest is lowercase SHA-256 of the canonical bundle contents. Standalone acceptance checks structure and integrity; referring plugins compile the selected bundles as one executable generation
+                          - WafRuleBundle: strict non-overlay WAF inputs — { version, profile, provenance, digest, roots: string[], rules: [{ name, content }], phraseAssets?: [{ name, content }] }; digest is lowercase SHA-256 of the canonical bundle contents
+                          - WafPolicy: shared WAF combinations — { profiles: { name: { bundleRefs: [{ name, namespace?, expectedDigest, optional? }] } }, defaultProfile }; a referring plugin compiles the selected combination as one generation
                           - Misc: open payload (x-kubernetes-preserve-unknown-fields); escape hatch for third-party or unknown payloads only
                         Validation of the concrete shape is performed by the Controller
                         and surfaced via the `Accepted` status condition.
@@ -75,8 +77,10 @@ spec:
                   description: |
                     Gateway-API-style conditions.
                     - `Accepted`: the spec passed per-variant preparse validation.
-                    - `ResolvedRefs`: cross-resource references resolve. Currently all typed variants
-                      report True unconditionally (no variant carries external cross-resource refs).
+                    - `ResolvedRefs`: required cross-resource references resolve. WafPolicy
+                      checks its referenced WafRuleBundle resources.
+                    - `PartiallyInvalid`: optional WafPolicy references
+                      were skipped; usable required bundles remain effective.
                   items:
                     type: object
                     properties:

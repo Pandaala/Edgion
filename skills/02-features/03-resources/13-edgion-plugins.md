@@ -27,9 +27,9 @@ metadata:
   namespace: default
 spec:
   waf:
-    rules: |
-      SecRule REQUEST_URI "@contains /blocked" "id:1,phase:1,deny,status:403"
     mode: on
+    policyRef:
+      name: baseline-waf-policy
   requestPlugins:
     - type: RateLimitLocal           # Plugin type
       config:                   # Plugin configuration (varies by type)
@@ -63,9 +63,12 @@ spec:
 `EdgionPlugin` discriminator and does not appear in any stage array. One
 compiled generation internally owns request-header, request-body,
 response-header, response-safe phase-4, and logging-phase execution. Its
-schema is `{ rules: String, mode: on | detectionOnly }`; source is inline,
-strictly compiled, admin-redacted, and cannot use filesystem/network includes
-or external phrase assets. Invalid updates retain the last activatable
+schema uses one fixed `policyRef` to a typed `WafPolicy` EdgionConfigData.
+The policy owns named profiles of ordered, digest-pinned `WafRuleBundle` references
+and one default profile. Each plugin may reference a `Selector` with `activeProfileRef`
+to choose its own active profile from that shared policy.
+Only one compiled generation is active per request. Bundle sources are strictly
+compiled and admin-redacted; invalid required updates retain the last activatable
 generation. See
 `docs/en/user-guide/http-route/filters/edgion-plugins/waf.md`.
 

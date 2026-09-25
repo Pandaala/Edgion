@@ -493,3 +493,31 @@ phase_suite!(
         ("waf_bundle_v2_denied", "updated bundle denies v2", "v2", None, 451),
     ]
 );
+
+phase_suite!(
+    WafDynamicSelectorHighTestSuite,
+    "Native WAF Dynamic - Selector High",
+    [
+        (
+            "waf_selector_high_v1_allowed",
+            "selected high profile allows v1",
+            "v1",
+            None,
+            200
+        ),
+        (
+            "waf_selector_high_v2_denied",
+            "selected high profile denies v2",
+            "v2",
+            None,
+            451
+        ),
+        (
+            "waf_selector_high_body_denied",
+            "second bundle in high profile denies request body",
+            "v1",
+            Some("blocked"),
+            406
+        ),
+    ]
+);

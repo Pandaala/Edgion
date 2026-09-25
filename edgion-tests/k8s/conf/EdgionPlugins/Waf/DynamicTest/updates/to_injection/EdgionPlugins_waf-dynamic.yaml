@@ -5,9 +5,8 @@ metadata:
   namespace: edgion-default
 spec:
   waf:
-    mode: "on"
+    mode: on
     requestBody:
       inspection: full
-    rules: |
-      SecRule REQUEST_HEADERS:X-Waf-Sql "@detectSQLi" "id:3501,phase:1,deny,status:403,t:urlDecodeUni,capture"
-      SecRule REQUEST_HEADERS:X-Waf-Xss "@detectXSS" "id:3502,phase:1,deny,status:406,t:urlDecodeUni"
+    policyRef:
+      name: waf-policy

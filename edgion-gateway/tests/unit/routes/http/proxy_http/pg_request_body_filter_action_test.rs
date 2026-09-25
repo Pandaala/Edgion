@@ -141,11 +141,10 @@ async fn terminate_grpc_invalid_body_records_diagnostic_without_exact_message() 
 
 fn streaming_waf_context(body_limit: u64) -> EdgionHttpContext {
     let config = WafConfig {
-        rules: "SecRule REQUEST_BODY \"@pm blocked\" \"id:1,phase:2,deny,status:409\"\n".to_string(),
         mode: WafMode::On,
-        priority: 0,
-        request_body: Default::default(),
-        ..WafConfig::default()
+        ..crate::plugins::http::waf::fixture::config(
+            "SecRule REQUEST_BODY \"@pm blocked\" \"id:1,phase:2,deny,status:409\"\n",
+        )
     };
     let generation = Arc::new(config.compile_generation().expect("test WAF compiles"));
     let request = RequestHead::new(

@@ -6,6 +6,5 @@ metadata:
 spec:
   waf:
     mode: on
-    rules: |
-      SecRule REQUEST_HEADERS:X-Waf-Version "!@streq v3" "id:3001,phase:1,deny,status:429"
-
+    policyRef:
+      name: waf-policy

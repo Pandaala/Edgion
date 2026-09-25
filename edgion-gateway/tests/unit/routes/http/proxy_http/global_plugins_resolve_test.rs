@@ -60,10 +60,18 @@ fn waf_runtime(priority: u16) -> Arc<PluginRuntime> {
 fn waf_selection_uses_priority_scope_and_declaration_order() {
     let global_high = waf_runtime(20);
     let route_low = waf_runtime(10);
-    let selected = select_waf_owner(&[Arc::clone(&global_high)], &[], &[Some(route_low)]).expect("one WAF is selected");
+    let selected = select_waf_owner(&[Arc::clone(&global_high)], &[], &[Some(Arc::clone(&route_low))])
+        .expect("one WAF is selected");
     assert!(Arc::ptr_eq(
         selected.owner(),
-        &global_high.waf_candidate().unwrap().owner()
+        &route_low.waf_candidate().unwrap().owner()
+    ));
+
+    let gateway_low = waf_runtime(1);
+    let selected = select_waf_owner(&[global_high], &[Arc::clone(&gateway_low)], &[]).expect("gateway WAF is selected");
+    assert!(Arc::ptr_eq(
+        selected.owner(),
+        &gateway_low.waf_candidate().unwrap().owner()
     ));
 
     let global_equal = waf_runtime(30);

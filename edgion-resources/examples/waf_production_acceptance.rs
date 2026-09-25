@@ -2,6 +2,8 @@
 
 use std::{collections::BTreeSet, fs, path::Path};
 
+use edgion_resources::resources::edgion_config_data::{WafPolicyData, WafRuleBundleData};
+use edgion_resources::resources::edgion_plugins::plugin_configs::ResolvedWafBundle;
 use edgion_resources::resources::edgion_plugins::plugin_configs::WafConfig;
 use edgion_waf::seclang::{
     BodyProcessorSelection, EvaluationMode, PhaseOutcome, RequestBody, RequestHead, RequestHeader, ResponseHead,
@@ -10,7 +12,7 @@ use edgion_waf::seclang::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const REVIEWED_MANIFEST_SHA256: &str = "73d0307ca4ad09098e496230baf499f19888cec56dcea27e06f162fb3d3df653";
+const REVIEWED_MANIFEST_SHA256: &str = "15751e2f15103ceff566df1ec4aa94eb7ee95b27574bdc1735a2677e0a1d24db";
 const BASELINE_CASES: [(&str, &str, u16, Option<u64>); 9] = [
     ("initial-allow", "initial", 200, None),
     ("initial-header-deny", "initial", 403, Some(1001)),
@@ -40,7 +42,16 @@ struct Profile {
     name: String,
     path: String,
     sha256: String,
+    policy: BundleFile,
     rule_ids: Vec<u64>,
+    bundles: Vec<BundleFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BundleFile {
+    path: String,
+    sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -209,7 +220,53 @@ fn run(manifest_path: &Path, report_path: &Path) -> Result<(), String> {
         if sha256(&bytes) != profile.sha256 {
             return Err(format!("profile digest changed: {}", profile.path));
         }
-        let document: PluginDocument = serde_yaml::from_slice(&bytes).map_err(|error| error.to_string())?;
+        let mut document: PluginDocument = serde_yaml::from_slice(&bytes).map_err(|error| error.to_string())?;
+        let policy_bytes =
+            fs::read(root.join(&profile.policy.path)).map_err(|error| format!("{}: {error}", profile.policy.path))?;
+        if sha256(&policy_bytes) != profile.policy.sha256 {
+            return Err(format!("policy file digest changed: {}", profile.policy.path));
+        }
+        let policy_value: serde_yaml::Value =
+            serde_yaml::from_slice(&policy_bytes).map_err(|error| error.to_string())?;
+        if policy_value["spec"]["data"]["type"].as_str() != Some("WafPolicy")
+            || policy_value["metadata"]["name"].as_str() != Some(document.spec.waf.policy_ref.name.as_str())
+        {
+            return Err(format!("policy reference changed: {}", profile.policy.path));
+        }
+        let policy: WafPolicyData = serde_yaml::from_value(policy_value["spec"]["data"]["config"].clone())
+            .map_err(|error| error.to_string())?;
+        policy.validate_shape()?;
+        let selected = policy.default_profile.clone();
+        let refs = &policy.profiles[&selected].bundle_refs;
+        if refs.len() != profile.bundles.len() {
+            return Err(format!("bundle inventory changed: {}", profile.name));
+        }
+        let mut resolved = Vec::new();
+        for (reference, bundle_file) in refs.iter().zip(&profile.bundles) {
+            let bytes =
+                fs::read(root.join(&bundle_file.path)).map_err(|error| format!("{}: {error}", bundle_file.path))?;
+            if sha256(&bytes) != bundle_file.sha256 {
+                return Err(format!("bundle file digest changed: {}", bundle_file.path));
+            }
+            let value: serde_yaml::Value = serde_yaml::from_slice(&bytes).map_err(|error| error.to_string())?;
+            let data: WafRuleBundleData =
+                serde_yaml::from_value(value["spec"]["data"]["config"].clone()).map_err(|error| error.to_string())?;
+            data.validate()?;
+            if data.digest != reference.expected_digest {
+                return Err(format!("bundle reference digest changed: {}", bundle_file.path));
+            }
+            let namespace = reference.target.namespace.as_deref().unwrap_or("edgion-default");
+            resolved.push(ResolvedWafBundle {
+                identity: format!("{namespace}/{}", reference.target.name),
+                digest: data.digest.clone(),
+                data,
+            });
+        }
+        document.spec.waf.selected_profile = Some(selected);
+        document.spec.waf.resolved_policy = Some(policy);
+        document.spec.waf.owner_namespace = Some("edgion-default".to_string());
+        document.spec.waf.resolved_ref_indices = (0..resolved.len()).collect();
+        document.spec.waf.resolved_bundles = Some(resolved);
         let generation = document.spec.waf.compile_generation()?;
         let ids = generation.rule_units().map(|unit| unit.id()).collect::<Vec<_>>();
         if ids != profile.rule_ids || ids.is_empty() {

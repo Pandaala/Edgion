@@ -245,9 +245,12 @@ async fn response_companions_share_and_release_with_their_request_entry() {
 
 #[test]
 fn waf_owner_and_all_stage_filters_are_shared_within_one_source() {
-    let mut generation = PluginGeneration::new(resource(json!({
-        "waf": {"rules": "SecAction \"id:1,phase:1,pass\"\n"},
-    })));
+    let mut source = resource(json!({}));
+    source.spec.waf = Some(crate::plugins::http::waf::fixture::config_in_namespace(
+        "SecAction \"id:1,phase:1,pass\"\n",
+        "apps",
+    ));
+    let mut generation = PluginGeneration::new(source);
     let first = generation.compile(None);
     let second = generation.compile(None);
     assert!(first.is_activatable, "{:?}", first.preparse_errors);

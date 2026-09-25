@@ -327,9 +327,7 @@ fn make_ctx_with_raw_waf(namespace: &str, name: &str) -> HandlerContext {
         "apiVersion": "edgion.io/v1",
         "kind": "EdgionPlugins",
         "metadata": {"namespace": namespace, "name": name},
-        "spec": {"waf": {
-            "rules": "SecAction \\\"id:1,phase:1,pass\\\""
-        }}
+        "spec": {"waf": {"policyRef": {"name": "waf-policy"}}}
     }))
     .expect("WAF fixture must deserialize");
     let raw = Arc::new(LocalRawStore::new());

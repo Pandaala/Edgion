@@ -8,14 +8,13 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-`WafConfig::inspect_support()` returns a value-free, bounded report for local
-tools and other consumers. `analysis_complete` means SecLang reached semantic
-compatibility analysis. Only `strict_validation_passed` means the exact
-inline `WafConfig.rules` and `request_body` settings passed the strict compiler and
-request-body inspection check. A configuration with `bundleRefs` reports an
-unresolved-reference failure in local inspection, because the CLI has no
-Controller-resolved bundle contents. The Controller and Gateway continue to use
-`WafConfig::compile_generation()` for publication.
+`WafConfig::inspect_inline_source()` returns a value-free, bounded report for a
+local SecLang source. `analysis_complete` means SecLang reached semantic
+compatibility analysis. Only `strict_validation_passed` means that source and
+its default request-body inspection settings passed strict compilation. This
+local source check does not resolve the referenced WafPolicy, its selected profile, or any digest-pinned
+`WafRuleBundle` reference. The Controller and Gateway use
+`WafConfig::compile_generation()` on the selected resolved profile for publication.
 The strict compiler now admits `@detectSQLi` and `@detectXSS`, but an inspection
 result still does not establish Gateway request behavior.
 
@@ -26,9 +25,9 @@ validation. A compatibility inventory alone can therefore exist when
 publication fails, including a missing phrase asset or a rule needing complete
 upstream response-body aggregation. The report maps typed compiler failures to
 fixed categories and emits numeric locations, never raw source, operands,
-regexes, asset handles, or file identities. `edgion-cli waf inspect` consumes
-the public resource-layer report without authentication or a network call.
-Its document input is capped at 16 MiB; the report retains at most 128 findings
+regexes, asset handles, or file identities. `edgion-cli waf inspect` consumes a
+raw SecLang source file and the public resource-layer report without
+authentication or a network call. Its source input is capped at 16 MiB; the report retains at most 128 findings
 and 128 rule summaries and exposes omitted counts.
 
 ## Alternatives and limits
@@ -45,8 +44,8 @@ behavior; the separate selected-profile acceptance gate owns that evidence.
 
 Resource-layer tests cover mixed supported and unavailable rules, strict
 rejection, missing IDs, malformed syntax, missing phrase assets, redaction,
-bundle reference handling, and report truncation. CLI tests cover local command parsing and value-free
-text presentation. Re-evaluate if the compiler, diagnostic categories,
+bundle reference handling, and report truncation. CLI tests cover raw source
+input and value-free text presentation. Re-evaluate if the compiler, diagnostic categories,
 report bounds, resource schema, or publication path changes.
 
 ## Resolution references
@@ -54,4 +53,4 @@ report bounds, resource schema, or publication path changes.
 - `waf-rule-support-diagnostics`: implemented as a bounded local inspection
   report with a reusable resource-layer API.
 - `waf-rule-bundles-and-assets`: typed `EdgionConfigData` bundles are resolved
-  before strict compilation; local inspection reports unresolved references.
+  before strict publication compilation; local source inspection does not bind them.

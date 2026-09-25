@@ -5,6 +5,8 @@ metadata:
   namespace: edgion-default
 spec:
   waf:
-    mode: "on"
-    rules: |
-      SecRule REQUEST_URI "@contains private" "id:2002,phase:1,deny,status:100"
+    mode: on
+    requestBody:
+      inspection: full
+    policyRef:
+      name: waf-policy

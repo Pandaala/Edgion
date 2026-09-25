@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: pp-waf-rules
+  namespace: edgion-test
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: "1"
+      profile: policy
+      provenance: edgion-tests/plugin-policy
+      digest: 6b4ccdec96620e5a24aa9e438246de5f336c17ebbc70e9524ced483386ac29b6
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            SecRule REQUEST_HEADERS:X-Policy-Waf "@streq blocked" "id:940001,phase:1,deny,status:403"

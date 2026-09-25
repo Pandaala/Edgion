@@ -1030,11 +1030,8 @@ fn waf_resource(rules: &str) -> EdgionPlugins {
         spec: EdgionPluginsSpec {
             current_status: None,
             waf: Some(WafConfig {
-                rules: rules.to_string(),
                 mode: WafMode::On,
-                priority: 0,
-                request_body: Default::default(),
-                ..WafConfig::default()
+                ..crate::plugins::http::waf::fixture::config(rules)
             }),
             ..Default::default()
         },
@@ -1091,39 +1088,9 @@ fn invalid_waf_update_retains_the_last_known_good_generation() {
 }
 
 fn bundled_waf_resource(id: u64) -> EdgionPlugins {
-    use edgion_resources::resources::edgion_config_data::{EdgionConfigDataRef, WafBundleMember, WafRuleBundleData};
-    use edgion_resources::resources::edgion_plugins::{ResolvedWafBundle, WafBundleRef};
-
-    let mut data = WafRuleBundleData {
-        version: format!("revision-{id}"),
-        profile: "test".into(),
-        provenance: "test/bundle".into(),
-        digest: String::new(),
-        roots: vec!["main.conf".into()],
-        rules: vec![WafBundleMember {
-            name: "main.conf".into(),
-            content: format!("SecRule REQUEST_URI \"@contains /blocked\" \"id:{id},phase:1,deny\"\n"),
-        }],
-        phrase_assets: vec![],
-    };
-    data.digest = data.compute_digest();
-    let mut resource = waf_resource("");
-    let waf = resource.spec.waf.as_mut().unwrap();
-    waf.bundle_refs = vec![WafBundleRef {
-        target: EdgionConfigDataRef {
-            name: format!("bundle-{id}"),
-            namespace: None,
-            ref_denied: None,
-        },
-        expected_digest: data.digest.clone(),
-    }];
-    waf.resolved_bundles = Some(vec![ResolvedWafBundle {
-        identity: format!("default/bundle-{id}"),
-        digest: data.digest.clone(),
-        data,
-    }]);
-    waf.owner_namespace = Some("default".into());
-    resource
+    waf_resource(&format!(
+        "SecRule REQUEST_URI \"@contains /blocked\" \"id:{id},phase:1,deny\"\n"
+    ))
 }
 
 #[test]
@@ -1549,7 +1516,18 @@ fn waf_reload_storm_never_publishes_an_invalid_or_partial_runtime() {
                 for _ in 0..10_000 {
                     let published = store.scope().http(&key).expect("reload never removes the active WAF");
                     let runtime = &published.plugin_runtime;
-                    let rules = &published.spec.spec.waf.as_ref().unwrap().rules;
+                    let rules = &published
+                        .spec
+                        .spec
+                        .waf
+                        .as_ref()
+                        .unwrap()
+                        .resolved_bundles
+                        .as_ref()
+                        .unwrap()[0]
+                        .data
+                        .rules[0]
+                        .content;
                     assert!(published.is_activatable);
                     assert!(rules.contains("/first") || rules.contains("/second"));
                     assert_eq!(runtime.request_plugins_count(), 1);

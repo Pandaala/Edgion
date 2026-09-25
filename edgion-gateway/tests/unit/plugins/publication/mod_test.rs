@@ -25,16 +25,23 @@ fn plugin(program: &str, valid: bool) -> Arc<EdgionPlugins> {
         spec["requestPlugins"].as_array_mut().unwrap().push(json!({
             "type": "Dsl", "config": {"name": "program", "source": if valid {"let a = 1"} else {"invalid @@@"}}
         }));
-    } else {
-        spec["waf"] = json!({"rules": if valid {"SecAction \"id:1,phase:1,pass\"\n"} else {"SecRule invalid-("}});
     }
-    Arc::new(
-        serde_json::from_value(json!({
-            "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
-            "metadata": {"namespace": "apps", "name": "plugins"}, "spec": spec,
-        }))
-        .unwrap(),
-    )
+    let mut resource: EdgionPlugins = serde_json::from_value(json!({
+        "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+        "metadata": {"namespace": "apps", "name": "plugins"}, "spec": spec,
+    }))
+    .unwrap();
+    if program == "waf" {
+        resource.spec.waf = Some(crate::plugins::http::waf::fixture::config_in_namespace(
+            if valid {
+                "SecAction \"id:1,phase:1,pass\"\n"
+            } else {
+                "SecRule invalid-("
+            },
+            "apps",
+        ));
+    }
+    Arc::new(resource)
 }
 
 fn jwe_plugin(program: &str, valid_program: bool, key: &[u8]) -> Arc<EdgionPlugins> {
@@ -53,18 +60,23 @@ fn jwe_plugin(program: &str, valid_program: bool, key: &[u8]) -> Arc<EdgionPlugi
             "type": "Dsl",
             "config": {"name": "program", "source": if valid_program {"let a = 1"} else {"invalid @@@"}}
         }));
-    } else {
-        spec["waf"] = json!({
-            "rules": if valid_program {"SecAction \"id:1,phase:1,pass\"\n"} else {"SecRule invalid-("}
-        });
     }
-    Arc::new(
-        serde_json::from_value(json!({
-            "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
-            "metadata": {"namespace": "apps", "name": "plugins"}, "spec": spec,
-        }))
-        .unwrap(),
-    )
+    let mut resource: EdgionPlugins = serde_json::from_value(json!({
+        "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+        "metadata": {"namespace": "apps", "name": "plugins"}, "spec": spec,
+    }))
+    .unwrap();
+    if program == "waf" {
+        resource.spec.waf = Some(crate::plugins::http::waf::fixture::config_in_namespace(
+            if valid_program {
+                "SecAction \"id:1,phase:1,pass\"\n"
+            } else {
+                "SecRule invalid-("
+            },
+            "apps",
+        ));
+    }
+    Arc::new(resource)
 }
 
 fn jwe_plugin_with_skip(program: &str, valid_program: bool, key: &[u8]) -> Arc<EdgionPlugins> {

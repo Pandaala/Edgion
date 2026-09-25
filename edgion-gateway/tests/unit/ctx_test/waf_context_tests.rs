@@ -4,11 +4,8 @@ use edgion_waf::seclang::{RequestHead, RuleEngineMode, RuntimeLimits, Transactio
 
 fn request_headers_outcome(rules: &str, uri: &'static [u8]) -> edgion_waf::seclang::PhaseOutcome {
     let config = WafConfig {
-        rules: rules.to_string(),
         mode: WafMode::On,
-        priority: 0,
-        request_body: Default::default(),
-        ..WafConfig::default()
+        ..crate::plugins::http::waf::fixture::config(rules)
     };
     let generation = Arc::new(config.compile_generation().expect("test WAF compiles"));
     let request = RequestHead::new(

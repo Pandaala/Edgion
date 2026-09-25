@@ -152,7 +152,8 @@ pub use response_rewrite::ResponseRewriteTestSuite;
 pub use waf::{
     WafDynamicBundleV1TestSuite, WafDynamicBundleV2TestSuite, WafDynamicConfiguredPrefixTestSuite,
     WafDynamicControlTestSuite, WafDynamicDeletedTestSuite, WafDynamicDetectionTestSuite, WafDynamicInitialTestSuite,
-    WafDynamicInjectionTestSuite, WafDynamicRecoveredTestSuite, WafDynamicUpdatedTestSuite,
+    WafDynamicInjectionTestSuite, WafDynamicRecoveredTestSuite, WafDynamicSelectorHighTestSuite,
+    WafDynamicUpdatedTestSuite,
 };
 pub use wasm::WasmPluginTestSuite;
 pub use webhook_key_get::WebhookKeyGetTestSuite;

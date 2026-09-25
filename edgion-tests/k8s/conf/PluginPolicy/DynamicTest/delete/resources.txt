@@ -3,6 +3,8 @@ UDPRoute/edgion-test/pp-b
 EdgionPlugins/edgion-test/pp-mock
 EdgionPlugins/edgion-test/pp-dsl
 EdgionPlugins/edgion-test/pp-waf
+EdgionConfigData/edgion-test/pp-waf-policy
+EdgionConfigData/edgion-test/pp-waf-rules
 EdgionPlugins/edgion-test/pp-response
 EdgionPlugins/edgion-test/pp-body
 EdgionPlugins/edgion-test/pp-async

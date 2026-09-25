@@ -26,30 +26,27 @@ spec:
               properties:
                 waf:
                   type: object
-                  description: "One native WAF configuration spanning all supported transaction phases. Provide non-empty inline rules, at least one bundleRefs entry, or both. Bundle references are resolved and compiled as one generation by the Controller and Gateway."
+                  description: "One native WAF configuration referencing a shared WafPolicy EdgionConfigData. The Controller resolves its selected profile into one strictly compiled generation."
+                  required: [policyRef]
                   properties:
-                    rules:
-                      type: string
-                      description: "Optional inline bounded SecLang source, evaluated after bundle roots. Inline rules cannot include bundle members."
-                    bundleRefs:
-                      type: array
-                      maxItems: 16
-                      description: "Ordered, digest-pinned references to WafRuleBundle EdgionConfigData resources. Each target must be enabled, structurally valid, and authorized."
-                      items:
-                        type: object
-                        required: [name, expectedDigest]
-                        properties:
-                          name:
-                            type: string
-                            minLength: 1
-                            description: "Name of the EdgionConfigData resource."
-                          namespace:
-                            type: string
-                            description: "Target namespace; defaults to the EdgionPlugins namespace. Cross-namespace use follows visibility and ReferenceGrant rules."
-                          expectedDigest:
-                            type: string
-                            pattern: "^[0-9a-f]{64}$"
-                            description: "Exact lowercase SHA-256 digest declared by the selected WafRuleBundle. Update this value to opt into a new bundle revision."
+                    policyRef:
+                      type: object
+                      required: [name]
+                      properties:
+                        name:
+                          type: string
+                        namespace:
+                          type: string
+                      description: "Fixed WafPolicy EdgionConfigData reference. Cross-namespace use follows visibility and ReferenceGrant rules."
+                    activeProfileRef:
+                      type: object
+                      required: [name]
+                      properties:
+                        name:
+                          type: string
+                        namespace:
+                          type: string
+                      description: "Optional per-plugin Selector EdgionConfigData reference. Selects a profile from policyRef; unavailable choices use defaultProfile."
                     mode:
                       type: string
                       description: "Whether disruptive WAF actions are enforced or only reported"
@@ -61,7 +58,7 @@ spec:
                       minimum: 0
                       maximum: 65535
                       default: 0
-                      description: "WAF owner-selection priority; a larger value wins"
+                      description: "WAF owner-selection priority within one scope; Route takes precedence over Gateway and Global"
                     requestBody:
                       type: object
                       properties:

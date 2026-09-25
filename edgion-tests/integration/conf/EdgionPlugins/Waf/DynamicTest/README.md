@@ -33,8 +33,17 @@ switch is tested in both directions against the same phase-2 rules. A target
 exclusion suppresses only the response-status child of a tagged phase-3 chain.
 The generation then reloads to the recovery rules.
 
-The bundle phases apply a versioned `WafRuleBundle` EdgionConfigData with an
+Every WAF phase applies digest-pinned `WafRuleBundle` and aggregated `WafPolicy`
+EdgionConfigData with its plugin configuration. The plugin retains one fixed
+`policyRef` while policy updates change the selected sources. The bundle phases apply a versioned bundle with an
 `Include` and a phrase asset, then bind it through a digest-pinned `bundleRefs`
 entry. A changed asset with the old digest retains the prior compiled WAF.
 The next version changes the denied phrase; reapplying the original bundle and
 pin rolls back. Deletion removes both bundle resources and the plugin.
+The selector phases keep two named profiles in the shared WafPolicy. The low
+profile uses one bundle; the high profile combines the V2 phrase bundle with a
+second body rule bundle. A Selector update switches to high, an unknown name
+falls back to low, and a later update selects high again. Each request observes
+one selected profile and the suite checks both high-profile bundles. A missing
+optional third bundle reports `PartiallyInvalid=True` while both valid bundles
+remain active.

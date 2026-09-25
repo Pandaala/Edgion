@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-rules-recovered
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: "1"
+      profile: recovered
+      provenance: edgion-tests/waf-dynamic
+      digest: 4bf87d00495eb380ccc0b99b72190a4935f125ffe2ca48d38bd352c8b9ee317d
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            SecRule REQUEST_HEADERS:X-Waf-Version "!@streq v3" "id:3001,phase:1,deny,status:429"

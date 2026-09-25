@@ -67,12 +67,12 @@ pub use plugin_configs::{
     ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionMode, RouteRule, SanType,
     SchemaComplexityProfile, StrictJsonError, TinyUfoTtlCacheConfig, TransformConfig, TransformType, UnauthAction,
     UpstreamFallback, UpstreamHeaderConfig, VerificationMode, WafBundleRef, WafBundleResolutionError,
-    WafBundleResolutionKind, WafConfig, WafMode, WafRequestBodyConfig, WafRequestBodyInspection, WafSupportFailure,
-    WafSupportFinding, WafSupportReport, WebhookKeyGetConfig, WebhookVar, ABSOLUTE_INSTANCE_MAX_BYTES,
-    CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN, CREDENTIAL_INJECTOR_VALUE_PREFIX_MAX_LEN, DEFAULT_INSTANCE_MAX_BYTES,
-    MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES, MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES,
-    MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS, MAX_LRU_CACHE_CAPACITY, MAX_LRU_CACHE_SHARDS,
-    MAX_TINY_UFO_CACHE_ENTRIES, MAX_TINY_UFO_LOGICAL_BYTES, TINY_UFO_WEIGHT_UNIT_BYTES,
+    WafBundleResolutionKind, WafConfig, WafMode, WafProfile, WafRequestBodyConfig, WafRequestBodyInspection,
+    WafSupportFailure, WafSupportFinding, WafSupportReport, WebhookKeyGetConfig, WebhookVar,
+    ABSOLUTE_INSTANCE_MAX_BYTES, CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN, CREDENTIAL_INJECTOR_VALUE_PREFIX_MAX_LEN,
+    DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES, MAX_JSON_PATCH_OPERATIONS,
+    MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS, MAX_LRU_CACHE_CAPACITY,
+    MAX_LRU_CACHE_SHARDS, MAX_TINY_UFO_CACHE_ENTRIES, MAX_TINY_UFO_LOGICAL_BYTES, TINY_UFO_WEIGHT_UNIT_BYTES,
 };
 pub use plugin_configs::{
     valid_request_id_header, valid_request_id_value, DefaultIdConfig, RequestIdConfig, RequestIdGenerator,

@@ -1,4 +1,4 @@
-//! Local inspection of one EdgionPlugins inline WAF configuration.
+//! Local inspection of one SecLang rule source.
 
 use std::fs::File;
 use std::io::Read;
@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use edgion_resources::resources::edgion_plugins::{EdgionPlugins, WafSupportReport};
+use edgion_resources::resources::edgion_plugins::{WafConfig, WafSupportReport};
 
-const MAX_WAF_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_WAF_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Args)]
 pub struct WafArgs {
@@ -18,9 +18,9 @@ pub struct WafArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum WafCommand {
-    /// Inspect one EdgionPlugins document without publishing it.
+    /// Inspect one local SecLang source without publishing it.
     Inspect {
-        #[arg(long, value_name = "EDGIONPLUGINS.YAML")]
+        #[arg(long, value_name = "RULES.CONF")]
         file: PathBuf,
         #[arg(long, value_enum, default_value = "text")]
         format: WafReportFormat,
@@ -37,12 +37,9 @@ pub fn execute(args: &WafArgs) -> Result<()> {
     match &args.command {
         WafCommand::Inspect { file, format } => {
             let bytes = read_bounded(file)?;
-            let document: EdgionPlugins = serde_yaml::from_slice(&bytes)
-                .map_err(|_| anyhow::anyhow!("invalid EdgionPlugins YAML; rule source was not displayed"))?;
-            let Some(waf) = document.spec.waf else {
-                bail!("EdgionPlugins document has no spec.waf configuration");
-            };
-            let report = waf.inspect_support();
+            let source = std::str::from_utf8(&bytes)
+                .map_err(|_| anyhow::anyhow!("WAF rule source is not UTF-8; source was not displayed"))?;
+            let report = WafConfig::inspect_inline_source(source);
             match format {
                 WafReportFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
                 WafReportFormat::Text => print!("{}", render_text(&report)),
@@ -57,15 +54,15 @@ pub fn execute(args: &WafArgs) -> Result<()> {
 
 fn read_bounded(path: &Path) -> Result<Vec<u8>> {
     if path.as_os_str() == "-" {
-        bail!("stdin is not supported; pass an EdgionPlugins file path");
+        bail!("stdin is not supported; pass a rule source file path");
     }
-    let file = File::open(path).map_err(|_| anyhow::anyhow!("cannot open WAF document"))?;
+    let file = File::open(path).map_err(|_| anyhow::anyhow!("cannot open WAF rule source"))?;
     let mut bytes = Vec::new();
-    file.take(MAX_WAF_DOCUMENT_BYTES + 1)
+    file.take(MAX_WAF_SOURCE_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| anyhow::anyhow!("cannot read WAF document"))?;
-    if bytes.len() as u64 > MAX_WAF_DOCUMENT_BYTES {
-        bail!("WAF document exceeds the 16 MiB inspection limit");
+        .map_err(|_| anyhow::anyhow!("cannot read WAF rule source"))?;
+    if bytes.len() as u64 > MAX_WAF_SOURCE_BYTES {
+        bail!("WAF rule source exceeds the 16 MiB inspection limit");
     }
     Ok(bytes)
 }

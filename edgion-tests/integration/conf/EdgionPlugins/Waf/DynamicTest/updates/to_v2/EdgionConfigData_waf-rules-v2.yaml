@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-rules-v2
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: "1"
+      profile: v2
+      provenance: edgion-tests/waf-dynamic
+      digest: b3d9de8829b7356c4a204205c71e3b41675c79ccbc30ea4e64699d1a933de34e
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            SecRule REQUEST_HEADERS:X-Waf-Version "!@streq v2" "id:2001,phase:1,deny,status:451"
+            SecRule REQUEST_BODY "@contains blocked" "id:2002,phase:2,deny,status:406"

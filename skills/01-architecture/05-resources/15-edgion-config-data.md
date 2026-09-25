@@ -110,7 +110,8 @@ Envelope (any variant): `enable: bool` (default true), `active: Option<String>`,
 | selector | `Selector` | `{ active?: string, description?: string }` | Active-profile selector; switches among the consumer's git-owned profiles |
 | first-party overlay | `RegionRouteOverride` | `{ regions?: [...], enable?: bool, active?: string }` | Typed; whole-replace of region table |
 | security policy | `ProxyProtocolTrust` | `{ mode: required }` or `{ mode: trustedSources, trustedCidrs: [...] }` | Non-overlay, all-or-nothing Gateway listener trust policy. Requires envelope `enable=true` and `active` absent. Unknown config fields are fatal rather than advisory. |
-| executable policy data | `WafRuleBundle` | `{ version, profile, provenance, digest, roots, rules, phraseAssets? }` | Non-overlay WAF rule and phrase-asset inputs. Structural validation and digest are all-or-nothing; referring `EdgionPlugins.spec.waf.bundleRefs` must resolve and compile the complete selected generation. Requires `enable=true`, `active` absent, and no unknown config fields. |
+| executable policy data | `WafRuleBundle` | `{ version, profile, provenance, digest, roots, rules, phraseAssets? }` | Non-overlay WAF rule and phrase-asset inputs. Structural validation and digest are all-or-nothing; a WAF named profile aggregates ordered, digest-pinned references and strictly compiles the selected generation. Requires `enable=true`, `active` absent, and no unknown config fields. |
+| WAF policy | `WafPolicy` | `{ profiles, defaultProfile }` | Shared aggregation of ordered bundle references. EdgionPlugins fixes one `policyRef` and may select a profile with its own `activeProfileRef`; the Controller transports the selected profile's accepted bundles for Gateway compilation. Requires `enable=true`, `active` absent, and no unknown config fields. |
 | escape hatch | `Misc` | `x-kubernetes-preserve-unknown-fields` | Third-party / unknown / experimental only |
 
 ## Unknown Config Fields
@@ -144,9 +145,11 @@ exposes only "which profile is active" as the hot-swappable surface — see the 
 `ProxyProtocolTrust` and `WafRuleBundle` are exceptions to the ordinary overlay/advisory behavior. `WafRuleBundle`
 contains executable rule input, so a wrong or omitted config field invalidates the bundle instead of silently
 reducing WAF coverage. Its standalone `Accepted=True` proves structure and content integrity, not that a
-consumer's combined rule generation is executable. `WafConfig` resolves all pinned references and compiles
-them together before publication; one missing, denied, disabled, mismatched, or invalid bundle rejects the
-whole candidate generation. Bundle content is transported through conf_sync, while Admin serialization and
+consumer's combined rule generation is executable. `WafConfig.policyRef` resolves a `WafPolicy` that selects one named profile through a
+default or a `Selector`, then compiles its required pinned references together before publication.
+Optional independent references are attempted in order; an invalid optional reference is omitted
+and reported through `PartiallyInvalid`, while required failures invalidate that profile. An invalid
+or unknown Selector choice returns to a validated default profile. Bundle content is transported through conf_sync, while Admin serialization and
 Rust `Debug` redact rule and phrase-asset bodies. Editing a referenced bundle can change WAF policy; enforce
 write permissions with that authority in mind.
 
@@ -180,7 +183,7 @@ Namespace-visible targets require an exact grant from `gateway.networking.k8s.io
 
 - Looks up resources referencing this EdgionConfigData via `EdgionConfigDataRefManager` and requeues them.
   Consumers include Gateway inbound PROXY policies, EdgionPlugins (via `overrideRef` in `RegionRouteConfig`
-  and `bundleRefs` in `WafConfig`) and EdgionStreamPlugins
+  and `WafConfig.policyRef`, plugin `activeProfileRef`, and WafPolicy bundle refs) and EdgionStreamPlugins
   (via `activeProfileRef` in `GlobalConnectionIpRestrictionConfig`). Also requeues EdgionPlugins and
   EdgionStreamPlugins that reference this object as an `IpList` via `allowRefs`/`denyRefs` in
   IpRestriction configs or GCIR per-profile `ProfileRules`.
@@ -269,7 +272,7 @@ Full analysis and the decision to keep it that way:
 | Direction | Mechanism |
 |-----------|-----------|
 | EdgionConfigData ← EdgionPlugins | `overrideRef` in `RegionRouteConfig` → `RegionRouteOverride`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
-| EdgionConfigData ← EdgionPlugins | Ordered `bundleRefs` in `WafConfig` → `WafRuleBundle`; Controller resolves a single batch and embeds complete uncompiled bundles in EdgionPlugins for Gateway revalidation. Missing or invalid references reject the entire candidate WAF generation; no partial-good or fail-to-base fallback. |
+| EdgionConfigData ← EdgionPlugins | `WafConfig.policyRef` → `WafPolicy`; plugin `activeProfileRef` → `Selector`; policy profile `bundleRefs` → `WafRuleBundle`. Controller tracks every reference, chooses one profile, and embeds its accepted uncompiled bundles for Gateway revalidation. Required bundle failures invalidate a profile; explicit optional references may be skipped with `PartiallyInvalid`. Selector failures fall back to the validated default profile. |
 | EdgionConfigData ← EdgionPlugins | `RequestAccessPolicy.activeProfileRef` → `Selector`; IP rules/conditions → `IpList`; URL rules → `RequestAccessUrlAllowList` | Selector failures affect `ResolvedRefs`; optional IP/URL data failures, including cross-ns denial, are omitted individually and reported through `PartiallyInvalid`. All refs use the shared reverse index and cross-namespace requeue path. |
 | EdgionConfigData ← EdgionStreamPlugins | `activeProfileRef` in `GlobalConnectionIpRestrictionConfig` → `Selector`; ESP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
 | EdgionConfigData ← {EdgionPlugins, EdgionStreamPlugins} | `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile `ProfileRules` → `IpList`; referrer `ResolvedRefs` reflects resolution (missing/disabled/wrong-type → `ResolvedRefs=False`; cross-ns without grant/visibility → `RefNotPermitted`) |
@@ -282,7 +285,8 @@ Full analysis and the decision to keep it that way:
 
 Cross-namespace EdgionConfigData references — all ref types: `allowRefs`/`denyRefs` (IpList),
 `overrideRef` (RegionRouteOverride), `activeProfileRef` (Selector, including
-`RequestAccessPolicy.activeProfileRef`), and `bundleRefs` (WafRuleBundle) — are gated by two complementary controls.
+`RequestAccessPolicy.activeProfileRef`, `WafConfig.activeProfileRef`), and WafPolicy profile
+`bundleRefs` (WafRuleBundle) — are gated by two complementary controls.
 
 ### Mechanism
 

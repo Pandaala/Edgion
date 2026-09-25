@@ -12,6 +12,7 @@
 //! | Selector | `Selector` | Active-profile selector via `activeProfileRef` (GlobalConnectionIpRestriction) |
 //! | First-party overlay | `RegionRouteOverride` | All-Optional region table overlay via `overrideRef` |
 //! | Executable policy data | `WafRuleBundle` | Strict, content-addressed WAF inputs |
+//! | WAF policy | `WafPolicy` | Named bundle combinations selected by a consuming plugin |
 //! | Escape hatch | `Misc` | Third-party / unknown payloads |
 //!
 //! The top-level envelope carries `enable` (kill switch, default `true`) and
@@ -24,6 +25,7 @@ pub mod overlay;
 pub mod region_route;
 pub mod request_access_url_allow_list;
 pub mod selector;
+pub mod waf_policy;
 pub mod waf_rule_bundle;
 
 pub use ip_group::IpGroup;
@@ -33,6 +35,7 @@ pub use overlay::{apply_override, OverlaySignal};
 pub use region_route::{merge_region_route_override, validate_regions, RegionRouteOverride, RegionTableValidation};
 pub use request_access_url_allow_list::RequestAccessUrlAllowListData;
 pub use selector::Selector;
+pub use waf_policy::{WafBundleRef, WafPolicyData, WafProfile};
 pub use waf_rule_bundle::{WafBundleMember, WafRuleBundleData};
 
 use crate::resources::common::Condition;
@@ -247,6 +250,9 @@ pub enum ConfigEntry {
     /// validation checks structure and integrity; the consumer compiles it.
     WafRuleBundle(WafRuleBundleData),
 
+    /// Named bundle combinations with one default and an optional Selector.
+    WafPolicy(WafPolicyData),
+
     /// Escape hatch for third-party, experimental, or unknown payloads.
     /// The `config` content is not validated — use sparingly and only when no
     /// typed first-party variant fits.  `x-kubernetes-preserve-unknown-fields`
@@ -265,6 +271,7 @@ impl EdgionConfigData {
             ConfigEntry::Selector(_) => "Selector",
             ConfigEntry::RegionRouteOverride(_) => "RegionRouteOverride",
             ConfigEntry::WafRuleBundle(_) => "WafRuleBundle",
+            ConfigEntry::WafPolicy(_) => "WafPolicy",
             ConfigEntry::Misc(_) => "Misc",
         }
     }
@@ -310,6 +317,22 @@ impl EdgionConfigData {
                 // Standalone validation of the overlay (only validates present fields).
                 if let Err(e) = ov.validate_and_init() {
                     errors.push(format!("RegionRouteOverride invalid: {}", e));
+                }
+            }
+            ConfigEntry::WafPolicy(policy) => {
+                if !self.spec.enable || self.spec.active.is_some() {
+                    errors.push("WafPolicy requires enable=true and active absent".to_string());
+                }
+                if self
+                    .spec
+                    .unknown_fields
+                    .iter()
+                    .any(|path| path == "data.config" || path.starts_with("data.config."))
+                {
+                    errors.push("WafPolicy contains unknown config fields".to_string());
+                }
+                if let Err(error) = policy.validate_shape() {
+                    errors.push(error);
                 }
             }
             ConfigEntry::WafRuleBundle(bundle) => {
