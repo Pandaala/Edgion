@@ -30,6 +30,30 @@ with its own base manifest set and gateway startup configuration:
 | `gateway-http-conformance-report.yaml` | GATEWAY-HTTP | 2026-05-23 | Earlier partial/failing report, retained as history |
 | `gateway-http-grpc-v1.6.2-kind-2026-09-23.yaml` | GATEWAY-HTTP, GATEWAY-GRPC | 2026-09-23 | v1.6.2 Experimental, isolated kind node run; all selected tests passed |
 | `gateway-tls-v1.6.2-kind-2026-09-23.yaml` | GATEWAY-TLS | 2026-09-23 | v1.6.2 Experimental, isolated kind node run; one extended test failed |
+| `gateway-http-grpc-v1.6.2-standard-kind-2026-09-24.yaml` | GATEWAY-HTTP, GATEWAY-GRPC | 2026-09-24 | v1.6.2 Standard; HTTP Core 36/37, Extended 26/30, GRPC Core 15/15 |
+| `gateway-tls-v1.6.2-standard-kind-2026-09-24.yaml` | GATEWAY-TLS | 2026-09-24 | v1.6.2 Standard; TLS Core 20/20 |
+
+## Standard v1.6.2 result boundary
+
+The Standard runs used an isolated kind cluster on OrbStack and local arm64
+Controller and Gateway images. The unmodified upstream HTTP/GRPC suite failed
+`HTTPRouteMultipleGateways`: the four base Gateways all published the same
+Gateway Service IP, so identical host/path requests could not select a
+distinct Gateway parent. Four HTTP Extended tests also failed in the combined
+run; a targeted `BackendTLSPolicySANValidation` run passed, but that does not
+establish a full-profile pass. GRPC Core passed 15/15.
+
+The TLS-only run used the unmodified upstream test binary with the pinned
+TLS-only base manifest and passed Core 20/20. It does not report an Extended
+profile. TCP and UDP remain outside the declared feature set because dynamic
+listener binding is not implemented.
+
+An addressed-hostNetwork experiment was excluded from these reports: it
+assigned node loopback IPs to the test Gateways and patched upstream fixture
+preparation to preserve them. Normal Gateway Pods use their own network
+namespace behind a Service, so a Gateway address or Service VIP need not be
+present on a Pod. That experiment does not establish support for binding
+`Gateway.spec.addresses` in the default Kubernetes deployment.
 
 The new reports use Go conformance v1.6.2 and Gateway API v1.6.2
 Experimental CRDs with local arm64 Edgion images. The full HTTP profile

@@ -1,4 +1,4 @@
-# TLS-only base manifest for Gateway API conformance tests.
+# TLS-only base manifest for Gateway API v1.6.2 conformance tests.
 # Filtered version of upstream base/manifests.yaml with HTTP/HTTPS Gateways
 # removed to prevent port 443 conflicts with TLS Passthrough listeners.
 #
@@ -69,7 +69,7 @@ spec:
       containers:
       - name: infra-backend-v1
         # Originally from https://github.com/kubernetes-sigs/ingress-controller-conformance/tree/master/images/echoserver
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         env:
         - name: POD_NAME
           valueFrom:
@@ -115,7 +115,7 @@ spec:
     spec:
       containers:
       - name: infra-backend-v2
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         env:
         - name: POD_NAME
           valueFrom:
@@ -150,7 +150,7 @@ metadata:
   labels:
     app: infra-backend-v3
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: infra-backend-v3
@@ -161,7 +161,7 @@ spec:
     spec:
       containers:
       - name: infra-backend-v3
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.6.0-dev.3
         env:
         - name: POD_NAME
           valueFrom:
@@ -207,7 +207,7 @@ spec:
     spec:
       containers:
       - name: tls-backend
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         volumeMounts:
         - name: secret-volume
           mountPath: /etc/secret-volume
@@ -269,7 +269,7 @@ spec:
     spec:
       containers:
       - name: tls-backend-2
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         volumeMounts:
         - name: secret-volume
           mountPath: /etc/secret-volume
@@ -338,7 +338,7 @@ spec:
     spec:
       containers:
       - name: tls-backend
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         volumeMounts:
         - name: secret-volume
           mountPath: /etc/secret-volume
@@ -400,7 +400,7 @@ spec:
     spec:
       containers:
       - name: app-backend-v1
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         env:
         - name: POD_NAME
           valueFrom:
@@ -446,7 +446,7 @@ spec:
     spec:
       containers:
       - name: app-backend-v2
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         env:
         - name: POD_NAME
           valueFrom:
@@ -499,7 +499,7 @@ spec:
     spec:
       containers:
       - name: web-backend
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         env:
         - name: POD_NAME
           valueFrom:
@@ -546,7 +546,7 @@ spec:
     spec:
       containers:
       - name: grpc-infra-backend-v1
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         env:
         - name: POD_NAME
           valueFrom:
@@ -595,7 +595,7 @@ spec:
     spec:
       containers:
       - name: grpc-infra-backend-v2
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         env:
         - name: POD_NAME
           valueFrom:
@@ -644,7 +644,7 @@ spec:
     spec:
       containers:
       - name: grpc-infra-backend-v3
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         env:
         - name: POD_NAME
           valueFrom:
@@ -768,7 +768,7 @@ spec:
     spec:
       containers:
       - name: tcp-backend
-        image: gcr.io/k8s-staging-gateway-api/echo-basic:v20260204-monthly-2026.01-60-g28382302
+        image: registry.k8s.io/gateway-api/echo-basic:v1.5.1
         resources:
           requests:
             cpu: 10m

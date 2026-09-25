@@ -1,0 +1,90 @@
+apiVersion: gateway.networking.k8s.io/v1
+date: "2026-09-24T14:40:12Z"
+gatewayAPIChannel: standard
+gatewayAPIVersion: v1.6.2
+implementation:
+  contact:
+  - '@edgion'
+  organization: Edgion
+  project: Edgion
+  url: https://github.com/edgion/edgion
+  version: dev
+kind: ConformanceReport
+mode: default
+profiles:
+- core:
+    failedTests:
+    - HTTPRouteMultipleGateways
+    result: failure
+    statistics:
+      Failed: 1
+      Passed: 36
+      Skipped: 0
+  extended:
+    failedTests:
+    - BackendTLSPolicy
+    - BackendTLSPolicyInvalidCACertificateRef
+    - BackendTLSPolicyInvalidKind
+    - BackendTLSPolicySANValidation
+    result: failure
+    statistics:
+      Failed: 4
+      Passed: 26
+      Skipped: 0
+    supportedFeatures:
+    - BackendTLSPolicy
+    - BackendTLSPolicySANValidation
+    - GatewayHTTPListenerIsolation
+    - GatewayHTTPSListenerDetectMisdirectedRequests
+    - HTTPRoute303RedirectStatusCode
+    - HTTPRoute307RedirectStatusCode
+    - HTTPRoute308RedirectStatusCode
+    - HTTPRouteBackendProtocolH2C
+    - HTTPRouteBackendProtocolWebSocket
+    - HTTPRouteBackendRequestHeaderModification
+    - HTTPRouteBackendTimeout
+    - HTTPRouteCORS
+    - HTTPRouteDestinationPortMatching
+    - HTTPRouteHostRewrite
+    - HTTPRouteMethodMatching
+    - HTTPRouteNamedRouteRule
+    - HTTPRoutePathRedirect
+    - HTTPRoutePathRewrite
+    - HTTPRoutePortRedirect
+    - HTTPRouteQueryParamMatching
+    - HTTPRouteRequestMirror
+    - HTTPRouteRequestPercentageMirror
+    - HTTPRouteRequestTimeout
+    - HTTPRouteResponseHeaderModification
+    - HTTPRouteSchemeRedirect
+    unsupportedFeatures:
+    - GatewayAddressEmpty
+    - GatewayBackendClientCertificate
+    - GatewayFrontendClientCertificateValidation
+    - GatewayFrontendClientCertificateValidationInsecureFallback
+    - GatewayInfrastructurePropagation
+    - GatewayPort8080
+    - GatewayStaticAddresses
+    - HTTPRouteParentRefPort
+    - HTTPRouteRequestMultipleMirrors
+    - HTTPRouteRetry
+    - HTTPRouteRetryBackendTimeout
+    - HTTPRouteRetryConnectionError
+    - ListenerSet
+  name: GATEWAY-HTTP
+  summary: Core tests failed with 1 test failures. Extended tests failed with 4 test
+    failures.
+- core:
+    result: success
+    statistics:
+      Failed: 0
+      Passed: 15
+      Skipped: 0
+  name: GATEWAY-GRPC
+  summary: Core tests succeeded.
+succeededProvisionalTests:
+- HTTPRoute303Redirect
+- HTTPRoute307Redirect
+- HTTPRoute308Redirect
+- HTTPRouteNamedRule
+- HTTPRouteRequestPercentageMirror

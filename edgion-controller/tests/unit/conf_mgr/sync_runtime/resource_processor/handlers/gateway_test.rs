@@ -187,6 +187,38 @@ fn unsupported_protocol_only_invalidates_its_listener() {
     }
 }
 
+#[test]
+fn unadvertised_tls_terminate_has_no_supported_kinds() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime);
+    let handler = GatewayHandler::new(None, None);
+    let mut gateway: Gateway = serde_json::from_value(serde_json::json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+        "metadata": {"name": "edge", "namespace": "demo"},
+        "spec": {
+            "gatewayClassName": "test",
+            "listeners": [{
+                "name": "tls-terminate", "port": 443, "protocol": "TLS",
+                "tls": {"mode": "Terminate", "certificateRefs": [{"name": "cert"}]}
+            }]
+        }
+    }))
+    .unwrap();
+    let errors = handler.validate(&gateway, &ctx);
+    handler.update_status(&mut gateway, &ctx, &errors);
+    let listener = &gateway.status.unwrap().listeners.unwrap()[0];
+    let accepted = listener
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == "Accepted")
+        .unwrap();
+    assert_eq!(
+        (accepted.status.as_str(), accepted.reason.as_str()),
+        ("False", "UnsupportedValue")
+    );
+    assert!(listener.supported_kinds.is_empty());
+}
+
 #[tokio::test]
 async fn gateway_address_without_value_is_status_rejected_and_recovers() {
     let runtime = Arc::new(ControllerRuntime::default());

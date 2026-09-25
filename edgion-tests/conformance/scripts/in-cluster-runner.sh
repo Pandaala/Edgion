@@ -26,7 +26,7 @@ set -euo pipefail
 # Reports are saved to reports/ with profile-derived names.
 #
 # The script:
-#   1. Cross-compiles the Go test binary (linux/amd64)
+#   1. Cross-compiles the Go test binary for the cluster node architecture
 #   2. Creates a ServiceAccount + ClusterRole with wide permissions
 #   3. Deploys an ubuntu:22.04 sleep pod
 #   4. Copies the test binary into the pod
@@ -116,9 +116,14 @@ require_gateway_service
 
 # ── Step 1: Cross-compile test binary ─────────────────────────────────────────
 if [[ "$RUN_ONLY" != "true" ]]; then
-  echo "=== [1/4] Cross-compiling conformance test binary (linux/amd64) ==="
+  NODE_ARCH=$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}')
+  case "$NODE_ARCH" in
+    amd64|arm64) ;;
+    *) echo "Unsupported Kubernetes node architecture: $NODE_ARCH" >&2; exit 1 ;;
+  esac
+  echo "=== [1/4] Cross-compiling conformance test binary (linux/$NODE_ARCH) ==="
   cd "$CONFORMANCE_ROOT"
-  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o conformance-test.bin .
+  GOOS=linux GOARCH="$NODE_ARCH" CGO_ENABLED=0 go test -c -o conformance-test.bin .
   echo "  Binary: $(ls -lh conformance-test.bin | awk '{print $5}')"
 
   pod_ready=false
@@ -455,6 +460,10 @@ wait_controller_ready() {
 wait_gateway_endpoints_ready() {
   local timeout=60 elapsed=0
   local gw_svc="edgion-gateway"
+  local probe_port=80
+  if has_tls_profile && ! has_http_grpc_profile; then
+    probe_port=443
+  fi
   echo "    Waiting for gateway Service endpoints to become ready..."
   while (( elapsed < timeout )); do
     local ep_addrs
@@ -465,8 +474,8 @@ wait_gateway_endpoints_ready() {
       gw_ip=$(kubectl get svc "$gw_svc" -n "$NAMESPACE" \
         -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
       if [[ -n "$gw_ip" ]] && kubectl exec -n "$NAMESPACE" "$RUNNER_POD" -- \
-          bash -c "echo >/dev/tcp/${gw_ip}/80" 2>/dev/null; then
-        echo "    Gateway endpoints ready and port 80 reachable after ${elapsed}s."
+          bash -c "echo >/dev/tcp/${gw_ip}/${probe_port}" 2>/dev/null; then
+        echo "    Gateway endpoints ready and port ${probe_port} reachable after ${elapsed}s."
         return
       fi
     fi
@@ -542,6 +551,7 @@ if [[ "$CLEAN_SLATE" == "true" ]]; then
     for kind in service deployment; do
       delete_non_base "$kind" "$ns" \
         "infra-backend-v1" "infra-backend-v2" "infra-backend-v3" \
+        "app-backend-v1" "app-backend-v2" "web-backend" \
         "grpc-infra-backend-v1" "grpc-infra-backend-v2" "grpc-infra-backend-v3" \
         "tls-backend" "tls-backend-2" "tcp-backend" "coredns"
     done

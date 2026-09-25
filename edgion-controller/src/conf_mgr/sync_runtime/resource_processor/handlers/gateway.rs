@@ -2532,13 +2532,13 @@ fn detect_mixed_tls_mode_listeners(
 }
 
 fn listener_has_unsupported_tls_mode(listener: &GatewayListener) -> bool {
-    // The CRD enum + serde rejects values other than Terminate/Passthrough,
-    // so the only remaining semantic constraint is: HTTPS does not support
-    // Passthrough (the listener must terminate TLS to expose HTTP routes).
+    // The CRD enum + serde rejects values other than Terminate/Passthrough.
+    // TLSRoute termination is not advertised; HTTPS requires termination.
     let Some(mode) = listener.tls.as_ref().and_then(|tls| tls.mode.as_ref()) else {
         return false;
     };
-    listener.protocol.eq_ignore_ascii_case("HTTPS") && *mode == GatewayTlsMode::Passthrough
+    (listener.protocol.eq_ignore_ascii_case("HTTPS") && *mode == GatewayTlsMode::Passthrough)
+        || (listener.protocol.eq_ignore_ascii_case("TLS") && *mode == GatewayTlsMode::Terminate)
 }
 
 /// Compute supported kinds for a listener, honoring allowedRoutes.kinds when provided.
