@@ -171,7 +171,7 @@ fn multipart_boundary_search_preserves_candidate_order_and_overlap() {
     for _ in 0..256 {
         let mut next = || {
             state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            alphabet[(state as usize) % alphabet.len()]
+            alphabet[((state >> 16) as usize) % alphabet.len()]
         };
         let boundary: Vec<u8> = (0..(next() as usize % 8 + 1)).map(|_| next()).collect();
         let input: Vec<u8> = (0..96).map(|_| next()).collect();

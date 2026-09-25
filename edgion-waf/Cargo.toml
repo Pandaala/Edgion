@@ -33,5 +33,9 @@ harness = false
 name = "injection_regression"
 harness = false
 
+[[bench]]
+name = "multipart_boundary"
+harness = false
+
 [lints]
 workspace = true

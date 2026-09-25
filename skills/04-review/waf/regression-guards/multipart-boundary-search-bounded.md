@@ -46,8 +46,10 @@ body and boundary lengths.
 The source is `edgion-waf/src/seclang/body.rs`. Tests in
 `edgion-waf/tests/unit/seclang/body_test.rs` compare boundary positions with
 the old search on every cursor for varied boundaries, including an overlapping
-CR/LF example, and exercise long near matches, normal fields and files,
-malformed input, and limits. The transaction test checks Phase 2 results in
+CR/LF example. Deterministic high-bit pseudorandom samples also cover repeated
+bytes without the low-bit alternation of the original fixture. The tests
+exercise long near matches, normal fields and files, malformed input, and
+limits. The transaction test checks Phase 2 results in
 both enforcement and detection-only modes.
 
 ## Alternatives and limits
@@ -83,6 +85,19 @@ old search. Full multipart publication on near-match bodies measured 19 us
 at about 1 MiB, 570 us at about 8 MiB, and 1.14 ms at about 15 MiB. The
 manual benchmark source was removed after measurement; these are elapsed-time
 medians from this host, not persistent CI gates or exact CPU measurements.
+
+The current reproducible benchmark is
+`cargo bench -p edgion-waf --bench multipart_boundary`; set
+`EDGION_WAF_BENCH_SMOKE=1` for a short run. It measures the public
+`Transaction::publish_request_body` call after transaction construction and
+header evaluation, then verifies the Phase 2 result outside the timed region.
+It reports CSV p50/p95 for 70- and 200-byte boundaries; plain file content,
+near matches, and exact delimiters with invalid suffixes; and body sizes from
+64 KiB through 8 MiB, plus a 15 MiB near-match case. A 101-sample optimized
+run on aarch64 macOS during this follow-up measured 1 MiB near-match p50 at
+about 0.45-0.51 ms and 15 MiB near-match p50 at about 8.9-9.2 ms. This
+end-to-end publication benchmark includes parsing and allocation, so its
+numbers must not be compared directly with the earlier search-only timings.
 
 Re-evaluate if the accepted boundary syntax, multipart parse flow, work-budget
 model, finder dependency, or supported CPU targets change. Repeat the
