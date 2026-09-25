@@ -1,4 +1,4 @@
-//! Immutable, content-addressed inputs for a native WAF generation.
+//! Strict rule inputs with an optional content self-check for a native WAF generation.
 
 use std::collections::HashSet;
 
@@ -31,7 +31,7 @@ impl std::fmt::Debug for WafBundleMember {
 }
 
 /// One versioned rule bundle. The consumer compiles selected bundles together;
-/// standalone validation proves only this bundle's structure and digest.
+/// standalone validation proves this bundle's structure and any supplied digest.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WafRuleBundleData {
@@ -41,8 +41,9 @@ pub struct WafRuleBundleData {
     pub profile: String,
     /// Human-readable origin such as a repository and revision.
     pub provenance: String,
-    /// Lowercase SHA-256 digest of the canonical, length-framed bundle contents.
-    pub digest: String,
+    /// Optional self-check of the canonical bundle contents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
     /// Ordered names of rule members selected as entry points.
     pub roots: Vec<String>,
     /// Rule files, including files reached by Include.
@@ -130,14 +131,15 @@ impl WafRuleBundleData {
                 return Err("WafRuleBundle has an unsafe, duplicate, or missing root".into());
             }
         }
-        if self.digest.len() != 64
-            || !self
-                .digest
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-            || self.digest != self.compute_digest()
-        {
-            return Err("WafRuleBundle digest does not match its contents".into());
+        if let Some(digest) = &self.digest {
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                || digest != &self.compute_digest()
+            {
+                return Err("WafRuleBundle digest does not match its contents".into());
+            }
         }
         Ok(())
     }

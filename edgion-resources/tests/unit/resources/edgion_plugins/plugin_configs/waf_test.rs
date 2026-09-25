@@ -8,7 +8,7 @@ fn test_bundle(name: &str, id: u64) -> (WafBundleRef, ResolvedWafBundle) {
         version: "1".into(),
         profile: "test".into(),
         provenance: "test/revision".into(),
-        digest: String::new(),
+        digest: None,
         roots: vec!["main.conf".into()],
         rules: vec![WafBundleMember {
             name: "main.conf".into(),
@@ -16,7 +16,7 @@ fn test_bundle(name: &str, id: u64) -> (WafBundleRef, ResolvedWafBundle) {
         }],
         phrase_assets: vec![],
     };
-    data.digest = data.compute_digest();
+    data.digest = Some(data.compute_digest());
     (
         WafBundleRef {
             target: EdgionConfigDataRef {
@@ -29,7 +29,7 @@ fn test_bundle(name: &str, id: u64) -> (WafBundleRef, ResolvedWafBundle) {
         },
         ResolvedWafBundle {
             identity: format!("default/{name}"),
-            digest: data.digest.clone(),
+            digest: data.compute_digest(),
             data,
         },
     )
@@ -65,6 +65,25 @@ fn bundle_refs_require_complete_pinned_sources_and_redact_content() {
     let parsed: WafConfig = serde_json::from_value(json).unwrap();
     assert_eq!(parsed.compile_generation().unwrap().rule_unit_count(), 2);
 
+    let mut unpinned = config.clone();
+    unpinned
+        .resolved_policy
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("default")
+        .unwrap()
+        .bundle_refs[0]
+        .expected_digest = None;
+    unpinned.resolved_bundles.as_mut().unwrap()[0].data.digest = None;
+    let wire = serde_json::to_value(&unpinned).unwrap();
+    let mut unpinned: WafConfig = serde_json::from_value(wire).unwrap();
+    assert_eq!(unpinned.compile_generation().unwrap().rule_unit_count(), 2);
+    unpinned.resolved_bundles.as_mut().unwrap()[0].data.rules[0]
+        .content
+        .push_str("# changed");
+    assert!(unpinned.compile_generation().is_err());
+
     let mut tampered = config.clone();
     tampered.resolved_bundles.as_mut().unwrap()[0].data.rules[0]
         .content
@@ -80,7 +99,7 @@ fn bundle_refs_require_complete_pinned_sources_and_redact_content() {
         .get_mut("default")
         .unwrap()
         .bundle_refs[0]
-        .expected_digest = "0".repeat(64);
+        .expected_digest = Some("0".repeat(64));
     assert!(mismatch.compile_generation().is_err());
 
     let mut missing = config.clone();
@@ -507,7 +526,7 @@ fn dynamic_integration_generations_compile_with_the_production_profile() {
 }
 
 #[test]
-fn plugin_requires_one_policy_reference_and_rejects_inline_profile_fields() {
+fn plugin_requires_one_policy_reference_and_accepts_one_profile_selector() {
     assert!(serde_json::from_value::<WafConfig>(serde_json::json!({})).is_err());
     for field in ["profiles", "defaultProfile", "bundleRefs"] {
         let mut value = serde_json::json!({"policyRef": {"name": "policy"}});
@@ -524,6 +543,16 @@ fn plugin_requires_one_policy_reference_and_rejects_inline_profile_fields() {
     .unwrap();
     assert_eq!(selected.active_profile_ref.as_ref().unwrap().name, "business-selector");
     assert!(selected.validate_shape().is_ok());
+    let fixed: WafConfig = serde_json::from_value(serde_json::json!({
+        "policyRef": {"name": "policy"},
+        "activeProfile": "high"
+    }))
+    .unwrap();
+    assert_eq!(fixed.active_profile.as_deref(), Some("high"));
+    assert!(fixed.validate_shape().is_ok());
+    let mut conflicting = fixed;
+    conflicting.active_profile_ref = selected.active_profile_ref;
+    assert!(conflicting.validate_shape().is_err());
     let schema = serde_json::to_value(schemars::schema_for!(WafConfig)).unwrap();
     let properties = schema["properties"].as_object().unwrap();
     assert!(properties.contains_key("policyRef"));

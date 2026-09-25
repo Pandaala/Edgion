@@ -92,7 +92,7 @@ fn register_policy_refs(ed: &EdgionConfigData, ctx: &HandlerContext) {
 fn policy_ref_error(
     reference: &EdgionConfigDataRef,
     namespace: &str,
-    expected_digest: &str,
+    expected_digest: Option<&str>,
     ctx: &HandlerContext,
 ) -> Option<String> {
     let target_ns = reference.namespace.as_deref().unwrap_or(namespace);
@@ -133,7 +133,7 @@ fn policy_ref_error(
             if bundle.validate().is_err() {
                 return Some(format!("WafRuleBundle {label} is invalid"));
             }
-            if expected_digest != bundle.digest {
+            if expected_digest.is_some_and(|digest| digest != bundle.compute_digest()) {
                 return Some(format!("WafRuleBundle {label} has a digest mismatch"));
             }
         }
@@ -277,7 +277,7 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
                 for profile in policy.profiles.values() {
                     for reference in &profile.bundle_refs {
                         if let Some(error) =
-                            policy_ref_error(&reference.target, namespace, &reference.expected_digest, ctx)
+                            policy_ref_error(&reference.target, namespace, reference.expected_digest.as_deref(), ctx)
                         {
                             if reference.optional {
                                 optional_errors.push(error);

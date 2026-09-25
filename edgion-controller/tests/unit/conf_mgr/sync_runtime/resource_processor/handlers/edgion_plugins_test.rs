@@ -1474,7 +1474,7 @@ async fn waf_bundle_refs_register_requeue_and_resolve_only_complete_pinned_sourc
         version: "1".into(),
         profile: "test".into(),
         provenance: "test/revision".into(),
-        digest: String::new(),
+        digest: None,
         roots: vec!["main.conf".into()],
         rules: vec![WafBundleMember {
             name: "main.conf".into(),
@@ -1482,7 +1482,7 @@ async fn waf_bundle_refs_register_requeue_and_resolve_only_complete_pinned_sourc
         }],
         phrase_assets: vec![],
     };
-    bundle.digest = bundle.compute_digest();
+    bundle.digest = Some(bundle.compute_digest());
     let make_target = |data: WafRuleBundleData| {
         build_edgion_config_data(
             "default",
@@ -1532,7 +1532,7 @@ async fn waf_bundle_refs_register_requeue_and_resolve_only_complete_pinned_sourc
                                 name: "optional-missing".into(),
                                 ..Default::default()
                             },
-                            expected_digest: "0".repeat(64),
+                            expected_digest: Some("0".repeat(64)),
                             optional: true,
                         },
                     ],
@@ -1638,13 +1638,73 @@ async fn waf_bundle_refs_register_requeue_and_resolve_only_complete_pinned_sourc
         .edgion_config_data_refs
         .get_refs("business/waf-profile")
         .contains(&"EdgionPlugins:business/business-waf".to_string()));
+    let mut fixed = resource.clone();
+    fixed.metadata.name = Some("fixed-waf".into());
+    fixed.spec.waf.as_mut().unwrap().active_profile_ref = None;
+    fixed.spec.waf.as_mut().unwrap().active_profile = Some("high".into());
+    let fixed = match handler.parse(fixed, &ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert_eq!(
+        fixed.spec.waf.as_ref().unwrap().selected_profile.as_deref(),
+        Some("high")
+    );
+    assert!(fixed.spec.waf.as_ref().unwrap().compile_generation().is_ok());
+    let mut unknown = fixed;
+    unknown.metadata.name = Some("unknown-waf".into());
+    unknown.spec.waf.as_mut().unwrap().active_profile = Some("unknown".into());
+    let unknown = match handler.parse(unknown, &ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert!(unknown.spec.waf.as_ref().unwrap().compile_generation().is_err());
     let mut detached = business;
     detached.spec.waf.as_mut().unwrap().active_profile_ref = None;
-    let _ = handler.parse(detached, &ctx).await;
+    let detached = match handler.parse(detached, &ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert_eq!(
+        detached.spec.waf.as_ref().unwrap().selected_profile.as_deref(),
+        Some("default")
+    );
     assert!(!runtime
         .edgion_config_data_refs
         .get_refs("business/waf-profile")
         .contains(&"EdgionPlugins:business/business-waf".to_string()));
+
+    let mut digestless_bundle = bundle.clone();
+    digestless_bundle.digest = None;
+    runtime.edgion_config_data_store.replace_all(HashMap::from([
+        ("default/rules-v1".into(), make_target(digestless_bundle.clone())),
+        ("default/waf-profile".into(), selector.clone()),
+        ("default/waf-policy".into(), make_policy(policy.clone())),
+    ]));
+    let pinned = match handler.parse(resource.clone(), &ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert!(pinned.spec.waf.as_ref().unwrap().compile_generation().is_ok());
+
+    let mut unpinned_policy = policy.clone();
+    for profile in unpinned_policy.profiles.values_mut() {
+        for reference in &mut profile.bundle_refs {
+            if reference.target.name == "rules-v1" {
+                reference.expected_digest = None;
+            }
+        }
+    }
+    runtime.edgion_config_data_store.replace_all(HashMap::from([
+        ("default/rules-v1".into(), make_target(digestless_bundle)),
+        ("default/waf-profile".into(), selector.clone()),
+        ("default/waf-policy".into(), make_policy(unpinned_policy)),
+    ]));
+    let unpinned = match handler.parse(resource.clone(), &ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert!(unpinned.spec.waf.as_ref().unwrap().compile_generation().is_ok());
 
     bundle.rules[0].content.push_str("# changed");
     runtime.edgion_config_data_store.replace_all(HashMap::from([
@@ -1674,7 +1734,7 @@ async fn waf_selector_cross_namespace_without_grant_uses_default_profile() {
         version: "1".into(),
         profile: "test".into(),
         provenance: "test/revision".into(),
-        digest: String::new(),
+        digest: None,
         roots: vec!["main.conf".into()],
         rules: vec![WafBundleMember {
             name: "main.conf".into(),
@@ -1682,7 +1742,7 @@ async fn waf_selector_cross_namespace_without_grant_uses_default_profile() {
         }],
         phrase_assets: vec![],
     };
-    bundle.digest = bundle.compute_digest();
+    bundle.digest = Some(bundle.compute_digest());
     let rules = build_edgion_config_data(
         "default",
         "rules-v1",
@@ -1866,7 +1926,7 @@ async fn waf_policy_grant_does_not_authorize_its_cross_namespace_bundle() {
         version: "1".into(),
         profile: "test".into(),
         provenance: "test/revision".into(),
-        digest: String::new(),
+        digest: None,
         roots: vec!["main.conf".into()],
         rules: vec![WafBundleMember {
             name: "main.conf".into(),
@@ -1874,7 +1934,7 @@ async fn waf_policy_grant_does_not_authorize_its_cross_namespace_bundle() {
         }],
         phrase_assets: vec![],
     };
-    bundle.digest = bundle.compute_digest();
+    bundle.digest = Some(bundle.compute_digest());
     let policy = build_edgion_config_data(
         "policy-ns",
         "shared-policy",
@@ -1972,7 +2032,7 @@ async fn waf_bundle_reference_limit_stops_subscription_and_source_capture() {
                             name: "large-bundle".into(),
                             ..Default::default()
                         },
-                        expected_digest: "0".repeat(64),
+                        expected_digest: Some("0".repeat(64)),
                         optional: false,
                     };
                     1_024

@@ -56,12 +56,13 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 |-------|----------|---------|---------|
 | `policyRef.name` | yes | — | Fixed reference to a `WafPolicy` EdgionConfigData |
 | `policyRef.namespace` | no | EdgionPlugins namespace | Policy namespace; cross-namespace use requires visibility or ReferenceGrant |
+| `activeProfile` | no | `WafPolicy.defaultProfile` | Fixed profile name for this plugin; mutually exclusive with `activeProfileRef` |
 | `WafPolicy.profiles` | yes | — | One to 16 named profiles; each contains one to 16 ordered `bundleRefs`, with at least one required reference |
 | `WafPolicy.defaultProfile` | yes | — | Profile used without a usable Selector choice |
-| `activeProfileRef` | no | — | Per-plugin reference to a typed `Selector` EdgionConfigData for hot switching among configured profiles |
+| `activeProfileRef` | no | — | Per-plugin reference to a typed `Selector` EdgionConfigData for hot switching among configured profiles; mutually exclusive with `activeProfile` |
 | `WafPolicy.profiles.<name>.bundleRefs[].name` | with each reference | — | Target WafRuleBundle EdgionConfigData name |
 | `WafPolicy.profiles.<name>.bundleRefs[].namespace` | no | WafPolicy namespace | Target namespace; cross-namespace use follows `visibility` and `ReferenceGrant` |
-| `WafPolicy.profiles.<name>.bundleRefs[].expectedDigest` | with each reference | — | Exact lowercase SHA-256 digest of the selected bundle |
+| `WafPolicy.profiles.<name>.bundleRefs[].expectedDigest` | no | — | Optional lowercase SHA-256 content pin; when omitted, valid bundle updates take effect automatically |
 | `WafPolicy.profiles.<name>.bundleRefs[].optional` | no | `false` | Skip a missing or invalid independent addition and report `PartiallyInvalid`; never mark the base bundle optional |
 | `mode` | no | `on` | `on` enforces disruptive actions; `detectionOnly` records matches without blocking |
 | `priority` | no | `0` | Tie breaker within one attachment scope from `0` through `65535`; a larger value wins |
@@ -129,7 +130,7 @@ spec:
 | Bundle field | Required | Meaning |
 |--------------|----------|---------|
 | `version`, `profile`, `provenance` | yes | Non-empty version, ruleset profile, and source description included in the digest |
-| `digest` | yes | Lowercase SHA-256 of the canonical, length-framed bundle; a changed member or metadata field needs a new digest |
+| `digest` | no | Optional lowercase SHA-256 self-check of the canonical bundle; omit it for directly managed rules |
 | `roots` | yes | Ordered rule member names to compile; at least one root is required |
 | `rules[].name`, `rules[].content` | yes | Relative member path and SecLang source; at least one rule member is required |
 | `phraseAssets[].name`, `phraseAssets[].content` | no | Relative member path and text for `@pmFromFile` |
@@ -147,7 +148,7 @@ The selected profile compiles bundles in `bundleRefs` order and each bundle's
 `roots` order. Includes and phrase assets resolve only within the bundle that
 contains the requesting rule. Duplicate rule IDs across all selected bundles
 reject the entire generation.
-The Controller checks each reference and its digest, and the Gateway checks the
+The Controller checks each reference and any configured content pin, and the Gateway checks the
 transported contents again before publishing the generation. An invalid,
 missing, disabled, wrong-type, or unauthorized reference cannot publish a
 partial base ruleset. An optional addition can be skipped with
@@ -167,6 +168,8 @@ on `EdgionPlugins.spec.waf` and create an EdgionConfigData with `data.type: Sele
 `data.config.active: high`. Changing `active` switches to another configured
 profile after Controller validation. A missing, disabled, wrong-type, or unknown
 selection falls back to `defaultProfile`; it cannot disable WAF.
+For a fixed choice, set `activeProfile: high` on the plugin instead. The name
+must exist in the policy. Omit both selection fields to use `defaultProfile`.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -181,10 +184,11 @@ spec:
       active: high
 ```
 
-Bundle content changes do not activate automatically: create a new versioned
-bundle resource, calculate its digest, then update each WafPolicy reference's `name` and
-`expectedDigest` to opt in. Keep the prior versioned resource while any
-consumer still pins it.
+For pinned references, bundle content changes do not activate automatically:
+create a new versioned bundle resource, calculate its digest, then update each
+WafPolicy reference's `name` and `expectedDigest` to opt in. Keep the prior
+versioned resource while any consumer still pins it. Without `expectedDigest`,
+a valid bundle update activates after Controller and Gateway validation.
 When cross-namespace reference validation is enabled, a target with
 `visibility: Namespace` needs a matching `ReferenceGrant` in the target
 namespace; `visibility: Cluster` allows references from all namespaces.

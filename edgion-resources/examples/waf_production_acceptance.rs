@@ -252,13 +252,14 @@ fn run(manifest_path: &Path, report_path: &Path) -> Result<(), String> {
             let data: WafRuleBundleData =
                 serde_yaml::from_value(value["spec"]["data"]["config"].clone()).map_err(|error| error.to_string())?;
             data.validate()?;
-            if data.digest != reference.expected_digest {
+            let computed_digest = data.compute_digest();
+            if reference.expected_digest.as_deref() != Some(computed_digest.as_str()) {
                 return Err(format!("bundle reference digest changed: {}", bundle_file.path));
             }
             let namespace = reference.target.namespace.as_deref().unwrap_or("edgion-default");
             resolved.push(ResolvedWafBundle {
                 identity: format!("{namespace}/{}", reference.target.name),
-                digest: data.digest.clone(),
+                digest: computed_digest,
                 data,
             });
         }

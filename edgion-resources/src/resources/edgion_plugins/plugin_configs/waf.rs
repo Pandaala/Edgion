@@ -115,6 +115,10 @@ pub struct WafConfig {
     /// Fixed reference to the shared WafPolicy EdgionConfigData.
     pub policy_ref: EdgionConfigDataRef,
 
+    /// Optional fixed profile name selected by this plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_profile: Option<String>,
+
     /// Per-plugin selector for one of the shared policy's named profiles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_profile_ref: Option<EdgionConfigDataRef>,
@@ -189,6 +193,7 @@ impl std::fmt::Debug for WafConfig {
             .debug_struct("WafConfig")
             .field("rules", &"[redacted]")
             .field("policy_ref", &self.policy_ref)
+            .field("active_profile", &self.active_profile)
             .field("active_profile_ref", &self.active_profile_ref)
             .field("resolved_policy", &self.resolved_policy)
             .field("selected_profile", &self.selected_profile)
@@ -756,6 +761,14 @@ impl WafConfig {
         {
             return Err("activeProfileRef requires a valid name".to_string());
         }
+        if let Some(name) = self.active_profile.as_deref() {
+            if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
+                return Err("activeProfile requires a valid profile name".to_string());
+            }
+            if self.active_profile_ref.is_some() {
+                return Err("activeProfile and activeProfileRef are mutually exclusive".to_string());
+            }
+        }
         Ok(())
     }
 
@@ -805,6 +818,15 @@ impl WafConfig {
             .as_ref()
             .ok_or_else(|| WafCompileFailure::Config("policyRef has not been resolved".to_string()))?;
         policy.validate_shape().map_err(WafCompileFailure::Config)?;
+        if self
+            .active_profile
+            .as_ref()
+            .is_some_and(|name| !policy.profiles.contains_key(name))
+        {
+            return Err(WafCompileFailure::Config(
+                "activeProfile is not a configured WAF profile".to_string(),
+            ));
+        }
         if !self.resolution_errors.is_empty() {
             return Err(WafCompileFailure::Config(
                 "required bundleRefs resolution failed".to_string(),
@@ -848,8 +870,11 @@ impl WafConfig {
                     let expected_identity = format!("{namespace}/{}", reference.target.name);
                     if reference.target.ref_denied.is_some()
                         || bundle.identity != expected_identity
-                        || reference.expected_digest != bundle.digest
-                        || bundle.digest != bundle.data.digest
+                        || reference
+                            .expected_digest
+                            .as_deref()
+                            .is_some_and(|digest| digest != bundle.digest)
+                        || bundle.digest != bundle.data.compute_digest()
                         || bundle.data.validate().is_err()
                     {
                         return Err(WafCompileFailure::Config(

@@ -1,4 +1,4 @@
-//! Named, digest-pinned WAF policy inputs selected by a consuming plugin.
+//! Named WAF policy inputs with optional content pins, selected by a consuming plugin.
 
 use super::EdgionConfigDataRef;
 use schemars::JsonSchema;
@@ -8,13 +8,14 @@ use std::collections::BTreeMap;
 const MAX_WAF_BUNDLE_REFS: usize = 16;
 const MAX_WAF_TOTAL_REFS: usize = 64;
 
-/// One version-pinned shared rule bundle.
+/// One shared rule bundle with an optional content pin.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WafBundleRef {
     #[serde(flatten)]
     pub target: EdgionConfigDataRef,
-    pub expected_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_digest: Option<String>,
     /// An independent addition that may be omitted when unavailable or invalid.
     #[serde(default)]
     pub optional: bool,
@@ -62,13 +63,14 @@ impl WafPolicyData {
                 if reference.target.name.is_empty() || reference.target.name.contains('/') {
                     return Err("bundleRefs contains an invalid name".to_string());
                 }
-                if reference.expected_digest.len() != 64
-                    || !reference
-                        .expected_digest
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                {
-                    return Err("bundleRefs expectedDigest must be a lowercase SHA-256 digest".to_string());
+                if let Some(digest) = &reference.expected_digest {
+                    if digest.len() != 64
+                        || !digest
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    {
+                        return Err("bundleRefs expectedDigest must be a lowercase SHA-256 digest".to_string());
+                    }
                 }
             }
         }

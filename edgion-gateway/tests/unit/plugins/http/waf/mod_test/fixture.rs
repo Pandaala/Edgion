@@ -15,7 +15,7 @@ pub(crate) fn config_in_namespace(rules: &str, namespace: &str) -> WafConfig {
         version: "test-v1".into(),
         profile: "test".into(),
         provenance: "test/fixture".into(),
-        digest: String::new(),
+        digest: None,
         roots: vec!["main.conf".into()],
         rules: vec![WafBundleMember {
             name: "main.conf".into(),
@@ -23,7 +23,7 @@ pub(crate) fn config_in_namespace(rules: &str, namespace: &str) -> WafConfig {
         }],
         phrase_assets: vec![],
     };
-    data.digest = data.compute_digest();
+    data.digest = Some(data.compute_digest());
     WafConfig {
         policy_ref: EdgionConfigDataRef {
             name: "test-policy".into(),
@@ -50,7 +50,7 @@ pub(crate) fn config_in_namespace(rules: &str, namespace: &str) -> WafConfig {
         resolved_ref_indices: vec![0],
         resolved_bundles: Some(vec![ResolvedWafBundle {
             identity: format!("{namespace}/test-bundle"),
-            digest: data.digest.clone(),
+            digest: data.compute_digest(),
             data,
         }]),
         owner_namespace: Some(namespace.into()),

@@ -64,9 +64,11 @@ spec:
 compiled generation internally owns request-header, request-body,
 response-header, response-safe phase-4, and logging-phase execution. Its
 schema uses one fixed `policyRef` to a typed `WafPolicy` EdgionConfigData.
-The policy owns named profiles of ordered, digest-pinned `WafRuleBundle` references
-and one default profile. Each plugin may reference a `Selector` with `activeProfileRef`
-to choose its own active profile from that shared policy.
+The policy owns named profiles of ordered `WafRuleBundle` references with optional content pins
+and one default profile. Each plugin may choose a fixed `activeProfile` or
+reference a `Selector` with `activeProfileRef` to choose its own active profile
+from that shared policy. These fields are mutually exclusive; omitting both uses
+the policy default.
 Only one compiled generation is active per request. Bundle sources are strictly
 compiled and admin-redacted; invalid required updates retain the last activatable
 generation. See

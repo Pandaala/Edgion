@@ -47,6 +47,9 @@ spec:
                         namespace:
                           type: string
                       description: "Optional per-plugin Selector EdgionConfigData reference. Selects a profile from policyRef; unavailable choices use defaultProfile."
+                    activeProfile:
+                      type: string
+                      description: "Optional fixed profile name from policyRef. Mutually exclusive with activeProfileRef; omit both to use defaultProfile."
                     mode:
                       type: string
                       description: "Whether disruptive WAF actions are enforced or only reported"

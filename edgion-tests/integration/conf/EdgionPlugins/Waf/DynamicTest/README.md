@@ -39,10 +39,13 @@ EdgionConfigData with its plugin configuration. The plugin retains one fixed
 `Include` and a phrase asset, then bind it through a digest-pinned `bundleRefs`
 entry. A changed asset with the old digest retains the prior compiled WAF.
 The next version changes the denied phrase; reapplying the original bundle and
-pin rolls back. Deletion removes both bundle resources and the plugin.
+pin rolls back. An unpinned policy then observes a valid in-place bundle update
+without either digest field; restoring the pinned V1 bundle rolls it back again.
+Deletion removes both bundle resources and the plugin.
 The selector phases keep two named profiles in the shared WafPolicy. The low
 profile uses one bundle; the high profile combines the V2 phrase bundle with a
-second body rule bundle. A Selector update switches to high, an unknown name
+second body rule bundle. A plugin update selects high with an inline `activeProfile`,
+then switches back to its external `activeProfileRef`. A Selector update switches to high, an unknown name
 falls back to low, and a later update selects high again. Each request observes
 one selected profile and the suite checks both high-profile bundles. A missing
 optional third bundle reports `PartiallyInvalid=True` while both valid bundles

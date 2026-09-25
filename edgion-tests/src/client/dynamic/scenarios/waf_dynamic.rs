@@ -265,6 +265,19 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         ctx.apply_dir("updates/to_bundle_rollback").await?;
         ctx.wait_phase(scenario, "bundle-rollback", Duration::from_secs(15))
             .await?;
+        ctx.apply_dir("updates/to_bundle_unpinned_policy").await?;
+        ctx.wait_phase(scenario, "bundle-v1", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_bundle_unpinned_update").await?;
+        ctx.wait_phase(scenario, "bundle-v2", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_bundle_rollback").await?;
+        ctx.wait_phase(scenario, "bundle-rollback", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_selector_initial").await?;
+        ctx.wait_phase(scenario, "selector-low", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_inline_high").await?;
+        ctx.wait_phase(scenario, "selector-high", Duration::from_secs(15))
+            .await?;
         ctx.apply_dir("updates/to_selector_initial").await?;
         ctx.wait_phase(scenario, "selector-low", Duration::from_secs(15))
             .await?;

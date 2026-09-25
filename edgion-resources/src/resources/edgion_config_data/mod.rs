@@ -11,7 +11,7 @@
 //! | Security policy | `ProxyProtocolTrust` | Strict inbound PROXY sender trust policy |
 //! | Selector | `Selector` | Active-profile selector via `activeProfileRef` (GlobalConnectionIpRestriction) |
 //! | First-party overlay | `RegionRouteOverride` | All-Optional region table overlay via `overrideRef` |
-//! | Executable policy data | `WafRuleBundle` | Strict, content-addressed WAF inputs |
+//! | Executable policy data | `WafRuleBundle` | Strict WAF inputs with optional content pins |
 //! | WAF policy | `WafPolicy` | Named bundle combinations selected by a consuming plugin |
 //! | Escape hatch | `Misc` | Third-party / unknown payloads |
 //!
@@ -250,7 +250,7 @@ pub enum ConfigEntry {
     /// validation checks structure and integrity; the consumer compiles it.
     WafRuleBundle(WafRuleBundleData),
 
-    /// Named bundle combinations with one default and an optional Selector.
+    /// Named bundle combinations with one default, selected by a consuming plugin.
     WafPolicy(WafPolicyData),
 
     /// Escape hatch for third-party, experimental, or unknown payloads.

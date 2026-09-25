@@ -12,7 +12,7 @@ fn policy() -> WafPolicyData {
                         name: "base".into(),
                         ..Default::default()
                     },
-                    expected_digest: "a".repeat(64),
+                    expected_digest: Some("a".repeat(64)),
                     optional: false,
                 }],
             },
@@ -31,9 +31,15 @@ fn profiles_require_a_named_default_and_required_base() {
     optional_only.profiles.get_mut("low").unwrap().bundle_refs[0].optional = true;
     assert!(optional_only.validate_shape().is_err());
     let mut unpinned = value;
-    unpinned.profiles.get_mut("low").unwrap().bundle_refs[0]
-        .expected_digest
-        .clear();
+    unpinned.profiles.get_mut("low").unwrap().bundle_refs[0].expected_digest = None;
+    assert!(unpinned.validate_shape().is_ok());
+    let encoded = serde_json::to_value(&unpinned).unwrap();
+    assert!(encoded["profiles"]["low"]["bundleRefs"][0]
+        .get("expectedDigest")
+        .is_none());
+    unpinned.profiles.get_mut("low").unwrap().bundle_refs[0].expected_digest = Some("invalid".into());
+    assert!(unpinned.validate_shape().is_err());
+    unpinned.profiles.get_mut("low").unwrap().bundle_refs[0].expected_digest = Some(String::new());
     assert!(unpinned.validate_shape().is_err());
 }
 

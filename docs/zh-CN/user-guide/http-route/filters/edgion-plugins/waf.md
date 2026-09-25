@@ -47,12 +47,13 @@ spec:
 |------|------|--------|------|
 | `policyRef.name` | 是 | — | 固定引用 `WafPolicy` EdgionConfigData |
 | `policyRef.namespace` | 否 | EdgionPlugins 的命名空间 | 策略所在命名空间；跨命名空间需满足可见性或 ReferenceGrant |
+| `activeProfile` | 否 | `WafPolicy.defaultProfile` | 插件固定选择的 profile 名称；与 `activeProfileRef` 互斥 |
 | `WafPolicy.profiles` | 是 | — | 1–16 个具名配置，每个配置包含 1–16 个有序 `bundleRefs`，至少一个为必需引用 |
 | `WafPolicy.defaultProfile` | 是 | — | 没有可用 Selector 选择时使用的配置 |
-| `activeProfileRef` | 否 | — | 插件引用有类型的 `Selector` EdgionConfigData，独立切换已配置的 profile |
+| `activeProfileRef` | 否 | — | 插件引用有类型的 `Selector` EdgionConfigData，独立切换已配置的 profile；与 `activeProfile` 互斥 |
 | `WafPolicy.profiles.<name>.bundleRefs[].name` | 每个引用必填 | — | 目标规则包 EdgionConfigData 名称 |
 | `WafPolicy.profiles.<name>.bundleRefs[].namespace` | 否 | WafPolicy 的命名空间 | 目标命名空间；跨命名空间引用遵守 `visibility` 和 `ReferenceGrant` |
-| `WafPolicy.profiles.<name>.bundleRefs[].expectedDigest` | 每个引用必填 | — | 目标规则包的完整小写 SHA-256 摘要 |
+| `WafPolicy.profiles.<name>.bundleRefs[].expectedDigest` | 否 | — | 可选的规则包内容锁定值；省略时有效的规则包更新会自动生效 |
 | `WafPolicy.profiles.<name>.bundleRefs[].optional` | 否 | `false` | 独立附加包缺失或无效时跳过并报告 `PartiallyInvalid`；基础包不可设为可选 |
 | `mode` | 否 | `on` | `on` 执行规则阻断；`detectionOnly` 仅记录规则命中 |
 | `priority` | 否 | `0` | 0–65535，仅在同一挂载范围内按较大值优先 |
@@ -109,7 +110,7 @@ spec:
 | 规则包字段 | 必填 | 含义 |
 |------------|------|------|
 | `version`、`profile`、`provenance` | 是 | 非空的版本、规则集 profile 和来源说明；三者都参与摘要计算 |
-| `digest` | 是 | 规范化规则包的小写 SHA-256 摘要；成员或元数据变更后须重新计算 |
+| `digest` | 否 | 可选的规则包内容自检值；直接管理的规则可省略 |
 | `roots` | 是 | 按顺序编译的入口规则成员名称，至少一个 |
 | `rules[].name`、`rules[].content` | 是 | 相对成员路径及 SecLang 源码，至少一个规则成员 |
 | `phraseAssets[].name`、`phraseAssets[].content` | 否 | 供 `@pmFromFile` 读取的相对成员路径及文本 |
@@ -122,7 +123,7 @@ spec:
 
 所选 profile 按 `bundleRefs` 顺序、每个包的 `roots` 顺序编译。
 `Include` 和词组资源只能读取发起规则所属包中的成员。
-所选包中的规则 ID 重复会使整个版本编译失败。控制面（Controller）校验引用及摘要，
+所选包中的规则 ID 重复会使整个版本编译失败。控制面（Controller）校验引用及已配置的摘要锁定值，
 数据面（Gateway）在发布前重新校验收到的内容。引用缺失、被禁用、类型不符、未授权或内容无效时，
 不能发布不完整的基础规则。独立附加包可标记 `optional: true`，缺失或无效时跳过，
 并报告 `PartiallyInvalid=True`；最终组合仍须严格编译。必需包失效时保留上一有效版本。
@@ -136,6 +137,8 @@ spec:
 再创建 `data.type: Selector`、`data.config.active: high` 的 EdgionConfigData。
 修改 `active` 可在控制面校验后切换；引用缺失、禁用、类型不符或选择未知 profile
 时回到 `defaultProfile`，不会关闭 WAF。
+固定选择时可在插件中改用 `activeProfile: high`，名称必须存在于策略中。
+两个选择字段都不配置时使用 `defaultProfile`。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -150,8 +153,9 @@ spec:
       active: high
 ```
 
-修改规则包内容不会自动启用新版本：先创建新的版本化规则包并计算摘要，再更新各 WafPolicy 引用的
-`name` 和 `expectedDigest`。还有使用者固定旧版本时，应保留旧资源。启用跨命名空间引用校验时，
+对于已锁定摘要的引用，修改规则包内容不会自动启用新版本：先创建新的版本化规则包并计算摘要，再更新各 WafPolicy 引用的
+`name` 和 `expectedDigest`。还有使用者固定旧版本时，应保留旧资源。未设置 `expectedDigest` 时，
+有效的规则包更新会在 Controller 和 Gateway 校验后生效。启用跨命名空间引用校验时，
 目标资源的 `visibility: Namespace` 需要在目标命名空间配置对应 `ReferenceGrant`；
 `visibility: Cluster` 允许所有命名空间引用。可以写入被引用规则包的主体也能改变 WAF 执行策略，
 应限制其写入权限。Admin 输出和 Rust `Debug` 会隐藏规则及词组正文，可信配置同步仍会将原文发送到 Gateway。

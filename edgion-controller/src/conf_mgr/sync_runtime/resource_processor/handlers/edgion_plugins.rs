@@ -1135,6 +1135,14 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
     }
     waf.policy_resolved = Some(true);
     waf.owner_namespace = Some(policy_namespace.clone());
+    if waf
+        .active_profile
+        .as_ref()
+        .is_some_and(|name| !policy.profiles.contains_key(name))
+    {
+        waf.resolved_policy = Some(policy);
+        return;
+    }
     let selector_target = waf.active_profile_ref.as_mut().and_then(|reference| {
         reference.ref_denied = None;
         let target_namespace = reference.namespace.as_deref().unwrap_or(namespace);
@@ -1179,7 +1187,9 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
             .push("WAF Selector unavailable or inactive; using defaultProfile".to_string());
     }
     let requested = selector_active.filter(|name| policy.profiles.contains_key(name));
-    let desired_profile = requested.unwrap_or_else(|| policy.default_profile.clone());
+    let desired_profile = requested
+        .or_else(|| waf.active_profile.clone())
+        .unwrap_or_else(|| policy.default_profile.clone());
 
     let mut usable = std::collections::BTreeMap::new();
     let mut failures = std::collections::BTreeMap::new();
@@ -1231,12 +1241,16 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
                             || data.validate().is_err()
                         {
                             Some(WafBundleResolutionKind::Invalid)
-                        } else if data.digest != reference.expected_digest {
+                        } else if reference
+                            .expected_digest
+                            .as_deref()
+                            .is_some_and(|digest| digest != data.compute_digest())
+                        {
                             Some(WafBundleResolutionKind::DigestMismatch)
                         } else {
                             resolved = Some(ResolvedWafBundle {
                                 identity: key,
-                                digest: data.digest.clone(),
+                                digest: data.compute_digest(),
                                 data: data.clone(),
                             });
                             None
@@ -1353,7 +1367,7 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
                 };
                 Some(ResolvedWafBundle {
                     identity,
-                    digest: data.digest.clone(),
+                    digest: data.compute_digest(),
                     data: data.clone(),
                 })
             })

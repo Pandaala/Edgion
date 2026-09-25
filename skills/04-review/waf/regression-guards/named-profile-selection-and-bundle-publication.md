@@ -8,8 +8,8 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-An `EdgionPlugins.spec.waf.policyRef` fixes one typed `WafPolicy` EdgionConfigData. The plugin may independently reference a Selector with `activeProfileRef`. The policy names bounded profiles. Each profile
-orders digest-pinned `WafRuleBundle` references; its required references form
+An `EdgionPlugins.spec.waf.policyRef` fixes one typed `WafPolicy` EdgionConfigData. The plugin may select a fixed `activeProfile`, independently reference a Selector with `activeProfileRef`, or use the policy default. The two explicit selection fields are mutually exclusive. The policy names bounded profiles. Each profile
+orders `WafRuleBundle` references, optionally pinned by content digest; its required references form
 an atomic base and may aggregate multiple ConfigData objects. The Controller
 captures the Selector and every referenced bundle in one ConfigData read,
 strictly compiles candidate profiles, and publishes only the chosen profile's
@@ -67,7 +67,7 @@ for a request.
 
 Profile names such as `low`, `mid`, and `high` are operator-defined. They do
 not imply that Edgion ships or validates an OWASP CRS release. The actual rule
-content, version, profile metadata, and digest live in `WafRuleBundle` data;
+content, version, profile metadata, and optional self-check digest live in `WafRuleBundle` data;
 production acceptance must verify a selected source set before claiming CRS
 coverage. Cross-bundle `Include` and phrase-asset lookup remain forbidden, so
 optional bundles must be self-contained. Re-evaluate if ConfigData snapshot
