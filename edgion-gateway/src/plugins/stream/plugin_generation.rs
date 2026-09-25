@@ -95,7 +95,10 @@ impl StreamPluginGeneration {
         stages: StreamStages,
     ) -> Arc<CompiledStreamPlugins> {
         let namespace = self.source.metadata.namespace.as_deref().unwrap_or("default");
-        let stream_plugin_runtime = if stages.connection {
+        let unsupported = !self.source.unsupported_plugin_errors().is_empty();
+        let stream_plugin_runtime = if stages.connection && unsupported {
+            StreamPluginRuntime::unsupported_source()
+        } else if stages.connection {
             StreamPluginRuntime::from_cached_entries(
                 self.source.spec.plugins.as_deref().unwrap_or_default(),
                 namespace,
@@ -106,7 +109,9 @@ impl StreamPluginGeneration {
         } else {
             StreamPluginRuntime::new()
         };
-        let tls_route_plugin_runtime = if stages.tls_route {
+        let tls_route_plugin_runtime = if stages.tls_route && unsupported {
+            TlsRoutePluginRuntime::unsupported_source()
+        } else if stages.tls_route {
             TlsRoutePluginRuntime::from_cached_entries(
                 self.source.spec.tls_route_plugins.as_deref().unwrap_or_default(),
                 namespace,

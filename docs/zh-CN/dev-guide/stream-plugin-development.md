@@ -5,6 +5,13 @@
 > 面向 AI / Agent 的主 workflow 入口现在是 [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/13-stream-plugin-dev.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/13-stream-plugin-dev.md)。
 > 本文档保留给人看的背景说明、实现边界和手工核对清单。
 
+## 新增插件类型无需修改 CRD
+
+连接阶段和 TLSRoute 阶段的插件名称在 CRD 中都是开放字符串。实现并注册新的 Rust 枚举变体时，无需增加 YAML 白名单条目。
+不支持的名称会产生 `Accepted=False`，并拒绝经过该资源的流量；禁用条目或配置策略 bypass 都不能绕过此检查。
+已知配置仍保持强类型校验。内部 `Unsupported` 占位不进入受支持插件列表，并丢弃未知配置内容。
+新增公共条目字段仍可能需要更新 CRD schema。
+
 ## 这类插件解决什么问题
 
 `EdgionStreamPlugins` 是 Edgion 的 L4 扩展机制，用来在 HTTP 解析之前、接纳 UDP 会话时或 TLSRoute 匹配之后执行额外处理。

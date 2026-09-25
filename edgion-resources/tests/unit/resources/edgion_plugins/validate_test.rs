@@ -600,3 +600,54 @@ fn invalid_alias_is_reported_and_does_not_skip_stage_check() {
         .to_string()]
     );
 }
+
+#[test]
+fn unsupported_types_decode_without_poisoning_a_resource_list_and_remain_invalid() {
+    for stage in [
+        "requestPlugins",
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        for enabled in [true, false] {
+            let invalid = json!({"apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
+            "metadata":{"name":"invalid"}, "spec":{stage:[
+                {"type":"FuturePlugin", "enable":enabled, "config":{"token":"must-not-survive"}}
+            ]}});
+            let valid = json!({"apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
+                "metadata":{"name":"valid"}, "spec":{}});
+            let list: Vec<EdgionPlugins> = serde_json::from_value(json!([invalid, valid])).unwrap();
+            assert_eq!(
+                list[0].validate_plugins(),
+                vec![format!("{stage}[0]: unsupported plugin type")]
+            );
+            assert!(list[1].validate_plugins().is_empty());
+            let serialized = serde_json::to_string(&list[0]).unwrap();
+            assert!(!serialized.contains("must-not-survive"));
+            let roundtrip: EdgionPlugins = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(roundtrip.validate_plugins(), list[0].validate_plugins());
+            let yaml = serde_yaml::to_string(&list[0]).unwrap();
+            let from_yaml: EdgionPlugins = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(from_yaml.validate_plugins(), list[0].validate_plugins());
+        }
+    }
+}
+
+#[test]
+fn unsupported_fallback_does_not_accept_malformed_known_configs_or_tags() {
+    for input in [
+        json!({"config":{}}),
+        json!({"type":123, "config":{}}),
+        json!({"type":"RequestHeaderModifier", "config":{"remove":123}}),
+    ] {
+        assert!(serde_json::from_value::<RequestFilterEntry>(input).is_err());
+    }
+    for input in [
+        r#"{"config":{"nested":[1,2]},"type":"FuturePlugin"}"#,
+        r#"{"type":"FuturePlugin"}"#,
+        r#"{"type":"Unsupported","config":{}}"#,
+    ] {
+        let entry: RequestFilterEntry = serde_json::from_str(input).unwrap();
+        assert!(matches!(entry.plugin, EdgionPlugin::Unsupported));
+    }
+}

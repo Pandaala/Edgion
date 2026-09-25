@@ -38,6 +38,15 @@ impl StreamPluginRuntime {
         Self { plugins: Vec::new() }
     }
 
+    /// Reject every attachment of a source containing an unsupported type.
+    pub(crate) fn unsupported_source() -> Self {
+        Self {
+            plugins: vec![Arc::new(FailClosedStreamPlugin {
+                reason: "unsupported stream plugin type".to_string(),
+            })],
+        }
+    }
+
     /// Create runtime from stream plugin entries.
     ///
     /// `parent_namespace` is the namespace of the owning `EdgionStreamPlugins` resource,
@@ -75,6 +84,10 @@ impl StreamPluginRuntime {
         let mut invalid_config_reason: Option<String> = None;
 
         for (index, entry) in entries.iter().enumerate() {
+            if matches!(entry.plugin, EdgionStreamPlugin::Unsupported) {
+                invalid_config_reason.get_or_insert_with(|| "unsupported stream plugin type".to_string());
+                continue;
+            }
             if !entry.is_enabled() {
                 continue;
             }
@@ -125,6 +138,7 @@ impl StreamPluginRuntime {
 
     fn build_entry(entry: &StreamPluginEntry, namespace: &str, resource_key: &str, index: usize) -> StreamEntryOutcome {
         match &entry.plugin {
+            EdgionStreamPlugin::Unsupported => Err("unsupported stream plugin type"),
             EdgionStreamPlugin::IpRestriction(config) => {
                 if !config.legacy_http_fields().is_empty() || config.validation_error().is_some() {
                     return Err("invalid stream/IpRestriction configuration");

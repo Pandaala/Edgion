@@ -62,7 +62,7 @@ fn ip_restriction_entry() -> TlsRoutePluginEntry {
     };
     TlsRoutePluginEntry {
         enable: true,
-        plugin: TlsRouteStreamPlugin::IpRestriction(config),
+        plugin: TlsRouteStreamPlugin::IpRestriction(Box::new(config)),
     }
 }
 
@@ -147,4 +147,27 @@ async fn async_trait_dispatch_preserves_borrowed_metadata_identity() {
     };
 
     assert!(matches!(runtime.run(&ctx).await, StreamPluginResult::Allow));
+}
+
+#[tokio::test]
+async fn unsupported_direct_tls_route_entries_deny_before_disable_and_policy_checks() {
+    let policy = PluginPolicyConfig {
+        allow: Some(Vec::new()),
+        denied_action: PolicyActionKind::Bypass,
+        ..Default::default()
+    }
+    .compile()
+    .unwrap();
+    let rsc = crate::Rsc::new("TLSRoute", "default", "test");
+    let ctx = make_ctx(&rsc);
+    for enabled in [true, false] {
+        let entry: TlsRoutePluginEntry = serde_json::from_value(serde_json::json!({
+            "type":"FuturePlugin", "enable":enabled, "config":{}
+        }))
+        .unwrap();
+        let mut cache = vec![None];
+        let runtime = TlsRoutePluginRuntime::from_cached_entries(&[entry], "default", Some(&policy), &mut cache);
+        assert!(matches!(runtime.run(&ctx).await, StreamPluginResult::Deny(_)));
+        assert!(cache[0].is_none());
+    }
 }

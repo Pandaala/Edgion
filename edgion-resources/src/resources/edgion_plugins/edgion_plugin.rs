@@ -153,6 +153,14 @@ pub enum EdgionPlugin {
     Canary(CanaryConfig),
     /// Wasm filter (proxy-wasm ABI guest module executed via wasmtime)
     Wasm(WasmConfig),
+    /// Non-executable marker for a plugin type this binary does not support.
+    /// Validation rejects the containing resource, including disabled entries.
+    #[serde(
+        other,
+        deserialize_with = "crate::resources::common::discard_unsupported_plugin_config"
+    )]
+    #[schemars(skip)]
+    Unsupported,
     // TODO: Add more custom Edgion plugins here (no `Edgion` prefix on the variant name)
     // Waf(WafConfig),
     // Cache(CacheConfig),
@@ -183,6 +191,7 @@ impl EdgionPlugin {
         use super::body_requirement::BodyRequirement;
         use EdgionPlugin::*;
         match self {
+            EdgionPlugin::Unsupported => None,
             // HMAC consumes the REQUEST body only, and only when Digest
             // verification is on. Never at the response stage.
             HmacAuth(cfg) if cfg.validate_request_body && stage == BodyStage::Request => {
@@ -314,6 +323,7 @@ impl EdgionPlugin {
     /// Get the plugin type name
     pub fn type_name(&self) -> &'static str {
         match self {
+            EdgionPlugin::Unsupported => "Unsupported",
             EdgionPlugin::RequestHeaderModifier(_) => "RequestHeaderModifier",
             EdgionPlugin::ResponseHeaderModifier(_) => "ResponseHeaderModifier",
             EdgionPlugin::RequestRedirect(_) => "RequestRedirect",
@@ -387,6 +397,7 @@ impl EdgionPlugin {
             return &[];
         }
         match self {
+            EdgionPlugin::Unsupported => &[],
             EdgionPlugin::Canary(c) => {
                 // The internal kill switch pauses selection, not the entry's
                 // anti-spoof ownership. Keep its valid request dye plan installed.
@@ -499,6 +510,7 @@ impl EdgionPlugin {
     /// the wire contract cannot drift from the type list.
     pub fn dye_type_prefix(&self) -> &'static str {
         match self {
+            EdgionPlugin::Unsupported => "unsupported",
             EdgionPlugin::Canary(_) => "canary",
             EdgionPlugin::DynamicInternalUpstream(_) => "dynamic_internal_upstream",
             EdgionPlugin::DynamicExternalUpstream(_) => "dynamic_external_upstream",
@@ -571,6 +583,7 @@ impl EdgionPlugin {
                 .collect()
         }
         match self {
+            EdgionPlugin::Unsupported => Vec::new(),
             // DirectEndpoint / DynamicInternalUpstream / DynamicExternalUpstream:
             // a single `from: KeyGet` field.
             EdgionPlugin::DirectEndpoint(c) => headers_of(std::iter::once(&c.from)),
@@ -652,6 +665,7 @@ impl EdgionPlugin {
     pub fn validation_error(&self) -> Option<String> {
         use crate::resources::edgion_plugins::PluginValidation;
         match self {
+            EdgionPlugin::Unsupported => Some("unsupported plugin type".to_string()),
             EdgionPlugin::CtxSet(c) => c.validation_error(),
             EdgionPlugin::WebhookKeyGet(c) => c.validation_error(),
             EdgionPlugin::AiProxy(c) => c.validation_error(),

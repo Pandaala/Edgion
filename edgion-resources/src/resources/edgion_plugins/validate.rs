@@ -65,20 +65,16 @@ impl StageSet {
 }
 
 /// Plugin types that are NOT request-stage-only. Every `EdgionPlugin` variant
-/// absent from this table is request-stage-only.
+/// absent from this table is request-stage-only, except the non-executable sentinel.
 ///
 /// This is the single source of truth for stage applicability. It is keyed by
 /// [`EdgionPlugin::type_name`] so the CRD drift guard can consume it directly
 /// instead of maintaining its own copy — the mirror table that used to live in
 /// `edgion-resources/tests/plugin_crd_type_coverage.rs` is gone.
 ///
-/// Because this is a lookup rather than an exhaustive `match`, a new variant
-/// silently defaults to request-only. That default is correct for the large
-/// majority, and the case where it is not is caught two ways:
-/// `stage_exception_keys_are_real_variants` proves every key here names a real
-/// variant (read from `schema_for!(EdgionPlugin)`, i.e. the schema the CRD and
-/// `plugin_policy` actually consume), and the CRD guard's Direction-3 proves
-/// nothing reaches a response-stage CRD enum without being declared here.
+/// New supported names default to request-only. Schema-driven tests reject
+/// misspelled exception keys; stage eligibility must also stay aligned with
+/// the Gateway's explicit constructors. CRD type strings are intentionally open.
 pub const HTTP_PLUGIN_STAGE_EXCEPTIONS: &[(&str, StageSet)] = &[
     // Upstream-response-filter-stage-only plugins.
     ("ResponseHeaderModifier", StageSet::new(false, true, false, false)),
@@ -90,7 +86,7 @@ pub const HTTP_PLUGIN_STAGE_EXCEPTIONS: &[(&str, StageSet)] = &[
     ("Dsl", StageSet::new(true, true, false, false)),
     // Wasm (proxy-wasm guest) runs in the request, upstream-response-filter,
     // and upstream-response-body-filter (read-only observation) stages,
-    // matching its three CRD stage enum entries.
+    // matching the Gateway stage constructors.
     ("Wasm", StageSet::new(true, true, true, false)),
 ];
 
@@ -101,6 +97,9 @@ pub const HTTP_PLUGIN_STAGE_EXCEPTIONS: &[(&str, StageSet)] = &[
 /// The async upstream-response stage currently has no directly configurable
 /// plugin. ExtProc response processing is owned by its request-stage entry.
 pub fn applicable_stages_by_name(type_name: &str) -> StageSet {
+    if type_name == "Unsupported" {
+        return StageSet::new(false, false, false, false);
+    }
     let mut i = 0;
     while i < HTTP_PLUGIN_STAGE_EXCEPTIONS.len() {
         let (name, stages) = HTTP_PLUGIN_STAGE_EXCEPTIONS[i];
@@ -325,8 +324,33 @@ impl EdgionPlugins {
         self.validate_plugins_with_waf(false)
     }
 
-    fn validate_plugins_with_waf(&self, include_waf: bool) -> Vec<String> {
+    /// Unknown types invalidate the source even when disabled or policy-masked.
+    pub fn unsupported_plugin_errors(&self) -> Vec<String> {
         let mut errors = Vec::new();
+        macro_rules! scan {
+            ($entries:expr, $label:literal) => {
+                for (index, entry) in $entries.iter().flatten().enumerate() {
+                    if matches!(entry.plugin, EdgionPlugin::Unsupported) {
+                        errors.push(format!("{}[{}]: unsupported plugin type", $label, index));
+                    }
+                }
+            };
+        }
+        scan!(self.spec.request_plugins, "requestPlugins");
+        scan!(
+            self.spec.upstream_response_filter_plugins,
+            "upstreamResponseFilterPlugins"
+        );
+        scan!(
+            self.spec.upstream_response_body_filter_plugins,
+            "upstreamResponseBodyFilterPlugins"
+        );
+        scan!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
+        errors
+    }
+
+    fn validate_plugins_with_waf(&self, include_waf: bool) -> Vec<String> {
+        let mut errors = self.unsupported_plugin_errors();
 
         if let Some(waf) = self.spec.waf.as_ref().filter(|_| include_waf) {
             if let Some(error) = waf.validation_error() {
@@ -343,7 +367,7 @@ impl EdgionPlugins {
             ($entries:expr, $label:literal) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() {
+                        if !entry.is_enabled() || matches!(entry.plugin, EdgionPlugin::Unsupported) {
                             continue;
                         }
                         if let Some(conds) = entry.conditions.as_ref() {
@@ -378,7 +402,7 @@ impl EdgionPlugins {
                     for (i, entry) in entries.iter().enumerate() {
                         // Inert entries are skipped, matching the entry-level
                         // conditions pass and gateway `compile_body_entries`.
-                        if !entry.is_enabled() {
+                        if !entry.is_enabled() || matches!(entry.plugin, EdgionPlugin::Unsupported) {
                             continue;
                         }
                         if let Some(conds) = entry.body.as_ref().and_then(|b| b.conditions.as_ref()) {
@@ -395,7 +419,7 @@ impl EdgionPlugins {
             ($entries:expr, $label:literal) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() {
+                        if !entry.is_enabled() || matches!(entry.plugin, EdgionPlugin::Unsupported) {
                             continue;
                         }
                         if let Some(dye) = entry.dye.as_ref() {
@@ -459,7 +483,7 @@ impl EdgionPlugins {
                     // Per-stage-array alias accumulator; see `duplicate_alias_error`.
                     let mut seen_aliases = std::collections::HashSet::new();
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() {
+                        if !entry.is_enabled() || matches!(entry.plugin, EdgionPlugin::Unsupported) {
                             continue;
                         }
                         let name = entry.plugin.type_name();

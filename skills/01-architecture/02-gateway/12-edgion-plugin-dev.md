@@ -135,16 +135,18 @@ You typically touch at least these locations:
    `create_*_from_edgion` constructors (the three where the plugin is invalid take a
    `CreateResult::WrongStage` arm).
 
-Two more that the compiler does **not** catch:
+One more that the compiler does **not** catch:
 
-9. `config/crd/edgion-crd/edgion_plugins_crd.yaml` — add the type to the `type:` enum of every
-   stage the plugin is valid at. Miss this and the CRD prunes/rejects the plugin at admission,
-   i.e. it is un-appliable. Guarded by `edgion-resources/tests/plugin_crd_type_coverage.rs`.
-10. `edgion-resources/src/resources/edgion_plugins/validate.rs` — **only if the plugin is not
-    request-stage-only.** `HTTP_PLUGIN_STAGE_EXCEPTIONS` is the single source of truth for stage
-    applicability (request-only is the default and needs no entry); the CRD guard reads it via
-    `applicable_stages_by_name`. A key that names no real variant fails
-    `stage_exception_keys_are_real_variants`.
+9. `edgion-resources/src/resources/edgion_plugins/validate.rs` — **only if the plugin is not
+   request-stage-only.** `HTTP_PLUGIN_STAGE_EXCEPTIONS` is the stage authority; request-only
+   is the default. `stage_exception_keys_are_real_variants` validates its keys against the
+   supported enum schema.
+
+Adding a plugin type does not require a CRD change. All stage-entry `type` fields are open
+strings and `config` preserves unknown fields. The Controller rejects unsupported types with
+`Accepted=False`; the Gateway seals a failure runtime, including disabled or policy-masked
+unsupported entries. The internal `Unsupported` sentinel is not a supported plugin and must
+stay out of schema-driven policy catalogs. New common entry fields may still require a CRD edit.
 
 Integration-test registration (suite module, `test_client.rs`, `run_integration.sh`,
 `capabilities.tsv`) is covered in

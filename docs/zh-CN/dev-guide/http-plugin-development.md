@@ -59,6 +59,13 @@ graph TD
 - 只写了 plugin 实现，没有让路由预解析时真正构建 `PluginRuntime`
 - 插件本身可运行，但条件执行、ctx 变量传递、PluginLog 没接好
 
+## CRD 与未知插件类型
+
+新增插件类型名称不再需要更新 CRD。各阶段的 `type` 使用开放字符串，已知插件仍通过 Rust 强类型配置解析。
+不支持的名称会产生 `Accepted=False`，Gateway 对相关流量执行失败关闭，即使该条目被禁用或被策略屏蔽也不能绕过。
+诊断信息定位到具体条目；强类型配置视图会将原始名称归一为 `Unsupported`，并丢弃其配置内容。
+新增公共条目字段仍可能需要修改 CRD。`EdgionStreamPlugins` 的连接阶段和 TLSRoute 阶段也遵循这一规则。
+
 ## 相关代码位置
 
 如果你要新增或扩展 HTTP 插件，通常会碰到这几块：

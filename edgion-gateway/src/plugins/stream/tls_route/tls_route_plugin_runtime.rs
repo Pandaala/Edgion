@@ -32,6 +32,15 @@ impl TlsRoutePluginRuntime {
         Self { plugins: Vec::new() }
     }
 
+    /// Reject every attachment of a source containing an unsupported type.
+    pub(crate) fn unsupported_source() -> Self {
+        Self {
+            plugins: vec![Arc::new(FailClosedTlsRoutePlugin {
+                reason: "unsupported stream plugin type".to_string(),
+            })],
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn from_test_plugins(plugins: Vec<Arc<dyn TlsRoutePlugin>>) -> Self {
         Self { plugins }
@@ -54,8 +63,13 @@ impl TlsRoutePluginRuntime {
         // regardless of the restricted entry's original position (mirrors the
         // HTTP "gate first" semantics).
         let mut policy_block_reason: Option<String> = None;
+        let mut invalid_config_reason: Option<String> = None;
 
         for (index, entry) in entries.iter().enumerate() {
+            if matches!(entry.plugin, TlsRouteStreamPlugin::Unsupported) {
+                invalid_config_reason.get_or_insert_with(|| "unsupported TLS route plugin type".to_string());
+                continue;
+            }
             if !entry.is_enabled() {
                 continue;
             }
@@ -78,6 +92,9 @@ impl TlsRoutePluginRuntime {
             }
 
             let plugin = cache[index].get_or_insert_with(|| match &entry.plugin {
+                TlsRouteStreamPlugin::Unsupported => Arc::new(FailClosedTlsRoutePlugin {
+                    reason: "unsupported TLS route plugin type".to_string(),
+                }),
                 TlsRouteStreamPlugin::IpRestriction(config) => {
                     Arc::new(TlsRouteIpRestriction::new(config, parent_namespace))
                 }
@@ -86,8 +103,8 @@ impl TlsRoutePluginRuntime {
             plugins.push(Arc::clone(plugin));
         }
 
-        if let Some(reason) = policy_block_reason {
-            plugins.insert(0, Arc::new(PolicyBlockTlsRoutePlugin { reason }));
+        if let Some(reason) = policy_block_reason.or(invalid_config_reason) {
+            plugins.insert(0, Arc::new(FailClosedTlsRoutePlugin { reason }));
         }
 
         Self { plugins }
@@ -113,13 +130,13 @@ impl TlsRoutePluginRuntime {
     }
 }
 
-/// Always-deny placeholder for a policy-blocked TLS route plugin entry.
-struct PolicyBlockTlsRoutePlugin {
+/// Always-deny gate for policy blocks and unsupported source configurations.
+struct FailClosedTlsRoutePlugin {
     reason: String,
 }
 
 #[async_trait::async_trait]
-impl TlsRoutePlugin for PolicyBlockTlsRoutePlugin {
+impl TlsRoutePlugin for FailClosedTlsRoutePlugin {
     async fn on_tls_route(&self, _ctx: &TlsRouteContext<'_>) -> StreamPluginResult {
         StreamPluginResult::Deny(self.reason.clone())
     }

@@ -27,7 +27,7 @@ impl PluginGeneration {
                 if let Some(entries) = $entries.as_mut() {
                     let mut aliases = HashSet::new();
                     for (index, entry) in entries.iter_mut().enumerate() {
-                        if !entry.is_enabled() {
+                        if !entry.is_enabled() || matches!(entry.plugin, edgion_resources::EdgionPlugin::Unsupported) {
                             continue;
                         }
                         let error = entry

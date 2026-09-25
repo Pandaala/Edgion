@@ -449,6 +449,11 @@ impl PluginRuntime {
         self.invalid_plugins.record_non_retainable("AiGuardOrdering");
     }
 
+    /// Unknown source types must not become executable through enable or policy masks.
+    pub(crate) fn record_unsupported_plugin(&mut self) {
+        self.invalid_plugins.record_non_retainable("Unsupported");
+    }
+
     /// Publication policy for an update that failed runtime construction.
     pub(crate) fn invalid_update_policy(&self) -> Option<InvalidUpdatePolicy> {
         self.invalid_plugins.update_policy()
@@ -1742,6 +1747,7 @@ impl PluginRuntime {
         entry_scope: &str,
     ) -> CreateResult<Box<dyn RequestFilter>> {
         match plugin {
+            EdgionPlugin::Unsupported => CreateResult::WrongStage,
             EdgionPlugin::RequestHeaderModifier(config) => CreateResult::Ok(
                 RequestHeaderModifierFilter::new(config.clone())
                     .ok()
@@ -1840,6 +1846,7 @@ impl PluginRuntime {
         _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponseFilter>> {
         match plugin {
+            EdgionPlugin::Unsupported => CreateResult::WrongStage,
             EdgionPlugin::ResponseHeaderModifier(config) => CreateResult::Ok(
                 ResponseHeaderModifierFilter::new(config.clone())
                     .ok()
@@ -1904,6 +1911,7 @@ impl PluginRuntime {
         _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponse>> {
         match plugin {
+            EdgionPlugin::Unsupported => CreateResult::WrongStage,
             EdgionPlugin::ExtProc(_) | EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
             // Every other variant belongs to a different stage. Exhaustive
             // (no `_`), matching the other three `create_*_from_edgion`
@@ -1967,6 +1975,7 @@ impl PluginRuntime {
         _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponseBodyFilter>> {
         match plugin {
+            EdgionPlugin::Unsupported => CreateResult::WrongStage,
             EdgionPlugin::BandwidthLimit(config) => CreateResult::Ok(Some(BandwidthLimit::create(config))),
             EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_body_filter(config)),
             // Not body-filter plugins
@@ -2022,6 +2031,7 @@ impl PluginRuntime {
     /// Get plugin type name for error messages
     fn get_plugin_name(plugin: &EdgionPlugin) -> &'static str {
         match plugin {
+            EdgionPlugin::Unsupported => "Unsupported",
             EdgionPlugin::RequestHeaderModifier(_) => "RequestHeaderModifier",
             EdgionPlugin::RequestRedirect(_) => "RequestRedirect",
             EdgionPlugin::ResponseHeaderModifier(_) => "ResponseHeaderModifier",

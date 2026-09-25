@@ -192,3 +192,11 @@ pub struct TcpKeepaliveConfig {
     pub interval: std::time::Duration,
     pub count: usize,
 }
+
+/// Discard opaque config for a non-executable unsupported plugin sentinel.
+/// Known variants still deserialize their concrete configuration normally.
+pub(crate) fn discard_unsupported_plugin_config<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<(), D::Error> {
+    <serde::de::IgnoredAny as serde::Deserialize>::deserialize(deserializer).map(|_| ())
+}

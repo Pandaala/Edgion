@@ -196,3 +196,21 @@ impl EdgionStreamPlugins {
         self.spec.plugins.as_ref().map_or(0, |p| p.len())
     }
 }
+
+impl EdgionStreamPlugins {
+    /// Unsupported types invalidate the source before enable or policy filtering.
+    pub fn unsupported_plugin_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (index, entry) in self.spec.plugins.iter().flatten().enumerate() {
+            if matches!(entry.plugin, EdgionStreamPlugin::Unsupported) {
+                errors.push(format!("plugins[{index}]: unsupported plugin type"));
+            }
+        }
+        for (index, entry) in self.spec.tls_route_plugins.iter().flatten().enumerate() {
+            if matches!(entry.plugin, TlsRouteStreamPlugin::Unsupported) {
+                errors.push(format!("tlsRoutePlugins[{index}]: unsupported plugin type"));
+            }
+        }
+        errors
+    }
+}

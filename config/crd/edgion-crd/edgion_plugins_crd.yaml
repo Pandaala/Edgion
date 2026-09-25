@@ -368,53 +368,6 @@ spec:
                       type:
                         type: string
                         description: "Plugin type"
-                        enum:
-                          - BasicAuth
-                          - CredentialInjector
-                          - AiProxy
-                          - Cors
-                          - Csrf
-                          - CtxSet
-                          - WebhookKeyGet
-                          - ForwardAuth
-                          - IpRestriction
-                          - JwtAuth
-                          - JweDecrypt
-                          - KeyAuth
-                          - HmacAuth
-                          - HeaderCertAuth
-                          - LdapAuth
-                          - OpenidConnect
-                          - Mock
-                          - ProxyRewrite
-                          - RateLimitLocal
-                          - RateLimitRedis
-                          - RealIp
-                          - RequestRestriction
-                          - RequestBodyBuffer
-                          - JsonSchemaValidation
-                          - FormJsonTransform
-                          - RequestHeaderModifier
-                          - ResponseHeaderModifier
-                          - RequestRedirect
-                          - UrlRewrite
-                          - DebugAccessLogToHeader
-                          - DirectEndpoint
-                          - DynamicInternalUpstream
-                          - DynamicExternalUpstream
-                          - AllEndpointStatus
-                          - Dsl
-                          - RegionRoute
-                          - RequestMirror
-                          - FaultInjection
-                          - RequestId
-                          - ExtProc
-                          - Guardrail
-                          - AiGuard
-                          - RequestAccessPolicy
-                          - GeoIpLocation
-                          - Canary
-                          - Wasm
                       config:
                         type: object
                         description: "Plugin-specific configuration"
@@ -610,12 +563,6 @@ spec:
                       dye: *dyeSchema
                       type:
                         type: string
-                        enum:
-                          - ResponseHeaderModifier
-                          - ResponseRewrite
-                          - DebugAccessLogToHeader
-                          - Dsl
-                          - Wasm
                       config:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
@@ -638,9 +585,6 @@ spec:
                       dye: *dyeSchema
                       type:
                         type: string
-                        enum:
-                          - BandwidthLimit
-                          - Wasm
                       config:
                         type: object
                         description: "Plugin-specific configuration"

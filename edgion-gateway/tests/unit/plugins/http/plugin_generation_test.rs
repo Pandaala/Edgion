@@ -449,3 +449,41 @@ async fn latest_source_block_precedes_restricted_retained_candidate_entries() {
         }
     ));
 }
+
+#[tokio::test]
+async fn unsupported_types_fail_closed_even_when_disabled_or_policy_masked() {
+    let bypass = PluginPolicyConfig {
+        allow: Some(Vec::new()),
+        denied_action: PolicyActionKind::Bypass,
+        ..Default::default()
+    }
+    .compile()
+    .unwrap();
+    for stage in [
+        "requestPlugins",
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        for enabled in [true, false] {
+            for policy in [None, Some(&bypass)] {
+                let source = resource(json!({stage: [{"type":"FuturePlugin", "enable":enabled, "config":{}}]}));
+                let expected = source.validate_plugins();
+                let mut generation = PluginGeneration::new(source);
+                let view = generation.compile(policy);
+                assert!(!view.is_activatable);
+                assert!(!view.retain_previous_on_invalid_update);
+                assert_eq!(view.preparse_errors, expected);
+                let gate = view.plugin_runtime.request_plugins_iter().next().unwrap();
+                let mut session = MockPluginSession::new();
+                let mut log = PluginLog::new("UnsupportedTest");
+                assert!(matches!(
+                    gate.run_request(&mut session, &mut log).await,
+                    PluginRunningResult::ErrResponse { status: 500, .. }
+                ));
+            }
+        }
+    }
+    let corrected = resource(json!({"requestPlugins":[{"type":"RequestHeaderModifier", "config":{}}]}));
+    assert!(PluginGeneration::new(corrected).compile(None).is_activatable);
+}

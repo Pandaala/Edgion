@@ -31,11 +31,19 @@ pub enum EdgionStreamPlugin {
     /// the HTTP `GeoIpLocation` (`edgion_plugins::plugin_configs::GeoIpLocationConfig`);
     /// only `DirectPeerIp`-sourced rules are legal here (no XFF at L4).
     GeoIpLocation(GeoIpLocationConfig),
+    /// Non-executable marker; source validation rejects even disabled entries.
+    #[serde(
+        other,
+        deserialize_with = "crate::resources::common::discard_unsupported_plugin_config"
+    )]
+    #[schemars(skip)]
+    Unsupported,
 }
 
 impl EdgionStreamPlugin {
     pub fn type_name(&self) -> &'static str {
         match self {
+            Self::Unsupported => "Unsupported",
             EdgionStreamPlugin::IpRestriction(_) => "IpRestriction",
             EdgionStreamPlugin::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
             EdgionStreamPlugin::ConnectionRateLimit(_) => "ConnectionRateLimit",

@@ -59,6 +59,15 @@ The usual misses are:
 - a plugin implementation exists, but route preparse never actually builds a `PluginRuntime`
 - the plugin itself works, but conditional execution, ctx passing, or PluginLog integration is incomplete
 
+## CRD and unknown plugin types
+
+New plugin type names do not require a CRD update. Stage-entry `type` values are open strings,
+while each known plugin still has a typed Rust config. Unsupported names produce
+`Accepted=False` and a fail-closed Gateway runtime, even if disabled or policy-masked.
+Diagnostics identify the entry position; typed views normalize the original name to
+`Unsupported` and discard its config. New shared entry fields can still need a CRD change.
+The same rule applies to connection and TLSRoute plugins in `EdgionStreamPlugins`.
+
 ## Relevant Code Areas
 
 When adding or extending an HTTP plugin, you usually touch these areas.

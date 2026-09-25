@@ -5,6 +5,15 @@ This document is for contributors who need to extend `EdgionStreamPlugins`. It e
 > The primary AI / agent workflow now lives in [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/13-stream-plugin-dev.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/13-stream-plugin-dev.md).
 > This document remains the human-facing background guide, implementation boundary explanation, and manual review checklist.
 
+## Adding plugin types without CRD edits
+
+Connection-stage and TLSRoute-stage plugin names are open strings in the CRD. Implement and
+register the new Rust variant without adding a YAML whitelist entry. Unsupported names produce
+`Accepted=False` and deny traffic through the affected resource, even for disabled entries or
+policy bypass. Known configuration types remain strictly typed. The internal `Unsupported`
+sentinel is excluded from supported-plugin catalogs and discards the unknown config content.
+New common entry fields can still require a CRD schema update.
+
 ## What This Plugin Family Is For
 
 `EdgionStreamPlugins` is Edgion's L4 extension mechanism. It lets the gateway

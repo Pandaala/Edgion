@@ -884,3 +884,32 @@ spec:
         other => panic!("expected EdgionConfigDataNotFound, got {:?}", other),
     }
 }
+
+#[test]
+fn unsupported_stream_types_report_invalid_status_and_survive_transport() {
+    for stage in ["plugins", "tlsRoutePlugins"] {
+        for enabled in [true, false] {
+            let mut esp: EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
+                "apiVersion":"edgion.io/v1", "kind":"EdgionStreamPlugins",
+                "metadata":{"name":"unknown", "namespace":"default"},
+                "spec":{stage:[{"type":"FuturePlugin", "enable":enabled, "config":{"token":"discard-me"}}]}
+            }))
+            .unwrap();
+            let errors = EdgionStreamPluginsHandler::new().preparse(&mut esp, &make_ctx());
+            assert_eq!(errors, vec![format!("{stage}[0]: unsupported plugin type")]);
+            EdgionStreamPluginsHandler::new().update_status(&mut esp, &make_ctx(), &errors);
+            let status = serde_json::to_value(&esp.status).unwrap();
+            let accepted = status["conditions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["type"] == "Accepted")
+                .unwrap();
+            assert_eq!(accepted["status"], "False");
+            let encoded = serde_json::to_string(&esp).unwrap();
+            assert!(!encoded.contains("discard-me"));
+            let restored: EdgionStreamPlugins = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(restored.unsupported_plugin_errors(), errors);
+        }
+    }
+}

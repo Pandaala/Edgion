@@ -270,3 +270,35 @@ fn test_schema_validator_creation() {
     let validator = validator.unwrap();
     assert!(validator.schema_count() > 0, "No schemas loaded");
 }
+
+#[test]
+fn unsupported_plugin_schema_admits_future_types_in_all_stages() {
+    let crd_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+    let validator = SchemaValidator::from_crd_dir(&crd_dir).unwrap();
+    for stage in [
+        "requestPlugins",
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        let mut value = serde_json::json!({"apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
+            "metadata":{"name":"future"}, "spec":{stage:[{"type":"FuturePlugin", "config":{"futureField":true}}]}});
+        assert!(
+            validator.validate(ResourceKind::EdgionPlugins, &value).is_ok(),
+            "{stage}"
+        );
+        value["spec"][stage][0]["type"] = serde_json::json!(123);
+        assert!(validator.validate(ResourceKind::EdgionPlugins, &value).is_err());
+    }
+}
+
+#[test]
+fn unsupported_stream_plugin_schema_admits_future_types() {
+    let crd_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+    let validator = SchemaValidator::from_crd_dir(&crd_dir).unwrap();
+    for stage in ["plugins", "tlsRoutePlugins"] {
+        let value = serde_json::json!({"apiVersion":"edgion.io/v1", "kind":"EdgionStreamPlugins",
+            "metadata":{"name":"future"}, "spec":{stage:[{"type":"FuturePlugin", "config":{"futureField":true}}]}});
+        assert!(validator.validate(ResourceKind::EdgionStreamPlugins, &value).is_ok());
+    }
+}

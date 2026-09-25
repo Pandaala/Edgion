@@ -143,6 +143,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         continue;
                     }
                     match &entry.plugin {
+                        EdgionPlugin::Unsupported => {}
                         EdgionPlugin::OpenidConnect(config) => {
                             errors.extend(check_validation_block(
                                 config.tls.validation.as_ref(),

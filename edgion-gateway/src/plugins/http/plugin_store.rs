@@ -14,6 +14,7 @@ use crate::plugins::runtime::conditions::PluginConditionsExt;
 use crate::plugins::runtime::entry_bundle::EntryCache;
 use crate::plugins::runtime::{InvalidUpdatePolicy, PluginRuntime};
 use edgion_resources::resource::meta::ResourceMeta;
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use edgion_resources::resources::EdgionPlugins;
 
 static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> = LazyLock::new(|| Arc::new(PluginStore { isolated: None }));
@@ -123,6 +124,27 @@ pub(crate) fn compile_plugins_with_cache(
 ) -> Arc<CompiledPlugins> {
     let mut spec = ep.clone();
     let mut runtime = PluginRuntime::new();
+    let unsupported_errors = ep.unsupported_plugin_errors();
+    if !unsupported_errors.is_empty() {
+        errors.extend(unsupported_errors);
+        runtime.record_unsupported_plugin();
+        // Keep entry indices stable for the generation cache, but do not build
+        // conditions, dependencies, or filters for non-executable sentinels.
+        macro_rules! disable_unsupported {
+            ($entries:expr) => {
+                for entry in $entries.iter_mut().flatten() {
+                    if matches!(entry.plugin, EdgionPlugin::Unsupported) {
+                        entry.enable = false;
+                    }
+                }
+            };
+        }
+        disable_unsupported!(spec.spec.request_plugins);
+        disable_unsupported!(spec.spec.upstream_response_filter_plugins);
+        disable_unsupported!(spec.spec.upstream_response_body_filter_plugins);
+        disable_unsupported!(spec.spec.upstream_response_plugins);
+    }
+
     runtime.configure_request_id_scope(
         ep.has_active_request_id(),
         !ep.validate_request_id_early_attachment().is_empty(),

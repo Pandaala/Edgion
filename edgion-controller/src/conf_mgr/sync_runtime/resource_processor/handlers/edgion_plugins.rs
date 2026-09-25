@@ -200,6 +200,7 @@ impl EdgionPluginsHandler {
         };
         for entry in plugins.iter_mut() {
             match &mut entry.plugin {
+                EdgionPlugin::Unsupported => {}
                 EdgionPlugin::RegionRoute(config) => {
                     if let Some(r) = config.override_ref.as_mut() {
                         mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::RegionRouteOverride, ctx);

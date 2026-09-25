@@ -66,7 +66,7 @@ impl EdgionStreamPluginsHandler {
                         (ns, r.name.clone())
                     })
                 }
-                EdgionStreamPlugin::IpRestriction(_) => None,
+                EdgionStreamPlugin::IpRestriction(_) | EdgionStreamPlugin::Unsupported => None,
                 EdgionStreamPlugin::ConnectionRateLimit(_) => None,
                 EdgionStreamPlugin::GeoIpLocation(_) => None,
             })
@@ -110,7 +110,7 @@ impl EdgionStreamPluginsHandler {
                         }
                     }
                 }
-                EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+                EdgionStreamPlugin::ConnectionRateLimit(_) | EdgionStreamPlugin::Unsupported => {}
                 EdgionStreamPlugin::GeoIpLocation(_) => {}
             }
         }
@@ -118,6 +118,7 @@ impl EdgionStreamPluginsHandler {
         // Stage 2: TLS-route plugins (exhaustive over TlsRouteStreamPlugin).
         for entry in esp.spec.tls_route_plugins.iter_mut().flatten() {
             match &mut entry.plugin {
+                TlsRouteStreamPlugin::Unsupported => {}
                 TlsRouteStreamPlugin::IpRestriction(config) => {
                     for r in config
                         .allow_refs
@@ -156,7 +157,7 @@ impl EdgionStreamPluginsHandler {
                         );
                     }
                 }
-                EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+                EdgionStreamPlugin::ConnectionRateLimit(_) | EdgionStreamPlugin::Unsupported => {}
                 EdgionStreamPlugin::GeoIpLocation(_) => {}
             }
         }
@@ -164,6 +165,7 @@ impl EdgionStreamPluginsHandler {
         // Stage 2: TlsRoute plugins (HTTP-layer `IpRestrictionConfig`).
         for entry in esp.spec.tls_route_plugins.iter().flatten() {
             match &entry.plugin {
+                TlsRouteStreamPlugin::Unsupported => {}
                 TlsRouteStreamPlugin::IpRestriction(config) => {
                     collect_ref_pairs(&mut out, esp_ns, config.allow_refs.as_ref(), config.deny_refs.as_ref());
                 }
@@ -204,9 +206,9 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             );
         }
 
-        let mut errors = Vec::new();
+        let mut errors = esp.unsupported_plugin_errors();
 
-        // Both stages validate disabled entries with `is_enabled()` skipped, mirroring the
+        // Known disabled entries are skipped, mirroring the
         // runtime builders (`from_stream_plugins` / `from_entries`) which never construct a
         // disabled plugin — a parked broken config must not flip `Accepted` to False.
         //
@@ -273,6 +275,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                 continue;
             }
             match &entry.plugin {
+                TlsRouteStreamPlugin::Unsupported => {}
                 TlsRouteStreamPlugin::IpRestriction(config) => {
                     if let Err(e) = config.clone().validate_and_init() {
                         errors.push(format!("tlsRoutePlugins[{idx}] (IpRestriction): {e}"));
@@ -498,7 +501,7 @@ fn resolve_ip_list_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<
                     }
                 }
             }
-            EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+            EdgionStreamPlugin::ConnectionRateLimit(_) | EdgionStreamPlugin::Unsupported => {}
             EdgionStreamPlugin::GeoIpLocation(_) => {}
         }
     }
@@ -506,6 +509,7 @@ fn resolve_ip_list_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<
     // Stage 2: TLS-route plugins.
     for entry in esp.spec.tls_route_plugins.iter().flatten() {
         match &entry.plugin {
+            TlsRouteStreamPlugin::Unsupported => {}
             TlsRouteStreamPlugin::IpRestriction(config) => {
                 for r in config
                     .allow_refs
@@ -611,7 +615,10 @@ fn collect_inline_ip_entry_errors(
         }
     }
     for entry in esp.spec.tls_route_plugins.iter().flatten() {
-        let TlsRouteStreamPlugin::IpRestriction(config) = &entry.plugin;
+        let config = match &entry.plugin {
+            TlsRouteStreamPlugin::IpRestriction(config) => config,
+            TlsRouteStreamPlugin::Unsupported => continue,
+        };
         if let Some(g) = &config.allow {
             errs.extend(collect_entry_errors(g));
         }

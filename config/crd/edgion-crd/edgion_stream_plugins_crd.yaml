@@ -43,11 +43,6 @@ spec:
                     type:
                       type: string
                       description: Plugin type
-                      enum:
-                      - IpRestriction
-                      - GlobalConnectionIpRestriction
-                      - ConnectionRateLimit
-                      - GeoIpLocation
                     config:
                       type: object
                       description: Plugin configuration
@@ -65,8 +60,6 @@ spec:
                     type:
                       type: string
                       description: Plugin type
-                      enum:
-                      - IpRestriction
                     config:
                       type: object
                       description: Plugin configuration

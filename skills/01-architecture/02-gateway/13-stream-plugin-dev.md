@@ -138,6 +138,13 @@ If your stream plugin can also share configuration with the HTTP layer, prefer r
 
 ## 3. Wire the new type into the resource enum
 
+Adding a connection or TLSRoute plugin type requires no CRD whitelist update. Both `type`
+fields are open strings. Unknown types become schema-hidden `Unsupported` sentinels; the
+Controller reports `Accepted=False`, and every demanded attachment of that source denies
+connections, including when the entry is disabled or a policy would bypass it. Keep explicit
+exhaustive arms for real plugins. Known config validation remains typed and unchanged.
+
+
 Stage 1:
 
 - Modify [../../../edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs](../../../edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs).

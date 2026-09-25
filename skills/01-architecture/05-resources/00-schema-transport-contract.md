@@ -38,9 +38,10 @@ for four fully structural specs:
 It also contains narrow regression pins for EdgionAcme status and the stream-plugin TLS-route
 field. The property walker does not validate field types/patterns/defaults.
 
-`edgion-resources/tests/plugin_crd_type_coverage.rs` compares the committed EdgionPlugins stage
-`type` discriminator entries with `schema_for!(EdgionPlugin)`. It does not make the tagged-enum
-`config` bodies structural.
+`edgion-resources/tests/plugin_crd_type_coverage.rs` and `stream_plugin_crd_type_coverage.rs`
+guard open string plugin discriminators and config preservation. Unsupported names are rejected
+through typed sentinel validation and fail-closed runtimes, not CRD whitelists. These guards do
+not make the plugin `config` bodies structural. Nested condition enums remain separately guarded.
 
 Tagged-enum CRDs such as plugins, stream plugins, ACME, LinkSys, and EdgionConfigData preserve
 unknown config fields and are not covered field-by-field. Review their `#[schemars(skip)]`, serde,

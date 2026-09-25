@@ -18,7 +18,7 @@ before applying a decision to current code.
 - [`PartiallyInvalid` is not route-exclusive — DOCS-DRIFT (fixed)](intentional-design/partially-invalid-not-route-exclusive.md)
 - [ReferenceGrant validation is a controller-global policy — DESIGN-DECISION](intentional-design/reference-grant-validation-controller-scoped.md)
 - [Schema validation placement and Kubernetes availability without bundle locking](intentional-design/schema-validator-non-k8s-asymmetry.md)
-- [Unknown EdgionPlugin variant rejects the EdgionPlugins resource — ACCEPTED-TRADEOFF (strict typed enum is intentional)](intentional-design/unknown-plugin-variant-strict-enum.md)
+- [Unknown plugin types remain readable but fail closed](intentional-design/unknown-plugin-variant-strict-enum.md)
 - [Validation errors are untyped `Vec<String>` — ACCEPTED-TRADEOFF (the machine-readable taxonomy already exists as the Gateway API `.status.conditions.reason` field)](intentional-design/validation-errors-untyped-string-vs-status-reason-taxonomy.md)
 
 ## Compatibility constraints
@@ -33,5 +33,5 @@ before applying a decision to current code.
 - [Duration schema admission patterns](regression-guards/duration-schema-admission-patterns.md)
 - [EdgionBackend unknown-field handling is mode-specific](regression-guards/edgion-backend-unknown-fields-are-mode-specific.md)
 - [EdgionGatewayConfig process-global values aggregated deterministically — FIXED](regression-guards/edgion-gateway-config-global-aggregation-deterministic.md)
-- [EdgionPlugins closed enums drifted from Rust — FIXED (reconciled + guarded)](regression-guards/edgion-plugins-crd-type-enum-drift.md)
+- [Open plugin types and nested condition enum guards](regression-guards/edgion-plugins-crd-type-enum-drift.md)
 - [Terminal local replies require a final HTTP status](regression-guards/request-local-reply-final-status-validation.md)

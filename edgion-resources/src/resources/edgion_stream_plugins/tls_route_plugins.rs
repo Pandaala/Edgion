@@ -13,12 +13,20 @@ use crate::resources::edgion_plugins::IpRestrictionConfig;
 #[serde(tag = "type", content = "config")]
 pub enum TlsRouteStreamPlugin {
     /// IP Restriction at TLS route level (same check, richer context)
-    IpRestriction(IpRestrictionConfig),
+    IpRestriction(Box<IpRestrictionConfig>),
+    /// Non-executable marker; source validation rejects even disabled entries.
+    #[serde(
+        other,
+        deserialize_with = "crate::resources::common::discard_unsupported_plugin_config"
+    )]
+    #[schemars(skip)]
+    Unsupported,
 }
 
 impl TlsRouteStreamPlugin {
     pub fn type_name(&self) -> &'static str {
         match self {
+            Self::Unsupported => "Unsupported",
             TlsRouteStreamPlugin::IpRestriction(_) => "IpRestriction",
         }
     }
