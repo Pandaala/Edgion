@@ -1,5 +1,7 @@
 use crate::conf_sync::cache_client::cache_data::CacheData;
 use crate::observe::metrics::{global_metrics, record_config_event_parse_error};
+use bytes::Bytes;
+use edgion_common::conf_sync::payload;
 use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use edgion_resources::{
@@ -10,6 +12,7 @@ use kube::{Resource, ResourceExt};
 use parking_lot::RwLock;
 use rand::Rng;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
 use super::cache::ClientCache;
@@ -44,6 +47,31 @@ fn clear_backend_cache<T: ResourceMeta>(cache_data: &Arc<RwLock<CacheData<T>>>, 
     let mut cache = cache_data.write();
     cache.reset(Vec::new(), sync_version);
     cache.set_not_ready();
+}
+
+/// Discard decoding results when channel retirement is observed across the await.
+async fn decode_transport_payload<T: ResourceMeta>(
+    cache_data: &Arc<RwLock<CacheData<T>>>,
+    data: Bytes,
+    encoding: i32,
+    uncompressed_size: u64,
+    sync_version: u64,
+    generation: &CancellationToken,
+) -> Result<Bytes, tonic::Status> {
+    let result = tokio::select! {
+        biased;
+        _ = generation.cancelled() => return Err(tonic::Status::cancelled("Configuration channel replaced")),
+        result = payload::decode(data, encoding, uncompressed_size) => result,
+    };
+    if generation.is_cancelled() {
+        return Err(tonic::Status::cancelled("Configuration channel replaced"));
+    }
+    result.map_err(|error| {
+        if is_edgion_backend::<T>() {
+            clear_backend_cache(cache_data, sync_version);
+        }
+        error.into_status()
+    })
 }
 
 fn valid_dns_label(value: &str) -> bool {
@@ -403,6 +431,7 @@ where
         cache_data: &Arc<RwLock<CacheData<T>>>,
         log_context: &str,
         expected_server_id: &str,
+        generation: &CancellationToken,
     ) -> Result<ListResult, tonic::Status> {
         let list_request = tonic::Request::new(edgion_common::conf_sync::proto::ListRequest {
             key: gateway_class_key.to_string(),
@@ -412,17 +441,29 @@ where
 
         let response = client.list(list_request).await?;
         let list_data = response.into_inner();
+        let data = decode_transport_payload(
+            cache_data,
+            list_data.data,
+            list_data.encoding,
+            list_data.uncompressed_size,
+            list_data.sync_version,
+            generation,
+        )
+        .await?;
 
         tracing::info!(
             kind = T::kind_name(),
-            bytes = list_data.data.len(),
+            bytes = data.len(),
             sync_version = list_data.sync_version,
             server_id = %list_data.server_id,
             context = log_context,
             "Listing resources"
         );
 
-        let count = match publish_list_payload(cache_data, &list_data.data, list_data.sync_version) {
+        if generation.is_cancelled() {
+            return Err(tonic::Status::cancelled("Configuration channel replaced"));
+        }
+        let count = match publish_list_payload(cache_data, &data, list_data.sync_version) {
             Ok(count) => count,
             Err(error) => {
                 if is_edgion_backend::<T>() {
@@ -554,7 +595,7 @@ where
                         generation_reloaded = true;
                         continue;
                     }
-                    r = Self::list_and_reset(&mut client, "", &cache_data, "watch relist", "") => r,
+                    r = Self::list_and_reset(&mut client, "", &cache_data, "watch relist", "", &gen_token) => r,
                 };
                 let (from_version, current_server_id) = match list_outcome {
                     Ok(list_result) => {
@@ -684,9 +725,46 @@ where
                                 }
 
                                 let response_sv = watch_response.sync_version;
+                                let decoded = decode_transport_payload(
+                                    &cache_data,
+                                    watch_response.data,
+                                    watch_response.encoding,
+                                    watch_response.uncompressed_size,
+                                    response_sv,
+                                    &gen_token,
+                                )
+                                .await;
+                                if gen_token.is_cancelled() {
+                                    generation_reloaded = true;
+                                    break 'watch_block;
+                                }
+                                let data = match decoded {
+                                    Ok(data) => data,
+                                    Err(error) => {
+                                        if is_edgion_backend::<T>() {
+                                            is_ready = false;
+                                        }
+                                        record_config_event_parse_error(T::kind_name());
+                                        tracing::error!(kind = T::kind_name(), sync_version = response_sv,
+                                            error = %error, "Invalid configuration transport payload; relisting");
+                                        break 'watch_block;
+                                    }
+                                };
+                                let Ok(data) = std::str::from_utf8(&data) else {
+                                    if is_edgion_backend::<T>() {
+                                        clear_backend_cache(&cache_data, response_sv);
+                                        is_ready = false;
+                                    }
+                                    record_watch_parse_failure::<T>(
+                                        &WatchLogIdentity::default(),
+                                        response_sv,
+                                        "watch response must contain UTF-8 JSON",
+                                    );
+                                    break 'watch_block;
+                                };
 
                                 if is_edgion_backend::<T>() {
-                                    if apply_backend_watch_payload(&cache_data, &watch_response.data, response_sv)
+                                    if apply_backend_watch_payload(&cache_data, data, response_sv)
                                         == BackendWatchBatchOutcome::Unsafe
                                     {
                                         is_ready = false;
@@ -700,8 +778,7 @@ where
                                     continue;
                                 }
 
-                                if apply_generic_watch_payload(&cache_data, &watch_response.data, response_sv).is_err()
-                                {
+                                if apply_generic_watch_payload(&cache_data, data, response_sv).is_err() {
                                     break 'watch_block;
                                 }
                             }

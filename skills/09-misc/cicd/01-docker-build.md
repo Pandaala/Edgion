@@ -35,7 +35,7 @@ Pingora).
 
 All source-building image paths use Cargo's `--locked` mode, so images use the
 exact Edgion Pingora commit recorded in `Cargo.lock`, even though the
-workspace manifest follows the fork's `edgion_v5` branch.
+workspace manifest follows the fork's `edgion_0.9.0_v1` branch.
 
 ```bash
 # Default images

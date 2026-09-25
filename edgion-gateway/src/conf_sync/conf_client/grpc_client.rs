@@ -3,6 +3,7 @@ use crate::conf_sync::conf_client::rotation::EndpointRotator;
 use crate::conf_sync::conf_client::ConfigClient;
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
+use edgion_common::conf_sync::payload::MAX_MESSAGE_BYTES;
 use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use edgion_common::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
 use edgion_resources::rate_limit_local_config::set_gateway_instance_count;
@@ -287,7 +288,7 @@ impl ConfigSyncClient {
 
         // connect_lazy returns a Channel immediately; connection happens on first request.
         let channel = build_channel(&uri, timeout, tls_config_opt)?;
-        let client = ConfigSyncClientService::new(channel);
+        let client = configured_client(channel);
 
         // Set gRPC client for all caches via unified dispatch.
         // Uses ResourceKind exhaustive match internally, so adding a new kind
@@ -843,11 +844,16 @@ async fn prepare_client(
         }
         None => None,
     };
-    Ok(ConfigSyncClientService::new(build_channel(
+    Ok(configured_client(build_channel(
         &build_grpc_uri(address, use_tls),
         timeout,
         tls,
     )?))
+}
+
+/// Every initial, recovery and TLS-reload handle uses the same payload budget.
+fn configured_client(channel: Channel) -> ConfigSyncClientService<Channel> {
+    ConfigSyncClientService::new(channel).max_decoding_message_size(MAX_MESSAGE_BYTES)
 }
 
 /// Build a lazily-connected gRPC [`Channel`] for `uri` with the shared keepalive

@@ -41,6 +41,8 @@ k8s-openapi.workspace = true
 # gRPC (config sync + fed sync)
 tonic.workspace = true
 prost.workspace = true
+bytes.workspace = true
+zstd.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
 webpki-roots.workspace = true

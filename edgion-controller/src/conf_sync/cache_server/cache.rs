@@ -192,7 +192,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             "New watch request"
         );
         // Use bounded channel for data to provide backpressure
-        let (data_tx, data_rx) = mpsc::channel(100);
+        let (data_tx, data_rx) = mpsc::channel(1);
 
         let notify = self.get_notify();
         let store = self.get_store();
@@ -284,7 +284,7 @@ where
         let typed_rx = self.watch(client_id, client_name, from_version);
 
         // Create a new channel for the simplified response
-        let (simple_tx, simple_rx) = mpsc::channel(100);
+        let (simple_tx, simple_rx) = mpsc::channel(1);
 
         // Spawn a task to convert WatchResponse<T> to WatchResponseSimple
         tokio::spawn(async move {

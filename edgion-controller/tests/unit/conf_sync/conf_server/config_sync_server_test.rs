@@ -146,26 +146,28 @@ async fn fill_labels_entry_with_list_json_version() {
 }
 
 #[tokio::test]
-async fn oversize_is_negative_cached_per_version() {
-    let big = "x".repeat(MAX_LIST_BYTES + 1);
+async fn large_snapshot_is_compressed_once_and_shared_without_changing_raw_cache() {
+    let big = "x".repeat(64 * 1024 * 1024 + 1);
     let obj = Arc::new(CountingWatchObj::new(1, &big));
     drop(big);
     let server = server_with(obj.clone());
 
-    let expected_err = format!(
-        "List response for kind 'CountingKind' is too large ({} bytes, limit {} bytes)",
-        MAX_LIST_BYTES + 1,
-        MAX_LIST_BYTES
+    let (first, version, _) = server.list_grpc_cached("CountingKind").await.unwrap();
+    assert_eq!(version, 1);
+    assert_eq!(first.encoding, 1);
+    assert_eq!(first.uncompressed_size, 64 * 1024 * 1024 + 1);
+    assert_eq!(obj.calls(), 1);
+    let (second, _, _) = server.list_grpc_cached("CountingKind").await.unwrap();
+    assert_eq!(first.data.as_ptr(), second.data.as_ptr());
+    assert_eq!(obj.calls(), 1);
+    let raw = server.list_sync_cached("CountingKind").await.unwrap();
+    assert_eq!(raw.data.len() as u64, first.uncompressed_size);
+    assert_eq!(
+        payload::decode(first.data, first.encoding, first.uncompressed_size)
+            .await
+            .unwrap(),
+        raw.data
     );
-
-    let e1 = server.list_sync_cached("CountingKind").await.unwrap_err();
-    assert_eq!(e1, expected_err);
-    assert_eq!(obj.calls(), 1);
-
-    // Same version: fail-fast from the negative cache, no re-serialization.
-    let e2 = server.list_sync_cached("CountingKind").await.unwrap_err();
-    assert_eq!(e2, expected_err);
-    assert_eq!(obj.calls(), 1);
 
     // A version bump retries naturally.
     *obj.payload.write() = "[]".to_string();

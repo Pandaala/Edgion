@@ -68,6 +68,7 @@ use edgion_common::conf_sync::proto::{
 use edgion_resources::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
 use super::ConfigSyncServer;
+use edgion_common::conf_sync::payload::{self, MAX_MESSAGE_BYTES};
 
 /// A conf_sync TLS connection scoped to the trust root that authenticated it.
 ///
@@ -233,7 +234,7 @@ impl ConfigSyncGrpcServer {
     }
 
     pub fn into_service(self) -> ConfigSyncService<ConfigSyncGrpcServer> {
-        ConfigSyncService::new(self)
+        ConfigSyncService::new(self).max_encoding_message_size(MAX_MESSAGE_BYTES)
     }
 
     /// Gate the plaintext path (the `tls_handle = None` branch of `serve_with_shutdown`).
@@ -569,15 +570,14 @@ impl ConfigSync for ConfigSyncGrpcServer {
             return Err(Status::invalid_argument("Resource kind is required"));
         }
 
-        let list_data = server
-            .list_sync_cached(&req.kind)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to list resources: {}", e)))?;
+        let (payload, sync_version, server_id) = server.list_grpc_cached(&req.kind).await?;
 
         Ok(Response::new(ListResponse {
-            data: list_data.data,
-            sync_version: list_data.sync_version,
-            server_id: list_data.server_id,
+            data: payload.data,
+            encoding: payload.encoding,
+            uncompressed_size: payload.uncompressed_size,
+            sync_version,
+            server_id,
         }))
     }
 
@@ -645,7 +645,7 @@ impl ConfigSync for ConfigSyncGrpcServer {
         );
 
         // Convert EventDataSimple receiver to WatchResponse stream
-        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
 
         // Capture provider and initial server_id for reload detection
         let provider = self.provider.clone();
@@ -674,8 +674,25 @@ impl ConfigSync for ConfigSyncGrpcServer {
                     event = receiver.recv() => {
                         match event {
                             Some(event_data) => {
+                                let encoded = tokio::select! {
+                                    _ = &mut shutdown => break,
+                                    _ = tx.closed() => break,
+                                    result = payload::encode(event_data.data.into()) => result,
+                                };
+                                let encoded = match encoded {
+                                    Ok(encoded) => encoded,
+                                    Err(error) => {
+                                        tracing::warn!(component = "grpc_server", kind = %shutdown_kind,
+                                            sync_version = event_data.sync_version, error = %error,
+                                            "Configuration watch batch cannot be encoded for transport");
+                                        let _ = tx.send(Err(error.into_status())).await;
+                                        break;
+                                    }
+                                };
                                 let response = WatchResponse {
-                                    data: event_data.data,
+                                    data: encoded.data,
+                                    encoding: encoded.encoding,
+                                    uncompressed_size: encoded.uncompressed_size,
                                     sync_version: event_data.sync_version,
                                     err: event_data.err.unwrap_or_default(),
                                     server_id: event_data.server_id,
@@ -709,7 +726,9 @@ impl ConfigSync for ConfigSyncGrpcServer {
                                     "Server reloaded, notifying client to relist"
                                 );
                                 let response = WatchResponse {
-                                    data: String::new(),
+                                    data: Default::default(),
+                                    encoding: 0,
+                                    uncompressed_size: 0,
                                     sync_version: 0,
                                     err: WATCH_ERR_SERVER_RELOAD.to_string(),
                                     server_id: new_server_id,

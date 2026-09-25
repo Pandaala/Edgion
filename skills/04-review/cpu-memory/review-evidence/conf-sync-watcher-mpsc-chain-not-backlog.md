@@ -1,12 +1,37 @@
 ---
 name: conf-sync-watcher-mpsc-chain-not-backlog
-description: Use when reviewing findings that count conf_sync watcher three-layer mpsc(100) chain as a per-event backlog of tens of thousands; each channel item is a batch, not a single event.
+description: Distinguish batch counts from byte retention in the bounded conf_sync watcher queue chain.
 knowledge_type: review-evidence
 ---
 
 > See also: [cpu-memory/SKILL.md](../SKILL.md) for the index.
 
-# conf_sync Watcher Three-Layer mpsc(100) Chain is Not a Backlog Issue
+# conf_sync Watcher Queue Backpressure and Payload Retention
+
+## Current conclusion
+
+The four configuration payload queues (typed Watch, JSON conversion, server-id
+attachment and gRPC response) now have capacity one. This change accompanies
+`waf-conf-sync-message-size-contract`, which supports larger compressed snapshots
+and updates. The channels still await sends and propagate backpressure; a lagging
+watcher can still recover through TooOldVersion and List.
+
+Queue capacity is measured in batches. Multiplying batches by events per batch
+and bytes per event is valid when estimating retained memory; the historical
+claim below that this multiplication is a unit error is incorrect. Large WAF
+resources invalidate its assumption that each event is only a few KiB. Count
+bounds do not establish byte bounds, and a bounded ring can retain large resource
+copies. No fixed process RSS guarantee follows from the payload codec budget.
+
+Re-evaluate for measured backlog or memory pressure, increased batch/resource
+sizes, or changed cancellation/backpressure behavior. See
+[payload compression](../../conf-sync/regression-guards/bounded-payload-compression.md).
+
+## Historical review evidence (superseded capacity and memory assumptions)
+
+The following records the original argument, not an active rule suppressing
+memory findings. Its backpressure mechanism remains relevant; its three-layer
+count, multiplication objection, small-payload bound and blanket verdict do not.
 
 **False-positive scenario**: the three `mpsc::channel(100)` in `conf_sync/cache_server/cache.rs:221,299` and `conf_sync/conf_server/grpc_server.rs:305` are counted as "per-watcher × 3 channels × 100 capacity × N events = 40000+ event backlog"; suggests reducing capacity or switching to a lock-free queue to alleviate memory.
 

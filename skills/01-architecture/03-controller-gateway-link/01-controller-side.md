@@ -70,7 +70,16 @@ ConfigSyncGrpcServer does not hold ConfigSyncServer directly; instead it dynamic
 
 When `expected_server_id` does not match the current `server_id`, returns a `WATCH_ERR_SERVER_ID_MISMATCH` error to inform Gateway to re-sync.
 
-List additionally rejects a serialized JSON snapshot larger than 64 MiB. The TLS accept layer
+List and Watch use the shared `edgion-common::conf_sync::payload` codec. JSON over
+32 MiB uses Zstd level 3 only if smaller; both raw and decoded payloads have a
+512 MiB safety budget. The gRPC message budget adds 64 KiB for protobuf metadata.
+`list_grpc_cached` caches the encoded result (including errors) in a per-snapshot
+OnceCell; `list_sync_cached` remains raw JSON for federation. Admin redaction never
+reads or populates either transport cache. Configuration Watch queues have capacity
+one; metadata queues are unchanged. The codec runs at most two blocking jobs per
+process and retains the permit until each job finishes, even after cancellation.
+The raw snapshot is still serialized before encoding; this budget is not a bound
+on process memory or on all transient allocations. The TLS accept layer
 bounds in-flight handshakes at 256 and applies 10-second handshake / 30-second handoff timeouts.
 
 ## ConfigSyncServerProvider

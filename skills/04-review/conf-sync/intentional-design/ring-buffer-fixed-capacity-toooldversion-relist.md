@@ -47,9 +47,11 @@ uniform 200 default is not documented as insufficient for high-churn kinds.
 Falling back to a full List on `TooOldVersion` is the deliberate
 correctness-over-bandwidth choice: a Gateway that has provably missed events
 re-establishes ground truth rather than applying a gapped delta. The fallback is
-bounded by the 64 MB hard limit on List responses
-(`conf_server/config_sync_server.rs:147-170`), which exists precisely because a full
-EndpointSlice List can be large. This is the same "full resync is authoritative"
+bounded on the conf_sync transport by the shared 512 MiB decoded-payload safety
+budget, with threshold compression; see
+[payload compression](../regression-guards/bounded-payload-compression.md).
+The former 64 MiB List limit has been removed. Serialization and decoded resource
+storage still consume memory beyond the wire representation. This is the same "full resync is authoritative"
 posture accepted across the config-sync family (see Reference Cases), not a bug.
 
 **3. Event compaction is a large cross-layer feature, not a narrow fix**
@@ -108,7 +110,8 @@ Re-open (as a `tasks/todo/` feature, not a review fix) only if:
 - `tasks/review-envoy/sync-06-ring-buffer-capacity-is-per-kind-fixed.md` (closed 2026-06-14, ⚠️ accepted-tradeoff)
 - `edgion-controller/src/conf_sync/cache_server/store.rs:177-201` (`mut_update` eviction + `expire_sync_version`; `get_events_from_sync_version` TooOldVersion gate)
 - `edgion-common/src/conf_sync/config.rs:21-67` (`ConfSyncConfig.default_capacity` + `capacity_overrides`, `get_capacity` resolution)
-- `edgion-controller/src/conf_sync/conf_server/config_sync_server.rs:147-170` (`MAX_LIST_BYTES` 64 MB List response hard limit bounding the relist)
+- `edgion-common/src/conf_sync/payload.rs` (current transport budget and compression;
+  the historical `MAX_LIST_BYTES` 64 MiB limit is removed)
 - `skills/04-review/conf-sync/intentional-design/gateway-no-local-config-snapshot.md` (sibling config-sync Envoy-comparison tradeoff, sync-05 — "full resync is authoritative")
 - `skills/04-review/conf-sync/intentional-design/no-ack-nack-control-plane-validation.md` (sibling config-sync Envoy-comparison tradeoff, sync-01)
 - `skills/04-review/concurrency/intentional-design/watcher-send-await-backpressure-no-timeout.md` (sibling sync-03; the slow-client stall this finding's feedback-loop point 3 references)

@@ -29,6 +29,16 @@ This prevents a meta reconnect from mixing an old address with a new handle or t
 
 ### Reconnection mechanism
 
+Initial, recovery and certificate-reload clients share the same finite receive
+budget from `conf_sync::payload`. List and Watch decode the explicit payload
+encoding and exact uncompressed length before JSON parsing. Unknown encodings,
+oversized output, corrupt/truncated Zstd frames, extra frames and trailing bytes
+fail decoding. Cancellation observed during or immediately after asynchronous
+decoding discards the result before publication or Backend clearing. This does
+not make the existing synchronous JSON parsing/publication atomic with a
+concurrent channel swap. Invalid envelopes preserve generic last-known-good state;
+Backend invalid-envelope handling follows its invalid-JSON withdrawal policy.
+
 On-demand recovery builds a candidate channel, then calls `GetServerInfo` on that
 exact handle before installing it. Controller provider availability is the existing
 serving gate for leader-only and all-serve deployments. This probe creates no client

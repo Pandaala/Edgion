@@ -707,6 +707,7 @@ fn kind_23_conf_sync_envelopes_require_nested_ai_spec() {
         data: serde_json::to_vec(&vec![nested.clone()]).unwrap().into(),
         sync_version: 7,
         server_id: "server-a".to_string(),
+        ..Default::default()
     };
     assert_eq!(
         decode_list_payload::<EdgionBackend>(&nested_response.data)
@@ -720,26 +721,33 @@ fn kind_23_conf_sync_envelopes_require_nested_ai_spec() {
         data: serde_json::to_vec(&vec![flat.clone()]).unwrap().into(),
         sync_version: 8,
         server_id: "server-a".to_string(),
+        ..Default::default()
     };
     assert!(decode_list_payload::<EdgionBackend>(&flat_response.data).is_err());
 
     let nested_watch = WatchResponse {
-        data: serde_json::to_string(&vec![serde_json::json!({"type": "update", "data": nested})]).unwrap(),
+        data: serde_json::to_vec(&vec![serde_json::json!({"type": "update", "data": nested})])
+            .unwrap()
+            .into(),
         sync_version: 9,
         err: String::new(),
         server_id: "server-a".to_string(),
+        ..Default::default()
     };
-    let nested_events: Vec<serde_json::Value> = serde_json::from_str(&nested_watch.data).unwrap();
+    let nested_events: Vec<serde_json::Value> = serde_json::from_slice(&nested_watch.data).unwrap();
     let (_, _, nested_data) = take_watch_event_parts(nested_events.into_iter().next().unwrap(), 9).unwrap();
     assert!(serde_json::from_value::<EdgionBackend>(nested_data).is_ok());
 
     let flat_watch = WatchResponse {
-        data: serde_json::to_string(&vec![serde_json::json!({"type": "update", "data": flat})]).unwrap(),
+        data: serde_json::to_vec(&vec![serde_json::json!({"type": "update", "data": flat})])
+            .unwrap()
+            .into(),
         sync_version: 10,
         err: String::new(),
         server_id: "server-a".to_string(),
+        ..Default::default()
     };
-    let flat_events: Vec<serde_json::Value> = serde_json::from_str(&flat_watch.data).unwrap();
+    let flat_events: Vec<serde_json::Value> = serde_json::from_slice(&flat_watch.data).unwrap();
     let (_, _, flat_data) = take_watch_event_parts(flat_events.into_iter().next().unwrap(), 10).unwrap();
     assert!(raw_backend_key(&flat_data).is_some());
     assert!(serde_json::from_value::<EdgionBackend>(flat_data).is_err());
@@ -758,6 +766,103 @@ fn backend_fail_close_clears_cache_version_and_readiness() {
     assert!(data.is_empty());
     assert!(!data.is_ready());
     assert_eq!(data.sync_version(), 42);
+}
+
+#[tokio::test]
+async fn invalid_transport_preserves_generic_state_and_withdraws_backend_state() {
+    let generic = Arc::new(RwLock::new(CacheData::<ConfigMap>::new()));
+    generic.write().insert("ns/a".into(), make_cm("ns", "a"));
+    generic.write().set_ready();
+    let generation = CancellationToken::new();
+    assert!(
+        decode_transport_payload(&generic, Bytes::from_static(b"[]"), 0, 3, 2, &generation)
+            .await
+            .is_err()
+    );
+    assert_eq!(generic.read().len(), 1);
+    assert!(generic.read().is_ready());
+
+    let (backend, store, _) = backend_cache_with_handler();
+    let initial = serde_json::to_vec(&vec![runtime_backend_json("backend-a")]).unwrap();
+    publish_list_payload(&backend, &initial, 1).unwrap();
+    backend.write().set_ready();
+    assert!(
+        decode_transport_payload(&backend, Bytes::from_static(b"broken"), 1, 100, 2, &generation)
+            .await
+            .is_err()
+    );
+    assert!(backend.read().is_empty());
+    assert!(!backend.read().is_ready());
+    assert_eq!(store.count(), 0);
+    publish_list_payload(&backend, &initial, 3).unwrap();
+    assert_eq!(store.count(), 1, "a valid relist restores the runtime");
+}
+
+#[tokio::test]
+async fn cancelled_generation_cannot_clear_backend_during_payload_decode() {
+    use std::{future::Future, task::Poll};
+    let (backend, store, _) = backend_cache_with_handler();
+    let initial = serde_json::to_vec(&vec![runtime_backend_json("backend-a")]).unwrap();
+    publish_list_payload(&backend, &initial, 1).unwrap();
+    backend.write().set_ready();
+    let encoded = payload::encode(vec![b' '; payload::COMPRESSION_THRESHOLD + 1].into())
+        .await
+        .unwrap();
+    let generation = CancellationToken::new();
+    // An incorrect declared size would withdraw backend state if the old response
+    // were allowed to finish after the channel generation was retired.
+    let future = decode_transport_payload(
+        &backend,
+        encoded.data,
+        encoded.encoding,
+        encoded.uncompressed_size - 1,
+        2,
+        &generation,
+    );
+    tokio::pin!(future);
+    std::future::poll_fn(|cx| {
+        assert!(future.as_mut().poll(cx).is_pending(), "blocking decode must yield");
+        Poll::Ready(())
+    })
+    .await;
+    generation.cancel();
+    assert_eq!(future.await.unwrap_err().code(), tonic::Code::Cancelled);
+    assert_eq!(backend.read().sync_version(), 1);
+    assert!(backend.read().is_ready());
+    assert_eq!(store.count(), 1);
+}
+
+#[tokio::test]
+async fn cancelled_generation_discards_successful_compressed_payload() {
+    use std::{future::Future, task::Poll};
+    let cache = Arc::new(RwLock::new(CacheData::<ConfigMap>::new()));
+    cache.write().insert("ns/old".into(), make_cm("ns", "old"));
+    cache.write().set_ready();
+    let json = format!("[{}]", " ".repeat(payload::COMPRESSION_THRESHOLD));
+    let encoded = payload::encode(json.into()).await.unwrap();
+    let generation = CancellationToken::new();
+    let future = decode_transport_payload(
+        &cache,
+        encoded.data,
+        encoded.encoding,
+        encoded.uncompressed_size,
+        2,
+        &generation,
+    );
+    tokio::pin!(future);
+    std::future::poll_fn(|cx| {
+        assert!(future.as_mut().poll(cx).is_pending(), "blocking decode must yield");
+        Poll::Ready(())
+    })
+    .await;
+    generation.cancel();
+    let result = future.await;
+    assert_eq!(result.as_ref().unwrap_err().code(), tonic::Code::Cancelled);
+    if let Ok(data) = result {
+        publish_list_payload(&cache, &data, 2).unwrap();
+    }
+    assert!(cache.read().get("ns/old").is_some());
+    assert!(cache.read().is_ready());
 }
 
 #[test]

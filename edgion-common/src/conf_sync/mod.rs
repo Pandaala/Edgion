@@ -1,6 +1,7 @@
 pub mod cert_duration;
 pub mod cert_expiry_watch;
 pub mod config;
+pub mod payload;
 pub mod proto;
 pub mod traits;
 pub mod types;

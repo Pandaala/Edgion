@@ -25,11 +25,19 @@ message ListRequest {
     string expected_server_id = 3;  // Expected server ID for server instance validation
 }
 
+// Shared payload encoding for List and Watch. Peers must validate decoded length.
+enum PayloadEncoding {
+    IDENTITY = 0;
+    ZSTD = 1;
+}
+
 // List response
 message ListResponse {
-    bytes data = 1;   // JSON payload; bytes (not string) so prost maps it to Bytes for zero-copy
+    bytes data = 1;   // Encoded JSON payload, mapped to Bytes for shared cached responses
     uint64 sync_version = 2;
     string server_id = 3;  // Server instance ID for detecting server restarts
+    PayloadEncoding encoding = 4;
+    uint64 uncompressed_size = 5; // Exact decoded JSON length, also required for identity
 }
 
 // Watch request
@@ -44,10 +52,12 @@ message WatchRequest {
 
 // Watch response
 message WatchResponse {
-    string data = 1;
+    bytes data = 1; // Encoded JSON event batch
     uint64 sync_version = 2;
     string err = 3;
     string server_id = 4;  // Server instance ID for detecting server restarts
+    PayloadEncoding encoding = 5;
+    uint64 uncompressed_size = 6; // Exact decoded JSON length, also required for identity
 }
 
 // Request to watch server metadata (gateway instance count, etc.)
@@ -71,4 +81,3 @@ message ServerInfoResponse {
     string server_id = 1;              // Server instance ID
     repeated string supported_kinds = 3;  // List of resource kinds supported by this server
 }
-

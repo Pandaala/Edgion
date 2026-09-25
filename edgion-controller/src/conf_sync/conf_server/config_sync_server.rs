@@ -4,6 +4,7 @@
 //! It holds a HashMap<kind, Arc<dyn WatchObj>> registered by ResourceProcessors.
 
 use bytes::Bytes;
+use edgion_common::conf_sync::payload::{self, EncodedPayload, PayloadError};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,28 +32,11 @@ pub struct ListDataSimple {
     pub server_id: String,
 }
 
-/// 64 MB hard limit — prevents OOM when serializing very large resource sets
-/// (e.g. thousands of EndpointSlices). Pagination is the long-term solution.
-const MAX_LIST_BYTES: usize = 64 * 1024 * 1024;
-
-fn oversize_error(kind: &str, size: usize) -> String {
-    format!(
-        "List response for kind '{}' is too large ({} bytes, limit {} bytes)",
-        kind, size, MAX_LIST_BYTES
-    )
-}
-
-/// Cached serialization result for one kind at one sync_version.
-enum CachedPayload {
-    /// Serialized snapshot bytes, shared across concurrent hits.
-    Bytes(Bytes),
-    /// Negative cache: serialization at this version exceeded MAX_LIST_BYTES.
-    Oversize { size: usize },
-}
-
 struct CachedList {
     sync_version: u64,
-    payload: CachedPayload,
+    data: Bytes,
+    /// gRPC encoding is computed once for this exact serialized snapshot.
+    wire: Arc<tokio::sync::OnceCell<Result<EncodedPayload, PayloadError>>>,
 }
 
 /// Per-kind versioned list cache with single-flight fill.
@@ -159,17 +143,6 @@ impl ConfigSyncServer {
         let obj = map.get(kind).ok_or_else(|| format!("Unknown kind: {}", kind))?;
 
         let (data, sync_version) = obj.list_json()?;
-        if data.len() > MAX_LIST_BYTES {
-            tracing::warn!(
-                component = "config_sync_server",
-                kind = kind,
-                size_bytes = data.len(),
-                limit_bytes = MAX_LIST_BYTES,
-                "List response exceeds size limit, rejecting to prevent OOM"
-            );
-            return Err(oversize_error(kind, data.len()));
-        }
-
         Ok(ListDataSimple {
             data: Bytes::from(data),
             sync_version,
@@ -185,26 +158,22 @@ impl ConfigSyncServer {
         self.list_cache.write().entry(kind.to_string()).or_default().clone()
     }
 
-    /// Version-equality cache lookup. `None` = miss; `Some(Ok)` = bytes hit;
-    /// `Some(Err)` = negative (oversize) hit.
-    fn cache_lookup(kind: &str, kc: &KindListCache, current_version: u64) -> Option<Result<Bytes, String>> {
+    /// Version-equality cache lookup. Raw bytes are shared with federation.
+    fn cache_lookup(kc: &KindListCache, current_version: u64) -> Option<Bytes> {
         let cached = kc.cached.read();
         let entry = cached.as_ref()?;
         if entry.sync_version != current_version {
             return None;
         }
-        Some(match &entry.payload {
-            CachedPayload::Bytes(bytes) => Ok(bytes.clone()),
-            CachedPayload::Oversize { size } => Err(oversize_error(kind, *size)),
-        })
+        Some(entry.data.clone())
     }
 
-    fn hit_to_response(&self, hit: Result<Bytes, String>, sync_version: u64) -> Result<ListDataSimple, String> {
-        hit.map(|bytes| ListDataSimple {
-            data: bytes,
+    fn hit_to_response(&self, data: Bytes, sync_version: u64) -> ListDataSimple {
+        ListDataSimple {
+            data,
             sync_version,
             server_id: self.server_id(),
-        })
+        }
     }
 
     /// List resources by kind through the per-(kind, sync_version)
@@ -235,8 +204,8 @@ impl ConfigSyncServer {
 
         // Fast path: version-equal hit, no fill lock.
         let current_version = obj.current_version();
-        if let Some(hit) = Self::cache_lookup(kind, &kc, current_version) {
-            return self.hit_to_response(hit, current_version);
+        if let Some(hit) = Self::cache_lookup(&kc, current_version) {
+            return Ok(self.hit_to_response(hit, current_version));
         }
 
         // Single-flight: at most one serialization per version.
@@ -245,8 +214,8 @@ impl ConfigSyncServer {
         // Double-check against a FRESH version read — the version may have
         // advanced (and a peer may have filled) while we waited for the lock.
         let current_version = obj.current_version();
-        if let Some(hit) = Self::cache_lookup(kind, &kc, current_version) {
-            return self.hit_to_response(hit, current_version);
+        if let Some(hit) = Self::cache_lookup(&kc, current_version) {
+            return Ok(self.hit_to_response(hit, current_version));
         }
 
         // The one serialization for this version. The (data, sync_version)
@@ -256,29 +225,11 @@ impl ConfigSyncServer {
         let started = Instant::now();
         let (data, sync_version) = obj.list_json()?;
 
-        if data.len() > MAX_LIST_BYTES {
-            // warn once per version (single-flight guarantees one fill),
-            // instead of today's warn per request.
-            tracing::warn!(
-                component = "config_sync_server",
-                kind = kind,
-                sync_version = sync_version,
-                size_bytes = data.len(),
-                limit_bytes = MAX_LIST_BYTES,
-                "List response exceeds size limit, rejecting to prevent OOM (negative-cached for this version)"
-            );
-            let size = data.len();
-            *kc.cached.write() = Some(CachedList {
-                sync_version,
-                payload: CachedPayload::Oversize { size },
-            });
-            return Err(oversize_error(kind, size));
-        }
-
         let bytes = Bytes::from(data);
         *kc.cached.write() = Some(CachedList {
             sync_version,
-            payload: CachedPayload::Bytes(bytes.clone()),
+            data: bytes.clone(),
+            wire: Arc::new(tokio::sync::OnceCell::new()),
         });
         tracing::debug!(
             component = "config_sync_server",
@@ -294,6 +245,41 @@ impl ConfigSyncServer {
             sync_version,
             server_id: self.server_id(),
         })
+    }
+
+    /// Encode the gRPC snapshot without changing the raw federation/admin API.
+    pub async fn list_grpc_cached(&self, kind: &str) -> Result<(EncodedPayload, u64, String), tonic::Status> {
+        // Do not let a thread-local redacting context read or populate wire caches.
+        let redacting = edgion_resources::redact::redact_active();
+        let raw = self
+            .list_sync_cached(kind)
+            .await
+            .map_err(|_| tonic::Status::internal("Failed to serialize configuration snapshot"))?;
+        let wire = if redacting {
+            Arc::new(tokio::sync::OnceCell::new())
+        } else {
+            let kc = self.kind_list_cache(kind);
+            let cached = kc.cached.read();
+            cached
+                .as_ref()
+                .filter(|entry| entry.sync_version == raw.sync_version && entry.data.as_ptr() == raw.data.as_ptr())
+                .map(|entry| entry.wire.clone())
+                // A concurrent new snapshot may have replaced the entry already.
+                .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()))
+        };
+        let encoded = wire
+            .get_or_init(|| async {
+                let result = payload::encode(raw.data).await;
+                if let Err(error) = &result {
+                    tracing::warn!(component = "config_sync_server", kind, sync_version = raw.sync_version,
+                    error = %error, "Configuration snapshot cannot be encoded for transport");
+                }
+                result
+            })
+            .await
+            .clone()
+            .map_err(|error| error.into_status())?;
+        Ok((encoded, raw.sync_version, raw.server_id))
     }
 
     /// Watch resources by kind name
@@ -324,7 +310,7 @@ impl ConfigSyncServer {
         let server_id = self.server_id();
 
         // Convert WatchResponseSimple to EventDataSimple (add server_id)
-        let (tx, rx) = mpsc::channel(100);
+        let (tx, rx) = mpsc::channel(1);
 
         tokio::spawn(async move {
             let mut simple_rx = simple_rx;

@@ -14,7 +14,12 @@ knowledge_type: intentional-design
 
 1. **Cold admin path, not data plane**: the only callers are `configserver_handlers.rs::get_resource` (the `GET /configserver/{kind}?namespace=…&name=…` admin endpoint) and the `edgion-cli --target server` debug flow. No per-request, per-connection, or per-reconcile traffic touches this code. Trigger frequency is manual ops/diagnostics — bounded by human keypresses.
 
-2. **Response size is hard-capped**: `ConfigSyncServer::list` already enforces `MAX_LIST_BYTES = 64 MB` (`config_sync_server.rs:149`) and returns an error if the serialized kind exceeds that. So worst-case allocation per call is bounded; there is no unbounded-N risk.
+2. **The old size-limit rationale is superseded**: the former 64 MiB List check
+   was removed by `waf-conf-sync-message-size-contract`. That check happened after
+   serialization and never proved a peak-allocation bound. The new gRPC codec
+   budget does not apply to the raw admin path. This cold-path tradeoff remains a
+   frequency/cost decision, not proof that large manual reads have bounded memory.
+   Re-evaluate on measured admin memory pressure or substantially larger snapshots.
 
 3. **The "proper fix" expands a cross-cutting trait surface for no measurable benefit**: `ServerCache<T>::get_by_key` (`cache.rs:99`) exists and is O(1), but it is intentionally not on the `WatchObj` trait (`conf_server/traits.rs`). Adding `get_json` to `WatchObj` would require implementing it on every cache type and plumbing through `ConfigSyncServer::get`, all to save microseconds on a path nobody hot-loops. The trait deliberately exposes only `list_json` + `watch_json` because that's all the gRPC sync protocol needs.
 

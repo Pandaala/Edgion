@@ -1,6 +1,6 @@
 ---
 name: watcher-send-await-backpressure-no-timeout
-description: Use when reviewing `conf_sync` server findings of the form "ServerCache::start_watcher_task unconditional sender.send(response).await blocks the watcher on a slow/stuck Gateway / four-level mpsc(100) backpressure stalls Controller event delivery / no send_timeout/try_send / no Envoy-style per-client isolation / slow Gateway degrades healthy Gateways". Reject re-reports proposing send_timeout + drop + force-relist as a narrow fix.
+description: Review per-client conf_sync Watch backpressure, slow-reader retention and the accepted absence of send_timeout.
 status: accepted-tradeoff
 finding_id: sync-03
 closed: 2026-06-14
@@ -17,12 +17,13 @@ knowledge_type: intentional-design
 `ServerCache::start_watcher_task` (`edgion-controller/src/conf_sync/cache_server/cache.rs:125-206`)
 intentionally awaits `sender.send(response).await` (line 146) with no `send_timeout`/`try_send`,
 so the per-client watcher task is backpressured end-to-end through the four-level
-`mpsc::channel(100)` chain
+`mpsc::channel(1)` chain (capacity reduced by `waf-conf-sync-message-size-contract`)
 (`data_tx` cache.rs:227 → `simple_tx` cache.rs:305 → `config_sync_server` tx
 config_sync_server.rs:207 → `grpc_server` tx grpc_server.rs:247). A slow Gateway is served at
 its own pace; a Gateway that falls behind the bounded `EventStore` circular queue is realigned
-via `WATCH_ERR_TOO_OLD_VERSION` → relist; a fully dead connection is dropped within ~15s by
-HTTP/2 keepalive (`grpc_server.rs:10-13`). This is the same design documented from the memory
+via `WATCH_ERR_TOO_OLD_VERSION` → relist once it resumes consuming. HTTP/2 keepalive
+detects an unresponsive connection; it does not impose an application read deadline.
+This is the same design documented from the memory
 angle in [../cpu-memory/cases/conf-sync-watcher-mpsc-chain-not-backlog.md](../../cpu-memory/review-evidence/conf-sync-watcher-mpsc-chain-not-backlog.md);
 this entry closes the **per-client-isolation / "management plane must not block"** framing.
 
@@ -56,14 +57,14 @@ behind, and it never receives a corrupt/partial view. This is functionally the s
 Envoy's "drop the lagging client and make it re-sync" — Edgion just triggers the resync from
 circular-buffer overflow rather than from an explicit send-buffer drop.
 
-**3. The dead-connection window is already bounded; the "arbitrary duration" stall is not real.**
+**3. Keepalive does not bound an application's stalled-read duration.**
 
-A *slow-but-alive* Gateway reads each batch in order; the watcher advances as the Gateway
-drains, then detects `TooOldVersion` if it ever falls past the buffer. A *fully stuck* (reads
-nothing) Gateway triggers HTTP/2 keepalive (10s interval / 5s timeout) within ~15s → stream
-drop → receiver drop → `send` returns `Err` → watcher breaks (cache.rs:146-149). So the
-finding's #3 "hold the watcher stuck for an arbitrary duration" only applies inside that bounded
-keepalive window, not indefinitely.
+A slow Gateway advances as it drains batches, then detects `TooOldVersion` if it
+has fallen behind the ring. A peer can stop consuming application data while
+still acknowledging HTTP/2 PINGs; such a Watch can remain blocked indefinitely.
+The historical claim that every stuck reader is disconnected within 15 seconds
+was incorrect. The accepted per-client backpressure policy is unchanged, but it
+retains queued/in-flight data until consumption resumes or the connection closes.
 
 **4. The verification note itself walks back the worker-thread / fairness claims.**
 
@@ -78,8 +79,9 @@ impact rests on that walked-back claim and does not hold.
   forcing the Gateway to reconnect/relist"** — this is a behavior change, not a bug fix. It
   converts slow-but-alive Gateways that could keep up under backpressure into forced relists;
   a full List is heavier than incremental Watch and lands precisely when the control plane is
-  already under load, adding pressure rather than relieving it. The genuinely-stuck case is
-  already bounded by the 15s keepalive + the `TooOldVersion` relist.
+  already under load, adding pressure rather than relieving it. This accepts
+  indefinite retention for a live peer that stops reading; the smaller payload
+  queues reduce retention, but do not establish a process-wide byte bound.
 - **"Use an unbounded per-client channel with a buffered-event cap, drop the client past the
   cap"** — same force-relist downside, plus it removes the end-to-end backpressure that today
   keeps a slow consumer from making the Controller buffer unboundedly. The bounded chain +
@@ -92,6 +94,9 @@ impact rests on that walked-back claim and does not hold.
 ## Re-evaluation Triggers
 
 Re-open this decision only if:
+
+- Large configuration payloads or stalled readers cause measured retained-memory
+  pressure. Keepalive alone cannot dismiss this concern.
 
 - Profiling on a real deployment shows a slow/stuck Gateway measurably degrading **other**
   Gateways' config-sync convergence (not just its own), proving a cross-client coupling this

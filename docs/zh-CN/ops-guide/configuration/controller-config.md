@@ -131,6 +131,13 @@ conf_center:
 
 ### [conf_sync_security]
 
+List 和 Watch 载荷超过 32 MiB 时，如果压缩能减小体积，会自动采用 Zstd level 3。
+Gateway 解压后再应用配置。原有的 64 MiB List 限制已移除；两种操作均采用解压后
+512 MiB 的传输安全预算。超限返回 `ResourceExhausted`，不会截断配置。压缩减少网络
+传输量，不会消除解压后配置所需的内存。升级时 Controller 和 Gateway 必须使用相同
+的载荷协议版本，无需配置压缩开关。这些限制不改变 Kubernetes 对象限制或 WAF
+规则包校验限制。
+
 **必填配置。** conf_sync gRPC 通道会把解析后的 Secret（TLS 私钥、后端凭证）下发到数据面，
 因此其传输方式必须由运维显式选择。
 

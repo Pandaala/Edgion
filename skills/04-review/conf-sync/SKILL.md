@@ -23,6 +23,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Bounded List and Watch payload compression](regression-guards/bounded-payload-compression.md)
+
 - [Initial resource documents are consumed by phase](regression-guards/initial-documents-consumed-by-phase.md)
 - [Transactional Controller channel selection](regression-guards/transactional-controller-channel-selection.md)
 - [Generic Watch decode failure recovery](regression-guards/watch-decode-error-relist.md)

@@ -133,6 +133,16 @@ conf_center:
 
 ### [conf_sync_security]
 
+List and Watch payloads larger than 32 MiB are automatically compressed with
+Zstd level 3 when compression reduces their size. Gateways decode the payload
+before applying configuration. The former 64 MiB List limit is removed; both
+operations have a 512 MiB uncompressed transport safety budget. An oversized
+payload is rejected with `ResourceExhausted`, rather than truncated. Compression
+reduces network traffic, not the memory required for decoded configuration.
+Controller and Gateway must use the same payload protocol version when upgrading.
+No compression setting is required. These limits do not change Kubernetes object
+limits or WAF bundle validation limits.
+
 **Required.** The conf_sync gRPC channel carries resolved Secrets (TLS private keys, backend
 credentials) to the data plane, so its transport must be chosen explicitly.
 

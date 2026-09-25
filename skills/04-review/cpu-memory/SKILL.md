@@ -59,7 +59,7 @@ before applying a decision to current code.
 
 - [Access Log JSON Serialization Allocating a New String per Request is Not an Issue](review-evidence/access-log-json-serialization-per-request.md)
 - [`BidirectionalRefManager` Lacking GC / Expiry Mechanism is Not a Memory Leak](review-evidence/bidirectional-ref-manager-no-gc-not-memory-leak.md)
-- [conf_sync Watcher Three-Layer mpsc(100) Chain is Not a Backlog Issue](review-evidence/conf-sync-watcher-mpsc-chain-not-backlog.md)
+- [conf_sync Watcher Queue Backpressure and Payload Retention](review-evidence/conf-sync-watcher-mpsc-chain-not-backlog.md)
 - [`extract_status_json` Double Serialization is Cold Path + API Shape](review-evidence/extract-status-json-double-serialization-cold-path.md)
 - [`get_raw_any` / `lookup_gateway` is Not JSON Serialization](review-evidence/get-raw-any-lookup-not-json-scan.md)
 - [`HashMap::new()` Default Capacity on Reconcile / Full-Sync Paths](review-evidence/hashmap-new-default-capacity-reconcile-paths.md)
