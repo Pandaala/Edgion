@@ -1658,10 +1658,13 @@ fn finalize_request_uri(session: &mut Session, ctx: &mut EdgionHttpContext) -> p
     };
     let want_raw = decide_want_raw(annotation, external_jump_preserve_raw, cfg.forward_normalized_path);
     let parsed = if !want_raw && ctx.path() != session.req_header().uri.path() {
+        let path_only = ctx
+            .uri(session.req_header())
+            .parse::<http::Uri>()
+            .map_err(|e| PingoraError::because(ErrorType::InternalError, "compose normalized uri", e))?;
         Some(
-            ctx.uri(session.req_header())
-                .parse::<http::Uri>()
-                .map_err(|e| PingoraError::because(ErrorType::InternalError, "compose normalized uri", e))?,
+            crate::ctx::retain_uri_authority_for_path_only(&session.req_header().uri, path_only)
+                .map_err(|e| PingoraError::because(ErrorType::InternalError, "retain request authority", e))?,
         )
     } else {
         None

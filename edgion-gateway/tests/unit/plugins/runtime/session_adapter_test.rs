@@ -1,5 +1,83 @@
 use super::*;
 
+#[tokio::test]
+async fn stripping_query_credential_preserves_absolute_request_target() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"GET http://example.com/raw%2Fpath?api_key=secret&keep=1 HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    let mut ctx = EdgionHttpContext::default();
+
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    crate::plugins::http::common::auth_common::strip_query_param(&mut adapter, "api_key");
+
+    assert_eq!(session.req_header().raw_path(), b"http://example.com/raw%2Fpath?keep=1");
+    assert_eq!(session.req_header().uri.path(), "/raw%2Fpath");
+    assert_eq!(session.req_header().uri.query(), Some("keep=1"));
+    assert!(!ctx.uri_finalized);
+}
+
+#[tokio::test]
+async fn stripping_query_credential_preserves_h2_authority_without_host() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: placeholder\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    session
+        .req_header_mut()
+        .set_uri("https://example.com/raw%2Fpath?api_key=secret&keep=1".parse().unwrap());
+    session.req_header_mut().set_version(http::Version::HTTP_2);
+    session.req_header_mut().remove_header("Host");
+    let mut ctx = EdgionHttpContext::default();
+
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    crate::plugins::http::common::auth_common::strip_query_param(&mut adapter, "api_key");
+
+    let header = session.req_header();
+    assert_eq!(header.uri.scheme_str(), Some("https"));
+    assert_eq!(header.uri.authority().unwrap().as_str(), "example.com");
+    assert_eq!(header.raw_path(), b"/raw%2Fpath?keep=1");
+    assert!(header.headers.get("Host").is_none());
+    assert!(!ctx.uri_finalized);
+}
+
+#[tokio::test]
+async fn path_only_rewrite_keeps_h2_authority_without_host() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: placeholder\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    session
+        .req_header_mut()
+        .set_uri("https://example.com/original?scope=read".parse().unwrap());
+    session.req_header_mut().set_version(http::Version::HTTP_2);
+    session.req_header_mut().remove_header("Host");
+    let mut ctx = EdgionHttpContext::default();
+
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    adapter.set_upstream_uri("/rewritten?scope=read").unwrap();
+
+    let header = session.req_header();
+    assert_eq!(header.uri.to_string(), "https://example.com/rewritten?scope=read");
+    assert!(header.headers.get("Host").is_none());
+    assert!(ctx.uri_finalized);
+}
+
 #[test]
 fn request_body_buffer_install_failure_is_storage_failure() {
     assert_eq!(body_buffer_install_error(), BodyReadError::StorageFailure);

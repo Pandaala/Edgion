@@ -1,4 +1,4 @@
-//! Duplicate-Host policy updates on unchanged ordinary and redirect listeners.
+//! Protocol-level duplicate-Host rejection across Gateway config updates.
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
@@ -58,24 +58,15 @@ fn assert_status(response: &str, expected: u16, listener: &str) -> Result<()> {
     Ok(())
 }
 
-async fn assert_generation(ctx: &TestContext, generation: Generation) -> Result<()> {
-    let escape_hatch = matches!(generation, Generation::Updated);
+async fn assert_generation(ctx: &TestContext, _generation: Generation) -> Result<()> {
     let ordinary = duplicate_host_response(ctx, ctx.http_port).await?;
-    assert_status(&ordinary, if escape_hatch { 200 } else { 400 }, "ordinary HTTP")?;
+    assert_status(&ordinary, 400, "ordinary HTTP")?;
     let redirect_port = PortConfig::load()
         .map_err(anyhow::Error::msg)?
         .require_port("Gateway/DuplicateHostPolicyHotReload/Redirect", PortKind::Http)
         .map_err(anyhow::Error::msg)?;
     let redirect = duplicate_host_response(ctx, redirect_port).await?;
-    assert_status(&redirect, if escape_hatch { 301 } else { 400 }, "HTTP redirect")?;
-    if escape_hatch {
-        ensure!(
-            redirect
-                .to_ascii_lowercase()
-                .contains("\r\nlocation: https://duplicate-host-policy.sandbox.example.com/health\r\n"),
-            "redirect response did not preserve the routable Host in Location"
-        );
-    }
+    assert_status(&redirect, 400, "HTTP redirect")?;
     Ok(())
 }
 
@@ -90,7 +81,7 @@ impl TestSuite for GenerationSuite {
         let generation = self.0;
         vec![TestCase::new(
             "duplicate_host_policy_generation",
-            "Ordinary and redirect listeners use the current duplicate-Host policy",
+            "Protocol parsing rejects duplicate Host on ordinary and redirect listeners across config updates",
             move |ctx| {
                 Box::pin(async move {
                     let start = Instant::now();

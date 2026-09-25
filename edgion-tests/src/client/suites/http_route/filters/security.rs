@@ -154,8 +154,8 @@ impl HttpSecurityTestSuite {
                     match TcpStream::connect(&addr).await {
                         Ok(mut stream) => {
                             // Two Host header lines: a legitimate routable host followed by an
-                            // attacker-controlled one. With reject_duplicate_host=true (default)
-                            // the gateway must respond 400 instead of routing on the first value.
+                            // attacker-controlled one. Pingora rejects this before the
+                            // Gateway-level policy can route on either value.
                             let primary = ctx.http_host.clone().unwrap_or_else(|| "test.example.com".to_string());
                             let request = format!(
                                 "GET /health HTTP/1.1\r\nHost: {}\r\nHost: attacker.example\r\nConnection: close\r\n\r\n",

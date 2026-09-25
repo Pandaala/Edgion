@@ -222,7 +222,7 @@ Controller preparse warns rather than refusing to publish, so the Gateway applie
 | `fallbackSni` | `String` | — | Fallback hostname used when the client provides no SNI |
 | `tlsProxyLogRecord` | `Boolean` | `true` | Record TLS proxy connection logs |
 | `allowLoopbackUpstream` | `Boolean` | `false` | Explicitly allow loopback upstream addresses for this GatewayClass. Link-local / metadata ranges remain blocked |
-| `rejectDuplicateHost` | `Boolean` | `true` | Reject HTTP/1.1 requests carrying more than one `Host` header line with `400 Bad Request` (RFC 9110 §7.2 Host smuggling defense). Disable only as a transitional escape hatch for legacy middleware that emits duplicate `Host` lines |
+| `rejectDuplicateHost` | `Boolean` | `true` | Gateway-level duplicate `Host` check. Pingora 0.9 rejects duplicate HTTP/1.1 `Host` fields during protocol parsing before this setting is consulted, so `false` does not permit them |
 
 If the entire `securityProtect` block is absent, the XFF byte cap is disabled.
 If the block is present and `xForwardedForLimit` is omitted, its default is 200.

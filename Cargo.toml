@@ -115,17 +115,17 @@ boring-sys = "5"
 foreign-types = "0.5"
 
 # Pingora — the Gateway builds exclusively against the Edgion fork family so
-# public types never cross a source boundary. Development follows the fork's
-# `edgion_v5` branch; the committed Cargo.lock pins the exact commit, and
-# CI/release builds use `--locked`. Release milestones may temporarily use a
-# protected immutable tag when a manifest-level source identity is required.
-pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v5", features = ["connection_filter"] }
-pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v5" }
-pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v5" }
-pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v5" }
-pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v5" }
-pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v5" }
-tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v5" }
+# public types never cross a source boundary. This local 0.9.0 candidate selects
+# `edgion_0.9.0_v1`; Cargo.lock pins its exact commit. The source-policy guard
+# still requires the published `edgion_v5` development branch until the release
+# selector is approved. CI/release builds use `--locked`.
+pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_0.9.0_v1", features = ["connection_filter"] }
+pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_0.9.0_v1" }
+pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_0.9.0_v1" }
+pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_0.9.0_v1" }
+pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_0.9.0_v1" }
+pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_0.9.0_v1" }
+tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion_0.9.0_v1" }
 
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros", "ws"] }

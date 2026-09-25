@@ -18,6 +18,11 @@ HTTP method before replaying a buffered request body. Non-idempotent methods
 retried on a reused keepalive reset by default; idempotent methods
 (GET/HEAD/PUT/DELETE/OPTIONS/TRACE per `http::Method::is_idempotent()` / RFC 9110)
 still are. A route opts back in with `edgion.io/retry-non-idempotent: "true"`.
+The same method, replay-backing, attempt-budget, and deadline gates also veto
+already-decided `InvalidH2` and `H2Downgrade` errors. These local protocol
+outcomes do not establish that the origin skipped the request. The AI attempt
+dispatcher explicitly clears a preexisting retry decision when it returns
+`Final` or fails.
 
 Re-report fix suggestions of the following forms are **not accepted**:
 - "Add a `retriable_methods` / `allowNonSafeRetry` field to the `HTTPRouteRetry` CRD" —
@@ -30,9 +35,10 @@ Re-report fix suggestions of the following forms are **not accepted**:
   safe retries.
 - "Also guard Case 1 (status-code `retry.codes`) and Case 1.5 (per-try timeout)" — those
   fire only under an **explicit** operator-configured retry policy (`retry_configured()`),
-  i.e. the operator opted into retrying. Case 2 is the only path that retries on the global
-  `retry.attempts` default (2) with no per-route config, so it is the only *implicit* exposure.
-  Scoping the guard to Case 2 is the accepted decision.
+  i.e. the operator opted into retrying. Case 2 and Pingora's ambiguous
+  already-decided H2 protocol outcomes can retry without per-route policy;
+  both now apply the method-safety guard. This does not change the explicit
+  status or per-try-timeout policy.
 
 ## Core Rationale
 
@@ -46,8 +52,17 @@ brings Edgion's default in line.
 
 The guard is a single conjunct on `can_retry`:
 `method_retry_ok = session.req_header().method.is_idempotent() || ctx.retry_allow_non_idempotent()`.
-Errors arriving already-`Decided(true)` (h2 GOAWAY / REFUSED_STREAM decided inside Pingora)
-are unaffected — `decide_reuse` is a no-op unless the state is `ReusedOnly`.
+`decide_reuse` is a no-op for an incoming `Decided(true)`. Pingora 0.9 can
+produce that state for local H2 `GOAWAY(PROTOCOL_ERROR)` as `InvalidH2`, even
+when an origin may already have processed a POST. The override must explicitly
+clear the decision when the method, backing, budget, or deadline gate fails.
+Protocol-qualified `REFUSED_STREAM` and peer GOAWAY decisions remain subject
+to the separate Pingora-decided ceiling. Their safety depends on the precise
+stream condition, not on every error called `H2Error` being safe.
+
+P090-008 remains the acceptance task for controlled-origin side-effect counts,
+the complete retry policy table, and remaining H2 cases. This page records the
+corrected guard, not completion of that broader matrix.
 
 The opt-in flag is a runtime-only field (`parsed_allow_non_idempotent_retry`,
 `#[serde(skip)] #[schemars(skip)]`) on `HTTPRouteRule` / `GRPCRouteRule`, parsed from the
@@ -61,6 +76,8 @@ travels over conf_sync, never the derived field.
   "retry decided" — could tighten the guard to only fire when a body was buffered.
 - A future requirement to make the guard per-rule (not per-route) — the annotation is
   currently route-level, applied to all rules.
+- A Pingora change to H2 error classification or retry decisions — recheck
+  which outcomes prove the stream was not processed.
 
 ## Reference Cases
 
@@ -70,3 +87,4 @@ travels over conf_sync, never the derived field.
   `routing/per-try-timeout-test-coverage.md`.
 - Annotation reference: `skills/02-features/05-annotations/references/annotations-metadata.md`
   (`edgion.io/retry-non-idempotent`).
+- Pingora 0.9 acceptance task: `tasks/pingora-0.9.0/008-overridden-retry-policy-review.md`.

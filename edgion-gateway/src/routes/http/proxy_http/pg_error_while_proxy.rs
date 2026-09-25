@@ -34,6 +34,24 @@ fn ai_failure_wants_retry(
     }
 }
 
+#[inline]
+fn ai_dispatch_should_retry<E>(decision: &Result<crate::ai::dispatch::AiRetryDecision, E>) -> bool {
+    matches!(decision, Ok(crate::ai::dispatch::AiRetryDecision::Retry))
+}
+
+#[inline]
+fn ambiguous_decided_h2_retry_allowed(
+    error: &Error,
+    replayable: bool,
+    method_allowed: bool,
+    attempts_allowed: bool,
+    deadline_exceeded: bool,
+) -> Option<bool> {
+    (matches!(error.retry, pingora_core::RetryType::Decided(true))
+        && matches!(error.etype(), ErrorType::InvalidH2 | ErrorType::H2Downgrade))
+    .then_some(replayable && method_allowed && attempts_allowed && !deadline_exceeded)
+}
+
 fn classify_ai_proxy_failure(
     error_type: &ErrorType,
     error_source: &ErrorSource,
@@ -76,9 +94,8 @@ fn is_backend_request_timeout_retry_candidate(
 /// reach this callback already carrying `RetryType::Decided(true)`: h2 GOAWAY,
 /// RST_STREAM(REFUSED_STREAM), an HTTP/1.1-required downgrade, or a
 /// reused-connection IO error. Those decisions are made inside the upstream h2
-/// client and never pass through the route retry budget or the AI dispatch
-/// budget, and `RetryType::decide_reuse` is a no-op once a decision exists, so
-/// nothing in this file can veto them.
+/// client. Ambiguous protocol errors and AI failures are subject to the gates
+/// below; protocol-qualified safe retries may still bypass the route budget.
 ///
 /// `ServerConf.max_retries` used to bound them at its default of 16. It is now
 /// sized for the public route budget (`1 + attempts`, up to `i32::MAX`), so
@@ -99,7 +116,7 @@ fn pingora_decided_retry_exhausted(decided_retries: u32) -> bool {
 /// left alone.
 #[inline]
 pub fn error_while_proxy(
-    edgion_http: &EdgionHttpProxy,
+    _edgion_http: &EdgionHttpProxy,
     peer: &HttpPeer,
     session: &mut Session,
     e: Box<Error>,
@@ -111,7 +128,7 @@ pub fn error_while_proxy(
         ctx.pingora_decided_retries = ctx.pingora_decided_retries.saturating_add(1);
     }
 
-    let mut e = decide_retry(edgion_http, peer, session, e, ctx, client_reused);
+    let mut e = decide_retry(peer, session, e, ctx, client_reused);
 
     if pingora_decided_retry && e.retry() && pingora_decided_retry_exhausted(ctx.pingora_decided_retries) {
         ctx.record_error(EdgionErrorCode::UpstreamTransportRetryCeiling);
@@ -123,7 +140,6 @@ pub fn error_while_proxy(
 
 #[inline]
 fn decide_retry(
-    _edgion_http: &EdgionHttpProxy,
     peer: &HttpPeer,
     session: &mut Session,
     e: Box<Error>,
@@ -208,6 +224,7 @@ fn decide_retry(
             gates_allow_retry,
             failure_class == AiProxyFailureClass::AmbiguousUpstream,
         );
+        e.set_retry(ai_dispatch_should_retry(&decision));
         if let Some(state) = ctx.ai_state_mut() {
             state.attempt_runtime.finish_failure(match failure_class {
                 AiProxyFailureClass::BackendRequestTimeout => {
@@ -234,7 +251,6 @@ fn decide_retry(
                 if failure_class == AiProxyFailureClass::BackendRequestTimeout {
                     ctx.record_error(EdgionErrorCode::BackendRequestTimeoutRetry);
                 }
-                e.set_retry(true);
             }
             Ok(crate::ai::dispatch::AiRetryDecision::BudgetDenied) => {
                 crate::observe::metrics::record_retry_budget_denied();
@@ -325,6 +341,21 @@ fn decide_retry(
         && method_retry_ok
         && super::retry_budget_allows_next_attempt(ctx.try_cnt, retry_attempts)
         && !deadline_exceeded;
+
+    // A local H2 protocol error or downgrade does not prove that the origin
+    // skipped the request. Pingora may arrive with Decided(true), which
+    // decide_reuse cannot revoke. Apply the same replay safety gates to these
+    // ambiguous outcomes even when the H2 connection was fresh.
+    if ambiguous_decided_h2_retry_allowed(
+        &e,
+        buffer_ok,
+        method_retry_ok,
+        super::retry_budget_allows_next_attempt(ctx.try_cnt, retry_attempts),
+        deadline_exceeded,
+    ) == Some(false)
+    {
+        e.set_retry(false);
+    }
 
     // Capture whether the retry decision is ours to make: errors that arrive
     // already Decided(true) (e.g. h2 GOAWAY / REFUSED_STREAM decided inside

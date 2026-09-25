@@ -3831,6 +3831,23 @@ fn compose_uri(path: &str, query: Option<&str>) -> String {
     }
 }
 
+/// Keep HTTP/2 scheme and authority when a rewrite supplies only a path.
+/// An explicit absolute URI replaces them instead.
+pub(crate) fn retain_uri_authority_for_path_only(
+    current: &http::Uri,
+    replacement: http::Uri,
+) -> Result<http::Uri, http::uri::InvalidUriParts> {
+    if replacement.scheme().is_some()
+        || replacement.authority().is_some()
+        || (current.scheme().is_none() && current.authority().is_none())
+    {
+        return Ok(replacement);
+    }
+    let mut parts = current.clone().into_parts();
+    parts.path_and_query = replacement.into_parts().path_and_query;
+    http::Uri::from_parts(parts)
+}
+
 #[cfg(test)]
 #[path = "../tests/unit/ctx_test/log_label_tests.rs"]
 mod log_label_tests;

@@ -1162,27 +1162,48 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_request_query(&mut self, query: &str) -> PluginSessionResult<()> {
-        // Rebuild the request target from the current live path plus the new
-        // query, leaving the path byte-for-byte. Deliberately does NOT set
-        // `ctx.uri_finalized`, so the upstream-peer stage still applies the
-        // raw-vs-normalized path-forwarding decision. The path is unchanged,
-        // so the normalized-path cache stays consistent (it is query-agnostic).
-        let path = self.inner.req_header().uri.path().to_string();
-        let new_target = if query.is_empty() {
-            path
-        } else {
-            format!("{}?{}", path, query)
-        };
-        let parsed_uri = new_target
-            .parse::<Uri>()
+        // Keep the raw request-target form (including an absolute-form scheme
+        // and authority) while replacing only its query. Path normalization is
+        // query-agnostic, and the upstream-peer stage still chooses the final
+        // raw or normalized path because this does not set `uri_finalized`.
+        let uri = &self.inner.req_header().uri;
+        if uri.scheme().is_some() || uri.authority().is_some() {
+            // HTTP/2 carries :scheme and :authority in the Uri. A raw-target
+            // update would replace them with a path-only Uri.
+            let path_and_query = if query.is_empty() {
+                uri.path().to_string()
+            } else {
+                format!("{}?{}", uri.path(), query)
+            };
+            let replacement = path_and_query
+                .parse::<Uri>()
+                .map_err(|e| Box::new(e) as PluginSessionError)?;
+            let updated = crate::ctx::retain_uri_authority_for_path_only(uri, replacement)
+                .map_err(|e| Box::new(e) as PluginSessionError)?;
+            self.inner.req_header_mut().set_uri(updated);
+            return Ok(());
+        }
+
+        let current = self.inner.req_header().raw_path();
+        let path_end = current.iter().position(|byte| *byte == b'?').unwrap_or(current.len());
+        let mut target = Vec::with_capacity(path_end + usize::from(!query.is_empty()) + query.len());
+        target.extend_from_slice(&current[..path_end]);
+        if !query.is_empty() {
+            target.push(b'?');
+            target.extend_from_slice(query.as_bytes());
+        }
+        self.inner
+            .req_header_mut()
+            .set_raw_path(&target)
             .map_err(|e| Box::new(e) as PluginSessionError)?;
-        self.inner.req_header_mut().set_uri(parsed_uri);
         Ok(())
     }
 
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()> {
         let parsed_uri = uri.parse::<Uri>().map_err(|e| Box::new(e) as PluginSessionError)?;
-        self.inner.req_header_mut().set_uri(parsed_uri);
+        let updated = crate::ctx::retain_uri_authority_for_path_only(&self.inner.req_header().uri, parsed_uri)
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        self.inner.req_header_mut().set_uri(updated);
         let cfg = edgion_resources::path_normalization::get_path_normalization_config();
         self.ctx.refresh_normalized_path(self.inner.req_header(), cfg);
         self.ctx.uri_finalized = true;

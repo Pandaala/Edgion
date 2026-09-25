@@ -1,21 +1,84 @@
 use super::{
-    ai_failure_wants_retry, classify_ai_proxy_failure, is_backend_request_timeout_retry_candidate,
-    pingora_decided_retry_exhausted, should_record_local_origin_failure, AiProxyFailureClass,
-    MAX_PINGORA_DECIDED_RETRIES,
+    ai_dispatch_should_retry, ai_failure_wants_retry, ambiguous_decided_h2_retry_allowed, classify_ai_proxy_failure,
+    decide_retry, is_backend_request_timeout_retry_candidate, pingora_decided_retry_exhausted,
+    should_record_local_origin_failure, AiProxyFailureClass, MAX_PINGORA_DECIDED_RETRIES,
 };
+use crate::EdgionHttpContext;
 use crate::PeerTimeoutSource;
+use pingora_core::prelude::HttpPeer;
 use pingora_core::{ErrorSource, ErrorType};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use tokio::io::AsyncWriteExt;
 
 async fn live_h1_session() -> (Session, tokio::io::DuplexStream) {
+    live_h1_session_for(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await
+}
+
+async fn live_h1_session_for(request: &'static [u8]) -> (Session, tokio::io::DuplexStream) {
     let (mut client, server) = tokio::io::duplex(4096);
-    client.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+    client.write_all(request).await.unwrap();
     let stream: pingora_core::protocols::Stream = Box::new(server);
     let mut session = Session::new_h1(stream);
     session.read_request().await.unwrap();
     (session, client)
+}
+
+#[tokio::test]
+async fn ambiguous_decided_h2_errors_do_not_replay_post_by_default() {
+    let peer = HttpPeer::new("127.0.0.1:30001", false, String::new());
+    for client_reused in [false, true] {
+        for error_type in [ErrorType::InvalidH2, ErrorType::H2Downgrade] {
+            let (mut session, _client) =
+                live_h1_session_for(b"POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\n\r\n").await;
+            let mut error = pingora_core::Error::new_up(error_type);
+            error.set_retry(true);
+
+            let result = decide_retry(
+                &peer,
+                &mut session,
+                error,
+                &mut EdgionHttpContext::default(),
+                client_reused,
+            );
+            assert!(!result.retry(), "ambiguous H2 outcome must not replay POST");
+        }
+    }
+}
+
+#[test]
+fn ambiguous_decided_h2_retry_requires_every_safety_gate() {
+    let cases = [
+        (ErrorType::InvalidH2, true, true, true, true, false, Some(true)),
+        (ErrorType::InvalidH2, true, true, false, true, false, Some(false)),
+        (ErrorType::H2Downgrade, true, true, true, true, false, Some(true)),
+        (ErrorType::H2Downgrade, true, true, true, false, false, Some(false)),
+        (ErrorType::InvalidH2, true, true, true, true, true, Some(false)),
+        (ErrorType::InvalidH2, true, false, true, true, false, Some(false)),
+        (ErrorType::H2Error, true, false, false, false, true, None),
+        (ErrorType::InvalidH2, false, false, false, false, true, None),
+    ];
+    for (error_type, decided, backing, method, attempts, deadline, expected) in cases {
+        let mut error = pingora_core::Error::new_up(error_type);
+        error.set_retry(decided);
+        assert_eq!(
+            ambiguous_decided_h2_retry_allowed(&error, backing, method, attempts, deadline),
+            expected
+        );
+    }
+}
+
+#[test]
+fn ai_final_and_dispatch_error_clear_incoming_retry_decision() {
+    use crate::ai::dispatch::AiRetryDecision;
+    let retry: Result<_, ()> = Ok(AiRetryDecision::Retry);
+    let final_decision: Result<_, ()> = Ok(AiRetryDecision::Final);
+    let budget_denied: Result<_, ()> = Ok(AiRetryDecision::BudgetDenied);
+    let dispatch_error: Result<AiRetryDecision, _> = Err(());
+    assert!(ai_dispatch_should_retry(&retry));
+    assert!(!ai_dispatch_should_retry(&final_decision));
+    assert!(!ai_dispatch_should_retry(&budget_denied));
+    assert!(!ai_dispatch_should_retry(&dispatch_error));
 }
 
 async fn write_response_status(session: &mut Session, status: u16) {

@@ -200,6 +200,15 @@ Starting with v4, Edgion forwards the normalized path to the upstream by default
 | 3 | global switch `forward_normalized_path` | `path_normalization` config section | `true` (normalized) |
 | Default | fallthrough | — | normalized |
 
+When an auth plugin removes a credential from the query string, it changes only
+the query. The path and the original HTTP/1 request-target form, including an
+absolute-form target, remain available to the forwarding decision above.
+For HTTP/2, the request's scheme and authority remain intact.
+Path normalization and path-only rewrite plugins also retain HTTP/2 scheme
+and authority in the request URI. An explicit absolute URI rewrite replaces
+those URI parts; the final wire authority still follows the upstream Host
+reconciliation and configured upstream authority policy.
+
 ### Compared with Envoy / Kong
 
 | Gateway | Default upstream view | Toggleable? |

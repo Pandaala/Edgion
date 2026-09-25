@@ -89,15 +89,31 @@ self.inner.req_header_mut().set_uri(parsed);
 
 1. `edgion-gateway/src/plugins/runtime/session_adapter.rs::set_upstream_uri`
    - Triggered by rewrite plugins (url_rewrite / proxy_rewrite / DSL `req.set_uri` / Gateway API URLRewrite filter)
-   - Write order: `set_uri(parsed)` → `refresh_normalized_path(req, cfg)` → `uri_finalized = true`
+   - Write order: preserve current scheme/authority for a path-only rewrite,
+     `set_uri(parsed)` → `refresh_normalized_path(req, cfg)` → `uri_finalized = true`
 
 2. `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer_http` single-point decision block (newly added in v4)
    - Entry check `!ctx.uri_finalized`
-   - Write order (only the `want_raw=false` branch calls set_uri): `set_uri(normalized)` → `uri_finalized = true` (set unconditionally)
+   - Write order (only the `want_raw=false` branch calls set_uri): preserve
+     current scheme/authority while replacing the normalized path/query,
+     `set_uri(normalized)` → `uri_finalized = true` (set unconditionally)
 
 **Rule 2.1** (v4): If `set_uri` calls at the two legal locations above are not immediately followed by `uri_finalized = true` → report mandatorily.
 
 **All rewrite plugins** must change paths via the trait method `session.set_upstream_uri()`; bare calls are not allowed.
+
+Query-only credential stripping uses `session_adapter::set_request_query`.
+For HTTP/1 raw targets it replaces the query through `RequestHeader::set_raw_path`,
+preserving the current request-target form and path bytes, including
+absolute-form. When the URI already carries scheme or authority (HTTP/2 or a
+URI rewrite), it replaces only `path_and_query` and preserves those URI parts.
+Neither path finalizes the forwarding choice. Rebuilding every target from
+`uri.path()` would turn HTTP/1 absolute-form into origin-form and discard
+HTTP/2 authority. The consumer regression tests are
+`stripping_query_credential_preserves_absolute_request_target` and
+`stripping_query_credential_preserves_h2_authority_without_host`.
+The same authority-preserving helper covers normalized path forwarding and
+path-only URI rewrites; an explicit absolute rewrite replaces authority.
 
 ---
 

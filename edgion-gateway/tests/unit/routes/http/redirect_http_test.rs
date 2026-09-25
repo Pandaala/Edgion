@@ -253,6 +253,12 @@ async fn redirect_connection_policy_matches_wire_and_stream_reuse() {
                     .await
                     .unwrap();
                 let mut session = Session::new_h1(Box::new(server));
+                if host_headers.matches("Host:").count() > 1 {
+                    // Pingora 0.9 rejects malformed authorities before the
+                    // redirect service receives a request session.
+                    assert!(session.read_request().await.is_err());
+                    continue;
+                }
                 assert!(session.read_request().await.unwrap());
                 let mut ctx = redirect.new_ctx();
                 redirect.early_request_filter(&mut session, &mut ctx).await.unwrap();
@@ -352,8 +358,8 @@ async fn redirect_listener_enforces_total_request_limit_on_the_wire() {
 }
 
 #[tokio::test]
-async fn redirect_duplicate_host_gate_uses_the_request_pinned_egc_generation() {
-    let (redirect, mut pinned_true, mut updated_false) = {
+async fn redirect_duplicate_host_setting_cannot_override_protocol_validation() {
+    let (_redirect, pinned_true, updated_false) = {
         let _guard = GLOBAL_STORE_TEST_LOCK.lock();
         let handler = crate::config::edgion_gateway::create_edgion_gateway_config_handler();
         let config = |reject_duplicate_host| {
@@ -411,34 +417,12 @@ async fn redirect_duplicate_host_gate_uses_the_request_pinned_egc_generation() {
 
     let request = b"GET /path?query=1 HTTP/1.1\r\nHost: first.test\r\nHost: second.test\r\nConnection: close\r\n\r\n";
 
-    let (mut rejected_client, rejected_server) = tokio::io::duplex(4096);
-    rejected_client.write_all(request).await.unwrap();
-    let mut rejected_session = Session::new_h1(Box::new(rejected_server));
-    assert!(rejected_session.read_request().await.unwrap());
-    assert!(redirect
-        .request_filter(&mut rejected_session, &mut pinned_true)
-        .await
-        .unwrap());
-    assert_eq!(pinned_true.status, 400);
-    drop(rejected_session);
-    let mut rejected_wire = String::new();
-    rejected_client.read_to_string(&mut rejected_wire).await.unwrap();
-    assert!(rejected_wire.starts_with("HTTP/1.1 400"));
-
-    let (mut allowed_client, allowed_server) = tokio::io::duplex(4096);
-    allowed_client.write_all(request).await.unwrap();
-    let mut allowed_session = Session::new_h1(Box::new(allowed_server));
-    assert!(allowed_session.read_request().await.unwrap());
-    assert!(redirect
-        .request_filter(&mut allowed_session, &mut updated_false)
-        .await
-        .unwrap());
-    assert_eq!(updated_false.status, 301);
-    drop(allowed_session);
-    let mut allowed_wire = String::new();
-    allowed_client.read_to_string(&mut allowed_wire).await.unwrap();
-    assert!(allowed_wire.starts_with("HTTP/1.1 301"));
-    assert!(allowed_wire.contains("\r\nLocation: https://first.test/path?query=1\r\n"));
+    for _ctx in [pinned_true, updated_false] {
+        let (mut client, server) = tokio::io::duplex(4096);
+        client.write_all(request).await.unwrap();
+        let mut session = Session::new_h1(Box::new(server));
+        assert!(session.read_request().await.is_err());
+    }
 }
 
 #[tokio::test]
