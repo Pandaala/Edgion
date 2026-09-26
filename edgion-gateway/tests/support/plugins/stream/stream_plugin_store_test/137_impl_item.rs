@@ -17,7 +17,7 @@ impl StreamPluginStore {
             "spec":{"controllerName":"edgion.io/gateway-controller"}
         }))
         .unwrap();
-        let gateway: Gateway = serde_json::from_value(serde_json::json!({
+        let gateway: Gateway = crate::test_current_status::from_value(serde_json::json!({
             "apiVersion":"gateway.networking.k8s.io/v1","kind":"Gateway","metadata":{"name":"scope","namespace":"stream-store-test"},
             "spec":{"gatewayClassName":"stream-store-test","listeners":[{"name":"tcp","port":18089,"protocol":"TCP"}]}
         })).unwrap();

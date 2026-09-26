@@ -113,6 +113,21 @@ passed (one passed, zero failed). This fresh result covers DSL/WAF, delta/full,
 and policy/source event order; the broader counts above remain historical
 migration-checkpoint evidence.
 
+## Processed-resource test fixtures
+
+Fixtures representing Controller-published Gateways and Routes must include
+`spec.currentStatus`. Use `crate::test_current_status::from_value` or `processed`
+at fixture construction. A Gateway without the current listener status produces
+no serving listeners or policy scope; a Route without current owned acceptance
+produces no accepted parents. Complete API `status` is not a fallback.
+
+Five Stream store/connection-bridge regressions were traced on 2026-09-26 to
+three fixture construction sites that still used raw serde inputs. Preserve their
+budget, snapshot, port-selection and hot-reload assertions when completing these
+fixtures. Missing-status rejection tests must continue using raw inputs. The
+[canonical status guard](../../status/regression-guards/canonical-parent-status-ownership.md)
+defines the production contract; do not relax admission to repair test setup.
+
 ## Resolution references
 
 - D0095 / `plugin-policy-invalid-generation-retention` — reproduced and fixed by

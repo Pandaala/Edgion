@@ -92,10 +92,12 @@ fn stream_parent_ports_preserve_scope_across_gateway_publications() {
         });
         let parents = match kind {
             "TCPRoute" => {
-                TcpRouteUnit::from_route(Arc::new(serde_json::from_value(route).unwrap())).resolved_parent_refs
+                TcpRouteUnit::from_route(Arc::new(crate::test_current_status::from_value(route).unwrap()))
+                    .resolved_parent_refs
             }
             "UDPRoute" => {
-                UdpRouteUnit::from_route(Arc::new(serde_json::from_value(route).unwrap())).resolved_parent_refs
+                UdpRouteUnit::from_route(Arc::new(crate::test_current_status::from_value(route).unwrap()))
+                    .resolved_parent_refs
             }
             _ => unreachable!(),
         };
@@ -216,6 +218,7 @@ async fn listener_annotation_can_be_added_and_removed_after_startup() {
     let gateway: edgion_resources::Gateway = serde_yaml::from_str(
             "apiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata: {name: dynamic, namespace: default}\nspec:\n  gatewayClassName: dynamic\n  listeners: [{name: tcp, port: 18094, protocol: TCP}]"
         ).unwrap();
+    let gateway = crate::test_current_status::processed(gateway);
     let class = Arc::new(serde_yaml::from_str(
             "apiVersion: gateway.networking.k8s.io/v1\nkind: GatewayClass\nmetadata: {name: dynamic}\nspec: {controllerName: edgion.io/gateway-controller}"
         ).unwrap());
