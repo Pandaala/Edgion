@@ -330,6 +330,21 @@ async fn finalize_request_uri_keeps_h2_authority_without_host() {
 }
 
 #[tokio::test]
+async fn finalize_request_uri_keeps_absolute_form_authority_and_query() {
+    let (mut session, _client) = live_h1_session("http://test/%61dmin?scope=read").await;
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_info.normalized_current_path = "/admin".to_string();
+
+    finalize_request_uri(&mut session, &mut ctx).unwrap();
+
+    let header = session.req_header();
+    assert_eq!(header.uri.to_string(), "/admin?scope=read");
+    assert_eq!(header.raw_path(), b"http://test/admin?scope=read");
+    assert_eq!(header.headers.get("host").unwrap(), "test");
+    assert!(ctx.uri_finalized);
+}
+
+#[tokio::test]
 async fn finalize_request_uri_leaves_an_already_finalized_uri_untouched() {
     let (mut session, _client) = live_h1_session("/plugin-owned?scope=read").await;
     let original = session.req_header().uri.clone();

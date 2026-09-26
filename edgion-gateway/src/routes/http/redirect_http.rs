@@ -51,7 +51,6 @@ pub struct RedirectContext {
     pub path: String,
     pub status: u16,
     pub redirect_url: String,
-    pub reject_duplicate_host: bool,
 }
 
 /// HTTP to HTTPS redirect proxy
@@ -131,7 +130,6 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
             path: String::new(),
             status: 0,
             redirect_url: String::new(),
-            reject_duplicate_host: request_config.reject_duplicate_host,
             egc: request_config,
             downstream_keepalive_initialized: false,
         }
@@ -184,19 +182,6 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
         ctx.direct_peer_ip = addrs.direct_peer_ip;
 
         let req_header = session.req_header();
-
-        // RFC 9110 §7.2 — duplicate Host header rejection. Mirrors the data-plane
-        // proxy gate in `pg_request_filter::build_request_metadata` so attackers
-        // cannot smuggle a Host through the HTTP→HTTPS redirect listener (which
-        // would otherwise echo the attacker-controlled first Host into the 301
-        // `Location:` URL).
-        if ctx.reject_duplicate_host && req_header.headers.get_all("host").iter().count() > 1 {
-            ctx.status = 400;
-            let mut resp = ResponseHeader::build(StatusCode::BAD_REQUEST, Some(2))?;
-            resp.insert_header("Content-Length", "0")?;
-            session.write_response_header(Box::new(resp), true).await?;
-            return Ok(true);
-        }
 
         // RFC 9112 §3.2 — an HTTP/1.1 request whose Host is missing, invalid, or
         // collapses to empty (e.g. whitespace-only or a bare `:port`) must be

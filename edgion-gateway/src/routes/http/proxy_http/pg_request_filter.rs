@@ -453,18 +453,6 @@ async fn build_request_metadata(
     };
     ctx.request_info.remote_ip = crate::ctx::canonicalize_ip_str(&resolved).unwrap_or(resolved);
 
-    // RFC 9110 §7.2: reject HTTP/1.1 requests carrying more than one Host header
-    // line. Host smuggling defense — gated by `SecurityProtectConfig.reject_duplicate_host`
-    // (default true), matching Envoy's effective behavior (commas in the coalesced
-    // :authority fail Envoy's authority validator). HTTP/2 carries authority in the
-    // `:authority` pseudo-header and `headers.get_all("host")` is normally empty for
-    // h2, so this branch is a no-op for h2 / gRPC-over-h2 traffic.
-    if ctx.reject_duplicate_host && req_header.headers.get_all("host").iter().count() > 1 {
-        ctx.record_error(EdgionErrorCode::DuplicateHostHeader);
-        end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
-        return Ok(true);
-    }
-
     // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback).
     // NormalizedHostname::new() applies trim, port-strip, FQDN-dot-strip, and lowercase once.
     ctx.request_info.hostname = req_header
@@ -485,8 +473,7 @@ async fn build_request_metadata(
         })
         .unwrap_or_default();
 
-    // Publish the bounded XFF snapshot only after the earlier Host validation.
-    // A duplicate-Host rejection must not expose partially built metadata.
+    // Publish the bounded XFF snapshot after Pingora's protocol-level Host validation.
     ctx.request_info.x_forwarded_for = xff_snapshot.value;
 
     if let Some(status) = request_metadata_validation_error(ctx, &raw_path, raw_query, path_norm_cfg, xff_too_long) {

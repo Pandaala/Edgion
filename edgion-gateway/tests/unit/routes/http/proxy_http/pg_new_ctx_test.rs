@@ -25,11 +25,9 @@ fn proxy(config_name: Option<&str>) -> EdgionHttpProxy {
     }
 }
 
-fn config(name: &str, mode: PreflightMode, status_code: u16, reject_duplicate_host: bool) -> EdgionGatewayConfig {
+fn config(name: &str, mode: PreflightMode, status_code: u16) -> EdgionGatewayConfig {
     let mut config = EdgionGatewayConfig::new(name, Default::default());
     config.spec.preflight_policy = Some(PreflightPolicy { mode, status_code });
-    config.spec.security_protect =
-        Some(serde_json::from_value(serde_json::json!({"rejectDuplicateHost": reject_duplicate_host})).unwrap());
     config
 }
 
@@ -101,7 +99,7 @@ fn request_context_pins_preflight_policy_from_one_snapshot_generation() {
     let handler = crate::config::edgion_gateway::create_edgion_gateway_config_handler();
     handler.full_set(&HashMap::from([(
         "policy".to_string(),
-        Arc::new(config("policy", PreflightMode::AllOptions, 299, false)),
+        Arc::new(config("policy", PreflightMode::AllOptions, 299)),
     )]));
     let mut proxy = proxy(Some("policy"));
 
@@ -113,13 +111,12 @@ fn request_context_pins_preflight_policy_from_one_snapshot_generation() {
             status_code: 299,
         }
     );
-    assert!(!in_flight.reject_duplicate_host);
 
     handler.partial_update(
         HashMap::new(),
         HashMap::from([(
             "policy".to_string(),
-            Arc::new(config("policy", PreflightMode::CorsStandard, 205, true)),
+            Arc::new(config("policy", PreflightMode::CorsStandard, 205)),
         )]),
         HashSet::new(),
     );
@@ -131,7 +128,6 @@ fn request_context_pins_preflight_policy_from_one_snapshot_generation() {
             status_code: 205,
         }
     );
-    assert!(updated.reject_duplicate_host);
     assert_eq!(
         in_flight.preflight_policy,
         ResolvedPreflightPolicy {
@@ -139,17 +135,13 @@ fn request_context_pins_preflight_policy_from_one_snapshot_generation() {
             status_code: 299,
         }
     );
-    assert!(!in_flight.reject_duplicate_host);
 
     handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["policy".to_string()]));
     assert_eq!(new_ctx(&proxy).preflight_policy, ResolvedPreflightPolicy::default());
-    assert!(new_ctx(&proxy).reject_duplicate_host);
     proxy.egc = crate::config::bind_gateway_config(Some("missing"));
     assert_eq!(new_ctx(&proxy).preflight_policy, ResolvedPreflightPolicy::default());
-    assert!(new_ctx(&proxy).reject_duplicate_host);
     proxy.egc = crate::config::bind_gateway_config(None);
     assert_eq!(new_ctx(&proxy).preflight_policy, ResolvedPreflightPolicy::default());
-    assert!(new_ctx(&proxy).reject_duplicate_host);
 
     handler.full_set(&HashMap::new());
 }

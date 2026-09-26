@@ -3,7 +3,7 @@ use crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK;
 use edgion_resources::sensitive::{SensitiveMode, SENSITIVE_MODE};
 use edgion_resources::EdgionGatewayConfig;
 use pingora_core::apps::{HttpPersistentSettings, ReusedHttpStream};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -358,71 +358,13 @@ async fn redirect_listener_enforces_total_request_limit_on_the_wire() {
 }
 
 #[tokio::test]
-async fn redirect_duplicate_host_setting_cannot_override_protocol_validation() {
-    let (_redirect, pinned_true, updated_false) = {
-        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
-        let handler = crate::config::edgion_gateway::create_edgion_gateway_config_handler();
-        let config = |reject_duplicate_host| {
-            serde_json::from_value::<EdgionGatewayConfig>(serde_json::json!({
-                "apiVersion": "edgion.io/v1",
-                "kind": "EdgionGatewayConfig",
-                "metadata": {"name": "redirect-duplicate-host-policy"},
-                "spec": {"securityProtect": {"rejectDuplicateHost": reject_duplicate_host}}
-            }))
-            .unwrap()
-        };
-        handler.full_set(&HashMap::from([(
-            "redirect-duplicate-host-policy".to_string(),
-            Arc::new(config(true)),
-        )]));
-        let redirect = EdgionHttpRedirectProxy::new(
-            443,
-            test_access_logger(),
-            crate::config::bind_gateway_config(Some("redirect-duplicate-host-policy")),
-        );
-        let pinned_true = redirect.new_ctx();
-
-        handler.partial_update(
-            HashMap::new(),
-            HashMap::from([("redirect-duplicate-host-policy".to_string(), Arc::new(config(false)))]),
-            HashSet::new(),
-        );
-        let updated_false = redirect.new_ctx();
-        assert!(pinned_true.reject_duplicate_host);
-        assert!(!updated_false.reject_duplicate_host);
-
-        handler.partial_update(
-            HashMap::new(),
-            HashMap::new(),
-            HashSet::from(["redirect-duplicate-host-policy".to_string()]),
-        );
-        assert!(redirect.new_ctx().reject_duplicate_host);
-        assert!(
-            EdgionHttpRedirectProxy::new(
-                443,
-                test_access_logger(),
-                crate::config::bind_gateway_config(Some("missing"))
-            )
-            .new_ctx()
-            .reject_duplicate_host
-        );
-        assert!(
-            EdgionHttpRedirectProxy::new(443, test_access_logger(), crate::config::bind_gateway_config(None))
-                .new_ctx()
-                .reject_duplicate_host
-        );
-        handler.full_set(&HashMap::new());
-        (redirect, pinned_true, updated_false)
-    };
-
+async fn redirect_duplicate_host_is_rejected_by_protocol_validation() {
+    let _redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), crate::config::bind_gateway_config(None));
     let request = b"GET /path?query=1 HTTP/1.1\r\nHost: first.test\r\nHost: second.test\r\nConnection: close\r\n\r\n";
-
-    for _ctx in [pinned_true, updated_false] {
-        let (mut client, server) = tokio::io::duplex(4096);
-        client.write_all(request).await.unwrap();
-        let mut session = Session::new_h1(Box::new(server));
-        assert!(session.read_request().await.is_err());
-    }
+    let (mut client, server) = tokio::io::duplex(4096);
+    client.write_all(request).await.unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    assert!(session.read_request().await.is_err());
 }
 
 #[tokio::test]

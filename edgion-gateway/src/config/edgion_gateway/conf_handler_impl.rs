@@ -57,7 +57,6 @@ pub struct ResolvedGatewayConfig {
     pub request_body: ResolvedRequestBodyConfig,
     pub remote_ip_header: http::HeaderName,
     pub(crate) preflight_policy: ResolvedPreflightPolicy,
-    pub reject_duplicate_host: bool,
     pub x_forwarded_for_limit: Option<usize>,
     pub require_sni_host_match: bool,
     pub allow_loopback_upstream: bool,
@@ -144,12 +143,6 @@ impl ResolvedGatewayConfig {
             request_body: ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
             remote_ip_header,
             preflight_policy: ResolvedPreflightPolicy::resolve(config.spec.preflight_policy.as_ref()),
-            reject_duplicate_host: config
-                .spec
-                .security_protect
-                .as_ref()
-                .map(|security| security.reject_duplicate_host)
-                .unwrap_or(true),
             x_forwarded_for_limit: security.map(|s| s.x_forwarded_for_limit),
             require_sni_host_match: security.is_none_or(|s| s.require_sni_host_match),
             allow_loopback_upstream: security.is_some_and(|s| s.allow_loopback_upstream),
@@ -176,7 +169,6 @@ impl Default for ResolvedGatewayConfig {
             request_body: ResolvedRequestBodyConfig::default(),
             remote_ip_header: default_remote_ip_header(),
             preflight_policy: ResolvedPreflightPolicy::default(),
-            reject_duplicate_host: true,
             x_forwarded_for_limit: None,
             require_sni_host_match: true,
             allow_loopback_upstream: false,

@@ -107,6 +107,9 @@ DEADLINE_RUNNER="${UTILS_DIR}/run_with_deadline.py"
 # across the start script, the bash admin helpers, and test_client. Honors an
 # operator-provided value.
 export EDGION_GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
+# This runner enables includeRawUri in its generated Gateway config and exposes
+# the local access-log admin API to the shared ForwardView client suite.
+export EDGION_TEST_ACCESS_LOG_RAW_URI=1
 
 # Controller admin token (token-only model). The Controller authenticates the
 # Admin API with a single pre-shared bearer token read from EDGION_ADMIN_TOKEN.

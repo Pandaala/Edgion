@@ -35,6 +35,8 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::collections::HashMap;
 use std::time::Instant;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 const HOST_DEFAULT: &str = "path-fwd-default.example.com";
 const HOST_RAW: &str = "path-fwd-raw.example.com";
@@ -91,6 +93,72 @@ struct EchoInfo {
 pub struct PathNormalizationForwardViewTestSuite;
 
 impl PathNormalizationForwardViewTestSuite {
+    fn tc_absolute_form_consumers() -> TestCase {
+        TestCase::new(
+            "absolute_form_consumers",
+            "Absolute-form requests retain entry URI while normalization, raw forwarding and URLRewrite choose upstream paths",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let access_logs = (std::env::var("EDGION_TEST_ACCESS_LOG_RAW_URI").ok().as_deref() == Some("1"))
+                        .then(crate::access_log_client::AccessLogClient::default_gateway);
+                    for (index, (host, expected_path)) in [
+                        (HOST_DEFAULT, "/api/data"),
+                        (HOST_RAW, "/%61pi/data"),
+                        (HOST_NORM, "/api/data"),
+                        (HOST_REWRITE, "/rewritten/data"),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let trace = format!("absolute-forward-{index}-{}", std::process::id());
+                        let target = format!("http://{host}/%61pi/data?x=1");
+                        let request = format!(
+                            "GET {target} HTTP/1.1\r\nHost: {host}\r\ntraceparent: {}\r\naccess_log: test_store\r\nConnection: close\r\n\r\n",
+                            crate::access_log_client::traceparent_for_marker(&trace)
+                        );
+                        let mut stream = match TcpStream::connect((ctx.target_host.as_str(), ctx.http_port)).await {
+                            Ok(stream) => stream,
+                            Err(error) => return TestResult::failed(start.elapsed(), format!("connect failed: {error}")),
+                        };
+                        if let Err(error) = stream.write_all(request.as_bytes()).await {
+                            return TestResult::failed(start.elapsed(), format!("write failed: {error}"));
+                        }
+                        let mut wire = Vec::new();
+                        if let Err(error) = stream.read_to_end(&mut wire).await {
+                            return TestResult::failed(start.elapsed(), format!("read failed: {error}"));
+                        }
+                        let response = String::from_utf8_lossy(&wire);
+                        if !response.starts_with("HTTP/1.1 200") {
+                            return TestResult::failed(start.elapsed(), format!("{host}: unexpected status: {:?}", response.lines().next()));
+                        }
+                        if parse_echo_path(&response).as_deref() != Some(expected_path)
+                            || parse_echo_query(&response).as_deref() != Some("x=1")
+                        {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("{host}: expected origin path {expected_path} and query x=1, got {response}"),
+                            );
+                        }
+                        if let Some(access_logs) = &access_logs {
+                            let entry = match access_logs.get_access_log_with_retry(&trace, 20, 100).await {
+                                Ok(entry) => entry,
+                                Err(error) => return TestResult::failed(start.elapsed(), format!("access log lookup failed: {error}")),
+                            };
+                            if entry.get_str("request_uri") != Some("/%61pi/data?x=1") {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("{host}: entry request URI changed: {:?}", entry.get_str("request_uri")),
+                                );
+                            }
+                        }
+                    }
+                    TestResult::passed(start.elapsed())
+                })
+            },
+        )
+    }
+
     // TC-A: default (no annotation) — upstream receives normalized path
     //
     // Request: /%61pi/data?x=1  (raw: %61 = 'a')
@@ -528,6 +596,7 @@ impl TestSuite for PathNormalizationForwardViewTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
+            Self::tc_absolute_form_consumers(),
             Self::tc_a_default_normalized(),
             Self::tc_b_annotation_raw_true(),
             Self::tc_c_annotation_norm_false(),

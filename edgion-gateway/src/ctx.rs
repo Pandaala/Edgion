@@ -2217,10 +2217,6 @@ pub struct EdgionHttpContext {
     /// snapshot as the request-body and forwarded-identity policies.
     pub(crate) preflight_policy: ResolvedPreflightPolicy,
 
-    /// Whether duplicate HTTP/1.1 Host field lines are rejected. Captured from
-    /// the same immutable EGC snapshot as the other request-scoped policies.
-    pub(crate) reject_duplicate_host: bool,
-
     /// Full request-body cache and mutation framing state. Its read-only view
     /// stays available through the final upstream-response header plugin chain
     /// and is then released before streaming the response.
@@ -3208,7 +3204,6 @@ impl EdgionHttpContext {
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
             remote_ip_header: http::HeaderName::from_static("x-real-ip"),
             preflight_policy: ResolvedPreflightPolicy::default(),
-            reject_duplicate_host: true,
             request_body: RequestBodyState::default(),
             waf_prefix_inspected: false,
             request_body_plugins: None,
@@ -3846,6 +3841,45 @@ pub(crate) fn retain_uri_authority_for_path_only(
     let mut parts = current.clone().into_parts();
     parts.path_and_query = replacement.into_parts().path_and_query;
     http::Uri::from_parts(parts)
+}
+
+/// Replace a path-only target while keeping an HTTP/1 absolute-form target's
+/// original scheme and authority. Pingora stores those bytes in `raw_path()`,
+/// not in `uri`, so `set_uri` alone would turn the target into origin-form.
+pub(crate) fn set_path_only_request_target(
+    request: &mut pingora_http::RequestHeader,
+    replacement: http::Uri,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if replacement.scheme().is_some() || replacement.authority().is_some() || request.uri.authority().is_some() {
+        let updated = retain_uri_authority_for_path_only(&request.uri, replacement)?;
+        request.set_uri(updated);
+        return Ok(());
+    }
+
+    use pingora_http::authority::{raw_target_authority, RawTargetAuthority};
+    match raw_target_authority(request.raw_path()) {
+        RawTargetAuthority::Absolute { scheme, authority, .. } => {
+            let path_and_query = replacement.path_and_query().map_or("/", |value| value.as_str());
+            if !path_and_query.starts_with('/') {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "absolute-form request-target rewrite requires an origin-form path",
+                )
+                .into());
+            }
+            let mut target = Vec::with_capacity(scheme.len() + authority.len() + path_and_query.len() + 3);
+            target.extend_from_slice(scheme);
+            target.extend_from_slice(b"://");
+            target.extend_from_slice(authority);
+            target.extend_from_slice(path_and_query.as_bytes());
+            request.set_raw_path(&target)?;
+        }
+        RawTargetAuthority::AmbiguousAuthority => {
+            return Err(std::io::Error::other("ambiguous request-target authority").into());
+        }
+        RawTargetAuthority::None => request.set_uri(replacement),
+    }
+    Ok(())
 }
 
 #[cfg(test)]

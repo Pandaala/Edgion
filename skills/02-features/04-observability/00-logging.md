@@ -34,7 +34,7 @@ Each entry is serialized from `AccessLogEntry` (`edgion-gateway/src/observe/acce
 | `diagnostics` | Ordered `{kind, code}` request events; errors may be recovered by a later retry |
 | `stage_logs` | Per-plugin execution log (compact, ≤ 40 bytes per entry) |
 | `backend_context.upstreams` | Upstream connection details (ip, port, timing phases, retry) |
-| `request_uri` | **Optional** raw client-entry URI; emitted only when `access_log_options.includeRawUri: true` |
+| `request_uri` | **Optional** client-entry path and query, before normalization or rewrites; emitted only when `access_log_options.includeRawUri: true` |
 
 For the complete, authoritative field list (real client IP, trace id, SNI, TLS id, protocol discovery, plugin `PluginLog` format, etc.) see the canonical reference [../../03-coding/observability/00-access-log.md](../../03-coding/observability/00-access-log.md). Do not re-list field names here — that doc tracks `entry.rs` directly.
 

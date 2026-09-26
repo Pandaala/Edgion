@@ -1356,6 +1356,8 @@ main() {
     cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "${CONFIG_DIR}/edgion-gateway.yaml"
     CONTROLLER_CONFIG="${CONFIG_DIR}/edgion-controller.yaml"
     GATEWAY_CONFIG="${CONFIG_DIR}/edgion-gateway.yaml"
+    # Exercise entry path and query identity through the integration access-log API.
+    printf '\naccess_log_options:\n  includeRawUri: true\n' >> "$GATEWAY_CONFIG"
     if [ "${EDGION_TEST_DOWNSTREAM_TLS_OFFLOAD:-0}" = "1" ]; then
         awk '
             /^server:$/ {

@@ -1,5 +1,4 @@
 use super::*;
-use crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK;
 use crate::observe::AccessLogger;
 use crate::routes::grpc::GrpcPortRouteManager;
 use crate::routes::http::routes_mgr::HttpPortRouteManager;
@@ -9,9 +8,8 @@ use edgion_resources::resources::edgion_config_data::IpGroup;
 use edgion_resources::{EdgionGatewayConfig, ListenerKey};
 use http::HeaderValue;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio::io::{AsyncWriteExt, DuplexStream};
 
 fn request_with_xff(values: &[HeaderValue]) -> RequestHeader {
     let mut request = RequestHeader::build("GET", b"/", None).unwrap();
@@ -153,72 +151,28 @@ fn configured_xff_is_case_insensitive_while_custom_header_keeps_its_path() {
 }
 
 #[tokio::test]
-async fn duplicate_host_precedes_xff_rejection_without_publishing_xff_metadata() {
-    let (mut session, _client) =
-        session_from_request(b"GET / HTTP/1.1\r\nHost: first.test\r\nX-Forwarded-For: 12345\r\n\r\n").await;
-    session.req_header_mut().append_header("host", "second.test").unwrap();
-    let mut ctx = context(4);
-
-    assert!(build_request_metadata(&proxy(), &mut session, &mut ctx).await.unwrap());
-    assert!(ctx.diagnostics.contains_error(EdgionErrorCode::DuplicateHostHeader));
-    assert!(!ctx.diagnostics.contains_error(EdgionErrorCode::XffHeaderTooLong));
-    assert_eq!(ctx.request_info.x_forwarded_for, None);
+async fn duplicate_host_is_rejected_during_protocol_parsing() {
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: first.test\r\nHost: second.test\r\nX-Forwarded-For: 12345\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    assert!(session.read_request().await.is_err());
 }
 
 #[tokio::test]
-async fn duplicate_host_gate_uses_the_request_pinned_egc_generation() {
-    let (proxy, mut pinned_true, mut updated_false) = {
-        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
-        let handler = crate::config::edgion_gateway::create_edgion_gateway_config_handler();
-        let config = |reject_duplicate_host| {
-            serde_json::from_value::<EdgionGatewayConfig>(json!({
-                "apiVersion": "edgion.io/v1",
-                "kind": "EdgionGatewayConfig",
-                "metadata": {"name": "duplicate-host-policy"},
-                "spec": {"securityProtect": {"rejectDuplicateHost": reject_duplicate_host}}
-            }))
-            .unwrap()
-        };
-        handler.full_set(&HashMap::from([(
-            "duplicate-host-policy".to_string(),
-            Arc::new(config(true)),
-        )]));
-        let mut proxy = proxy();
-        proxy.egc = crate::config::bind_gateway_config(Some("duplicate-host-policy"));
-        let pinned_true = crate::routes::http::proxy_http::pg_new_ctx::new_ctx(&proxy);
+async fn absolute_form_entry_uses_path_for_matching_and_keeps_raw_target() {
+    let (mut session, _client) =
+        session_from_request(b"GET http://example.test/%61pi?scope=read HTTP/1.1\r\nHost: example.test\r\n\r\n").await;
+    let mut ctx = context(200);
 
-        handler.partial_update(
-            HashMap::new(),
-            HashMap::from([("duplicate-host-policy".to_string(), Arc::new(config(false)))]),
-            HashSet::new(),
-        );
-        let updated_false = crate::routes::http::proxy_http::pg_new_ctx::new_ctx(&proxy);
-        handler.full_set(&HashMap::new());
-        (proxy, pinned_true, updated_false)
-    };
-
-    let (mut rejected, mut rejected_wire) = session_from_request(b"GET / HTTP/1.1\r\nHost: first.test\r\n\r\n").await;
-    rejected.req_header_mut().append_header("host", "second.test").unwrap();
-    assert!(build_request_metadata(&proxy, &mut rejected, &mut pinned_true)
-        .await
-        .unwrap());
-    assert!(pinned_true
-        .diagnostics
-        .contains_error(EdgionErrorCode::DuplicateHostHeader));
-    drop(rejected);
-    let mut response = String::new();
-    rejected_wire.read_to_string(&mut response).await.unwrap();
-    assert!(response.starts_with("HTTP/1.1 400"));
-
-    let (mut allowed, _allowed_wire) = session_from_request(b"GET / HTTP/1.1\r\nHost: first.test\r\n\r\n").await;
-    allowed.req_header_mut().append_header("host", "second.test").unwrap();
-    assert!(!build_request_metadata(&proxy, &mut allowed, &mut updated_false)
-        .await
-        .unwrap());
-    assert!(!updated_false
-        .diagnostics
-        .contains_error(EdgionErrorCode::DuplicateHostHeader));
-    assert_eq!(updated_false.request_info.hostname.as_str(), "first.test");
+    assert!(!build_request_metadata(&proxy(), &mut session, &mut ctx).await.unwrap());
+    assert_eq!(session.req_header().raw_path(), b"http://example.test/%61pi?scope=read");
+    assert_eq!(ctx.request_info.hostname.as_str(), "example.test");
+    assert_eq!(ctx.request_path(), "/%61pi");
+    assert_eq!(ctx.path(), "/api");
+    assert_eq!(ctx.request_uri(), "/%61pi?scope=read");
 }
 
 #[tokio::test]

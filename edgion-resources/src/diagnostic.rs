@@ -99,11 +99,6 @@ pub enum EdgionErrorCode {
     /// Path contains invalid percent-encoding rejected by path normalization policy (HTTP 400)
     PathInvalidPercentEncoding,
 
-    /// HTTP/1.1 request contains more than one Host header field line (HTTP 400).
-    /// RFC 9110 §7.2 violation; rejected when `SecurityProtectConfig.reject_duplicate_host`
-    /// is true (default). Host smuggling defense.
-    DuplicateHostHeader,
-
     /// Route Not Found
     RouteNotFound,
 
@@ -397,7 +392,6 @@ impl EdgionErrorCode {
             Self::XffHeaderTooLong => "XffHeaderTooLong",
             Self::PathEscapedSlashRejected => "PathEscapedSlashRejected",
             Self::PathInvalidPercentEncoding => "PathInvalidPercentEncoding",
-            Self::DuplicateHostHeader => "DuplicateHostHeader",
             Self::RouteNotFound => "RouteNotFound",
             Self::SniHostMismatch => "SniHostMismatch",
             Self::ClientClosed => "ClientClosed",

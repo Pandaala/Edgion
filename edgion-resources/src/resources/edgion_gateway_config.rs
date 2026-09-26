@@ -607,15 +607,6 @@ pub struct SecurityProtectConfig {
     /// node-local deployments. Link-local / cloud metadata ranges remain blocked.
     #[serde(default)]
     pub allow_loopback_upstream: bool,
-
-    /// Reject HTTP/1.1 requests that contain more than one Host header.
-    ///
-    /// Per RFC 9110 §7.2 a server MUST respond with 400 to a request that
-    /// contains more than one Host header field line. Pingora 0.9 rejects
-    /// duplicates during protocol parsing before this Gateway-level setting
-    /// is consulted, so false does not permit them. Default: true.
-    #[serde(default = "default_reject_duplicate_host")]
-    pub reject_duplicate_host: bool,
 }
 
 fn default_xff_limit() -> usize {
@@ -627,10 +618,6 @@ fn default_require_sni_host_match() -> bool {
 }
 
 fn default_tls_proxy_log_record() -> bool {
-    true
-}
-
-fn default_reject_duplicate_host() -> bool {
     true
 }
 

@@ -48,7 +48,7 @@ and same-name recreation updates that handle again.
 
 No reference is distinct from the real name `default`. Missing/deleted references
 use a shared runtime default Arc. In particular, loopback remains denied, SNI/Host
-and duplicate Host protection default on, RealIp extraction is disabled, fallback
+protection defaults on, RealIp extraction is disabled, fallback
 SNI is absent, and L4 timeouts retain their established defaults. XFF has an
 existing distinction: absent `securityProtect` means no byte cap, while a present
 block with an omitted field defaults to 200. Exceeding the cap returns HTTP 400;

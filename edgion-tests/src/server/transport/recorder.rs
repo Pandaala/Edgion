@@ -94,6 +94,12 @@ pub struct TransportEvent {
     pub method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// `ReqHeaders`: request target observed on the upstream protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// `ReqHeaders`: H1 Host or H2 URI authority observed by the upstream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<String>,
     /// `ReqHeaders`: parsed `grpc-timeout`, split so the recorder never stores
     /// arbitrary request-header text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -167,6 +173,16 @@ impl TransportEvent {
 
     pub fn path(mut self, v: &str) -> Self {
         self.path = Some(v.to_string());
+        self
+    }
+
+    pub fn target(mut self, v: &str) -> Self {
+        self.target = Some(v.to_string());
+        self
+    }
+
+    pub fn authority(mut self, v: &str) -> Self {
+        self.authority = Some(v.to_string());
         self
     }
 

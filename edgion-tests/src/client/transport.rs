@@ -632,6 +632,10 @@ pub struct TransportEvent {
     #[serde(default)]
     pub path: Option<String>,
     #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub authority: Option<String>,
+    #[serde(default)]
     pub grpc_timeout_value: Option<u64>,
     #[serde(default)]
     pub grpc_timeout_unit: Option<String>,
