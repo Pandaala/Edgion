@@ -28,10 +28,10 @@ The user invoked the campaign for `edgion-common` on 2026-09-26. Continue the ex
 
 - Campaign status: `in-progress`.
 - Coverage planner: `common_coverage`; 90-file inventory verified; process complete relative paths lexically, with no exclusions.
-- Common inventory: 90 files; 85 `pending`, 2 `changed`, 3 `analysis-ready`. Git tracked inventory and `rg --files` agree; no Common untracked source.
+- Common inventory: 90 files; 1 `analysis-in-progress`, 2 `analysis-ready`, 2 `changed`, 1 `deferred`, 1 `examined-no-change`, 83 `pending`.
 - Historical Gateway ledger: 582 rows, all terminal; 504 imported exclusions, 49 changed, 27 examined-no-change, 1 deferred, 1 removed.
-- Active serial batch: B0077 verified; automatic commit pending.
-- Analysis queue: B0078 allowed SAN (analysis-ready; D0016 recorded), B0079 certificate utilities (analysis-ready), B0080 expiry watcher (analysis-ready; D0018 recorded).
+- Active serial batch: B0078 verified; automatic commit pending.
+- Analysis queue: B0079 certificate utilities (analysis-ready), B0081 certificate duration (analysis-in-progress), then B0080 expiry watcher (analysis-ready; D0018 recorded). IDs reflect allocation; promotion follows lexical paths.
 - Resume gate: `freeze_diagnostic` proved 147 changed and 320 new integration files against external commits after `0b5890414bf0e9a9d2459fb318e509058632f624`; 3,305 unchanged entries were retained. The 3,772-entry guard passes. Per-path provenance is in `integration-reconciliation-2026-09-26.tsv`; no test file was edited.
 
 ## Protected pre-existing work

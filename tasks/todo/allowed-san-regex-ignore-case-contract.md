@@ -10,7 +10,7 @@
 
 ## Evidence
 
-The EdgionTls CRD exposes `ignoreCase` without a match-type restriction. `edgion-resources/src/resources/allowed_san.rs::AllowedSan::compile_regex` calls the bounded regex compiler without consuming `ignore_case`. `edgion-common/src/allowed_san.rs` executes the compiled regex directly. A URI RegularExpression matching `^spiffe://cluster` remains case-sensitive with `ignoreCase: true` unless the pattern embeds `(?i)`.
+The EdgionTls CRD exposes `ignoreCase` without a match-type restriction. `edgion-resources/src/resources/allowed_san.rs::AllowedSan::compile` calls the bounded regex compiler without consuming `ignore_case`. `edgion-common/src/allowed_san.rs` executes the compiled regex directly. A URI RegularExpression matching `^spiffe://cluster` remains case-sensitive with `ignoreCase: true` unless the pattern embeds `(?i)`.
 
 The confirmed behavior is an accepted flag being ignored. This is not a demonstrated authorization bypass, and the intended regex flag contract remains unresolved. Operators can unexpectedly reject client certificates if they expect the exposed flag to apply.
 
