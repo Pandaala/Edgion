@@ -17,7 +17,8 @@ Fixed: `upstream_response_body_filter` now receives `end_of_stream = true` exact
 `downstream-response-body-filter-trailer-eos-gap` is implemented locally in the
 sibling Pingora worktree based on `0b0d8bba` after explicit user authorization
 on 2026-09-25. The canonical
-[fork record](../../../../../pingora/edgion-changes/review/h2-grpc/trailer-done-terminal-body-dispatch.md#downstream-terminal-observation)
+fork record at `edgion-changes/review/h2-grpc/trailer-done-terminal-body-dispatch.md`
+(`Downstream terminal observation` section)
 owns the separate downstream latch, empty terminal callback, and rejection of
 nonempty synthetic output. This task corrects an observation gap; no production
 byte-loss impact was established. Edgion has no production override of this downstream hook, and its
@@ -27,7 +28,8 @@ After independent review and targeted verification, the user explicitly
 requested removal of the original task despite the unrelated baseline test
 failures. Three default-retry unit tests still fail on the clean Pingora
 baseline with the same dependency lockfile and remain tracked in the
-[separate baseline investigation](../../../../../pingora/edgion-changes/pending-issues/default-retry-policy-test-baseline.md).
+separate baseline investigation at
+`edgion-changes/pending-issues/default-retry-policy-test-baseline.md`.
 Task removal does not claim a green full-library suite or dependency adoption.
 Do not interpret the older upstream/compression closure evidence below as a
 successful check of this local downstream change.
