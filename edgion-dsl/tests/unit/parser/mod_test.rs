@@ -17,8 +17,31 @@ fn test_parse_comments() {
 
 #[test]
 fn test_source_too_large() {
-    let source = "a".repeat(super::MAX_SOURCE_LEN + 1);
-    assert!(parse_program(&source).is_err());
+    let source = format!("nil{}", " ".repeat(super::MAX_SOURCE_LEN - 3));
+    assert_eq!(source.len(), super::MAX_SOURCE_LEN);
+    assert_eq!(parse_program(&source).unwrap().stmts.len(), 1);
+
+    let oversized = format!("{source} ");
+    let err = parse_program(&oversized).unwrap_err();
+    assert_eq!(
+        err.message,
+        format!(
+            "source too large: {} bytes (max {})",
+            oversized.len(),
+            super::MAX_SOURCE_LEN
+        )
+    );
+}
+
+#[test]
+fn test_ast_node_limit() {
+    // Each expression statement contributes one statement and one literal node.
+    let source = "nil\n".repeat(1_000);
+    assert_eq!(parse_program(&source).unwrap().stmts.len(), 1_000);
+
+    let oversized = "nil\n".repeat(1_001);
+    let err = parse_program(&oversized).unwrap_err();
+    assert_eq!(err.message, "too many AST nodes: 2001 (max 2000)");
 }
 
 #[test]

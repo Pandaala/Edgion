@@ -6,6 +6,19 @@ use super::super::ast::*;
 use super::super::error::ParseError;
 use super::{lit, ws, ParseCtx};
 
+fn with_nesting<'a, T>(
+    ctx: &mut ParseCtx<'a>,
+    parse: impl FnOnce(&mut ParseCtx<'a>) -> IResult<&'a str, T, ParseError>,
+) -> IResult<&'a str, T, ParseError> {
+    if let Err(error) = ctx.enter_nesting() {
+        ctx.leave_nesting();
+        return Err(nom::Err::Failure(error));
+    }
+    let result = parse(ctx);
+    ctx.leave_nesting();
+    result
+}
+
 // ==================== Expression Parsing (Pratt / Precedence Climbing) ====================
 
 pub(super) fn parse_expr<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Expr, ParseError> {
@@ -37,11 +50,14 @@ fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx<'a>, min_bp: u8) -> IRes
             ctx.add_node().map_err(nom::Err::Failure)?;
             let span = ctx.current_span(input);
             let rest = ws(&input[1..]);
-            let (rest, key) = parse_expr(rest, ctx)?;
-            let rest = ws(rest);
-            if !rest.starts_with(']') {
-                return Err(nom::Err::Failure(ParseError::new("expected ']' after index key")));
-            }
+            let (rest, key) = with_nesting(ctx, |ctx| {
+                let (rest, key) = parse_expr(rest, ctx)?;
+                let rest = ws(rest);
+                if !rest.starts_with(']') {
+                    return Err(nom::Err::Failure(ParseError::new("expected ']' after index key")));
+                }
+                Ok((&rest[1..], key))
+            })?;
             lhs = Expr::with_span(
                 ExprKind::Index {
                     object: Box::new(lhs),
@@ -49,7 +65,7 @@ fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx<'a>, min_bp: u8) -> IRes
                 },
                 span,
             );
-            input = &rest[1..];
+            input = rest;
             continue;
         }
 
@@ -93,7 +109,7 @@ fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'
     if let Some(stripped) = input.strip_prefix('!') {
         let span = ctx.current_span(input);
         ctx.add_node().map_err(nom::Err::Failure)?;
-        let (rest, operand) = parse_unary_or_atom(stripped, ctx)?;
+        let (rest, operand) = with_nesting(ctx, |ctx| parse_unary_or_atom(stripped, ctx))?;
         return Ok((
             rest,
             Expr::with_span(
@@ -113,7 +129,7 @@ fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'
         if next.is_ascii_digit() || next == b'(' || next.is_ascii_alphabetic() || next == b'_' {
             let span = ctx.current_span(input);
             ctx.add_node().map_err(nom::Err::Failure)?;
-            let (rest, operand) = parse_unary_or_atom(&input[1..], ctx)?;
+            let (rest, operand) = with_nesting(ctx, |ctx| parse_unary_or_atom(&input[1..], ctx))?;
             return Ok((
                 rest,
                 Expr::with_span(
@@ -129,15 +145,14 @@ fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'
 
     // Parenthesized expression
     if let Some(stripped) = input.strip_prefix('(') {
-        ctx.enter_nesting().map_err(nom::Err::Failure)?;
-        let (rest, expr) = parse_expr(stripped, ctx)?;
-        let rest = ws(rest);
-        if !rest.starts_with(')') {
-            ctx.leave_nesting();
-            return Err(nom::Err::Failure(ParseError::new("expected ')'")));
-        }
-        ctx.leave_nesting();
-        return Ok((&rest[1..], expr));
+        return with_nesting(ctx, |ctx| {
+            let (rest, expr) = parse_expr(stripped, ctx)?;
+            let rest = ws(rest);
+            if !rest.starts_with(')') {
+                return Err(nom::Err::Failure(ParseError::new("expected ')'")));
+            }
+            Ok((&rest[1..], expr))
+        });
     }
 
     parse_atom(input, ctx)
@@ -196,46 +211,40 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Ex
 
     // Map literal: {"key": expr, ...}
     if let Some(stripped) = input.strip_prefix('{') {
-        ctx.enter_nesting().map_err(nom::Err::Failure)?;
-        let mut input = ws(stripped);
-        let mut pairs: Vec<(Expr, Expr)> = Vec::new();
+        let (input, pairs) = with_nesting(ctx, |ctx| {
+            let mut input = ws(stripped);
+            let mut pairs: Vec<(Expr, Expr)> = Vec::new();
 
-        if let Some(stripped) = input.strip_prefix('}') {
-            ctx.leave_nesting();
-            ctx.add_node().map_err(nom::Err::Failure)?;
-            return Ok((stripped, Expr::with_span(ExprKind::MapLiteral(pairs), span)));
-        }
+            if let Some(stripped) = input.strip_prefix('}') {
+                return Ok((stripped, pairs));
+            }
 
-        loop {
-            ctx.tick().map_err(nom::Err::Failure)?;
-            if !input.starts_with('"') {
-                ctx.leave_nesting();
-                return Err(nom::Err::Failure(ParseError::new("map key must be a string literal")));
+            loop {
+                ctx.tick().map_err(nom::Err::Failure)?;
+                if !input.starts_with('"') {
+                    return Err(nom::Err::Failure(ParseError::new("map key must be a string literal")));
+                }
+                let key_span = ctx.current_span(input);
+                let (rest, mut key_expr) = lit::parse_string_literal(input, ctx)?;
+                key_expr.span = Some(key_span);
+                let rest = ws(rest);
+                if !rest.starts_with(':') {
+                    return Err(nom::Err::Failure(ParseError::new("expected ':' after map key")));
+                }
+                let rest = ws(&rest[1..]);
+                let (rest, val_expr) = parse_expr(rest, ctx)?;
+                pairs.push((key_expr, val_expr));
+                let rest = ws(rest);
+                if let Some(stripped) = rest.strip_prefix('}') {
+                    return Ok((stripped, pairs));
+                }
+                if let Some(stripped) = rest.strip_prefix(',') {
+                    input = ws(stripped);
+                } else {
+                    return Err(nom::Err::Failure(ParseError::new("expected ',' or '}' in map literal")));
+                }
             }
-            let key_span = ctx.current_span(input);
-            let (rest, mut key_expr) = lit::parse_string_literal(input, ctx)?;
-            key_expr.span = Some(key_span);
-            let rest = ws(rest);
-            if !rest.starts_with(':') {
-                ctx.leave_nesting();
-                return Err(nom::Err::Failure(ParseError::new("expected ':' after map key")));
-            }
-            let rest = ws(&rest[1..]);
-            let (rest, val_expr) = parse_expr(rest, ctx)?;
-            pairs.push((key_expr, val_expr));
-            let rest = ws(rest);
-            if let Some(stripped) = rest.strip_prefix('}') {
-                ctx.leave_nesting();
-                input = stripped;
-                break;
-            }
-            if let Some(stripped) = rest.strip_prefix(',') {
-                input = ws(stripped);
-            } else {
-                ctx.leave_nesting();
-                return Err(nom::Err::Failure(ParseError::new("expected ',' or '}' in map literal")));
-            }
-        }
+        })?;
         ctx.add_node().map_err(nom::Err::Failure)?;
         return Ok((input, Expr::with_span(ExprKind::MapLiteral(pairs), span)));
     }
@@ -293,6 +302,10 @@ fn parse_dot_access<'a>(input: &'a str, object: Expr, ctx: &mut ParseCtx<'a>) ->
 
 /// Parse comma-separated arguments inside parentheses. Input starts AFTER '('
 fn parse_call_args<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Vec<Expr>, ParseError> {
+    with_nesting(ctx, |ctx| parse_call_args_inner(input, ctx))
+}
+
+fn parse_call_args_inner<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Vec<Expr>, ParseError> {
     let mut args = Vec::new();
     let mut input = ws(input);
 

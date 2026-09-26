@@ -4,6 +4,24 @@ fn compile(source: &str) -> CompiledScript {
     resolve_script(Some(source), None, &ValidationLimits::default()).expect("source must compile")
 }
 
+fn validated_bytecode(code: Vec<OpCode>, max_loop_depth: u16) -> CompiledScript {
+    let script = CompiledScript {
+        version: crate::bytecode::BYTECODE_VERSION,
+        code,
+        constants: vec![
+            Constant::Str("cache".into()),
+            Constant::Str("typo".into()),
+            Constant::Str("key".into()),
+        ],
+        local_count: 0,
+        max_loop_depth,
+        source: None,
+        source_map: None,
+    };
+    let encoded = script.serialize_base64().expect("serialize bytecode");
+    resolve_script(None, Some(&encoded), &ValidationLimits::default()).expect("bytecode must validate")
+}
+
 #[test]
 fn resolve_script_rejects_uncompilable_source() {
     let err = resolve_script(Some("this is not valid dsl @@@"), None, &ValidationLimits::default())
@@ -196,4 +214,157 @@ fn check_fails_open_when_layout_is_ambiguous() {
     // (the undeclared link surfaces at runtime via ok=false, not as a 500).
     let script = compile("let r = redis.get(\"typo\", req.header(\"X-Key\"))");
     assert!(check_redis_link_names(&script, &HashSet::new()).is_ok());
+}
+
+#[test]
+fn check_skips_literal_bypassed_by_forward_jump() {
+    use crate::bytecode::BuiltinId;
+    use OpCode::*;
+
+    // The jump skips the apparent first argument at index 2. The VM receives
+    // "cache" and "key", despite the all-single-push window at indices 2..4.
+    let script = validated_bytecode(
+        vec![
+            LoadConst(0),
+            Jump(1),
+            LoadConst(1),
+            LoadConst(2),
+            CallBuiltin(BuiltinId::RedisGet, 2),
+            Pop,
+            ReturnNext,
+        ],
+        0,
+    );
+    assert!(check_redis_link_names(&script, &HashSet::from(["cache"])).is_ok());
+}
+
+#[test]
+fn check_skips_literal_when_jump_targets_call() {
+    use crate::bytecode::BuiltinId;
+    use OpCode::*;
+
+    // The jump lands on CallBuiltin itself, skipping both pushes in its
+    // apparent argument window. The stack already holds "cache" and "key".
+    let script = validated_bytecode(
+        vec![
+            LoadConst(0),
+            LoadConst(2),
+            Jump(2),
+            LoadConst(1),
+            LoadConst(2),
+            CallBuiltin(BuiltinId::RedisGet, 2),
+            Pop,
+            ReturnNext,
+        ],
+        0,
+    );
+    assert!(check_redis_link_names(&script, &HashSet::from(["cache"])).is_ok());
+}
+
+#[test]
+fn check_still_rejects_literal_when_jump_targets_window_start() {
+    use crate::bytecode::BuiltinId;
+    use OpCode::*;
+
+    let script = validated_bytecode(
+        vec![
+            Jump(0),
+            LoadConst(1),
+            LoadConst(2),
+            CallBuiltin(BuiltinId::RedisGet, 2),
+            Pop,
+            ReturnNext,
+        ],
+        0,
+    );
+    assert!(check_redis_link_names(&script, &HashSet::from(["cache"])).is_err());
+}
+
+#[test]
+fn check_skips_window_with_valid_loopback_ingress() {
+    use crate::bytecode::BuiltinId;
+    use OpCode::*;
+
+    // LoopBack targets the second push. Stack-height validation accepts both
+    // the first pass and the back edge, so the literal at index 1 is not a
+    // proven first argument on every path to the call.
+    let script = validated_bytecode(
+        vec![
+            LoopInit,
+            LoadConst(1),
+            LoadConst(2),
+            CallBuiltin(BuiltinId::RedisGet, 2),
+            Pop,
+            LoadFalse,
+            JumpIfFalse(2),
+            LoadConst(0),
+            LoopBack(-7),
+            LoopEnd,
+            ReturnNext,
+        ],
+        1,
+    );
+    assert!(check_redis_link_names(&script, &HashSet::from(["cache"])).is_ok());
+}
+
+#[test]
+fn check_skips_direct_unvalidated_conditional_ingress() {
+    use crate::bytecode::BuiltinId;
+    use OpCode::*;
+
+    // This fixture deliberately bypasses Validator: the conditional path has
+    // an inconsistent stack height at the call. The public static check still
+    // treats the interior jump target conservatively.
+    let script = CompiledScript {
+        version: crate::bytecode::BYTECODE_VERSION,
+        code: vec![
+            LoadTrue,
+            JumpIfFalse(2),
+            LoadConst(1),
+            LoadConst(2),
+            CallBuiltin(BuiltinId::RedisGet, 2),
+            Pop,
+            ReturnNext,
+        ],
+        constants: vec![
+            Constant::Str("cache".into()),
+            Constant::Str("typo".into()),
+            Constant::Str("key".into()),
+        ],
+        local_count: 0,
+        max_loop_depth: 0,
+        source: None,
+        source_map: None,
+    };
+    assert!(check_redis_link_names(&script, &HashSet::from(["cache"])).is_ok());
+}
+
+#[test]
+fn check_skips_direct_unvalidated_invalid_jump_target() {
+    use crate::bytecode::BuiltinId;
+    use OpCode::*;
+
+    // resolve_script rejects this target. A direct caller still must not get
+    // an alias error from a positional check on invalid control flow.
+    let script = CompiledScript {
+        version: crate::bytecode::BYTECODE_VERSION,
+        code: vec![
+            Jump(i32::MIN),
+            LoadConst(1),
+            LoadConst(2),
+            CallBuiltin(BuiltinId::RedisGet, 2),
+            Pop,
+            ReturnNext,
+        ],
+        constants: vec![
+            Constant::Str("cache".into()),
+            Constant::Str("typo".into()),
+            Constant::Str("key".into()),
+        ],
+        local_count: 0,
+        max_loop_depth: 0,
+        source: None,
+        source_map: None,
+    };
+    assert!(check_redis_link_names(&script, &HashSet::from(["cache"])).is_ok());
 }

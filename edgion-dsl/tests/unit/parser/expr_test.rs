@@ -1,5 +1,8 @@
 use super::super::super::ast::*;
+use super::super::super::bytecode::OpCode;
+use super::super::super::compiler::Compiler;
 use super::super::parse_program;
+use super::super::ParseCtx;
 
 #[test]
 fn test_parse_string_literal() {
@@ -128,4 +131,92 @@ fn test_parse_chained_index() {
         },
         _ => panic!("expected Let"),
     }
+}
+
+#[test]
+fn test_expression_nesting_boundary() {
+    let cases = [
+        ("!".repeat(64) + "true", "!".repeat(65) + "true"),
+        (
+            format!("{}1{}", "len(".repeat(64), ")".repeat(64)),
+            format!("{}1{}", "len(".repeat(65), ")".repeat(65)),
+        ),
+        (
+            format!("{}m{}", "m[".repeat(64), "]".repeat(64)),
+            format!("{}m{}", "m[".repeat(65), "]".repeat(65)),
+        ),
+    ];
+
+    for (allowed, rejected) in cases {
+        parse_program(&format!("let x = {allowed}")).unwrap();
+        let error = parse_program(&format!("let x = {rejected}")).unwrap_err();
+        assert!(error.to_string().contains("nesting too deep"), "{error}");
+    }
+}
+
+#[test]
+fn test_mixed_expression_nesting_counts_statement_depth() {
+    let source = |index_depth| {
+        format!(
+            "if true {{ let x = {}{}{}m{}{} }}",
+            "!".repeat(21),
+            "len(".repeat(21),
+            "m[".repeat(index_depth),
+            "]".repeat(index_depth),
+            ")".repeat(21),
+        )
+    };
+
+    parse_program(&source(21)).unwrap();
+    let error = parse_program(&source(22)).unwrap_err();
+    assert!(error.to_string().contains("nesting too deep"), "{error}");
+}
+
+#[test]
+fn test_expression_nesting_depth_restored() {
+    for source in ["f(1)", "!true", "m[1]", "(1)", "{}"] {
+        let mut ctx = ParseCtx::new(source);
+        ctx.nesting_depth = 2;
+        assert!(super::parse_expr(source, &mut ctx).is_ok(), "{source}");
+        assert_eq!(ctx.nesting_depth, 2, "{source}");
+    }
+
+    for source in ["f(?)", "!?", "m[?]", "(1", "{\"x\": ?}"] {
+        let mut ctx = ParseCtx::new(source);
+        ctx.nesting_depth = 2;
+        assert!(
+            matches!(super::parse_expr(source, &mut ctx), Err(nom::Err::Failure(_))),
+            "{source}"
+        );
+        assert_eq!(ctx.nesting_depth, 2, "{source}");
+    }
+
+    let source = "f(1)";
+    let mut ctx = ParseCtx::new(source);
+    ctx.nesting_depth = ctx.max_nesting_depth;
+    assert!(matches!(super::parse_expr(source, &mut ctx), Err(nom::Err::Failure(_))));
+    assert_eq!(ctx.nesting_depth, ctx.max_nesting_depth);
+}
+
+#[test]
+fn test_valid_unary_ast_and_bytecode() {
+    let source = "let x = !-1";
+    let program = parse_program(source).unwrap();
+    let StmtKind::Let { value, .. } = &program.stmts[0].kind else {
+        panic!("expected Let");
+    };
+    let ExprKind::UnaryOp {
+        op: UnaryOp::Not,
+        operand,
+    } = &value.kind
+    else {
+        panic!("expected Not");
+    };
+    assert!(matches!(operand.kind, ExprKind::UnaryOp { op: UnaryOp::Neg, .. }));
+
+    let script = Compiler::new().compile_with_source(&program, source).unwrap();
+    assert!(script
+        .code
+        .windows(3)
+        .any(|ops| matches!(ops, [OpCode::LoadConst(_), OpCode::Neg, OpCode::Not])));
 }

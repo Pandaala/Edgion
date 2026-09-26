@@ -43,7 +43,7 @@ use super::body_scan_budget::BodyScanBudget;
 use super::body_scanners::{JsonPathScanner, JsonScanValue, JsonSelectPlan, JsonSelectScanner, StreamingRegexScanner};
 use super::bytecode::*;
 use super::error::RuntimeError;
-use super::value::Value;
+use super::value::{Value, ValueShape, ValueWorkBudget};
 use edgion_dsl::json_path::DefiniteJsonPath;
 
 pub(crate) trait RuntimeString {
@@ -184,6 +184,7 @@ pub(crate) struct VmState {
     max_steps: u32,
     max_call_count: u32,
     pub(crate) body_scan_budget: BodyScanBudget,
+    value_work_budget: ValueWorkBudget,
 }
 
 impl VmState {
@@ -202,12 +203,16 @@ impl VmState {
             max_steps: limits.max_steps,
             max_call_count: limits.max_call_count,
             body_scan_budget: BodyScanBudget::default(),
+            value_work_budget: ValueWorkBudget::default(),
         }
     }
 
     pub(crate) fn push(&mut self, value: Value, max_depth: usize) -> Result<(), RuntimeError> {
         if self.stack.len() >= max_depth {
             return Err(RuntimeError::StackOverflow { limit: max_depth });
+        }
+        if matches!(value, Value::Map(_) | Value::List(_)) {
+            value.inspect_shape(&mut self.value_work_budget)?;
         }
         self.stack.push(value);
         Ok(())
@@ -438,7 +443,13 @@ impl Vm {
 
                 // ===== Local Variables =====
                 OpCode::GetLocal(slot) => {
-                    let val = state.locals.get(slot as usize).cloned().unwrap_or(Value::Nil);
+                    let val = if let Some(value) = state.locals.get(slot as usize) {
+                        let shape = value.inspect_shape(&mut state.value_work_budget)?;
+                        state.value_work_budget.charge_clone(shape)?;
+                        value.clone()
+                    } else {
+                        Value::Nil
+                    };
                     state.push(val, self.limits.max_stack_depth)?;
                 }
                 OpCode::SetLocal(slot) => {
@@ -606,7 +617,12 @@ impl Vm {
                                 .text_predicate(BodyTextOperation::Equals(pattern.to_string()))
                                 .await?
                         }
-                        (a, b) => a == b,
+                        (a, b) => {
+                            let left = a.inspect_shape(&mut state.value_work_budget)?;
+                            let right = b.inspect_shape(&mut state.value_work_budget)?;
+                            state.value_work_budget.charge_comparison(left, right)?;
+                            a == b
+                        }
                     };
                     state.push(Value::Bool(equal), self.limits.max_stack_depth)?;
                 }
@@ -619,7 +635,12 @@ impl Vm {
                                 .text_predicate(BodyTextOperation::Equals(pattern.to_string()))
                                 .await?
                         }
-                        (a, b) => a == b,
+                        (a, b) => {
+                            let left = a.inspect_shape(&mut state.value_work_budget)?;
+                            let right = b.inspect_shape(&mut state.value_work_budget)?;
+                            state.value_work_budget.charge_comparison(left, right)?;
+                            a == b
+                        }
                     };
                     state.push(Value::Bool(!equal), self.limits.max_stack_depth)?;
                 }
@@ -1102,7 +1123,15 @@ impl Vm {
                                     .unwrap_or(Value::Nil)
                             }
                         }
-                        (Value::Map(m), Value::Str(k)) => m.get(k.as_ref()).cloned().unwrap_or(Value::Nil),
+                        (Value::Map(m), Value::Str(k)) => {
+                            if let Some(value) = m.get(k.as_ref()) {
+                                let shape = value.inspect_shape(&mut state.value_work_budget)?;
+                                state.value_work_budget.charge_clone(shape)?;
+                                value.clone()
+                            } else {
+                                Value::Nil
+                            }
+                        }
                         _ => Value::Nil,
                     };
                     state.push(val, self.limits.max_stack_depth)?;
@@ -1119,6 +1148,27 @@ impl Vm {
                             size: count,
                             limit: self.limits.max_map_size,
                         });
+                    }
+                    let needed = count * 2;
+                    let start = state
+                        .stack
+                        .len()
+                        .checked_sub(needed)
+                        .ok_or_else(|| RuntimeError::Internal {
+                            message: "stack underflow".to_string(),
+                        })?;
+                    let mut shape = ValueShape::map_root();
+                    for pair in state.stack[start..].chunks_exact(2) {
+                        let key = &pair[0];
+                        let value = &pair[1];
+                        let key_len = key.implicit_string_len().map_err(|error| RuntimeError::TypeError {
+                            expected: "a value implicitly convertible to Str",
+                            got: error.got(),
+                            operation: "implicit string conversion",
+                        })?;
+                        state.value_work_budget.charge(32u64.saturating_add(key_len as u64))?;
+                        let child = value.inspect_shape(&mut state.value_work_budget)?;
+                        shape.add_map_entry(key_len, child)?;
                     }
                     let mut map: IndexMap<String, Value> = IndexMap::with_capacity(count);
                     let mut pairs: Vec<(Value, Value)> = Vec::with_capacity(count);
@@ -1259,6 +1309,10 @@ pub async fn execute_safe(
                 RuntimeError::StringTooLong { .. } => "string too long",
                 RuntimeError::ListTooLong { .. } => "list too long",
                 RuntimeError::MapTooLarge { .. } => "map too large",
+                RuntimeError::MapTooDeep { .. } => "map too deep",
+                RuntimeError::ValueTooManyItems { .. } => "value item limit exceeded",
+                RuntimeError::ValueKeysTooLong { .. } => "value map-key byte limit exceeded",
+                RuntimeError::ValueWorkLimitExceeded { .. } => "value work limit exceeded",
                 RuntimeError::ApiError { .. } => "api error",
                 RuntimeError::BodyAccess { .. } => unreachable!("handled above"),
                 RuntimeError::RegexError { .. } => "regex error",

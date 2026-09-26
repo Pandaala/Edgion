@@ -92,6 +92,32 @@ fn test_parse_for_range() {
 }
 
 #[test]
+fn test_parse_for_range_with_whitespace_and_comment_before_parenthesis() {
+    for source in [
+        "for i in range\t(0, 5) {}",
+        "for i in range   (0, 5) {}",
+        "for i in range // comment\n (0, 5) {}",
+    ] {
+        let prog = parse_program(source).unwrap();
+        assert!(
+            matches!(prog.stmts[0].kind, StmtKind::ForRange { .. }),
+            "expected ForRange for {source:?}"
+        );
+    }
+}
+
+#[test]
+fn test_parse_for_range_identifier_stays_for_in() {
+    for source in ["for i in range {}", "for i in range_extra(0, 5) {}"] {
+        let prog = parse_program(source).unwrap();
+        assert!(
+            matches!(prog.stmts[0].kind, StmtKind::ForIn { .. }),
+            "expected ForIn for {source:?}"
+        );
+    }
+}
+
+#[test]
 fn test_parse_while() {
     let prog = parse_program(
         r#"

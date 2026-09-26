@@ -158,3 +158,94 @@ fn test_split_exactly_at_limit() {
     let result = run_with_limits(r#"let xs = split("a,b,c", ",")"#, session, limits);
     assert_eq!(result, good_next());
 }
+
+#[test]
+fn vm_map_depth_has_exact_boundary_after_validated_bytecode_load() {
+    let source = "let mut x = {}\nfor i in range(0,63) { x = {\"a\": x} }";
+    let encoded = compile_dsl_source(source, &ValidationLimits::default()).expect("compile failed");
+    let script = CompiledScript::deserialize_base64(&encoded).expect("deserialize failed");
+    assert!(edgion_dsl::validator::Validator::new(ValidationLimits::default())
+        .validate(&script)
+        .is_empty());
+    let vm = Vm::new(script, VmLimits::default()).expect("vm failed");
+    assert_eq!(
+        run_vm_policy(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny),
+        good_next()
+    );
+
+    let over = "let mut x = {}\nfor i in range(0,64) { x = {\"a\": x} }";
+    let error = run_expect_runtime_err_with_limits(over, MockPluginSession::new(), VmLimits::default());
+    assert!(matches!(error, RuntimeError::MapTooDeep { limit: 64 }), "got {error:?}");
+    let response = run_with_limits(over, MockPluginSession::new(), VmLimits::default());
+    assert!(matches!(response, PluginRunningResult::ErrResponse { status: 500, .. }));
+}
+
+#[test]
+fn branching_maps_stop_before_unbounded_growth() {
+    let source = "let mut x = {}\nfor i in range(0,10000) { x = {\"a\": x, \"b\": x} }";
+    let error = run_expect_runtime_err_with_limits(source, MockPluginSession::new(), VmLimits::default());
+    assert!(
+        matches!(
+            error,
+            RuntimeError::ValueTooManyItems { .. } | RuntimeError::ValueWorkLimitExceeded { .. }
+        ),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn repeated_wide_map_and_list_copies_consume_value_work_budget() {
+    let entries = (0..100).map(|i| format!("\"k{i}\": {i}")).collect::<Vec<_>>().join(",");
+    let source = format!("let m = {{{entries}}}\nfor i in range(0,3000) {{ let y = m }}");
+    let limits = VmLimits {
+        max_steps: 100_000,
+        max_loop_iterations: 3000,
+        max_stack_depth: 512,
+        ..Default::default()
+    };
+    let error = run_expect_runtime_err_with_limits(&source, MockPluginSession::new(), limits.clone());
+    assert!(
+        matches!(error, RuntimeError::ValueWorkLimitExceeded { .. }),
+        "got {error:?}"
+    );
+
+    let source = "let xs = range(0,1000)\nfor i in range(0,3000) { let y = xs }";
+    let error = run_expect_runtime_err_with_limits(source, MockPluginSession::new(), limits);
+    assert!(
+        matches!(error, RuntimeError::ValueWorkLimitExceeded { .. }),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn repeated_long_string_equality_is_charged_before_comparison() {
+    let source = format!(
+        "let s = \"{}\"\nfor i in range(0,3000) {{ if s == s {{ }} }}",
+        "a".repeat(4000)
+    );
+    let limits = VmLimits {
+        max_steps: 100_000,
+        max_loop_iterations: 3000,
+        ..Default::default()
+    };
+    let error = run_expect_runtime_err_with_limits(&source, MockPluginSession::new(), limits);
+    assert!(
+        matches!(error, RuntimeError::ValueWorkLimitExceeded { .. }),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn map_index_value_copy_is_charged() {
+    let source = "let m = {\"x\": range(0,1000)}\nfor i in range(0,3000) { let y = m[\"x\"] }";
+    let limits = VmLimits {
+        max_steps: 100_000,
+        max_loop_iterations: 3000,
+        ..Default::default()
+    };
+    let error = run_expect_runtime_err_with_limits(source, MockPluginSession::new(), limits);
+    assert!(
+        matches!(error, RuntimeError::ValueWorkLimitExceeded { .. }),
+        "got {error:?}"
+    );
+}

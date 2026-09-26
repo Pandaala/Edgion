@@ -8,6 +8,108 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
+use crate::error::RuntimeError;
+
+/// Fixed VM value limits, independent of the configurable per-container limits.
+pub const MAX_VALUE_MAP_DEPTH: usize = 64;
+pub const MAX_VALUE_CONTAINER_ITEMS: usize = 32_768;
+pub const MAX_VALUE_MAP_KEY_BYTES: usize = 262_144;
+pub const MAX_VALUE_WORK_UNITS: u64 = 16 * 1024 * 1024;
+
+const ITEM_WORK_UNITS: u64 = 32;
+
+/// The bounded shape of one Value. Strings share their bytes when cloned, but
+/// comparisons can visit their contents, so both costs are tracked separately.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ValueShape {
+    map_depth: usize,
+    container_items: usize,
+    map_key_bytes: usize,
+    string_bytes: u64,
+}
+
+impl ValueShape {
+    pub fn map_root() -> Self {
+        Self {
+            map_depth: 1,
+            ..Self::default()
+        }
+    }
+
+    pub fn add_map_entry(&mut self, key_bytes: usize, child: Self) -> Result<(), RuntimeError> {
+        self.container_items = self
+            .container_items
+            .saturating_add(1)
+            .saturating_add(child.container_items);
+        if self.container_items > MAX_VALUE_CONTAINER_ITEMS {
+            return Err(RuntimeError::ValueTooManyItems {
+                limit: MAX_VALUE_CONTAINER_ITEMS,
+            });
+        }
+        self.map_key_bytes = self
+            .map_key_bytes
+            .saturating_add(key_bytes)
+            .saturating_add(child.map_key_bytes);
+        if self.map_key_bytes > MAX_VALUE_MAP_KEY_BYTES {
+            return Err(RuntimeError::ValueKeysTooLong {
+                limit: MAX_VALUE_MAP_KEY_BYTES,
+            });
+        }
+        self.map_depth = self.map_depth.max(child.map_depth.saturating_add(1));
+        if self.map_depth > MAX_VALUE_MAP_DEPTH {
+            return Err(RuntimeError::MapTooDeep {
+                limit: MAX_VALUE_MAP_DEPTH,
+            });
+        }
+        self.string_bytes = self.string_bytes.saturating_add(child.string_bytes);
+        Ok(())
+    }
+
+    fn clone_work(self) -> u64 {
+        (self.container_items as u64)
+            .saturating_mul(ITEM_WORK_UNITS)
+            .saturating_add(self.map_key_bytes as u64)
+    }
+
+    fn compare_work(self) -> u64 {
+        self.clone_work().saturating_add(self.string_bytes)
+    }
+}
+
+/// Per-execution accounting for recursive Value operations. Shape inspection
+/// itself spends budget as it visits each container item and Map key.
+pub struct ValueWorkBudget {
+    remaining: u64,
+}
+
+impl Default for ValueWorkBudget {
+    fn default() -> Self {
+        Self {
+            remaining: MAX_VALUE_WORK_UNITS,
+        }
+    }
+}
+
+impl ValueWorkBudget {
+    pub fn charge(&mut self, units: u64) -> Result<(), RuntimeError> {
+        self.remaining = self
+            .remaining
+            .checked_sub(units)
+            .ok_or(RuntimeError::ValueWorkLimitExceeded {
+                limit: MAX_VALUE_WORK_UNITS,
+            })?;
+        Ok(())
+    }
+
+    pub fn charge_clone(&mut self, shape: ValueShape) -> Result<(), RuntimeError> {
+        self.charge(shape.clone_work())
+    }
+
+    pub fn charge_comparison(&mut self, left: ValueShape, right: ValueShape) -> Result<(), RuntimeError> {
+        self.charge(left.compare_work().saturating_add(right.compare_work()))
+    }
+}
+
 /// Opaque host-backed body values exposed to the DSL.
 ///
 /// The tag deliberately carries no bytes, cursor, file handle, or gateway
@@ -64,6 +166,69 @@ pub enum Value {
 }
 
 impl Value {
+    /// Inspect a Value without allocating or descending beyond the fixed Map
+    /// depth. The traversal is charged before each container item is visited.
+    pub fn inspect_shape(&self, budget: &mut ValueWorkBudget) -> Result<ValueShape, RuntimeError> {
+        fn walk(value: &Value, depth: usize, budget: &mut ValueWorkBudget) -> Result<ValueShape, RuntimeError> {
+            match value {
+                Value::Map(map) => {
+                    let next_depth = depth.saturating_add(1);
+                    if next_depth > MAX_VALUE_MAP_DEPTH {
+                        return Err(RuntimeError::MapTooDeep {
+                            limit: MAX_VALUE_MAP_DEPTH,
+                        });
+                    }
+                    let mut shape = ValueShape::map_root();
+                    for (key, value) in map.iter() {
+                        budget.charge(ITEM_WORK_UNITS.saturating_add(key.len() as u64))?;
+                        let child = walk(value, next_depth, budget)?;
+                        shape.add_map_entry(key.len(), child)?;
+                    }
+                    Ok(shape)
+                }
+                Value::List(items) => {
+                    if items.len() > MAX_VALUE_CONTAINER_ITEMS {
+                        return Err(RuntimeError::ValueTooManyItems {
+                            limit: MAX_VALUE_CONTAINER_ITEMS,
+                        });
+                    }
+                    budget.charge((items.len() as u64).saturating_mul(ITEM_WORK_UNITS))?;
+                    let mut string_bytes = 0u64;
+                    for item in items {
+                        string_bytes = string_bytes.saturating_add(item.len() as u64);
+                    }
+                    Ok(ValueShape {
+                        container_items: items.len(),
+                        string_bytes,
+                        ..ValueShape::default()
+                    })
+                }
+                Value::Str(value) => Ok(ValueShape {
+                    string_bytes: value.len() as u64,
+                    ..ValueShape::default()
+                }),
+                _ => Ok(ValueShape::default()),
+            }
+        }
+
+        walk(self, 0, budget)
+    }
+
+    /// Byte length of the existing implicit string representation, without
+    /// cloning a Map or allocating a potentially large String.
+    pub fn implicit_string_len(&self) -> Result<usize, ImplicitStringCoercionError> {
+        match self {
+            Value::Str(value) => Ok(value.len()),
+            Value::Int(value) => Ok(value.to_string().len()),
+            Value::Bool(true) => Ok(4),
+            Value::Bool(false) => Ok(5),
+            Value::Nil => Ok(3),
+            Value::Body(_) => Err(ImplicitStringCoercionError::new("Body")),
+            Value::List(_) => Ok(6),
+            Value::Map(map) => Ok(6 + map.len().to_string().len()),
+        }
+    }
+
     // ========== Type coercion ==========
 
     /// Get a string reference using the legacy nil-friendly coercion rules.

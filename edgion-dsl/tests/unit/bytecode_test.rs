@@ -122,12 +122,19 @@ fn test_line_of_walks_rle_runs() {
 }
 
 #[test]
+fn test_reject_oversized_encoded_payload() {
+    let encoded = "A".repeat((MAX_DECODED_BYTECODE_LEN * 4 / 3) + 9);
+    let err = CompiledScript::deserialize_base64(&encoded).expect_err("should reject oversized encoded payload");
+    assert!(err.contains("bytes encoded"), "{err}");
+}
+
+#[test]
 fn test_reject_oversized_decoded_payload() {
     use base64::Engine;
     let huge = vec![b'a'; MAX_DECODED_BYTECODE_LEN + 1];
     let encoded = base64::engine::general_purpose::STANDARD.encode(huge);
     let err = CompiledScript::deserialize_base64(&encoded).expect_err("should reject oversized payload");
-    assert!(err.contains("payload too large"));
+    assert!(err.contains("bytes decoded"), "{err}");
 }
 
 #[test]

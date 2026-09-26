@@ -32,6 +32,15 @@ EdgionDSL 的沙盒设计遵循以下核心原则：
 | HTTP 请求 Body | `httpMaxRequestBodyBytes` | 1 MiB | 1 字节 | 32 MiB | 单次出站调用可发送的不透明请求 Body 上限 |
 | HTTP 响应体 | `httpMaxResponseBodyBytes` | 1 MiB | 1 字节 | 1 MiB | 单次出站调用可保留的响应字节上限 |
 
+VM 还设有不可配置的固定 Value 限制：Map 最多嵌套 64 层；单个 Value 内
+Map 条目与 List 元素总计最多 32,768 个；Map 键的 UTF-8 字节数总计最多
+262,144 字节。每次执行另有 16 MiB 等价工作预算，用于 Value 结构检查、
+复制和相等比较。每个容器元素计 32 单位，每个遍历或复制的 Map 键字节或比较的
+字符串字节计 1 单位。这些限制独立于 `maxMapSize`、`maxListLen` 和
+操作数栈限制 `maxStackDepth`。VM 在值入栈时检查，并在构造 VM 内的 Map
+前预检。宿主内置函数可能在入栈检查前已分配返回值；这些限制不约束该阶段
+的聚合内存。
+
 ### 各限制详细说明
 
 **maxSteps（最大执行步数）**
@@ -183,6 +192,10 @@ errorPolicy:
 | `LoopLimitExceeded` | 循环迭代超限 | 单个循环迭代次数过多 |
 | `CallLimitExceeded` | 函数调用超限 | 内置函数调用次数过多 |
 | `StackOverflow` | 栈深度超限 | 表达式嵌套过深 |
+| `MapTooDeep` | Map 嵌套超过 64 层 | 递归 Map 嵌套过深 |
+| `ValueTooManyItems` | Map 条目与 List 元素合计超过 32,768 个 | 容器总体增长过大 |
+| `ValueKeysTooLong` | Map 键合计超过 262,144 字节 | Map 键总体过大 |
+| `ValueWorkLimitExceeded` | Value 工作量超过固定 16 MiB 等价预算 | 重复遍历、复制或比较开销过大 |
 | `StringTooLong` | 字符串过长 | 字符串拼接结果超过 `maxStringLen` |
 | `RegexError` | 正则错误 | 正则解析或执行失败 |
 | `ApiError` | API 调用或参数校验失败 | 包括 PluginSession 异常、`http.call()` 的 URL/方法/Header 无效，或直接 IP 字面量被 SSRF 预检查拒绝；连接时被拒绝的 DNS 解析地址返回 `status = 0` |

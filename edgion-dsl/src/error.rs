@@ -143,6 +143,14 @@ pub enum RuntimeError {
     ListTooLong { len: usize, limit: usize },
     /// Map exceeded entry-count limit
     MapTooLarge { size: usize, limit: usize },
+    /// A Map contains too many nested Map levels.
+    MapTooDeep { limit: usize },
+    /// A Value contains too many Map entries and List elements in total.
+    ValueTooManyItems { limit: usize },
+    /// A Value contains too many Map-key bytes in total.
+    ValueKeysTooLong { limit: usize },
+    /// Value traversal, cloning, and comparison exhausted the execution budget.
+    ValueWorkLimitExceeded { limit: u64 },
     /// PluginSession API returned error
     ApiError { function: String, message: String },
     /// Request-body capture, storage, scan, or mutation failed.
@@ -181,6 +189,10 @@ impl fmt::Display for RuntimeError {
             Self::MapTooLarge { size, limit } => {
                 write!(f, "map too large ({} > {})", size, limit)
             }
+            Self::MapTooDeep { limit } => write!(f, "map depth exceeded ({})", limit),
+            Self::ValueTooManyItems { limit } => write!(f, "value item limit exceeded ({})", limit),
+            Self::ValueKeysTooLong { limit } => write!(f, "value map-key byte limit exceeded ({})", limit),
+            Self::ValueWorkLimitExceeded { limit } => write!(f, "value work budget exceeded ({})", limit),
             Self::ApiError { function, message } => {
                 write!(f, "API error in {}: {}", function, message)
             }

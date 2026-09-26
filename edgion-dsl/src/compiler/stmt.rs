@@ -79,7 +79,10 @@ impl Compiler {
                     return Err(CompileError::new("'break' outside of loop"));
                 }
                 let idx = self.emit(OpCode::Jump(0));
-                self.break_patch_stacks.last_mut().unwrap().push(idx);
+                self.break_patch_stacks
+                    .last_mut()
+                    .expect("break stack is nonempty after the outside-loop check")
+                    .push(idx);
             }
 
             StmtKind::Continue => {
@@ -87,7 +90,10 @@ impl Compiler {
                     return Err(CompileError::new("'continue' outside of loop"));
                 }
                 let idx = self.emit(OpCode::Jump(0));
-                self.continue_patch_stacks.last_mut().unwrap().push(idx);
+                self.continue_patch_stacks
+                    .last_mut()
+                    .expect("continue stack is nonempty after the outside-loop check")
+                    .push(idx);
             }
 
             StmtKind::ReturnNext => {
