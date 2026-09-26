@@ -594,11 +594,11 @@ Inventory baseline: `18e03b4c65b5225d0b299db55b8fb17c65232df5`. Stable lexical i
 | Anchor crate | Path | Module | Status | Batch | Outcome | Last checked commit |
 |--------------|------|--------|--------|-------|---------|---------------------|
 | edgion-common | `edgion-common/Cargo.toml` | package | changed | B0076 | Moved test-only kube/base64/rcgen declarations to dev-dependencies | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/build.rs` | package | analysis-ready | B0077 | Contextual OUT_DIR build error | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/build.rs` | package | changed | B0077 | Propagate contextual OUT_DIR errors without a bare unwrap | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/allowed_san.rs` | src | analysis-ready | B0078 | Defer regex ignoreCase contract; no local matcher edit | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/cert_util.rs` | src | analysis-ready | B0079 | Certificate validity observation needs no local change | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/conf_sync/cert_duration.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/conf_sync/cert_expiry_watch.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/conf_sync/cert_expiry_watch.rs` | src/conf_sync | analysis-ready | B0080 | Isolate expiry-watcher filesystem tests and strengthen assertions | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/conf_sync/config.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/conf_sync/mod.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/conf_sync/payload.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |

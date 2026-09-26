@@ -18,3 +18,5 @@
 | D0014 | resolved | `skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md` | B0075 |
 | D0015 | resolved | `skills/04-review/tls/regression-guards/mtls-config-reorder.md` | B0075 |
 | D0016 | needs-investigation | `tasks/todo/allowed-san-regex-ignore-case-contract.md` | B0078 |
+| D0017 | ready-for-separate-task | `tasks/todo/align-conf-sync-operational-limits-overview.md` | B0077 |
+| D0018 | needs-investigation | `tasks/todo/conf-sync-client-expiry-watch-installed-identity.md` | B0080 |

@@ -1,5 +1,7 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let out_dir = std::path::PathBuf::from(
+        std::env::var_os("OUT_DIR").ok_or("OUT_DIR is not set; run this build script through Cargo")?,
+    );
 
     // conf_sync: Controller <-> Gateway configuration sync.
     let proto_dir = "src/conf_sync/proto";

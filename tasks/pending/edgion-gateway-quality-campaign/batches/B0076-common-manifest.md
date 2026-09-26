@@ -54,4 +54,4 @@ Implementer `b0076_implement` moved only the three unchanged declarations and co
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Commit: pending automatic commit.
+- Commit: `f0ec920dc`.
