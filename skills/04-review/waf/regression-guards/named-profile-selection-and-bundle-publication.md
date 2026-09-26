@@ -43,6 +43,14 @@ immutable generation and owner token across request and response phases; the
 Selector is not read again per phase. This preserves the single-transaction
 request boundary and avoids compilation on the request path.
 
+The Gateway's source generation retains resolved WAF bundles for revalidation
+and later scoped builds. Each `CompiledPlugins` view drops its copied
+`resolved_bundles` after runtime construction: class scopes share the cached
+WAF executable and do not retain another copy of rule and phrase source text.
+The scoped spec still carries the other fields needed for policy, diagnostics,
+and admission. This addresses `waf-scoped-source-copy-reduction`; it does not
+remove the source generation or change in-flight view ownership.
+
 The Controller rejects an over-limit policy before copying its child sources, then
 captures one policy snapshot and retains only accepted reference indices for inactive profiles.
 After choosing the active profile, it materializes that profile's bundle sources
@@ -80,6 +88,10 @@ Focused resource, Controller, Gateway, and dynamic integration tests cover the
 profile and publication boundaries. The exact commands and outcomes are
 recorded in the closing response; the offline acceptance gate covers its
 repository-selected rule corpus and does not certify full CRS compatibility.
+The Gateway `scoped_waf_views_share_executable_without_retaining_bundle_sources`
+test checks two GatewayClass views against one source generation. Existing
+Gateway WAF reload tests cover invalid-update retention and in-flight pins;
+neither test directly measures process allocator usage.
 
 ## Resolution reference
 

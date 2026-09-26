@@ -287,6 +287,12 @@ pub(crate) fn compile_plugins_with_cache(
     // Plugin policy enforcement gates (block ahead of fail-closed reject).
     runtime.seal_plugin_policy();
 
+    // The source generation retains these bundles for future scoped builds.
+    // Published views only need the compiled WAF and bounded diagnostics.
+    if let Some(waf) = spec.spec.waf.as_mut() {
+        waf.resolved_bundles = None;
+    }
+
     Arc::new(CompiledPlugins {
         spec: Arc::new(spec),
         plugin_runtime: Arc::new(runtime),

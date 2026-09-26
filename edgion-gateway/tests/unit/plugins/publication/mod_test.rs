@@ -438,6 +438,40 @@ fn active_classes_share_instances_and_release_after_last_allowing_attachment() {
 }
 
 #[test]
+fn scoped_waf_views_share_executable_without_retaining_bundle_sources() {
+    let publisher = publisher();
+    publisher.update_gateway_configs(
+        HashMap::from([("policy-b".into(), config("policy-b", json!({})))]),
+        &HashSet::new(),
+    );
+    publisher.update_gateway_classes(
+        HashMap::from([("b".into(), class("b", Some("policy-b")))]),
+        &HashSet::new(),
+    );
+    publisher.update_gateways(
+        HashMap::from([("apps/b".into(), gateway("b", "b", 18081, None))]),
+        &HashSet::new(),
+    );
+
+    update_source(&publisher, plugin("waf", true), false);
+    let first = view(&publisher);
+    let second = scope(&publisher, "apps/b").http("apps/plugins").unwrap();
+    assert!(first.is_activatable);
+    assert!(second.is_activatable);
+    assert!(Arc::ptr_eq(&filter(&first, "Waf"), &filter(&second, "Waf")));
+    for scoped in [&first, &second] {
+        assert!(scoped.spec.spec.waf.as_ref().unwrap().resolved_bundles.is_none());
+    }
+    assert!(publisher.snapshot().http_sources()["apps/plugins"]
+        .spec
+        .waf
+        .as_ref()
+        .unwrap()
+        .resolved_bundles
+        .is_some());
+}
+
+#[test]
 fn unreferenced_sources_and_policies_never_construct_and_full_empty_cleans_up() {
     let publisher = PluginPublisher::new();
     publisher.replace_http_plugins(HashMap::from([("apps/plugins".into(), plugin("waf", true))]));
