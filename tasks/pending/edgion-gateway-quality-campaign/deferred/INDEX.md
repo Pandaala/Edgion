@@ -17,3 +17,4 @@
 | D0013 | coverage-added | `skills/04-review/http1/regression-guards/duplicate-host.md` | B0066 |
 | D0014 | resolved | `skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md` | B0075 |
 | D0015 | resolved | `skills/04-review/tls/regression-guards/mtls-config-reorder.md` | B0075 |
+| D0016 | needs-investigation | `tasks/todo/allowed-san-regex-ignore-case-contract.md` | B0078 |

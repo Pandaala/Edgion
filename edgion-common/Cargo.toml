@@ -34,8 +34,7 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-# Kubernetes client and types
-kube.workspace = true
+# Kubernetes types
 k8s-openapi.workspace = true
 
 # gRPC (config sync + fed sync)
@@ -52,7 +51,6 @@ x509-parser.workspace = true
 axum.workspace = true
 
 # Utilities
-base64.workspace = true
 chrono.workspace = true
 httpdate.workspace = true
 parking_lot.workspace = true
@@ -77,7 +75,6 @@ http.workspace = true
 
 reqwest.workspace = true
 
-rcgen.workspace = true
 time.workspace = true
 
 # Standard-DNS resolver backend (targets an explicit server list; see src/dns/).
@@ -87,4 +84,7 @@ hickory-resolver.workspace = true
 tonic-build.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 h2.workspace = true
+kube.workspace = true
+rcgen.workspace = true

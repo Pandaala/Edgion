@@ -586,3 +586,100 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/tests/otlp_transport.rs` | tests | excluded-with-reason | — | Outside residual campaign; user declared previously processed; historical per-file outcome unavailable | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/tests/rate_limit_local_overflow_redis.rs` | tests | excluded-with-reason | — | Outside residual campaign; user declared previously processed; historical per-file outcome unavailable | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/tests/tls_passthrough_clienthello.rs` | tests | excluded-with-reason | — | Outside residual campaign; user declared previously processed; historical per-file outcome unavailable | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+
+## Common phase — 2026-09-26
+
+Inventory baseline: `18e03b4c65b5225d0b299db55b8fb17c65232df5`. Stable lexical inventory; grouping awaits coverage-planning evidence.
+
+| Anchor crate | Path | Module | Status | Batch | Outcome | Last checked commit |
+|--------------|------|--------|--------|-------|---------|---------------------|
+| edgion-common | `edgion-common/Cargo.toml` | package | changed | B0076 | Moved test-only kube/base64/rcgen declarations to dev-dependencies | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/build.rs` | package | analysis-ready | B0077 | Contextual OUT_DIR build error | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/allowed_san.rs` | src | analysis-ready | B0078 | Defer regex ignoreCase contract; no local matcher edit | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/cert_util.rs` | src | analysis-ready | B0079 | Certificate validity observation needs no local change | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/conf_sync/cert_duration.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/conf_sync/cert_expiry_watch.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/conf_sync/config.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/conf_sync/mod.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/conf_sync/payload.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/conf_sync/proto.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/conf_sync/proto/config_sync.proto` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/conf_sync/traits.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/conf_sync/types.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/dns/hickory.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/dns/http_fetcher.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/dns/httpdns.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/dns/mod.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/dns/resolver_select.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/dns/standard.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/dns/system.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/egress.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/ext_proc/mod.rs` | src/ext_proc | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/ext_proc/proto.rs` | src/ext_proc | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/ext_proc/proto/ext_proc.proto` | src/ext_proc | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/grpc_tls.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/lib.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/credential.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/health.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/http_client.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/mod.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/outbound_tls.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/client.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/config_mapping.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/election.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/mod.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/ops.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/providers/mod.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/link_sys_core/tls.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/observe/cardinality_guard.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/observe/fed_metrics.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/observe/logs.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/observe/metrics_api.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/observe/mod.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/observe/system_metrics.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/secret/mod.rs` | src/secret | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/secret/secret_store.rs` | src/secret | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/startup.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/test_mode.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/time.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/tls_validation.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/outbound_http2_header_limit.rs` | tests | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/support/outbound_tls.rs` | tests/support | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/allowed_san_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/cert_util_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/conf_sync/cert_duration_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/conf_sync/cert_expiry_watch_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/conf_sync/config_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/conf_sync/payload_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/dns/hickory_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/dns/http_fetcher_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/dns/httpdns_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/dns/mod_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/dns/resolver_select_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/dns/standard_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/dns/system_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/egress_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/ext_proc/mod_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/grpc_tls_test/validate_identity_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/credential_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/health_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/http_client_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/outbound_tls_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/client_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/config_mapping_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/election_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/ops_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/tls_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/observe/cardinality_guard_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/observe/fed_metrics_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/observe/fed_metrics_test/rbac_metric_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/observe/logs_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/observe/metrics_api_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/observe/system_metrics_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/secret/secret_store_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/secret/secret_store_test/stats_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/startup_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/time_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/tls_validation_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/tls_validation_test/canonical_ca_bundle_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/tls_validation_test/status_determinism_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |

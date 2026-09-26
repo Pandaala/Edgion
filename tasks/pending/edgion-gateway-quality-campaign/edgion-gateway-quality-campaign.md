@@ -1,80 +1,65 @@
-# Edgion Gateway Quality Campaign
+# Edgion Quality Campaign
 
 ## Meta
 
 | Key | Value |
 |-----|-------|
 | Created | 2026-09-19 |
-| Status | complete |
+| Status | in-progress |
 | Type | refactor |
 | Priority | P2 |
-| Baseline | `a0b4d49b298149422c7e46150a0ca027ad5321f7` |
-| Active anchor crate | `edgion-gateway` |
+| Original baseline | `a0b4d49b298149422c7e46150a0ca027ad5321f7` |
+| Common phase baseline | `18e03b4c65b5225d0b299db55b8fb17c65232df5` |
+| Active anchor crate | `edgion-common` |
 
 ## AI guide summary
 
-Resume the file-by-file quality campaign for the remaining `edgion-gateway` paths in the exact order supplied by `task/optimization-by-files.md`. Each batch receives an independent value analysis, separate implementation when warranted, independent review, full required verification, and an automatic local commit. Existing integration-test files remain byte-for-byte frozen and the campaign never pushes.
+The user invoked the campaign for `edgion-common` on 2026-09-26. Continue the existing campaign after the completed Gateway phase. Analyze every Common file with separate value, implementation, and independent review roles. Commit only batches passing all gates; never push. Preserve prior Gateway coverage as historical evidence, not a fresh verdict on subsequent external changes.
 
-## Scope
+## Scope and authority
 
-### In scope
-
-- The residual `edgion-gateway` files listed in `task/optimization-by-files.md`, in listed order.
-- Directly related crate-local unit tests approved by the batch analyst.
-- Exact cross-crate support paths only when the analyst proves they are required for the anchor functionality.
-- Campaign bookkeeping under this directory.
-
-### Out of scope
-
-- Previously processed `edgion-gateway` files not present in the residual manifest.
-- Existing `edgion-tests/**` files, which are frozen and may only be executed.
-- Independent cleanup of any other crate.
-- Pushes and unrelated user-owned work.
+- Current authorized phase: all tracked Common files and confirmed product-source additions, with exact analyst-approved support paths only.
+- Ordered phases: `edgion-gateway` (completed historical phase), `edgion-common` (active). Other crates are not independently authorized by this invocation.
+- Existing `edgion-tests/**` files are frozen; reconcile only externally committed, individually proven fingerprint changes.
+- Preserve behavior, schemas, protocols, architecture, and all applicable red design rules. No finding-repair workflow, unrelated cleanup, or user-work staging.
+- The explicit campaign invocation authorizes automatic local commits after verification.
 
 ## Campaign state
 
-- Campaign status: `complete`
-- Ordered crate phases: `edgion-gateway` completed; later crates were not authorized by this residual run.
-- Completed crates: `edgion-gateway`.
-- Active serial batch: none; final batch B0075 completed at `18a94a49`.
-- Analysis queue: none; every residual anchor was processed in manifest order.
-- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 0 `pending`, 0 `in-progress`, 1 `deferred`, 49 `changed`, 27 `examined-no-change`, and 1 `removed`.
-- Resolved external gate: the user-authorized prerequisite commit `c8e48ff50` added the missing `tasks/todo/os-packaging-and-system-service-adapters.md`; agent-doc validation now passes.
-- Resolved external gate: the Gateway API transform-contract generator and its test are present at `0094fc788`; the drift gate and all 5 generator tests pass.
-- Frozen integration baseline: 3,452 paths captured in `integration-freeze.tsv`; latest reconciliation proved 10 existing and 9 new paths against external commits `04413c3e`, `ab459fba`, and `c6aa6e90` before updating only those entries.
-- Resolved external gate: `RUSTSEC-2026-0285` was remediated by locking
-  `rustls 0.23.45`; the remediation run passed full `cargo deny check` on
-  2026-09-19. B0001 remains `in-progress` until the campaign workflow resumes.
+- Campaign status: `in-progress`.
+- Coverage planner: `common_coverage`; 90-file inventory verified; process complete relative paths lexically, with no exclusions.
+- Common inventory: 90 files; 86 `pending`, 1 `changed`, 3 `analysis-ready`. Git tracked inventory and `rg --files` agree; no Common untracked source.
+- Historical Gateway ledger: 582 rows, all terminal; 504 imported exclusions, 49 changed, 27 examined-no-change, 1 deferred, 1 removed.
+- Active serial batch: B0076 verified; automatic commit pending.
+- Analysis queue: B0077 build script (analysis-ready), B0078 allowed SAN (analysis-ready; D0016 recorded), B0079 certificate utilities (analysis-ready).
+- Resume gate: `freeze_diagnostic` proved 147 changed and 320 new integration files against external commits after `0b5890414bf0e9a9d2459fb318e509058632f624`; 3,305 unchanged entries were retained. The 3,772-entry guard passes. Per-path provenance is in `integration-reconciliation-2026-09-26.tsv`; no test file was edited.
 
 ## Protected pre-existing work
 
-- `task/optimization-by-files.md` (user-supplied campaign order; read-only and not staged)
-- `tasks/pingora-0.9.0/` (all current untracked contents)
-- `tasks/todo/complete-k8s-dynamic-scenario-parity/` (all current untracked contents)
-- `waf-architecture-and-multi-pattern-matching.md`
+- `tasks/ai-2.0/00-context.md`
+- `tasks/ai-2.0/01-product-boundary.md`
+- `tasks/ai-2.0/02-current-capabilities.md`
+- `tasks/ai-2.0/03-competitive-analysis.md`
+- `tasks/ai-2.0/04-gap-analysis.md`
+- `tasks/ai-2.0/05-roadmap.md`
+- `tasks/ai-2.0/06-task-breakdown.md`
+- `tasks/ai-2.0/07-decisions.md`
+- `tasks/ai-2.0/08-sources.md`
+- `tasks/ai-2.0/09-consolidation.md`
+- `tasks/ai-2.0/ai-2.0.md`
+- `tasks/todo/edgion_io_2_edgion_dev`
+- `tasks/todo/waf-architecture-and-multi-pattern-matching.md`
 
-## Governing constraints
+## Records
 
-- Preserve external behavior, configuration, protocol semantics, and architecture unless a batch value case explicitly proves a local correction is required.
-- Apply all red design rules, including binary-owned logging, canonical access-log ownership, redaction, observability restraint, and cross-cutting unification.
-- Keep one serial mutation lane and use distinct analysis, implementation, and review agents.
-- Do not modify existing `edgion-tests/**` files.
-- Commit each completed batch locally after all gates pass; never push.
+- `00-context.md`: workflow and progressive knowledge entry points.
+- `03-subtasks.md`: retained Gateway history and complete Common inventory.
+- `07-changelog.md`: completed batch audit trail.
+- `deferred/INDEX.md`: coordinator-owned follow-up tracking.
+- `integration-freeze.tsv`: individually verified existing integration-file fingerprints.
 
-## Document index
+## Common coverage plan
 
-| Document | Status | Notes |
-|----------|--------|-------|
-| `00-context.md` | done | Campaign workflow and repository knowledge entry points |
-| `03-subtasks.md` | done | Full inventory reconciled with the residual manifest |
-| `07-changelog.md` | done | Unified batch audit trail |
-| `deferred/INDEX.md` | done | Coordinator-owned deferred issue index |
-| `integration-freeze.tsv` | done | Frozen existing integration-test manifest |
+Planner `common_coverage` verified 2 package/build files, 48 source files (including two maintained proto inputs), and 40 test/support files. Process full paths lexically, beginning with Cargo.toml and build.rs. Read associated unit tests with their source, but terminate test rows only after full-file examination.
 
-## Coverage plan
-
-- Preserve the exact 78-line residual manifest order; do not path-sort pending work.
-- Treat tightly coupled files as shared analysis units while retaining their individual ledger order.
-- Inspect cross-module ownership at backend/LB/proxy, config/runtime stores, plugin/session/Pingora callbacks, TLS routing/BoringSSL callbacks, LinkSys/common egress, and metrics/inventory boundaries.
-- The 504 current non-listed files are imported as prior coverage with unavailable historical per-file outcomes; no fresh technical verdict is asserted for them.
-- `edgion-gateway/benches/lru_expiration.rs` is terminal `removed`, with deletion provenance from commit `5a25d32e880c89cfa9af4f28008d1bf34bb7574c`.
+Required context boundaries: proto wrappers/build inputs; payload wire/size limits; DNS transport/parser/fallback; canonical outbound TLS/client/default trust; etcd generation/timeout/election; health publication and Gateway runner; recorder/cardinality installation; panic hook/logging readiness. These are read boundaries, not blanket edit permission. No generated or fixture exclusions apply.
