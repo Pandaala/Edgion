@@ -162,7 +162,6 @@ pub enum EdgionPlugin {
     #[schemars(skip)]
     Unsupported,
     // TODO: Add more custom Edgion plugins here (no `Edgion` prefix on the variant name)
-    // Waf(WafConfig),
     // Cache(CacheConfig),
     // Transform(TransformConfig),
     // ...
