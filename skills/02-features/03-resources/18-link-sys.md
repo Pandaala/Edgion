@@ -25,6 +25,14 @@ spec:
 
 `type` and `config` form a tagged enum with `#[serde(tag = "type", content = "config")]`: `type: redis` in YAML corresponds to `RedisClientConfig`, `type: webhook` to `WebhookServiceConfig`, and so on. The older form that placed `type` inside `spec.config.type` is no longer supported.
 
+The CRD accepts any string for `spec.type`; the running Edgion version determines
+which types it supports. An unsupported type reports `Accepted=False/Invalid`,
+withdraws the previous connector at that key, and cannot be used as a connector.
+Correct the type or upgrade the binaries. Unknown payloads are discarded in typed
+Controller/Gateway views. Known configs, credentials, and nested enums keep their
+validation. Unknown non-credential fields within a supported type are a separate
+advisory diagnostic.
+
 ## Credential Model (Common)
 
 ### Secret Reference: `SecretObjectReference`

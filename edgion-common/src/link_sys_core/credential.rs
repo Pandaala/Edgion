@@ -321,6 +321,7 @@ pub fn tls_ready(ls: &LinkSys) -> bool {
     // fail-open readiness bug (DR-4). List every variant so a future one forces
     // an explicit decision here.
     let tls = match &ls.spec.config {
+        SystemConfig::Unsupported => None,
         SystemConfig::Redis(r) => r.tls.as_ref(),
         SystemConfig::Etcd(e) => e.tls.as_ref(),
         SystemConfig::Otlp(o) => o.tls.as_ref(),

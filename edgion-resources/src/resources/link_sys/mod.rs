@@ -102,7 +102,7 @@ impl<'de> Deserialize<'de> for LinkSysSpec {
 }
 
 /// System configuration enum
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Clone, Debug, JsonSchema)]
 #[serde(tag = "type", content = "config", rename_all = "lowercase")]
 pub enum SystemConfig {
     /// Redis client configuration
@@ -122,12 +122,54 @@ pub enum SystemConfig {
     /// Controller-managed credential acquisition and rotation.
     #[serde(rename = "credentialSource")]
     CredentialSource(CredentialSourceConfig),
+    /// Unknown extensions remain readable but cannot create a runtime.
+    #[serde(other, deserialize_with = "crate::resources::common::discard_unsupported_config")]
+    #[schemars(skip)]
+    Unsupported,
+}
+
+impl Serialize for SystemConfig {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use crate::resources::common::{EmptyExtensionConfig, ExtensionEnvelope};
+        match self {
+            Self::Redis(config) => ExtensionEnvelope { kind: "redis", config }.serialize(serializer),
+            Self::Etcd(config) => ExtensionEnvelope { kind: "etcd", config }.serialize(serializer),
+            Self::Elasticsearch(config) => ExtensionEnvelope {
+                kind: "elasticsearch",
+                config,
+            }
+            .serialize(serializer),
+            Self::Kafka(config) => ExtensionEnvelope { kind: "kafka", config }.serialize(serializer),
+            Self::Otlp(config) => ExtensionEnvelope { kind: "otlp", config }.serialize(serializer),
+            Self::Webhook(config) => ExtensionEnvelope {
+                kind: "webhook",
+                config,
+            }
+            .serialize(serializer),
+            Self::HttpDns(config) => ExtensionEnvelope {
+                kind: "httpdns",
+                config,
+            }
+            .serialize(serializer),
+            Self::CredentialSource(config) => ExtensionEnvelope {
+                kind: "credentialSource",
+                config,
+            }
+            .serialize(serializer),
+            Self::Unsupported => ExtensionEnvelope {
+                kind: "unsupported",
+                config: &EmptyExtensionConfig {},
+            }
+            .serialize(serializer),
+        }
+    }
 }
 
 impl SystemConfig {
     /// Get the system type
     pub fn system_type(&self) -> SystemType {
         match self {
+            SystemConfig::Unsupported => SystemType::Unsupported,
             SystemConfig::Redis(_) => SystemType::Redis,
             SystemConfig::Etcd(_) => SystemType::Etcd,
             SystemConfig::Elasticsearch(_) => SystemType::Elasticsearch,
@@ -169,6 +211,8 @@ pub enum SystemType {
     HttpDns,
     #[serde(rename = "credentialSource")]
     CredentialSource,
+    #[schemars(skip)]
+    Unsupported,
 }
 
 impl LinkSys {
@@ -180,6 +224,9 @@ impl LinkSys {
     pub fn validate_config(&self) -> Vec<String> {
         let mut errors = Vec::new();
         match &self.spec.config {
+            SystemConfig::Unsupported => {
+                errors.push("Unsupported spec.type; use a supported type or upgrade Edgion".to_string())
+            }
             SystemConfig::Redis(redis_config) => {
                 errors.extend(redis_config.validation_errors());
             }

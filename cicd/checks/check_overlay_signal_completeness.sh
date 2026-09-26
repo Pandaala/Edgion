@@ -53,9 +53,31 @@ for entry in "${ENTRIES[@]}"; do
     fi
     missing=()
     for sig in "${REQUIRED_SIGNALS[@]}"; do
-        # Match e.g. `record_region_route_overlay_event("overlay_missing")` --
-        # any whitespace between fn and ( is fine.
-        if ! grep -qE "${recorder}\s*\(\s*\"${sig}\"" "$file"; then
+        # Accept direct calls and the shared match-result call used by RegionRoute.
+        # Only expression lines inside that immediately consumed match count;
+        # comments, log strings and literals elsewhere cannot satisfy the guard.
+        if ! python3 - "$file" "$recorder" "$sig" <<'PY'
+import pathlib
+import re
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+recorder, signal = map(re.escape, sys.argv[2:])
+direct = re.search(rf"\b{recorder}\s*\(\s*\"{signal}\"", source)
+computed = re.finditer(
+    rf"^(?P<indent>[ \t]*)let signal = match [^\n]+\{{\n"
+    rf"(?P<body>.*?)^(?P=indent)\}};\n"
+    rf"(?P=indent){recorder}\(signal\);",
+    source,
+    re.MULTILINE | re.DOTALL,
+)
+found = direct or any(
+    re.search(rf'^\s*"{signal}"\s*$', match["body"], re.MULTILINE)
+    for match in computed
+)
+sys.exit(0 if found else 1)
+PY
+        then
             missing+=("$sig")
         fi
     done

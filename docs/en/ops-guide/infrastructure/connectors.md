@@ -16,6 +16,17 @@ A single `LinkSys` object describes exactly one connector. The top-level `spec.t
 
 `LinkSys` is a Namespaced resource with the short name `lsys`. `kubectl get linksys` shows the `Accepted` and `ResolvedRefs` conditions at a glance.
 
+### Unsupported connector types
+
+The CRD accepts an open string for `spec.type`, so a new supported connector name
+does not require reinstalling a type whitelist. The Controller reports
+`Accepted=False/Invalid` when its Edgion version does not support the type. Such an
+update withdraws the old connector at that name; correct the type or upgrade Edgion
+and reapply the original configuration to recover. Typed admin writes and views
+discard the unknown type and payload, retaining only an invalid marker and empty
+`config: {}` envelope. Known credential
+fields and nested configuration enums still undergo their normal validation.
+
 ### Updates and removal
 
 Ordinary same-type updates reuse unchanged connection material. Changing

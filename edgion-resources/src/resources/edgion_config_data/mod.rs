@@ -215,7 +215,7 @@ pub struct EdgionConfigDataStatus {
 /// unknown payloads whose schema is not defined here.  Its `config` is open
 /// (`x-kubernetes-preserve-unknown-fields` at the CRD level).
 /// **Use `Misc` only when no typed first-party variant fits the use-case.**
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "config")]
 pub enum ConfigEntry {
     /// Key-value list with configurable match mode (exact string or regex).
@@ -258,6 +258,60 @@ pub enum ConfigEntry {
     /// typed first-party variant fits.  `x-kubernetes-preserve-unknown-fields`
     /// applies at the CRD level (no schema validation by the API server).
     Misc(serde_json::Value),
+    /// Unknown extensions are invalid and retain no opaque payload.
+    #[serde(other, deserialize_with = "crate::resources::common::discard_unsupported_config")]
+    #[schemars(skip)]
+    Unsupported,
+}
+
+impl Serialize for ConfigEntry {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use crate::resources::common::{EmptyExtensionConfig, ExtensionEnvelope};
+        match self {
+            Self::KeyList(config) => ExtensionEnvelope {
+                kind: "KeyList",
+                config,
+            }
+            .serialize(serializer),
+            Self::IpList(config) => ExtensionEnvelope { kind: "IpList", config }.serialize(serializer),
+            Self::RequestAccessUrlAllowList(config) => ExtensionEnvelope {
+                kind: "RequestAccessUrlAllowList",
+                config,
+            }
+            .serialize(serializer),
+            Self::ProxyProtocolTrust(config) => ExtensionEnvelope {
+                kind: "ProxyProtocolTrust",
+                config,
+            }
+            .serialize(serializer),
+            Self::Selector(config) => ExtensionEnvelope {
+                kind: "Selector",
+                config,
+            }
+            .serialize(serializer),
+            Self::RegionRouteOverride(config) => ExtensionEnvelope {
+                kind: "RegionRouteOverride",
+                config,
+            }
+            .serialize(serializer),
+            Self::WafRuleBundle(config) => ExtensionEnvelope {
+                kind: "WafRuleBundle",
+                config,
+            }
+            .serialize(serializer),
+            Self::WafPolicy(config) => ExtensionEnvelope {
+                kind: "WafPolicy",
+                config,
+            }
+            .serialize(serializer),
+            Self::Misc(config) => ExtensionEnvelope { kind: "Misc", config }.serialize(serializer),
+            Self::Unsupported => ExtensionEnvelope {
+                kind: "Unsupported",
+                config: &EmptyExtensionConfig {},
+            }
+            .serialize(serializer),
+        }
+    }
 }
 
 impl EdgionConfigData {
@@ -273,6 +327,7 @@ impl EdgionConfigData {
             ConfigEntry::WafRuleBundle(_) => "WafRuleBundle",
             ConfigEntry::WafPolicy(_) => "WafPolicy",
             ConfigEntry::Misc(_) => "Misc",
+            ConfigEntry::Unsupported => "Unsupported",
         }
     }
 
@@ -353,6 +408,9 @@ impl EdgionConfigData {
             }
             // Misc: the payload is opaque; no schema validation is performed here.
             ConfigEntry::Misc(_) => {}
+            ConfigEntry::Unsupported => {
+                errors.push("Unsupported spec.data.type; use a supported type or upgrade Edgion".to_string())
+            }
         }
         errors
     }

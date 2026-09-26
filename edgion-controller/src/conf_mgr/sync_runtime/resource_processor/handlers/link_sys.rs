@@ -594,6 +594,7 @@ async fn resolve_credential_source(
 
 async fn resolve_for_spec(ctx: &HandlerContext, owner: &ResourceRef, config: &mut SystemConfig) -> SpecResolution {
     let errors = match config {
+        SystemConfig::Unsupported => Vec::new(),
         SystemConfig::Redis(r) => drive_standard(ctx, owner, r.auth.as_mut(), r.tls.as_mut()).await,
         SystemConfig::Etcd(e) => drive_standard(ctx, owner, e.auth.as_mut(), e.tls.as_mut()).await,
         SystemConfig::Otlp(o) => {

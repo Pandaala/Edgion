@@ -194,3 +194,85 @@ async fn link_sys_clean_create_has_no_warnings() {
     let serialized = serde_json::to_value(&body.0).expect("ApiResponse must serialize");
     assert!(serialized.get("warnings").is_none());
 }
+
+#[tokio::test]
+async fn unsupported_extensions_create_and_update_preserve_required_config_envelope() {
+    use crate::conf_mgr::SchemaValidator;
+    use edgion_resources::resources::edgion_config_data::EdgionConfigData;
+    use edgion_resources::resources::link_sys::LinkSys;
+    use edgion_resources::ResourceKind;
+    use serde_json::json;
+
+    let (mut state, _tmp) = make_fs_state().await;
+    let crd_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+    Arc::get_mut(&mut state).unwrap().schema_validator =
+        Arc::new(SchemaValidator::from_crd_dir(&crd_dir).expect("committed CRD schemas"));
+    for (kind, config_path, expected_tag) in [
+        (ResourceKind::LinkSys, "/spec/config", "unsupported"),
+        (ResourceKind::EdgionConfigData, "/spec/data/config", "Unsupported"),
+    ] {
+        let extension = json!({"type":"FuturePrivateExtension","config":{"password":"opaque-secret-must-disappear"}});
+        let spec = if kind == ResourceKind::LinkSys {
+            extension
+        } else {
+            json!({"data":extension})
+        };
+        let raw = json!({
+            "apiVersion":"edgion.io/v1", "kind":kind.as_str(),
+            "metadata":{"name":"unknown-extension","namespace":"default"}, "spec":spec
+        });
+        let normalized = if kind == ResourceKind::LinkSys {
+            let resource: LinkSys = serde_json::from_value(raw.clone()).unwrap();
+            assert!(!resource.validate_config().is_empty());
+            serde_json::to_value(resource).unwrap()
+        } else {
+            let resource: EdgionConfigData = serde_json::from_value(raw.clone()).unwrap();
+            assert!(!resource.validate_pre_parse().is_empty());
+            serde_json::to_value(resource).unwrap()
+        };
+        assert_eq!(normalized.pointer(config_path), Some(&json!({})));
+        let type_path = config_path.replace("/config", "/type");
+        assert_eq!(normalized.pointer(&type_path), Some(&json!(expected_tag)));
+        assert!(!normalized.to_string().contains("opaque-secret-must-disappear"));
+        state
+            .schema_validator
+            .validate(kind, &normalized)
+            .expect("normalized unknown extension remains CRD-admissible");
+        let mut missing_config = normalized.clone();
+        let parent_path = config_path.strip_suffix("/config").unwrap();
+        missing_config
+            .pointer_mut(parent_path)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("config");
+        assert!(
+            state.schema_validator.validate(kind, &missing_config).is_err(),
+            "guard exercises the actual required-config schema"
+        );
+
+        let body = Bytes::from(serde_json::to_vec(&raw).unwrap());
+        let (status, _, created) = create_namespaced(
+            State(Arc::clone(&state)),
+            Path((kind.as_str().to_string(), "default".to_string())),
+            body.clone(),
+        )
+        .await
+        .expect("unknown extension must reach processing instead of rejecting the normalized write");
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(created.0.warnings.is_empty());
+        let updated = update_namespaced(
+            State(Arc::clone(&state)),
+            Path((
+                kind.as_str().to_string(),
+                "default".to_string(),
+                "unknown-extension".to_string(),
+            )),
+            HeaderMap::new(),
+            body,
+        )
+        .await
+        .expect("unknown extension update must reach processing and invalidate old state");
+        assert!(updated.0.warnings.is_empty());
+    }
+}

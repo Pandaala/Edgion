@@ -22,16 +22,17 @@ fail-open（失败即放行），而不是无害的空操作。
 
 ## 明确表态
 
-**我们只警告，不阻断。阻断畸形配置应该发生在 apply 之前。**
+普通受支持配置中的未知非凭据字段属于提示性诊断：`UnknownConfigFields` 报告这些字段，
+不改变 `Accepted` 或阻止同步。凭据子结构仍然严格校验。安全敏感的 ConfigData 类型
+（`ProxyProtocolTrust`、`WafRuleBundle`、`WafPolicy`）会拒绝未知配置字段。
+如需准入检查，可在 apply 前调用 `POST /api/v1/validate/{kind}`。
 
-Controller 永远不会因为出现无法识别的配置键而拒绝一个资源。`Accepted` 保持不变，配置仍然
-会按照没有这个功能时一样同步给 Gateway，拼写错误的键依然会被忽略——唯一的变化是现在有人会
-被告知。这里没有严格/拒绝模式，也不打算引入：拒绝会带来这个功能刻意没有回答的一系列问题
-（一个在拒绝模式开启前就已经 apply 并在同步的资源该怎么处理、Controller 重启时整个存储被
-重新摄入该怎么处理、每种 conf_center 模式在拒绝没有运维人员可以上报时应该怎么办）。如果你
-想要阻断，请在下面的 `POST /api/v1/validate/{kind}` 之上自己搭建——比如
-`ValidatingAdmissionWebhook`、CI 检查，或 GitOps 的 pre-merge 步骤，这些都发生在 Controller
-看到该对象之前。
+未知扩展**类型**的语义不同。LinkSys 的 `spec.type` 和 EdgionConfigData 的
+`spec.data.type` 是开放的 CRD 字符串，但当前二进制不支持的类型会报告
+`Accepted=False/Invalid`。类型化解码器丢弃其名称和配置，同步无效标记以撤下旧客户端或
+数据索引。ConfigData overlay 使用 base 回退；严格信任策略和必需的 WAF 引用继续判为无效。
+无效标记保留空的 `config: {}`。Admin 写入会持久化该标记，因此修正类型或升级 Edgion 后，
+还需要重新应用原始配置才能恢复。嵌套枚举和已知配置的校验保持不变。
 
 ## 发现结果出现在哪里
 

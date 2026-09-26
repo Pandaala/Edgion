@@ -95,7 +95,7 @@ and others later) may reference it via a generic `dataRef`.
 
 Signals: gateway uses an access-log `EdgionErrorCode` diagnostic + Prometheus counter. No `tracing::error!` on the data plane.
 
-> Three CI gates guard this contract — see [`skills/09-misc/cicd/02-github-workflow.md`](../../../09-misc/cicd/02-github-workflow.md) "EdgionConfigData overlay gates". In short: forbidden-legacy-refs grep, CRD `type` ↔ Rust `ConfigEntry` parity, and overlay-consumer signal completeness (all four signals above).
+> Three CI gates guard this contract — see [`skills/09-misc/cicd/02-github-workflow.md`](../../../09-misc/cicd/02-github-workflow.md) "EdgionConfigData overlay gates". In short: forbidden-legacy-refs grep, open extension discriminator contracts, and overlay-consumer signal completeness (all four signals above).
 
 ## Variant Taxonomy
 
@@ -113,6 +113,26 @@ Envelope (any variant): `enable: bool` (default true), `active: Option<String>`,
 | executable policy data | `WafRuleBundle` | `{ version, profile, provenance, digest?, roots, rules, phraseAssets? }` | Non-overlay WAF rule and phrase-asset inputs. Structural validation is strict; an optional digest self-checks contents. A WAF profile aggregates ordered references with optional `expectedDigest` pins and strictly compiles the selected generation. Requires `enable=true`, `active` absent, and no unknown config fields. |
 | WAF policy | `WafPolicy` | `{ profiles, defaultProfile }` | Shared aggregation of ordered bundle references. EdgionPlugins fixes one `policyRef` and may select a profile with `activeProfile` or `activeProfileRef`; the Controller transports the selected profile's accepted bundles for Gateway compilation. Requires `enable=true`, `active` absent, and no unknown config fields. |
 | escape hatch | `Misc` | `x-kubernetes-preserve-unknown-fields` | Third-party / unknown / experimental only |
+
+## Open Extension Types
+
+`spec.data.type` is an open CRD string. Adding a supported `ConfigEntry` variant
+requires its Rust schema, validation, consumers, and tests, but no CRD type whitelist
+update or reinstall. Nested enums and known payload validation remain unchanged.
+An unknown type decodes as a schema-hidden `Unsupported` unit marker. The unknown
+name and config are discarded, including secret-like fields; conf_sync carries only
+the normalized marker with an empty `config: {}` required by the CRD envelope.
+Admin writes persist the normalized value, so an upgrade alone cannot recover
+discarded input: reapply the original configuration after correcting the type or
+upgrading the consuming binaries.
+
+Controller validation sets `Accepted=False/Invalid`, even when `enable=false`.
+The resource still replaces the raw store entry, clears outgoing WAF references,
+requeues dependents, and reaches the Gateway. Both full and incremental publication
+remove stale IpList matchers and RegionRoute proofs. Overlay/Selector consumers use
+their base behavior; strict PROXY trust and required WAF references reject the wrong
+type. Existing IP allow/deny reference semantics remain in force. A supported
+replacement restores normal validation and runtime publication.
 
 ## Unknown Config Fields
 

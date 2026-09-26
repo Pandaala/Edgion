@@ -1871,3 +1871,63 @@ async fn otlp_cross_namespace_secret_requires_grant_and_recovers() {
         assert!(runtime.cross_ns_ref_mgr.get_refs(namespace).is_empty());
     }
 }
+
+#[tokio::test]
+async fn unsupported_extension_clears_credential_source_state_and_recovers() {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::CredentialManagerResult;
+    use edgion_resources::resources::link_sys::CredentialSourceState;
+    let (key, secret) = make_secret(
+        "ops",
+        "bootstrap",
+        &[("clientId", b"client"), ("clientSecret", b"secret")],
+    );
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    let handler = LinkSysHandler::new();
+    let original = make_credential_source("ops", "provider", "bootstrap");
+    let ProcessResult::Continue(mut current) = handler.parse(original.clone(), &ctx).await else {
+        panic!("must continue")
+    };
+    assert!(runtime.credential_source_registry.source("ops/provider").is_some());
+    assert!(!ctx.secret_ref_manager().get_refs("ops/bootstrap").is_empty());
+    runtime.credential_source_registry.replace_result(
+        "ops/provider".into(),
+        CredentialManagerResult {
+            observed_generation: 1,
+            state: CredentialSourceState::Valid,
+            published_generation: Some("old".into()),
+            issued_at: None,
+            valid_until: None,
+            last_successful_refresh_time: None,
+            next_refresh_time: None,
+            desired_consumer_count: 1,
+            published_consumer_count: 1,
+            conflicted_consumer_count: 0,
+        },
+    );
+    current.metadata.generation = Some(2);
+    current.spec.config = SystemConfig::Unsupported;
+    let ProcessResult::Continue(mut unknown) = handler.parse(current, &ctx).await else {
+        panic!("must continue for invalidation")
+    };
+    let errors = unknown.validate_config();
+    handler.update_status(&mut unknown, &ctx, &errors);
+    assert!(runtime.credential_source_registry.source("ops/provider").is_none());
+    assert!(runtime.credential_source_registry.result("ops/provider").is_none());
+    assert!(ctx.secret_ref_manager().get_refs("ops/bootstrap").is_empty());
+    let accepted = find_cond(&unknown, "Accepted").unwrap();
+    assert_eq!(accepted.status, "False");
+    assert_eq!(accepted.reason, "Invalid");
+    assert_eq!(accepted.observed_generation, Some(2));
+    assert_eq!(find_cond(&unknown, "ResolvedRefs").unwrap().status, "True");
+    let mut recovered = original;
+    recovered.metadata.generation = Some(3);
+    let ProcessResult::Continue(mut recovered) = handler.parse(recovered, &ctx).await else {
+        panic!("must recover")
+    };
+    let errors = recovered.validate_config();
+    handler.update_status(&mut recovered, &ctx, &errors);
+    assert!(runtime.credential_source_registry.source("ops/provider").is_some());
+    assert!(!ctx.secret_ref_manager().get_refs("ops/bootstrap").is_empty());
+    assert_eq!(find_cond(&recovered, "Accepted").unwrap().status, "True");
+    assert_eq!(find_cond(&recovered, "Accepted").unwrap().observed_generation, Some(3));
+}

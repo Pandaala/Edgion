@@ -151,7 +151,7 @@ If you are adding a new system variant within the existing `LinkSys` resource, y
 
 1. `edgion-resources/src/resources/link_sys/<system>.rs`
 2. `edgion-resources/src/resources/link_sys/mod.rs`
-3. `config/crd/edgion-crd/link_sys_crd.yaml`
+3. `config/crd/edgion-crd/link_sys_crd.yaml` only when changing structural fields; `spec.type` is an open string with no whitelist to update
 4. `edgion-gateway/src/link_sys/providers/<system>/`
 5. `edgion-gateway/src/link_sys/runtime/store.rs`
 6. If needed, `edgion-gateway/src/api/mod.rs`
@@ -170,7 +170,9 @@ First define or extend:
 - The `SystemConfig` variant.
 - The `<System>ClientConfig`.
 - The `validate_config()` branch.
-- The CRD schema.
+- Any affected structural CRD fields. A new variant name alone needs no CRD update.
+- Unsupported-type decoding/status and valid-to-unknown-to-valid runtime tests;
+  preserve the schema-hidden sentinel and known credential strictness.
 
 If the schema is not in place, do not start writing human docs or test YAML.
 
@@ -247,7 +249,7 @@ These resemble the `local_file` provider rather than a new `SystemConfig`.
 
 ## Common pitfalls
 
-- Adding only a `SystemConfig` variant and forgetting `validate_config()` or the CRD.
+- Adding only a `SystemConfig` variant and forgetting `validate_config()`, runtime dispatch, or structural CRD fields (the extension type itself has no whitelist).
 - The provider is finished but `runtime/store.rs` does not dispatch, so the YAML is synced but the runtime does not take effect.
 - Only handling full sync, forgetting the partial-update / remove paths.
 - Adding a second provider-specific runtime registry or publishing an unprepared Webhook client.

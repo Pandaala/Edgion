@@ -561,11 +561,7 @@ fn linksys_auth_reference_fields_survive_kubernetes_pruning() {
         auth["properties"].get("secret").is_none(),
         "resolved credentials must stay schema-excluded"
     );
-    assert!(crd["properties"]["type"]["enum"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|kind| kind == "otlp"));
+    assert!(crd["properties"]["type"].get("enum").is_none());
 
     // Unsupported fields must reach the same typed validation in Kubernetes,
     // FS and etcd; pruning them would silently select a core Secret instead.

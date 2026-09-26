@@ -179,11 +179,8 @@ fn rejects_inline_fields_and_validates_resource_identity() {
     assert_eq!(resource.validate_config(), ["invalid LinkSys reference"]);
     let crd: serde_yaml::Value =
         serde_yaml::from_str(include_str!("../../../../../config/crd/edgion-crd/link_sys_crd.yaml")).unwrap();
-    assert!(
-        crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["type"]["enum"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .any(|value| value.as_str() == Some("otlp"))
-    );
+    let discriminator =
+        &crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["type"];
+    assert_eq!(discriminator["type"].as_str(), Some("string"));
+    assert!(discriminator["enum"].is_null());
 }

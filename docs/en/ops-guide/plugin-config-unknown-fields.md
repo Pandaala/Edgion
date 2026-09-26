@@ -26,18 +26,21 @@ This document is the operator guide to the detector that catches it.
 
 ## The position, stated plainly
 
-**We only warn, we do not block. Blocking a malformed config belongs before apply.**
+Unknown non-credential fields in ordinary supported configurations are advisory:
+`UnknownConfigFields` reports them without changing `Accepted` or blocking sync.
+Credential substructures remain strict. Security-sensitive ConfigData variants
+(`ProxyProtocolTrust`, `WafRuleBundle`, and `WafPolicy`) reject unknown config fields.
+For an admission gate, use `POST /api/v1/validate/{kind}` before apply.
 
-The Controller never rejects a resource because of an unrecognized config key. `Accepted`
-stays untouched, the config still syncs to the Gateway exactly as it would have without this
-feature, and the mistyped key is still ignored — the only change is that somebody is now
-told. There is no strict/reject mode, and none is planned: rejecting raises questions this
-feature deliberately does not answer (what happens to a resource that was already applied and
-syncing before rejection was turned on, what happens on Controller restart when the whole
-store is re-ingested, what each conf_center mode should do when the rejection has no operator
-to report to). If you want blocking, build it yourself on `POST /api/v1/validate/{kind}` (see
-below) — a `ValidatingAdmissionWebhook`, a CI check, or a GitOps pre-merge step, all of which
-run before the Controller ever sees the object.
+Unknown extension **types** have different semantics. LinkSys `spec.type` and
+EdgionConfigData `spec.data.type` are open CRD strings, but a type unsupported by
+the running binary reports `Accepted=False/Invalid`. The typed decoder discards
+its name and config, and syncs an invalid marker so previous clients or data indexes
+are withdrawn. ConfigData overlay consumers fall back to their base; strict trust
+and required WAF references remain invalid. The marker retains an empty `config: {}`
+envelope. Admin writes persist that marker, so correct the type or upgrade Edgion,
+then reapply the original configuration to recover. Nested enums and known
+configuration validation remain unchanged.
 
 ## Where a finding shows up
 

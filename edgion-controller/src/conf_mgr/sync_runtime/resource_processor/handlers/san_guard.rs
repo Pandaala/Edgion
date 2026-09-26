@@ -258,6 +258,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
 pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
     // Extract the outbound validation block from whichever provider is configured.
     let tls = match &ls.spec.config {
+        SystemConfig::Unsupported => None,
         SystemConfig::Redis(c) => c.tls.as_ref(),
         SystemConfig::Etcd(c) => c.tls.as_ref(),
         SystemConfig::Otlp(c) => c.tls.as_ref(),
@@ -277,6 +278,7 @@ pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
         .filter(|tls| tls.enabled)
         .and_then(|tls| tls.outbound.validation.as_ref());
     let provider = match &ls.spec.config {
+        SystemConfig::Unsupported => "Unsupported",
         SystemConfig::Redis(_) => "Redis",
         SystemConfig::Etcd(_) => "Etcd",
         SystemConfig::Otlp(_) => "OTLP",

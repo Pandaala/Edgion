@@ -5,7 +5,7 @@ on:
     branches: [main]
 # Structural CI gates for the EdgionConfigData overlay refactor. See
 # `cicd/checks/check_no_legacy_data_refs.sh`,
-# `cicd/checks/check_edgion_config_data_variant_parity.py`,
+# `cicd/checks/check_open_extension_types.py`,
 # `cicd/checks/check_overlay_signal_completeness.sh` for policy details.
 jobs:
   no-legacy-refs:
@@ -15,12 +15,13 @@ jobs:
       - name: Forbid legacy PluginMetaData / ClusterRegionRoute / ServiceRegionRoute refs
         run: cicd/checks/check_no_legacy_data_refs.sh
 
-  variant-parity:
+  open-extension-types:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: EdgionConfigData CRD `type` enum matches Rust `ConfigEntry` variants
-        run: python3 cicd/checks/check_edgion_config_data_variant_parity.py
+      - run: python3 -m pip install PyYAML
+      - name: LinkSys and EdgionConfigData extension discriminators remain open
+        run: python3 cicd/checks/check_open_extension_types.py
 
   overlay-signal-completeness:
     runs-on: ubuntu-latest
