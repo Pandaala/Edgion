@@ -312,10 +312,19 @@ fn attachment_inputs_preserve_associations_and_policy_changes() {
     assert!(idx
         .update_listener_config_and_collect_routes("default/gw1", &gateway)
         .is_some());
+    // spec.addresses is the external ingress address, not listener identity.
     gateway.spec.addresses = Some(vec![serde_json::from_value(
         serde_json::json!({"type": "IPAddress", "value": "127.0.0.1"}),
     )
     .unwrap()]);
+    assert!(idx
+        .update_listener_config_and_collect_routes("default/gw1", &gateway)
+        .is_none());
+    // The local bind IP annotation does change listener identity.
+    gateway.metadata.annotations = Some(std::collections::BTreeMap::from([(
+        edgion_resources::constants::annotations::edgion::LOCAL_BIND_IP.to_string(),
+        "127.0.0.1".to_string(),
+    )]));
     assert!(idx
         .update_listener_config_and_collect_routes("default/gw1", &gateway)
         .is_some());

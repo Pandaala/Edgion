@@ -1949,4 +1949,12 @@ impl KubernetesStorage {
         }
         storage
     }
+
+    /// Route this storage's version probes through the given test client, as
+    /// production shares one client between the center and its writer.
+    #[cfg(test)]
+    pub(in crate::conf_mgr::conf_center::kubernetes) fn with_client_for_test(mut self, client: Client) -> Self {
+        self.client = client;
+        self
+    }
 }

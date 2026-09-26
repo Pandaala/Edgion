@@ -61,10 +61,11 @@ fn truncated_builtin_bytecode_is_rejected_by_both_factories() {
         config.bytecode = Some(script.serialize_base64().unwrap());
         let error = config.compile_and_validate().unwrap_err();
         assert!(
+            // argc 1 reads the last `nil` argument as the template.
             error.contains(if argc == 0 {
                 "expects 1 to 255"
             } else {
-                "operand stack is not empty"
+                "must come directly from a string constant"
             }),
             "{error}"
         );

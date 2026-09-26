@@ -99,3 +99,55 @@ pub fn setup_header_mocks(mock: &mut MockPluginSession, headers: &[(&str, &str)]
 
     mock.expect_request_header_map().return_const(map);
 }
+
+/// Wire the borrowed accessors that condition evaluation reads directly.
+///
+/// Conditions read `Method`, `Path`, `RequestPath`, `Header`, `Cookie`,
+/// `RemoteIp`, and `DirectPeerIp` through borrowed session accessors instead of
+/// the owned `key_get()`. This serves those accessors from one key/value list:
+/// headers and cookies go through [`setup_header_mocks`], `Method`, `Path`, and
+/// `RequestPath` default to empty, and the IP accessors are stubbed only when
+/// listed so a test may set them separately. Other key sources still need an
+/// explicit `expect_key_get()`.
+#[cfg(test)]
+pub fn setup_condition_input_mocks(mock: &mut MockPluginSession, inputs: &[(edgion_resources::common::KeyGet, &str)]) {
+    use edgion_resources::common::KeyGet;
+
+    let value_of = |target: &KeyGet| {
+        inputs
+            .iter()
+            .find(|(key, _)| key == target)
+            .map(|(_, value)| value.to_string())
+    };
+    let mut headers: Vec<(&str, &str)> = inputs
+        .iter()
+        .filter_map(|(key, value)| match key {
+            KeyGet::Header { name } => Some((name.as_str(), *value)),
+            _ => None,
+        })
+        .collect();
+    let cookie = inputs
+        .iter()
+        .filter_map(|(key, value)| match key {
+            KeyGet::Cookie { name } => Some(format!("{name}={value}")),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    if !cookie.is_empty() {
+        headers.push(("cookie", cookie.as_str()));
+    }
+    setup_header_mocks(mock, &headers);
+    mock.expect_get_method()
+        .return_const(value_of(&KeyGet::Method).unwrap_or_default());
+    mock.expect_get_path()
+        .return_const(value_of(&KeyGet::Path).unwrap_or_default());
+    mock.expect_get_request_path()
+        .return_const(value_of(&KeyGet::RequestPath).unwrap_or_default());
+    if let Some(ip) = value_of(&KeyGet::RemoteIp) {
+        mock.expect_remote_ip().return_const(ip);
+    }
+    if let Some(ip) = value_of(&KeyGet::DirectPeerIp) {
+        mock.expect_direct_peer_ip().return_const(ip);
+    }
+}

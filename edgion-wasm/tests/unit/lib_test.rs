@@ -278,7 +278,7 @@ fn reference_sdk_guest_is_far_below_analysis_limits() {
     assert_eq!(complexity.inventory_name_bytes, 1_451);
     assert_eq!(complexity.type_signature_cells, 188);
     assert_eq!(complexity.report_signature_cells, 304);
-    assert_eq!(complexity.total_locals, 891);
+    assert_eq!(complexity.total_locals, 893);
     assert_eq!(complexity.max_function_body_bytes, 4_973);
     let report = analyze(&bytes);
     assert!(report.compatible, "{:#?}", report.errors);

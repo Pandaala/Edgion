@@ -1,6 +1,6 @@
 use super::*;
 use crate::plugins::runtime::traits::session::MockPluginSession;
-use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
+use crate::plugins::runtime::traits::test_helpers::{setup_condition_input_mocks, setup_header_mocks};
 use edgion_resources::common::KeyGet;
 use edgion_resources::resources::edgion_plugins::conditions::{
     AllOfGroup, AnyOfClause, Condition, ConditionSet, IpAccessMatch, KeyExistCondition, KeyMatchCondition, MatchCore,
@@ -56,10 +56,10 @@ fn cfg(mode: RestrictionMode, groups: Vec<AnyOfClause>) -> RequestRestrictionCon
 }
 
 fn expect_key(session: &mut MockPluginSession, want: KeyGet, value: Option<String>) {
-    session
-        .expect_key_get()
-        .withf(move |key| format!("{key:?}") == format!("{want:?}"))
-        .return_const(value.clone());
+    match value {
+        Some(value) => setup_condition_input_mocks(session, &[(want, value.as_str())]),
+        None => setup_condition_input_mocks(session, &[]),
+    }
 }
 
 #[test]
@@ -98,11 +98,18 @@ async fn matching_sync_all_of_logs_compiled_descriptors() {
 
     let plugin = RequestRestriction::create(&config);
     let mut session = MockPluginSession::new();
-    session.expect_key_get().returning(|key| match key {
-        KeyGet::Method => Some("DELETE".to_string()),
-        KeyGet::Header { name } if name == "X-Audit-Token" => Some("present".to_string()),
-        _ => None,
-    });
+    setup_condition_input_mocks(
+        &mut session,
+        &[
+            (KeyGet::Method, "DELETE"),
+            (
+                KeyGet::Header {
+                    name: "X-Audit-Token".to_string(),
+                },
+                "present",
+            ),
+        ],
+    );
     session.expect_write_response_header().returning(|_, _| Ok(()));
     session.expect_write_response_body().returning(|_, _| Ok(()));
     session.expect_shutdown().returning(|| {});
@@ -210,11 +217,7 @@ async fn test_deny_mode_and_group_needs_all_predicates() {
     let plugin = RequestRestriction::create(&config);
     let mut s = MockPluginSession::new();
     let mut log = PluginLog::new("RequestRestriction");
-    s.expect_key_get().returning(|key| match key {
-        KeyGet::Method => Some("DELETE".to_string()),
-        KeyGet::Path => Some("/other".to_string()),
-        _ => None,
-    });
+    setup_condition_input_mocks(&mut s, &[(KeyGet::Method, "DELETE"), (KeyGet::Path, "/other")]);
 
     let result = plugin.run_request(&mut s, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
@@ -332,11 +335,18 @@ async fn test_allow_mode_multi_group_or_passes_on_second_group() {
     let plugin = RequestRestriction::create(&config);
     let mut s = MockPluginSession::new();
     let mut log = PluginLog::new("RequestRestriction");
-    s.expect_key_get().returning(|key| match key {
-        KeyGet::Method => Some("POST".to_string()),
-        KeyGet::Header { name } if name == "X-Tier" => Some("gold".to_string()),
-        _ => None,
-    });
+    setup_condition_input_mocks(
+        &mut s,
+        &[
+            (KeyGet::Method, "POST"),
+            (
+                KeyGet::Header {
+                    name: "X-Tier".to_string(),
+                },
+                "gold",
+            ),
+        ],
+    );
 
     let result = plugin.run_request(&mut s, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
@@ -516,10 +526,7 @@ async fn ip_and_path_in_one_group() {
     let mut hit = MockPluginSession::new();
     let mut hit_log = PluginLog::new("RequestRestriction");
     hit.expect_direct_peer_ip().return_const("203.0.113.10".to_string());
-    hit.expect_key_get().returning(|key| match key {
-        KeyGet::Path => Some("/admin".to_string()),
-        _ => None,
-    });
+    setup_condition_input_mocks(&mut hit, &[(KeyGet::Path, "/admin")]);
     hit.expect_write_response_header().returning(|_, _| Ok(()));
     hit.expect_write_response_body().returning(|_, _| Ok(()));
     hit.expect_shutdown().returning(|| {});
@@ -534,10 +541,7 @@ async fn ip_and_path_in_one_group() {
     path_miss
         .expect_direct_peer_ip()
         .return_const("203.0.113.10".to_string());
-    path_miss.expect_key_get().returning(|key| match key {
-        KeyGet::Path => Some("/public".to_string()),
-        _ => None,
-    });
+    setup_condition_input_mocks(&mut path_miss, &[(KeyGet::Path, "/public")]);
     assert_eq!(
         plugin.run_request(&mut path_miss, &mut path_log).await,
         PluginRunningResult::GoodNext

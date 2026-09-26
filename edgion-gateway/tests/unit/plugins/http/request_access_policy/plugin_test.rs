@@ -284,14 +284,9 @@ async fn run_imported_secret_case(path: &str, host: &str, token: Option<&str>) -
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("203.0.113.8".to_string());
     session.expect_get_path().return_const(path.to_string());
-    let token = token.map(str::to_string);
-    setup_header_mocks(&mut session, &[("host", host)]);
-    session.expect_key_get().returning(move |key| match key {
-        edgion_resources::common::KeyGet::Header { name } if name.eq_ignore_ascii_case("X-Vendor-Token") => {
-            token.clone()
-        }
-        _ => None,
-    });
+    let mut headers = vec![("host", host)];
+    headers.extend(token.map(|token| ("x-vendor-token", token)));
+    setup_header_mocks(&mut session, &headers);
     let mut log = PluginLog::new("RequestAccessPolicy");
     plugin.run_request(&mut session, &mut log).await
 }
@@ -649,7 +644,7 @@ profiles:
     let mut session = MockPluginSession::new();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("198.51.100.10".to_string());
-    session.expect_key_get().return_const(Some("yes".to_string()));
+    setup_header_mocks(&mut session, &[("x-one", "yes")]);
     let mut log = PluginLog::new("RequestAccessPolicy");
 
     assert_eq!(
@@ -686,7 +681,7 @@ profiles:
     let mut session = MockPluginSession::new();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("198.51.100.10".to_string());
-    session.expect_key_get().return_const(Some("yes".to_string()));
+    setup_header_mocks(&mut session, &[("x-one", "yes"), ("x-two", "yes")]);
     let mut log = PluginLog::new("RequestAccessPolicy");
 
     assert_eq!(

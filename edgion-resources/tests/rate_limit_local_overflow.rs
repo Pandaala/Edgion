@@ -2,7 +2,7 @@ use edgion_resources::resources::edgion_plugins::conditions::{
     Condition, ConditionSet, ConditionValidationProfile, PluginConditions,
 };
 use edgion_resources::resources::edgion_plugins::{
-    EdgionPlugins, EdgionPluginsSpec, OnLimitExceeded, RateLimitLocalConfig,
+    EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, OnLimitExceeded, RateLimitLocalConfig,
 };
 use serde_json::{json, Value};
 
@@ -25,11 +25,16 @@ fn resource(entries: Vec<Value>) -> EdgionPlugins {
 
 #[test]
 fn overflow_schema_is_strict_and_preserves_operator_fields() {
+    // Unknown discriminators decode into the fail-closed Unsupported sentinel.
+    let removed = serde_json::from_value::<EdgionPluginsSpec>(
+        json!({"requestPlugins":[{"type":"RateLimit","config":{"rate":50}}]}),
+    )
+    .unwrap();
     assert!(
-        serde_json::from_value::<EdgionPluginsSpec>(
-            json!({"requestPlugins":[{"type":"RateLimit","config":{"rate":50}}]})
-        )
-        .is_err(),
+        matches!(
+            removed.request_plugins.as_deref(),
+            Some([entry]) if matches!(entry.plugin, EdgionPlugin::Unsupported)
+        ),
         "the removed RateLimit discriminator must not remain as an alias"
     );
     let default: RateLimitLocalConfig = serde_json::from_value(json!({"rate":50})).unwrap();

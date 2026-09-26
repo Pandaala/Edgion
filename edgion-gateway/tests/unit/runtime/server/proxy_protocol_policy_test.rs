@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 
 use super::*;
-use edgion_resources::resources::gateway::{GatewayAddress, GatewaySpec};
+use edgion_resources::resources::gateway::GatewaySpec;
 use edgion_resources::resources::proxy_protocol::ProxyProtocolPolicySourceKind;
 
 fn gateway(name: &str, port: i32, state: ResolvedInboundProxyProtocol) -> Gateway {
@@ -40,11 +40,16 @@ fn ready(policy: CanonicalProxyProtocolTrustPolicy) -> ResolvedInboundProxyProto
     }
 }
 
-fn with_address(mut gateway: Gateway, address: &str) -> Gateway {
-    gateway.spec.addresses = Some(vec![GatewayAddress {
-        address_type: None,
-        value: Some(address.to_string()),
-    }]);
+/// Listener identity follows the local bind IP, not `spec.addresses`.
+fn with_bind_ip(mut gateway: Gateway, ip: &str) -> Gateway {
+    gateway
+        .metadata
+        .annotations
+        .get_or_insert_with(Default::default)
+        .insert(
+            edgion_resources::constants::annotations::edgion::LOCAL_BIND_IP.to_string(),
+            ip.to_string(),
+        );
     gateway
 }
 
@@ -173,11 +178,11 @@ fn every_restart_scoped_policy_dimension_trips_the_guard() {
             ),
         ),
         (
-            with_address(
+            with_bind_ip(
                 gateway("a", 18103, ready(CanonicalProxyProtocolTrustPolicy::Required {})),
                 "127.0.0.1",
             ),
-            with_address(
+            with_bind_ip(
                 gateway("a", 18103, ready(CanonicalProxyProtocolTrustPolicy::Required {})),
                 "127.0.0.2",
             ),

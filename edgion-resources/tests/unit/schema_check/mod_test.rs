@@ -208,7 +208,7 @@ struct Recursive {
     pub wide: Vec<Recursive>,
 }
 
-use crate::resources::edgion_config_data::{edgion_config_data_spec_schema, EdgionConfigDataSpec};
+use crate::resources::edgion_config_data::{edgion_config_data_spec_schema, ConfigEntry, EdgionConfigDataSpec};
 use crate::resources::edgion_plugins::plugin_configs::{MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES};
 use crate::resources::link_sys::link_sys_spec_schema;
 
@@ -569,14 +569,16 @@ fn config_data_envelope_typo_is_reported() {
 }
 
 #[test]
-fn config_data_missing_or_unknown_discriminator_is_fail_silent_but_serde_rejects() {
-    for value in [
-        json!({"data":{"config":{"typo":true}}}),
-        json!({"data":{"type":"FutureType","config":{"typo":true}}}),
-    ] {
-        assert!(unknown_key_paths(&value, edgion_config_data_spec_schema()).is_empty());
-        assert!(serde_json::from_value::<EdgionConfigDataSpec>(value).is_err());
-    }
+fn config_data_missing_or_unknown_discriminator_is_fail_silent() {
+    let missing = json!({"data":{"config":{"typo":true}}});
+    assert!(unknown_key_paths(&missing, edgion_config_data_spec_schema()).is_empty());
+    assert!(serde_json::from_value::<EdgionConfigDataSpec>(missing).is_err());
+
+    // Unknown types decode into the schema-hidden Unsupported sentinel.
+    let unknown = json!({"data":{"type":"FutureType","config":{"typo":true}}});
+    assert!(unknown_key_paths(&unknown, edgion_config_data_spec_schema()).is_empty());
+    let spec = serde_json::from_value::<EdgionConfigDataSpec>(unknown).unwrap();
+    assert!(matches!(spec.data, ConfigEntry::Unsupported));
 }
 
 #[test]
@@ -585,7 +587,8 @@ fn config_data_generated_schema_keeps_only_misc_open() {
     let branches = schema["$defs"]["ConfigEntry"]["oneOf"]
         .as_array()
         .expect("ConfigEntry must remain an adjacent-tagged oneOf");
-    assert_eq!(branches.len(), 7);
+    // Eight typed variants plus Misc; Unsupported is schema-hidden.
+    assert_eq!(branches.len(), 9);
     let mut saw_misc = false;
     let mut typed_branches = 0usize;
 
