@@ -79,7 +79,7 @@ impl Default for ConfSyncConfig {
 }
 
 /// conf_sync gRPC channel security configuration.
-/// The entire section is optional; omitting it = no security enhancement (backward compatible).
+/// Both planes require an explicit transport choice; an omitted section fails closed.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ConfSyncSecurityConfig {
@@ -107,7 +107,10 @@ impl ConfSyncSecurityConfig {
     /// 1. `certs` array: find entry where `name == active`
     /// 2. `certs` has exactly one entry and `active` is None: use it
     /// 3. Fallback to legacy `tls` field
-    /// 4. `None` = plaintext gRPC
+    /// 4. `None` = no active file-based TLS config
+    ///
+    /// Callers must validate the selection and enforce the transport configuration.
+    /// Plaintext requires an explicit `skip_tls` on the selected config.
     pub fn resolve_active_tls(&self) -> Option<&ConfSyncTlsConfig> {
         if !self.certs.is_empty() {
             if let Some(active) = &self.active {

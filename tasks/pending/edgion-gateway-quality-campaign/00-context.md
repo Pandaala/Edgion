@@ -2,10 +2,13 @@
 
 ## Workflow
 
-- `/Users/caohao/.codex/skills/edgion-gateway-quality-campaign/SKILL.md`
-- `/Users/caohao/.codex/skills/edgion-gateway-quality-campaign/references/campaign-artifacts.md`
-- `/Users/caohao/.codex/skills/edgion-gateway-quality-campaign/references/batch-workflow.md`
-- `/Users/caohao/.codex/skills/edgion-gateway-quality-campaign/references/subagent-contracts.md`
+The 2026-09-27 continuation uses the explicitly invoked
+`/Users/caohao/.codex/skills/quality-improvement/SKILL.md`.
+The former campaign-specific skill is no longer installed. Existing scope,
+frozen integration paths, coverage history and protected user work remain in force.
+Related files may be reviewed together; each ledger row still requires full-file
+and associated-call-chain examination. Promote pending source paths lexically;
+associated test/protocol rows may complete with their owning source batch.
 
 ## Repository knowledge entry points
 

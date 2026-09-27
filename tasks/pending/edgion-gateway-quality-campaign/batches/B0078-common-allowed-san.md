@@ -43,4 +43,4 @@ Coverage also includes complete `edgion-common/tests/unit/allowed_san_test.rs`, 
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Commit: pending automatic commit.
+- Commit: `dfe2d11bb`.

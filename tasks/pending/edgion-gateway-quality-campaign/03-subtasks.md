@@ -596,16 +596,16 @@ Inventory baseline: `18e03b4c65b5225d0b299db55b8fb17c65232df5`. Stable lexical i
 | edgion-common | `edgion-common/Cargo.toml` | package | changed | B0076 | Moved test-only kube/base64/rcgen declarations to dev-dependencies | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/build.rs` | package | changed | B0077 | Propagate contextual OUT_DIR errors without a bare unwrap | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/allowed_san.rs` | src | deferred | B0078 | D0016: resolve ignored regex ignoreCase flag across schema/compiler/docs | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/cert_util.rs` | src | analysis-ready | B0079 | Certificate validity observation needs no local change | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/conf_sync/cert_duration.rs` | src/conf_sync | analysis-in-progress | B0081 | Value analysis pending | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/conf_sync/cert_expiry_watch.rs` | src/conf_sync | analysis-ready | B0080 | Isolate expiry-watcher filesystem tests and strengthen assertions | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/conf_sync/config.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/conf_sync/mod.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/conf_sync/payload.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/conf_sync/proto.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/conf_sync/proto/config_sync.proto` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/conf_sync/traits.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/conf_sync/types.rs` | src/conf_sync | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/cert_util.rs` | src | examined-no-change | B0079 | Reviewed full file and consumers; see batch evidence | dfe2d11bb |
+| edgion-common | `edgion-common/src/conf_sync/cert_duration.rs` | src/conf_sync | examined-no-change | B0081 | Reviewed full file and consumers; see batch evidence | dfe2d11bb |
+| edgion-common | `edgion-common/src/conf_sync/cert_expiry_watch.rs` | src/conf_sync | examined-no-change | B0080 | Reviewed full file and consumers; see batch evidence | dfe2d11bb |
+| edgion-common | `edgion-common/src/conf_sync/config.rs` | src/conf_sync | changed | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | dfe2d11bb |
+| edgion-common | `edgion-common/src/conf_sync/mod.rs` | src/conf_sync | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | dfe2d11bb |
+| edgion-common | `edgion-common/src/conf_sync/payload.rs` | src/conf_sync | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | dfe2d11bb |
+| edgion-common | `edgion-common/src/conf_sync/proto.rs` | src/conf_sync | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | dfe2d11bb |
+| edgion-common | `edgion-common/src/conf_sync/proto/config_sync.proto` | src/conf_sync | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | dfe2d11bb |
+| edgion-common | `edgion-common/src/conf_sync/traits.rs` | src/conf_sync | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | dfe2d11bb |
+| edgion-common | `edgion-common/src/conf_sync/types.rs` | src/conf_sync | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | dfe2d11bb |
 | edgion-common | `edgion-common/src/dns/hickory.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/dns/http_fetcher.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/dns/httpdns.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
@@ -614,9 +614,9 @@ Inventory baseline: `18e03b4c65b5225d0b299db55b8fb17c65232df5`. Stable lexical i
 | edgion-common | `edgion-common/src/dns/standard.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/dns/system.rs` | src/dns | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/egress.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/ext_proc/mod.rs` | src/ext_proc | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/ext_proc/proto.rs` | src/ext_proc | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/ext_proc/proto/ext_proc.proto` | src/ext_proc | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/ext_proc/mod.rs` | src/ext_proc | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | dfe2d11bb |
+| edgion-common | `edgion-common/src/ext_proc/proto.rs` | src/ext_proc | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | dfe2d11bb |
+| edgion-common | `edgion-common/src/ext_proc/proto/ext_proc.proto` | src/ext_proc | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | dfe2d11bb |
 | edgion-common | `edgion-common/src/grpc_tls.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/lib.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/src/link_sys_core/credential.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
@@ -646,11 +646,11 @@ Inventory baseline: `18e03b4c65b5225d0b299db55b8fb17c65232df5`. Stable lexical i
 | edgion-common | `edgion-common/tests/outbound_http2_header_limit.rs` | tests | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/tests/support/outbound_tls.rs` | tests/support | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/tests/unit/allowed_san_test.rs` | tests/unit | examined-no-change | B0078 | Full 13-test matcher suite independently reviewed and passed | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/cert_util_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/conf_sync/cert_duration_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/conf_sync/cert_expiry_watch_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/conf_sync/config_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/conf_sync/payload_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/cert_util_test.rs` | tests/unit | examined-no-change | B0079 | Reviewed full file and consumers; see batch evidence | dfe2d11bb |
+| edgion-common | `edgion-common/tests/unit/conf_sync/cert_duration_test.rs` | tests/unit | examined-no-change | B0081 | Reviewed full file and consumers; see batch evidence | dfe2d11bb |
+| edgion-common | `edgion-common/tests/unit/conf_sync/cert_expiry_watch_test.rs` | tests/unit | changed | B0080 | Reviewed full file and consumers; see batch evidence | dfe2d11bb |
+| edgion-common | `edgion-common/tests/unit/conf_sync/config_test.rs` | tests/unit | examined-no-change | B0082 | Complete test file independently reviewed; included in passing Common suite | dfe2d11bb |
+| edgion-common | `edgion-common/tests/unit/conf_sync/payload_test.rs` | tests/unit | examined-no-change | B0082 | Complete test file independently reviewed; included in passing Common suite | dfe2d11bb |
 | edgion-common | `edgion-common/tests/unit/dns/hickory_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/tests/unit/dns/http_fetcher_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/tests/unit/dns/httpdns_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
@@ -659,7 +659,7 @@ Inventory baseline: `18e03b4c65b5225d0b299db55b8fb17c65232df5`. Stable lexical i
 | edgion-common | `edgion-common/tests/unit/dns/standard_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/tests/unit/dns/system_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/tests/unit/egress_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/ext_proc/mod_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/tests/unit/ext_proc/mod_test.rs` | tests/unit | examined-no-change | B0082 | Complete test file independently reviewed; included in passing Common suite | dfe2d11bb |
 | edgion-common | `edgion-common/tests/unit/grpc_tls_test/validate_identity_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/tests/unit/link_sys_core/credential_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/tests/unit/link_sys_core/health_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |

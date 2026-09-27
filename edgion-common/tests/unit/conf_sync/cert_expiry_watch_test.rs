@@ -66,9 +66,8 @@ fn load_validity_from_pem_source() {
 
 #[test]
 fn load_validity_from_file_source_rereads_disk() {
-    let dir = std::env::temp_dir().join(format!("edgion-cert-watch-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("client.crt");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("client.crt");
 
     std::fs::write(&path, test_cert_pem_expiring(1_900_000_000)).unwrap();
     let first = load_validity(&CertSource::File(path.clone())).unwrap();
@@ -82,8 +81,6 @@ fn load_validity_from_file_source_rereads_disk() {
         second.not_after, 1_950_000_000,
         "File source must re-read from disk on every check"
     );
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 fn pemfn_some() -> Option<String> {
@@ -108,7 +105,8 @@ fn load_validity_from_pemfn_source() {
 
 #[test]
 fn load_validity_reports_missing_file() {
-    let err = load_validity(&CertSource::File(PathBuf::from("/nonexistent/edgion-test.crt"))).unwrap_err();
+    let dir = tempfile::tempdir().unwrap();
+    let err = load_validity(&CertSource::File(dir.path().join("missing.crt"))).unwrap_err();
     assert!(
         err.contains("read"),
         "error should mention the read failure, got: {err}"
@@ -148,25 +146,31 @@ fn check_and_report_exports_not_after_gauge_with_side_label() {
 
 #[test]
 fn check_and_report_survives_unreadable_source() {
-    // Must not panic — the safety net cannot take down the process.
-    let mut state = ExpiryWatchState::default();
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = ExpiryWatchState {
+        last_severity: Some(ExpirySeverity::Critical),
+        consecutive_failures: 0,
+    };
     check_and_report(
         sides::CLIENT,
-        &CertSource::File(PathBuf::from("/nonexistent/edgion-test.crt")),
+        &CertSource::File(dir.path().join("missing.crt")),
         0,
         &mut state,
     );
+    assert_eq!(state.consecutive_failures, 1);
+    assert_eq!(state.last_severity, Some(ExpirySeverity::Critical));
 }
 
 #[test]
 fn check_and_report_resets_consecutive_failures_after_a_success() {
+    let dir = tempfile::tempdir().unwrap();
     let recorder = PrometheusBuilder::new().build_recorder();
     let mut state = ExpiryWatchState::default();
 
     metrics::with_local_recorder(&recorder, || {
         check_and_report(
             sides::CLIENT,
-            &CertSource::File(PathBuf::from("/nonexistent/edgion-test.crt")),
+            &CertSource::File(dir.path().join("missing.crt")),
             0,
             &mut state,
         );

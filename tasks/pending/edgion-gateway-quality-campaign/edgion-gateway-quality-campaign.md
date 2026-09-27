@@ -14,7 +14,7 @@
 
 ## AI guide summary
 
-The user invoked the campaign for `edgion-common` on 2026-09-26. Continue the existing campaign after the completed Gateway phase. Analyze every Common file with separate value, implementation, and independent review roles. Commit only batches passing all gates; never push. Preserve prior Gateway coverage as historical evidence, not a fresh verdict on subsequent external changes.
+The user invoked the campaign for `edgion-common` on 2026-09-26. Continue the existing campaign after the completed Gateway phase. Use the invoked quality-improvement workflow to examine every Common file and independently review each batch. Commit only batches passing all gates; never push. Preserve prior Gateway coverage as historical evidence, not a fresh verdict on subsequent external changes.
 
 ## Scope and authority
 
@@ -28,10 +28,10 @@ The user invoked the campaign for `edgion-common` on 2026-09-26. Continue the ex
 
 - Campaign status: `in-progress`.
 - Coverage planner: `common_coverage`; 90-file inventory verified; process complete relative paths lexically, with no exclusions.
-- Common inventory: 90 files; 1 `analysis-in-progress`, 2 `analysis-ready`, 2 `changed`, 1 `deferred`, 1 `examined-no-change`, 83 `pending`.
+- Common inventory: 90 files; 4 `changed`, 1 `deferred`, 18 `examined-no-change`, 67 `pending`.
 - Historical Gateway ledger: 582 rows, all terminal; 504 imported exclusions, 49 changed, 27 examined-no-change, 1 deferred, 1 removed.
-- Active serial batch: B0078 verified; automatic commit pending.
-- Analysis queue: B0079 certificate utilities (analysis-ready), B0081 certificate duration (analysis-in-progress), then B0080 expiry watcher (analysis-ready; D0018 recorded). IDs reflect allocation; promotion follows lexical paths.
+- Active serial batch: B0079/B0081/B0080 certificate chain verified; B0082 shared protocol review verified; local commit pending.
+- Next source batch: B0083 DNS parsing and transport-test layout, followed by shared TLS/Etcd safety fixes. Associated ExtProc files were reviewed with synchronization bindings to share the protocol contract context.
 - Resume gate: `freeze_diagnostic` proved 147 changed and 320 new integration files against external commits after `0b5890414bf0e9a9d2459fb318e509058632f624`; 3,305 unchanged entries were retained. The 3,772-entry guard passes. Per-path provenance is in `integration-reconciliation-2026-09-26.tsv`; no test file was edited.
 
 ## Protected pre-existing work
