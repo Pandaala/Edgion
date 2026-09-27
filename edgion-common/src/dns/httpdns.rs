@@ -77,7 +77,13 @@ fn json_pointer_path(path: &str) -> String {
     let mut p = String::new();
     for seg in path.split('.') {
         p.push('/');
-        p.push_str(seg);
+        for ch in seg.chars() {
+            match ch {
+                '~' => p.push_str("~0"),
+                '/' => p.push_str("~1"),
+                _ => p.push(ch),
+            }
+        }
     }
     p
 }
@@ -96,7 +102,7 @@ fn require_non_empty_delimiter(delimiter: Option<&str>) -> Result<&str, DnsError
 /// Parse the response body into a de-duplicated IP list, capped at
 /// [`MAX_HTTP_DNS_ADDRS`].
 pub fn parse_body(fmt: &HttpDnsResponseFormat, body: &str) -> Result<Vec<IpAddr>, DnsError> {
-    let raw: Vec<String> = match fmt.kind {
+    match fmt.kind {
         HttpDnsBodyKind::Json => {
             let v: serde_json::Value = serde_json::from_str(body).map_err(|e| DnsError::Parse(e.to_string()))?;
             let path = fmt.ip_path.as_deref().unwrap_or("ips");
@@ -104,29 +110,29 @@ pub fn parse_body(fmt: &HttpDnsResponseFormat, body: &str) -> Result<Vec<IpAddr>
                 .pointer(&json_pointer_path(path))
                 .ok_or_else(|| DnsError::Parse(format!("ipPath '{path}' not found in response")))?;
             match node {
-                serde_json::Value::Array(items) => {
-                    items.iter().filter_map(|i| i.as_str().map(|s| s.to_string())).collect()
-                }
+                serde_json::Value::Array(items) => parse_ip_candidates(items.iter().filter_map(|i| i.as_str())),
                 serde_json::Value::String(s) => {
                     let delim = require_non_empty_delimiter(fmt.delimiter.as_deref())?;
-                    s.split(delim).map(|x| x.trim().to_string()).collect()
+                    parse_ip_candidates(s.split(delim).map(str::trim))
                 }
-                _ => return Err(DnsError::Parse("ipPath did not point to array/string".into())),
+                _ => Err(DnsError::Parse("ipPath did not point to array/string".into())),
             }
         }
         HttpDnsBodyKind::Delimited => {
             let delim = require_non_empty_delimiter(fmt.delimiter.as_deref())?;
-            body.split(delim).map(|x| x.trim().to_string()).collect()
+            parse_ip_candidates(body.split(delim).map(str::trim))
         }
-    };
+    }
+}
 
+fn parse_ip_candidates<'a>(raw: impl Iterator<Item = &'a str>) -> Result<Vec<IpAddr>, DnsError> {
     let mut out = Vec::new();
     let mut seen: HashSet<IpAddr> = HashSet::new();
     for s in raw {
         if out.len() >= MAX_HTTP_DNS_ADDRS {
             break;
         }
-        let parsed = s.parse::<IpAddr>().or_else(|_| strip_brackets(&s).parse::<IpAddr>());
+        let parsed = s.parse::<IpAddr>().or_else(|_| strip_brackets(s).parse::<IpAddr>());
         if let Ok(ip) = parsed {
             if seen.insert(ip) {
                 out.push(ip);

@@ -1,14 +1,9 @@
-use super::*;
+// Standalone transport fixture: this tests the Common HTTP client without a
+// Gateway/Controller topology and does not start or restart shared services.
+use edgion_common::dns::http_fetcher::ReqwestHttpDnsFetcher;
+use edgion_common::dns::httpdns::HttpDnsFetcher;
+use edgion_common::dns::DnsError;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-impl ReqwestHttpDnsFetcher {
-    /// Override the response-body cap so a small oversized body can exercise
-    /// the bound without allocating a 64 KiB fixture.
-    fn with_max_response_bytes(mut self, n: usize) -> Self {
-        self.max_response_bytes = n;
-        self
-    }
-}
 
 /// Spawn a one-shot HTTP/1.1 stub that replies with `body` and returns its URL.
 async fn spawn_stub(body: String) -> String {
@@ -40,11 +35,11 @@ async fn fetches_body_from_stub() {
 
 #[tokio::test]
 async fn rejects_body_over_limit() {
-    let url = spawn_stub("x".repeat(100)).await;
-    let fetcher = ReqwestHttpDnsFetcher::new(None).unwrap().with_max_response_bytes(8);
+    let url = spawn_stub("x".repeat(64 * 1024 + 1)).await;
+    let fetcher = ReqwestHttpDnsFetcher::new(None).unwrap();
     let err = fetcher.get(&url).await.unwrap_err();
     assert!(
-        matches!(err, DnsError::Http(_)),
+        matches!(&err, DnsError::Http(message) if message.contains("response exceeds the 65536-byte limit")),
         "expected size-limit error, got {err:?}"
     );
 }
@@ -70,7 +65,7 @@ async fn end_to_end_preset_parse_via_stub() {
         connection: None,
     };
     let fetcher = ReqwestHttpDnsFetcher::new(None).unwrap();
-    let ips = super::super::httpdns::resolve_http_dns_with(&fetcher, &cfg, "api.example.com")
+    let ips = edgion_common::dns::httpdns::resolve_http_dns_with(&fetcher, &cfg, "api.example.com")
         .await
         .unwrap();
     assert_eq!(ips.len(), 2);

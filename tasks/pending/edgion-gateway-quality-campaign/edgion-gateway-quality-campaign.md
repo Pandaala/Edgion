@@ -27,11 +27,11 @@ The user invoked the campaign for `edgion-common` on 2026-09-26. Continue the ex
 ## Campaign state
 
 - Campaign status: `in-progress`.
-- Coverage planner: `common_coverage`; 90-file inventory verified; process complete relative paths lexically, with no exclusions.
-- Common inventory: 90 files; 4 `changed`, 1 `deferred`, 18 `examined-no-change`, 67 `pending`.
+- Coverage planner: `common_coverage`; 90-file baseline inventory verified; one moved integration target added; process complete relative paths lexically, with no exclusions.
+- Common inventory: 91 historical/current rows; DNS rows reviewed, remaining TLS/Etcd and foundation reviews are being recorded.
 - Historical Gateway ledger: 582 rows, all terminal; 504 imported exclusions, 49 changed, 27 examined-no-change, 1 deferred, 1 removed.
-- Active serial batch: B0079/B0081/B0080 certificate chain verified; B0082 shared protocol review verified; local commit pending.
-- Next source batch: B0083 DNS parsing and transport-test layout, followed by shared TLS/Etcd safety fixes. Associated ExtProc files were reviewed with synchronization bindings to share the protocol contract context.
+- Active serial batch: B0079/B0081/B0080 and B0082 committed as `ee0038cb7`; B0083 DNS verified, preparing commit.
+- Next source batch: B0084 TLS/Etcd fixes are blocked on real-service verification and remain uncommitted; B0085 foundation tests are in progress. Associated ExtProc files were reviewed with synchronization bindings to share the protocol contract context.
 - Resume gate: `freeze_diagnostic` proved 147 changed and 320 new integration files against external commits after `0b5890414bf0e9a9d2459fb318e509058632f624`; 3,305 unchanged entries were retained. The 3,772-entry guard passes. Per-path provenance is in `integration-reconciliation-2026-09-26.tsv`; no test file was edited.
 
 ## Protected pre-existing work
