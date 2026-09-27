@@ -606,81 +606,81 @@ Inventory baseline: `18e03b4c65b5225d0b299db55b8fb17c65232df5`. Stable lexical i
 | edgion-common | `edgion-common/src/conf_sync/proto/config_sync.proto` | src/conf_sync | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | ee0038cb7 |
 | edgion-common | `edgion-common/src/conf_sync/traits.rs` | src/conf_sync | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | ee0038cb7 |
 | edgion-common | `edgion-common/src/conf_sync/types.rs` | src/conf_sync | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | ee0038cb7 |
-| edgion-common | `edgion-common/src/dns/hickory.rs` | src/dns | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/src/dns/http_fetcher.rs` | src/dns | deferred | B0083 | Reviewed; D0019 prepared runtime and D0020 endpoint egress remain unresolved; transport tests moved | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/src/dns/httpdns.rs` | src/dns | changed | B0083 | Correct JSON Pointer escaping and borrow parse candidates; 28 DNS tests passed | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/src/dns/mod.rs` | src/dns | deferred | B0083 | Reviewed; D0019 prepared runtime and D0020 endpoint egress remain unresolved; transport tests moved | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/src/dns/resolver_select.rs` | src/dns | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/src/dns/standard.rs` | src/dns | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/src/dns/system.rs` | src/dns | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/src/egress.rs` | src | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
+| edgion-common | `edgion-common/src/dns/hickory.rs` | src/dns | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
+| edgion-common | `edgion-common/src/dns/http_fetcher.rs` | src/dns | deferred | B0083 | Reviewed; D0019 prepared runtime and D0020 endpoint egress remain unresolved; transport tests moved | 99b85e31b |
+| edgion-common | `edgion-common/src/dns/httpdns.rs` | src/dns | changed | B0083 | Correct JSON Pointer escaping and borrow parse candidates; 28 DNS tests passed | 99b85e31b |
+| edgion-common | `edgion-common/src/dns/mod.rs` | src/dns | deferred | B0083 | Reviewed; D0019 prepared runtime and D0020 endpoint egress remain unresolved; transport tests moved | 99b85e31b |
+| edgion-common | `edgion-common/src/dns/resolver_select.rs` | src/dns | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
+| edgion-common | `edgion-common/src/dns/standard.rs` | src/dns | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
+| edgion-common | `edgion-common/src/dns/system.rs` | src/dns | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
+| edgion-common | `edgion-common/src/egress.rs` | src | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
 | edgion-common | `edgion-common/src/ext_proc/mod.rs` | src/ext_proc | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | ee0038cb7 |
 | edgion-common | `edgion-common/src/ext_proc/proto.rs` | src/ext_proc | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | ee0038cb7 |
 | edgion-common | `edgion-common/src/ext_proc/proto/ext_proc.proto` | src/ext_proc | examined-no-change | B0082 | Verified transport and protocol contracts; corrected stale comments where needed | ee0038cb7 |
-| edgion-common | `edgion-common/src/grpc_tls.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/lib.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/credential.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/health.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/http_client.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/mod.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/outbound_tls.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/client.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/config_mapping.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/election.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/mod.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/ops.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/providers/mod.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/link_sys_core/tls.rs` | src/link_sys_core | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/observe/cardinality_guard.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/observe/fed_metrics.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/observe/logs.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/observe/metrics_api.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/observe/mod.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/observe/system_metrics.rs` | src/observe | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/secret/mod.rs` | src/secret | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/secret/secret_store.rs` | src/secret | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/startup.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/test_mode.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/time.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/src/tls_validation.rs` | src | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/outbound_http2_header_limit.rs` | tests | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/support/outbound_tls.rs` | tests/support | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
+| edgion-common | `edgion-common/src/grpc_tls.rs` | src | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/lib.rs` | src | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/link_sys_core/credential.rs` | src/link_sys_core | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/health.rs` | src/link_sys_core | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/http_client.rs` | src/link_sys_core | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/mod.rs` | src/link_sys_core | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/outbound_tls.rs` | src/link_sys_core | blocked | B0084 | Static review complete; live TLS/reconnect verification blocked; see B0084 | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/client.rs` | src/link_sys_core | blocked | B0084 | Static review complete; live TLS/reconnect verification blocked; see B0084 | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/config_mapping.rs` | src/link_sys_core | blocked | B0084 | Static review complete; live TLS/reconnect verification blocked; see B0084 | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/election.rs` | src/link_sys_core | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/mod.rs` | src/link_sys_core | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/providers/etcd/ops.rs` | src/link_sys_core | blocked | B0084 | Static review complete; live TLS/reconnect verification blocked; see B0084 | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/providers/mod.rs` | src/link_sys_core | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/link_sys_core/tls.rs` | src/link_sys_core | blocked | B0084 | Static review complete; live TLS/reconnect verification blocked; see B0084 | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/src/observe/cardinality_guard.rs` | src/observe | changed | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/observe/fed_metrics.rs` | src/observe | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/observe/logs.rs` | src/observe | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/observe/metrics_api.rs` | src/observe | changed | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/observe/mod.rs` | src/observe | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/observe/system_metrics.rs` | src/observe | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/secret/mod.rs` | src/secret | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/secret/secret_store.rs` | src/secret | changed | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/startup.rs` | src | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/test_mode.rs` | src | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/time.rs` | src | changed | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/src/tls_validation.rs` | src | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/outbound_http2_header_limit.rs` | tests | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/support/outbound_tls.rs` | tests/support | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
 | edgion-common | `edgion-common/tests/unit/allowed_san_test.rs` | tests/unit | examined-no-change | B0078 | Full 13-test matcher suite independently reviewed and passed | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
 | edgion-common | `edgion-common/tests/unit/cert_util_test.rs` | tests/unit | examined-no-change | B0079 | Reviewed full file and consumers; see batch evidence | ee0038cb7 |
 | edgion-common | `edgion-common/tests/unit/conf_sync/cert_duration_test.rs` | tests/unit | examined-no-change | B0081 | Reviewed full file and consumers; see batch evidence | ee0038cb7 |
 | edgion-common | `edgion-common/tests/unit/conf_sync/cert_expiry_watch_test.rs` | tests/unit | changed | B0080 | Reviewed full file and consumers; see batch evidence | ee0038cb7 |
 | edgion-common | `edgion-common/tests/unit/conf_sync/config_test.rs` | tests/unit | examined-no-change | B0082 | Complete test file independently reviewed; included in passing Common suite | ee0038cb7 |
 | edgion-common | `edgion-common/tests/unit/conf_sync/payload_test.rs` | tests/unit | examined-no-change | B0082 | Complete test file independently reviewed; included in passing Common suite | ee0038cb7 |
-| edgion-common | `edgion-common/tests/unit/dns/hickory_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/tests/unit/dns/http_fetcher_test.rs` | tests/unit | removed | B0083 | All three identities moved to tests/httpdns_fetcher.rs; real 64 KiB cap tested | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/tests/unit/dns/httpdns_test.rs` | tests/unit | changed | B0083 | Correct JSON Pointer escaping and borrow parse candidates; 28 DNS tests passed | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/tests/unit/dns/mod_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/tests/unit/dns/resolver_select_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/tests/unit/dns/standard_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/tests/unit/dns/system_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
-| edgion-common | `edgion-common/tests/unit/egress_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | ee0038cb7 + B0083 diff |
+| edgion-common | `edgion-common/tests/unit/dns/hickory_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
+| edgion-common | `edgion-common/tests/unit/dns/http_fetcher_test.rs` | tests/unit | removed | B0083 | All three identities moved to tests/httpdns_fetcher.rs; real 64 KiB cap tested | 99b85e31b |
+| edgion-common | `edgion-common/tests/unit/dns/httpdns_test.rs` | tests/unit | changed | B0083 | Correct JSON Pointer escaping and borrow parse candidates; 28 DNS tests passed | 99b85e31b |
+| edgion-common | `edgion-common/tests/unit/dns/mod_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
+| edgion-common | `edgion-common/tests/unit/dns/resolver_select_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
+| edgion-common | `edgion-common/tests/unit/dns/standard_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
+| edgion-common | `edgion-common/tests/unit/dns/system_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
+| edgion-common | `edgion-common/tests/unit/egress_test.rs` | tests/unit | examined-no-change | B0083 | Full file and consumers reviewed; see B0083 evidence | 99b85e31b |
 | edgion-common | `edgion-common/tests/unit/ext_proc/mod_test.rs` | tests/unit | examined-no-change | B0082 | Complete test file independently reviewed; included in passing Common suite | ee0038cb7 |
-| edgion-common | `edgion-common/tests/unit/grpc_tls_test/validate_identity_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/link_sys_core/credential_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/link_sys_core/health_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/link_sys_core/http_client_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/link_sys_core/outbound_tls_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/client_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/config_mapping_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/election_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/ops_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/link_sys_core/tls_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/observe/cardinality_guard_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/observe/fed_metrics_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/observe/fed_metrics_test/rbac_metric_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/observe/logs_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/observe/metrics_api_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/observe/system_metrics_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/secret/secret_store_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/secret/secret_store_test/stats_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/startup_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/time_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/tls_validation_test.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/tls_validation_test/canonical_ca_bundle_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/unit/tls_validation_test/status_determinism_tests.rs` | tests/unit | pending | — | Not yet examined | 18e03b4c65b5225d0b299db55b8fb17c65232df5 |
-| edgion-common | `edgion-common/tests/httpdns_fetcher.rs` | tests | changed | B0083 | Three transport identities moved intact and passed; standalone fixture exception documented | ee0038cb7 + B0083 diff |
+| edgion-common | `edgion-common/tests/unit/grpc_tls_test/validate_identity_tests.rs` | tests/unit | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/credential_test.rs` | tests/unit | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/health_test.rs` | tests/unit | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/http_client_test.rs` | tests/unit | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/outbound_tls_test.rs` | tests/unit | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/client_test.rs` | tests/unit | blocked | B0084 | Static review complete; live TLS/reconnect verification blocked; see B0084 | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/config_mapping_test.rs` | tests/unit | blocked | B0084 | Static review complete; live TLS/reconnect verification blocked; see B0084 | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/election_test.rs` | tests/unit | examined-no-change | B0084 | Complete file and consumers reviewed; see B0084 for evidence | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/providers/etcd/ops_test.rs` | tests/unit | blocked | B0084 | Static review complete; live TLS/reconnect verification blocked; see B0084 | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/unit/link_sys_core/tls_test.rs` | tests/unit | blocked | B0084 | Static review complete; live TLS/reconnect verification blocked; see B0084 | 99b85e31b + B0084 diff |
+| edgion-common | `edgion-common/tests/unit/observe/cardinality_guard_test.rs` | tests/unit | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/observe/fed_metrics_test.rs` | tests/unit | changed | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/observe/fed_metrics_test/rbac_metric_tests.rs` | tests/unit | changed | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/observe/logs_test.rs` | tests/unit | changed | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/observe/metrics_api_test.rs` | tests/unit | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/observe/system_metrics_test.rs` | tests/unit | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/secret/secret_store_test.rs` | tests/unit | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/secret/secret_store_test/stats_tests.rs` | tests/unit | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/startup_test.rs` | tests/unit | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/time_test.rs` | tests/unit | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/tls_validation_test.rs` | tests/unit | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/tls_validation_test/canonical_ca_bundle_tests.rs` | tests/unit | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/unit/tls_validation_test/status_determinism_tests.rs` | tests/unit | examined-no-change | B0085 | Complete file and consumers reviewed; see B0085 for evidence | 99b85e31b + B0085 diff |
+| edgion-common | `edgion-common/tests/httpdns_fetcher.rs` | tests | changed | B0083 | Three transport identities moved intact and passed; standalone fixture exception documented | 99b85e31b |

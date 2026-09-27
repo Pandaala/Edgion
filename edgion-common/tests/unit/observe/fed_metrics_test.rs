@@ -1,5 +1,21 @@
 use super::labels::*;
 
+pub(super) fn assert_sample(output: &str, name: &str, labels: &[(&str, &str)], expected: f64) {
+    let line = output
+        .lines()
+        .find(|line| {
+            line.strip_prefix(name).is_some_and(|rest| {
+                (rest.starts_with('{') || rest.starts_with(' '))
+                    && labels
+                        .iter()
+                        .all(|(key, value)| rest.contains(&format!("{key}=\"{value}\"")))
+            })
+        })
+        .unwrap_or_else(|| panic!("missing {name} {labels:?} in:\n{output}"));
+    let value: f64 = line.split_whitespace().last().unwrap().parse().unwrap();
+    assert_eq!(value, expected, "{line}");
+}
+
 #[test]
 fn metric_names_have_edgion_fed_prefix() {
     use super::names::*;
@@ -128,12 +144,40 @@ fn bounded_enum_value_sets_are_exhaustive_and_unique() {
 
 #[test]
 fn helpers_are_callable_without_recorder() {
-    // Without a Prometheus recorder installed, the metrics crate uses
-    // a no-op recorder. Helpers must not panic in that case, which
-    // also covers unit-test harnesses.
-    super::set_connections_active(role::CONTROLLER, 0);
-    super::record_connection_event(role::CONTROLLER, event::CONNECTED);
-    super::record_connection_duration(role::CONTROLLER, 1.5);
-    super::record_watch_event("EdgionConfigData", direction::RECV);
-    super::record_ready_gate_wait(0.25);
+    let emit = || {
+        super::set_connections_active(role::CONTROLLER, 1);
+        super::record_connection_event(role::CONTROLLER, event::CONNECTED);
+        super::record_connection_duration(role::CONTROLLER, 1.5);
+        super::record_watch_event("EdgionConfigData", direction::RECV);
+        super::record_ready_gate_wait(0.25);
+    };
+    // An emission before recorder installation must not pin no-op handles.
+    emit();
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    metrics::with_local_recorder(&recorder, || {
+        emit();
+        let output = handle.render();
+        use super::names;
+        assert_sample(&output, names::CONNECTIONS_ACTIVE, &[("role", role::CONTROLLER)], 1.0);
+        assert_sample(
+            &output,
+            names::CONNECTION_EVENTS_TOTAL,
+            &[("role", role::CONTROLLER), ("event", event::CONNECTED)],
+            1.0,
+        );
+        assert_sample(
+            &output,
+            names::CONNECTION_DURATION_LAST,
+            &[("role", role::CONTROLLER)],
+            1.5,
+        );
+        assert_sample(
+            &output,
+            names::WATCH_EVENTS_TOTAL,
+            &[("kind", "EdgionConfigData"), ("direction", direction::RECV)],
+            1.0,
+        );
+        assert_sample(&output, names::READY_GATE_WAIT_LAST, &[], 0.25);
+    });
 }

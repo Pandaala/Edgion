@@ -1,7 +1,7 @@
-//! Global Secret Store
+//! Shared Secret Store
 //!
-//! Provides a global store for Secret resources that can be accessed
-//! from anywhere in the application (e.g., TLS callback).
+//! Provides runtime-owned controller stores and a global gateway fallback for
+//! Secret resources used during resolution and plugin initialization.
 //!
 //! Write frequency is low (controller-driven reconcile),
 //! so a simple RwLock<HashMap> is sufficient.
@@ -92,9 +92,8 @@ impl Default for SecretStore {
 /// Global Secret Store instance (used by Gateway-side code for fallback access).
 ///
 /// NOTE: Controller-side code uses `ControllerRuntime::secret_store` instead.
-/// This global is kept for Gateway binary compatibility where plugins may fall
-/// back to reading secrets directly (e.g., BasicAuth fallback when resolved_users
-/// is absent).
+/// Gateway plugins may fall back to reading secrets here during initialization
+/// when controller-resolved material is absent (OIDC and HeaderCertAuth).
 static GLOBAL_SECRET_STORE: LazyLock<Arc<SecretStore>> = LazyLock::new(|| Arc::new(SecretStore::new()));
 
 /// Get the global Secret Store

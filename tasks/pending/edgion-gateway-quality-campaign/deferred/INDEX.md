@@ -20,3 +20,6 @@
 | D0016 | needs-investigation | `tasks/todo/allowed-san-regex-ignore-case-contract.md` | B0078 |
 | D0017 | ready-for-separate-task | `tasks/todo/align-conf-sync-operational-limits-overview.md` | B0077 |
 | D0018 | needs-investigation | `tasks/todo/conf-sync-client-expiry-watch-installed-identity.md` | B0080 |
+| D0019 | needs-design | `tasks/todo/prepare-httpdns-runtime-and-config-audit.md` | B0083 |
+| D0020 | needs-design | `tasks/todo/define-httpdns-endpoint-egress-policy.md` | B0083 |
+| D0021 | needs-design | `tasks/todo/define-etcd-linksys-unused-config-fields.md` | B0084 |
