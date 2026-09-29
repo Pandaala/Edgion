@@ -1227,3 +1227,41 @@ async fn unsupported_extension_retires_every_provider_and_recovers_full_and_part
         }
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn webhook_forced_tls_rebuild_revokes_unusable_generation_and_recovers() {
+    for unresolved_identity in [false, true] {
+        let registry = RuntimeRegistry::new();
+        let data = one(create_test_webhook_linksys("test", "link"));
+        registry.apply(1, &data, &HashSet::new(), &data, true, false);
+        let old = registry.get("test/link").unwrap();
+        let mut invalid = data["test/link"].clone();
+        let SystemConfig::Webhook(config) = &mut invalid.spec.config else {
+            panic!("expected webhook")
+        };
+        if unresolved_identity {
+            config.conn.tls = Some(
+                serde_json::from_value(serde_json::json!({
+                    "enabled": true, "clientCertificateRef": {"name": "missing"}
+                }))
+                .unwrap(),
+            );
+        } else {
+            config.conn.target.service.port = None;
+        }
+        let invalid = one(invalid);
+        registry.apply(2, &invalid, &HashSet::new(), &invalid, false, false);
+        assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
+        registry.apply(3, &invalid, &HashSet::new(), &invalid, true, true);
+        assert!(registry.get("test/link").is_none());
+        assert!(old.stopped.load(Ordering::Acquire));
+        assert_eq!(registry.count(ProviderKind::Webhook), 0);
+        registry.apply(4, &invalid, &HashSet::new(), &invalid, true, false);
+        assert!(registry.get("test/link").is_none());
+        registry.apply(5, &data, &HashSet::new(), &data, true, true);
+        let recovered = registry.get("test/link").unwrap();
+        assert!(!Arc::ptr_eq(&old, &recovered));
+        assert!(!recovered.stopped.load(Ordering::Acquire));
+        assert_eq!(registry.count(ProviderKind::Webhook), 1);
+    }
+}

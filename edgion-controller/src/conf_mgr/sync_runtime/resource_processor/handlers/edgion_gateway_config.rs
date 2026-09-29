@@ -2,12 +2,15 @@
 //!
 //! Handles EdgionGatewayConfig resources with Gateway API standard status management.
 
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{resolve_ca_certificate_refs, CaFetchStrategy};
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{
+    fetch_secret, resolve_ca_certificate_refs, CaFetchStrategy, FetchOutcome,
+};
 use crate::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, update_condition, HandlerContext, ProcessResult,
     ProcessorHandler, ResourceRef,
 };
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
+use edgion_resources::resources::common::is_core_api_group;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigStatus;
 use edgion_resources::ResourceKind;
 
@@ -83,8 +86,26 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         }
 
         if let Some(ref mut ob) = egc.spec.outbound_tls {
-            // Reset the runtime-resolved field first to avoid stale values on update.
+            // Replace both runtime fields on every generation, including missing or denied refs.
             ob.resolved_ca_certificates = None;
+            ob.resolved_client_certificate = None;
+
+            // Like global CA refs, a cluster-scoped identity needs an explicit namespace.
+            // fetch_secret registers dependencies before checking grants or material presence.
+            if let Some(reference) = ob.client_certificate_ref.as_ref().filter(|reference| {
+                reference
+                    .namespace
+                    .as_deref()
+                    .is_some_and(|namespace| !namespace.is_empty())
+                    && reference.kind.as_deref().unwrap_or("Secret") == "Secret"
+                    && is_core_api_group(reference.group.as_deref().unwrap_or(""))
+            }) {
+                if let FetchOutcome::Ok(secret) =
+                    fetch_secret(ctx, &resource_ref, "edgion.io", "EdgionGatewayConfig", reference)
+                {
+                    ob.resolved_client_certificate = Some(secret);
+                }
+            }
 
             // Resolve cluster-wide outbound CA certificate refs.
             // EGC is cluster-scoped (owner_ns = None); each ref must carry an explicit

@@ -125,9 +125,12 @@ impl<O: ApplyOwner> PersistentRunner<O> {
         });
     }
 
-    pub fn post_not_ready(&self) {
+    pub fn post_not_ready(&self, forced: bool) {
         self.desired.send_modify(|desired| {
             desired.gen = desired.gen.saturating_add(1);
+            if forced {
+                desired.force_gen = desired.gen;
+            }
             desired.state = DesiredState::NotReady;
         });
     }
@@ -233,6 +236,20 @@ async fn run_loop<O: ApplyOwner>(
         }
 
         let snapshot = rx.borrow().clone();
+        // Global TLS changes may revoke the material held by the published
+        // generation. Retire it before fingerprinting or building a replacement,
+        // including when the latest resource is not ready. Ordinary updates
+        // retain the existing handover behavior.
+        if snapshot.force_gen > fulfilled_force_gen {
+            if let Some(live) = runner.current() {
+                replace_now::<O>(&runner, live).await;
+            }
+            join_retire::<O>(&runner).await;
+            if shutdown.is_cancelled() {
+                finish_delete::<O>(&runner).await;
+                return;
+            }
+        }
         match snapshot.state {
             DesiredState::NotReady => {
                 backoff.reset();

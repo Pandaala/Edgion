@@ -121,9 +121,8 @@ spec:
 Current product boundaries in Edgion:
 
 - Standard `Passthrough` is supported.
-- Standard `Terminate` is deferred until the full TLS conformance profile passes
-  and `TLSRouteModeTerminate` is declared; see the
-  [follow-up](../../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md).
+- Standard `Terminate` is not currently supported; `TLSRouteModeTerminate` is
+  not declared.
 - `TLSRouteModeMixed` is not supported.
 - BackendTLSPolicy does not apply to TLSRoute (Passthrough forwards the original TLS, and Terminate goes through the stream layer; use HTTPRoute/GRPCRoute when backend TLS is required).
 

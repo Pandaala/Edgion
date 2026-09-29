@@ -115,7 +115,7 @@ Therefore:
 Edgion currently enables `TLSRoute` + `TLS listener(mode=Passthrough)`.
 The Controller rejects explicit `TLS listener(mode=Terminate)` with
 `Accepted=False/UnsupportedValue` while `TLSRouteModeTerminate` is undeclared.
-Termination proxy code is retained for the full-profile follow-up below.
+Termination proxy code is retained, but the full-profile follow-up was canceled.
 
 But explicitly does not support `TLSRouteModeMixed`, that is:
 
@@ -129,7 +129,7 @@ Reasons:
 
 Therefore:
 
-- `TLSRouteModeTerminate` may be pursued as a follow-up conformance target
+- `TLSRouteModeTerminate` is not a current conformance target
 - `TLSRouteModeMixed` is not a current implementation target and should not be declared in supported features
 
 ## GatewayPort8080 / HTTPRouteParentRefPort / dynamic port binding

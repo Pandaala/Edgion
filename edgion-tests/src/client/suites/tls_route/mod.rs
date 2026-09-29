@@ -29,7 +29,5 @@ pub fn tls_route_terminate_tests_enabled() -> bool {
 }
 
 pub fn report_terminate_deferred(scope: &str) {
-    println!(
-        "DEFERRED: {scope}: TLSRouteModeTerminate positive checks await gateway-api-v16-tls-terminate-full-profile"
-    );
+    println!("DEFERRED: {scope}: TLSRouteModeTerminate is not currently supported");
 }

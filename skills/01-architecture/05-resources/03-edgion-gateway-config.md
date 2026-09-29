@@ -40,6 +40,15 @@ requeues. See the [shared status guard](../../04-review/status/regression-guards
 ReferenceGrant enforcement, and embeds `resolved_ca_certificates` for conf_sync. Because the owner
 is cluster-scoped, referenced material must carry an explicit namespace.
 
+The same parse pass clears and resolves `outboundTls.clientCertificateRef` into
+`resolvedClientCertificate`. It requires an explicit namespace and a core Secret
+reference, and uses the shared grant-gated credential fetch. Missing Secrets and
+missing grants remain indexed for reprocessing; every generation clears stale
+material before lookup. Cluster-scoped source identity follows the existing CA
+fetch convention (`default` on the source side of a cross-namespace grant).
+Secret key/certificate validation remains in the shared outbound TLS consumer;
+missing identity material fails closed rather than silently dropping mTLS.
+
 Change/delete events requeue all GatewayClass resources because their parametersRef status depends
 on EdgionGatewayConfig existence; delete also clears Secret registrations.
 

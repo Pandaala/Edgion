@@ -3579,9 +3579,7 @@ async fn main() -> Result<()> {
                 | "TLSRoute/GeoRestriction"
         )
     {
-        let reason = format!(
-            "suite `{suite}` requires deferred TLSRouteModeTerminate; see tasks/pending/gateway-api-v16-tls-terminate-full-profile.md"
-        );
+        let reason = format!("suite `{suite}` requires TLSRouteModeTerminate, which is not currently supported");
         if std::env::var("EDGION_INTEGRATION_EXPLICIT_TARGET").as_deref() != Ok("0") {
             anyhow::bail!(reason);
         }

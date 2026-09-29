@@ -456,3 +456,163 @@ async fn egc_ca_only_no_san_accepted() {
         errors
     );
 }
+
+fn client_identity_config(namespace: Option<&str>) -> EdgionGatewayConfig {
+    serde_json::from_value(serde_json::json!({
+        "apiVersion": "edgion.io/v1alpha1", "kind": "EdgionGatewayConfig",
+        "metadata": {"name": "global-client"},
+        "spec": {"outboundTls": {"clientCertificateRef": {
+            "name": "client", "namespace": namespace
+        }}}
+    }))
+    .unwrap()
+}
+
+async fn parse_client_identity(egc: EdgionGatewayConfig, ctx: &HandlerContext) -> EdgionGatewayConfig {
+    match EdgionGatewayConfigHandler.parse(egc, ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    }
+}
+
+#[tokio::test]
+async fn global_client_identity_tracks_material_grants_and_removal() {
+    let ctx = make_ctx_with_secrets(HashMap::new());
+    let owner = ResourceRef::new(ResourceKind::EdgionGatewayConfig, None, "global-client".to_string());
+    let mut egc = client_identity_config(Some("certs"));
+    egc.spec.outbound_tls.as_mut().unwrap().resolved_client_certificate = Some(Secret::default());
+    egc = parse_client_identity(egc, &ctx).await;
+    assert!(egc
+        .spec
+        .outbound_tls
+        .as_ref()
+        .unwrap()
+        .resolved_client_certificate
+        .is_none());
+    assert!(ctx.secret_ref_manager().get_refs("certs/client").contains(&owner));
+    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("certs").contains(&owner));
+
+    let grant = serde_json::from_value(serde_json::json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "ReferenceGrant",
+        "metadata": {"name": "client", "namespace": "certs"},
+        "spec": {"from": [{"group": "edgion.io", "kind": "EdgionGatewayConfig", "namespace": "default"}],
+                 "to": [{"group": "", "kind": "Secret", "name": "client"}]}
+    }))
+    .unwrap();
+    ctx.runtime()
+        .ref_grant_store
+        .upsert("certs/client".to_string(), Arc::new(grant));
+    egc = parse_client_identity(egc, &ctx).await;
+    assert!(egc
+        .spec
+        .outbound_tls
+        .as_ref()
+        .unwrap()
+        .resolved_client_certificate
+        .is_none());
+
+    for generation in ["first", "rotated"] {
+        let secret = Secret {
+            type_: Some("kubernetes.io/tls".to_string()),
+            data: Some(BTreeMap::from([(
+                "tls.crt".to_string(),
+                ByteString(generation.as_bytes().to_vec()),
+            )])),
+            ..Default::default()
+        };
+        ctx.runtime()
+            .secret_store
+            .replace_all(HashMap::from([("certs/client".to_string(), secret.clone())]));
+        egc = parse_client_identity(egc, &ctx).await;
+        assert_eq!(
+            egc.spec
+                .outbound_tls
+                .as_ref()
+                .unwrap()
+                .resolved_client_certificate
+                .as_ref(),
+            Some(&secret)
+        );
+    }
+    ctx.runtime().secret_store.replace_all(HashMap::new());
+    egc = parse_client_identity(egc, &ctx).await;
+    assert!(egc
+        .spec
+        .outbound_tls
+        .as_ref()
+        .unwrap()
+        .resolved_client_certificate
+        .is_none());
+    ctx.runtime()
+        .secret_store
+        .replace_all(HashMap::from([("certs/client".to_string(), Secret::default())]));
+    egc = parse_client_identity(egc, &ctx).await;
+    assert!(egc
+        .spec
+        .outbound_tls
+        .as_ref()
+        .unwrap()
+        .resolved_client_certificate
+        .is_some());
+    ctx.runtime().ref_grant_store.remove("certs/client");
+    egc = parse_client_identity(egc, &ctx).await;
+    assert!(egc
+        .spec
+        .outbound_tls
+        .as_ref()
+        .unwrap()
+        .resolved_client_certificate
+        .is_none());
+
+    egc.spec
+        .outbound_tls
+        .as_mut()
+        .unwrap()
+        .client_certificate_ref
+        .as_mut()
+        .unwrap()
+        .namespace = Some("other".to_string());
+    egc = parse_client_identity(egc, &ctx).await;
+    assert!(ctx.secret_ref_manager().get_refs("certs/client").is_empty());
+    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("certs").is_empty());
+    assert!(ctx.secret_ref_manager().get_refs("other/client").contains(&owner));
+    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("other").contains(&owner));
+    EdgionGatewayConfigHandler.on_delete(&egc, &ctx).await;
+    assert!(ctx.secret_ref_manager().get_refs("other/client").is_empty());
+    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("other").is_empty());
+}
+
+#[tokio::test]
+async fn global_client_identity_requires_explicit_namespace_and_core_secret_kind() {
+    let ctx = make_ctx_with_secrets(HashMap::from([("default/client".to_string(), Secret::default())]));
+    for (namespace, group, kind, expected) in [
+        (None, None, None, false),
+        (Some(""), None, None, false),
+        (Some("default"), None, None, true),
+        (Some("default"), Some("core"), Some("Secret"), true),
+        (Some("default"), Some("other.io"), Some("Secret"), false),
+        (Some("default"), None, Some("ConfigMap"), false),
+    ] {
+        let mut egc = client_identity_config(namespace);
+        let tls = egc.spec.outbound_tls.as_mut().unwrap();
+        tls.resolved_client_certificate = Some(Secret::default());
+        let reference = tls.client_certificate_ref.as_mut().unwrap();
+        reference.group = group.map(str::to_string);
+        reference.kind = kind.map(str::to_string);
+        let parsed = parse_client_identity(egc, &ctx).await;
+        assert_eq!(
+            parsed.spec.outbound_tls.unwrap().resolved_client_certificate.is_some(),
+            expected
+        );
+        assert_eq!(
+            !ctx.secret_ref_manager().get_refs("default/client").is_empty(),
+            expected
+        );
+    }
+    let mut removed = client_identity_config(Some("default"));
+    removed.spec.outbound_tls.as_mut().unwrap().client_certificate_ref = None;
+    removed.spec.outbound_tls.as_mut().unwrap().resolved_client_certificate = Some(Secret::default());
+    let parsed = parse_client_identity(removed, &ctx).await;
+    assert!(parsed.spec.outbound_tls.unwrap().resolved_client_certificate.is_none());
+    assert!(ctx.secret_ref_manager().get_refs("default/client").is_empty());
+}

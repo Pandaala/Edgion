@@ -11,8 +11,12 @@ knowledge_type: regression-guards
 Webhook does not use the persistent connection runner. Its owned
 WebhookLinkClient prepares the canonical ManagedOutboundClient before a same-type
 replacement becomes visible in the unified LinkSys runtime table. Equal
-fingerprints reuse the current object; failed preparation preserves an existing
-same-type client. Typed lookup cannot discover a stale independent Webhook
+fingerprints reuse the current object; failed ordinary preparation preserves an
+existing same-type client. A forced rebuild after global outbound TLS changes
+retires the previous Webhook publication before readiness/preparation: preserving
+it would continue using an identity or trust policy that may have been revoked.
+An unbuildable replacement stays absent until a later usable generation arrives.
+Typed lookup cannot discover a stale independent Webhook
 registration after a type change.
 
 Retirement explicitly stops the managed health task without waiting for the last
@@ -37,7 +41,10 @@ never publish an incompletely prepared client.
 Owning sources are link_sys/runtime/store.rs, providers/webhook/client.rs,
 providers/webhook/manager.rs, and the canonical outbound engine under
 plugins/http/common/outbound/. Review source-event ordering, same-type failure
-preservation, kind changes, and full-set omission whenever publication changes.
+preservation, forced TLS invalidation, recovery, kind changes, and full-set omission
+whenever publication changes. The store test
+`webhook_forced_tls_rebuild_revokes_unusable_generation_and_recovers` covers both
+readiness and preparation failures without changing ordinary last-good behavior.
 The [provider-owned removal page](../intentional-design/provider-owned-runtime-and-simple-removal.md)
 records the unified table's verification boundary; historical verification of
 the removed manager does not verify the new table.

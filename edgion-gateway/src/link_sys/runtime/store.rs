@@ -538,6 +538,15 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
     if kind == ProviderKind::Otlp && OTLP_STOPPING.load(Ordering::Acquire) {
         return;
     }
+    // A forced rebuild follows a global outbound TLS policy/material change.
+    // Revoke the old Webhook publication even if the replacement is not ready or
+    // fails preparation; it may carry credentials that are no longer permitted.
+    if forced && kind == ProviderKind::Webhook {
+        if let Some(old) = entries.remove(key) {
+            old.stop();
+            counts[kind as usize] -= 1;
+        }
+    }
     let existing = entries.get(key);
     let was_registered = existing.is_some();
     if kind != ProviderKind::Webhook
@@ -561,7 +570,7 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
                     if ready {
                         runner.post_ready(Arc::new(resource.clone()), forced);
                     } else {
-                        runner.post_not_ready();
+                        runner.post_not_ready(forced);
                     }
                 }
             } else if ready {
@@ -577,7 +586,7 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
                     if ready {
                         runner.post_ready(Arc::new(resource.clone()), forced);
                     } else {
-                        runner.post_not_ready();
+                        runner.post_not_ready(forced);
                     }
                 }
             } else if ready {
@@ -593,7 +602,7 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
                     if ready {
                         runner.post_ready(Arc::new(resource.clone()), forced);
                     } else {
-                        runner.post_not_ready();
+                        runner.post_not_ready(forced);
                     }
                 }
             } else if ready {
@@ -612,7 +621,7 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
                     if ready {
                         runner.post_ready(Arc::new(resource.clone()), forced);
                     } else {
-                        runner.post_not_ready();
+                        runner.post_not_ready(forced);
                     }
                 }
             } else if ready {
@@ -628,7 +637,7 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
                     if ready {
                         runner.post_ready(Arc::new(resource.clone()), forced);
                     } else {
-                        runner.post_not_ready();
+                        runner.post_not_ready(forced);
                     }
                 }
             } else if ready {

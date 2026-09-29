@@ -804,7 +804,11 @@ async fn ready_recovery_clears_stale_scheduler_checkpoint() {
     assert!(matches!(outcome, CheckOutcome::Wait(_, TriggerKind::Renewal)));
     let patches = patches.lock();
     assert_eq!(patches.len(), 1);
-    assert!(patches[0]["status"]["scheduler"].is_null());
+    // JSON indexing returns null for both absent and explicitly null fields;
+    // only omission removes the SSA-owned checkpoint without a schema error.
+    assert_eq!(patches[0]["status"], serde_json::json!({}));
+    assert_eq!(patches[0]["metadata"]["resourceVersion"], "10");
+    assert_eq!(patches[0]["metadata"]["uid"], acme.metadata.uid.unwrap());
 }
 
 #[tokio::test]

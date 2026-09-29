@@ -11,7 +11,6 @@ TLSRoute implements SNI-based layer-4 routing. The code contains two proxy paths
 but only Passthrough is currently enabled: the Controller rejects explicit
 TLS/Terminate listeners with `Accepted=False/UnsupportedValue`. The termination
 path below describes retained implementation, not an enabled product feature.
-See the [full-profile follow-up](../../../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md).
 
 - **Terminate** (deferred): the proxy implementation terminates TLS and forwards plain TCP to the backend. SNI is read from the completed TLS handshake.
 - **Passthrough**: the Gateway does not terminate TLS; it parses SNI from the raw ClientHello and transparently relays all bytes (including the original ClientHello) to the backend.

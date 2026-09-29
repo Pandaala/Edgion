@@ -1720,7 +1720,12 @@ async fn patch_scheduler_status(
         .metadata
         .resource_version
         .context("EdgionAcme has no resourceVersion")?;
-    let scheduler = scheduler.map(serde_json::to_value).transpose()?;
+    // Omit the field to remove this manager's previous SSA ownership/value.
+    // Explicit null is rejected by the non-nullable scheduler CRD schema.
+    let status = match scheduler {
+        Some(scheduler) => serde_json::json!({ "scheduler": scheduler }),
+        None => serde_json::json!({}),
+    };
     let patch = serde_json::json!({
         "apiVersion": "edgion.io/v1",
         "kind": "EdgionAcme",
@@ -1729,7 +1734,7 @@ async fn patch_scheduler_status(
             "uid": current.metadata.uid,
             "resourceVersion": resource_version,
         },
-        "status": { "scheduler": scheduler },
+        "status": status,
     });
     let params = PatchParams::apply("edgion-acme-scheduler").force();
     api.patch_status(name, &params, &Patch::Apply(patch))

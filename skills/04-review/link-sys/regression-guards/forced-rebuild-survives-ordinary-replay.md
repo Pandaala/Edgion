@@ -47,6 +47,23 @@ new objects admitted after capacity recovery use the current process-wide settin
 
 ## Verification and re-evaluation
 
+### Global TLS invalidation follow-up (2026-09-28)
+
+A forced global TLS refresh can represent authorization revocation or missing
+client identity, not only a buildable material rotation. The runner now retires
+the currently published generation before fingerprint/build/init and before a
+NotReady wait. Both Ready and NotReady posts retain the force generation across
+ordinary replays. A failed replacement leaves no current client; a later valid
+ordinary post can recover. Ordinary failed handovers retain their existing
+last-good behavior. Existing caller-held handles retain provider-specific
+shutdown semantics; this is not a blanket cancellation guarantee.
+
+The new runner regressions cover failed construction, failed initialization,
+NotReady replay and recovery. All 80 runtime tests pass in
+`/tmp/ws5-persistent-tls-revocation-final-tests.log`, and the Gateway binary builds
+successfully (`/tmp/ws5-persistent-tls-revocation-build.log`). This does not claim real
+Redis/Etcd/Elasticsearch/Kafka/OTLP traffic verification.
+
 `cargo test -p edgion-gateway --lib equal_replay_` passed both focused tests on
 2026-09-17. One test coalesces the forced post with an equal ordinary replay
 before the runner polls; the other injects that replay just before candidate

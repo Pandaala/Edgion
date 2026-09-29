@@ -59,8 +59,8 @@ The new reports use Go conformance v1.6.2 and Gateway API v1.6.2
 Experimental CRDs with local arm64 Edgion images. The full HTTP profile
 passed Core 37/37 and Extended 30/30; GRPC passed Core 15/15. The full TLS
 profile passed Core 20/20 and Extended 2/3. Its only failure was
-`TLSRouteTerminateSimpleSameNamespace` after a separate targeted pass. See
-the [TLS follow-up](../../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md).
+`TLSRouteTerminateSimpleSameNamespace` after a separate targeted pass. The TLS
+full-profile follow-up was canceled; `TLSRouteModeTerminate` remains unsupported.
 The TCP and UDP full profiles timed out while probing listener ports created
 after Gateway startup, so neither produced a report. See the
 [dynamic-listener follow-up](../../../tasks/pending/gateway-api-v16-dynamic-stream-listeners.md).

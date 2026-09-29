@@ -67,6 +67,25 @@ write schedules another control-plane check and never reserves a sixth attempt.
 `Uncertain(kube::Error)`. It checks local leadership both before and after the
 Lease GET so a local step-down during the read cannot validate an old attempt.
 
+## Scheduler clearing and the structural CRD
+
+Clear the checkpoint by omitting `status.scheduler` from this manager's SSA
+payload, keeping `status: {}`. The CRD declares a non-nullable object: explicitly
+sending `scheduler: null` is rejected with HTTP 422, leaving a published
+certificate stuck in the checkpoint-clear retry loop. Do not weaken the CRD or
+use a broad status replacement to work around this contract. Preserve the source
+UID/resourceVersion fence and the independent lifecycle/condition/challenge
+writers. This relies on the documented single scheduler field-manager owner;
+re-evaluate deletion semantics if another manager owns the same field.
+
+The Ready-recovery regression must assert absence, not JSON indexing plus
+`is_null()`, which also returns true for a missing field. Real API-server dry runs
+in the Center alignment topology reproduced the null rejection and confirmed
+that omission removes the scheduler while preserving Ready and certificate
+expiry. Full runtime recovery/renewal evidence is tracked separately in the
+sibling Center alignment task; a mock Kubernetes response alone cannot establish
+SSA deletion behavior.
+
 ## Regression anchors
 
 - `edgion-controller/src/services/acme/service.rs`

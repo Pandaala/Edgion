@@ -29,6 +29,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Proxy shutdown notification and streaming drain](regression-guards/proxy-shutdown-notification.md)
 - [AsyncRwLock Write Guard Held Across an RPC — Clone-and-Drop, Don't Re-derive](regression-guards/async-write-lock-across-rpc.md)
 - [LinkSys ES bulk_ingest_loop Empty endpoints Panic](regression-guards/es-bulk-ingest-empty-endpoints-fail-closed.md)
 - [LinkSys Elasticsearch Bulk item-level 429 retry](regression-guards/es-bulk-item-level-429-retry.md)

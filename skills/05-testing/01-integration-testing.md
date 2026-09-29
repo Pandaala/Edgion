@@ -105,9 +105,8 @@ the Controller currently rejects explicit TLS/Terminate listeners and does not
 declare `TLSRouteModeTerminate`. Pure Terminate suites report SKIP in sweeps
 (explicit requests fail); mixed suites retain supported protocol checks and
 record DEFERRED subcases in the final report. The status suite verifies
-`Accepted=False/UnsupportedValue` and empty `supportedKinds`. See the
-[full-profile follow-up](../../tasks/pending/gateway-api-v16-tls-terminate-full-profile.md)
-for the coverage inventory and re-enable gate. This is not a Gateway build
+`Accepted=False/UnsupportedValue` and empty `supportedKinds`. Positive checks
+remain disabled while the feature is unsupported. This is not a Gateway build
 capability and must not be inferred from the presence of termination proxy code.
 
 ### Run every integration test in one shot
@@ -496,6 +495,8 @@ Only when a **completely different process-level configuration** is needed shoul
 | `run_otlp_test.sh` | Immutable Gateway process YAML selects shared OTLP primary/fallback outputs; isolated owned collectors test hot LinkSys generations |
 | `test_oidc_egress.sh` | Gateway-startup proxy environment and process-local multi-address DNS injection for both OIDC client branches |
 | `test_debug_access_log_wire.sh` | Replace/Wrap masking is Gateway-startup-global; two serial isolated modes verify response headers and plugin hot reload |
+| `test_http_process_shutdown.py` | SIGTERM, worker scheduling, and grace/drain limits require owned processes; verifies idle keepalive closure and active SSE/gRPC completion on two listeners |
+| `benchmark_http_shutdown.py` | Manual notifier A/B comparison uses separately built Gateway binaries with identical worker settings; each sample owns and drains its processes |
 
 A new standalone script must include a header comment explaining "why the main environment cannot be reused"; otherwise the PR cannot be merged.
 

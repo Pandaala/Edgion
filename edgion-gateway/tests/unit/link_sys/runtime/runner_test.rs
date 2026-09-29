@@ -72,7 +72,9 @@ impl ApplyOwner for FakeOwner {
             _ => String::new(),
         };
         if endpoint.contains("invalid") {
-            FAKE_BUILD_FAILS.fetch_add(1, Ordering::Relaxed);
+            if key == "runner/invalid-build" {
+                FAKE_BUILD_FAILS.fetch_add(1, Ordering::Relaxed);
+            }
             anyhow::bail!("invalid spec");
         }
         Ok(Arc::new(FakeClient {
@@ -240,6 +242,45 @@ async fn live_zero_replace_now_swaps_generation() {
     runner.await_join().await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn forced_rebuild_retires_live_client_before_failed_replacement_and_recovers() {
+    for endpoint in ["redis://invalid:6379", "redis://fail:6379"] {
+        let link = redis_ls("force-failure", "redis://up:6379", "1");
+        let first = FakeOwner::build("runner/force-failure", &link).unwrap();
+        let runner =
+            PersistentRunner::<FakeOwner>::spawn_with_published("runner/force-failure".to_string(), first.clone());
+        runner.post_ready(Arc::new(redis_ls("force-failure", endpoint, "2")), true);
+        wait_until(|| first.shutdowns.load(Ordering::Relaxed) == 1).await;
+        assert!(runner.current().is_none());
+        assert!(first.retired.load(Ordering::Relaxed));
+
+        runner.post_ready(Arc::new(link), false);
+        wait_until(|| runner.current().is_some()).await;
+        assert!(!Arc::ptr_eq(&first, &runner.current().unwrap()));
+        runner.begin_delete();
+        runner.await_join().await;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn forced_not_ready_survives_ordinary_replay_and_retires_live_client() {
+    let link = redis_ls("force-not-ready", "redis://up:6379", "1");
+    let first = FakeOwner::build("runner/force-not-ready", &link).unwrap();
+    let runner =
+        PersistentRunner::<FakeOwner>::spawn_with_published("runner/force-not-ready".to_string(), first.clone());
+    runner.post_not_ready(true);
+    runner.post_not_ready(false);
+    wait_until(|| first.shutdowns.load(Ordering::Relaxed) == 1).await;
+    assert!(runner.current().is_none());
+    assert!(first.retired.load(Ordering::Relaxed));
+
+    runner.post_ready(Arc::new(link), false);
+    wait_until(|| runner.current().is_some()).await;
+    assert!(!Arc::ptr_eq(&first, &runner.current().unwrap()));
+    runner.begin_delete();
+    runner.await_join().await;
+}
+
 #[tokio::test]
 async fn live_positive_handover_publishes_next_before_old_shutdown() {
     let first_ls = redis_ls("handover", "redis://up:6379", "1");
@@ -306,7 +347,7 @@ async fn superseded_at_publish_keeps_old_client_and_runner() {
     let first = FakeOwner::build("runner/stale-publish", &first_ls).unwrap();
     let runner = PersistentRunner::<FakeOwner>::spawn_with_published("runner/stale-publish".to_string(), first.clone());
     let supersede = runner.clone();
-    *runner.publish_entry.lock() = Some(Box::new(move || supersede.post_not_ready()));
+    *runner.publish_entry.lock() = Some(Box::new(move || supersede.post_not_ready(false)));
 
     runner.post_ready(Arc::new(redis_ls("stale-publish", "redis://up2:6379", "2")), false);
     wait_until(|| matches!(runner.desired.borrow().state, DesiredState::NotReady)).await;
@@ -343,7 +384,7 @@ async fn desired_post_during_swap_keeps_published_client_and_runner() {
         || {
             post = Some(std::thread::spawn(move || {
                 started_tx.send(()).unwrap();
-                posting_runner.post_not_ready();
+                posting_runner.post_not_ready(false);
                 done_tx.send(()).unwrap();
             }));
             started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
