@@ -143,7 +143,12 @@ pub(super) fn walk_transformations<O: TransformObserver>(
             }
             .into());
         }
-        let identity = transformation == TransformationKind::None;
+        // Lowercase changes ASCII uppercase bytes only. Keep an unchanged
+        // input borrowed instead of allocating and copying it into scratch.
+        // The step still emits checkpoints and charges its input/output work.
+        let lowercase = transformation == TransformationKind::Lowercase;
+        let identity =
+            transformation == TransformationKind::None || (lowercase && !current.iter().any(u8::is_ascii_uppercase));
         if !identity {
             let needed = projected_output(transformation, current.len())?.min(limits.max_output_bytes);
             let existing = output.capacity();
@@ -164,7 +169,9 @@ pub(super) fn walk_transformations<O: TransformObserver>(
                 .map_err(TransformWalkError::Observer)?;
             apply_one(transformation, current, output, limits.max_output_bytes)?;
         }
-        let changed = !identity && output.as_slice() != current;
+        // A non-identity lowercase step necessarily changed an uppercase byte;
+        // its preflight already establishes this without a second comparison.
+        let changed = !identity && (lowercase || output.as_slice() != current);
         let result = if identity { current } else { output.as_slice() };
         // apply_one enforces its output bound while producing bytes; the ordinary
         // path also historically checked its final output before charging work.

@@ -104,3 +104,16 @@ Re-evaluate physical capacity/work thresholds when inline sizes, retained scratc
 shared outcome destruction or broad dispatch ordering changes. Preserve successful
 semantic results, strict charged limits and terminal failure behavior; do not infer
 identical allocator-dependent admission from unchanged logical JSON rules.
+
+The common transformation walker also borrows unchanged ASCII-lowercase input.
+The no-uppercase preflight proves identity; finding uppercase proves change and
+replaces the output equality comparison. Input/output work and checkpoints remain
+charged, and later transforms still validate. This does not borrow persisted match
+payloads from the body or extend source lifetime. Preserve both multiMatch modes,
+exact work/output bounds, repeated-transform storage and owned-wrapper behavior.
+
+Local key-tree links use private NodeId(NonZeroUsize), with checked index-plus-one
+encoding so optional links occupy one machine word. Bounds-checked node access
+and scoped arena lifetime remain mandatory; these IDs are not persistent sink
+receipts. Key offsets/public limits remain usize. Growth admission uses actual
+Member/Frame size, including when layout changes reduce physical work or heap use.

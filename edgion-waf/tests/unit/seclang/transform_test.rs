@@ -312,3 +312,121 @@ fn normalize_path_stack_preserves_relative_absolute_and_windows_semantics() {
     assert_eq!(scratch.retained_bytes().unwrap(), 6);
     assert_eq!(probe.stages, [b"a".to_vec()]);
 }
+
+#[test]
+fn unchanged_lowercase_borrows_with_zero_scratch_and_preserves_work_limits() {
+    let input = b"lowercase-123\0\xff";
+    for multi_match in [false, true] {
+        for work in [input.len() * 2 - 1, input.len() * 2] {
+            let mut scratch = TransformScratch::default();
+            let mut probe = WalkProbe::default();
+            let result = walk_transformations(
+                input,
+                &[TransformationKind::Lowercase],
+                multi_match,
+                TransformLimits {
+                    max_output_bytes: input.len(),
+                    max_work_bytes: work,
+                },
+                &mut scratch,
+                &mut probe,
+            );
+            if work == input.len() * 2 {
+                assert!(matches!(result, Ok(CurrentTransform::Input)));
+                assert_eq!(probe.stages, [input.to_vec()]);
+                assert_eq!(probe.pointers, [input.as_ptr() as usize]);
+                assert_eq!(probe.work, [work]);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(TransformWalkError::Transformation(TransformError::WorkLimit { .. }))
+                ));
+            }
+            assert_eq!(probe.changed, [false]);
+            assert_eq!(scratch.retained_bytes().unwrap(), 0);
+        }
+    }
+}
+
+#[test]
+fn lowercase_identity_preserves_transformed_storage_and_later_validation() {
+    for multi_match in [false, true] {
+        let mut scratch = TransformScratch::default();
+        let mut probe = WalkProbe {
+            cap: 3,
+            ..Default::default()
+        };
+        assert!(matches!(
+            walk_transformations(
+                b"ABC",
+                &[TransformationKind::Lowercase, TransformationKind::Lowercase],
+                multi_match,
+                walk_limits(),
+                &mut scratch,
+                &mut probe,
+            ),
+            Ok(CurrentTransform::First)
+        ));
+        assert_eq!(scratch.retained_bytes().unwrap(), 3);
+        assert_eq!(probe.changed, [true, false]);
+        assert_eq!(probe.work, [6, 12]);
+        assert_eq!(probe.stages.last().unwrap(), b"abc");
+        assert_eq!(*probe.pointers.last().unwrap(), scratch.first.as_ptr() as usize);
+
+        let mut probe = WalkProbe {
+            cap: 100,
+            ..Default::default()
+        };
+        assert!(matches!(
+            walk_transformations(
+                b"abc",
+                &[TransformationKind::Lowercase, TransformationKind::HexEncode],
+                multi_match,
+                TransformLimits {
+                    max_output_bytes: 3,
+                    max_work_bytes: 100
+                },
+                &mut scratch,
+                &mut probe,
+            ),
+            Err(TransformWalkError::Transformation(TransformError::OutputLimit {
+                limit: 3
+            }))
+        ));
+    }
+}
+
+#[test]
+fn lowercase_borrowing_matches_ascii_mapping_for_every_byte() {
+    for byte in 0u8..=u8::MAX {
+        assert_eq!(
+            transform(TransformationKind::Lowercase, &[byte]),
+            [byte.to_ascii_lowercase()]
+        );
+    }
+    assert_eq!(transform(TransformationKind::Lowercase, b""), b"");
+}
+
+#[test]
+fn large_unchanged_lowercase_keeps_input_borrowed() {
+    let input = vec![b'x'; 256 * 1024];
+    let mut scratch = TransformScratch::default();
+    let mut probe = WalkProbe::default();
+    assert!(matches!(
+        walk_transformations(
+            &input,
+            &[TransformationKind::Lowercase],
+            false,
+            TransformLimits {
+                max_output_bytes: input.len(),
+                max_work_bytes: input.len() * 2,
+            },
+            &mut scratch,
+            &mut probe,
+        ),
+        Ok(CurrentTransform::Input)
+    ));
+    assert_eq!(probe.pointers, [input.as_ptr() as usize]);
+    assert_eq!(scratch.retained_bytes().unwrap(), 0);
+    assert_eq!(probe.work, [input.len() * 2]);
+}

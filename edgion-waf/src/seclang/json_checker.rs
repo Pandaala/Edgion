@@ -1,7 +1,7 @@
 //! Source-neutral JSON inspection with pooled object identity and no value tape.
 #[cfg(test)]
 use crate::seclang::measurements::{self, Event};
-use std::{cmp::Ordering, fmt, io::Write, mem::size_of};
+use std::{cmp::Ordering, fmt, io::Write, mem::size_of, num::NonZeroUsize};
 
 use super::json_scratch::{growth_target, heap_capacity, GrowthError};
 use smallvec::{Array, SmallVec};
@@ -175,6 +175,23 @@ impl<R: Copy> Default for Subtree<R> {
     }
 }
 
+// Index plus one lets Option use zero for an absent link without a separate
+// discriminant. IDs are scoped to the live node arena and never escape the reducer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NodeId(NonZeroUsize);
+
+impl NodeId {
+    fn new(index: usize) -> Result<Self, JsonCheckerError> {
+        NonZeroUsize::new(add(index, 1)?)
+            .map(Self)
+            .ok_or(JsonCheckerError::Arithmetic)
+    }
+
+    fn index(self) -> usize {
+        self.0.get() - 1
+    }
+}
+
 #[derive(Clone, Copy)]
 struct KeyRange {
     start: usize,
@@ -183,16 +200,16 @@ struct KeyRange {
 #[derive(Clone, Copy)]
 struct Member<R: Copy> {
     key: KeyRange,
-    left: Option<usize>,
-    right: Option<usize>,
+    left: Option<NodeId>,
+    right: Option<NodeId>,
     height: u8,
     value: Subtree<R>,
 }
 #[derive(Clone, Copy)]
 enum Container {
     Object {
-        root: Option<usize>,
-        pending: Option<usize>,
+        root: Option<NodeId>,
+        pending: Option<NodeId>,
         key_mark: usize,
         node_mark: usize,
     },
@@ -363,19 +380,19 @@ struct Reducer<R: Copy> {
 }
 
 impl<R: Copy> Reducer<R> {
-    fn member(&mut self, id: usize) -> Result<Member<R>, JsonCheckerError> {
+    fn member(&mut self, id: NodeId) -> Result<Member<R>, JsonCheckerError> {
         self.budget.work(1)?;
-        self.nodes.get(id).copied().ok_or(JsonCheckerError::State)
+        self.nodes.get(id.index()).copied().ok_or(JsonCheckerError::State)
     }
-    fn store(&mut self, id: usize, member: Member<R>) -> Result<(), JsonCheckerError> {
+    fn store(&mut self, id: NodeId, member: Member<R>) -> Result<(), JsonCheckerError> {
         self.budget.work(1)?;
-        *self.nodes.get_mut(id).ok_or(JsonCheckerError::State)? = member;
+        *self.nodes.get_mut(id.index()).ok_or(JsonCheckerError::State)? = member;
         Ok(())
     }
-    fn height(&mut self, id: Option<usize>) -> Result<u8, JsonCheckerError> {
+    fn height(&mut self, id: Option<NodeId>) -> Result<u8, JsonCheckerError> {
         id.map_or(Ok(0), |id| Ok(self.member(id)?.height))
     }
-    fn refresh(&mut self, id: usize) -> Result<(), JsonCheckerError> {
+    fn refresh(&mut self, id: NodeId) -> Result<(), JsonCheckerError> {
         let mut node = self.member(id)?;
         node.height = self
             .height(node.left)?
@@ -384,7 +401,7 @@ impl<R: Copy> Reducer<R> {
             .ok_or(JsonCheckerError::Arithmetic)?;
         self.store(id, node)
     }
-    fn rotate_left(&mut self, id: usize) -> Result<usize, JsonCheckerError> {
+    fn rotate_left(&mut self, id: NodeId) -> Result<NodeId, JsonCheckerError> {
         let mut a = self.member(id)?;
         let child = a.right.ok_or(JsonCheckerError::State)?;
         let mut b = self.member(child)?;
@@ -396,7 +413,7 @@ impl<R: Copy> Reducer<R> {
         self.refresh(child)?;
         Ok(child)
     }
-    fn rotate_right(&mut self, id: usize) -> Result<usize, JsonCheckerError> {
+    fn rotate_right(&mut self, id: NodeId) -> Result<NodeId, JsonCheckerError> {
         let mut a = self.member(id)?;
         let child = a.left.ok_or(JsonCheckerError::State)?;
         let mut b = self.member(child)?;
@@ -408,7 +425,7 @@ impl<R: Copy> Reducer<R> {
         self.refresh(child)?;
         Ok(child)
     }
-    fn balance(&mut self, id: usize) -> Result<usize, JsonCheckerError> {
+    fn balance(&mut self, id: NodeId) -> Result<NodeId, JsonCheckerError> {
         self.refresh(id)?;
         let mut node = self.member(id)?;
         let left = self.height(node.left)?;
@@ -448,7 +465,7 @@ impl<R: Copy> Reducer<R> {
         Ok(key.len().cmp(&existing.len()))
     }
     // Recursion follows a balanced index, never the untrusted document depth.
-    fn insert(&mut self, root: Option<usize>, key: &[u8]) -> Result<(usize, usize, bool), JsonCheckerError> {
+    fn insert(&mut self, root: Option<NodeId>, key: &[u8]) -> Result<(NodeId, NodeId, bool), JsonCheckerError> {
         let Some(id) = root else {
             let members = add(self.budget.usage.members, 1)?;
             Budget::check(members, self.budget.limits.max_members, JsonStructureLimit::Members)?;
@@ -475,7 +492,7 @@ impl<R: Copy> Reducer<R> {
             }
             self.budget.reserve(&mut self.nodes, 1)?;
             self.budget.work(1)?;
-            let id = self.nodes.len();
+            let id = NodeId::new(self.nodes.len())?;
             self.nodes.push(member);
             self.budget.usage.members = members;
             self.budget.usage.peak_members = self.budget.usage.peak_members.max(members);
@@ -516,7 +533,7 @@ impl<R: Copy> Reducer<R> {
     }
     fn drain<S: JsonCheckerSink<Receipt = R>>(
         &mut self,
-        root: Option<usize>,
+        root: Option<NodeId>,
         sink: &mut S,
     ) -> Result<Subtree<R>, JsonCheckerError> {
         let Some(id) = root else {

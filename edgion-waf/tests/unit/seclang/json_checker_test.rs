@@ -158,11 +158,11 @@ fn duplicates_collisions_and_canonical_order_at_every_split() {
     }
 }
 
-fn assert_avl(checker: &JsonChecker<Receipt>, root: Option<usize>) -> u8 {
+fn assert_avl(checker: &JsonChecker<Receipt>, root: Option<NodeId>) -> u8 {
     let Some(id) = root else {
         return 0;
     };
-    let node = checker.reducer.nodes[id];
+    let node = checker.reducer.nodes[id.index()];
     let left = assert_avl(checker, node.left);
     let right = assert_avl(checker, node.right);
     assert!((i16::from(left) - i16::from(right)).abs() <= 1);
@@ -183,7 +183,7 @@ fn all_rotations_and_closed_child_slot_reuse() {
             panic!("expected object");
         };
         assert_eq!(assert_avl(&checker, root), 2);
-        let node = checker.reducer.nodes[root.unwrap()];
+        let node = checker.reducer.nodes[root.unwrap().index()];
         assert_eq!(
             &checker.reducer.keys[node.key.start..node.key.start + node.key.len],
             b"b"
@@ -902,10 +902,21 @@ fn fixed_inline_parser_layout_is_reported_separately_from_heap_usage() {
     assert_eq!(checker.usage().retained_bytes, 0);
     assert_eq!(checker.lexical_usage().retained_bytes, 0);
     println!(
-        "json_inline_layout,checker={},stream={},key_buffer={},token_buffer={}",
+        "json_inline_layout,checker={},stream={},key_buffer={},token_buffer={},member={},frame={}",
         size_of::<JsonChecker<Receipt>>(),
         size_of::<JsonStream>(),
         size_of::<SmallVec<[u8; 256]>>(),
-        size_of::<SmallVec<[u8; 1024]>>()
+        size_of::<SmallVec<[u8; 1024]>>(),
+        size_of::<Member<Receipt>>(),
+        size_of::<Frame<Receipt>>()
     );
+}
+
+#[test]
+fn node_links_use_one_word_and_reject_index_overflow() {
+    assert_eq!(size_of::<Option<NodeId>>(), size_of::<usize>());
+    for index in [0, 1, 65_535, usize::MAX - 1] {
+        assert_eq!(NodeId::new(index).unwrap().index(), index);
+    }
+    assert_eq!(NodeId::new(usize::MAX), Err(JsonCheckerError::Arithmetic));
 }
