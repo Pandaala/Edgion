@@ -205,6 +205,118 @@ async fn run_once(
     Ok(seen)
 }
 
+/// A normal close must drain a response even when the peer's stream window
+/// forces DATA to remain queued while the connection processes GOAWAY.
+#[tokio::test]
+async fn normal_goaway_drains_a_flow_controlled_response_before_closing() {
+    let addr = start_backend().await;
+    for action in ["close", "goaway"] {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut sock = TcpStream::connect(addr).await.unwrap();
+            let mut block = Vec::new();
+            for (name, value) in [
+                (":method", "POST"),
+                (":scheme", "http"),
+                (":path", "/wire-proof"),
+                (":authority", "wire.proof"),
+                ("x-up-after-response", action),
+                ("x-up-reset-code", "NO_ERROR"),
+                ("x-up-resp-len", "16"),
+            ] {
+                put_header(&mut block, name, value);
+            }
+            let mut out = PREFACE.to_vec();
+            // SETTINGS_INITIAL_WINDOW_SIZE = 1: the remaining 15 bytes cannot
+            // leave the server until the client observes DATA and grants credit.
+            put_frame(&mut out, T_SETTINGS, 0, 0, &[0, 4, 0, 0, 0, 1]);
+            put_frame(&mut out, T_HEADERS, F_END_HEADERS | F_END_STREAM, 1, &block);
+            sock.write_all(&out).await.unwrap();
+
+            let mut received = Vec::new();
+            let mut response_ended = false;
+            let mut saw_goaway = false;
+            loop {
+                let frame = match read_frame(&mut sock).await {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        assert!(response_ended, "{action}: response cut short: {error}");
+                        break;
+                    }
+                };
+                let mut reply = Vec::new();
+                match frame.kind {
+                    T_SETTINGS | T_PING if frame.flags & F_ACK == 0 => {
+                        let payload = if frame.kind == T_PING { &frame.payload[..] } else { &[] };
+                        put_frame(&mut reply, frame.kind, F_ACK, 0, payload);
+                    }
+                    T_GOAWAY => {
+                        assert_eq!(&frame.payload[4..8], &[0; 4], "{action}: expected NO_ERROR");
+                        saw_goaway = true;
+                    }
+                    T_HEADERS if frame.stream == 1 => {
+                        assert_eq!(frame.flags & F_END_STREAM, 0);
+                    }
+                    T_DATA if frame.stream == 1 => {
+                        received.extend_from_slice(&frame.payload);
+                        response_ended = frame.flags & F_END_STREAM != 0;
+                        if !response_ended {
+                            assert_eq!(received.len(), 1, "the initial window must constrain DATA");
+                            put_frame(&mut reply, T_WINDOW_UPDATE, 0, 1, &15u32.to_be_bytes());
+                        }
+                    }
+                    T_RST_STREAM => panic!("{action}: unexpected response reset"),
+                    _ => {}
+                }
+                if !reply.is_empty() {
+                    sock.write_all(&reply).await.unwrap();
+                }
+            }
+            assert!(saw_goaway, "{action}: missing GOAWAY");
+            assert_eq!(received, b"edgion-transport", "{action}: incorrect response body");
+        })
+        .await
+        .expect("normal GOAWAY did not finish the response and close");
+    }
+}
+
+/// A mid-request close is an injected connection fault, even with NO_ERROR.
+/// It must not wait for a graceful-shutdown PING round trip or an open upload.
+#[tokio::test]
+async fn mid_request_close_remains_abrupt_without_ping_ack() {
+    let addr = start_backend().await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut sock = TcpStream::connect(addr).await.unwrap();
+        let mut block = Vec::new();
+        for (name, value) in [
+            (":method", "POST"),
+            (":scheme", "http"),
+            (":path", "/wire-proof"),
+            (":authority", "wire.proof"),
+            ("x-up-behavior", "close"),
+            ("x-up-at-bytes", "1"),
+        ] {
+            put_header(&mut block, name, value);
+        }
+        let mut out = PREFACE.to_vec();
+        put_frame(&mut out, T_SETTINGS, 0, 0, &[]);
+        put_frame(&mut out, T_HEADERS, F_END_HEADERS, 1, &block);
+        put_frame(&mut out, T_DATA, 0, 1, b"u");
+        sock.write_all(&out).await.unwrap();
+        let mut saw_goaway = false;
+        while let Ok(frame) = read_frame(&mut sock).await {
+            if frame.kind == T_GOAWAY {
+                // Abrupt GOAWAY names the accepted stream; graceful shutdown
+                // first advertises MAX_STREAM_ID and then waits for PING ACK.
+                assert_eq!(&frame.payload[..8], &[0, 0, 0, 1, 0, 0, 0, 0]);
+                saw_goaway = true;
+            }
+        }
+        assert!(saw_goaway, "the fault must emit GOAWAY before closing");
+    })
+    .await
+    .expect("mid-request close waited for the open request or a PING ACK");
+}
+
 /// THE proof this module exists for: a complete response **followed by**
 /// RST_STREAM(NO_ERROR), on the wire, in that order, every single run.
 ///

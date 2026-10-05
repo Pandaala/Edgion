@@ -61,9 +61,44 @@ The CI source-isolation tree check remains separate: it proves the Gateway
 binary contains only fork Pingora packages (no registry-sourced Pingora may
 enter the dependency graph).
 
+## Synchronization evidence boundaries
+
+Source consistency, upstream ancestry, and behavioral acceptance are separate
+checks. A passing source-policy guard establishes one locked fork family; it
+does not establish that a synchronization test matrix passed or that an old
+published head has an immutable remote reference. Record the actual consumer
+HEAD, locked source, remote branch observation, and local fork changes separately.
+Inspect resolved Cargo metadata as well as the manifest to exclude a local
+override from consumer verification.
+
+P090-002's scoped investigation on 2026-10-05 confirmed that consumer
+`d05d95576d8d046b3221b1d8e444123fc85e7f89` locks all 16 fork packages to
+`0b0d8bba9609655bfd7db0fe0add6818bc0ee937`. The adopted upstream milestone
+`702f69015e53f7244d6ad2e743de571d859a70a4` is its ancestor. The observed
+remote branch head was `ce7b8e805fa34d7bc0240a7253a254b9b55582a1`; its
+later changes are not implicitly selected or validated by the consumer lock.
+Normal consumer metadata resolved 15 active fork packages, all from that Git
+revision's Cargo checkout; the complete lock family still contains 16.
+
+The fork's stale candidate/publication prose is being corrected separately
+from historical snapshots. Its local uncommitted test corrections cannot
+turn the locked revision's failing tests into passing results. Reusing a
+Cargo target directory with a source archive's old timestamps can also reuse
+stale local-crate artifacts: require demonstrable recompilation before using
+such an archive as verification evidence.
+
+The original [synchronization task](../../../../tasks/pingora-0.9.0/002-fork-baseline-synchronization.md)
+now records verified local test corrections and consumer acceptance; it remains
+open for publication provenance. Candidate success is not evidence that its
+uncommitted test changes entered the locked source or a completed release.
+Re-evaluate when the consumer lock, tested worktree,
+dependency resolution, or remote publication evidence changes.
+
 ## Resolution references
 
 - The user authorized updating the development selector from `edgion_v5` to
   `edgion_0.9.0_v1` to match the existing manifest and lockfile. URL, selector
   consistency, no-rev and single-commit enforcement remain unchanged.
 - `BODY-WORK-008` — 2026-07-27.
+- `P090-002` — scoped documentation/provenance correction and locked-baseline
+  verification; remaining acceptance is tracked in the original task.

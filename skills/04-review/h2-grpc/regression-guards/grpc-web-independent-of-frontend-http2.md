@@ -73,7 +73,7 @@ The follow-up `add-grpc-web-http1-only-gateway-integration` extends the existing
 `HTTPRoute/Protocol/GrpcWeb` selection with a second suite on port 31083, resolved
 through its own `ports.json` key. Its Gateway sets
 `edgion.io/enable-http2: "false"`; the original port 31081 listener remains
-H2-enabled. Both HTTPRoutes reach the existing `test-grpc` Service using
+H2-enabled. Both HTTPRoutes reach the dedicated `test-grpcweb` Service using
 `appProtocol: kubernetes.io/h2c`. Matching Gateway/HTTPRoute fixtures are present
 in the local and Kubernetes configuration trees.
 The Kubernetes Gateway Service also exposes TCP 31083, because the test client
@@ -124,6 +124,32 @@ or independent H2 frame-level coverage.
 Resolution: `add-grpc-web-http1-only-gateway-integration` (B0183 follow-up), fixed
 by extending the existing suite after separate user authorization to add tests.
 The runtime correction and its historical module-level tests remain unchanged.
+
+### Shared-suite backend identity (P090-002)
+
+The 2026-10-05 combined local acceptance run exposed a fixture collision:
+GrpcWeb and GRPCRoute/Basic both declared `edgion-test/test-grpc`, but only
+GrpcWeb supplied `appProtocol: kubernetes.io/h2c`. Loading GRPCRoute/Basic
+last removed that protocol hint. Both gRPC-Web success cases then reached
+the H2-only origin using HTTP/1, producing upstream `InvalidHTTPHeader` and
+a body-encoded INTERNAL status instead of a protobuf reply.
+
+GrpcWeb now owns `test-grpcweb`, including its local EndpointSlice and both
+HTTPRoute backendRefs. Kubernetes uses the same Service identity with the
+existing `app: edgion-test-server` selector, allowing Kubernetes to generate
+the endpoints. GRPCRoute/Basic retains its original hint-free Service, so
+native-gRPC protocol inference coverage is not weakened. Keep these resource
+identities distinct when combining suites; a green standalone run cannot
+establish that the merged fixtures preserve the protocol hint.
+
+The corrected fixtures were loaded together, with GRPCRoute/Basic after
+GrpcWeb, in the standard shared topology
+`tmp/integration_testing/testing_20261005_210018`. All four gRPC-Web cases,
+three GRPCRoute/Basic cases, and 32 BodyPlugins cases passed, followed by the
+final residue check. The test client received the actual Gateway binary's
+`--print-build-capabilities` output for the BodyPlugins capability gate.
+Workspace checks, both suite-parity scripts, and static Kubernetes selector /
+backend-reference checks passed. No live Kubernetes run was performed.
 
 ## Re-evaluation triggers
 

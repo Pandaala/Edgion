@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: test-grpc
+  name: test-grpcweb
   namespace: edgion-test
 spec:
   ports:

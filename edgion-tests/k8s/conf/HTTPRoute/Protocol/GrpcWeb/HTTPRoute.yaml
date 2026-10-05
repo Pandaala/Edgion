@@ -15,5 +15,5 @@ spec:
         type: PathPrefix
         value: /test.TestService
     backendRefs:
-    - name: test-grpc
+    - name: test-grpcweb
       port: 30021

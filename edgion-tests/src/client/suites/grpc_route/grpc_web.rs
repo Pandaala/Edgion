@@ -5,7 +5,7 @@
 // gRPC trailers back into a 0x80-prefixed body frame for the grpc-web client.
 //
 // Required config (edgion-tests/integration/conf/HTTPRoute/Protocol/GrpcWeb/):
-// - Service_test-grpc.yaml (appProtocol: kubernetes.io/h2c), EndpointSlice_test-grpc.yaml
+// - Service_test-grpcweb.yaml (appProtocol: kubernetes.io/h2c), EndpointSlice_test-grpcweb.yaml
 // - Gateway.yaml, HTTPRoute.yaml (host grpcweb.test.example.com)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};

@@ -121,11 +121,16 @@ pub async fn start_transport_h2_server(port: u16) -> Result<()> {
 /// What one turn of the connection loop produced.
 type Accepted = Option<Result<(http::Request<h2::RecvStream>, h2s::SendResponse<Bytes>), h2::Error>>;
 
+enum Goaway {
+    DrainResponse,
+    Abrupt(h2::Reason),
+}
+
 enum ConnStep {
     /// Boxed only to keep the variants a similar size — an accepted stream
     /// carries a whole `Request` and a `SendResponse`.
     Accepted(Box<Accepted>),
-    Goaway(h2::Reason),
+    Goaway(Goaway),
     /// A stream task asked to be told when the connection had been driven —
     /// see [`StreamHandles::wait_for_flush`].
     Flushed(oneshot::Sender<()>),
@@ -134,7 +139,7 @@ enum ConnStep {
 /// A stream task's handles on the connection loop.
 #[derive(Clone)]
 struct StreamHandles {
-    goaway: mpsc::Sender<h2::Reason>,
+    goaway: mpsc::Sender<Goaway>,
     flush: mpsc::Sender<oneshot::Sender<()>>,
     faults: mpsc::Sender<retry_wire::Command>,
 }
@@ -190,7 +195,7 @@ async fn handle_conn(tcp: TcpStream, conn: u32) -> Result<(), String> {
     // Streams are served in their own tasks so that resetting one stream never
     // tears the connection down — a case asserting "the pooled H2 connection
     // stayed usable" needs the backend not to close it.
-    let (goaway_tx, mut goaway_rx) = mpsc::channel::<h2::Reason>(8);
+    let (goaway_tx, mut goaway_rx) = mpsc::channel::<Goaway>(8);
     let (flush_tx, mut flush_rx) = mpsc::channel::<oneshot::Sender<()>>(8);
     let handles = StreamHandles {
         goaway: goaway_tx,
@@ -225,13 +230,23 @@ async fn handle_conn(tcp: TcpStream, conn: u32) -> Result<(), String> {
             ConnStep::Flushed(ack) => {
                 let _ = ack.send(());
             }
-            ConnStep::Goaway(reason) => {
+            ConnStep::Goaway(goaway) => {
+                let reason = match goaway {
+                    Goaway::DrainResponse => h2::Reason::NO_ERROR,
+                    Goaway::Abrupt(reason) => reason,
+                };
                 recorder::record(
                     TransportEvent::new(LISTENER_H2, conn, 0, recorder::KIND_RESP_DONE)
                         .code(&reason_name(reason))
                         .detail("backend sent GOAWAY"),
                 );
-                h2conn.abrupt_shutdown(reason);
+                match goaway {
+                    // Normal completion must drain DATA still waiting for peer
+                    // flow-control credit. Mid-request faults remain abrupt,
+                    // even when they use the NO_ERROR code.
+                    Goaway::DrainResponse => h2conn.graceful_shutdown(),
+                    Goaway::Abrupt(reason) => h2conn.abrupt_shutdown(reason),
+                }
             }
             ConnStep::Accepted(accepted) => match *accepted {
                 None => break,
@@ -547,7 +562,7 @@ async fn handle_stream(
                 ctx.event(recorder::KIND_RESP_DONE)
                     .detail("close: HTTP/2 has no connection close per stream, sending GOAWAY(NO_ERROR)"),
             );
-            let _ = handles.goaway.send(h2::Reason::NO_ERROR).await;
+            let _ = handles.goaway.send(Goaway::Abrupt(h2::Reason::NO_ERROR)).await;
         }
     }
 }
@@ -821,7 +836,7 @@ async fn respond_h2(
     match script.after_response {
         AfterResponse::Linger => {}
         AfterResponse::Close => {
-            let _ = handles.goaway.send(h2::Reason::NO_ERROR).await;
+            let _ = handles.goaway.send(Goaway::DrainResponse).await;
         }
         AfterResponse::Reset => {
             // A complete response, THEN RST_STREAM with the requested code.
@@ -875,7 +890,13 @@ async fn respond_h2(
             }
         }
         AfterResponse::Goaway => {
-            let _ = handles.goaway.send(parse_reason(&script.reset_code)).await;
+            let reason = parse_reason(&script.reset_code);
+            let goaway = if reason == h2::Reason::NO_ERROR {
+                Goaway::DrainResponse
+            } else {
+                Goaway::Abrupt(reason)
+            };
+            let _ = handles.goaway.send(goaway).await;
         }
     }
 }
