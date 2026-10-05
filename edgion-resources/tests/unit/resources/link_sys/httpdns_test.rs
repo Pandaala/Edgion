@@ -66,6 +66,7 @@ fn http_dns_connection_roundtrips_without_target() {
     let conn: HttpDnsConnection = serde_yaml::from_str(yaml).expect("parse lean connection");
     assert_eq!(conn.timeout_ms, Some(1500));
     assert!(conn.tls.is_none());
+    assert!(!conn.allow_loopback);
 
     // Round-trip: serialized form must not contain a `target` key.
     let out = serde_yaml::to_string(&conn).unwrap();
@@ -76,6 +77,45 @@ fn http_dns_connection_roundtrips_without_target() {
 }
 
 #[test]
+fn loopback_policy_is_typed_schema_visible_and_survives_linksys_transport() {
+    use crate::resources::link_sys::LinkSys;
+    for allow in [false, true] {
+        let input = serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "LinkSys",
+            "metadata": {"name": "dns", "namespace": "default"},
+            "spec": {"type": "httpdns", "config": {
+                "preset": "aliyun",
+                "connection": {"allowLoopback": allow}
+            }}
+        });
+        let link: LinkSys = serde_json::from_value(input).unwrap();
+        let config = link.spec.config.as_http_dns().unwrap();
+        assert_eq!(config.connection.as_ref().unwrap().allow_loopback, allow);
+        assert!(config.validate().is_empty());
+        let serialized = serde_json::to_value(&link).unwrap();
+        assert_eq!(serialized["spec"]["config"]["connection"]["allowLoopback"], allow);
+        let restored: LinkSys = serde_json::from_value(serialized).unwrap();
+        assert_eq!(
+            restored
+                .spec
+                .config
+                .as_http_dns()
+                .unwrap()
+                .connection
+                .as_ref()
+                .unwrap()
+                .allow_loopback,
+            allow
+        );
+    }
+    assert!(serde_json::from_value::<HttpDnsConnection>(serde_json::json!({"allowLoopback": "true"})).is_err());
+    let schema = serde_json::to_value(schemars::schema_for!(HttpDnsConnection)).unwrap();
+    assert_eq!(schema["properties"]["allowLoopback"]["type"], "boolean");
+    assert_eq!(schema["properties"]["allowLoopback"]["default"], false);
+}
+
+#[test]
 fn http_dns_config_with_lean_connection_roundtrips() {
     let cfg = HttpDnsResolverConfig {
         preset: Some(HttpDnsPreset::Aliyun),
@@ -83,6 +123,7 @@ fn http_dns_config_with_lean_connection_roundtrips() {
         response: HttpDnsResponseFormat::default(),
         fallback: HttpDnsFallback::System,
         connection: Some(HttpDnsConnection {
+            allow_loopback: false,
             tls: None,
             timeout_ms: Some(2000),
         }),

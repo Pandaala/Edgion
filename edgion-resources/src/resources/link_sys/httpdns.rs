@@ -14,14 +14,19 @@ use crate::resources::common::TlsConfig;
 ///
 /// Deliberately lean: an HTTP DNS resolver targets a `urlTemplate` (not a
 /// Kubernetes Service), so — unlike the webhook `ExternalHttpConnection` — it
-/// has NO required `target`/`WebhookTarget`. Only the two fields the resolver
-/// core actually consumes are modeled: outbound TLS and a request timeout.
+/// has NO required `target`/`WebhookTarget`. Settings cover outbound TLS,
+/// request timeout, and the explicit local-service exception.
 //
 // NOTE: no `PartialEq`/`Eq` — `TlsConfig` derives neither, so structural
 // equality is unavailable here (and unnecessary). Do not add them.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpDnsConnection {
+    /// Allow this HTTP DNS endpoint to use loopback addresses. Default false.
+    /// Link-local and unspecified addresses remain blocked; private addresses
+    /// remain allowed. Applies to both literal and resolved endpoint addresses.
+    #[serde(default)]
+    pub allow_loopback: bool,
     /// Outbound TLS configuration (custom CA, mTLS, SAN checks) for the HTTPS
     /// request to the HTTP DNS endpoint. Absent = system CA bundle, no client
     /// certificate.

@@ -15,6 +15,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [HTTP DNS endpoint egress and bootstrap policy](regression-guards/httpdns-endpoint-egress.md)
+
 - [DSL `http.call` shared client disables env proxy — FIXED (was FB-01)](regression-guards/dsl-http-call-no-env-proxy.md)
 - [DSL `http.call` re-checks `block_private_ips` on every redirect hop — FIXED (F-012)](regression-guards/dsl-http-call-redirect-per-hop.md)
 - [Dsl ssrf guard naming](regression-guards/dsl-ssrf-guard-naming.md)

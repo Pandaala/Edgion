@@ -57,6 +57,51 @@ waiting for capacity is reconsidered when a slot is removed or the limit increas
 
 ⚠️ **All credentials (passwords, tokens, API keys, HMAC keys, client private keys) must come from Secret references. Inlining sensitive fields in the CRD is rejected at parse time** — the auth and TLS structs enable `deny_unknown_fields`, so writing `username`, `password`, `bearerToken`, `apiKeyId`, `hmacKey`, or `clientKey` directly in YAML fails validation rather than being silently ignored.
 
+## HTTP DNS resolver
+
+`type: httpdns` queries an HTTP(S) service for domain addresses. For a local
+HTTP DNS sidecar, explicitly enable loopback access on that LinkSys:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: local-dns
+  namespace: default
+spec:
+  type: httpdns
+  config:
+    urlTemplate: "http://127.0.0.1:8080/resolve?host={domain}"
+    connection:
+      allowLoopback: true
+      timeoutMs: 3000
+    response:
+      kind: json
+      ipPath: ips
+    fallback:
+      type: system
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `connection.allowLoopback` | Boolean | `false` | Permit this HTTP DNS service to use `127.0.0.0/8` or `::1`. |
+
+The policy checks both literal URL addresses and addresses resolved from service
+hostnames, including IPv4-mapped IPv6. Private IPv4 and IPv6 unique-local services
+are allowed. Link-local (including metadata) and unspecified addresses remain
+blocked even with `allowLoopback: true`. Proxy environment variables are ignored
+and redirects are not followed. A blocked endpoint uses the configured
+`fallback`, just like a failed HTTP request; `none` returns a resolution error.
+
+The HTTP DNS service hostname always uses the system resolver for bootstrap;
+it never uses itself for resolution. This HTTP endpoint policy does not restrict
+the system DNS server or an explicitly configured standard-DNS fallback server.
+In separate Controller and Gateway Pods, localhost refers to each Pod separately;
+deploy the local service beside every process that performs these queries.
+Changing this setting changes the Gateway DNS cache identity for subsequent lookups.
+The explicit integration-testing mode retains its test-only loopback exception;
+do not enable that mode in production.
+
 ## Credential model
 
 All connectors share the same credential conventions.

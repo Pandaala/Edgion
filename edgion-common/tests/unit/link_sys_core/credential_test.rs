@@ -374,6 +374,7 @@ fn mk_httpdns_linksys(
 fn tls_ready_httpdns_false_when_client_cert_unresolved() {
     use edgion_resources::resources::link_sys::httpdns::HttpDnsConnection;
     let ls = mk_httpdns_linksys(Some(HttpDnsConnection {
+        allow_loopback: false,
         tls: Some(tls_with_unresolved_client_cert()),
         timeout_ms: None,
     }));

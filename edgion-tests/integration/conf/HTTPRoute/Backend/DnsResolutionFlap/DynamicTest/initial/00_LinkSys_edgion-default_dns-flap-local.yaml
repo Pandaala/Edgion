@@ -9,6 +9,8 @@ metadata:
 spec:
   type: httpdns
   config:
+    connection:
+      allowLoopback: true
     urlTemplate: "http://127.0.0.1:30001/dns/resolve?host={domain}&ip=127.0.0.1"
     response:
       kind: json

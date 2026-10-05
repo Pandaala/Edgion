@@ -631,7 +631,7 @@ async fn resolve_for_spec(ctx: &HandlerContext, owner: &ResourceRef, config: &mu
             drive_standard(ctx, owner, kafka_config.sasl.as_mut(), kafka_config.tls.as_mut()).await
         }
         SystemConfig::HttpDns(h) => {
-            // `connection` is the lean `HttpDnsConnection { tls, timeout_ms }`;
+            // `connection` holds HTTP DNS TLS, timeout, and loopback policy;
             // its outbound TLS refs get the same treatment as every other
             // provider. Non-TLS secretRef resolution for httpdns (if any is
             // added later) stays deferred; TLS is resolved here like the rest.

@@ -1,5 +1,16 @@
 use super::*;
 
+#[test]
+fn httpdns_loopback_policy_changes_cache_fingerprint() {
+    let mut config: HttpDnsResolverConfig = serde_json::from_value(serde_json::json!({
+        "preset": "aliyun", "connection": {"allowLoopback": false}
+    }))
+    .unwrap();
+    let before = ResolverSpec::HttpDns(Box::new(config.clone())).fingerprint();
+    config.connection.as_mut().unwrap().allow_loopback = true;
+    assert_ne!(before, ResolverSpec::HttpDns(Box::new(config)).fingerprint());
+}
+
 #[tokio::test]
 async fn system_spec_resolves_localhost() {
     let addrs = resolve(&ResolverSpec::System, "localhost").await.expect("resolves");
@@ -57,6 +68,7 @@ fn httpdns_fingerprint_redacts_resolved_secret_material() {
         response: HttpDnsResponseFormat::default(),
         fallback: HttpDnsFallback::System,
         connection: Some(HttpDnsConnection {
+            allow_loopback: false,
             tls: Some(tls),
             timeout_ms: None,
         }),

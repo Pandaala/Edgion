@@ -52,6 +52,48 @@ CRD 的 `spec.type` 接受开放字符串，新增受支持的连接器名称不
 
 ⚠️ **所有凭据（密码、令牌、API 密钥、HMAC 密钥、客户端私钥）必须通过 Secret 引用传入。不允许在 CRD 中内联敏感字段**——认证和 TLS 结构体开启了 `deny_unknown_fields`，直接在 YAML 中写入 `username`、`password`、`bearerToken`、`apiKeyId`、`hmacKey` 或 `clientKey` 会导致校验失败，而非被静默忽略。
 
+## HTTP DNS 解析服务
+
+`type: httpdns` 通过 HTTP(S) 服务查询域名地址。使用本机 HTTP DNS 辅助服务时，
+需要在对应 LinkSys 上明确允许本机地址：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: local-dns
+  namespace: default
+spec:
+  type: httpdns
+  config:
+    urlTemplate: "http://127.0.0.1:8080/resolve?host={domain}"
+    connection:
+      allowLoopback: true
+      timeoutMs: 3000
+    response:
+      kind: json
+      ipPath: ips
+    fallback:
+      type: system
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `connection.allowLoopback` | Boolean | `false` | 允许该 HTTP DNS 服务使用 `127.0.0.0/8` 或 `::1`。 |
+
+检查覆盖 URL 中的 IP 字面量和服务域名解析出的地址，也覆盖 IPv4-mapped IPv6。
+允许 IPv4 私网和 IPv6 unique-local 地址；即使开启 `allowLoopback`，
+链路本地地址（包括元数据地址）和未指定地址仍被拒绝。客户端忽略代理环境变量，
+不跟随重定向。地址被拒绝时与 HTTP 请求失败一样执行配置的 `fallback`；
+`none` 表示返回解析错误。
+
+HTTP DNS 服务自身的域名始终通过系统解析器解析，不会递归使用自身。
+此 HTTP 服务地址策略不限制系统 DNS 服务器或显式配置的普通 DNS 回退服务器。
+Controller 和 Gateway 位于不同 Pod 时，localhost 分别指向各自的 Pod，
+实际执行查询的进程旁都需要部署对应本机服务。
+修改此设置会改变 Gateway 后续查询使用的 DNS 缓存标识。
+显式集成测试模式保留仅用于测试的本机地址例外，生产环境不可启用该模式。
+
 ## 凭据模型
 
 所有连接器共享相同的凭据约定。

@@ -417,8 +417,14 @@ Key fields:
 - `preset` (`aliyun` | `tencent`) — selects the response **format** (Aliyun JSON `ips`; Tencent DNSPod `;`-delimited) plus a best-effort built-in URL. The built-in URLs are plain HTTP against the vendors' public resolving IPs and are account-less, so for real vendor accounts combine `preset` with an explicit `urlTemplate`.
 - `urlTemplate` — request URL with a `{domain}` placeholder. **Wins over a preset's built-in URL**, so `preset` + `urlTemplate` = the preset's response format with a custom (account-scoped / correct-scheme) endpoint. Required only when no `preset` is set.
 - `response` — parsing rules (`json` with `ipPath`, or `delimited` with `delimiter`); ignored when a `preset` is set.
-- `connection` — lean `{ tls, timeoutMs }` (no `target`); outbound TLS + request timeout for the fetch.
+- `connection` — `{ tls, timeoutMs, allowLoopback }` (no `target`); outbound TLS, request timeout, and per-resolver loopback exception (default false).
 - `fallback` — `system` | `dns` (server list) | `none`, applied on fetch/parse failure.
+
+Endpoint hostnames bootstrap through System DNS with the shared EgressResolver;
+IP literals are classified before sending. RFC1918/ULA remain allowed;
+link-local and unspecified addresses remain blocked even with allowLoopback.
+The explicit integration-testing mode keeps the shared loopback exception.
+See [operator configuration](../../../docs/en/ops-guide/infrastructure/connectors.md#http-dns-resolver).
 
 ### `type: credentialSource`
 

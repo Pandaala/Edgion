@@ -7,13 +7,17 @@
 //! bound on the response body so a malicious/buggy endpoint cannot stream an
 //! unbounded body into memory.
 
+use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use edgion_resources::resources::link_sys::httpdns::HttpDnsConnection;
 
 use super::httpdns::HttpDnsFetcher;
-use super::DnsError;
+use super::{DnsError, ResolverSpec};
+use crate::egress::{classify_ip, EgressPolicy, EgressResolver, IpClass};
 use crate::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig};
+use crate::test_mode::is_integration_testing_mode;
 
 /// Default per-request timeout when the resolver config does not set one.
 const DEFAULT_HTTP_DNS_TIMEOUT_MS: u64 = 3000;
@@ -28,6 +32,7 @@ const MAX_HTTP_DNS_BODY_BYTES: usize = 64 * 1024;
 pub struct ReqwestHttpDnsFetcher {
     client: reqwest::Client,
     max_response_bytes: usize,
+    allow_loopback: bool,
 }
 
 impl ReqwestHttpDnsFetcher {
@@ -40,6 +45,18 @@ impl ReqwestHttpDnsFetcher {
     ///   shared client factory's defaults.
     pub fn new(conn: Option<&HttpDnsConnection>) -> Result<Self, DnsError> {
         let timeout_ms = conn.and_then(|c| c.timeout_ms).unwrap_or(DEFAULT_HTTP_DNS_TIMEOUT_MS);
+        // Match the canonical resolver's test exception on the literal path too.
+        let allow_loopback = conn.is_some_and(|c| c.allow_loopback) || cfg!(test) || is_integration_testing_mode();
+        // Bootstrap is always System: resolving the endpoint through HTTP DNS
+        // itself would recurse. Return only admitted addresses to the connector,
+        // rather than checking DNS once and letting reqwest resolve it again.
+        let resolver = EgressResolver::new_with_options(
+            ResolverSpec::System,
+            EgressPolicy { block_private: false },
+            Duration::ZERO,
+            allow_loopback,
+            None,
+        );
         // Pass TLS only when explicitly enabled; the client factory treats
         // `None` as "no custom TLS" (default roots), per its contract.
         let tls = conn.and_then(|c| c.tls.clone()).filter(|t| t.enabled);
@@ -48,12 +65,14 @@ impl ReqwestHttpDnsFetcher {
             disable_proxy: true,
             tls,
             tls_context: Some("HttpDns"),
+            dns_resolver: Some(Arc::new(resolver)),
             ..Default::default()
         };
         let client = build_outbound_client(cfg).map_err(|e| DnsError::Http(e.to_string()))?;
         Ok(Self {
             client,
             max_response_bytes: MAX_HTTP_DNS_BODY_BYTES,
+            allow_loopback,
         })
     }
 }
@@ -61,6 +80,25 @@ impl ReqwestHttpDnsFetcher {
 #[async_trait::async_trait]
 impl HttpDnsFetcher for ReqwestHttpDnsFetcher {
     async fn get(&self, url: &str) -> Result<String, DnsError> {
+        let url = reqwest::Url::parse(url).map_err(|_| DnsError::Http("invalid HTTP DNS endpoint URL".into()))?;
+        // reqwest skips custom DNS for literals. Classify the normalized URL
+        // host, including bracketed IPv6, and send this exact parsed URL.
+        if let Some(ip) = url
+            .host_str()
+            .and_then(|host| super::strip_brackets(host).parse::<IpAddr>().ok())
+        {
+            match classify_ip(ip) {
+                IpClass::Loopback if !self.allow_loopback => {
+                    return Err(DnsError::Http("HTTP DNS endpoint blocked: loopback".into()));
+                }
+                IpClass::LinkLocal | IpClass::Unspecified => {
+                    return Err(DnsError::Http(
+                        "HTTP DNS endpoint blocked: link-local or unspecified".into(),
+                    ));
+                }
+                _ => {}
+            }
+        }
         let mut resp = self
             .client
             .get(url)

@@ -77,15 +77,26 @@ impl DnsFlapFailingTestSuite {
     fn test_resolution_fails() -> TestCase {
         TestCase::new(
             "resolution_fails",
-            "dead httpdns resolver with fallback:none returns 5xx",
+            "unavailable or blocked httpdns resolver returns 5xx without calling the live resolver",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    let before = match live_resolver_hits(&ctx).await {
+                        Ok(n) => n,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
                     match flap_status(&ctx).await {
-                        Ok(s) if s >= 500 => TestResult::passed_with_message(
-                            start.elapsed(),
-                            format!("resolution failed as expected ({s})"),
-                        ),
+                        Ok(s) if s >= 500 => match live_resolver_hits(&ctx).await {
+                            Ok(after) if after == before => TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("resolution failed as expected ({s}); live resolver not called"),
+                            ),
+                            Ok(after) => TestResult::failed(
+                                start.elapsed(),
+                                format!("old live resolver still used: {before} -> {after}"),
+                            ),
+                            Err(e) => TestResult::failed(start.elapsed(), e),
+                        },
                         Ok(s) => TestResult::failed(start.elapsed(), format!("expected 5xx, got {s}")),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }

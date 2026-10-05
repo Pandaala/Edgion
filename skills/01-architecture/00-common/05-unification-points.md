@@ -161,6 +161,11 @@ not in-process checks.
 
 ### 5. DNS resolution — Unified core, deliberate partial adoption
 
+HTTP DNS endpoint connections use Common's `EgressResolver` with fixed System
+bootstrap and literal pre-send classification. Private services remain allowed;
+`connection.allowLoopback` defaults false, and link-local/unspecified remain
+denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/httpdns-endpoint-egress.md).
+
 - **Canon**: `edgion-common/src/dns/` — `ResolverSpec`
   (`System` | `StandardDns` via hickory-resolver | `HttpDns` via the LinkSys
   httpdns config), with `fingerprint()` as the cache-key component. Controller

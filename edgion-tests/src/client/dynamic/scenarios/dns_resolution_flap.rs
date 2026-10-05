@@ -42,6 +42,12 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
         // Hot-reload the Service's resolver-ref annotation to a live httpdns.
         ctx.apply_dir("updates/to_working").await?;
         ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
+        // A LinkSys update must also replace the endpoint policy generation.
+        // Link-local remains denied even with an explicit loopback exception.
+        ctx.apply_dir("updates/to_blocked").await?;
+        ctx.wait_phase(scenario, "failing", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_restored").await?;
+        ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
         Ok(())
     })
 }

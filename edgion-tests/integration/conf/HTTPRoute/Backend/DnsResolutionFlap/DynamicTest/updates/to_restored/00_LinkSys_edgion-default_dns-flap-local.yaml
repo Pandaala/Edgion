@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: dns-flap-local
+  namespace: edgion-default
+spec:
+  type: httpdns
+  config:
+    urlTemplate: "http://127.0.0.1:30001/dns/resolve?host={domain}&ip=127.0.0.1"
+    connection:
+      allowLoopback: true
+    response:
+      kind: json
+      ipPath: ips
+    fallback:
+      type: system
