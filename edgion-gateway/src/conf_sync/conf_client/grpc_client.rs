@@ -2,6 +2,7 @@ use crate::conf_sync::conf_client::cert_watch::CertPaths;
 use crate::conf_sync::conf_client::rotation::EndpointRotator;
 use crate::conf_sync::conf_client::ConfigClient;
 use arc_swap::ArcSwap;
+use edgion_common::cert_util::LeafValidity;
 use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
 use edgion_common::conf_sync::payload::MAX_MESSAGE_BYTES;
 use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
@@ -63,11 +64,19 @@ fn mark_confsync_connected() {
     );
 }
 
+/// A candidate's handle and certificate metadata always travel together.
+#[derive(Clone)]
+struct PreparedClient {
+    client: ConfigSyncClientService<Channel>,
+    validity: Option<LeafValidity>,
+}
+
 /// One coherent installed transport generation. Candidates never mutate it.
 struct InstalledChannel {
     address: String,
     index: usize,
     client: ConfigSyncClientService<Channel>,
+    validity: Option<LeafValidity>,
     generation: Arc<CancellationToken>,
 }
 
@@ -88,16 +97,17 @@ impl ChannelManager {
         &self,
         address: String,
         index: usize,
-        client: ConfigSyncClientService<Channel>,
+        prepared: PreparedClient,
         rotator: &mut EndpointRotator,
     ) -> Arc<InstalledChannel> {
         let old = self.installed.load_full();
-        self.config_client.set_all_grpc_clients(client.clone()).await;
+        self.config_client.set_all_grpc_clients(prepared.client.clone()).await;
         let generation = Arc::new(CancellationToken::new());
         let installed = Arc::new(InstalledChannel {
             address,
             index,
-            client,
+            client: prepared.client,
+            validity: prepared.validity,
             generation: generation.clone(),
         });
         self.installed.store(installed.clone());
@@ -112,7 +122,7 @@ impl ChannelManager {
         expected: Arc<InstalledChannel>,
         index: usize,
         revision: u64,
-        client: ConfigSyncClientService<Channel>,
+        prepared: PreparedClient,
     ) -> anyhow::Result<Option<Arc<InstalledChannel>>> {
         let manager = self.clone();
         // Dropping this JoinHandle does not abort a partially completed commit.
@@ -122,7 +132,7 @@ impl ChannelManager {
                 return None;
             }
             let address = rotator.address(index).to_owned();
-            Some(manager.publish_locked(address, index, client, &mut rotator).await)
+            Some(manager.publish_locked(address, index, prepared, &mut rotator).await)
         })
         .await
         .map_err(|error| anyhow::anyhow!("conf_sync channel publisher failed: {error}"))
@@ -227,6 +237,7 @@ impl ConfigSyncClient {
         // file-mode cert watcher. `client_tls_reload` stays `None` for plaintext
         // and `skip_tls` — there is nothing to hot-reload in those modes.
         let mut client_tls_reload: Option<CertPaths> = None;
+        let mut validity = None;
         let tls_config_opt: Option<ClientTlsConfig> = if let Some(tls) = tls_config {
             if tls.skip_tls {
                 // Explicit emergency escape hatch — plaintext even when auto_ca is on.
@@ -249,7 +260,8 @@ impl ConfigSyncClient {
                 );
                 None
             } else {
-                let client_tls = edgion_common::grpc_tls::load_client_tls(tls).await?;
+                let (client_tls, loaded_validity) = edgion_common::grpc_tls::load_client_tls(tls).await?;
+                validity = Some(loaded_validity);
                 tracing::info!(component = "grpc_client", "conf_sync mTLS enabled for gRPC client");
                 client_tls_reload = Some(CertPaths {
                     cert: tls.cert_path(),
@@ -305,6 +317,7 @@ impl ConfigSyncClient {
                 address: initial_addr,
                 index: 0,
                 client,
+                validity,
                 generation,
             }),
             config_client: config_client.clone(),
@@ -354,7 +367,7 @@ impl ConfigSyncClient {
             _ = expected.generation.cancelled() => return Ok(RecoveryOutcome::Superseded),
             result = prepare_client(&address, self.use_tls, self.timeout, self.client_tls.as_ref()) => result,
         };
-        let mut client = match prepared {
+        let mut prepared = match prepared {
             Ok(client) => client,
             Err(error) => {
                 let rotator = self.channels.swap_lock.lock().await;
@@ -367,10 +380,10 @@ impl ConfigSyncClient {
         let result = tokio::select! {
             biased;
             _ = expected.generation.cancelled() => return Ok(RecoveryOutcome::Superseded),
-            result = request_server_info(&mut client, self.timeout) => result,
+            result = request_server_info(&mut prepared.client, self.timeout) => result,
         };
         match result {
-            Ok(info) => match self.channels.commit(expected, index, revision, client).await? {
+            Ok(info) => match self.channels.commit(expected, index, revision, prepared).await? {
                 Some(installed) if self.channels.is_current(&installed) => Ok(RecoveryOutcome::Installed(info)),
                 _ => Ok(RecoveryOutcome::Superseded),
             },
@@ -469,6 +482,12 @@ impl ConfigSyncClient {
     /// Get a reference to the `ConfigClient`.
     pub fn get_config_client(&self) -> Arc<ConfigClient> {
         self.config_client.clone()
+    }
+
+    /// Read the certificate metadata belonging to the installed Channel.
+    /// A disk replacement or uncommitted candidate cannot change this value.
+    pub fn installed_cert_validity(&self) -> Option<LeafValidity> {
+        self.channels.installed.load().validity
     }
 
     /// Get server information including endpoint mode and supported resource kinds
@@ -832,23 +851,19 @@ async fn prepare_client(
     use_tls: bool,
     timeout: Duration,
     paths: Option<&CertPaths>,
-) -> anyhow::Result<ConfigSyncClientService<Channel>> {
-    let tls = match paths {
+) -> anyhow::Result<PreparedClient> {
+    let (tls, validity) = match paths {
         Some(paths) => {
             let (cert, key, ca) = super::cert_watch::read_and_validate(paths).await?;
-            Some(
-                ClientTlsConfig::new()
-                    .ca_certificate(tonic::transport::Certificate::from_pem(ca))
-                    .identity(tonic::transport::Identity::from_pem(cert, key)),
-            )
+            let (tls, validity) = edgion_common::grpc_tls::client_tls_from_pems(cert, key, ca)?;
+            (Some(tls), Some(validity))
         }
-        None => None,
+        None => (None, None),
     };
-    Ok(configured_client(build_channel(
-        &build_grpc_uri(address, use_tls),
-        timeout,
-        tls,
-    )?))
+    Ok(PreparedClient {
+        client: configured_client(build_channel(&build_grpc_uri(address, use_tls), timeout, tls)?),
+        validity,
+    })
 }
 
 /// Every initial, recovery and TLS-reload handle uses the same payload budget.

@@ -106,8 +106,7 @@ fn compile_identity(tls: &EdgionTls) -> Result<Arc<CompiledServingCertificate>, 
         atomic_chain,
         key_type: private_key.id(),
         private_key,
-        leaf_not_before_unix: strict_chain.leaf_not_before_unix,
-        leaf_not_after_unix: strict_chain.leaf_not_after_unix,
+        validity: strict_chain.validity,
     }))
 }
 

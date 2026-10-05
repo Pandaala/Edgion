@@ -162,6 +162,8 @@ fn invalid_update_retains_last_known_good() {
         &std::collections::HashSet::new(),
     );
     assert!(store.get_validation_status("ns/foo").unwrap().is_valid);
+    let installed = store.snapshot().data.entries["ns/foo"].compiled.clone();
+    let validity = installed.identity.as_ref().unwrap().validity;
 
     let bad = make_invalid_tls("ns", "foo", &["foo.example.com"]);
     store.apply_partial_update(
@@ -172,6 +174,9 @@ fn invalid_update_retains_last_known_good() {
 
     let v = store.get_validation_status("ns/foo").expect("entry must remain");
     assert!(v.is_valid, "bad update must not overwrite the last-known-good cert");
+    let retained = store.snapshot().data.entries["ns/foo"].compiled.clone();
+    assert!(Arc::ptr_eq(&installed, &retained));
+    assert_eq!(retained.identity.as_ref().unwrap().validity, validity);
 }
 
 #[test]

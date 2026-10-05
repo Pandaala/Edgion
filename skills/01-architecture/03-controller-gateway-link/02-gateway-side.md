@@ -12,7 +12,8 @@ The Gateway connects to the Controller's gRPC service via `ConfigSyncClient`, re
 Manages the gRPC connection to the Controller; handles List/Watch calls, version tracking, and reconnection.
 
 The client separates the installed connection from candidate recovery. The installed
-snapshot combines address, address-list index, service handle, and reload generation.
+snapshot combines address, address-list index, service handle, certificate validity,
+and reload generation.
 The channel manager owns its publication boundary and the candidate traversal state.
 This prevents a meta reconnect from mixing an old address with a new handle or token.
 
@@ -71,6 +72,17 @@ Certificate reload selects the current address within the same publication bound
 validates local material, and publishes the new identity without depending on remote
 availability. An old candidate probe cannot reinstall a pre-reload identity. The
 file watcher's accepted `(mtime, length)` trigger policy is unchanged.
+
+Certificate validity is parsed from the same bytes used to build each initial,
+recovery, or reload Channel. A `PreparedClient` carries both the handle and
+`LeafValidity` through probing and publication. `/metrics` reads the installed
+snapshot and invokes the shared expiry reporter through `GatewayMetrics`; it never
+reads the mounted Secret files. Rejected or stalled reloads keep the old expiry,
+and a stale candidate cannot publish its metadata. Explicit plaintext carries no
+certificate validity and exports no client-expiry series. Auto-CA initialization
+failures remain observable through the existing retry diagnostics before an
+identity is installed. Prometheus compares the exported timestamp with `time()`;
+no independent Gateway expiry polling task is needed.
 
 ConfigSyncClient triggers a reconnection in the following situations:
 

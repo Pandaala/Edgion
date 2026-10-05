@@ -1,9 +1,10 @@
 //! conf_sync certificate expiry safety net (observability only).
 //!
-//! Periodically inspects the certificate currently in service on each side of
+//! Reports the certificate currently in service on each side of
 //! the conf_sync channel and (a) exports its `notAfter` as a Prometheus gauge
 //! so an alert rule can compute time-to-expiry server-side, and (b) logs
-//! WARN/ERROR once the remaining lifetime crosses the thresholds below.
+//! WARN/ERROR once the remaining lifetime crosses the thresholds below. The
+//! Controller samples hourly; Gateway scrapes supply installed validity directly.
 //!
 //! This module takes no action on expiry — rotation, plus an emergency
 //! rotation net, now live in the controller
@@ -43,7 +44,7 @@ pub const ERROR_THRESHOLD: Duration = Duration::from_secs(7 * 86_400);
 
 /// How often the background watch re-checks the certificate.
 ///
-/// Hourly: cheap (one file read + parse), and a 30-day warning window makes
+/// Hourly: cheap (one live identity read + parse), and a 30-day warning window makes
 /// sub-hour reaction time pointless.
 const CHECK_INTERVAL: Duration = Duration::from_secs(3600);
 
@@ -65,7 +66,8 @@ pub enum CertSource {
     /// should use `PemFn` or `File` instead, or this source goes stale and
     /// raises false expiry alarms after the first rotation/reload.
     Pem(String),
-    /// A certificate on disk (Secret mount or operator-provided path).
+    /// A certificate on disk. This observes file contents, not installation;
+    /// never use it for a hot-swappable Channel's in-service expiry.
     File(PathBuf),
     /// Reads the certificate currently in service from live process state on
     /// every check (e.g. the controller's hot-swappable server identity);
@@ -236,6 +238,13 @@ pub fn check_and_report(side: &'static str, source: &CertSource, now: i64, state
             return;
         }
     };
+    report_validity(side, validity, now, state);
+}
+
+/// Export a preprocessed installed identity and report severity transitions.
+/// Gateway scrapes call this without certificate I/O or parsing; the Controller
+/// watcher uses the same reporting path after loading its live identity.
+pub fn report_validity(side: &'static str, validity: LeafValidity, now: i64, state: &mut ExpiryWatchState) {
     state.consecutive_failures = 0;
 
     gauge!(CERT_EXPIRY_METRIC, "side" => side).set(validity.not_after as f64);

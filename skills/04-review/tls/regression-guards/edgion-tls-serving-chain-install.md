@@ -59,6 +59,16 @@ The installer's own clear-then-set contract covers a failed replacement.
 
 ## Compilation failure does not remove the resource from the matcher
 
+The compiled identity now carries the shared `edgion_common::cert_util::LeafValidity`
+rather than separate Unix-bound fields. Both EdgionTls and ordinary Gateway TLS
+handshakes consume its allocation-free `validity_error(now)` with RFC 5280 inclusive
+bounds. An invalid update retaining the predecessor also retains that predecessor's
+compiled validity. This unifies the representation used by installed conf_sync
+Channels without adding an EdgionTls expiry metric. See
+[installed conf_sync certificate expiry](../../conf-sync/regression-guards/installed-certificate-expiry.md).
+The existing verification below remains historical; current correction checks are
+recorded in that page.
+
 `validate_cert` accepts a resource whose mTLS CA reference is present but whose
 controller-resolved `ca.crt` content is missing or unparseable
 (`validate_mtls_config` checks only `ca_secret_ref.is_some()`). Such a resource

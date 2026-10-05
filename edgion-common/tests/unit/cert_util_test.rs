@@ -29,6 +29,46 @@ fn parse_leaf_validity_rejects_garbage() {
 }
 
 #[test]
+fn validity_uses_first_certificate_not_first_pem_block() {
+    let old = test_cert_pem(T0, T0 + 3 * DAY);
+    let future = test_cert_pem(T0, T0 + 365 * DAY);
+    let disguised = future.replace("CERTIFICATE", "PUBLIC KEY");
+    let key = rcgen::KeyPair::generate().unwrap().serialize_pem();
+    let bundle = format!("{disguised}{key}{old}{future}");
+    assert_eq!(parse_leaf_validity(&bundle).unwrap().not_after, T0 + 3 * DAY);
+    assert!(
+        parse_leaf_validity(disguised).is_err(),
+        "non-certificate labels must never supply validity"
+    );
+}
+
+#[test]
+fn malformed_pem_errors_do_not_echo_input_markers() {
+    let marker = "CERTIFICATE_SECRET_MARKER";
+    for malformed in [
+        format!("-----BEGIN CERTIFICATE {marker}\n"),
+        format!("-----BEGIN CERTIFICATE {marker}-----\naGVsbG8=\n"),
+    ] {
+        let error = parse_leaf_validity(malformed).unwrap_err();
+        assert_eq!(error, "invalid certificate PEM");
+        assert!(!error.contains(marker));
+    }
+}
+
+#[test]
+fn validity_bounds_are_inclusive_and_remaining_time_saturates() {
+    let validity = LeafValidity {
+        not_before: 10,
+        not_after: 20,
+    };
+    assert_eq!(validity.validity_error(9), Some("cert_not_yet_valid"));
+    assert_eq!(validity.validity_error(10), None);
+    assert_eq!(validity.validity_error(20), None);
+    assert_eq!(validity.validity_error(21), Some("cert_expired"));
+    assert_eq!(validity.remaining_seconds(i64::MIN), i64::MAX);
+}
+
+#[test]
 fn remaining_seconds_counts_down_and_goes_negative_after_expiry() {
     let v = LeafValidity {
         not_before: T0,

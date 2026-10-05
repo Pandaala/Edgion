@@ -295,7 +295,7 @@ async fn connect_and_run(
     let uri = format!("https://{}", addr);
 
     let endpoint = Channel::from_shared(uri)?;
-    let client_tls = edgion_common::grpc_tls::load_client_tls(tls_cfg).await?;
+    let (client_tls, _) = edgion_common::grpc_tls::load_client_tls(tls_cfg).await?;
     let endpoint = endpoint
         .tls_config(client_tls)
         .map_err(|e| anyhow::anyhow!("Failed to configure federation client TLS: {}", e))?;

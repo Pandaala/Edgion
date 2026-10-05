@@ -1,11 +1,13 @@
 //! Shared TLS loading utilities for gRPC channels.
 
+use crate::cert_util::{parse_leaf_validity, LeafValidity};
 use crate::conf_sync::config::ConfSyncTlsConfig;
+use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 
 /// Load client TLS config from certificate files.
 ///
 /// Returns error if any file is missing or invalid — caller must not connect.
-pub async fn load_client_tls(cfg: &ConfSyncTlsConfig) -> anyhow::Result<tonic::transport::ClientTlsConfig> {
+pub async fn load_client_tls(cfg: &ConfSyncTlsConfig) -> anyhow::Result<(ClientTlsConfig, LeafValidity)> {
     cfg.validate()?;
     let ca_path = cfg.ca_path();
     let cert_path = cfg.cert_path();
@@ -21,9 +23,24 @@ pub async fn load_client_tls(cfg: &ConfSyncTlsConfig) -> anyhow::Result<tonic::t
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read client key {:?}: {}", key_path, e))?;
 
-    Ok(tonic::transport::ClientTlsConfig::new()
-        .ca_certificate(tonic::transport::Certificate::from_pem(ca))
-        .identity(tonic::transport::Identity::from_pem(cert, key)))
+    client_tls_from_pems(cert, key, ca)
+}
+
+/// Build TLS configuration and metadata from exactly the same certificate bytes.
+/// The caller owns identity validation policy; no second filesystem read occurs.
+pub fn client_tls_from_pems(
+    cert: Vec<u8>,
+    key: Vec<u8>,
+    ca: Vec<u8>,
+) -> anyhow::Result<(ClientTlsConfig, LeafValidity)> {
+    let validity =
+        parse_leaf_validity(&cert).map_err(|error| anyhow::anyhow!("Client certificate validity: {error}"))?;
+    Ok((
+        ClientTlsConfig::new()
+            .ca_certificate(Certificate::from_pem(ca))
+            .identity(Identity::from_pem(cert, key)),
+        validity,
+    ))
 }
 
 // NOTE: there is deliberately NO server-side TLS builder here. The controller's

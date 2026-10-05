@@ -1,6 +1,6 @@
 use super::{
-    install_compiled_serving_identity, pick_secret_index, select_gateway_edgion_tls_overlay,
-    serving_certificate_validity_error, CompiledEdgionTls, SslCtx, TlsCallback,
+    install_compiled_serving_identity, pick_secret_index, select_gateway_edgion_tls_overlay, CompiledEdgionTls, SslCtx,
+    TlsCallback,
 };
 use crate::runtime::matching::{FrontendMtlsOutcome, GatewayTlsEntry};
 use edgion_resources::resources::edgion_tls::{
@@ -130,13 +130,14 @@ fn loopback_handshake(ssl: boring::ssl::Ssl, trusted_root: boring::x509::X509) -
 
 #[test]
 fn compiled_certificate_validity_bounds_are_inclusive() {
-    assert_eq!(
-        serving_certificate_validity_error(10, 20, 9),
-        Some("cert_not_yet_valid")
-    );
-    assert_eq!(serving_certificate_validity_error(10, 20, 10), None);
-    assert_eq!(serving_certificate_validity_error(10, 20, 20), None);
-    assert_eq!(serving_certificate_validity_error(10, 20, 21), Some("cert_expired"));
+    let validity = edgion_common::cert_util::LeafValidity {
+        not_before: 10,
+        not_after: 20,
+    };
+    assert_eq!(validity.validity_error(9), Some("cert_not_yet_valid"));
+    assert_eq!(validity.validity_error(10), None);
+    assert_eq!(validity.validity_error(20), None);
+    assert_eq!(validity.validity_error(21), Some("cert_expired"));
 }
 
 fn overlay_fixture(attached_gateway: &str, client_auth: bool) -> (Arc<EdgionTls>, GatewayTlsEntry) {
@@ -542,8 +543,10 @@ fn atomic_identity_rotation_sends_intermediate_and_replaces_old_chain() {
             atomic_chain: Arc::new(CompiledBoringCertificateChain::from_der(&chain_der).unwrap()),
             key_type: private_key.id(),
             private_key,
-            leaf_not_before_unix: i64::MIN,
-            leaf_not_after_unix: i64::MAX,
+            validity: edgion_common::cert_util::LeafValidity {
+                not_before: i64::MIN,
+                not_after: i64::MAX,
+            },
         });
         (compiled, X509::from_der(root.der()).unwrap())
     }
@@ -555,8 +558,10 @@ fn atomic_identity_rotation_sends_intermediate_and_replaces_old_chain() {
         atomic_chain: Arc::new(CompiledBoringCertificateChain::from_der(&[b"not-der".to_vec()]).unwrap()),
         private_key: old_identity.private_key.clone(),
         key_type: old_identity.key_type,
-        leaf_not_before_unix: i64::MIN,
-        leaf_not_after_unix: i64::MAX,
+        validity: edgion_common::cert_util::LeafValidity {
+            not_before: i64::MIN,
+            not_after: i64::MAX,
+        },
     });
     let server_ctx = SslContext::builder(SslMethod::tls()).unwrap().build();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

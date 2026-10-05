@@ -27,6 +27,13 @@ fn skip_tls_security() -> ConfSyncSecurityConfig {
     }
 }
 
+fn installed_transport(installed: &super::InstalledChannel) -> super::PreparedClient {
+    super::PreparedClient {
+        client: installed.client.clone(),
+        validity: installed.validity,
+    }
+}
+
 #[test]
 fn rotation_decision_matrix() {
     use super::{rotate_decision, RotateDecision};
@@ -56,7 +63,14 @@ async fn committed_candidate_changes_generation_and_rejects_duplicate() {
         rotation.begin_search(old.index);
         rotation.candidate()
     };
-    let handle = old.client.clone();
+    let validity = edgion_common::cert_util::LeafValidity {
+        not_before: 10,
+        not_after: 20,
+    };
+    let handle = super::PreparedClient {
+        client: old.client.clone(),
+        validity: Some(validity),
+    };
     assert!(client
         .channels
         .commit(old.clone(), index, revision, handle.clone())
@@ -67,12 +81,18 @@ async fn committed_candidate_changes_generation_and_rejects_duplicate() {
     assert_eq!(new.index, index);
     assert!(old.generation.is_cancelled());
     assert!(!new.generation.is_cancelled());
+    assert_eq!(client.installed_cert_validity(), Some(validity));
     assert!(client
         .channels
         .commit(old, index, revision, handle)
         .await
         .unwrap()
         .is_none());
+    assert_eq!(
+        client.installed_cert_validity(),
+        Some(validity),
+        "stale publication cannot replace expiry metadata"
+    );
 }
 
 #[tokio::test]
@@ -95,7 +115,7 @@ async fn same_address_after_full_lap_still_recycles_generation() {
     assert_eq!(index, old.index);
     assert!(client
         .channels
-        .commit(old.clone(), index, revision, old.client.clone())
+        .commit(old.clone(), index, revision, installed_transport(&old))
         .await
         .unwrap()
         .is_some());
@@ -142,10 +162,16 @@ async fn publication_finishes_after_caller_abort_and_notifies_last() {
     *cache_guard = None;
     let manager = client.channels.clone();
     let expected = old.clone();
+    let validity = edgion_common::cert_util::LeafValidity {
+        not_before: 10,
+        not_after: 20,
+    };
     let caller = tokio::spawn(async move {
-        manager
-            .commit(expected.clone(), index, revision, expected.client.clone())
-            .await
+        let prepared = super::PreparedClient {
+            client: expected.client.clone(),
+            validity: Some(validity),
+        };
+        manager.commit(expected.clone(), index, revision, prepared).await
     });
     // The publisher holds the swap lock while it waits for our cache lock.
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -156,6 +182,11 @@ async fn publication_finishes_after_caller_abort_and_notifies_last() {
     .await
     .unwrap();
     assert!(client.channels.is_current(&old));
+    assert_eq!(
+        client.installed_cert_validity(),
+        old.validity,
+        "pending cache publication must retain old expiry"
+    );
     assert!(!old.generation.is_cancelled(), "notification must wait for every cache");
     caller.abort();
     assert!(matches!(caller.await, Err(error) if error.is_cancelled()));
@@ -167,6 +198,7 @@ async fn publication_finishes_after_caller_abort_and_notifies_last() {
     assert_eq!(installed.index, index);
     assert!(!installed.generation.is_cancelled());
     assert!(cache.grpc_client.read().await.is_some());
+    assert_eq!(client.installed_cert_validity(), Some(validity));
 }
 
 #[tokio::test]
@@ -229,6 +261,7 @@ async fn queued_tls_reload_rebuilds_committed_address_and_fences_old_probe() {
         .unwrap()
         .signed_by(&key, &issuer)
         .unwrap();
+    let expected_validity = edgion_common::cert_util::parse_leaf_validity(cert.pem()).unwrap();
     let paths = super::CertPaths {
         cert: dir.path().join("cert.pem"),
         key: dir.path().join("key.pem"),
@@ -260,7 +293,7 @@ async fn queued_tls_reload_rebuilds_committed_address_and_fences_old_probe() {
     let expected = old.clone();
     let commit = tokio::spawn(async move {
         manager
-            .commit(expected.clone(), index, revision, expected.client.clone())
+            .commit(expected.clone(), index, revision, installed_transport(&expected))
             .await
     });
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -283,9 +316,10 @@ async fn queued_tls_reload_rebuilds_committed_address_and_fences_old_probe() {
     assert_ne!(installed.address, old.address);
     assert!(old.generation.is_cancelled());
     assert!(!installed.generation.is_cancelled());
+    assert_eq!(installed.validity, Some(expected_validity));
     assert!(client
         .channels
-        .commit(old.clone(), index, revision, old.client.clone())
+        .commit(old.clone(), index, revision, installed_transport(&old))
         .await
         .unwrap()
         .is_none());

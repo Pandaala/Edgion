@@ -23,6 +23,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Installed certificate expiry and shared validity](regression-guards/installed-certificate-expiry.md)
+
 - [Bounded List and Watch payload compression](regression-guards/bounded-payload-compression.md)
 
 - [Initial resource documents are consumed by phase](regression-guards/initial-documents-consumed-by-phase.md)

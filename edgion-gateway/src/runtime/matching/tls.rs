@@ -23,6 +23,7 @@
 
 use arc_swap::ArcSwapOption;
 use edgion_algo::matcher::rfc6125_hostname::Rfc6125HostnameMatcher;
+use edgion_common::cert_util::LeafValidity;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
@@ -71,8 +72,7 @@ pub struct CompiledServingCertificate {
     pub atomic_chain: Arc<CompiledBoringCertificateChain>,
     pub private_key: PKey<Private>,
     pub key_type: Id,
-    pub leaf_not_before_unix: i64,
-    pub leaf_not_after_unix: i64,
+    pub validity: LeafValidity,
 }
 
 /// Cold-compiled DER buffers consumed by BoringSSL's atomic
@@ -328,8 +328,7 @@ fn compile_serving_certificates(
             atomic_chain,
             key_type: private_key.id(),
             private_key,
-            leaf_not_before_unix: strict_chain.leaf_not_before_unix,
-            leaf_not_after_unix: strict_chain.leaf_not_after_unix,
+            validity: strict_chain.validity,
         }));
     }
     Some(Arc::from(certificates))

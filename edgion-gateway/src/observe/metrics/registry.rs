@@ -3,6 +3,8 @@
 //! Centralized metrics for monitoring gateway performance.
 //! Uses the `metrics` crate for thread-safe, high-performance counters.
 
+use edgion_common::cert_util::LeafValidity;
+use edgion_common::conf_sync::cert_expiry_watch::ExpiryWatchState;
 use metrics::{counter, gauge, histogram, Counter, Gauge, Label};
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -351,6 +353,13 @@ impl Drop for DegradeSelectionCounter {
 }
 
 impl GatewayMetrics {
+    /// The existing shared conf_sync metric is sampled from the installed
+    /// transport, never from the mutable certificate files.
+    pub(crate) fn record_conf_sync_cert_expiry(validity: LeafValidity, now: i64, state: &mut ExpiryWatchState) {
+        use edgion_common::conf_sync::cert_expiry_watch::{report_validity, sides};
+        report_validity(sides::CLIENT, validity, now, state);
+    }
+
     /// Register once on the Service configuration path, then retain the handle
     /// in runtime snapshots. Only Services with degrade capability register a
     /// series; request selection never constructs labels or queries the registry.

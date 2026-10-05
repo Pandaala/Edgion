@@ -127,20 +127,12 @@ impl EdgionGatewayCli {
 
         // Fail-close (2026-07-14): an omitted `conf_sync_security` refuses to start. The
         // conf_sync client has the same guard (`ConfigSyncClient::new`); checking here too
-        // fails fast, before the cert-expiry watcher and the auto_ca retry loop.
+        // fails fast, before the auto_ca retry loop.
         security.ensure_transport_configured()?;
 
-        // conf_sync cert expiry safety net (observability only): re-reads the mounted
-        // client cert every tick (kubelet refreshes Secret mounts in place), exports the
-        // notAfter gauge, and WARN/ERRORs as expiry approaches. Spawned before the client
-        // (and its auto_ca retry loop) so the watch exists even while the provisioned
-        // Secret is still landing — a missing file is logged, not fatal.
-        {
-            use edgion_common::conf_sync::cert_expiry_watch as cert_watch;
-            if let Some(source) = cert_watch::file_source_from_tls(security.resolve_active_tls()) {
-                cert_watch::spawn_expiry_watch(cert_watch::sides::CLIENT, source);
-            }
-        }
+        // Certificate expiry is sampled from the installed Channel at scrape
+        // time. Until installation succeeds, the retry diagnostics below expose
+        // missing auto-CA material without claiming a disk certificate is active.
 
         // Under auto_ca the gateway-client Secret is provisioned by the Controller and may
         // not exist yet at cold start (the mounted volume is `optional`). Rather than
@@ -198,6 +190,7 @@ impl EdgionGatewayCli {
     /// Start auxiliary services
     async fn start_auxiliary_services(
         config_client: Arc<ConfigClient>,
+        sync_client: Arc<ConfigSyncClient>,
         config: &EdgionGatewayConfig,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
@@ -322,7 +315,7 @@ impl EdgionGatewayCli {
                     }
                 }
             };
-            if let Err(e) = metrics::serve_with_shutdown(&metrics_cfg, shutdown_future).await {
+            if let Err(e) = metrics::serve_with_shutdown(&metrics_cfg, sync_client, shutdown_future).await {
                 tracing::error!(
                     component = "metrics_api",
                     event = "server_error",
@@ -730,6 +723,7 @@ impl EdgionGatewayCli {
         let (aux_shutdown_tx, aux_shutdown_rx) = tokio::sync::watch::channel(false);
         runtime.block_on(Self::start_auxiliary_services(
             config_client.clone(),
+            sync_client_arc.clone(),
             &config,
             aux_shutdown_rx.clone(),
         ));

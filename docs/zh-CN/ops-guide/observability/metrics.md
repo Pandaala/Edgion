@@ -250,6 +250,13 @@ Controller 两侧都会发射它（所以它在本文单列一节），条件生
 
 ### 某个 Gateway 还在和 Controller 同步吗？
 
+证书到期是独立信号：`edgion_conf_sync_cert_expiry_timestamp_seconds - time()`
+表示已加载 conf_sync 证书的剩余秒数。每个 Gateway 在 `/metrics` 拉取时导出已加载客户端
+证书的到期时间；挂载的 Secret 更新后，只有该 Gateway 成功加载替换证书才会更新指标。
+Controller 每小时采样当前服务端身份。被拒绝的重载还会通过
+`edgion_system_error_state{reason="cert_reload_invalid"}` 暴露。此到期指标不包含 EdgionTls
+或普通 Gateway 的服务端证书。
+
 这个指标族里最值得配上的一条查询：
 
 ```promql

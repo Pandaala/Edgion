@@ -12,6 +12,10 @@ Gateway conf-sync separates the installed connection from the search for a
 replacement. `InstalledChannel` groups address, address-list index, service handle,
 and reload generation. Candidate traversal is owned by `EndpointRotator` under the
 channel manager's publication lock; it is not evidence that an address is installed.
+Certificate metadata now belongs to the same installed snapshot; see
+[installed certificate expiry](installed-certificate-expiry.md) for the current
+scrape-time reporting contract. The verification below is historical evidence
+for channel selection, not fresh verification of that later correction.
 
 Multi-address recovery probes `GetServerInfo` on an on-demand candidate channel
 before installing that exact channel. It does not maintain permanent standby

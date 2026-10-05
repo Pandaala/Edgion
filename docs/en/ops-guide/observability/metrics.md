@@ -256,6 +256,15 @@ restate it.
 
 ### Is a Gateway still in sync with the Controller?
 
+Certificate expiry is a separate signal:
+`edgion_conf_sync_cert_expiry_timestamp_seconds - time()` gives the installed
+conf_sync certificate's remaining lifetime in seconds. Each Gateway exports its
+loaded client certificate's expiry on `/metrics` scrapes; replacing the mounted
+Secret does not advance the value until that Gateway successfully installs the
+replacement. The Controller samples its live server identity hourly. A rejected
+reload is also exposed by `edgion_system_error_state{reason="cert_reload_invalid"}`.
+The expiry metric excludes EdgionTls and ordinary Gateway serving certificates.
+
 The one query most worth wiring up from this family:
 
 ```promql

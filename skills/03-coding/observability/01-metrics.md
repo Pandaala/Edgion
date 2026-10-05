@@ -240,15 +240,23 @@ kept alongside the reason constants added for conf_sync cert rotation (see
 - **Name**: `edgion_conf_sync_cert_expiry_timestamp_seconds`.
 - **Labels**: `side` ∈ `{"server", "client"}` — 2 bounded series total, no cardinality risk.
 - **Value/unit**: the in-service certificate's `notAfter`, Unix seconds.
-- **Source**: `edgion-common/src/conf_sync/cert_expiry_watch.rs`, exported hourly by a
-  background watch spawned on both the controller (`side="server"`, reading the live
-  hot-swappable identity via `CertSource::PemFn`) and the gateway (`side="client"`, reading
-  the active cert file via `CertSource::File`, re-read on every check).
+- **Source**: the shared reporter in `edgion-common/src/conf_sync/cert_expiry_watch.rs`.
+  The Controller exports hourly from its live hot-swappable identity via
+  `CertSource::PemFn` (`side="server"`). Gateway `/metrics` scrapes export the
+  preprocessed `LeafValidity` from the installed Channel snapshot (`side="client"`),
+  through `GatewayMetrics`. Startup, recovery candidates, and TLS reload carry
+  Channel and validity together; only successful publication changes the source.
+  Scrapes never read certificate files or parse PEM. `EdgionTls` and ordinary
+  Gateway serving identities use the same `LeafValidity` for runtime expiry checks;
+  this metric remains scoped to conf_sync, not those serving certificates.
 - **Staleness is by design**: on a read/parse failure the gauge is left at its last
   successfully observed value rather than cleared — see the module's
   `check_and_report`. A stuck value still keeps the expiry alert armed instead of going
   blank while the underlying read is failing; the watch's own WARN/ERROR logs (cold-start
   vs. persistent failure) carry the failure signal separately.
+  Before Gateway has installed an identity, initialization errors and auto-CA retry
+  diagnostics remain visible; no disk candidate is reported as an installed identity.
+  Gateway severity-transition logs are evaluated on scrapes, not by a separate timer.
 - **Why the exception**: `system_metrics` reasons like `CERT_ROTATION_FAILED` only fire if
   the rotation code path is still alive to raise them. This gauge instead watches the
   certificate actually in service, so it is the one signal that still moves if the whole

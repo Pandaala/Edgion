@@ -16,6 +16,7 @@
 //! revocation/OCSP schema, no-SAN CN fallback) are emitted by a caller-side
 //! helper in the gateway.
 
+use crate::cert_util::LeafValidity;
 use rustls::pki_types::{pem::PemObject, PrivateKeyDer};
 use std::fmt;
 use x509_parser::pem::Pem;
@@ -53,8 +54,7 @@ pub struct StrictCertificateChain {
     pub certificates_der: Vec<Vec<u8>>,
     /// Leaf validity bounds compiled to Unix seconds for allocation-free
     /// handshake checks.
-    pub leaf_not_before_unix: i64,
-    pub leaf_not_after_unix: i64,
+    pub validity: LeafValidity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,12 +133,10 @@ pub fn parse_canonical_ca_bundle(input: &[u8]) -> Result<CanonicalCaBundle, CaBu
 pub fn parse_strict_certificate_chain(input: &[u8]) -> Result<StrictCertificateChain, CaBundleError> {
     let certificates_der = parse_ordered_certificate_pem(input)?;
     let (_, leaf) = X509Certificate::from_der(&certificates_der[0]).map_err(|_| CaBundleError::InvalidCertificate)?;
-    let leaf_not_before_unix = leaf.validity().not_before.timestamp();
-    let leaf_not_after_unix = leaf.validity().not_after.timestamp();
+    let validity = LeafValidity::from_certificate(&leaf);
     Ok(StrictCertificateChain {
         certificates_der,
-        leaf_not_before_unix,
-        leaf_not_after_unix,
+        validity,
     })
 }
 
@@ -593,10 +591,9 @@ fn parse_leaf_cert(pem_str: &str) -> Result<(Vec<u8>, i64, i64), String> {
     let der_data = pem.contents.clone();
     let (_, cert) = X509Certificate::from_der(&der_data).map_err(|e| format!("X.509 parse error: {}", e))?;
 
-    let not_before_ts = cert.validity().not_before.timestamp();
-    let not_after_ts = cert.validity().not_after.timestamp();
+    let validity = LeafValidity::from_certificate(&cert);
 
-    Ok((der_data, not_before_ts, not_after_ts))
+    Ok((der_data, validity.not_before, validity.not_after))
 }
 
 /// Validate expiration of chain certificates (intermediate CAs) in a PEM bundle.
@@ -652,7 +649,13 @@ fn check_expiration(not_before_ts: i64, not_after_ts: i64) -> Result<(), CertVal
     .unwrap_or(i64::MAX);
 
     // Both bounds are inclusive per RFC 5280: valid if not_before <= now <= not_after
-    if now > not_after_ts || now < not_before_ts {
+    if (LeafValidity {
+        not_before: not_before_ts,
+        not_after: not_after_ts,
+    })
+    .validity_error(now)
+    .is_some()
+    {
         let fmt = |ts: i64| {
             chrono::DateTime::from_timestamp(ts, 0)
                 .map(|dt: chrono::DateTime<chrono::Utc>| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())

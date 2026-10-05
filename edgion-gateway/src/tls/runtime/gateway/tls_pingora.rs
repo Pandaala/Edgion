@@ -64,16 +64,6 @@ fn install_compiled_serving_identity(ssl: &mut SslRef, certificate: &CompiledSer
     }
 }
 
-fn serving_certificate_validity_error(not_before: i64, not_after: i64, now: i64) -> Option<&'static str> {
-    if now < not_before {
-        Some("cert_not_yet_valid")
-    } else if now > not_after {
-        Some("cert_expired")
-    } else {
-        None
-    }
-}
-
 impl SslCtx {
     fn new(port: u16) -> Self {
         Self {
@@ -775,9 +765,7 @@ impl TlsCallback {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |duration| duration.as_secs().min(i64::MAX as u64) as i64);
-        if let Some(error) =
-            serving_certificate_validity_error(certificate.leaf_not_before_unix, certificate.leaf_not_after_unix, now)
-        {
+        if let Some(error) = certificate.validity.validity_error(now) {
             ssl_ctx.meta.err_log = Some(error.to_string());
             return;
         }
@@ -988,11 +976,7 @@ impl TlsCallback {
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |duration| duration.as_secs().min(i64::MAX as u64) as i64);
-        if let Some(error) = serving_certificate_validity_error(
-            certificate.leaf_not_before_unix,
-            certificate.leaf_not_after_unix,
-            now_unix,
-        ) {
+        if let Some(error) = certificate.validity.validity_error(now_unix) {
             ssl_ctx.meta.err_log = Some(error.to_string());
             return;
         }
