@@ -45,6 +45,15 @@ static check and fail through the normal runtime result map. Therefore:
 
 ## Result Semantics
 
+`redis.hgetall` uses the provider's `hgetall_bounded` entry: check raw entry
+count and the fixed 1 MiB field-plus-value budget on a borrowed raw RESP frame
+before Fred's additional result Map and owned-string conversion.
+Overflow maps to `result_too_large`; successful entries retain per-string
+truncation. Fred's complete reply aggregation precedes this check and remains
+outside the bound. Use the existing pool's `custom_raw` HGETALL with first-key
+routing; Fred's custom command forces a flush and can reduce batching efficiency.
+Do not replace this call with the unbounded public `hgetall`.
+
 Failures return a bounded error map, for example an undeclared alias, a declared link
 whose provider is not ready, or a Redis operation error. The public `error` value is a
 fixed class and never contains the alias, key, field, value, or dependency error. When

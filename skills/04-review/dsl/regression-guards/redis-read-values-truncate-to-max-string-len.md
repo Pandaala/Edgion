@@ -10,9 +10,16 @@ knowledge_type: regression-guards
 # `redis.get` / `redis.hget` / `redis.hgetall` values: silent truncation at `max_string_len` — RAISING IS NOT ACCEPTED
 
 **Status**: Resolved (fr-dsl-01, 2026-05-31) — `Vm::call_builtin_redis` for `BuiltinId::RedisGet` / `RedisHGet` / `RedisHGetAll` in `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs`. The shared helper `truncate_to_max_string_len` (defined next to `checked_value_str`) is applied to each value-construction site.
-**Tests**: `builtins.rs` inline `mod truncate_tests` (locks under-limit pass-through, over-limit byte truncation, and UTF-8 char-boundary walk-back). The redis client path itself requires a live `RedisLinkClient` and is covered by integration scenarios, not unit tests.
+**Tests**: `edgion-gateway/tests/unit/plugins/http/dsl/lang/builtins_test/truncate_tests.rs` locks under-limit pass-through, over-limit byte truncation, and UTF-8 char-boundary walk-back. The current producer budget and result envelope are covered by `tests/unit/link_sys/providers/redis/ops_test.rs` and `tests/unit/plugins/http/dsl/lang/builtins_test/redis_error_tests.rs`. Actual Redis command I/O still requires a live client and is covered by integration scenarios.
 
 ## Conclusion
+
+For `redis.hgetall`, the Gateway additionally checks original field plus value
+bytes against a fixed 1 MiB budget before owned-string conversion. Oversized
+results use the existing failure Map; only admitted results reach the truncation
+sites below. See [producer byte budgets](host-result-byte-budgets.md) for the
+current boundary and fred's unavoidable earlier aggregation. The historical
+single-string fix below never bounded that dependency allocation.
 
 The three redis read builtins (`redis.get`, `redis.hget`, and — for both key and value — `redis.hgetall`) construct `Value::Str` from server-returned strings. Each string is now **silently truncated** at `self.limits.max_string_len` (default 8 KiB) before entering the DSL value heap, restoring the sandbox invariant "no `Value::Str` in the VM heap exceeds `max_string_len`".
 

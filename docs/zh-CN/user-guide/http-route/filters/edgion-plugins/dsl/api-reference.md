@@ -1613,6 +1613,7 @@ if values["id"] != nil {
 - 不透明 `Body` 调用的调用方 Header 不得包含 `Content-Length` 或 `Transfer-Encoding`，由运行时唯一控制请求分帧。空的不透明 `Body` 发送 `Content-Length: 0`；`nil` 不附加请求体。
 - 响应体硬上限为 `min(httpMaxResponseBodyBytes, max_string_len)`（默认分别为 1 MiB 与 8 KiB）。声明长度或流式读取超出上限时，整个调用以状态零结果失败，不返回截断前缀。大小恰好等于上限的响应体仅在确认流结束后成功；有损 UTF-8 转换后的长度也必须满足 `max_string_len`。
 - 响应头按原始迭代顺序遍历。检查每个原始响应头之前，如果已保留的 `headers` Map 已有 `max_map_size` 个名称，则停止遍历。在已检查的原始前缀内，非 UTF-8 值会被跳过；只有在 Map 满之前遍历到重复名称时，后者才替换先前值。被忽略的尾部不会被检查。名称转为小写，且每个保留的名称和值都必须满足 `max_string_len`，否则整个调用返回状态零失败结果。
+- 当前保留的响应头名称和值合计还有固定的 1 MiB 字节上限，在复制每条数据前检查。替换重复头时退还旧值的字节，名称只计一次。超限会在读取响应体之前使整个调用返回相同的状态零失败结果。此限制独立于共享客户端的 HTTP/2 解码响应头列表限制（默认 16 KiB，最多 64 KiB）。
 - 实际超时为 `min(timeout_ms, httpMaxTimeoutMs)`。
 - `Str` 和 `Nil` 调用最多跟随 10 次重定向；当 `httpBlockPrivateIps: true` 时，每一跳都会应用直接 IP 字面量检查和连接时的 DNS 解析地址检查。不透明 `Body` 调用不跟随重定向，直接把 3xx 响应返回给脚本。
 
@@ -1955,6 +1956,10 @@ Map 中的失败。
 **签名**：`redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
 
 获取哈希的所有字段和值。键不存在时返回空 `Map`。发生连接错误或哈希条目数超过 `max_map_size` 限制时返回 `ok: false`；后者不会构造超大 `Map`，并返回受上述通用分类规则约束的 `result_too_large`。每个条目的键与值字符串都会各自在 `max_string_len`（默认 8 KiB）处被静默截断，与 `redis.get` 一致；调用仍然成功。
+
+原始字段和值的字节合计还必须符合固定的 1 MiB 上限。检查使用未截短的回复，在把 fred 结果转换为拥有独立字符串的表之前执行。条数或累计字节超限时返回 `ok: false`、`value: nil` 和 `error: "result_too_large"`（字符串预算较小时为 `"e"`）。通过检查后仍按上述规则截短单个字符串。提高 `maxStringLen` 不会提高累计上限。
+
+**依赖边界**：fred 10.1.0 在 Edgion 能检查结果之前，已接收并聚合完整的 HGETALL 回复。此上限在原始回复上检查，阻止超大结果继续构造额外的 Fred 结果 Map、Edgion 字符串表和 DSL Map，但不限制 Redis 网络缓冲或已解码的 frame（包括原生 RESP3 Map）。服务端哈希本身仍应有大小约束，不能把此检查视为总内存保证。
 
 **参数**：
 - `link`（Str）— 来自 `linkSysRefs[].name` 的别名

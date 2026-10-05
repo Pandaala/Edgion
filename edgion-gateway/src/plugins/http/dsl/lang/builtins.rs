@@ -7,6 +7,7 @@ use bytes::Bytes;
 use edgion_resources::redis_rate_limit::validate_rate_limit_call;
 use indexmap::IndexMap;
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -318,6 +319,9 @@ fn redis_ok(value: Value) -> Value {
 
 const REDIS_ERROR_FALLBACK: &str = "e";
 
+/// Per-result field/name plus value payload cap, independent of VM admission.
+pub(in crate::plugins::http::dsl) const MAX_DSL_HOST_RESULT_BYTES: usize = 1024 * 1024;
+
 #[derive(Clone, Copy, Debug)]
 enum RedisFailure {
     InvalidArgument,
@@ -379,6 +383,20 @@ fn redis_err(failure: RedisFailure, max_string_len: usize) -> Value {
 fn redis_dependency_err(error: &dyn std::fmt::Display, max_string_len: usize, log: &mut PluginLog) -> Value {
     log.push_err_sensitive(&error.to_string());
     redis_err(RedisFailure::DependencyError, max_string_len)
+}
+
+fn redis_hash_result(map: Option<HashMap<String, String>>, max_string_len: usize, log: &mut PluginLog) -> Value {
+    let Some(map) = map else {
+        log.push_err("redis result too large");
+        return redis_err(RedisFailure::ResultTooLarge, max_string_len);
+    };
+    let mut result = IndexMap::with_capacity(map.len());
+    for (key, value) in map {
+        let key = truncate_to_max_string_len(key, max_string_len);
+        let value = truncate_to_max_string_len(value, max_string_len);
+        result.insert(key, Value::Str(value.into()));
+    }
+    redis_ok(Value::Map(Box::new(result)))
 }
 
 /// Check that a string result doesn't exceed the VM's `max_string_len` limit.
@@ -492,7 +510,8 @@ pub(in crate::plugins::http::dsl) async fn complete_http_call_response(
     }
 
     let status = response.status().as_u16() as i64;
-    let mut response_headers = IndexMap::new();
+    let mut response_headers: IndexMap<String, Value> = IndexMap::new();
+    let mut header_bytes: usize = 0;
     for (name, value) in response.headers() {
         if response_headers.len() >= max_map_size {
             break;
@@ -500,11 +519,24 @@ pub(in crate::plugins::http::dsl) async fn complete_http_call_response(
         let Ok(value) = value.to_str() else {
             continue;
         };
-        let name = name.as_str().to_lowercase();
+        // HeaderName already exposes its canonical lowercase spelling.
+        let name = name.as_str();
         if name.len() > max_string_len || value.len() > max_string_len {
             return http_call_failure_map();
         }
-        response_headers.insert(name, Value::Str(Arc::from(value)));
+        let (previous_value_bytes, name_bytes) = match response_headers.get(name) {
+            Some(Value::Str(previous)) => (previous.len(), 0),
+            _ => (0, name.len()),
+        };
+        let Some(next) = header_bytes
+            .checked_sub(previous_value_bytes)
+            .and_then(|total| checked_bounded_len(total, name_bytes, MAX_DSL_HOST_RESULT_BYTES))
+            .and_then(|total| checked_bounded_len(total, value.len(), MAX_DSL_HOST_RESULT_BYTES))
+        else {
+            return http_call_failure_map();
+        };
+        header_bytes = next;
+        response_headers.insert(name.to_owned(), Value::Str(Arc::from(value)));
     }
 
     let Ok((body, truncated)) = stream_body_capped(response, effective_body_cap).await else {
@@ -1895,22 +1927,11 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
-                match client.hgetall(&key).await {
-                    Ok(map) => {
-                        if map.len() > self.limits.max_map_size {
-                            log.push_err("redis result too large");
-                            return Ok(redis_err(RedisFailure::ResultTooLarge, self.limits.max_string_len));
-                        }
-                        let mut result: IndexMap<String, Value> = IndexMap::new();
-                        for (k, v) in map {
-                            // Both key and value are externally-controlled Redis
-                            // strings; truncate each to keep the sandbox invariant.
-                            let k = truncate_to_max_string_len(k, self.limits.max_string_len);
-                            let v = truncate_to_max_string_len(v, self.limits.max_string_len);
-                            result.insert(k, Value::Str(v.into()));
-                        }
-                        Ok(redis_ok(Value::Map(Box::new(result))))
-                    }
+                match client
+                    .hgetall_bounded(&key, self.limits.max_map_size, MAX_DSL_HOST_RESULT_BYTES)
+                    .await
+                {
+                    Ok(map) => Ok(redis_hash_result(map, self.limits.max_string_len, log)),
                     Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }

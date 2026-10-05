@@ -10,6 +10,12 @@ knowledge_type: intentional-design
 
 ## Current contract
 
+Retained response-header name plus value bytes also have a fixed 1 MiB budget
+checked before each copy, refunding replaced value bytes. Overflow returns the
+same status-zero result before body consumption. The ignored tail remains
+uninspected. See [producer byte budgets](../regression-guards/host-result-byte-budgets.md)
+for this boundary and the separate canonical HTTP/2 transport header cap.
+
 The response body limit is `min(httpMaxResponseBodyBytes, max_string_len)`. A declared `Content-Length` above that limit, a stream that produces more bytes, a response-stream error, or lossy UTF-8 expansion beyond `max_string_len` fails the complete call. Failure returns the established value `{status: 0, body: "", headers: {}}`; it does not return a partial body and does not raise `RuntimeError::StringTooLong`.
 
 The limit is enforced while streaming through the canonical outbound body helper. A body exactly at the cap succeeds only after end-of-stream proves there is no next byte. Invalid UTF-8 is converted only after a checked, allocation-free calculation proves that replacement-character expansion fits `max_string_len`.

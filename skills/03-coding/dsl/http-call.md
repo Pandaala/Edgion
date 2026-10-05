@@ -42,6 +42,12 @@ are skipped and a duplicate replaces an earlier value only if it is reached befo
 the Map becomes full. Every retained name and value must fit `max_string_len`,
 otherwise the complete call returns the status-zero failure map.
 
+The current retained names plus values also have a fixed 1 MiB cumulative
+payload cap, checked before each copy. Duplicate replacement refunds the old
+value and counts its name once. Overflow returns the same failure Map before
+body consumption. This producer cap is separate from the canonical client's
+decoded HTTP/2 header-list limit (16 KiB default, 64 KiB maximum).
+
 The third argument accepts `Str`, `Nil`, or the opaque `Body` value obtained from
 `req.body`. A `Body` call takes an immutable logical snapshot at call start and pulls
 raw bytes from memory, spill files, and mutation segments without first materializing

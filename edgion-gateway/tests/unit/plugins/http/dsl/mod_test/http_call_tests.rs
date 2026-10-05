@@ -11,7 +11,7 @@ use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::plugins::http::dsl::lang::builtins::complete_http_call_response;
+use crate::plugins::http::dsl::lang::builtins::{complete_http_call_response, MAX_DSL_HOST_RESULT_BYTES};
 use crate::plugins::http::dsl::lang::value::Value;
 use crate::plugins::http::dsl::runtime::dsl_http_client;
 use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapshotReader};
@@ -37,6 +37,71 @@ fn finish_response(
 fn streamed_response(parts: Vec<Result<Bytes, io::Error>>) -> reqwest::Response {
     let body = reqwest::Body::wrap_stream(futures::stream::iter(parts));
     http::Response::new(body).into()
+}
+
+#[test]
+fn test_http_call_header_bytes_exact_cap_and_one_byte_over() {
+    let cap = MAX_DSL_HOST_RESULT_BYTES;
+    let response = http::Response::builder()
+        .header("x", "a".repeat(cap - 1))
+        .body(reqwest::Body::from(""))
+        .unwrap()
+        .into();
+    let result = result_map(finish_response(Ok(response), 8, cap, 2));
+    assert_eq!(result.get("status"), Some(&Value::Int(200)));
+    let Some(Value::Map(headers)) = result.get("headers") else {
+        panic!("expected headers")
+    };
+    assert_eq!(headers.get("x"), Some(&Value::Str("a".repeat(cap - 1).into())));
+
+    let body = reqwest::Body::wrap_stream(futures::stream::poll_fn(
+        |_| -> std::task::Poll<Option<Result<Bytes, io::Error>>> { panic!("header overflow must not poll body") },
+    ));
+    let response = http::Response::builder()
+        .header("x", "a".repeat(cap))
+        .body(body)
+        .unwrap()
+        .into();
+    assert_http_failure(finish_response(Ok(response), 8, cap, 2));
+}
+
+#[test]
+fn test_http_call_many_headers_fail_cumulative_byte_cap() {
+    let mut response = http::Response::builder();
+    for i in 0..32 {
+        response = response.header(format!("x-field-{i}"), "a".repeat(32 * 1024));
+    }
+    let response = response.body(reqwest::Body::from("")).unwrap().into();
+    assert_http_failure(finish_response(Ok(response), 8, 32 * 1024, 32));
+}
+
+#[test]
+fn test_http_call_header_replacement_refunds_old_value_bytes() {
+    let cap = MAX_DSL_HOST_RESULT_BYTES;
+    for (first, second) in [
+        ("a".repeat(cap - 1), "small".into()),
+        ("small".into(), "a".repeat(cap - 1)),
+    ] {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.append("x", reqwest::header::HeaderValue::from_str(&first).unwrap());
+        headers.append("x", reqwest::header::HeaderValue::from_str(&second).unwrap());
+        let mut response = http::Response::new(reqwest::Body::from(""));
+        *response.headers_mut() = headers;
+        // Keep another Map slot open so duplicate traversal is permitted.
+        let result = result_map(finish_response(Ok(response.into()), 8, cap, 2));
+        assert_eq!(result.get("status"), Some(&Value::Int(200)));
+        let Some(Value::Map(headers)) = result.get("headers") else {
+            panic!("expected headers")
+        };
+        assert_eq!(headers.get("x"), Some(&Value::Str(second.into())));
+    }
+    let response = http::Response::builder()
+        .header("x", "small")
+        .header("x", "a".repeat(cap))
+        .body(reqwest::Body::from(""))
+        .unwrap()
+        .into();
+    assert_http_failure(finish_response(Ok(response), 8, cap, 2));
 }
 
 fn result_map(value: Value) -> Box<indexmap::IndexMap<String, Value>> {

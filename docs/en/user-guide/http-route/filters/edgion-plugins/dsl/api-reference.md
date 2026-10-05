@@ -1650,6 +1650,7 @@ fail-close `BodyAccess` error.
 - On an opaque `Body` call, caller headers must not contain `Content-Length` or `Transfer-Encoding`; either header is rejected so the runtime exclusively controls request framing. An empty opaque `Body` sends `Content-Length: 0`; `nil` attaches no body.
 - The response body hard cap is `min(httpMaxResponseBodyBytes, max_string_len)` (defaults: 1 MiB and 8 KiB respectively). A declared or streamed overflow fails the complete call with the status-zero result; no truncated prefix is returned. A body exactly at the cap succeeds only after end-of-stream, and lossy UTF-8 expansion must also fit `max_string_len`.
 - Response headers are traversed in raw iteration order. Before inspecting each raw header, traversal stops if the retained `headers` Map already has `max_map_size` names. Within the inspected raw prefix, non-UTF-8 values are skipped and a duplicate replaces an earlier value only if reached before the Map becomes full. The ignored tail is not examined. Names are lowercased, and every retained name and value must fit `max_string_len`; otherwise the complete call returns the status-zero failure result.
+- Retained response-header names plus values have a fixed cumulative 1 MiB byte cap, checked before copying each entry. A replacement refunds the previous value's bytes and counts the name only once. Overflow fails the complete call with the same status-zero result, before reading its body. This is separate from the canonical client's decoded HTTP/2 response-header-list limit (16 KiB by default, at most 64 KiB).
 - The actual timeout applied is `min(timeout_ms, httpMaxTimeoutMs)`.
 - `Str` and `Nil` calls follow at most 10 redirects. When `httpBlockPrivateIps: true`, both the direct-literal and dial-time resolved-address checks apply to every redirect hop. Opaque `Body` calls never follow redirects and return the 3xx response directly.
 
@@ -2010,6 +2011,10 @@ Deletes a field from a hash. Returns `value: true` if the field existed and was 
 **Signature**: `redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
 
 Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned on a connection error, or when the hash contains more entries than the `max_map_size` limit (in which case the oversize `Map` is not constructed and `error` is `result_too_large`, subject to the generic-class rule above). Each entry's key and value string is independently truncated at `max_string_len` (default 8 KiB), the same as `redis.get`; the call still succeeds.
+
+The original field and value bytes together must also fit a fixed 1 MiB cap. This check uses the untruncated reply and runs before converting fred's result to an owned string table. Exceeding either the entry count or byte cap returns `ok: false`, `value: nil`, and `error: "result_too_large"` (or `"e"` for a small string budget). Admitted results retain the per-string truncation described above. Raising `maxStringLen` does not raise the cumulative cap.
+
+**Dependency boundary**: fred 10.1.0 receives and aggregates the complete HGETALL reply before Edgion can inspect it. The cap checks the raw reply before the additional Fred result Map, Edgion string table, and DSL Map construction for oversized results; it does not bound Redis wire buffering or the decoded frame (including a native RESP3 Map). Keep server-side hashes bounded; this check alone is not a total-memory guarantee.
 
 **Parameters**:
 - `link` (Str) — Alias name from `linkSysRefs[].name`

@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::Result;
 use fred::clients::Pool;
 use fred::interfaces::{ClientLike, HashesInterface, KeysInterface, ListInterface, LuaInterface};
+use fred::types::{ClusterHash, CustomCommand, Resp3Frame, Value as RedisValue};
 
 use super::client::RedisLinkClient;
 use crate::link_sys::LinkSysHealth;
@@ -157,6 +158,30 @@ impl RedisLinkClient {
         Ok(map)
     }
 
+    /// Bound raw hash payload before converting it to owned strings.
+    ///
+    /// Fred has already aggregated the complete reply; these limits prevent the
+    /// subsequent Fred Map and Edgion string-map allocations, not frame buffering.
+    /// `None` denotes a count or byte overflow, independently of command errors.
+    pub(crate) async fn hgetall_bounded(
+        &self,
+        key: &str,
+        max_entries: usize,
+        max_bytes: usize,
+    ) -> Result<Option<HashMap<String, String>>> {
+        // Reuse the same pool, key routing, timeout, and HGETALL ACL. Fred's custom
+        // command forces a flush, trading batching for access before Map conversion.
+        let frame = self
+            .pool()
+            .custom_raw(
+                CustomCommand::new_static("HGETALL", ClusterHash::FirstKey, false),
+                vec![key],
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("Redis HGETALL failed: {error}"))?;
+        bounded_hash_result(frame, max_entries, max_bytes)
+    }
+
     /// HEXISTS key field → bool
     pub async fn hexists(&self, key: &str, field: &str) -> Result<bool> {
         let exists: bool = self
@@ -166,6 +191,76 @@ impl RedisLinkClient {
             .map_err(|e| anyhow::anyhow!("Redis HEXISTS {} {}: {:?}", key, field, e))?;
         Ok(exists)
     }
+}
+
+/// Account raw field and value bytes without overflow or partial admission.
+fn checked_hash_bytes(current: usize, key_bytes: usize, value_bytes: usize, limit: usize) -> Option<usize> {
+    current
+        .checked_add(key_bytes)?
+        .checked_add(value_bytes)
+        .filter(|total| *total <= limit)
+}
+
+fn hash_frame_bytes(frame: &Resp3Frame) -> Result<usize> {
+    match frame {
+        Resp3Frame::BlobString { data, .. }
+        | Resp3Frame::SimpleString { data, .. }
+        | Resp3Frame::VerbatimString { data, .. }
+        | Resp3Frame::BigNumber { data, .. } => Ok(data.len()),
+        _ => Err(anyhow::anyhow!("Redis HGETALL returned a non-string value")),
+    }
+}
+
+fn bounded_hash_result(
+    frame: Resp3Frame,
+    max_entries: usize,
+    max_bytes: usize,
+) -> Result<Option<HashMap<String, String>>> {
+    let mut total = 0;
+    match &frame {
+        // Fred represents RESP2's flat HGETALL array as a RESP3 Array.
+        Resp3Frame::Array { data, .. } => {
+            if data.len() % 2 != 0 {
+                return Err(anyhow::anyhow!("Redis HGETALL returned an odd number of elements"));
+            }
+            if data.len() / 2 > max_entries {
+                return Ok(None);
+            }
+            for pair in data.chunks_exact(2) {
+                let Some(next) = checked_hash_bytes(
+                    total,
+                    hash_frame_bytes(&pair[0])?,
+                    hash_frame_bytes(&pair[1])?,
+                    max_bytes,
+                ) else {
+                    return Ok(None);
+                };
+                total = next;
+            }
+        }
+        Resp3Frame::Map { data, .. } => {
+            if data.len() > max_entries {
+                return Ok(None);
+            }
+            for (key, value) in data {
+                let Some(next) = checked_hash_bytes(total, hash_frame_bytes(key)?, hash_frame_bytes(value)?, max_bytes)
+                else {
+                    return Ok(None);
+                };
+                total = next;
+            }
+        }
+        Resp3Frame::SimpleError { .. } | Resp3Frame::BlobError { .. } => {
+            // Preserve Fred's canonical command-error classification.
+            RedisValue::try_from(frame)?;
+            return Err(anyhow::anyhow!("Redis HGETALL returned an invalid response"));
+        }
+        _ => return Err(anyhow::anyhow!("Redis HGETALL returned an invalid response")),
+    }
+    // Only admitted frames reach Fred's canonical conversion. No Map or owned
+    // strings are constructed during the borrowed count/byte preflight above.
+    let map = RedisValue::try_from(frame)?.into_map()?;
+    Ok(Some(RedisValue::Map(map).convert()?))
 }
 
 // ============================================================================

@@ -53,6 +53,15 @@ replace the configurable per-container limits or the operand-stack limit.
 Host builtins may allocate result Maps before VM stack admission; the fixed
 Value limits do not claim to bound that producer-side aggregation.
 
+Gateway `redis.hgetall` and `http.call` response headers separately apply a
+fixed 1 MiB cumulative field/name plus value payload cap before Edgion copies
+their results. Redis checks a borrowed raw RESP frame before Fred's additional
+result Map, truncation, and owned-string conversion; HTTP counts the live
+retained Map and refunds replaced values.
+Fred still aggregates the complete Redis reply before this guard. See
+[host-result byte budgets](../../04-review/dsl/regression-guards/host-result-byte-budgets.md)
+for failure shapes, dependency limits, and regression evidence.
+
 `DslConfig::resolve_runtime_limits` owns the defaults and accepted ranges for
 these fields: steps `1..=1_000_000`, loop iterations and calls
 `1..=100_000`, stack depth `1..=1_024`, string bytes `1..=1_048_576`, List

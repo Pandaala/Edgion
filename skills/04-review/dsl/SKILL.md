@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [External host results enforce cumulative byte budgets](regression-guards/host-result-byte-budgets.md)
+
 - [Builtin argument capacity and operand-stack validation](regression-guards/builtin-argument-capacity-and-stack-validation.md)
 
 - [DSL runtime-limit scalars use one resource-owned contract](regression-guards/runtime-limit-scalar-contract.md)

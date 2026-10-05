@@ -41,6 +41,13 @@ Map 条目与 List 元素总计最多 32,768 个；Map 键的 UTF-8 字节数总
 前预检。宿主内置函数可能在入栈检查前已分配返回值；这些限制不约束该阶段
 的聚合内存。
 
+两处外部结果生产路径另有固定的 1 MiB 字段／名称加值字节上限：
+`redis.hgetall` 在转换为独立字符串前检查原始回复，`http.call` 在复制每条
+响应头前检查当前保留数据。这是单个结果的负载上限，不含容器开销，也不限制
+fred 在更早阶段聚合完整 Redis 回复的内存。详见
+[Redis API 边界](./api-reference.md#redishgetall) 和
+[HTTP 返回值契约](./api-reference.md#httpcall)。
+
 ### 各限制详细说明
 
 **maxSteps（最大执行步数）**

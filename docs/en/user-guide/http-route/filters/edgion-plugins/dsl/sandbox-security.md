@@ -43,6 +43,14 @@ The VM checks values when they enter its stack and checks VM-built Maps before
 construction. A host builtin may have already allocated its result before
 that admission check; these limits do not bound producer-side aggregation.
 
+Two external-result producers additionally enforce a fixed 1 MiB field/name plus
+value byte cap: `redis.hgetall` checks the original reply before owned-string
+conversion, while `http.call` checks retained response headers before copying
+each entry. These are per-result payload bounds, excluding container overhead.
+They do not limit fred's earlier full Redis reply aggregation. See the
+[Redis API boundary](./api-reference.md#redishgetall) and
+[HTTP result contract](./api-reference.md#httpcall).
+
 ### Limit Details
 
 **maxSteps (Maximum Execution Steps)**

@@ -1,4 +1,38 @@
-use super::{redis_dependency_err, redis_err, PluginLog, RedisFailure, Value};
+use super::{redis_dependency_err, redis_err, redis_hash_result, PluginLog, RedisFailure, Value};
+
+#[test]
+fn oversized_hash_uses_existing_bounded_failure_map() {
+    for (limit, expected) in [(16, "result_too_large"), (1, "e"), (0, "")] {
+        let mut log = PluginLog::new("test");
+        let result = redis_hash_result(None, limit, &mut log);
+        assert_eq!(error_text(&result), expected);
+        let Value::Map(map) = result else {
+            panic!("expected Redis envelope")
+        };
+        assert_eq!(map.get("ok"), Some(&Value::Bool(false)));
+        assert_eq!(map.get("value"), Some(&Value::Nil));
+        assert!(log.contains("redis result too large"));
+    }
+}
+
+#[test]
+fn admitted_hash_preserves_utf8_truncation_and_success_envelope() {
+    let mut log = PluginLog::new("test");
+    let result = redis_hash_result(
+        Some(std::collections::HashMap::from([("aé".into(), "bñ".into())])),
+        2,
+        &mut log,
+    );
+    let Value::Map(map) = result else {
+        panic!("expected Redis envelope")
+    };
+    assert_eq!(map.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(map.get("error"), Some(&Value::Nil));
+    let Some(Value::Map(hash)) = map.get("value") else {
+        panic!("expected Redis hash")
+    };
+    assert_eq!(hash.get("a"), Some(&Value::Str("b".into())));
+}
 
 fn error_text(value: &Value) -> String {
     let Value::Map(map) = value else {
