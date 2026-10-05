@@ -15,10 +15,11 @@ acceptor owns its own Pingora runtime; the startup builder rejects a total
 above 64 threads after listener deduplication and conflict filtering. Plain
 HTTP/TCP/UDP, TLS passthrough, upstream TLS, and conf-sync TLS are unaffected.
 
-The locally committed fork revision `7c24c0dd6ea5996af011529f6bae8ae8972f695a`
-uses an abort-on-drop task handle, and `Cargo.lock` pins that revision for the
-complete fork family. The commit has not yet been pushed to the declared Git
-remote, so another machine cannot resolve this lockfile until publication.
+The locked fork revision `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`
+uses an abort-on-drop task handle for the complete fork family. On 2026-10-05,
+a separate clean checkout fetched this exact revision directly from the
+declared HTTPS remote. The earlier publication warning for local revision
+`7c24c0dd6ea5996af011529f6bae8ae8972f695a` is superseded.
 A listener timeout or caller cancellation must release an incomplete handshake
 task and its socket.
 The handler remains responsible for the established connection's existing TLS
@@ -35,7 +36,7 @@ describe a process-local policy, not an `EdgionTls` resource or route option.
 
 Pingora's `TlsSettings::build` creates a separate lazy `OffloadRuntime` for
 each acceptor. Without the process budget, a seemingly small pair of pool
-values multiplies by the number of listeners. The locally committed fork's
+values multiplies by the number of listeners. The locked fork's
 BoringSSL acceptor adopts the cancellation behavior from official upstream commit
 `4487f7b2ab50f159e4a2cf4f6a6b813f61bb6e19`.
 
@@ -58,9 +59,9 @@ limits.
 
 ## Verification and re-evaluation
 
-The fork's `spawned_task_is_aborted_when_handle_is_dropped`,
+The original local verification exercised `spawned_task_is_aborted_when_handle_is_dropped`,
 `completed_handshake_runs_callback_on_offload_thread`, and
-`timed_out_offloaded_handshake_closes_client_connection` tests cover cancellation,
+`timed_out_offloaded_handshake_closes_client_connection`. These tests cover cancellation,
 the dedicated callback thread, and a BoringSSL handshake held inside its
 certificate callback until the outer wait times out. The fork's
 `dropping_runtime_releases_pending_task` and
@@ -78,10 +79,71 @@ were run manually and are not part of the integration runner.
 The timeout test keeps the acceptor runtime alive through the client assertion;
 temporarily restoring the old bare spawn makes that test fail on client closure,
 and restoring abort-on-drop makes it pass.
-An offline workspace check with `--locked` consumed the new Git revision without
-a Cargo path patch. This local verification does not establish that the declared
-remote serves the commit or that performance improves. Publish the fork commit
-and rerun the locked checks on a clean checkout before release.
+That original offline workspace check consumed the local Git revision without
+a Cargo path patch. The fresh verification below supersedes its outstanding
+publication and clean-checkout gates; neither run establishes a performance gain.
+
+### Fresh acceptance on 2026-10-05
+
+The frozen Edgion revision was `6c89d1379d38ca8040c9cc1637867b2d4307d2d0`,
+with all 16 Pingora-family packages locked to `0b0d8bb`. A clean local Edgion
+clone used the existing compilation cache without a manifest or lockfile
+change or Cargo path patch. A separate fork clone fetched the exact locked
+commit from `https://github.com/Pandaala/pingora.git`. The fork does not commit
+a Cargo lockfile; its test lockfile was generated offline with
+`cargo generate-lockfile --offline` before the locked test command.
+
+- `cargo check --workspace --all-targets --locked` and
+  `cargo clippy --workspace --all-targets --locked` passed in the clean Edgion clone.
+- `cargo test -p edgion-gateway --lib --locked tls_offload`: 3 passed.
+- `cargo test -p pingora-core --features boringssl --lib --locked offload`:
+  12 passed, including the cancellation, real-handshake, independent-pool,
+  owner-release, and disabled-runtime regressions.
+- Freshly built Gateway, Controller, CLI, and test binaries ran with
+  `EDGION_TEST_DOWNSTREAM_TLS_OFFLOAD=1`. The eight EdgionTls suites
+  `https`, `grpctls`, `mTLS`, `cipher`, `mtls_failclose`, `fallback_sni`,
+  `sni_collision`, and `wildcard_single_label` passed all 31 cases.
+  `TlsLastKnownGood` passed valid rotation, invalid-update retention, and recovery.
+  The four incomplete connections in `test_downstream_tls_offload_timeout.py`
+  all closed within its production-timeout assertion bounds.
+- A temporary socket harness called the production `add_http_listener` and
+  `add_tls_terminate_to_tcp_listener` builders with synthesized Gateway
+  publication inputs. Across disabled, enabled, and trusted inbound PROXY
+  configurations, all 12 TLS 1.2/1.3 handshakes passed. HTTPS negotiated H2;
+  TCP termination advertised no ALPN. Darwin thread samples showed zero
+  offload workers while disabled, two workers for two warmed `1 x 1`
+  acceptors while enabled, and zero after final shutdown. Each handshake
+  emitted exactly one SSL record. TCP connection records retained SNI and
+  the handshake `tls_id`; `direct_peer_ip` remained `127.0.0.1` while the
+  trusted PROXY case set `remote_ip` to `192.0.2.123`.
+- The shared Gateway exited after SIGTERM in 35.12 seconds. Controller and
+  test-server teardown also completed without SIGKILL; all owned processes exited.
+- Format, agent-document, English-only, types-purity, Bash-portability,
+  shell-compatibility, SSA-force, metrics-inventory, Pingora-source,
+  Gateway API transform-contract, and unit-test-layout checks passed.
+
+The standard integration runner requires macOS loopback aliases unavailable
+without an administrator password in this environment. The focused suites
+therefore used its existing shared-topology startup helper and direct test
+client commands, with the relevant preflight guards run separately. An initial
+manual `mtls_failclose` run omitted `EDGION_TEST_ACCESS_LOG_PATH`; correcting
+the driver to use the shared work-directory log path made all three cases pass.
+This was a test-driver error, with no production change.
+
+Controller admission still rejects explicit TLS/Terminate and does not advertise
+`TLSRouteModeTerminate`. The temporary builder harness verifies the Gateway
+transport seam only; it does not establish Controller support or TLSRoute
+conformance. Normal TLSRoute suites that skip termination are not positive
+offload acceptance evidence. FIPS builds and new CPU-capped performance
+comparisons were not run in this macOS acceptance environment. The old and
+current fork's `offload.rs` and BoringSSL acceptor files were byte-identical;
+the historical performance results below remain diagnostic evidence.
+
+Local raw logs, thread samples, and the temporary harness are retained under
+`tmp/tls-offload-acceptance-20261005/`; the harness source is
+`listener_acceptance.rs`. It is not a permanent CI test target.
+
+### Historical equal-CPU comparison
 
 An equal-CPU local comparison used the Linux/arm64 debug binary inside a Docker
 container capped at two CPU cores and 4 GiB. Both modes loaded the same four
@@ -132,6 +194,6 @@ the one-entry SSL log and ex-data contracts.
 
 - P090-001, `tasks/pingora-0.9.0/001-downstream-tls-handshake-offload.md`:
   optional capability implemented with a bounded process policy and the
-  cancellation prerequisite in the local lockfile; the equal-CPU local
-  comparison is recorded above. Remote publication and clean-checkout
-  verification are still pending.
+  cancellation prerequisite in the published locked fork; fresh acceptance of
+  the current revision is recorded above. The historical equal-CPU comparison
+  remains diagnostic and does not justify an unconditional performance claim.
