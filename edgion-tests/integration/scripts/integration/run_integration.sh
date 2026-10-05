@@ -1955,6 +1955,8 @@ run_all_tests() {
                     fi
                     run_test "EdgionTls_grpctls" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i grpctls" || test_failed=true
                     run_test "EdgionTls_mTLS" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i mTLS" || test_failed=true
+                    run_test "Dyn_AllowedSanRegexIgnoreCase" \
+                        "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario AllowedSanRegexIgnoreCase" || test_failed=true
                     run_test "EdgionTls_cipher" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i cipher" || test_failed=true
                     run_test "EdgionTls_mtls_failclose" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i mtls_failclose" || test_failed=true
                     run_test "EdgionTls_fallback_sni" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i fallback_sni" || test_failed=true
@@ -1971,6 +1973,10 @@ run_all_tests() {
                 elif [ "$G_ITEM" = "LastKnownGood" ]; then
                     run_test "Dyn_TlsLastKnownGood" \
                         "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario TlsLastKnownGood" || test_failed=true
+                elif [ "$G_ITEM" = "mTLS" ]; then
+                    run_test "EdgionTls_mTLS" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i mTLS" || test_failed=true
+                    run_test "Dyn_AllowedSanRegexIgnoreCase" \
+                        "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario AllowedSanRegexIgnoreCase" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "EdgionTls_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i ${G_ITEM}" || test_failed=true

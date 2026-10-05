@@ -121,6 +121,21 @@ When `minTlsVersion` is unset, BoringSSL's default (TLS 1.2+) applies, which is 
 | `clientAuth.allowedSans` | Array\<object\> | none | Typed SAN allowlist. Each entry has `type` (`DNS` \| `URI` \| `Email` \| `IP` \| `OtherName`) and `value`. Optional `match` (`Exact` default, `Prefix`, `Suffix`, `Contains`, `RegularExpression`), `ignoreCase`, and `oid` (required for `OtherName`). Omit or empty means no extra SAN constraint. DNS Exact uses RFC 6125 wildcards. RegularExpression is compiled at config load. |
 | `clientAuth.allowedCns` | Array\<String\> | none | Allowlist of client-certificate Common Names (exact match) |
 
+`allowedSans[].ignoreCase` defaults to `false`. For `Exact`, `Prefix`, `Suffix`,
+and `Contains` string comparisons, `true` ignores ASCII case. DNS `Exact` always
+uses RFC 6125 hostname matching; IP `Exact` compares parsed addresses.
+
+For `RegularExpression`, `ignoreCase` sets the default case mode using Unicode
+simple case folding. Inline `(?i)` and `(?-i)` flags override it within their
+scope: `(?i)^spiffe://cluster$` is case-insensitive even with `ignoreCase: false`,
+while `^spiffe://(?-i:cluster)$` with `ignoreCase: true` permits `SPIFFE://cluster`
+but rejects `SPIFFE://CLUSTER`. Matching still requires the configured SAN type
+and, for `OtherName`, the configured OID. Regexes compile at configuration load
+under a 1,024-byte source limit and 1 MiB program/DFA limits. An invalid or
+uncompiled entry in the active allowlist rejects the client. An invalid
+configuration update may retain the previous valid TLS configuration, including
+its mTLS policy, under the existing last-known-good rules.
+
 #### `clientAuth.mode` values
 
 | Value | Meaning |

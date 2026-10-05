@@ -44,6 +44,7 @@ SpBackendChange	HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest	in
 SpWeighted	HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-default	spw-route
 TcpEspReload	TCPRoute/StreamPlugins/DynamicTest	initial	edgionstreamplugins.edgion.io	edgionstreamplugins	edgion-test	tcp-sp-reload-esp
 TlsLastKnownGood	EdgionTls/LastKnownGood	initial	edgiontls.edgion.io	edgiontls	edgion-test	lkg-tls
+AllowedSanRegexIgnoreCase	EdgionTls/mTLS	DynamicTest/initial	edgiontls.edgion.io	edgiontls	edgion-test	mtls-test-san
 WafDynamic	EdgionPlugins/Waf/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	waf-dynamic
 DelegationParentRefGatewayCollisionHttp	HTTPRoute/Delegation/ParentRefGatewayCollision/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-test	parentref-collision-http
 DelegationParentRefGatewayCollisionGrpc	GRPCRoute/Delegation/ParentRefGatewayCollision/DynamicTest	initial	grpcroutes.gateway.networking.k8s.io	grpcroute	edgion-test	parentref-collision-grpc

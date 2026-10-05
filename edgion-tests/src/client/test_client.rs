@@ -71,6 +71,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "TlsRoutePluginsReload",
     "GcParamsFlap",
     "TlsLastKnownGood",
+    "AllowedSanRegexIgnoreCase",
     "WafDynamic",
     "WasmRuntimeOwnership",
     "AcmeGatewayRefOwnership",
@@ -1567,6 +1568,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "PreflightPolicyHotReload" => Some(("Gateway/PreflightPolicyHotReload", PortKind::Http)),
         "TlsRoutePluginsReload" => Some(("TLSRoute/StreamPlugins", PortKind::Tls)),
         "TlsLastKnownGood" => Some(("EdgionTls/LastKnownGood", PortKind::Https)),
+        "AllowedSanRegexIgnoreCase" => Some(("EdgionTls/mTLS", PortKind::Https)),
         "AcmeGatewayRefOwnership" => Some(("Gateway/AcmeGatewayRefOwnership", PortKind::Http)),
         // This scenario only inspects control-plane status and intentionally has
         // no data-plane listener.

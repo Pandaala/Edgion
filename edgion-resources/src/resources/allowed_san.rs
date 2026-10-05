@@ -56,6 +56,9 @@ pub struct AllowedSan {
 
     pub value: String,
 
+    /// Ignore ASCII case for string comparisons. For RegularExpression, set the
+    /// regex engine's default case mode (Unicode-aware); inline flags override it.
+    /// DNS Exact and IP Exact retain their typed comparison semantics.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ignore_case: bool,
 
@@ -103,20 +106,22 @@ impl AllowedSan {
     /// Compile a `RegularExpression` entry. No-op for other match kinds.
     pub fn compile(&mut self) -> Result<(), String> {
         if self.match_kind == AllowedSanMatch::RegularExpression {
-            self.compiled_regex = Some(compile_bounded_regex(self.value.trim())?);
+            self.compiled_regex = Some(compile_bounded_regex(self.value.trim(), self.ignore_case)?);
         }
         Ok(())
     }
 }
 
 /// Compile an operator regex under the shared DFA caps.
-pub fn compile_bounded_regex(pattern: &str) -> Result<regex::Regex, String> {
+/// Inline `i` flags can override the supplied default within their scope.
+pub fn compile_bounded_regex(pattern: &str, ignore_case: bool) -> Result<regex::Regex, String> {
     if pattern.len() > ALLOWED_SAN_REGEX_MAX_LEN {
         return Err(format!(
             "RegularExpression value exceeds {ALLOWED_SAN_REGEX_MAX_LEN} bytes"
         ));
     }
     regex::RegexBuilder::new(pattern)
+        .case_insensitive(ignore_case)
         .size_limit(ALLOWED_SAN_REGEX_SIZE_LIMIT)
         .dfa_size_limit(ALLOWED_SAN_REGEX_SIZE_LIMIT)
         .build()
@@ -169,7 +174,7 @@ pub fn allowed_san_config_error(entry: &AllowedSan) -> Option<String> {
         return Some(err);
     }
     if entry.match_kind == AllowedSanMatch::RegularExpression {
-        if let Err(err) = compile_bounded_regex(entry.value.trim()) {
+        if let Err(err) = compile_bounded_regex(entry.value.trim(), entry.ignore_case) {
             return Some(err);
         }
     }

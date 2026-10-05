@@ -129,6 +129,7 @@ spec:
                           ignoreCase:
                             type: boolean
                             default: false
+                            description: "Ignore ASCII case for string comparisons. RegularExpression uses the regex engine's Unicode-aware default case mode; inline (?i) and (?-i) flags override it within their scope. DNS Exact and IP Exact retain typed comparison semantics."
                           oid:
                             type: string
                             description: "Required when type is OtherName; forbidden otherwise."

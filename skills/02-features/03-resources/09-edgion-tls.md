@@ -93,6 +93,14 @@ spec:
 | `allowedSans` | `Vec<AllowedSan>?` | — | Typed SAN allowlist (`type` + `value`, optional `match` / `ignoreCase` / `oid`). Omit or empty = no SAN constraint. |
 | `allowedCns` | `Vec<String>?` | — | Common Name allowlist |
 
+`allowedSans[].ignoreCase` defaults to `false`. String comparisons use ASCII
+case folding when enabled. For `RegularExpression`, it sets the regex engine's
+default case mode (Unicode simple case folding); inline `(?i)` and `(?-i)` flags
+override that default within their scope. DNS `Exact` retains RFC 6125 hostname
+matching, and IP `Exact` compares parsed addresses regardless of this flag.
+Regexes are bounded and compiled during configuration loading, including after
+Gateway deserialization; the handshake only executes the compiled matcher.
+
 **ClientAuthMode enum**:
 
 | Value | Description |

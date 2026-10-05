@@ -72,3 +72,63 @@ fn empty_value_rejected() {
     let entry = AllowedSan::exact(AllowedSanType::Uri, "  ");
     assert!(allowed_san_config_error(&entry).unwrap().contains("non-empty"));
 }
+
+#[test]
+fn regex_ignore_case_defaults_and_inline_overrides() {
+    for (pattern, ignore_case, presented, expected) in [
+        (r"^spiffe://cluster$", false, "SPIFFE://CLUSTER", false),
+        (r"^spiffe://cluster$", true, "SPIFFE://CLUSTER", true),
+        (r"(?i)^spiffe://cluster$", false, "SPIFFE://CLUSTER", true),
+        (r"(?-i)^spiffe://cluster$", true, "SPIFFE://CLUSTER", false),
+        (r"^spiffe://(?-i:cluster)$", true, "SPIFFE://cluster", true),
+        (r"^spiffe://(?-i:cluster)$", true, "SPIFFE://CLUSTER", false),
+        (r"^é$", true, "É", true),
+        (r"^é$", false, "É", false),
+    ] {
+        let mut entry = AllowedSan::exact(AllowedSanType::Uri, pattern);
+        entry.match_kind = AllowedSanMatch::RegularExpression;
+        entry.ignore_case = ignore_case;
+        assert!(allowed_san_config_error(&entry).is_none());
+        entry.compile().unwrap();
+        assert_eq!(
+            entry.compiled_regex.as_ref().unwrap().is_match(presented),
+            expected,
+            "pattern={pattern}, ignoreCase={ignore_case}, presented={presented}"
+        );
+    }
+}
+
+#[test]
+fn regex_ignore_case_preserves_admission_and_runtime_bounds() {
+    for ignore_case in [false, true] {
+        for pattern in [
+            "(".to_string(),
+            "a".repeat(ALLOWED_SAN_REGEX_MAX_LEN + 1),
+            r"\w{10000}".to_string(),
+        ] {
+            let mut entry = AllowedSan::exact(AllowedSanType::Uri, pattern);
+            entry.match_kind = AllowedSanMatch::RegularExpression;
+            entry.ignore_case = ignore_case;
+            let error = allowed_san_config_error(&entry).expect("invalid or oversized regex must be rejected");
+            assert_eq!(entry.compile().unwrap_err(), error);
+            assert!(entry.compiled_regex.is_none());
+        }
+    }
+}
+
+#[test]
+fn regex_case_folding_expansion_is_rejected_during_admission() {
+    let mut entry = AllowedSan::exact(AllowedSanType::Uri, r"[a-z]{5000}");
+    entry.match_kind = AllowedSanMatch::RegularExpression;
+    assert!(allowed_san_config_error(&entry).is_none());
+    assert!(entry.compile().is_ok());
+
+    // Unicode case folding expands this small source beyond the program cap.
+    // Admission must use the same flag as Gateway reconstruction.
+    entry.ignore_case = true;
+    entry.compiled_regex = None;
+    let error = allowed_san_config_error(&entry).expect("case-folded program must exceed the limit");
+    assert!(error.contains("compiled limit"));
+    assert_eq!(entry.compile().unwrap_err(), error);
+    assert!(entry.compiled_regex.is_none());
+}

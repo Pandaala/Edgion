@@ -121,6 +121,19 @@ spec:
 | `clientAuth.allowedSans` | Array\<object\> | none | 带类型的 SAN 允许列表。每项包含 `type`（`DNS` \| `URI` \| `Email` \| `IP` \| `OtherName`）和 `value`。可选 `match`（默认 `Exact`，以及 `Prefix` / `Suffix` / `Contains` / `RegularExpression`）、`ignoreCase`、以及 `OtherName` 所需的 `oid`。省略或空列表表示不额外约束 SAN。DNS Exact 使用 RFC 6125 通配符。RegularExpression 在配置加载时预编译。 |
 | `clientAuth.allowedCns` | Array\<String\> | none | 客户端证书 Common Name 允许列表（精确匹配） |
 
+`allowedSans[].ignoreCase` 默认为 `false`。对于 `Exact`、`Prefix`、`Suffix`
+和 `Contains` 的字符串比较，`true` 表示忽略 ASCII 大小写。DNS `Exact` 始终
+使用 RFC 6125 主机名匹配；IP `Exact` 比较解析后的地址。
+
+对于 `RegularExpression`，`ignoreCase` 使用 Unicode 简单大小写折叠设置默认
+匹配模式。内联 `(?i)` 和 `(?-i)` 标志可在各自作用域内覆盖默认值：即使
+`ignoreCase: false`，`(?i)^spiffe://cluster$` 也忽略大小写；而
+`^spiffe://(?-i:cluster)$` 配合 `ignoreCase: true` 允许 `SPIFFE://cluster`，
+但拒绝 `SPIFFE://CLUSTER`。匹配仍要求 SAN 类型一致，`OtherName` 还要求 OID
+一致。正则在配置加载时编译，源码上限为 1,024 字节，程序和 DFA 上限均为
+1 MiB。生效的允许列表包含非法或未编译条目时，会拒绝客户端。非法配置更新
+可能按既有的最近有效配置保留规则继续使用上一份有效 TLS 配置，包括其 mTLS 策略。
+
 #### `clientAuth.mode` 取值说明
 
 | 值 | 含义 |

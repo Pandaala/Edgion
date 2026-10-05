@@ -973,3 +973,79 @@ fn conf_handler_preserves_shared_resource_allocation() {
     let snapshot = store.matcher.data.load();
     assert!(Arc::ptr_eq(&snapshot.entries["ns/shared"].compiled.tls, &updated));
 }
+
+#[test]
+fn regex_ignore_case_reconstructs_after_serde_and_updates_published_generations() {
+    use edgion_common::allowed_san::{client_sans_match_allowed, PresentedSan};
+    use edgion_resources::resources::edgion_tls::{
+        AllowedSan, AllowedSanMatch, AllowedSanType, ClientAuthConfig, ClientAuthMode,
+    };
+
+    let store = TlsStore::new();
+    let mut resource = (*make_valid_tls("ns", "regex", &["regex.example.com"])).clone();
+    let mut san = AllowedSan::exact(AllowedSanType::Uri, r"^spiffe://cluster$");
+    san.match_kind = AllowedSanMatch::RegularExpression;
+    resource.spec.client_auth = Some(ClientAuthConfig {
+        mode: ClientAuthMode::Terminate,
+        ca_secret_ref: None,
+        verify_depth: 1,
+        ca_secret: None,
+        allowed_sans: Some(vec![san]),
+        allowed_cns: None,
+    });
+    let presented = [PresentedSan::uri("SPIFFE://CLUSTER")];
+    let mut previous = None;
+    for (index, ignore_case) in [false, true, false].into_iter().enumerate() {
+        let auth = resource.spec.client_auth.as_mut().unwrap();
+        let san = &mut auth.allowed_sans.as_mut().unwrap()[0];
+        san.ignore_case = ignore_case;
+        san.compile().unwrap();
+        let wire = serde_json::to_vec(&resource).unwrap();
+        let decoded: EdgionTls = serde_json::from_slice(&wire).unwrap();
+        let allowed = decoded
+            .spec
+            .client_auth
+            .as_ref()
+            .unwrap()
+            .allowed_sans
+            .as_ref()
+            .unwrap();
+        assert_eq!(allowed[0].ignore_case, ignore_case);
+        assert!(allowed[0].compiled_regex.is_none());
+        assert!(!client_sans_match_allowed(&presented, allowed));
+        let data = HashMap::from([("ns/regex".to_string(), Arc::new(decoded))]);
+        if index == 0 {
+            store.replace_all_tls(data);
+        } else {
+            store.apply_partial_update(HashMap::new(), data, &HashSet::new());
+        }
+        assert!(store.get_validation_status("ns/regex").unwrap().is_valid);
+        let snapshot = store.snapshot();
+        let compiled = snapshot.match_sni_candidates(&listener(443), "regex.example.com")[0].clone();
+        let allowed = compiled
+            .tls
+            .spec
+            .client_auth
+            .as_ref()
+            .unwrap()
+            .allowed_sans
+            .as_ref()
+            .unwrap();
+        assert!(allowed[0].compiled_regex.is_some());
+        assert_eq!(client_sans_match_allowed(&presented, allowed), ignore_case);
+        if let Some((old, old_ignore_case)) = previous.take() {
+            let old: Arc<CompiledEdgionTls> = old;
+            let allowed = old
+                .tls
+                .spec
+                .client_auth
+                .as_ref()
+                .unwrap()
+                .allowed_sans
+                .as_ref()
+                .unwrap();
+            assert_eq!(client_sans_match_allowed(&presented, allowed), old_ignore_case);
+        }
+        previous = Some((compiled, ignore_case));
+    }
+}

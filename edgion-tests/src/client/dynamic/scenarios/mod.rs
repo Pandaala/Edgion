@@ -7,6 +7,7 @@ pub mod ai_backend_secret_rotation;
 pub mod ai_backend_weighted;
 pub mod ai_guard_ordering;
 pub mod all_endpoint_status_tls;
+pub mod allowed_san_regex_ignore_case;
 pub mod basic_auth_dynamic;
 pub mod body_dynamic;
 pub mod btlsp_ref_flap;

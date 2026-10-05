@@ -205,3 +205,46 @@ fn typed_display_prefix_covers_other_name() {
         "otherName:1.3.6.1.4.1.311.20.2.3=alice@corp.example.com"
     ));
 }
+
+#[test]
+fn regex_ignore_case_matches_only_the_selected_identity_type() {
+    for (ignore_case, pattern, expected) in [
+        (false, r"^spiffe://cluster$", false),
+        (true, r"^spiffe://cluster$", true),
+        (false, r"(?i)^spiffe://cluster$", true),
+        (true, r"(?-i)^spiffe://cluster$", false),
+    ] {
+        let mut entry = AllowedSan::exact(AllowedSanType::Uri, pattern);
+        entry.match_kind = AllowedSanMatch::RegularExpression;
+        entry.ignore_case = ignore_case;
+        assert!(!client_sans_match_allowed(
+            &[PresentedSan::uri("SPIFFE://CLUSTER")],
+            std::slice::from_ref(&entry)
+        ));
+        entry.compile().unwrap();
+        assert_eq!(
+            client_sans_match_allowed(&[PresentedSan::uri("SPIFFE://CLUSTER")], std::slice::from_ref(&entry)),
+            expected
+        );
+        assert!(!client_sans_match_allowed(
+            &[PresentedSan::dns("SPIFFE://CLUSTER")],
+            std::slice::from_ref(&entry)
+        ));
+
+        let mut other_name = AllowedSan::other_name("1.2.3", pattern);
+        other_name.match_kind = AllowedSanMatch::RegularExpression;
+        other_name.ignore_case = ignore_case;
+        other_name.compile().unwrap();
+        assert_eq!(
+            client_sans_match_allowed(
+                &[PresentedSan::other_name("1.2.3", "SPIFFE://CLUSTER")],
+                std::slice::from_ref(&other_name)
+            ),
+            expected
+        );
+        assert!(!client_sans_match_allowed(
+            &[PresentedSan::other_name("1.2.4", "SPIFFE://CLUSTER")],
+            std::slice::from_ref(&other_name)
+        ));
+    }
+}
