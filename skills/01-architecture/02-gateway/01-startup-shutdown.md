@@ -18,7 +18,8 @@ Keep this page grouped by responsibility instead of freezing a shorter historica
 
 ### 1. Local configuration and process globals
 
-1. Load and merge `EdgionGatewayConfig`; initialize and validate the work directory.
+1. Load and merge `EdgionGatewayConfig`; validate the bounded downstream H2 startup policy,
+   then initialize and validate the work directory.
 2. Create the Tokio runtime and initialize system logging.
 3. Reject `--integration-testing-mode` unless the explicit production-unsafe environment gate is set.
 4. Install the Prometheus recorder before emitting startup metrics.
@@ -75,9 +76,15 @@ an explicit matcher.
 
 `create_and_configure_server()` runs in `spawn_blocking` while the Tokio runtime is active:
 
-1. Build `ServerConf` (`threads`, `work_stealing`, grace periods, keepalive pool, error log).
+1. Revalidate/prepare `DownstreamH2Policy` for programmatic callers and build `ServerConf`
+   (`threads`, `work_stealing`, grace periods, keepalive pool, error log).
 2. Create and bootstrap `pingora_core::Server`.
 3. Create `GatewayBase`, list Gateway resources, and configure startup listener sockets.
+   Normal HTTP proxy services receive the prepared H2 options through
+   `Service::app_logic_mut()` before endpoints are added; TLS H2 and h2c share this
+   policy. Defaults retain Pingora's header and stream bounds. Local H2 settings
+   require restart and never change existing connections. See the
+   [configuration contract](../../02-features/02-config/01-gateway-config.md#server).
 
 UDP listeners run on the auxiliary Tokio runtime, outside Pingora services. Their
 registry owns cancellation tokens and serve-task handles. If listener construction

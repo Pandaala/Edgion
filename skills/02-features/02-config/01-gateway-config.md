@@ -428,6 +428,9 @@ no CLI token flag. See [03-auth-bootstrap.md](03-auth-bootstrap.md#gateway-provi
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `threads` | `usize` | CPU core count | Pingora worker thread count |
+| `downstream_h2_stream_window_size` | `u32?` | `65535` | Startup HTTP/2 stream receive window in bytes |
+| `downstream_h2_connection_window_size` | `u32?` | `65535` | Startup HTTP/2 connection receive window in bytes |
+| `downstream_h2_max_concurrent_streams` | `u32?` | `100` | Startup HTTP/2 concurrent client streams per connection |
 | `work_stealing` | `bool` | `true` | Tokio task stealing |
 | `grace_period_seconds` | `u64` | `30` | Graceful shutdown wait time in seconds |
 | `graceful_shutdown_timeout_seconds` | `u64` | `10` | Shutdown timeout in seconds |
@@ -437,6 +440,14 @@ no CLI token flag. See [03-auth-bootstrap.md](03-auth-bootstrap.md#gateway-provi
 > These settings belong exclusively to the local Gateway process, are resolved at startup, and
 > require a restart to change. GatewayClass-scoped HTTP compression and downstream connection
 > request limits belong to `EdgionGatewayConfig.spec.server`.
+
+Downstream H2 fields apply uniformly to h2c and TLS H2. They are optional integer
+values, with CLI-over-YAML precedence. `DownstreamH2Policy` validates the merged
+config before startup services and builds from Pingora's `default_h2_options()`;
+the same validated policy is installed in each normal HTTP proxy service before
+TLS/TCP endpoints are added. See the
+[operator contract and bounds](../../../docs/en/ops-guide/configuration/gateway-config.md#server)
+and [regression guard](../../04-review/h2-grpc/regression-guards/downstream-h2-startup-policy.md).
 
 ### Business Log Schema
 

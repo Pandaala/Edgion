@@ -4,6 +4,7 @@
 //! protocol listeners to the gateway server. It separates listener construction logic
 //! from the main gateway bootstrap process.
 
+use crate::runtime::server::downstream_h2::DownstreamH2Policy;
 use crate::runtime::server::proxy_protocol_policy::{
     get_global_proxy_protocol_policy_runtime, GuardFirstConnectionFilter, PreparedProxyProtocolPolicy,
 };
@@ -47,6 +48,8 @@ pub struct ListenerContext {
     /// Shared binding to the GatewayClass EGC, or the distinct built-in default.
     pub egc: Arc<crate::config::GatewayConfigHandle>,
     pub server_conf: Arc<ServerConf>,
+    /// Validated startup-only process policy for TLS H2 and h2c.
+    pub downstream_h2_policy: DownstreamH2Policy,
     /// Whether to enable HTTP/2 support (from Gateway annotation)
     pub enable_http2: bool,
     /// Gateway annotations
@@ -262,6 +265,7 @@ pub fn add_http_listener(
     let mut http_service = ProxyServiceBuilder::new(&context.server_conf, edgion_http)
         .server_options(opts)
         .build();
+    context.downstream_h2_policy.apply_to(&mut http_service)?;
 
     apply_connection_filter(&mut http_service, context);
 

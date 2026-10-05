@@ -21,6 +21,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Bounded downstream HTTP/2 startup policy](regression-guards/downstream-h2-startup-policy.md)
+
 - [Terminal gRPC status fields have one writer](regression-guards/terminal-status-field-ownership.md)
 - [Abandoned Request Bodies Have a Distinct Terminal Event — FIXED](regression-guards/abandoned-request-body-terminal-event.md)
 - [Custom terminal 101 normalized before dispatch](regression-guards/custom-terminal-101-normalized-before-dispatch.md)

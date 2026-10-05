@@ -315,6 +315,9 @@ cannot be enabled below `error`; other targets retain normal module-level filter
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `threads` | `Integer` | CPU core count | Pingora worker thread count; `0` means auto-detect |
+| `downstream_h2_stream_window_size` | `Integer` | `65535` | HTTP/2 receive window per stream in bytes; `65535`–`16777216` |
+| `downstream_h2_connection_window_size` | `Integer` | `65535` | HTTP/2 receive window per connection in bytes; `65535`–`16777216` |
+| `downstream_h2_max_concurrent_streams` | `Integer` | `100` | Maximum simultaneous client streams per HTTP/2 connection; `1`–`1024` |
 | `downstream_tls_offload_threadpools` | `Integer` | Disabled | Dedicated handshake pools per terminating TLS listener; `1`–`4`, requires the paired field |
 | `downstream_tls_offload_thread_per_pool` | `Integer` | Disabled | Threads per handshake pool; `1`–`4`, requires the paired field |
 | `work_stealing` | `Boolean` | `true` | Enable Tokio work-stealing to improve CPU utilization |
@@ -326,6 +329,33 @@ cannot be enabled below `error`; other targets retain normal module-level filter
 > These settings configure one Gateway process at startup and require a restart to change. For
 > GatewayClass-scoped HTTP compression and downstream connection request limits, use
 > [EdgionGatewayConfig](./edgion-gateway-config.md).
+
+Downstream HTTP/2 tuning applies uniformly to every HTTP listener supporting h2c and
+every HTTPS listener negotiating H2. Omission preserves Pingora defaults, including
+its 64 KiB decoded request-header limit. For example, to allow 256 KiB per stream
+and 1 MiB per connection with up to 100 concurrent streams:
+
+```yaml
+server:
+  downstream_h2_stream_window_size: 262144
+  downstream_h2_connection_window_size: 1048576
+  downstream_h2_max_concurrent_streams: 100
+```
+
+The effective stream window multiplied by the effective concurrent-stream limit
+must not exceed `67108864` bytes (64 MiB). This is a conservative configuration
+credit budget per connection, not a hard limit on process memory or total body size.
+Invalid individual values or combinations fail before startup services begin. Each
+field is optional; omitted fields retain their own defaults. CLI flags
+`--downstream-h2-stream-window-size`, `--downstream-h2-connection-window-size`, and
+`--downstream-h2-max-concurrent-streams` override the corresponding YAML fields.
+Use integer byte counts, not size strings. Changes require a Gateway restart and
+apply to connections established by the restarted process; existing connections
+are not updated. These settings do not enable HTTP/2 on a listener where it is
+disabled, do not change upstream connection windows, and leave HTTP/1 unchanged.
+Larger receive windows may help uploads or client-to-server gRPC messages over
+high-latency links. Measure resource use and throughput for your traffic before
+increasing them; they do not directly enlarge the client's download receive window.
 
 TLS handshake offload applies to HTTPS and TLS termination listeners. Each distinct
 terminating listener owns its own pool: `listeners × pools × threads per pool` must

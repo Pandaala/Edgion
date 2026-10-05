@@ -109,6 +109,14 @@ server:
   # ， CPU
   # threads: 4
 
+  # Optional downstream HTTP/2 receive windows in bytes and streams per connection.
+  # Omission preserves Pingora defaults: 65535 bytes for both windows, 100 streams.
+  # Windows: 65535..=16777216; streams: 1..=1024.
+  # Stream window * streams must be <= 67108864 bytes. Restart required.
+  # downstream_h2_stream_window_size: 65535
+  # downstream_h2_connection_window_size: 65535
+  # downstream_h2_max_concurrent_streams: 100
+
   # Optional downstream TLS handshake offload, disabled when both are omitted.
   # Each terminating HTTPS/TLS listener owns its own pool; total threads must be <= 64.
   # downstream_tls_offload_threadpools: 2

@@ -1,6 +1,7 @@
 use crate::conf_sync::conf_client::ConfigClient;
 use crate::observe::access_log::get_access_logger_unchecked;
 use crate::observe::AccessLogger;
+use crate::runtime::server::downstream_h2::DownstreamH2Policy;
 use crate::runtime::server::listener_builder;
 use crate::runtime::server::proxy_protocol_policy::{
     get_global_proxy_protocol_policy_runtime, PreparedProxyProtocolPolicy,
@@ -64,6 +65,7 @@ impl GatewayBase {
         &self,
         pingora_server: &mut Server,
         gateways: Vec<edgion_resources::Gateway>,
+        downstream_h2_policy: &DownstreamH2Policy,
     ) -> Result<()> {
         // Validate every Gateway and shared physical listener before adding any
         // service to Pingora. This also freezes the process-lifetime policy map
@@ -242,6 +244,7 @@ impl GatewayBase {
                         access_logger: self.get_access_logger(),
                         egc: Arc::clone(&egc),
                         server_conf: server_conf_arc.clone(),
+                        downstream_h2_policy: downstream_h2_policy.clone(),
                         enable_http2,
                         gateway_annotations: gateway_annotations.clone(),
                         proxy_protocol_policy: if matches!(

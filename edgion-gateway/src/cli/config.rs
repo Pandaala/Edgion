@@ -1,4 +1,5 @@
 use crate::plugins::http::request_mirror::RequestMirrorGlobalConfig;
+use crate::runtime::server::downstream_h2::DownstreamH2Policy;
 use anyhow::{Context, Result};
 use clap::Args;
 use edgion_resources::rate_limit_local_config::RateLimitLocalGlobalConfig;
@@ -575,6 +576,21 @@ pub struct ServerConfig {
     #[serde(default)]
     pub threads: Option<usize>,
 
+    /// Downstream HTTP/2 stream receive window in bytes (65535..=16777216).
+    #[arg(long = "downstream-h2-stream-window-size", value_name = "BYTES")]
+    #[serde(default)]
+    pub downstream_h2_stream_window_size: Option<u32>,
+
+    /// Downstream HTTP/2 connection receive window in bytes (65535..=16777216).
+    #[arg(long = "downstream-h2-connection-window-size", value_name = "BYTES")]
+    #[serde(default)]
+    pub downstream_h2_connection_window_size: Option<u32>,
+
+    /// Downstream HTTP/2 concurrent streams per connection (1..=1024).
+    #[arg(long = "downstream-h2-max-concurrent-streams", value_name = "NUM")]
+    #[serde(default)]
+    pub downstream_h2_max_concurrent_streams: Option<u32>,
+
     /// Dedicated downstream TLS handshake pools per terminating listener (1..=4).
     #[arg(long = "downstream-tls-offload-threadpools", value_name = "NUM")]
     #[serde(default)]
@@ -1147,6 +1163,8 @@ impl EdgionGatewayConfig {
         // Merge: CLI args override file config
         Self::merge(&mut file_config, &cli_config);
 
+        DownstreamH2Policy::try_from(&file_config.server)?;
+
         Ok(LoadedGatewayConfig {
             config: file_config,
             unknown_fields,
@@ -1158,6 +1176,16 @@ impl EdgionGatewayConfig {
         // Work directory: CLI value takes precedence if provided
         if cli.work_dir.is_some() {
             base.work_dir = cli.work_dir.clone();
+        }
+
+        if cli.server.downstream_h2_stream_window_size.is_some() {
+            base.server.downstream_h2_stream_window_size = cli.server.downstream_h2_stream_window_size;
+        }
+        if cli.server.downstream_h2_connection_window_size.is_some() {
+            base.server.downstream_h2_connection_window_size = cli.server.downstream_h2_connection_window_size;
+        }
+        if cli.server.downstream_h2_max_concurrent_streams.is_some() {
+            base.server.downstream_h2_max_concurrent_streams = cli.server.downstream_h2_max_concurrent_streams;
         }
 
         if cli.server.downstream_tls_offload_threadpools.is_some() {
