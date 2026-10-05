@@ -49,7 +49,7 @@ pub struct EtcdLinkClient {
     /// Shutdown signal sender
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     /// Handle to the spawned health-monitor task (populated by `init()`),
-    /// aborted in `shutdown()` so the task is deterministically terminated.
+    /// aborted in `shutdown()` to request cancellation without joining it.
     monitor_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
     /// Apply fingerprint hashes captured by the Gateway runner (D19).
     fp_rebuild: [u8; 32],
