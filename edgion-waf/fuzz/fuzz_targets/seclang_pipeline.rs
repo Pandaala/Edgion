@@ -84,8 +84,8 @@ fuzz_target!(|data: &[u8]| {
         accelerated.execute_request_headers(),
         reference.execute_request_headers()
     );
-    let body = RequestBody::new(payload, BodyProcessorSelection::Auto);
-    let accelerated_body = accelerated.publish_request_body(body);
+    let body = RequestBody::new(bytes::Bytes::copy_from_slice(payload), BodyProcessorSelection::Auto);
+    let accelerated_body = accelerated.publish_request_body(body.clone());
     let reference_body = reference.publish_request_body(body);
     assert_eq!(accelerated_body, reference_body);
     if accelerated_body.is_err() {

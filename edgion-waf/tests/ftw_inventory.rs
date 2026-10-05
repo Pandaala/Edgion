@@ -487,6 +487,8 @@ fn compile_ftw_generation(crs_root: &Path) -> CompiledGeneration {
         "SecAction \"id:900005,phase:1,nolog,pass,",
         "setvar:tx.blocking_paranoia_level=4,",
         "setvar:tx.crs_validate_utf8_encoding=1,",
+        // The pinned upstream FTW Docker profile explicitly enables XML attribute inspection.
+        "setvar:tx.crs_xml_attr_inspect=1,",
         "setvar:tx.arg_name_length=100,",
         "setvar:tx.arg_length=400,",
         "setvar:tx.total_arg_length=64000,",
@@ -579,7 +581,10 @@ fn observe(
     )?;
     let mut logged_rule_ids = Vec::new();
     append_logged(&mut logged_rule_ids, &transaction.execute_request_headers()?);
-    transaction.publish_request_body(RequestBody::new(&input.body, BodyProcessorSelection::Auto))?;
+    transaction.publish_request_body(RequestBody::new(
+        bytes::Bytes::copy_from_slice(&input.body),
+        BodyProcessorSelection::Auto,
+    ))?;
     append_logged(&mut logged_rule_ids, &transaction.execute_request_body()?);
     transaction.publish_response_head(ResponseHead::new(200, &[]))?;
     append_logged(&mut logged_rule_ids, &transaction.execute_response_headers()?);

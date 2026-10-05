@@ -17,18 +17,17 @@ spec:
           maxDepth: 32
           maxRetainedBytes: 1048576
           maxWork: 16777216
-        document:
+        structure:
           maxRetainedBytes: 1048576
           maxKeyBytes: 65536
           maxMembers: 4096
-          maxEvents: 8192
           maxPathBytes: 4096
           maxDepth: 32
           maxWork: 16777216
-        plan:
-          maxSubscribers: 128
-          maxRetainedBytes: 65536
-        facts:
+        results:
+          maxCandidates: 4096
+          maxDeferredEntries: 4096
+          maxDeferredBytes: 1048576
           maxFacts: 8192
           maxRetainedBytes: 1048576
           maxWork: 33554432

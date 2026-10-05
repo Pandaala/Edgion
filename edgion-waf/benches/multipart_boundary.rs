@@ -92,7 +92,10 @@ fn publish(generation: &CompiledGeneration, body: &[u8], content_type: &[u8]) ->
     transaction.execute_request_headers().unwrap();
     let started = Instant::now();
     transaction
-        .publish_request_body(RequestBody::new(black_box(body), BodyProcessorSelection::Auto))
+        .publish_request_body(RequestBody::new(
+            bytes::Bytes::copy_from_slice(black_box(body)),
+            BodyProcessorSelection::Auto,
+        ))
         .unwrap();
     let elapsed = started.elapsed().as_nanos();
     assert_eq!(

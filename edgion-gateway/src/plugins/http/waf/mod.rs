@@ -7,108 +7,20 @@ use async_trait::async_trait;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{BodyRequirement, WafConfig, WafMode, WafRequestBodyInspection};
 use edgion_waf::seclang::{
-    BodyError, BodyProcessorSelection, JsonBodyError, JsonDocumentError, JsonExecutionError, JsonExecutionLimits,
-    JsonStreamError, JsonStreamInput, JsonStreamLimit, PhaseOutcome, RequestBody, RequestBodyPrefixCompletion,
-    RequestHead, RequestHeader, ResponseHead, ResponseHeader, ResponseWindow, RuleEngineMode, RuntimeError,
-    RuntimeLimits, Transaction,
+    BodyError, BodyProcessorSelection, JsonCheckerError, JsonInspectionLimits, JsonStreamError, JsonStreamLimit,
+    PhaseOutcome, RequestBody, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead, ResponseHeader,
+    ResponseWindow, RuleEngineMode, RuntimeError, RuntimeLimits, Transaction,
 };
 
 use crate::ctx::{WafErrorCode, WafLogPhase, WafPhase, WafPhaseClaim};
 use crate::plugins::runtime::body_gate::body_read_failure_result;
 use crate::plugins::runtime::log::PluginLog;
-use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapshotReader};
+use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::traits::{
     PluginSession, PluginSessionHeaderExt, RequestFilter, UpstreamResponse, UpstreamResponseFilter,
 };
 
 const NAME: &str = "Waf";
-
-#[derive(Debug)]
-enum JsonSnapshotError {
-    Read(BodyReadError),
-    Engine(JsonExecutionError),
-}
-
-fn check_json_source_len(
-    len: u64,
-    physical_cap: u64,
-    canonical_cap: usize,
-    source_cap: usize,
-) -> Result<(), JsonSnapshotError> {
-    if len > physical_cap {
-        return Err(JsonSnapshotError::Read(BodyReadError::BufferLimitExceeded {
-            limit: physical_cap,
-        }));
-    }
-    let actual = usize::try_from(len).map_err(|_| JsonSnapshotError::Engine(JsonExecutionError::Arithmetic))?;
-    if actual > canonical_cap {
-        return Err(JsonSnapshotError::Engine(JsonExecutionError::Runtime(
-            RuntimeError::Body {
-                kind: BodyError::ByteLimit {
-                    actual,
-                    limit: canonical_cap,
-                },
-            },
-        )));
-    }
-    if actual > source_cap {
-        return Err(JsonSnapshotError::Engine(JsonExecutionError::Body(
-            JsonBodyError::SourceByteLimit { limit: source_cap },
-        )));
-    }
-    Ok(())
-}
-
-/// Publish a pinned canonical snapshot only after real EOF. Reads and parser
-/// publication deliberately remain outside the Phase 2 execution timer.
-async fn publish_json_snapshot(
-    transaction: &mut Transaction<'_>,
-    reader: &mut dyn RequestBodySnapshotReader,
-    expected_len: u64,
-    physical_cap: u64,
-    canonical_cap: usize,
-    source_cap: usize,
-) -> Result<(), JsonSnapshotError> {
-    let result = async {
-        if reader.len() != expected_len {
-            return Err(JsonSnapshotError::Read(BodyReadError::Incomplete));
-        }
-        check_json_source_len(reader.len(), physical_cap, canonical_cap, source_cap)?;
-        let mut received = 0u64;
-        loop {
-            let chunk = reader.next_chunk().await.map_err(JsonSnapshotError::Read)?;
-            let Some(chunk) = chunk else {
-                if received != expected_len {
-                    return Err(JsonSnapshotError::Read(BodyReadError::Incomplete));
-                }
-                return transaction
-                    .feed_json_request_body(JsonStreamInput::Complete)
-                    .map_err(JsonSnapshotError::Engine);
-            };
-            if chunk.is_empty() {
-                return Err(JsonSnapshotError::Read(BodyReadError::Incomplete));
-            }
-            received = received
-                .checked_add(
-                    u64::try_from(chunk.len())
-                        .map_err(|_| JsonSnapshotError::Engine(JsonExecutionError::Arithmetic))?,
-                )
-                .ok_or(JsonSnapshotError::Engine(JsonExecutionError::Arithmetic))?;
-            if received > expected_len {
-                return Err(JsonSnapshotError::Read(BodyReadError::Incomplete));
-            }
-            check_json_source_len(received, physical_cap, canonical_cap, source_cap)?;
-            transaction
-                .feed_json_request_body(JsonStreamInput::Data(&chunk))
-                .map_err(JsonSnapshotError::Engine)?;
-        }
-    }
-    .await;
-    if result.is_err() {
-        let _ = transaction.feed_json_request_body(JsonStreamInput::Abandoned);
-    }
-    result
-}
 
 struct WafGenerationMetricLease {
     bytes: i64,
@@ -140,7 +52,7 @@ struct SharedWaf {
     requires_request_body: bool,
     request_body_inspection: WafRequestBodyInspection,
     request_body_prefix_bytes: usize,
-    json_limits: Option<JsonExecutionLimits>,
+    json_limits: JsonInspectionLimits,
     priority: u16,
     _generation_metric: WafGenerationMetricLease,
 }
@@ -179,7 +91,12 @@ impl WafPlugin {
                 requires_request_body,
                 request_body_inspection: config.request_body.inspection,
                 request_body_prefix_bytes: config.request_body.prefix_size_bytes()?,
-                json_limits: config.request_body.json.as_ref().map(|json| json.execution_limits()),
+                json_limits: config
+                    .request_body
+                    .json
+                    .as_ref()
+                    .map(|json| json.inspection_limits())
+                    .unwrap_or_default(),
                 priority: config.priority,
                 _generation_metric: WafGenerationMetricLease::new(generation_bytes),
             }),
@@ -198,6 +115,13 @@ impl WafPlugin {
         match error {
             RuntimeError::Body {
                 kind: BodyError::ByteLimit { .. },
+            }
+            | RuntimeError::JsonChecker {
+                kind:
+                    JsonCheckerError::Lexical(JsonStreamError::Limit {
+                        kind: JsonStreamLimit::SourceBytes,
+                        ..
+                    }),
             } => 413,
             _ => 500,
         }
@@ -205,6 +129,30 @@ impl WafPlugin {
 
     pub(crate) fn runtime_error_code(error: &RuntimeError) -> WafErrorCode {
         match error {
+            RuntimeError::JsonChecker { kind } => match kind {
+                JsonCheckerError::Lexical(JsonStreamError::Limit {
+                    kind: JsonStreamLimit::SourceBytes,
+                    ..
+                }) => WafErrorCode::BodyLimit,
+                JsonCheckerError::Limit { .. } | JsonCheckerError::Lexical(JsonStreamError::Limit { .. }) => {
+                    WafErrorCode::RuntimeLimit
+                }
+                JsonCheckerError::Allocation | JsonCheckerError::Lexical(JsonStreamError::Allocation) => {
+                    WafErrorCode::Allocation
+                }
+                JsonCheckerError::Arithmetic | JsonCheckerError::Lexical(JsonStreamError::Arithmetic) => {
+                    WafErrorCode::Arithmetic
+                }
+                JsonCheckerError::State
+                | JsonCheckerError::AlreadyComplete
+                | JsonCheckerError::Lexical(JsonStreamError::Abandoned | JsonStreamError::AlreadyComplete) => {
+                    WafErrorCode::PhaseState
+                }
+                _ => WafErrorCode::BodyProcessing,
+            },
+            RuntimeError::JsonResultLimit { .. } => WafErrorCode::RuntimeLimit,
+            RuntimeError::JsonUnsupported { .. } => WafErrorCode::Unsupported,
+            RuntimeError::JsonInspectionState => WafErrorCode::RuntimeInvariant,
             RuntimeError::InputByteLimit { .. }
             | RuntimeError::DetectorInputLimit { .. }
             | RuntimeError::HeaderLimit { .. }
@@ -253,50 +201,6 @@ impl WafPlugin {
         }
     }
 
-    fn json_error_classification(error: &JsonExecutionError) -> (u16, WafErrorCode) {
-        match error {
-            JsonExecutionError::Runtime(error) => (Self::runtime_error_status(error), Self::runtime_error_code(error)),
-            JsonExecutionError::Limit { .. } => (500, WafErrorCode::RuntimeLimit),
-            JsonExecutionError::Unsupported => (500, WafErrorCode::Unsupported),
-            JsonExecutionError::Allocation => (500, WafErrorCode::Allocation),
-            JsonExecutionError::Arithmetic => (500, WafErrorCode::Arithmetic),
-            JsonExecutionError::State | JsonExecutionError::AlreadyComplete => (500, WafErrorCode::PhaseState),
-            JsonExecutionError::Body(error) => match error {
-                JsonBodyError::SourceByteLimit { .. } => (413, WafErrorCode::BodyLimit),
-                JsonBodyError::Body(kind) => {
-                    Self::json_error_classification(&JsonExecutionError::Runtime(RuntimeError::Body { kind: *kind }))
-                }
-                JsonBodyError::Arithmetic => (500, WafErrorCode::Arithmetic),
-                JsonBodyError::Abandoned | JsonBodyError::AlreadyComplete => (500, WafErrorCode::PhaseState),
-                JsonBodyError::Document(error) => match error {
-                    JsonDocumentError::Limit { .. } => (500, WafErrorCode::RuntimeLimit),
-                    JsonDocumentError::Allocation => (500, WafErrorCode::Allocation),
-                    JsonDocumentError::Arithmetic => (500, WafErrorCode::Arithmetic),
-                    JsonDocumentError::State | JsonDocumentError::AlreadyComplete => (500, WafErrorCode::PhaseState),
-                    JsonDocumentError::SinkRejected | JsonDocumentError::Number => (500, WafErrorCode::BodyProcessing),
-                    JsonDocumentError::Lexical(error) => match error {
-                        JsonStreamError::Limit {
-                            kind: JsonStreamLimit::SourceBytes,
-                            ..
-                        } => (413, WafErrorCode::BodyLimit),
-                        JsonStreamError::Limit { .. } => (500, WafErrorCode::RuntimeLimit),
-                        JsonStreamError::Allocation => (500, WafErrorCode::Allocation),
-                        JsonStreamError::Arithmetic => (500, WafErrorCode::Arithmetic),
-                        JsonStreamError::Abandoned | JsonStreamError::AlreadyComplete => {
-                            (500, WafErrorCode::PhaseState)
-                        }
-                        JsonStreamError::Syntax
-                        | JsonStreamError::Utf8
-                        | JsonStreamError::Escape
-                        | JsonStreamError::Number
-                        | JsonStreamError::Incomplete
-                        | JsonStreamError::SinkRejected => (500, WafErrorCode::BodyProcessing),
-                    },
-                },
-            },
-        }
-    }
-
     fn body_read_failure(
         &self,
         session: &mut dyn PluginSession,
@@ -315,74 +219,6 @@ impl WafPlugin {
             status,
         );
         result
-    }
-
-    fn json_failure(
-        &self,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-        error: &JsonSnapshotError,
-    ) -> PluginRunningResult {
-        match error {
-            JsonSnapshotError::Read(error) => self.body_read_failure(session, log, error),
-            JsonSnapshotError::Engine(error) => {
-                let (status, code) = Self::json_error_classification(error);
-                session.record_waf_terminal_error(&self.shared.owner, WafLogPhase::RequestBody, code, status);
-                PluginRunningResult::ErrResponse { status, body: None }
-            }
-        }
-    }
-
-    async fn run_json_body(
-        &self,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-        mut transaction: Transaction<'static>,
-        limits: JsonExecutionLimits,
-        canonical_cap: usize,
-    ) -> PluginRunningResult {
-        let physical_cap = session.ctx().request_body_config.max_body_size_bytes;
-        let expected_len = match session.ensure_request_body(Some(physical_cap)).await {
-            Ok(len) => len,
-            Err(error) => return self.body_read_failure(session, log, &error),
-        };
-        if let Err(error) = check_json_source_len(
-            expected_len,
-            physical_cap,
-            canonical_cap,
-            limits.lexical.max_source_bytes,
-        ) {
-            return self.json_failure(session, log, &error);
-        }
-        let known_bodyless = session.ctx().request_info.body_declared == Some(false);
-        let mut reader = match session.request_body_snapshot_reader(known_bodyless).await {
-            Ok(reader) => reader,
-            Err(error) => return self.body_read_failure(session, log, &error),
-        };
-        if let Err(error) = publish_json_snapshot(
-            &mut transaction,
-            reader.as_mut(),
-            expected_len,
-            physical_cap,
-            canonical_cap,
-            limits.lexical.max_source_bytes,
-        )
-        .await
-        {
-            return self.json_failure(session, log, &error);
-        }
-        let started = Instant::now();
-        let execution = transaction.finish_json_request_body();
-        let request_body_us = elapsed_micros(started);
-        crate::observe::metrics::record_waf_execution_micros("request_body", request_body_us);
-        let intervention = match execution {
-            Ok(outcome) => self.record_outcome(session, WafLogPhase::RequestBody, request_body_us, &outcome),
-            Err(error) => return self.json_failure(session, log, &JsonSnapshotError::Engine(error)),
-        };
-        if intervention.is_some() {
-            return Self::intervention_result(intervention);
-        }
-        self.restore_transaction(session, transaction, WafLogPhase::RequestBody)
     }
 
     fn runtime_failure(
@@ -518,24 +354,19 @@ impl RequestFilter for WafPlugin {
             return Self::intervention_result(phase_one);
         }
 
-        if self.shared.requires_request_body {
-            if let Some(limits) = self.shared.json_limits {
-                match transaction.start_json_request_body(BodyProcessorSelection::Auto, limits) {
-                    Ok(()) => {
-                        return self
-                            .run_json_body(session, log, transaction, limits, runtime_limits.body.max_body_bytes)
-                            .await
-                    }
-                    Err(JsonExecutionError::Unsupported) => {}
-                    Err(error) => return self.json_failure(session, log, &JsonSnapshotError::Engine(error)),
-                }
+        let processor = if self.shared.request_body_inspection == WafRequestBodyInspection::Full {
+            match transaction.preflight_request_body(BodyProcessorSelection::Auto) {
+                Ok(processor) => processor,
+                Err(error) => return self.runtime_failure(session, WafLogPhase::RequestBody, &error),
             }
-        }
+        } else {
+            BodyProcessorSelection::Auto
+        };
 
         let prefix_mode = self.shared.request_body_inspection == WafRequestBodyInspection::Prefix
             && self.shared.requires_request_body;
         let mut prefix_complete = false;
-        let body = if self.shared.requires_request_body {
+        let mut body = if self.shared.requires_request_body {
             let result = if prefix_mode {
                 session
                     .read_request_body_prefix(self.shared.request_body_prefix_bytes)
@@ -546,7 +377,53 @@ impl RequestFilter for WafPlugin {
                     })
             } else {
                 let cap = session.ctx().request_body_config.max_body_size_bytes;
-                session.read_request_body(Some(cap)).await
+                let captured = match session.ensure_request_body(Some(cap)).await {
+                    Ok(len) => len,
+                    Err(error) => return self.body_read_failure(session, log, &error),
+                };
+                let known_bodyless = session.ctx().request_info.body_declared == Some(false);
+                let available = match session.request_body_available_len(known_bodyless) {
+                    Ok(len) if len == captured => len,
+                    Ok(_) => return self.body_read_failure(session, log, &BodyReadError::Incomplete),
+                    Err(error) => return self.body_read_failure(session, log, &error),
+                };
+                if available > cap {
+                    return self.body_read_failure(session, log, &BodyReadError::BufferLimitExceeded { limit: cap });
+                }
+                let Ok(actual) = usize::try_from(available) else {
+                    return self.runtime_failure(session, WafLogPhase::RequestBody, &RuntimeError::Arithmetic);
+                };
+                if actual > runtime_limits.body.max_body_bytes {
+                    return self.runtime_failure(
+                        session,
+                        WafLogPhase::RequestBody,
+                        &RuntimeError::Body {
+                            kind: BodyError::ByteLimit {
+                                actual,
+                                limit: runtime_limits.body.max_body_bytes,
+                            },
+                        },
+                    );
+                }
+                if processor == BodyProcessorSelection::Json
+                    && actual > self.shared.json_limits.lexical.max_source_bytes
+                {
+                    return self.runtime_failure(
+                        session,
+                        WafLogPhase::RequestBody,
+                        &RuntimeError::JsonChecker {
+                            kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
+                                kind: JsonStreamLimit::SourceBytes,
+                                limit: self.shared.json_limits.lexical.max_source_bytes,
+                            }),
+                        },
+                    );
+                }
+                match session.read_request_body(Some(cap)).await {
+                    Ok(body) if body.len() == actual => Ok(body),
+                    Ok(_) => Err(BodyReadError::Incomplete),
+                    Err(error) => Err(error),
+                }
             };
             match result {
                 Ok(body) => body,
@@ -556,8 +433,10 @@ impl RequestFilter for WafPlugin {
             bytes::Bytes::new()
         };
         if self.shared.request_body_inspection == WafRequestBodyInspection::Full {
-            if let Err(error) = transaction.publish_request_body(RequestBody::new(&body, BodyProcessorSelection::Auto))
-            {
+            if let Err(error) = transaction.publish_request_body_with_json_limits(
+                RequestBody::new(std::mem::take(&mut body), processor),
+                self.shared.json_limits,
+            ) {
                 return self.runtime_failure(session, WafLogPhase::RequestBody, &error);
             }
         }

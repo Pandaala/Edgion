@@ -1,7 +1,7 @@
 use memchr::memmem::Finder;
 use thiserror::Error;
 
-use super::{CollectionKind, JsonDocument, JsonDocumentEvent};
+use super::CollectionKind;
 
 pub const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_MAX_BODY_ENTRIES: usize = 65_536;
@@ -61,13 +61,14 @@ impl BodyProcessorSelection {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct RequestBody<'input> {
-    bytes: &'input [u8],
+/// One complete owned source. Cloning shares its bytes without copying the body.
+#[derive(Clone)]
+pub struct RequestBody {
+    bytes: bytes::Bytes,
     processor: BodyProcessorSelection,
 }
 
-impl std::fmt::Debug for RequestBody<'_> {
+impl std::fmt::Debug for RequestBody {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("RequestBody")
@@ -77,16 +78,20 @@ impl std::fmt::Debug for RequestBody<'_> {
     }
 }
 
-impl<'input> RequestBody<'input> {
-    pub const fn new(bytes: &'input [u8], processor: BodyProcessorSelection) -> Self {
+impl RequestBody {
+    pub const fn new(bytes: bytes::Bytes, processor: BodyProcessorSelection) -> Self {
         Self { bytes, processor }
     }
 
-    pub const fn bytes(self) -> &'input [u8] {
-        self.bytes
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
-    pub const fn processor(self) -> BodyProcessorSelection {
+    pub(crate) fn into_parts(self) -> (bytes::Bytes, BodyProcessorSelection) {
+        (self.bytes, self.processor)
+    }
+
+    pub const fn processor(&self) -> BodyProcessorSelection {
         self.processor
     }
 }
@@ -132,7 +137,7 @@ pub(super) struct BodyPublication {
 }
 
 pub(super) fn build_publication(
-    body: RequestBody<'_>,
+    body: &RequestBody,
     content_type: Option<&[u8]>,
     head_args_combined_size: usize,
     limits: BodyLimits,
@@ -141,7 +146,7 @@ pub(super) fn build_publication(
 }
 
 pub(super) fn build_publication_with_raw_policy(
-    body: RequestBody<'_>,
+    body: &RequestBody,
     content_type: Option<&[u8]>,
     head_args_combined_size: usize,
     limits: BodyLimits,
@@ -158,7 +163,7 @@ pub(super) fn build_publication_with_raw_policy(
 }
 
 pub(super) fn build_fallback_publication(
-    body: RequestBody<'_>,
+    body: &RequestBody,
     content_type: Option<&[u8]>,
     head_args_combined_size: usize,
     limits: BodyLimits,
@@ -167,7 +172,7 @@ pub(super) fn build_fallback_publication(
 }
 
 pub(super) fn build_fallback_publication_with_raw_policy(
-    body: RequestBody<'_>,
+    body: &RequestBody,
     content_type: Option<&[u8]>,
     head_args_combined_size: usize,
     limits: BodyLimits,
@@ -184,7 +189,7 @@ pub(super) fn build_fallback_publication_with_raw_policy(
 }
 
 fn build_publication_inner(
-    body: RequestBody<'_>,
+    body: &RequestBody,
     content_type: Option<&[u8]>,
     head_args_combined_size: usize,
     limits: BodyLimits,
@@ -206,7 +211,7 @@ fn build_publication_inner(
                 BodyProcessorSelection::Auto | BodyProcessorSelection::Raw | BodyProcessorSelection::UrlEncoded
             ),
     ) {
-        builder.push(CollectionKind::RequestBody, None, body.bytes, false)?;
+        builder.push(CollectionKind::RequestBody, None, &body.bytes, false)?;
     }
     let length = body.bytes.len().to_string();
     builder.push(CollectionKind::RequestBodyLength, None, length.as_bytes(), false)?;
@@ -214,10 +219,10 @@ fn build_publication_inner(
     if parse_derived_views && !body.bytes.is_empty() {
         match processor {
             BodyProcessorSelection::Auto | BodyProcessorSelection::Raw => {}
-            BodyProcessorSelection::UrlEncoded => parse_urlencoded(body.bytes, &mut builder)?,
-            BodyProcessorSelection::Json => parse_json(body.bytes, &mut builder)?,
-            BodyProcessorSelection::Multipart => parse_multipart(body.bytes, content_type, &mut builder)?,
-            BodyProcessorSelection::Xml => parse_xml(body.bytes, &mut builder)?,
+            BodyProcessorSelection::UrlEncoded => parse_urlencoded(&body.bytes, &mut builder)?,
+            BodyProcessorSelection::Json => return Err(BodyError::Malformed { processor }),
+            BodyProcessorSelection::Multipart => parse_multipart(&body.bytes, content_type, &mut builder)?,
+            BodyProcessorSelection::Xml => parse_xml(&body.bytes, &mut builder)?,
         }
     }
     let combined_size = builder.accounting.combined_size(head_args_combined_size)?.to_string();
@@ -258,16 +263,6 @@ fn ends_with_ascii_case(value: &[u8], suffix: &[u8]) -> bool {
         .is_some_and(|ending| ending.eq_ignore_ascii_case(suffix))
 }
 
-/// Length-only validation of a successfully completed JSON document.
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub enum JsonPublicationError {
-    /// The document is active, failed, or abandoned; no successful completion is available.
-    #[error("JSON publication requires a successfully completed document")]
-    IncompleteDocument,
-    #[error(transparent)]
-    Body(#[from] BodyError),
-}
-
 /// Logical complete-body publication costs, not the reducer's allocation usage.
 /// `retained_bytes` includes the materialized entry descriptors and payload
 /// lengths; this validator does not allocate or retain those payloads.
@@ -285,34 +280,6 @@ pub struct JsonPublicationSummary {
     pub args_combined_size: usize,
     /// Decoded bytes plus logical materialized entry descriptors, not allocated capacity.
     pub retained_bytes: usize,
-}
-
-/// Replay canonical publication checks against trusted surviving JSON metadata.
-///
-/// The document must already have completed successfully. Lexical/reducer errors,
-/// their precedence against the body prelude, and empty HTTP bodies belong to a
-/// `JsonBodyAdapter`; this function does not reinterpret failed or empty
-/// documents as valid JSON. `retain_raw_body` explicitly controls logical raw
-/// body publication, including its entry and byte costs. Head ARGS bytes are
-/// added only after all surviving JSON traversal checks, as in materialization.
-/// This validates publication accounting only: a standalone `JsonDocument`
-/// can use syntax limits beyond the reference body parser's recursion limit.
-/// Use `JsonBodyAdapter` for reference body syntax and prelude parity within
-/// its separate streaming resource budgets.
-/// Subscriber results are ignored. No payloads are allocated or reconstructed.
-pub fn validate_json_publication<S: Copy>(
-    document: &JsonDocument<S>,
-    head_args_combined_size: usize,
-    limits: BodyLimits,
-    retain_raw_body: bool,
-) -> Result<JsonPublicationSummary, JsonPublicationError> {
-    let events = document.events().ok_or(JsonPublicationError::IncompleteDocument)?;
-    let source_bytes = document.lexical_usage().source_bytes;
-    let mut accounting = BodyAccounting::json_prelude(source_bytes, limits, retain_raw_body)?;
-    for event in events {
-        accounting.replay_json(event)?;
-    }
-    Ok(accounting.finish_json(head_args_combined_size)?)
 }
 
 fn decimal_bytes(value: usize) -> usize {
@@ -365,19 +332,36 @@ impl BodyAccounting {
         Ok(accounting)
     }
 
-    pub(super) fn replay_json<S: Copy>(&mut self, event: JsonDocumentEvent<S>) -> Result<(), BodyError> {
-        match event {
-            JsonDocumentEvent::ExtendPath { path_bytes } => check_name_bytes(path_bytes, self.limits.max_name_bytes),
-            JsonDocumentEvent::Visit { path_bytes, depth } => self.visit_json(path_bytes, depth),
-            JsonDocumentEvent::Scalar {
-                path_bytes,
-                value_bytes,
-                ..
-            } => {
-                self.push(CollectionKind::Args, Some(path_bytes), value_bytes)?;
-                self.push(CollectionKind::ArgsNames, Some(path_bytes), path_bytes)
-            }
+    /// Fixed final priority replaces the DOM walk's first failing node: names,
+    /// depth, entries, decoded bytes, traversal work, then final metadata.
+    pub(super) fn apply_json_summary(&mut self, summary: super::JsonSemanticSummary) -> Result<(), BodyError> {
+        check_name_bytes(summary.max_checked_name_bytes, self.limits.max_name_bytes)?;
+        if summary.max_value_depth > self.limits.max_depth {
+            return Err(BodyError::DepthLimit {
+                limit: self.limits.max_depth,
+            });
         }
+        self.entries = self
+            .entries
+            .checked_add(summary.body_entry_count)
+            .ok_or(BodyError::Arithmetic)?;
+        if self.entries > self.limits.max_entries {
+            return Err(BodyError::EntryLimit {
+                limit: self.limits.max_entries,
+            });
+        }
+        self.decoded_bytes = self
+            .decoded_bytes
+            .checked_add(summary.decoded_bytes)
+            .ok_or(BodyError::Arithmetic)?;
+        if self.decoded_bytes > self.limits.max_decoded_bytes {
+            return Err(BodyError::DecodedByteLimit {
+                limit: self.limits.max_decoded_bytes,
+            });
+        }
+        self.charge_work(summary.traversal_work)?;
+        self.body_args_size = summary.combined_size;
+        Ok(())
     }
 
     pub(super) fn finish_json(mut self, head_args_combined_size: usize) -> Result<JsonPublicationSummary, BodyError> {
@@ -415,15 +399,6 @@ impl BodyAccounting {
             });
         }
         Ok(())
-    }
-
-    fn visit_json(&mut self, path_bytes: usize, depth: usize) -> Result<(), BodyError> {
-        if depth > self.limits.max_depth {
-            return Err(BodyError::DepthLimit {
-                limit: self.limits.max_depth,
-            });
-        }
-        self.charge_work(path_bytes)
     }
 
     fn push(
@@ -550,71 +525,6 @@ fn parse_urlencoded(input: &[u8], builder: &mut BodyBuilder) -> Result<(), BodyE
         builder.push(CollectionKind::Args, Some(&name), &value, false)?;
         builder.push(CollectionKind::ArgsNames, Some(&name), &name, false)?;
     }
-    Ok(())
-}
-
-fn parse_json(input: &[u8], builder: &mut BodyBuilder) -> Result<(), BodyError> {
-    let value: serde_json::Value = serde_json::from_slice(input).map_err(|_| BodyError::Malformed {
-        processor: BodyProcessorSelection::Json,
-    })?;
-    let mut path = try_copy(b"json")?;
-    flatten_json(&value, &mut path, 0, builder)
-}
-
-fn flatten_json(
-    value: &serde_json::Value,
-    path: &mut Vec<u8>,
-    depth: usize,
-    builder: &mut BodyBuilder,
-) -> Result<(), BodyError> {
-    builder.accounting.visit_json(path.len(), depth)?;
-    match value {
-        serde_json::Value::Object(object) => {
-            for (key, value) in object {
-                let previous = path.len();
-                append_path(path, key.as_bytes(), builder.accounting.limits.max_name_bytes)?;
-                flatten_json(value, path, depth + 1, builder)?;
-                path.truncate(previous);
-            }
-        }
-        serde_json::Value::Array(array) => {
-            for (index, value) in array.iter().enumerate() {
-                let previous = path.len();
-                let index = index.to_string();
-                append_path(path, index.as_bytes(), builder.accounting.limits.max_name_bytes)?;
-                flatten_json(value, path, depth + 1, builder)?;
-                path.truncate(previous);
-            }
-            let length = array.len().to_string();
-            builder.push(CollectionKind::Args, Some(path), length.as_bytes(), false)?;
-            builder.push(CollectionKind::ArgsNames, Some(path), path, false)?;
-        }
-        serde_json::Value::String(value) => push_json_scalar(path, value.as_bytes(), builder)?,
-        serde_json::Value::Null => push_json_scalar(path, b"", builder)?,
-        serde_json::Value::Bool(value) => {
-            push_json_scalar(path, if *value { b"true" } else { b"false" }, builder)?;
-        }
-        serde_json::Value::Number(value) => push_json_scalar(path, value.to_string().as_bytes(), builder)?,
-    }
-    Ok(())
-}
-
-fn push_json_scalar(path: &[u8], value: &[u8], builder: &mut BodyBuilder) -> Result<(), BodyError> {
-    builder.push(CollectionKind::Args, Some(path), value, false)?;
-    builder.push(CollectionKind::ArgsNames, Some(path), path, false)
-}
-
-fn append_path(path: &mut Vec<u8>, component: &[u8], limit: usize) -> Result<(), BodyError> {
-    let actual = path
-        .len()
-        .checked_add(1)
-        .and_then(|value| value.checked_add(component.len()))
-        .ok_or(BodyError::Arithmetic)?;
-    check_name_bytes(actual, limit)?;
-    path.try_reserve(1 + component.len())
-        .map_err(|_| BodyError::Allocation)?;
-    path.push(b'.');
-    path.extend_from_slice(component);
     Ok(())
 }
 

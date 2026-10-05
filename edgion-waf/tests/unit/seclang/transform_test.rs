@@ -99,3 +99,216 @@ fn errors_never_render_transformed_content() {
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("private"));
 }
+
+#[derive(Default)]
+struct WalkProbe {
+    cap: usize,
+    stages: Vec<Vec<u8>>,
+    pointers: Vec<usize>,
+    changed: Vec<bool>,
+    work: Vec<usize>,
+    peaks: Vec<usize>,
+    abort_stage: bool,
+}
+impl TransformObserver for WalkProbe {
+    type Error = ();
+    fn admit_scratch(&mut self, bytes: usize) -> Result<(), ()> {
+        self.peaks.push(bytes);
+        if bytes > self.cap {
+            Err(())
+        } else {
+            Ok(())
+        }
+    }
+    fn scratch_capacity(&mut self, bytes: usize) -> Result<(), ()> {
+        if bytes > self.cap {
+            Err(())
+        } else {
+            Ok(())
+        }
+    }
+    fn checkpoint(&mut self, point: TransformCheckpoint) -> Result<(), ()> {
+        match point {
+            TransformCheckpoint::StepOutput { changed, .. } => self.changed.push(changed),
+            TransformCheckpoint::StepComplete { work, .. } => self.work.push(work),
+            _ => {}
+        }
+        Ok(())
+    }
+    fn stage(&mut self, _: usize, value: &[u8]) -> Result<(), ()> {
+        if self.abort_stage {
+            return Err(());
+        }
+        self.pointers.push(value.as_ptr() as usize);
+        self.stages.push(value.to_vec());
+        Ok(())
+    }
+}
+fn walk_limits() -> TransformLimits {
+    TransformLimits {
+        max_output_bytes: 4096,
+        max_work_bytes: 65536,
+    }
+}
+
+#[test]
+fn walker_borrows_identity_and_records_unchanged_steps() {
+    let input = b"ABC";
+    let mut scratch = TransformScratch::default();
+    let mut probe = WalkProbe {
+        cap: 0,
+        ..Default::default()
+    };
+    assert!(walk_transformations(
+        input,
+        &[TransformationKind::None],
+        false,
+        walk_limits(),
+        &mut scratch,
+        &mut probe
+    )
+    .is_ok());
+    assert_eq!(probe.pointers, [input.as_ptr() as usize]);
+    assert_eq!(scratch.retained_bytes().unwrap(), 0);
+    let mut probe = WalkProbe {
+        cap: 100,
+        ..Default::default()
+    };
+    assert!(walk_transformations(
+        input,
+        &[
+            TransformationKind::None,
+            TransformationKind::Lowercase,
+            TransformationKind::None
+        ],
+        true,
+        walk_limits(),
+        &mut scratch,
+        &mut probe
+    )
+    .is_ok());
+    assert_eq!(probe.stages, [b"ABC".to_vec(), b"abc".to_vec()]);
+    assert_eq!(probe.changed, [false, true, false]);
+    assert_eq!(probe.work, [6, 12, 18]);
+}
+
+#[test]
+fn walker_rejects_growth_peak_before_mutating_existing_buffer() {
+    let mut scratch = TransformScratch::default();
+    let mut probe = WalkProbe {
+        cap: 100,
+        ..Default::default()
+    };
+    assert!(walk_transformations(
+        b"ABC",
+        &[TransformationKind::Lowercase],
+        false,
+        walk_limits(),
+        &mut scratch,
+        &mut probe
+    )
+    .is_ok());
+    let old_capacity = scratch.first.capacity();
+    let old_pointer = scratch.first.as_ptr();
+    let mut probe = WalkProbe {
+        cap: old_capacity + 5,
+        ..Default::default()
+    };
+    assert!(matches!(
+        walk_transformations(
+            b"ABCDEF",
+            &[TransformationKind::Lowercase],
+            false,
+            walk_limits(),
+            &mut scratch,
+            &mut probe
+        ),
+        Err(TransformWalkError::Observer(()))
+    ));
+    assert_eq!(scratch.first.as_ptr(), old_pointer);
+    assert_eq!(scratch.first, b"abc");
+    assert_eq!(probe.peaks.last(), Some(&(old_capacity + 6)));
+}
+
+#[test]
+fn walker_callback_abort_and_late_transform_error_are_distinct() {
+    let mut scratch = TransformScratch::default();
+    let mut probe = WalkProbe {
+        cap: 100,
+        abort_stage: true,
+        ..Default::default()
+    };
+    assert!(matches!(
+        walk_transformations(
+            b"ABC",
+            &[TransformationKind::Lowercase],
+            true,
+            walk_limits(),
+            &mut scratch,
+            &mut probe
+        ),
+        Err(TransformWalkError::Observer(()))
+    ));
+    assert_eq!(scratch.retained_bytes().unwrap(), 0);
+    let mut probe = WalkProbe {
+        cap: 100,
+        ..Default::default()
+    };
+    let limits = TransformLimits {
+        max_output_bytes: 3,
+        max_work_bytes: 100,
+    };
+    assert!(matches!(
+        walk_transformations(
+            b"ABC",
+            &[TransformationKind::Lowercase, TransformationKind::HexEncode],
+            true,
+            limits,
+            &mut scratch,
+            &mut probe
+        ),
+        Err(TransformWalkError::Transformation(TransformError::OutputLimit {
+            limit: 3
+        }))
+    ));
+    assert_eq!(probe.stages, [b"ABC".to_vec(), b"abc".to_vec()]);
+}
+
+#[test]
+fn normalize_path_stack_preserves_relative_absolute_and_windows_semantics() {
+    for (input, expected) in [
+        ("a/../", ""),
+        ("./", ""),
+        ("/../../", "/"),
+        ("../../a/../", "../../"),
+        ("a/b/../../c/", "c/"),
+        ("a/../../b", "../b"),
+        ("//a///./b/../", "/a/"),
+        ("long-component/../other/../last", "last"),
+    ] {
+        assert_eq!(
+            transform(TransformationKind::NormalizePath, input.as_bytes()),
+            expected.as_bytes()
+        );
+    }
+    assert_eq!(
+        transform(TransformationKind::NormalizePathWin, b"\\a/b\\..\\c\\"),
+        b"/a/c/"
+    );
+    let mut scratch = TransformScratch::default();
+    let mut probe = WalkProbe {
+        cap: 6,
+        ..Default::default()
+    };
+    assert!(walk_transformations(
+        b"a/b/..",
+        &[TransformationKind::NormalizePath],
+        false,
+        walk_limits(),
+        &mut scratch,
+        &mut probe
+    )
+    .is_ok());
+    assert_eq!(scratch.retained_bytes().unwrap(), 6);
+    assert_eq!(probe.stages, [b"a".to_vec()]);
+}

@@ -10,6 +10,7 @@ Check the current compiler, transaction, and detector code before applying a pas
 
 ## Regression guards
 
+- [JSON inspection uses one grammar pass and bounded selected retention](regression-guards/fused-json-inspection.md)
 - [Multipart boundary discovery stays linear](regression-guards/multipart-boundary-search-bounded.md)
 - [Native injection operators use bounded detection and transaction semantics](regression-guards/native-injection-operators-use-bounded-detection.md)
 - [Selected WAF control actions are request scoped](regression-guards/request-scoped-control-actions.md)

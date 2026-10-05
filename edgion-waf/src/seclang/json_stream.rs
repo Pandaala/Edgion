@@ -2,11 +2,17 @@
 //! `Complete` succeeds: later syntax errors and duplicate keys can invalidate
 //! any application decision based on an earlier token. This module neither
 //! publishes WAF variables nor selects an execution lane.
+#[cfg(test)]
+use crate::seclang::measurements::{self, Event};
 
 use std::fmt;
 use std::mem::size_of;
 
+use super::json_scratch::{growth_target, heap_capacity, GrowthError};
+use smallvec::SmallVec;
 use thiserror::Error;
+
+use super::JsonNumber;
 
 /// Independent lexical budgets, not aliases for complete-body publication limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,10 +27,11 @@ pub struct JsonStreamLimits {
     pub max_events: usize,
     /// Root value is depth zero; keys do not introduce another value depth.
     pub max_depth: usize,
-    /// Sum of live token/stack Vec capacities, excluding the fixed struct,
+    /// Sum of live token/stack heap capacities, excluding the fixed struct,
     /// allocator overhead, and transient storage during allocator reallocation.
     pub max_retained_bytes: usize,
-    /// Source visits, decoded writes, validation scans and capacity-growth copies.
+    /// Source visits, semantic-byte handling, validation scans and retained copies.
+    /// Physical copy/growth work depends on transport chunk boundaries.
     pub max_work: usize,
 }
 
@@ -61,7 +68,7 @@ impl fmt::Debug for JsonStreamInput<'_> {
 
 /// Payloads are borrowed only for the synchronous callback; consumers must not
 /// treat them as final document publications. Number spelling is preserved;
-/// its finite-number acceptance is checked by the same serde_json parser as Value.
+/// its value uses checked integers or correctly rounded finite binary64.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum JsonStreamToken<'a> {
     ObjectStart,
@@ -70,7 +77,7 @@ pub enum JsonStreamToken<'a> {
     ArrayEnd,
     Key(&'a str),
     String(&'a str),
-    Number(&'a str),
+    Number { raw: &'a str, value: JsonNumber },
     Boolean(bool),
     Null,
 }
@@ -84,7 +91,7 @@ impl fmt::Debug for JsonStreamToken<'_> {
             Self::ArrayEnd => f.write_str("ArrayEnd"),
             Self::Key(value) => f.debug_tuple("Key").field(&value.len()).finish(),
             Self::String(value) => f.debug_tuple("String").field(&value.len()).finish(),
-            Self::Number(value) => f.debug_tuple("Number").field(&value.len()).finish(),
+            Self::Number { raw, .. } => f.debug_tuple("Number").field(&raw.len()).finish(),
             Self::Boolean(_) => f.write_str("Boolean"),
             Self::Null => f.write_str("Null"),
         }
@@ -243,10 +250,9 @@ pub struct JsonStream {
     terminal: Terminal,
     lexical: Lexical,
     stack: Vec<Frame>,
-    token: Vec<u8>,
+    token: SmallVec<[u8; 1024]>,
     raw_token_bytes: usize,
     root_started: bool,
-    reference_recursion_guard: bool,
     utf8_remaining: u8,
     utf8_value: u32,
     utf8_minimum: u32,
@@ -265,26 +271,20 @@ impl fmt::Debug for JsonStream {
 
 impl JsonStream {
     pub fn new(limits: JsonStreamLimits) -> Self {
+        #[cfg(test)]
+        measurements::record(Event::GrammarInstances, 1);
         Self {
             limits,
             usage: JsonStreamUsage::default(),
             terminal: Terminal::Active,
             lexical: Lexical::Idle,
             stack: Vec::new(),
-            token: Vec::new(),
+            token: SmallVec::new(),
             raw_token_bytes: 0,
             root_started: false,
-            reference_recursion_guard: false,
             utf8_remaining: 0,
             utf8_value: 0,
             utf8_minimum: 0,
-        }
-    }
-
-    pub(super) fn new_for_body(limits: JsonStreamLimits) -> Self {
-        Self {
-            reference_recursion_guard: true,
-            ..Self::new(limits)
         }
     }
 
@@ -317,15 +317,30 @@ impl JsonStream {
     {
         match input {
             JsonStreamInput::Data(bytes) => {
-                for &byte in bytes {
+                let mut offset = 0;
+                while offset < bytes.len() {
+                    if let Lexical::String {
+                        key,
+                        escape: EscapeState::Plain,
+                    } = self.lexical
+                    {
+                        if self.token.is_empty() && self.utf8_remaining == 0 {
+                            offset += self.borrow_string_prefix(&bytes[offset..], key, sink)?;
+                            continue;
+                        }
+                    }
+                    let byte = bytes[offset];
                     charge(
                         &mut self.usage.source_bytes,
                         1,
                         self.limits.max_source_bytes,
                         JsonStreamLimit::SourceBytes,
                     )?;
+                    #[cfg(test)]
+                    measurements::record(Event::SourceBytes, 1);
                     self.work(1)?;
                     self.byte(byte, sink)?;
+                    offset += 1;
                 }
                 Ok(())
             }
@@ -340,11 +355,74 @@ impl JsonStream {
                     return Err(JsonStreamError::Incomplete);
                 }
                 self.terminal = Terminal::Complete;
+                #[cfg(test)]
+                measurements::record(Event::Completions, 1);
                 self.release();
                 Ok(())
             }
             JsonStreamInput::Abandoned => Err(JsonStreamError::Abandoned),
         }
+    }
+
+    // Consume once, with the same per-byte admission as the ordinary FSM.
+    // No lookahead reads past an uncharged byte. A complete unescaped token
+    // borrows this chunk; escape or chunk end retains only its consumed prefix.
+    fn borrow_string_prefix<F>(&mut self, bytes: &[u8], key: bool, sink: &mut F) -> Result<usize, JsonStreamError>
+    where
+        F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
+    {
+        for (offset, &byte) in bytes.iter().enumerate() {
+            charge(
+                &mut self.usage.source_bytes,
+                1,
+                self.limits.max_source_bytes,
+                JsonStreamLimit::SourceBytes,
+            )?;
+            #[cfg(test)]
+            measurements::record(Event::SourceBytes, 1);
+            self.work(1)?;
+            self.raw_byte()?;
+            if self.utf8_remaining != 0 {
+                self.utf8(byte)?;
+                self.decoded(1)?;
+                continue;
+            }
+            match byte {
+                b'"' => {
+                    self.work(offset)?;
+                    self.event()?;
+                    let value = std::str::from_utf8(&bytes[..offset]).map_err(|_| JsonStreamError::Utf8)?;
+                    sink(if key {
+                        JsonStreamToken::Key(value)
+                    } else {
+                        JsonStreamToken::String(value)
+                    })
+                    .map_err(|_| JsonStreamError::SinkRejected)?;
+                    self.lexical = Lexical::Idle;
+                    if key {
+                        *self.stack.last_mut().ok_or(JsonStreamError::Syntax)? = Frame::ObjectColon;
+                    }
+                    return Ok(offset + 1);
+                }
+                b'\\' => {
+                    self.work(offset)?;
+                    self.retain_token_bytes(&bytes[..offset])?;
+                    self.lexical = Lexical::String {
+                        key,
+                        escape: EscapeState::Slash,
+                    };
+                    return Ok(offset + 1);
+                }
+                0..=0x1f => return Err(JsonStreamError::Syntax),
+                _ => {
+                    self.utf8(byte)?;
+                    self.decoded(1)?;
+                }
+            }
+        }
+        self.work(bytes.len())?;
+        self.retain_token_bytes(bytes)?;
+        Ok(bytes.len())
     }
 
     fn byte<F>(&mut self, byte: u8, sink: &mut F) -> Result<(), JsonStreamError>
@@ -399,12 +477,6 @@ impl JsonStream {
         self.raw_byte()?;
         match byte {
             b'{' | b'[' => {
-                // The default serde_json body parser allows 127 nested containers
-                // and rejects the 128th, including subsequently replaced subtrees.
-                // This source syntax rule is separate from configured depth budgets.
-                if self.reference_recursion_guard && self.stack.len() >= 127 {
-                    return Err(JsonStreamError::Syntax);
-                }
                 self.start_value()?;
                 self.push_frame(if byte == b'{' {
                     Frame::ObjectFirst
@@ -663,13 +735,14 @@ impl JsonStream {
     where
         F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
     {
-        // Reuse the configured serde_json number semantics without constructing a DOM.
-        // Charge both the number parser and subsequent UTF-8 validation scan.
-        self.work(self.token.len().checked_mul(2).ok_or(JsonStreamError::Arithmetic)?)?;
-        serde_json::from_slice::<serde_json::Number>(&self.token).map_err(|_| JsonStreamError::Number)?;
+        // Charge both UTF-8 views, form classification, integer accumulation,
+        // and possible float fallback as a conservative linear scan bound.
+        self.work(self.token.len().checked_mul(5).ok_or(JsonStreamError::Arithmetic)?)?;
+        let raw = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Number)?;
+        let value = JsonNumber::from_validated_lexeme(raw).map_err(|_| JsonStreamError::Number)?;
         self.event()?;
-        let value = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Number)?;
-        sink(JsonStreamToken::Number(value)).map_err(|_| JsonStreamError::SinkRejected)?;
+        let raw = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Number)?;
+        sink(JsonStreamToken::Number { raw, value }).map_err(|_| JsonStreamError::SinkRejected)?;
         self.token.clear();
         self.lexical = Lexical::Idle;
         Ok(())
@@ -722,20 +795,29 @@ impl JsonStream {
 
     fn append(&mut self, bytes: &[u8]) -> Result<(), JsonStreamError> {
         self.decoded(bytes.len())?;
-        let required = self
-            .token
-            .len()
-            .checked_add(bytes.len())
-            .ok_or(JsonStreamError::Arithmetic)?;
-        if required > self.token.capacity() {
-            let target = self.growth_capacity(self.token.capacity(), required, 1)?;
+        self.retain_token_bytes(bytes)
+    }
+
+    fn retain_token_bytes(&mut self, bytes: &[u8]) -> Result<(), JsonStreamError> {
+        let remaining = self.limits.max_retained_bytes.saturating_sub(self.usage.retained_bytes);
+        let target = growth_target(&self.token, bytes.len(), remaining).map_err(|error| match error {
+            GrowthError::Arithmetic => JsonStreamError::Arithmetic,
+            GrowthError::Retained => limit_error(JsonStreamLimit::RetainedBytes, self.limits.max_retained_bytes),
+        })?;
+        if let Some(target) = target {
             self.work(self.token.len())?;
             self.token
                 .try_reserve_exact(target - self.token.len())
                 .map_err(|_| JsonStreamError::Allocation)?;
             self.account_retained()?;
         }
-        self.token.extend_from_slice(bytes);
+        if let [byte] = bytes {
+            self.token.push(*byte);
+        } else {
+            self.token.extend_from_slice(bytes);
+        }
+        #[cfg(test)]
+        measurements::record(Event::TokenCopyBytes, bytes.len());
         Ok(())
     }
 
@@ -775,7 +857,7 @@ impl JsonStream {
             .stack
             .capacity()
             .checked_mul(size_of::<Frame>())
-            .and_then(|bytes| bytes.checked_add(self.token.capacity()))
+            .and_then(|bytes| bytes.checked_add(heap_capacity(&self.token)))
             .ok_or(JsonStreamError::Arithmetic)?;
         self.usage.retained_bytes = retained;
         self.usage.peak_retained_bytes = self.usage.peak_retained_bytes.max(retained);
@@ -791,7 +873,7 @@ impl JsonStream {
     }
 
     fn release(&mut self) {
-        self.token = Vec::new();
+        self.token = SmallVec::new();
         self.stack = Vec::new();
         self.lexical = Lexical::Idle;
         self.utf8_remaining = 0;

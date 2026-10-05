@@ -21,46 +21,274 @@ pub(super) struct TransformLimits {
     pub max_work_bytes: usize,
 }
 
+/// Reusable transformation storage. Initial and identity results borrow input.
+#[derive(Default)]
+pub(super) struct TransformScratch {
+    first: Vec<u8>,
+    second: Vec<u8>,
+}
+
+impl TransformScratch {
+    pub(super) fn retained_bytes(&self) -> Result<usize, TransformError> {
+        self.first
+            .capacity()
+            .checked_add(self.second.capacity())
+            .ok_or(TransformError::Arithmetic)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum TransformCheckpoint {
+    Initial {
+        input_bytes: usize,
+    },
+    StepInput {
+        step: usize,
+        input_bytes: usize,
+        work: usize,
+    },
+    StepOutput {
+        step: usize,
+        output_bytes: usize,
+        work: usize,
+        changed: bool,
+    },
+    StepComplete {
+        step: usize,
+        work: usize,
+    },
+}
+
+/// Observer errors are physical failures and stop the walk immediately. Stage
+/// payloads are callback borrows. Semantic predicate errors must be recorded as
+/// data, not returned here: later transformation validation still runs.
+pub(super) trait TransformObserver {
+    type Error;
+    /// Admit peak live capacity, including the old destination during growth.
+    fn admit_scratch(&mut self, required_bytes: usize) -> Result<(), Self::Error>;
+    fn scratch_capacity(&mut self, actual_bytes: usize) -> Result<(), Self::Error>;
+    fn checkpoint(&mut self, point: TransformCheckpoint) -> Result<(), Self::Error>;
+    fn stage(&mut self, ordinal: usize, value: &[u8]) -> Result<(), Self::Error>;
+}
+
+pub(super) enum TransformWalkError<E> {
+    Transformation(TransformError),
+    Observer(E),
+}
+
+impl<E> From<TransformError> for TransformWalkError<E> {
+    fn from(value: TransformError) -> Self {
+        Self::Transformation(value)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum CurrentTransform {
+    Input,
+    First,
+    Second,
+}
+
+/// One transformation implementation serves materializing ordinary wrappers and
+/// provisional streaming observers. A stage callback never stops validation.
+pub(super) fn walk_transformations<O: TransformObserver>(
+    input: &[u8],
+    transformations: &[TransformationKind],
+    multi_match: bool,
+    limits: TransformLimits,
+    scratch: &mut TransformScratch,
+    observer: &mut O,
+) -> Result<CurrentTransform, TransformWalkError<O::Error>> {
+    observer
+        .admit_scratch(scratch.retained_bytes()?)
+        .map_err(TransformWalkError::Observer)?;
+    observer
+        .scratch_capacity(scratch.retained_bytes()?)
+        .map_err(TransformWalkError::Observer)?;
+    observer
+        .checkpoint(TransformCheckpoint::Initial {
+            input_bytes: input.len(),
+        })
+        .map_err(TransformWalkError::Observer)?;
+    if input.len() > limits.max_output_bytes {
+        return Err(TransformError::OutputLimit {
+            limit: limits.max_output_bytes,
+        }
+        .into());
+    }
+    let mut location = CurrentTransform::Input;
+    let mut ordinal = 0usize;
+    if multi_match {
+        observer.stage(ordinal, input).map_err(TransformWalkError::Observer)?;
+    }
+    let mut work = 0usize;
+    for (step, transformation) in transformations.iter().copied().enumerate() {
+        let retained = scratch.retained_bytes()?;
+        let (current, output, next) = match location {
+            CurrentTransform::Input => (input, &mut scratch.first, CurrentTransform::First),
+            CurrentTransform::First => (&scratch.first[..], &mut scratch.second, CurrentTransform::Second),
+            CurrentTransform::Second => (&scratch.second[..], &mut scratch.first, CurrentTransform::First),
+        };
+        observer
+            .checkpoint(TransformCheckpoint::StepInput {
+                step,
+                input_bytes: current.len(),
+                work,
+            })
+            .map_err(TransformWalkError::Observer)?;
+        work = work.checked_add(current.len()).ok_or(TransformError::Arithmetic)?;
+        if !multi_match && work > limits.max_work_bytes {
+            return Err(TransformError::WorkLimit {
+                limit: limits.max_work_bytes,
+            }
+            .into());
+        }
+        let identity = transformation == TransformationKind::None;
+        if !identity {
+            let needed = projected_output(transformation, current.len())?.min(limits.max_output_bytes);
+            let existing = output.capacity();
+            let base = retained.checked_sub(existing).ok_or(TransformError::Arithmetic)?;
+            observer
+                .admit_scratch(
+                    retained
+                        .checked_add(if needed > existing { needed } else { 0 })
+                        .ok_or(TransformError::Arithmetic)?,
+                )
+                .map_err(TransformWalkError::Observer)?;
+            output.clear();
+            output
+                .try_reserve_exact(needed)
+                .map_err(|_| TransformError::Allocation)?;
+            observer
+                .scratch_capacity(base.checked_add(output.capacity()).ok_or(TransformError::Arithmetic)?)
+                .map_err(TransformWalkError::Observer)?;
+            apply_one(transformation, current, output, limits.max_output_bytes)?;
+        }
+        let changed = !identity && output.as_slice() != current;
+        let result = if identity { current } else { output.as_slice() };
+        // apply_one enforces its output bound while producing bytes; the ordinary
+        // path also historically checked its final output before charging work.
+        if !multi_match && result.len() > limits.max_output_bytes {
+            return Err(TransformError::OutputLimit {
+                limit: limits.max_output_bytes,
+            }
+            .into());
+        }
+        observer
+            .checkpoint(TransformCheckpoint::StepOutput {
+                step,
+                output_bytes: result.len(),
+                work,
+                changed,
+            })
+            .map_err(TransformWalkError::Observer)?;
+        work = work.checked_add(result.len()).ok_or(TransformError::Arithmetic)?;
+        if work > limits.max_work_bytes {
+            return Err(TransformError::WorkLimit {
+                limit: limits.max_work_bytes,
+            }
+            .into());
+        }
+        observer
+            .checkpoint(TransformCheckpoint::StepComplete { step, work })
+            .map_err(TransformWalkError::Observer)?;
+        if multi_match && changed {
+            ordinal = ordinal.checked_add(1).ok_or(TransformError::Arithmetic)?;
+            observer.stage(ordinal, result).map_err(TransformWalkError::Observer)?;
+        }
+        if !identity && (!multi_match || changed) {
+            location = next;
+        }
+    }
+    if !multi_match {
+        let result = match location {
+            CurrentTransform::Input => input,
+            CurrentTransform::First => &scratch.first,
+            CurrentTransform::Second => &scratch.second,
+        };
+        observer.stage(0, result).map_err(TransformWalkError::Observer)?;
+    }
+    Ok(location)
+}
+
+struct MaterializedStages {
+    values: Vec<Vec<u8>>,
+    retain_stages: bool,
+}
+
+impl TransformObserver for MaterializedStages {
+    type Error = TransformError;
+    fn admit_scratch(&mut self, _required_bytes: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn scratch_capacity(&mut self, _actual_bytes: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn checkpoint(&mut self, point: TransformCheckpoint) -> Result<(), Self::Error> {
+        // Consume the complete checkpoint contract even though ordinary callers
+        // need only final validation and stage bytes, not retained cost profiles.
+        match point {
+            TransformCheckpoint::Initial { input_bytes } => {
+                let _ = input_bytes;
+            }
+            TransformCheckpoint::StepInput {
+                step,
+                input_bytes,
+                work,
+            } => {
+                let _ = (step, input_bytes, work);
+            }
+            TransformCheckpoint::StepOutput {
+                step,
+                output_bytes,
+                work,
+                changed,
+            } => {
+                let _ = (step, output_bytes, work, changed);
+            }
+            TransformCheckpoint::StepComplete { step, work } => {
+                let _ = (step, work);
+            }
+        }
+        Ok(())
+    }
+    fn stage(&mut self, _ordinal: usize, value: &[u8]) -> Result<(), Self::Error> {
+        if !self.retain_stages {
+            return Ok(());
+        }
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(value.len())
+            .map_err(|_| TransformError::Allocation)?;
+        copy.extend_from_slice(value);
+        self.values.push(copy);
+        Ok(())
+    }
+}
+
 pub(super) fn apply_transformations(
     input: &[u8],
     transformations: &[TransformationKind],
     limits: TransformLimits,
 ) -> Result<Vec<u8>, TransformError> {
-    if input.len() > limits.max_output_bytes {
-        return Err(TransformError::OutputLimit {
-            limit: limits.max_output_bytes,
-        });
+    let mut observer = MaterializedStages {
+        values: Vec::new(),
+        retain_stages: false,
+    };
+    let mut scratch = TransformScratch::default();
+    let location = walk_transformations(input, transformations, false, limits, &mut scratch, &mut observer)
+        .map_err(materialized_walk_error)?;
+    match location {
+        CurrentTransform::Input => {
+            let mut value = Vec::new();
+            value
+                .try_reserve_exact(input.len())
+                .map_err(|_| TransformError::Allocation)?;
+            value.extend_from_slice(input);
+            Ok(value)
+        }
+        CurrentTransform::First => Ok(scratch.first),
+        CurrentTransform::Second => Ok(scratch.second),
     }
-    let mut current = Vec::new();
-    current
-        .try_reserve_exact(input.len())
-        .map_err(|_| TransformError::Allocation)?;
-    current.extend_from_slice(input);
-    let mut output = Vec::new();
-    let mut work = 0_usize;
-    for transformation in transformations {
-        work = work.checked_add(current.len()).ok_or(TransformError::Arithmetic)?;
-        if work > limits.max_work_bytes {
-            return Err(TransformError::WorkLimit {
-                limit: limits.max_work_bytes,
-            });
-        }
-        output.clear();
-        apply_one(*transformation, &current, &mut output, limits.max_output_bytes)?;
-        if output.len() > limits.max_output_bytes {
-            return Err(TransformError::OutputLimit {
-                limit: limits.max_output_bytes,
-            });
-        }
-        work = work.checked_add(output.len()).ok_or(TransformError::Arithmetic)?;
-        if work > limits.max_work_bytes {
-            return Err(TransformError::WorkLimit {
-                limit: limits.max_work_bytes,
-            });
-        }
-        std::mem::swap(&mut current, &mut output);
-    }
-    Ok(current)
 }
 
 pub(super) fn apply_transformations_multimatch(
@@ -73,39 +301,25 @@ pub(super) fn apply_transformations_multimatch(
             limit: limits.max_output_bytes,
         });
     }
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(transformations.len().saturating_add(1))
+    let capacity = transformations.len().checked_add(1).ok_or(TransformError::Arithmetic)?;
+    let mut observer = MaterializedStages {
+        values: Vec::new(),
+        retain_stages: true,
+    };
+    observer
+        .values
+        .try_reserve_exact(capacity)
         .map_err(|_| TransformError::Allocation)?;
-    let mut current = copy_bytes(input)?;
-    values.push(copy_bytes(input)?);
-    let mut output = Vec::new();
-    let mut work = 0_usize;
-    for transformation in transformations {
-        work = work.checked_add(current.len()).ok_or(TransformError::Arithmetic)?;
-        output.clear();
-        apply_one(*transformation, &current, &mut output, limits.max_output_bytes)?;
-        work = work.checked_add(output.len()).ok_or(TransformError::Arithmetic)?;
-        if work > limits.max_work_bytes {
-            return Err(TransformError::WorkLimit {
-                limit: limits.max_work_bytes,
-            });
-        }
-        if output != current {
-            values.push(copy_bytes(&output)?);
-            std::mem::swap(&mut current, &mut output);
-        }
-    }
-    Ok(values)
+    let mut scratch = TransformScratch::default();
+    walk_transformations(input, transformations, true, limits, &mut scratch, &mut observer)
+        .map_err(materialized_walk_error)?;
+    Ok(observer.values)
 }
 
-fn copy_bytes(input: &[u8]) -> Result<Vec<u8>, TransformError> {
-    let mut output = Vec::new();
-    output
-        .try_reserve_exact(input.len())
-        .map_err(|_| TransformError::Allocation)?;
-    output.extend_from_slice(input);
-    Ok(output)
+fn materialized_walk_error(error: TransformWalkError<TransformError>) -> TransformError {
+    match error {
+        TransformWalkError::Transformation(error) | TransformWalkError::Observer(error) => error,
+    }
 }
 
 fn apply_one(
@@ -519,26 +733,30 @@ fn normalize_path(input: &[u8], output: &mut Vec<u8>, windows: bool, limit: usiz
     let trailing = input
         .last()
         .is_some_and(|byte| *byte == b'/' || (windows && *byte == b'\\'));
-    let mut components: Vec<&[u8]> = Vec::new();
-    components
-        .try_reserve(input.len().div_ceil(2))
-        .map_err(|_| TransformError::Allocation)?;
-    for component in input.split(|byte| *byte == b'/' || (windows && *byte == b'\\')) {
-        match component {
-            b"" | b"." => {}
-            b".." if components.last().is_some_and(|last| *last != b"..") => {
-                components.pop();
-            }
-            b".." if !absolute => components.push(component),
-            b".." => {}
-            _ => components.push(component),
-        }
-    }
     if absolute {
         push_byte(output, b'/', limit)?;
     }
-    for (index, component) in components.iter().enumerate() {
-        if index != 0 {
+    let root_len = usize::from(absolute);
+    // The output doubles as the component stack. Reverse scans remove the
+    // scanned component, so total scanning remains linear in the input size.
+    for component in input.split(|byte| *byte == b'/' || (windows && *byte == b'\\')) {
+        if component.is_empty() || component == b"." {
+            continue;
+        }
+        if component == b".." {
+            let start = output
+                .iter()
+                .rposition(|byte| *byte == b'/')
+                .map_or(0, |index| index + 1);
+            if output.len() > root_len && &output[start..] != b".." {
+                output.truncate(start.saturating_sub(1).max(root_len));
+                continue;
+            }
+            if absolute {
+                continue;
+            }
+        }
+        if output.len() > root_len {
             push_byte(output, b'/', limit)?;
         }
         append(output, component, limit)?;

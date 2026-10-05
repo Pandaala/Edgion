@@ -156,7 +156,10 @@ fn observe(config: &WafConfig, case: &Case) -> Result<(u16, Option<u64>), String
         return Ok((status, observed_rule));
     }
     transaction
-        .publish_request_body(RequestBody::new(case.body.as_bytes(), BodyProcessorSelection::Auto))
+        .publish_request_body(RequestBody::new(
+            bytes::Bytes::copy_from_slice(case.body.as_bytes()),
+            BodyProcessorSelection::Auto,
+        ))
         .map_err(|error| error.to_string())?;
     outcome = transaction.execute_request_body().map_err(|error| error.to_string())?;
     if let Some(status) = record(&outcome, &mut observed_rule) {

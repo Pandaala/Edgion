@@ -22,7 +22,7 @@ impl From<JsonStreamToken<'_>> for OwnedToken {
             JsonStreamToken::ArrayEnd => Self::ArrayEnd,
             JsonStreamToken::Key(value) => Self::Key(value.to_owned()),
             JsonStreamToken::String(value) => Self::String(value.to_owned()),
-            JsonStreamToken::Number(value) => Self::Number(value.to_owned()),
+            JsonStreamToken::Number { raw, .. } => Self::Number(raw.to_owned()),
             JsonStreamToken::Boolean(value) => Self::Boolean(value),
             JsonStreamToken::Null => Self::Null,
         }
@@ -49,6 +49,20 @@ fn tokenize(
         Ok(())
     });
     (result, tokens, stream.usage())
+}
+
+// Borrowing removes retained copies only for contiguous unescaped tokens.
+// Logical input/events stay chunk-independent; physical work/capacity do not.
+fn assert_same_semantics(
+    actual: &(Result<(), JsonStreamError>, Vec<OwnedToken>, JsonStreamUsage),
+    expected: &(Result<(), JsonStreamError>, Vec<OwnedToken>, JsonStreamUsage),
+) {
+    assert_eq!(actual.0, expected.0);
+    assert_eq!(actual.1, expected.1);
+    assert_eq!(actual.2.source_bytes, expected.2.source_bytes);
+    assert_eq!(actual.2.decoded_bytes, expected.2.decoded_bytes);
+    assert_eq!(actual.2.events, expected.2.events);
+    assert_eq!(actual.2.retained_bytes, 0);
 }
 
 #[test]
@@ -179,10 +193,10 @@ fn every_byte_split_matches_serde_json_acceptance_and_whole_input_events() {
         assert_eq!(baseline.0.is_ok(), expected, "input {source:?}: {:?}", baseline.0);
         for split in 0..=source.len() {
             let actual = tokenize(&[&source[..split], &[], &source[split..]], JsonStreamLimits::default());
-            assert_eq!(actual, baseline, "input {source:?}, split {split}");
+            assert_same_semantics(&actual, &baseline);
         }
         let bytes: Vec<&[u8]> = source.chunks(1).collect();
-        assert_eq!(tokenize(&bytes, JsonStreamLimits::default()), baseline);
+        assert_same_semantics(&tokenize(&bytes, JsonStreamLimits::default()), &baseline);
     }
 }
 
@@ -267,7 +281,7 @@ fn deterministic_random_documents_mutations_and_partitions_match_reference() {
                 serde_json::from_slice::<serde_json::Value>(input).is_ok(),
                 "{input:?}"
             );
-            assert_eq!(tokenize(&chunks, JsonStreamLimits::default()), whole);
+            assert_same_semantics(&tokenize(&chunks, JsonStreamLimits::default()), &whole);
         }
     }
 }
@@ -281,7 +295,16 @@ fn assert_boundary(source: &[u8], limit: usize, kind: JsonStreamLimit, set: impl
     assert_eq!(failed.0, Err(JsonStreamError::Limit { kind, limit: limit - 1 }));
     assert_eq!(failed.2.retained_bytes, 0);
     for split in 0..=source.len() {
-        assert_eq!(tokenize(&[&source[..split], &source[split..]], limits), failed);
+        let chunks = [&source[..split], &source[split..]];
+        if kind == JsonStreamLimit::Work {
+            let partition_work = tokenize(&chunks, JsonStreamLimits::default()).2.work;
+            set(&mut limits, partition_work);
+            tokenize(&chunks, limits).0.unwrap();
+            set(&mut limits, partition_work - 1);
+            assert_eq!(tokenize(&chunks, limits).0, Err(limit_error(kind, partition_work - 1)));
+        } else {
+            assert_same_semantics(&tokenize(&chunks, limits), &failed);
+        }
     }
 }
 
@@ -303,8 +326,8 @@ fn each_independent_limit_accepts_exact_boundary_and_rejects_first_excess() {
         limits.max_depth = value
     });
     assert_boundary(
-        br#"["abcdefghi"]"#,
-        9 + size_of::<Frame>(),
+        b"[123456789]",
+        size_of::<Frame>(),
         JsonStreamLimit::RetainedBytes,
         |limits, value| limits.max_retained_bytes = value,
     );
@@ -358,7 +381,7 @@ fn syntax_escape_utf8_number_and_incomplete_errors_are_typed_and_sticky() {
             .and_then(|()| stream.feed(JsonStreamInput::Complete, |_| Ok(())));
         assert_eq!(result, Err(expected));
         assert_eq!(stream.usage().retained_bytes, 0);
-        assert_eq!(stream.token.capacity(), 0);
+        assert_eq!(heap_capacity(&stream.token), 0);
         assert_eq!(stream.stack.capacity(), 0);
         for input in [
             JsonStreamInput::Data(b"null"),
@@ -454,7 +477,13 @@ fn debug_and_errors_do_not_expose_payloads() {
         format!("{:?}", JsonStreamInput::Data(input.as_bytes())),
         format!("{:?}", JsonStreamToken::Key(secret)),
         format!("{:?}", JsonStreamToken::String(secret)),
-        format!("{:?}", JsonStreamToken::Number(secret)),
+        format!(
+            "{:?}",
+            JsonStreamToken::Number {
+                raw: secret,
+                value: JsonNumber::from_validated_lexeme("0").unwrap()
+            }
+        ),
     ] {
         assert!(!rendered.contains(secret));
     }
@@ -475,7 +504,7 @@ fn retained_memory_stays_constant_across_long_documents_and_counts_stack_capacit
     let expected = stream.usage().retained_bytes;
     assert_eq!(
         expected,
-        stream.token.capacity() + stream.stack.capacity() * size_of::<Frame>()
+        heap_capacity(&stream.token) + stream.stack.capacity() * size_of::<Frame>()
     );
     for _ in 0..4096 {
         stream
@@ -560,7 +589,7 @@ fn nested_stack_has_its_own_exact_retained_capacity_boundary() {
     let mut stream = JsonStream::new(limits);
     stream.feed(JsonStreamInput::Data(b"[[[[[[[["), |_| Ok(())).unwrap();
     assert_eq!(stream.stack.len(), 8);
-    assert_eq!(stream.token.capacity(), 0);
+    assert_eq!(heap_capacity(&stream.token), 0);
     assert_eq!(stream.usage().retained_bytes, retained);
     assert_eq!(stream.stack.capacity() * size_of::<Frame>(), retained);
     stream.feed(JsonStreamInput::Data(b"]]]]]]]]"), |_| Ok(())).unwrap();
@@ -649,4 +678,230 @@ fn zero_limits_reject_only_the_resources_the_document_needs() {
         result.0.unwrap();
         assert_eq!(result.2.decoded_bytes, 0);
     }
+}
+
+#[test]
+fn typed_numbers_preserve_raw_spelling_and_value_at_every_split() {
+    for raw in [
+        "-0",
+        "18446744073709551615",
+        "-9223372036854775808",
+        "9007199254740993.0",
+        "2.4703282292062328e-324",
+    ] {
+        let expected = JsonNumber::from_validated_lexeme(raw).unwrap();
+        for split in 0..=raw.len() {
+            let mut stream = JsonStream::new(JsonStreamLimits::default());
+            let mut count = 0;
+            for input in [
+                JsonStreamInput::Data(&raw.as_bytes()[..split]),
+                JsonStreamInput::Data(&raw.as_bytes()[split..]),
+                JsonStreamInput::Complete,
+            ] {
+                stream
+                    .feed(input, |token| {
+                        let JsonStreamToken::Number { raw: spelling, value } = token else {
+                            panic!("expected numeric token")
+                        };
+                        assert_eq!(spelling, raw);
+                        assert_eq!(value, expected);
+                        count += 1;
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            assert_eq!(count, 1);
+        }
+    }
+}
+
+#[test]
+fn contiguous_unescaped_strings_and_keys_borrow_the_original_chunk() {
+    let source = "{\"key\":\"value-é\",\"\":\"\"}".as_bytes();
+    let mut stream = JsonStream::new(JsonStreamLimits::default());
+    let mut strings = 0;
+    stream
+        .feed(JsonStreamInput::Data(source), |token| {
+            if let JsonStreamToken::Key(value) | JsonStreamToken::String(value) = token {
+                let start = value.as_ptr() as usize;
+                let source_start = source.as_ptr() as usize;
+                assert!(start >= source_start && start + value.len() <= source_start + source.len());
+                strings += 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(strings, 4);
+    assert_eq!(heap_capacity(&stream.token), 0);
+    stream.feed(JsonStreamInput::Complete, |_| Ok(())).unwrap();
+    let mut scalar = JsonStream::new(JsonStreamLimits {
+        max_retained_bytes: 0,
+        ..JsonStreamLimits::default()
+    });
+    scalar
+        .feed(JsonStreamInput::Data(br#""ordinary value""#), |_| Ok(()))
+        .unwrap();
+    scalar.feed(JsonStreamInput::Complete, |_| Ok(())).unwrap();
+    assert_eq!(scalar.usage().peak_retained_bytes, 0);
+}
+
+#[test]
+fn borrowed_prefix_falls_back_once_for_escape_and_partial_utf8() {
+    for source in [br#""prefix\u20ac-suffix""#.as_slice(), "\"prefix-é-suffix\"".as_bytes()] {
+        let baseline = tokenize(&[source], JsonStreamLimits::default());
+        baseline.0.unwrap();
+        for split in 0..=source.len() {
+            let actual = tokenize(&[&source[..split], &source[split..]], JsonStreamLimits::default());
+            assert_same_semantics(&actual, &baseline);
+            assert!(actual.2.peak_retained_bytes <= JsonStreamLimits::default().max_retained_bytes);
+        }
+    }
+    let mut stream = JsonStream::new(JsonStreamLimits::default());
+    stream.feed(JsonStreamInput::Data(br#""prefix"#), |_| Ok(())).unwrap();
+    assert_eq!(stream.token.as_slice(), b"prefix");
+    assert_eq!(stream.usage().decoded_bytes, 6);
+    stream
+        .feed(JsonStreamInput::Data(br#"-suffix""#), |token| {
+            assert!(matches!(token, JsonStreamToken::String("prefix-suffix")));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(stream.usage().decoded_bytes, 13);
+}
+
+#[test]
+fn borrowed_string_admission_errors_precede_later_invalid_bytes() {
+    for (limit, expected) in [
+        (
+            JsonStreamLimits {
+                max_source_bytes: 2,
+                ..JsonStreamLimits::default()
+            },
+            limit_error(JsonStreamLimit::SourceBytes, 2),
+        ),
+        (
+            JsonStreamLimits {
+                max_raw_token_bytes: 2,
+                ..JsonStreamLimits::default()
+            },
+            limit_error(JsonStreamLimit::RawTokenBytes, 2),
+        ),
+        (
+            JsonStreamLimits {
+                max_decoded_bytes: 0,
+                ..JsonStreamLimits::default()
+            },
+            limit_error(JsonStreamLimit::DecodedBytes, 0),
+        ),
+        (
+            JsonStreamLimits {
+                max_work: 1,
+                ..JsonStreamLimits::default()
+            },
+            limit_error(JsonStreamLimit::Work, 1),
+        ),
+    ] {
+        let mut stream = JsonStream::new(limit);
+        assert_eq!(
+            stream.feed(JsonStreamInput::Data(&[b'"', b'a', 0xff, b'"']), |_| panic!(
+                "invalid token emitted"
+            )),
+            Err(expected)
+        );
+        assert_eq!(
+            stream.feed(JsonStreamInput::Complete, |_| panic!("sticky failure emitted")),
+            Err(expected)
+        );
+        assert_eq!(stream.usage().retained_bytes, 0);
+    }
+    for source in [&[b'"', 0xff, b'"'][..], &[b'"', 0, b'"'][..]] {
+        assert!(tokenize(&[source], JsonStreamLimits::default()).0.is_err());
+    }
+    for limit in 0..=2 {
+        let outcome = tokenize(
+            &[br#""a""#],
+            JsonStreamLimits {
+                max_raw_token_bytes: limit,
+                ..JsonStreamLimits::default()
+            },
+        );
+        assert_eq!(outcome.0, Err(limit_error(JsonStreamLimit::RawTokenBytes, limit)));
+    }
+    tokenize(
+        &[br#""a""#],
+        JsonStreamLimits {
+            max_raw_token_bytes: 3,
+            ..JsonStreamLimits::default()
+        },
+    )
+    .0
+    .unwrap();
+}
+
+#[test]
+fn mechanism_counter_tracks_consumed_prefix_not_supplied_slice() {
+    use crate::seclang::measurements::{self, Event};
+    let scope = measurements::start();
+    let mut stream = JsonStream::new(JsonStreamLimits {
+        max_source_bytes: 2,
+        ..JsonStreamLimits::default()
+    });
+    assert!(stream.feed(JsonStreamInput::Data(br#""abcdef""#), |_| Ok(())).is_err());
+    assert_eq!(scope.counts().get(Event::SourceBytes), stream.usage().source_bytes);
+    assert_eq!(scope.counts().get(Event::SourceBytes), 2);
+    assert_eq!(scope.counts().get(Event::Completions), 0);
+    assert!(stream.feed(JsonStreamInput::Complete, |_| Ok(())).is_err());
+    assert_eq!(scope.counts().get(Event::SourceBytes), 2);
+}
+
+#[test]
+fn inline_decoding_boundaries_and_exact_spill_budget_survive_chunk_splits() {
+    for len in [1023, 1024, 1025] {
+        let source = format!("\"{}\"", "\\u0061".repeat(len));
+        let limit = if len <= 1024 { 0 } else { len };
+        let limits = JsonStreamLimits {
+            max_retained_bytes: limit,
+            ..JsonStreamLimits::default()
+        };
+        let whole = tokenize(&[source.as_bytes()], limits);
+        whole.0.unwrap();
+        assert_eq!(whole.1, vec![OwnedToken::String("a".repeat(len))]);
+        assert_eq!(whole.2.peak_retained_bytes, limit);
+        let chunks: Vec<_> = source.as_bytes().chunks(7).collect();
+        let split = tokenize(&chunks, limits);
+        assert_same_semantics(&split, &whole);
+        if len > 1024 {
+            let failure = tokenize(
+                &chunks,
+                JsonStreamLimits {
+                    max_retained_bytes: len - 1,
+                    ..limits
+                },
+            );
+            assert_eq!(failure.0, Err(limit_error(JsonStreamLimit::RetainedBytes, len - 1)));
+            assert_eq!(failure.2.retained_bytes, 0);
+        }
+    }
+}
+
+#[test]
+fn spilled_token_storage_is_reused_until_terminal_release() {
+    let mut stream = JsonStream::new(JsonStreamLimits::default());
+    let source = format!("[\"{}\"", "\\u0061".repeat(1025));
+    stream
+        .feed(JsonStreamInput::Data(source.as_bytes()), |_| Ok(()))
+        .unwrap();
+    let retained = stream.usage().retained_bytes;
+    assert!(heap_capacity(&stream.token) >= 1025);
+    for _ in 0..100 {
+        stream
+            .feed(JsonStreamInput::Data(br#", "\u0061""#), |_| Ok(()))
+            .unwrap();
+        assert_eq!(stream.usage().retained_bytes, retained);
+    }
+    let failure = stream.feed(JsonStreamInput::Data(b",]"), |_| Ok(()));
+    assert_eq!(failure, Err(JsonStreamError::Syntax));
+    assert_eq!(heap_capacity(&stream.token), 0);
+    assert!(stream.token.is_empty());
+    assert_eq!(stream.feed(JsonStreamInput::Complete, |_| panic!("terminal")), failure);
 }

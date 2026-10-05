@@ -4,8 +4,8 @@ use edgion_waf::matcher::RegexProgramError;
 use edgion_waf::seclang::{
     compile_rule_bundles, compile_with_includes, inspect_compatibility, CompatibilityLimits, CompatibilityReport,
     CompiledGeneration, CompilerError, DirectiveLocation, FoldRequiredKind, FrontendError, FrontendLimits,
-    IncludeFailure, IncludeRequest, IncludeSink, IncludeSource, JsonDocumentLimits, JsonExecutionLimits,
-    JsonFactLimits, JsonPlanLimits, JsonStreamLimits, Phase, PhaseDefaults, RuleBundleMember, RuleBundleSource,
+    IncludeFailure, IncludeRequest, IncludeSink, IncludeSource, JsonInspectionLimits, JsonInspectionUnsupported,
+    JsonResultLimits, JsonStreamLimits, JsonStructureLimits, Phase, PhaseDefaults, RuleBundleMember, RuleBundleSource,
     SemanticError, SemanticLocation, SemanticValidationContext, SemanticValidationError, SourceError, SourcePosition,
     SyntaxError, UnavailableCapability, DEFAULT_REQUEST_BODY_PREFIX_BYTES, MAX_REQUEST_BODY_PREFIX_BYTES,
 };
@@ -88,50 +88,43 @@ pub struct WafJsonLexicalLimits {
     pub max_work: usize,
 }
 
-/// Explicit independent JSON document budgets. Zero remains restrictive.
+/// Explicit independent JSON structure budgets. Zero remains restrictive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WafJsonDocumentLimits {
+pub struct WafJsonStructureLimits {
     pub max_retained_bytes: usize,
     pub max_key_bytes: usize,
     pub max_members: usize,
-    pub max_events: usize,
     pub max_path_bytes: usize,
     pub max_depth: usize,
     pub max_work: usize,
 }
 
-/// Explicit independent JSON plan budgets. Zero remains restrictive.
+/// Explicit independent JSON result budgets. Zero remains restrictive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WafJsonPlanLimits {
-    pub max_subscribers: usize,
-    pub max_retained_bytes: usize,
-}
-
-/// Explicit independent JSON facts budgets. Zero remains restrictive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WafJsonFactsLimits {
+pub struct WafJsonResultLimits {
+    pub max_candidates: usize,
+    /// Allocated candidate/profile/change/outcome/capture slots, including spare and free slots.
     pub max_facts: usize,
     pub max_retained_bytes: usize,
     pub max_work: usize,
+    pub max_deferred_entries: usize,
+    pub max_deferred_bytes: usize,
 }
 
-/// Opt-in JSON snapshot execution with no implicit production budgets.
+/// Full-inspection overrides; omission selects the deterministic engine defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WafJsonConfig {
     pub lexical: WafJsonLexicalLimits,
-    pub document: WafJsonDocumentLimits,
-    pub plan: WafJsonPlanLimits,
-    pub facts: WafJsonFactsLimits,
+    pub structure: WafJsonStructureLimits,
+    pub results: WafJsonResultLimits,
 }
-
 impl WafJsonConfig {
-    /// Copy explicit budgets into the immutable runtime without normalization.
-    pub fn execution_limits(&self) -> JsonExecutionLimits {
-        JsonExecutionLimits {
+    /// Copy explicit budgets without normalizing restrictive zero values.
+    pub fn inspection_limits(&self) -> JsonInspectionLimits {
+        JsonInspectionLimits {
             lexical: JsonStreamLimits {
                 max_source_bytes: self.lexical.max_source_bytes,
                 max_raw_token_bytes: self.lexical.max_raw_token_bytes,
@@ -141,23 +134,21 @@ impl WafJsonConfig {
                 max_retained_bytes: self.lexical.max_retained_bytes,
                 max_work: self.lexical.max_work,
             },
-            document: JsonDocumentLimits {
-                max_retained_bytes: self.document.max_retained_bytes,
-                max_key_bytes: self.document.max_key_bytes,
-                max_members: self.document.max_members,
-                max_events: self.document.max_events,
-                max_path_bytes: self.document.max_path_bytes,
-                max_depth: self.document.max_depth,
-                max_work: self.document.max_work,
+            structure: JsonStructureLimits {
+                max_retained_bytes: self.structure.max_retained_bytes,
+                max_key_bytes: self.structure.max_key_bytes,
+                max_members: self.structure.max_members,
+                max_path_bytes: self.structure.max_path_bytes,
+                max_depth: self.structure.max_depth,
+                max_work: self.structure.max_work,
             },
-            plan: JsonPlanLimits {
-                max_subscribers: self.plan.max_subscribers,
-                max_retained_bytes: self.plan.max_retained_bytes,
-            },
-            facts: JsonFactLimits {
-                max_facts: self.facts.max_facts,
-                max_retained_bytes: self.facts.max_retained_bytes,
-                max_work: self.facts.max_work,
+            results: JsonResultLimits {
+                candidates: self.results.max_candidates,
+                records: self.results.max_facts,
+                retained_bytes: self.results.max_retained_bytes,
+                work: self.results.max_work,
+                deferred_entries: self.results.max_deferred_entries,
+                deferred_bytes: self.results.max_deferred_bytes,
             },
         }
     }
@@ -171,7 +162,7 @@ pub struct WafRequestBodyConfig {
     /// Prefix window, default 64 KiB, at most 1 MiB. Only valid in prefix mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix_size: Option<String>,
-    /// Explicit JSON snapshot budgets; only valid in full mode.
+    /// JSON checker limit overrides; full mode uses engine defaults when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub json: Option<WafJsonConfig>,
 }
@@ -375,6 +366,7 @@ enum WafCompileFailure {
     Config(String),
     Frontend(FrontendError),
     Prefix(&'static str),
+    Json(JsonInspectionUnsupported),
 }
 
 fn capability_name(capability: UnavailableCapability) -> (&'static str, &'static str) {
@@ -879,6 +871,17 @@ impl WafConfig {
             .map_err(|error| WafCompileFailure::Config(format!("WAF defaults are invalid: {error}")))
     }
 
+    fn validate_body_generation(&self, generation: &CompiledGeneration) -> Result<(), WafCompileFailure> {
+        if self.request_body.inspection == WafRequestBodyInspection::Prefix {
+            generation
+                .validate_request_body_prefix()
+                .map_err(WafCompileFailure::Prefix)?;
+        } else if let Some(finding) = generation.json_inspection_unsupported().first() {
+            return Err(WafCompileFailure::Json(*finding));
+        }
+        Ok(())
+    }
+
     fn compile_generation_detailed(&self) -> Result<CompiledGeneration, WafCompileFailure> {
         // Local source inspection and in-process test fixtures use this path.
         // `rules` is skipped by serde and is unavailable to operator resources.
@@ -896,11 +899,7 @@ impl WafConfig {
             )
             .map(|bundle| bundle.into_parts().0)
             .map_err(WafCompileFailure::Frontend)?;
-            if self.request_body.inspection == WafRequestBodyInspection::Prefix {
-                generation
-                    .validate_request_body_prefix()
-                    .map_err(WafCompileFailure::Prefix)?;
-            }
+            self.validate_body_generation(&generation)?;
             return Ok(generation);
         }
         self.validate_shape().map_err(WafCompileFailure::Config)?;
@@ -1024,11 +1023,7 @@ impl WafConfig {
             }
             .map(|bundle| bundle.into_parts().0)
             .map_err(WafCompileFailure::Frontend)?;
-        if self.request_body.inspection == WafRequestBodyInspection::Prefix {
-            generation
-                .validate_request_body_prefix()
-                .map_err(WafCompileFailure::Prefix)?;
-        }
+        self.validate_body_generation(&generation)?;
         Ok(generation)
     }
 
@@ -1102,6 +1097,12 @@ impl WafConfig {
                 report.failure = Some(WafSupportFailure::new("invalid_config", "Correct WAF configuration"))
             }
             Err(WafCompileFailure::Frontend(error)) => report.failure = Some(frontend_failure(&error)),
+            Err(WafCompileFailure::Json(_)) => {
+                report.failure = Some(WafSupportFailure::new(
+                    "unsupported_json_dependency",
+                    "Use bounded named JSON operands or supported static predicates",
+                ));
+            }
             Err(WafCompileFailure::Prefix(_)) => {
                 report.failure = Some(WafSupportFailure::new(
                     "unsupported_semantics",
@@ -1118,6 +1119,10 @@ impl WafConfig {
             WafCompileFailure::Config(message) => message,
             WafCompileFailure::Frontend(error) => format!("WAF rules are not executable: {error}"),
             WafCompileFailure::Prefix(message) => message.to_string(),
+            WafCompileFailure::Json(finding) => format!(
+                "WAF JSON dependency is unsupported: rule {}, member {}, reason {:?}",
+                finding.rule_id, finding.member, finding.reason
+            ),
         })
     }
 }

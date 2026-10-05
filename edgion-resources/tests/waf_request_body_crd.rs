@@ -74,7 +74,10 @@ fn request_body_fields_types_and_required_budgets_match_every_crd_version() {
             ["requestBody"];
         compare(&root, body, &root, "spec.waf.requestBody");
         let json = &body["properties"]["json"];
-        assert!(json.get("default").is_none(), "JSON activation must stay explicit");
+        assert!(
+            json.get("default").is_none(),
+            "Explicit override profiles must not receive partial schema defaults"
+        );
         for group in json["properties"].as_object().unwrap().values() {
             assert_eq!(names(group, "properties"), names(group, "required"));
             for budget in group["properties"].as_object().unwrap().values() {

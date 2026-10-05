@@ -1,7 +1,7 @@
 use super::*;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_plugins::{WafJsonConfig, WafMode};
-use edgion_waf::seclang::{EvaluationMode, Phase};
+use edgion_waf::seclang::Phase;
 
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::EdgionHttpContext;
@@ -258,6 +258,11 @@ async fn full_mode_captures_body_for_later_phase_only_dependency() {
     let mut session = MockPluginSession::new();
     expect_request_head(&mut session, "/full");
     session.expect_ctx().return_const(EdgionHttpContext::default());
+    session.expect_ensure_request_body().times(1).return_once(|_| Ok(7));
+    session
+        .expect_request_body_available_len()
+        .times(1)
+        .return_once(|_| Ok(7));
     session
         .expect_read_request_body()
         .times(1)
@@ -363,6 +368,11 @@ async fn malformed_structured_body_fails_closed_without_payload_logging() {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_body_config.max_body_size_bytes = 1024;
     session.expect_ctx().return_const(ctx);
+    session.expect_ensure_request_body().times(1).return_once(|_| Ok(20));
+    session
+        .expect_request_body_available_len()
+        .times(1)
+        .return_once(|_| Ok(20));
     session
         .expect_read_request_body()
         .return_once(|_| Ok(Bytes::from_static(b"private-invalid-json")));
@@ -392,7 +402,7 @@ async fn gateway_body_cap_failure_maps_to_413() {
     ctx.request_body_config.max_body_size_bytes = 8;
     session.expect_ctx().return_const(ctx);
     session
-        .expect_read_request_body()
+        .expect_ensure_request_body()
         .return_once(|_| Err(BodyReadError::BufferLimitExceeded { limit: 8 }));
     session.expect_record_error().returning(|_| ());
     let mut log = PluginLog::new(NAME);
@@ -417,6 +427,11 @@ async fn detection_only_records_body_match_and_keeps_the_transaction() {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_body_config.max_body_size_bytes = 1024;
     session.expect_ctx().return_const(ctx);
+    session.expect_ensure_request_body().times(1).return_once(|_| Ok(7));
+    session
+        .expect_request_body_available_len()
+        .times(1)
+        .return_once(|_| Ok(7));
     session
         .expect_read_request_body()
         .withf(|limit| *limit == Some(1024))
@@ -454,6 +469,11 @@ async fn one_transaction_advances_through_all_gateway_phase_hooks() {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_body_config.max_body_size_bytes = 1024;
     session.expect_ctx().return_const(ctx);
+    session.expect_ensure_request_body().times(1).return_once(|_| Ok(7));
+    session
+        .expect_request_body_available_len()
+        .times(1)
+        .return_once(|_| Ok(7));
     session
         .expect_read_request_body()
         .return_once(|_| Ok(Bytes::from_static(b"allowed")));
@@ -501,61 +521,307 @@ fn explicit_json_config() -> WafJsonConfig {
     serde_json::from_value(serde_json::json!({
         "lexical": {"maxSourceBytes": 1048576, "maxRawTokenBytes": 65536, "maxDecodedBytes": 1048576,
             "maxEvents": 65536, "maxDepth": 64, "maxRetainedBytes": 1048576, "maxWork": 16777216},
-        "document": {"maxRetainedBytes": 1048576, "maxKeyBytes": 65536, "maxMembers": 65536,
-            "maxEvents": 65536, "maxPathBytes": 16384, "maxDepth": 64, "maxWork": 16777216},
-        "plan": {"maxSubscribers": 65536, "maxRetainedBytes": 1048576},
-        "facts": {"maxFacts": 65536, "maxRetainedBytes": 1048576, "maxWork": 16777216}
+        "structure": {"maxRetainedBytes": 1048576, "maxKeyBytes": 65536, "maxMembers": 65536,
+            "maxPathBytes": 16384, "maxDepth": 64, "maxWork": 16777216},
+        "results": {"maxCandidates": 65536, "maxFacts": 65536, "maxRetainedBytes": 1048576,
+            "maxWork": 16777216, "maxDeferredEntries": 4096, "maxDeferredBytes": 1048576}
     }))
     .unwrap()
 }
 
-fn json_plugin(rules: &str, mode: WafMode) -> WafPlugin {
-    let mut config = super::fixture::config(rules);
-    config.mode = mode;
-    config.request_body.inspection = WafRequestBodyInspection::Full;
-    config.request_body.json = Some(explicit_json_config());
-    WafPlugin::try_new(&config).unwrap()
-}
-
-fn json_transaction(plugin: &WafPlugin, uri: &[u8]) -> Transaction<'static> {
-    let headers = [RequestHeader::new(b"content-type", b"application/json")];
-    let mut transaction = Transaction::new_shared_with_modes(
-        Arc::clone(&plugin.shared.generation),
-        RequestHead::new(
-            b"POST / HTTP/1.1",
-            b"POST",
-            uri,
-            uri,
-            b"HTTP/1.1",
-            b"192.0.2.1",
-            b"test",
-            &headers,
-        ),
-        RuntimeLimits::default(),
-        EvaluationMode::Accelerated,
-        plugin.shared.engine_mode,
-    )
-    .unwrap();
-    transaction.execute_request_headers().unwrap();
-    transaction
+#[tokio::test]
+async fn full_json_default_and_explicit_limits_use_one_proven_shared_read() {
+    for explicit in [false, true] {
+        let mut config = super::fixture::config("SecRule ARGS:json.a \"@streq hit\" \"id:1,phase:2,pass\"\n");
+        config.request_body.inspection = WafRequestBodyInspection::Full;
+        config.request_body.json = explicit.then(explicit_json_config);
+        let plugin = WafPlugin::try_new(&config).unwrap();
+        let mut session = MockPluginSession::new();
+        expect_request_head_with_headers(
+            &mut session,
+            "/json",
+            vec![(b"content-type".to_vec(), b"application/json".to_vec())],
+        );
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        let body = Bytes::from_static(br#"{"a":"gone","a":"hit"}"#);
+        let len = body.len() as u64;
+        let mut sequence = mockall::Sequence::new();
+        session
+            .expect_ensure_request_body()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(move |_| Ok(len));
+        session
+            .expect_request_body_available_len()
+            .with(mockall::predicate::eq(false))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(move |_| Ok(len));
+        session
+            .expect_read_request_body()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(move |_| Ok(body));
+        session
+            .expect_install_waf_transaction()
+            .times(1)
+            .return_once(|_, transaction| {
+                assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
+                true
+            });
+        assert_eq!(
+            plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+            PluginRunningResult::GoodNext
+        );
+    }
 }
 
 #[tokio::test]
-async fn json_opt_in_keeps_body_independent_generations_and_phase_one_denial_capture_free() {
-    for rules in [
-        "SecRule REQUEST_URI \"@contains allowed\" \"id:1,phase:2,pass\"\n",
-        "SecRule REQUEST_URI \"@contains allowed\" \"id:1,phase:1,deny,status:403\"\n",
-    ] {
-        let plugin = json_plugin(rules, WafMode::On);
+async fn full_capture_proof_and_all_caps_precede_materialization() {
+    for case in 0..5 {
+        let mut config = super::fixture::config("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n");
+        config.request_body.inspection = WafRequestBodyInspection::Full;
+        config.request_body.json = Some(explicit_json_config());
+        let plugin = WafPlugin::try_new(&config).unwrap();
+        let mut session = MockPluginSession::new();
+        expect_request_head_with_headers(
+            &mut session,
+            "/json",
+            vec![(b"content-type".to_vec(), b"application/json".to_vec())],
+        );
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_body_config.max_body_size_bytes = if case == 2 { 8 } else { 32 << 20 };
+        session.expect_ctx().return_const(ctx);
+        let len = match case {
+            0 | 1 => 0,
+            2 => 9,
+            3 => (16 << 20) + 1,
+            _ => (1 << 20) + 1,
+        };
+        session
+            .expect_ensure_request_body()
+            .times(1)
+            .return_once(move |_| Ok(len));
+        session
+            .expect_request_body_available_len()
+            .times(1)
+            .return_once(move |_| match case {
+                0 => Err(BodyReadError::NotBuffered),
+                1 => Ok(1),
+                _ => Ok(len),
+            });
+        session.expect_read_request_body().times(0);
+        session.expect_record_error().returning(|_| ());
+        assert_eq!(
+            plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+            PluginRunningResult::ErrResponse {
+                status: if case < 2 { 500 } else { 413 },
+                body: None
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn processor_override_precedes_json_only_caps_and_raw_reads() {
+    let mut config = super::fixture::config(concat!(
+        "SecAction \"id:1,phase:1,pass,ctl:requestBodyProcessor=URLENCODED\"\n",
+        "SecRule ARGS:a \"@streq hit\" \"id:2,phase:2,pass\"\n"
+    ));
+    config.request_body.inspection = WafRequestBodyInspection::Full;
+    let mut limits = explicit_json_config();
+    limits.lexical.max_source_bytes = 0;
+    config.request_body.json = Some(limits);
+    let plugin = WafPlugin::try_new(&config).unwrap();
+    let mut session = MockPluginSession::new();
+    expect_request_head_with_headers(
+        &mut session,
+        "/json",
+        vec![(b"content-type".to_vec(), b"application/json".to_vec())],
+    );
+    session.expect_ctx().return_const(EdgionHttpContext::new());
+    session.expect_ensure_request_body().times(1).return_once(|_| Ok(5));
+    session
+        .expect_request_body_available_len()
+        .times(1)
+        .return_once(|_| Ok(5));
+    session
+        .expect_read_request_body()
+        .times(1)
+        .return_once(|_| Ok(Bytes::from_static(b"a=hit")));
+    session
+        .expect_install_waf_transaction()
+        .times(1)
+        .return_once(|_, _| true);
+    assert_eq!(
+        plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+        PluginRunningResult::GoodNext
+    );
+}
+
+#[tokio::test]
+async fn shared_read_length_mismatch_fails_closed() {
+    let plugin = plugin("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n", WafMode::On);
+    let mut session = MockPluginSession::new();
+    expect_request_head(&mut session, "/");
+    session.expect_ctx().return_const(EdgionHttpContext::new());
+    session.expect_ensure_request_body().times(1).return_once(|_| Ok(3));
+    session
+        .expect_request_body_available_len()
+        .times(1)
+        .return_once(|_| Ok(3));
+    session
+        .expect_read_request_body()
+        .times(1)
+        .return_once(|_| Ok(Bytes::new()));
+    session.expect_record_error().returning(|_| ());
+    assert_eq!(
+        plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+        PluginRunningResult::ErrResponse {
+            status: 500,
+            body: None
+        }
+    );
+}
+
+#[tokio::test]
+async fn canonical_resident_spilled_and_edited_bodies_keep_the_inspected_source() {
+    use crate::request_body::BodyStorage;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    for (memory_limit, edited) in [(1024, false), (0, false), (1024, true), (0, true)] {
+        let original = Bytes::from_static(br#"{"x":"MISS"}"#);
+        let (mut storage, view) = BodyStorage::new(memory_limit, 1024);
+        storage.write(&original).await.unwrap();
+        storage.finish().await.unwrap();
+        if edited {
+            view.replace_spans(view.generation(), &[(6..10, Bytes::from_static(b"HIT"))])
+                .unwrap();
+        }
+        let body = view.read_all().await.unwrap();
+        if memory_limit != 0 && !edited {
+            let mut reader = view.snapshot_reader().unwrap();
+            let resident = reader.next_chunk().await.unwrap().unwrap();
+            assert_eq!(body.as_ptr(), resident.as_ptr());
+        }
+        let expected = if edited { "HIT" } else { "MISS" };
+        let rules = format!(
+            concat!(
+                "SecAction \"id:1,phase:1,pass,ctl:forceRequestBodyVariable=On\"\n",
+                "SecRule REQUEST_BODY \"@contains {}\" \"id:2,phase:3,deny,status:409\"\n"
+            ),
+            expected
+        );
+        let plugin = plugin(&rules, WafMode::On);
+        let mut session = MockPluginSession::new();
+        expect_request_head_with_headers(
+            &mut session,
+            "/",
+            vec![(b"content-type".to_vec(), b"application/json".to_vec())],
+        );
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        let len = body.len() as u64;
+        session
+            .expect_ensure_request_body()
+            .times(1)
+            .return_once(move |_| Ok(len));
+        session
+            .expect_request_body_available_len()
+            .times(1)
+            .return_once(move |_| Ok(len));
+        session
+            .expect_read_request_body()
+            .times(1)
+            .return_once(move |_| Ok(body));
+        session
+            .expect_install_waf_transaction()
+            .times(1)
+            .return_once(move |_, mut tx| {
+                view.replace_spans(view.generation(), &[(0..len, Bytes::from_static(b"changed"))])
+                    .unwrap();
+                tx.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+                assert_eq!(
+                    tx.execute_response_headers().unwrap().intervention().unwrap().status(),
+                    409
+                );
+                true
+            });
+        assert_eq!(
+            plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+            PluginRunningResult::GoodNext
+        );
+    }
+}
+
+#[tokio::test]
+async fn only_transport_proven_empty_capture_can_be_materialized() {
+    for declared in [Some(false), Some(true), None] {
+        let plugin = plugin("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n", WafMode::On);
+        let mut session = MockPluginSession::new();
+        expect_request_head(&mut session, "/");
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.body_declared = declared;
+        session.expect_ctx().return_const(ctx);
+        session.expect_ensure_request_body().times(1).return_once(|_| Ok(0));
+        session
+            .expect_request_body_available_len()
+            .with(mockall::predicate::eq(declared == Some(false)))
+            .times(1)
+            .return_once(move |_| {
+                if declared == Some(false) {
+                    Ok(0)
+                } else {
+                    Err(BodyReadError::NotBuffered)
+                }
+            });
+        if declared == Some(false) {
+            session
+                .expect_read_request_body()
+                .times(1)
+                .return_once(|_| Ok(Bytes::new()));
+            session
+                .expect_install_waf_transaction()
+                .times(1)
+                .return_once(|_, _| true);
+        } else {
+            session.expect_read_request_body().times(0);
+            session.expect_record_error().returning(|_| ());
+        }
+        assert_eq!(
+            plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+            if declared == Some(false) {
+                PluginRunningResult::GoodNext
+            } else {
+                PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                }
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn default_json_body_independent_rules_and_phase_one_denial_do_not_capture() {
+    for deny in [false, true] {
+        let rules = if deny {
+            "SecRule REQUEST_URI \"@contains allowed\" \"id:1,phase:1,deny,status:403\"\n"
+        } else {
+            "SecRule REQUEST_URI \"@contains allowed\" \"id:1,phase:2,pass\"\n"
+        };
+        let plugin = plugin(rules, WafMode::On);
         let mut session = MockPluginSession::new();
         expect_request_head(&mut session, "/allowed");
-        if !rules.contains("deny") {
-            session.expect_install_waf_transaction().return_once(|_, _| true);
+        session.expect_ensure_request_body().times(0);
+        session.expect_read_request_body().times(0);
+        if !deny {
+            session
+                .expect_install_waf_transaction()
+                .times(1)
+                .return_once(|_, _| true);
         }
-        let result = plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await;
         assert_eq!(
-            result,
-            if rules.contains("deny") {
+            plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+            if deny {
                 PluginRunningResult::ErrResponse {
                     status: 403,
                     body: None,
@@ -568,218 +834,13 @@ async fn json_opt_in_keeps_body_independent_generations_and_phase_one_denial_cap
 }
 
 #[tokio::test]
-async fn json_opt_in_uses_canonical_capture_snapshot_and_installs_one_transaction() {
-    use crate::request_body::BodyStorage;
-    use pingora_core::protocols::http::RequestBodyBuffer;
-    let plugin = json_plugin(
-        "SecRule ARGS:json.a \"@pm allowed\" \"id:1,phase:2,pass\"\n",
-        WafMode::On,
-    );
-    let (mut storage, view) = BodyStorage::new(1, 1024);
-    let body = Bytes::from_static(br#"{"a":"allowed"}"#);
-    storage.write(&body).await.unwrap();
-    storage.finish().await.unwrap();
-    let mut session = MockPluginSession::new();
-    expect_request_head_with_headers(
-        &mut session,
-        "/",
-        vec![(b"content-type".to_vec(), b"application/json".to_vec())],
-    );
-    let mut ctx = EdgionHttpContext::new();
-    ctx.request_body_config.max_body_size_bytes = 1024;
-    ctx.request_info.body_declared = Some(true);
-    session.expect_ctx().return_const(ctx);
-    session
-        .expect_ensure_request_body()
-        .with(mockall::predicate::eq(Some(1024)))
-        .times(1)
-        .return_once(move |_| Ok(body.len() as u64));
-    let reader = view.snapshot_reader().unwrap();
-    session
-        .expect_request_body_snapshot_reader()
-        .with(mockall::predicate::eq(false))
-        .times(1)
-        .return_once(move |_| Ok(reader));
-    session
-        .expect_install_waf_transaction()
-        .times(1)
-        .return_once(|_, transaction| {
-            assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
-            true
-        });
-    assert_eq!(
-        plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
-        PluginRunningResult::GoodNext
-    );
-    assert!(!view.is_materialized());
-}
-
-#[tokio::test]
-async fn only_initial_unsupported_json_admission_uses_ordinary_full_publication() {
-    let plugin = json_plugin(
-        "SecRule REQUEST_BODY \"@contains allowed\" \"id:1,phase:2,pass\"\n",
-        WafMode::On,
-    );
-    let mut session = MockPluginSession::new();
-    expect_request_head_with_headers(
-        &mut session,
-        "/",
-        vec![(b"content-type".to_vec(), b"application/json".to_vec())],
-    );
-    session.expect_ctx().return_const(EdgionHttpContext::new());
-    session
-        .expect_read_request_body()
-        .times(1)
-        .return_once(|_| Ok(Bytes::from_static(br#"{"a":"allowed"}"#)));
-    session
-        .expect_install_waf_transaction()
-        .times(1)
-        .return_once(|_, _| true);
-    assert_eq!(
-        plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
-        PluginRunningResult::GoodNext
-    );
-}
-
-#[tokio::test]
-async fn snapshot_driver_matches_complete_evaluation_for_memory_spill_and_logical_edits() {
-    use crate::request_body::BodyStorage;
-    use pingora_core::protocols::http::RequestBodyBuffer;
-    let plugin = json_plugin(
-        concat!(
-            "SecRule ARGS:json.a \"@pm blocked\" \"id:1,phase:2,deny,status:403\"\n",
-            "SecRule ARGS \"!@pm blocked\" \"id:2,phase:2,pass\"\n",
-            "SecRule ARGS_NAMES \"@pm json.a\" \"id:3,phase:2,pass\"\n",
-        ),
-        WafMode::On,
-    );
-    let body = Bytes::from_static(br#"{"a":"blocked","a":"allowed","array":[1,true,null]}"#);
-    for memory_limit in [1, 65536] {
-        let (mut storage, view) = BodyStorage::new(memory_limit, 1024);
-        for chunk in body.chunks(3) {
-            storage.write(&Bytes::copy_from_slice(chunk)).await.unwrap();
-        }
-        storage.finish().await.unwrap();
-        // Logical segments exercise boundaries independently of transport chunks.
-        view.prepend(Bytes::from_static(b" ")).unwrap();
-        view.append(Bytes::from_static(b" ")).unwrap();
-        let mut actual = json_transaction(&plugin, b"/?json.a=query&other=blocked");
-        let mut expected = json_transaction(&plugin, b"/?json.a=query&other=blocked");
-        actual
-            .start_json_request_body(BodyProcessorSelection::Auto, explicit_json_config().execution_limits())
-            .unwrap();
-        let mut reader = view.snapshot_reader().unwrap();
-        publish_json_snapshot(&mut actual, reader.as_mut(), view.len().unwrap(), 1024, 1024, 1024)
-            .await
-            .unwrap();
-        let actual_outcome = actual.finish_json_request_body().unwrap();
-        expected
-            .publish_request_body(RequestBody::new(&body, BodyProcessorSelection::Auto))
-            .unwrap();
-        assert_eq!(actual_outcome, expected.execute_request_body().unwrap());
-        assert!(!view.is_materialized());
-        // Full inspection preserves subsequent canonical mutation semantics.
-        view.append(Bytes::from_static(b" ")).unwrap();
-    }
-}
-
-#[tokio::test]
-async fn snapshot_driver_defers_malformed_mode_handling_to_canonical_engine() {
-    use crate::request_body::BodyStorage;
-    use pingora_core::protocols::http::RequestBodyBuffer;
-    for mode in [WafMode::On, WafMode::DetectionOnly] {
-        let plugin = json_plugin("SecRule ARGS \"@pm blocked\" \"id:1,phase:2,deny\"\n", mode);
-        let (mut storage, view) = BodyStorage::new(1, 1024);
-        let body = Bytes::from_static(br#"{"a":"blocked",invalid}"#);
-        storage.write(&body).await.unwrap();
-        storage.finish().await.unwrap();
-        let mut actual = json_transaction(&plugin, b"/?q=blocked");
-        actual
-            .start_json_request_body(BodyProcessorSelection::Auto, explicit_json_config().execution_limits())
-            .unwrap();
-        let mut reader = view.snapshot_reader().unwrap();
-        let publish = publish_json_snapshot(&mut actual, reader.as_mut(), body.len() as u64, 1024, 1024, 1024).await;
-        if mode == WafMode::On {
-            assert!(publish.is_err());
-            assert!(actual.finish_json_request_body().is_err());
-        } else {
-            publish.unwrap();
-            assert!(actual.finish_json_request_body().unwrap().intervention().is_none());
-            assert!(actual.request_body_error().is_some());
-        }
-    }
-}
-
-struct ScriptedJsonReader {
-    len: u64,
-    chunks: std::collections::VecDeque<Result<Option<Bytes>, BodyReadError>>,
-    calls: Arc<std::sync::atomic::AtomicUsize>,
-}
-#[async_trait]
-impl RequestBodySnapshotReader for ScriptedJsonReader {
-    fn len(&self) -> u64 {
-        self.len
-    }
-    async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.chunks.pop_front().unwrap_or(Ok(None))
-    }
-}
-
-#[tokio::test]
-async fn snapshot_driver_requires_real_eof_and_rejects_inconsistent_readers() {
-    let plugin = json_plugin("SecRule ARGS \"@pm blocked\" \"id:1,phase:2,pass\"\n", WafMode::On);
-    let body = Bytes::from_static(br#"{"a":"allowed"}"#);
-    let len = body.len() as u64;
-    let cases = [
-        (len, vec![Ok(Some(body.clone())), Ok(None)], true, 2),
-        (len + 1, vec![Ok(Some(body.clone())), Ok(None)], false, 0),
-        (len, vec![Ok(None)], false, 1),
-        (len, vec![Ok(Some(Bytes::new()))], false, 1),
-        (
-            len,
-            vec![Ok(Some(body.clone())), Ok(Some(Bytes::from_static(b" ")))],
-            false,
-            2,
-        ),
-        (
-            len,
-            vec![Ok(Some(body.clone())), Err(BodyReadError::StorageFailure)],
-            false,
-            2,
-        ),
-        (len, vec![Err(BodyReadError::Incomplete)], false, 1),
-    ];
-    for (metadata_len, chunks, success, expected_calls) in cases {
-        let mut transaction = json_transaction(&plugin, b"/");
-        transaction
-            .start_json_request_body(BodyProcessorSelection::Auto, explicit_json_config().execution_limits())
-            .unwrap();
-        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut reader = ScriptedJsonReader {
-            len: metadata_len,
-            chunks: chunks.into(),
-            calls: calls.clone(),
-        };
-        let result = publish_json_snapshot(&mut transaction, &mut reader, len, 1024, 1024, 1024).await;
-        assert_eq!(result.is_ok(), success, "{result:?}");
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), expected_calls);
-        if success {
-            assert!(transaction.finish_json_request_body().is_ok());
-        } else {
-            assert!(transaction.finish_json_request_body().is_err());
-        }
-    }
-}
-
-#[tokio::test]
-async fn independent_json_limits_fail_closed_in_detection_only_and_before_capture() {
-    let mut config = super::fixture::config("SecRule ARGS \"@pm blocked\" \"id:1,phase:2,pass\"\n");
+async fn json_physical_failure_still_rejects_detection_only() {
+    let mut config = super::fixture::config("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n");
     config.mode = WafMode::DetectionOnly;
     config.request_body.inspection = WafRequestBodyInspection::Full;
-    let mut json = explicit_json_config();
-    json.plan.max_subscribers = 0;
-    config.request_body.json = Some(json);
+    let mut limits = explicit_json_config();
+    limits.results.max_candidates = 0;
+    config.request_body.json = Some(limits);
     let plugin = WafPlugin::try_new(&config).unwrap();
     let mut session = MockPluginSession::new();
     expect_request_head_with_headers(
@@ -787,6 +848,17 @@ async fn independent_json_limits_fail_closed_in_detection_only_and_before_captur
         "/",
         vec![(b"content-type".to_vec(), b"application/json".to_vec())],
     );
+    session.expect_ctx().return_const(EdgionHttpContext::new());
+    session.expect_ensure_request_body().times(1).return_once(|_| Ok(11));
+    session
+        .expect_request_body_available_len()
+        .times(1)
+        .return_once(|_| Ok(11));
+    session
+        .expect_read_request_body()
+        .times(1)
+        .return_once(|_| Ok(Bytes::from_static(br#"{"a":"hit"}"#)));
+    session.expect_install_waf_transaction().times(0);
     assert_eq!(
         plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
         PluginRunningResult::ErrResponse {
@@ -794,305 +866,134 @@ async fn independent_json_limits_fail_closed_in_detection_only_and_before_captur
             body: None
         }
     );
-    let plugin = json_plugin(
-        "SecRule ARGS \"@pm blocked\" \"id:1,phase:2,pass\"\n",
-        WafMode::DetectionOnly,
-    );
-    for group in ["lexical", "document", "facts"] {
-        let mut limits = explicit_json_config().execution_limits();
-        match group {
-            "lexical" => limits.lexical.max_work = 0,
-            "document" => limits.document.max_work = 0,
-            _ => limits.facts.max_facts = 0,
-        }
-        let mut transaction = json_transaction(&plugin, b"/");
-        transaction
-            .start_json_request_body(BodyProcessorSelection::Auto, limits)
-            .unwrap();
-        let body = Bytes::from_static(br#"{"a":"blocked"}"#);
-        let mut reader = ScriptedJsonReader {
-            len: body.len() as u64,
-            chunks: vec![Ok(Some(body))].into(),
-            calls: Default::default(),
-        };
-        let expected_len = reader.len;
-        let error = publish_json_snapshot(&mut transaction, &mut reader, expected_len, 1024, 1024, 1024)
-            .await
-            .unwrap_err();
-        let JsonSnapshotError::Engine(error) = error else {
-            panic!("engine limit expected")
-        };
-        assert_json_classification(&error, 500, WafErrorCode::RuntimeLimit);
-        assert!(transaction.finish_json_request_body().is_err());
-    }
 }
 
 #[test]
-fn json_source_length_limits_preserve_status_and_canonical_classification() {
-    assert!(check_json_source_len(4, 4, 4, 4).is_ok());
-    assert!(matches!(
-        check_json_source_len(5, 4, 5, 5),
-        Err(JsonSnapshotError::Read(BodyReadError::BufferLimitExceeded { limit: 4 }))
-    ));
-    for error in [
-        check_json_source_len(5, 5, 4, 5).unwrap_err(),
-        check_json_source_len(5, 5, 5, 4).unwrap_err(),
-    ] {
-        let JsonSnapshotError::Engine(error) = error else {
-            panic!("engine byte cap expected")
-        };
-        assert_json_classification(&error, 413, WafErrorCode::BodyLimit);
-    }
-    assert!(check_json_source_len(0, 0, 0, 0).is_ok());
-    assert!(check_json_source_len(1, 1, 1, 0).is_err());
-}
-
-#[tokio::test]
-async fn bodyless_json_snapshot_completes_without_fabricating_a_data_chunk() {
-    let plugin = json_plugin("SecRule ARGS \"@pm blocked\" \"id:1,phase:2,pass\"\n", WafMode::On);
-    let mut transaction = json_transaction(&plugin, b"/");
-    transaction
-        .start_json_request_body(BodyProcessorSelection::Auto, explicit_json_config().execution_limits())
-        .unwrap();
-    let state = crate::request_body::RequestBodyState::default();
-    assert!(state.snapshot_reader(false).is_err());
-    let mut reader = state.snapshot_reader(true).unwrap();
-    publish_json_snapshot(&mut transaction, reader.as_mut(), 0, 0, 0, 0)
-        .await
-        .unwrap();
-    assert!(transaction.finish_json_request_body().is_ok());
-}
-
-struct PendingJsonReader {
-    body: Option<Bytes>,
-    len: u64,
-    dropped: Arc<std::sync::atomic::AtomicBool>,
-}
-impl Drop for PendingJsonReader {
-    fn drop(&mut self) {
-        self.dropped.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-#[async_trait]
-impl RequestBodySnapshotReader for PendingJsonReader {
-    fn len(&self) -> u64 {
-        self.len
-    }
-    async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
-        if let Some(body) = self.body.take() {
-            return Ok(Some(body));
-        }
-        std::future::pending().await
-    }
-}
-
-#[tokio::test]
-async fn cancellation_drops_pinned_transaction_and_reader_before_phase_two() {
-    use std::future::Future;
-    use std::task::Poll;
-    let plugin = json_plugin("SecRule ARGS \"@pm blocked\" \"id:1,phase:2,deny\"\n", WafMode::On);
-    let count = Arc::strong_count(&plugin.shared.generation);
-    let mut transaction = json_transaction(&plugin, b"/");
-    transaction
-        .start_json_request_body(BodyProcessorSelection::Auto, explicit_json_config().execution_limits())
-        .unwrap();
-    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let body = Bytes::from_static(br#"{"a":"blocked"}"#);
-    let len = body.len() as u64;
-    let mut reader = PendingJsonReader {
-        body: Some(body),
-        len,
-        dropped: Arc::clone(&dropped),
-    };
-    let mut operation = Box::pin(async move {
-        publish_json_snapshot(&mut transaction, &mut reader, len, 1024, 1024, 1024)
-            .await
-            .unwrap();
-        transaction.finish_json_request_body().unwrap()
-    });
-    std::future::poll_fn(|cx| {
-        assert!(
-            operation.as_mut().poll(cx).is_pending(),
-            "await actual EOF even after all expected bytes"
-        );
-        Poll::Ready(())
-    })
-    .await;
-    assert!(Arc::strong_count(&plugin.shared.generation) > count);
-    assert!(!dropped.load(std::sync::atomic::Ordering::SeqCst));
-    drop(operation);
-    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
-    assert_eq!(Arc::strong_count(&plugin.shared.generation), count);
-}
-
-#[tokio::test]
-async fn json_cached_length_is_rechecked_before_snapshot_reads() {
-    for (physical_cap, captured_len) in [(8, 9), (33554432, 16777217), (33554432, 1048577)] {
-        let plugin = json_plugin("SecRule ARGS \"@pm blocked\" \"id:1,phase:2,pass\"\n", WafMode::On);
-        let mut session = MockPluginSession::new();
-        expect_request_head_with_headers(
-            &mut session,
-            "/",
-            vec![(b"content-type".to_vec(), b"application/json".to_vec())],
-        );
-        let mut ctx = EdgionHttpContext::new();
-        ctx.request_body_config.max_body_size_bytes = physical_cap;
-        session.expect_ctx().return_const(ctx);
-        session
-            .expect_ensure_request_body()
-            .with(mockall::predicate::eq(Some(physical_cap)))
-            .times(1)
-            .return_once(move |_| Ok(captured_len));
-        session.expect_record_error().returning(|_| ());
-        assert_eq!(
-            plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
-            PluginRunningResult::ErrResponse {
-                status: 413,
-                body: None
-            }
-        );
-    }
-}
-
-#[tokio::test]
-async fn json_snapshot_bodyless_hint_uses_only_original_transport_metadata() {
-    for body_declared in [Some(false), Some(true), None] {
-        let plugin = json_plugin("SecRule ARGS \"@pm blocked\" \"id:1,phase:2,pass\"\n", WafMode::On);
-        let mut session = MockPluginSession::new();
-        expect_request_head_with_headers(
-            &mut session,
-            "/",
-            vec![(b"content-type".to_vec(), b"application/json".to_vec())],
-        );
-        let mut ctx = EdgionHttpContext::new();
-        ctx.request_info.body_declared = body_declared;
-        session.expect_ctx().return_const(ctx);
-        session.expect_ensure_request_body().times(1).return_once(|_| Ok(0));
-        let reader = crate::request_body::RequestBodyState::default()
-            .snapshot_reader(true)
-            .unwrap();
-        session
-            .expect_request_body_snapshot_reader()
-            .with(mockall::predicate::eq(body_declared == Some(false)))
-            .times(1)
-            .return_once(move |_| Ok(reader));
-        session
-            .expect_install_waf_transaction()
-            .times(1)
-            .return_once(|_, _| true);
-        assert_eq!(
-            plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
-            PluginRunningResult::GoodNext
-        );
-    }
-}
-
-#[test]
-fn json_error_mapping_is_payload_free_and_preserves_independent_error_classes() {
-    use edgion_waf::seclang::{JsonDocumentLimit, JsonExecutionLimit};
+fn json_error_categories_preserve_status_without_exposing_payloads() {
+    use edgion_waf::seclang::{JsonResultLimit, JsonStructureLimit};
     let cases = [
-        (JsonExecutionError::Unsupported, 500, WafErrorCode::Unsupported),
-        (JsonExecutionError::State, 500, WafErrorCode::PhaseState),
-        (JsonExecutionError::AlreadyComplete, 500, WafErrorCode::PhaseState),
-        (JsonExecutionError::Allocation, 500, WafErrorCode::Allocation),
-        (JsonExecutionError::Arithmetic, 500, WafErrorCode::Arithmetic),
         (
-            JsonExecutionError::Limit {
-                kind: JsonExecutionLimit::Facts,
-                limit: 0,
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
+                    kind: JsonStreamLimit::SourceBytes,
+                    limit: 0,
+                }),
+            },
+            413,
+            WafErrorCode::BodyLimit,
+        ),
+        (
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
+                    kind: JsonStreamLimit::Depth,
+                    limit: 0,
+                }),
             },
             500,
             WafErrorCode::RuntimeLimit,
         ),
         (
-            JsonExecutionError::Body(JsonBodyError::Document(JsonDocumentError::Limit {
-                kind: JsonDocumentLimit::Events,
-                limit: 0,
-            })),
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Limit {
+                    kind: JsonStructureLimit::Work,
+                    limit: 0,
+                },
+            },
             500,
             WafErrorCode::RuntimeLimit,
         ),
         (
-            JsonExecutionError::Body(JsonBodyError::Document(JsonDocumentError::Lexical(
-                JsonStreamError::Limit {
-                    kind: JsonStreamLimit::SourceBytes,
-                    limit: 0,
-                },
-            ))),
-            413,
-            WafErrorCode::BodyLimit,
-        ),
-        (
-            JsonExecutionError::Body(JsonBodyError::Document(JsonDocumentError::Allocation)),
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Allocation,
+            },
             500,
             WafErrorCode::Allocation,
         ),
         (
-            JsonExecutionError::Body(JsonBodyError::Document(JsonDocumentError::Lexical(
-                JsonStreamError::Allocation,
-            ))),
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Lexical(JsonStreamError::Allocation),
+            },
             500,
             WafErrorCode::Allocation,
         ),
         (
-            JsonExecutionError::Body(JsonBodyError::Document(JsonDocumentError::Arithmetic)),
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Arithmetic,
+            },
             500,
             WafErrorCode::Arithmetic,
         ),
         (
-            JsonExecutionError::Body(JsonBodyError::Document(JsonDocumentError::Lexical(
-                JsonStreamError::Arithmetic,
-            ))),
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Lexical(JsonStreamError::Arithmetic),
+            },
             500,
             WafErrorCode::Arithmetic,
         ),
+        (
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::State,
+            },
+            500,
+            WafErrorCode::PhaseState,
+        ),
+        (
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::AlreadyComplete,
+            },
+            500,
+            WafErrorCode::PhaseState,
+        ),
+        (
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Lexical(JsonStreamError::Abandoned),
+            },
+            500,
+            WafErrorCode::PhaseState,
+        ),
+        (
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Lexical(JsonStreamError::Syntax),
+            },
+            500,
+            WafErrorCode::BodyProcessing,
+        ),
+        (
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Sink,
+            },
+            500,
+            WafErrorCode::BodyProcessing,
+        ),
+        (
+            RuntimeError::JsonResultLimit {
+                kind: JsonResultLimit::Records,
+            },
+            500,
+            WafErrorCode::RuntimeLimit,
+        ),
+        (
+            RuntimeError::JsonUnsupported { rule_id: 42 },
+            500,
+            WafErrorCode::Unsupported,
+        ),
+        (RuntimeError::JsonInspectionState, 500, WafErrorCode::RuntimeInvariant),
     ];
+    let plugin = plugin("SecAction \"id:1,phase:1,pass\"\n", WafMode::On);
     for (error, status, code) in cases {
-        assert_json_classification(&error, status, code);
-    }
-}
-
-fn assert_json_classification(error: &JsonExecutionError, status: u16, code: WafErrorCode) {
-    let actual = WafPlugin::json_error_classification(error);
-    assert_eq!(actual.0, status);
-    assert_eq!(std::mem::discriminant(&actual.1), std::mem::discriminant(&code));
-}
-
-#[tokio::test]
-async fn json_snapshot_split_escape_and_duplicate_boundaries_preserve_ordered_phase_two() {
-    let plugin = json_plugin(
-        "SecRule ARGS:json.a \"@pm blocked\" \"id:1,phase:2,deny,status:403\"\n",
-        WafMode::On,
-    );
-    for body in [
-        br#"{"a":"blo\u0063ked","a":"allowed"}"#.as_slice(),
-        br#"{"a":"allowed","a":"blo\u0063ked"}"#.as_slice(),
-    ] {
-        for chunk_size in [1, 2, 7] {
-            let chunks = body
-                .chunks(chunk_size)
-                .map(|chunk| Ok(Some(Bytes::copy_from_slice(chunk))))
-                .collect();
-            let mut reader = ScriptedJsonReader {
-                len: body.len() as u64,
-                chunks,
-                calls: Default::default(),
-            };
-            let mut actual = json_transaction(&plugin, b"/?json.a=query");
-            let mut expected = json_transaction(&plugin, b"/?json.a=query");
-            actual
-                .start_json_request_body(BodyProcessorSelection::Auto, explicit_json_config().execution_limits())
-                .unwrap();
-            publish_json_snapshot(&mut actual, &mut reader, body.len() as u64, 1024, 1024, 1024)
-                .await
-                .unwrap();
-            expected
-                .publish_request_body(RequestBody::new(body, BodyProcessorSelection::Auto))
-                .unwrap();
-            assert_eq!(
-                actual.finish_json_request_body().unwrap(),
-                expected.execute_request_body().unwrap()
-            );
-        }
+        assert_eq!(WafPlugin::runtime_error_status(&error), status);
+        assert_eq!(
+            std::mem::discriminant(&WafPlugin::runtime_error_code(&error)),
+            std::mem::discriminant(&code)
+        );
+        let mut session = MockPluginSession::new();
+        session
+            .expect_record_waf_terminal_error()
+            .times(1)
+            .returning(|_, _, _, _| ());
+        assert_eq!(
+            plugin.runtime_failure(&mut session, WafLogPhase::RequestBody, &error),
+            PluginRunningResult::ErrResponse { status, body: None }
+        );
     }
 }

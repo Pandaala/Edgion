@@ -200,6 +200,66 @@ GATEWAY_SOURCE_LOCAL = {
 # These branches and fields must stay in their owning production items so the
 # test configuration can exercise the same function or preserve struct shape.
 SCOPED_EXCEPTIONS = {
+    ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"measurements::record\(Event::Completions\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"measurements::record\(Event::GrammarInstances\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"measurements::record\(Event::SourceBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"measurements::record\(Event::TokenCopyBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_checker.rs"), re.compile(r"measurements::record\(Event::KeyCopyBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_checker.rs"), re.compile(r"measurements::record\(Event::PathCopyBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection.rs"), re.compile(r"measurements::record\(Event::Candidates\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection.rs"), re.compile(r"measurements::record\(Event::CaptureCopyBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection.rs"), re.compile(r"measurements::record\(Event::DeferredCopyBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection.rs"), re.compile(r"measurements::record\(Event::MatchedCopyBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection.rs"), re.compile(r"measurements::record\(Event::NameCopyBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::DetectorWork\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::DispatchGroups\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::DispatchWork\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::OperatorStages\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::OperatorWork\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::ProfileWalks\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::TransformSteps\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::TransformWork\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_runtime.rs"), re.compile(r"measurements::record\(Event::LexicalPeakBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_runtime.rs"), re.compile(r"measurements::record\(Event::LexicalWork\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_runtime.rs"), re.compile(r"measurements::record\(Event::StructurePeakBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_runtime.rs"), re.compile(r"measurements::record\(Event::StructureWork\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::FullScans\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::RangeQueries\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::RangeQueryFailures\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::TemporaryCaptureCopyBytes\b")):
+        "test-only JSON mechanism measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"let dispatch_work_before = self\.store\.usage\(\)\.work;")):
+        "test-only snapshot of existing dispatch work accounting",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"scans:\s*usize\b")):
+        "test-only successful cache scan counter field",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"\{\s*cache\.scans \+= 1;")):
+        "test-only successful cache scan counter update",
     ("edgion-controller", Path("conf_mgr/conf_center/common.rs"), re.compile(r"let crd_dir\b")):
         "test-only CRD path fallback inside parse_resource_content_offline",
     ("edgion-waf", Path("seclang/compiler.rs"), re.compile(r"if COMPILER_ALLOCATION_FAILURE\.with\b")):

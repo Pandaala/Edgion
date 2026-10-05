@@ -31,32 +31,6 @@ fn generation(subscribers: usize) -> CompiledGeneration {
     .0
 }
 
-// Benchmark envelopes only: these values are not production recommendations.
-fn limits() -> JsonExecutionLimits {
-    JsonExecutionLimits {
-        lexical: JsonStreamLimits::default(),
-        document: JsonDocumentLimits {
-            max_retained_bytes: 16 * 1024 * 1024,
-            max_key_bytes: 1024 * 1024,
-            max_members: 65_536,
-            max_events: 131_072,
-            max_path_bytes: 16 * 1024,
-            max_depth: 64,
-            max_work: 128 * 1024 * 1024,
-        },
-        plan: JsonPlanLimits {
-            max_subscribers: 128,
-            max_retained_bytes: 1024 * 1024,
-        },
-        facts: JsonFactLimits {
-            max_facts: 131_072,
-            max_retained_bytes: 32 * 1024 * 1024,
-            // Includes speculative work for all shared-group pattern mappings.
-            max_work: 1024 * 1024 * 1024,
-        },
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 struct ResultSnapshot {
     outcome: Result<PhaseOutcome, RuntimeError>,
@@ -66,15 +40,12 @@ struct ResultSnapshot {
     logical_retained_bytes: usize,
 }
 
-fn canonical_error(error: JsonExecutionError) -> RuntimeError {
-    match error {
-        JsonExecutionError::Runtime(error) => error,
-        JsonExecutionError::Body(JsonBodyError::Body(kind)) => RuntimeError::Body { kind },
-        error => panic!("independent structured failure is not a comparable runtime result: {error:?}"),
-    }
-}
-
-fn execute(generation: &CompiledGeneration, body: &[u8], chunk: usize, mode: RuleEngineMode) -> ResultSnapshot {
+fn execute(
+    generation: &CompiledGeneration,
+    body: &bytes::Bytes,
+    evaluation: EvaluationMode,
+    mode: RuleEngineMode,
+) -> ResultSnapshot {
     let headers = [RequestHeader::new(b"content-type", b"application/json")];
     let head = RequestHead::new(
         b"POST /?q=miss HTTP/1.1",
@@ -86,29 +57,11 @@ fn execute(generation: &CompiledGeneration, body: &[u8], chunk: usize, mode: Rul
         b"benchmark",
         &headers,
     );
-    let mut tx = Transaction::new_with_modes(
-        generation,
-        head,
-        RuntimeLimits::default(),
-        EvaluationMode::Accelerated,
-        mode,
-    )
-    .unwrap();
+    let mut tx = Transaction::new_with_modes(generation, head, RuntimeLimits::default(), evaluation, mode).unwrap();
     tx.execute_request_headers().unwrap();
-    let outcome = if chunk == 0 {
-        tx.publish_request_body(RequestBody::new(body, BodyProcessorSelection::Auto))
-            .and_then(|()| tx.execute_request_body())
-    } else {
-        let mut collect = || -> Result<PhaseOutcome, JsonExecutionError> {
-            tx.start_json_request_body(BodyProcessorSelection::Auto, limits())?;
-            for bytes in body.chunks(chunk) {
-                tx.feed_json_request_body(JsonStreamInput::Data(bytes))?;
-            }
-            tx.feed_json_request_body(JsonStreamInput::Complete)?;
-            tx.finish_json_request_body()
-        };
-        collect().map_err(canonical_error)
-    };
+    let outcome = tx
+        .publish_request_body(RequestBody::new(body.clone(), BodyProcessorSelection::Auto))
+        .and_then(|()| tx.execute_request_body());
     ResultSnapshot {
         outcome,
         next_phase: tx.next_phase(),
@@ -127,6 +80,24 @@ fn cases() -> Vec<(&'static str, Vec<u8>)> {
             .join(",")
     )
     .into_bytes();
+    let no_hits = format!(
+        "{{{}}}",
+        (0..10_000)
+            .rev()
+            .map(|i| format!("\"k{i:05}\":\"{}\"", "x".repeat(16)))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+    .into_bytes();
+    let escaped_value = "\\u0078".repeat(253) + "\\u0048\\u0049\\u0054";
+    let escaped = format!(
+        "{{{}}}",
+        (0..256)
+            .map(|i| format!("\"k{i:04}\":\"{escaped_value}\""))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+    .into_bytes();
     let duplicate = format!(
         "{{{},\"same\":\"miss\"}}",
         (0..512)
@@ -137,8 +108,32 @@ fn cases() -> Vec<(&'static str, Vec<u8>)> {
     .into_bytes();
     let mut malformed = wide.clone();
     malformed.pop();
+    let small = |escaped: bool| {
+        let value = if escaped { "\\u0068\\u0069\\u0074" } else { "hit" };
+        format!(
+            "{{{}}}",
+            (0..32)
+                .map(|i| format!("\"key{i:03}\":\"{value}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+        .into_bytes()
+    };
+    let siblings = format!(
+        "[{}]",
+        (0..128)
+            .map(|_| "{\"name\":\"hit\",\"value\":0}")
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+    .into_bytes();
     vec![
+        ("small_plain", small(false)),
+        ("small_escaped", small(true)),
+        ("sibling_objects", siblings),
         ("wide_hits", wide),
+        ("wide_no_hits", no_hits),
+        ("escaped_hits", escaped),
         ("duplicates_last_miss", duplicate),
         ("malformed_tail", malformed),
         (
@@ -159,12 +154,13 @@ fn main() {
     } else {
         31
     };
-    println!("schema_version,case,arch,os,source_bytes,subscribers,mode,lane,chunk_bytes,samples,p50_ns,p95_ns,p99_ns,logical_retained_bytes");
+    println!("schema_version,case,arch,os,source_bytes,subscribers,mode,evaluation,samples,p50_ns,p95_ns,p99_ns,logical_retained_bytes");
     for subscribers in [1, 8, 32] {
         let generation = generation(subscribers);
         for (name, body) in cases() {
             for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
-                let expected = execute(&generation, &body, 0, mode);
+                let body = bytes::Bytes::copy_from_slice(&body);
+                let expected = execute(&generation, &body, EvaluationMode::Accelerated, mode);
                 if name != "malformed_tail" || mode == RuleEngineMode::DetectionOnly {
                     assert!(
                         expected.outcome.is_ok(),
@@ -173,31 +169,43 @@ fn main() {
                 } else {
                     assert!(matches!(expected.outcome, Err(RuntimeError::Body { .. })));
                 }
-                // Validate all compared lanes before publishing any timing for this fixture.
-                for chunk in [1024, 64 * 1024] {
+                if name == "wide_no_hits" {
+                    assert!(expected.outcome.as_ref().unwrap().findings().is_empty());
+                } else if matches!(name, "wide_hits" | "escaped_hits") {
+                    let outcome = expected.outcome.as_ref().unwrap();
+                    assert_eq!(outcome.findings().len(), subscribers);
+                    assert_eq!(outcome.omitted_findings(), 0);
+                }
+                if name == "escaped_hits" {
+                    let plain = cases().into_iter().find(|(name, _)| *name == "wide_hits").unwrap().1;
                     assert_eq!(
-                        execute(&generation, &body, chunk, mode),
-                        expected,
-                        "{name}, {subscribers}, {mode:?}"
+                        expected.outcome,
+                        execute(
+                            &generation,
+                            &bytes::Bytes::from(plain),
+                            EvaluationMode::Accelerated,
+                            mode
+                        )
+                        .outcome
                     );
                 }
-                for chunk in [0, 1024, 64 * 1024] {
+                assert_eq!(execute(&generation, &body, EvaluationMode::Reference, mode), expected);
+                for evaluation in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
                     for _ in 0..3 {
-                        black_box(execute(&generation, black_box(&body), chunk, mode));
+                        black_box(execute(&generation, black_box(&body), evaluation, mode));
                     }
                     let mut samples = Vec::with_capacity(samples_count);
                     for _ in 0..samples_count {
                         let started = Instant::now();
-                        black_box(execute(&generation, black_box(&body), chunk, mode));
+                        black_box(execute(&generation, black_box(&body), evaluation, mode));
                         samples.push(Instant::now().saturating_duration_since(started));
                     }
                     samples.sort_unstable();
                     println!(
-                        "1,{name},{},{},{},{subscribers},{mode:?},{},{chunk},{samples_count},{},{},{},{}",
+                        "1,{name},{},{},{},{subscribers},{mode:?},{evaluation:?},{samples_count},{},{},{},{}",
                         std::env::consts::ARCH,
                         std::env::consts::OS,
                         body.len(),
-                        if chunk == 0 { "complete" } else { "structured" },
                         percentile(&samples, 50),
                         percentile(&samples, 95),
                         percentile(&samples, 99),

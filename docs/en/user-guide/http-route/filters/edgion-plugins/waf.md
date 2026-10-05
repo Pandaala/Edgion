@@ -68,7 +68,7 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 | `priority` | no | `0` | Tie breaker within one attachment scope from `0` through `65535`; a larger value wins |
 | `requestBody.inspection` | no | `prefix` | Inspect a bounded prefix before backend dispatch, or use `full` for complete-body inspection |
 | `requestBody.prefixSize` | no | `64KiB` | Prefix window from 1 byte through `1MiB`, using size strings such as `16KiB`, `100k`, or `1m`; only valid with `prefix` |
-| `requestBody.json` | no | disabled | Explicit independent budgets for incremental JSON evaluation of a complete shared snapshot; only valid with `full` |
+| `requestBody.json` | no | engine defaults | Complete JSON checker limit overrides; only valid with `full` |
 
 For a disruptive `deny` or `block` action, `status` must be a final HTTP status
 from `200` through `599`. Informational responses, including `101 Switching
@@ -345,76 +345,84 @@ matcher scratch, transaction collections, transformations, body decoding,
 findings, and retained bytes. Limit failures are closed failures; they never
 fall back to an unbounded path.
 
-## Explicit JSON snapshot evaluation
+## Bounded JSON inspection
 
-For eligible JSON rules, `requestBody.json` evaluates the complete shared body
-snapshot in bounded chunks without materializing a disk-backed body as one
-contiguous value. The Gateway still waits for complete capture and the WAF decision
-before sending request headers or body to the backend. It uses the same memory/disk
-storage and replay policy as ordinary full inspection.
+Full request-body inspection always uses the native JSON checker for effective
+JSON processors. Omitting `requestBody.json` selects deterministic defaults;
+this field supplies a complete override profile. Zero is restrictive, and every
+field in an explicit profile is required. Legacy `document`, `plan` and `facts`
+fields are rejected.
 
-Set `inspection: full` and supply all budgets below. Values are integers: byte
-fields count bytes, count/depth fields count their named objects, and work fields
-bound engine work. No JSON budget has a production default; zero is a restrictive
-limit. The following small evaluation envelope is an example, not a recommended
-deployment policy. Measure your rules and request mix before enabling it.
+The Gateway proves complete bounded capture before one canonical body read.
+Resident contiguous bodies share their existing Bytes allocation. Spilled or
+edited bodies may require canonical BodyStorage materialization. The checker
+scans that stable source once, matches precompiled rules as values complete,
+and retains only required names, matching results and explicitly named deferred
+values. It does not build a complete JSON value tree. Raw REQUEST_BODY visibility
+remains controlled by the existing processor and ctl rules.
+
+Lexical and structural retained-byte limits count dynamic heap capacity, excluding
+fixed checker storage. Keys and paths each have 256 bytes of inline scratch, and
+token decoding has 1024 bytes; these are shared across nesting levels. Spill
+allocations are fallible and fully charged. A zero heap budget can still admit
+inline data, while source, decoded-byte, key, path, depth and work limits remain
+independently enforced. Rule selection scratch is reused and counts toward the
+runtime aggregate retained-byte limit, including while evaluating a chain branch.
+
+| Domain | Default limits |
+|---|---|
+| lexical | source/raw token 16 MiB; decoded/retained 32 MiB; events 131072; depth 64; work 128 MiB |
+| structure | retained 8 MiB; keys 4 MiB; members 65536; path 16 KiB; depth 64; work 128 MiB |
+| results | candidates 65536; facts 1000000; retained 32 MiB; work 128 MiB; deferred entries 4096; deferred bytes 4 MiB |
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: application-waf-json
-  namespace: default
-spec:
-  waf:
-    policyRef:
-      name: application-waf-policy
-    requestBody:
-      inspection: full
-      json:
-        lexical:
-          maxSourceBytes: 1048576
-          maxRawTokenBytes: 65536
-          maxDecodedBytes: 2097152
-          maxEvents: 16384
-          maxDepth: 32
-          maxRetainedBytes: 262144
-          maxWork: 16777216
-        document:
-          maxRetainedBytes: 2097152
-          maxKeyBytes: 65536
-          maxMembers: 16384
-          maxEvents: 16384
-          maxPathBytes: 4096
-          maxDepth: 32
-          maxWork: 16777216
-        plan:
-          maxSubscribers: 64
-          maxRetainedBytes: 65536
-        facts:
-          maxFacts: 131072
-          maxRetainedBytes: 8388608
-          maxWork: 67108864
+requestBody:
+  inspection: full
+  json:
+    lexical:
+      maxSourceBytes: 16777216
+      maxRawTokenBytes: 16777216
+      maxDecodedBytes: 33554432
+      maxEvents: 131072
+      maxDepth: 64
+      maxRetainedBytes: 33554432
+      maxWork: 134217728
+    structure:
+      maxRetainedBytes: 8388608
+      maxKeyBytes: 4194304
+      maxMembers: 65536
+      maxPathBytes: 16384
+      maxDepth: 64
+      maxWork: 134217728
+    results:
+      maxCandidates: 65536
+      maxFacts: 1000000
+      maxRetainedBytes: 33554432
+      maxWork: 134217728
+      maxDeferredEntries: 4096
+      maxDeferredBytes: 4194304
 ```
 
-The `lexical` budgets bound input/token decoding, `document` bounds duplicate-key
-and path publication state, `plan` admits the immutable subscriber plan, and `facts`
-bounds provisional per-value rule results, including overwritten values. These
-limits are independent of the Gateway physical cap and canonical WAF execution
-limits. All keys are required and unknown keys are rejected.
+`results.maxFacts` bounds allocated candidate/profile/change/outcome/capture
+record slots, including reusable free slots and spare vector capacity. It does
+not count only matching rules or live matches. Name/value storage, state bitmaps
+and the named-demand index instead consume the retained-byte/work budgets.
 
-Only unsupported initial admission uses the ordinary full evaluator, including
-non-JSON processors and unsupported rule combinations. A parser, storage or budget
-failure after admission never retries through that evaluator. Detection-only mode
-keeps canonical malformed-body handling, but resource and storage failures still
-reject. Duplicate keys retain the complete evaluator's final-value semantics.
+Physical inspection limits are independent of logical WAF and Gateway body
+limits. A physical failure rejects in DetectionOnly too and cannot be retried
+through another parser. Malformed JSON retains the existing DetectionOnly
+metadata behavior. Duplicate keys replace earlier subtrees; malformed syntax and
+physical work already consumed cannot be erased by later duplicate replacement.
+Full configurations with unsupported broad dynamic JSON value dependencies are
+rejected during validation, including configurations using default JSON limits.
+Use finite named dependencies where later transaction values are required.
 
-JSON evaluation is opt-in because CPU cost depends on rule count and request shape;
-duplicate-heavy or malformed input may cost more. Existing WAF runtime-byte metrics
-report canonical installed-transaction accounting and exclude provisional JSON
-capacity; they do not report total request memory or RSS.
-The inspected-body byte counter currently covers prefix inspection and excludes
-ordinary full and JSON snapshot scans.
+Logical publication checks use fixed priority: source/prelude, name length,
+depth, entries, decoded bytes, traversal work, then combined totals. Each limit
+remains independent; competing failures may differ from the former DOM parser.
+Depth is independently configurable; there is no historical 127-container guard.
+WAF runtime-byte metrics represent logical transaction accounting, not physical
+inspection capacity or RSS. Prefix inspected-byte metrics exclude full scans.
 
 ## Reload behavior
 

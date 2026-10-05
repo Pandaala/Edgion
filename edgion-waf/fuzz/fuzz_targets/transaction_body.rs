@@ -75,7 +75,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     if transaction
-        .publish_request_body(RequestBody::new(body, processor))
+        .publish_request_body(RequestBody::new(bytes::Bytes::copy_from_slice(body), processor))
         .is_ok()
     {
         let _ = transaction.execute_request_body();

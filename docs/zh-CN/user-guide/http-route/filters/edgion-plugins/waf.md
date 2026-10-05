@@ -59,7 +59,7 @@ spec:
 | `priority` | 否 | `0` | 0–65535，仅在同一挂载范围内按较大值优先 |
 | `requestBody.inspection` | 否 | `prefix` | `prefix` 提前检查指定窗口；`full` 检查完整有界请求体 |
 | `requestBody.prefixSize` | 否 | `64KiB` | 前缀窗口，1 字节至 `1MiB`，支持 `16KiB`、`100k`、`1m` 等大小字符串；仅用于 `prefix` |
-| `requestBody.json` | 否 | 关闭 | 为完整共享快照的 JSON 增量执行显式提供独立预算；仅用于 `full` |
+| `requestBody.json` | no | engine defaults | Complete JSON checker limit overrides; only valid with `full` |
 
 规则源码不会写入错误响应、日志或指标，网关管理接口将其脱敏。
 
@@ -260,67 +260,85 @@ Phase 2 中仅检查头部、URI 或查询参数集合（`ARGS_GET`、`ARGS_GET_
 
 ## 响应及热更新
 
-### 显式启用 JSON 快照执行
+## Bounded JSON inspection
 
-对支持的 JSON 规则，`requestBody.json` 分块检查完整共享快照，不把磁盘正文再次物化为
-一个连续字节值。网关仍在完整捕获并完成 WAF 判断后才向后端发送请求头和正文，复用
-全量模式的内存／磁盘存储和重试策略。
+Full request-body inspection always uses the native JSON checker for effective
+JSON processors. Omitting `requestBody.json` selects deterministic defaults;
+this field supplies a complete override profile. Zero is restrictive, and every
+field in an explicit profile is required. Legacy `document`, `plan` and `facts`
+fields are rejected.
 
-设置 `inspection: full`，并提供全部预算字段。数值为整数：字节字段按字节计，数量和
-深度字段按对象计，work 字段限制引擎工作量。JSON 预算没有生产默认值；零表示严格的
-零上限。下面是小规模评估示例，不是推荐部署参数；启用前应测量实际规则和请求类型。
+The Gateway proves complete bounded capture before one canonical body read.
+Resident contiguous bodies share their existing Bytes allocation. Spilled or
+edited bodies may require canonical BodyStorage materialization. The checker
+scans that stable source once, matches precompiled rules as values complete,
+and retains only required names, matching results and explicitly named deferred
+values. It does not build a complete JSON value tree. Raw REQUEST_BODY visibility
+remains controlled by the existing processor and ctl rules.
+
+Lexical and structural retained-byte limits count dynamic heap capacity, excluding
+fixed checker storage. Keys and paths each have 256 bytes of inline scratch, and
+token decoding has 1024 bytes; these are shared across nesting levels. Spill
+allocations are fallible and fully charged. A zero heap budget can still admit
+inline data, while source, decoded-byte, key, path, depth and work limits remain
+independently enforced. Rule selection scratch is reused and counts toward the
+runtime aggregate retained-byte limit, including while evaluating a chain branch.
+
+| Domain | Default limits |
+|---|---|
+| lexical | source/raw token 16 MiB; decoded/retained 32 MiB; events 131072; depth 64; work 128 MiB |
+| structure | retained 8 MiB; keys 4 MiB; members 65536; path 16 KiB; depth 64; work 128 MiB |
+| results | candidates 65536; facts 1000000; retained 32 MiB; work 128 MiB; deferred entries 4096; deferred bytes 4 MiB |
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: application-waf-json
-  namespace: default
-spec:
-  waf:
-    policyRef:
-      name: application-waf-policy
-    requestBody:
-      inspection: full
-      json:
-        lexical:
-          maxSourceBytes: 1048576
-          maxRawTokenBytes: 65536
-          maxDecodedBytes: 2097152
-          maxEvents: 16384
-          maxDepth: 32
-          maxRetainedBytes: 262144
-          maxWork: 16777216
-        document:
-          maxRetainedBytes: 2097152
-          maxKeyBytes: 65536
-          maxMembers: 16384
-          maxEvents: 16384
-          maxPathBytes: 4096
-          maxDepth: 32
-          maxWork: 16777216
-        plan:
-          maxSubscribers: 64
-          maxRetainedBytes: 65536
-        facts:
-          maxFacts: 131072
-          maxRetainedBytes: 8388608
-          maxWork: 67108864
+requestBody:
+  inspection: full
+  json:
+    lexical:
+      maxSourceBytes: 16777216
+      maxRawTokenBytes: 16777216
+      maxDecodedBytes: 33554432
+      maxEvents: 131072
+      maxDepth: 64
+      maxRetainedBytes: 33554432
+      maxWork: 134217728
+    structure:
+      maxRetainedBytes: 8388608
+      maxKeyBytes: 4194304
+      maxMembers: 65536
+      maxPathBytes: 16384
+      maxDepth: 64
+      maxWork: 134217728
+    results:
+      maxCandidates: 65536
+      maxFacts: 1000000
+      maxRetainedBytes: 33554432
+      maxWork: 134217728
+      maxDeferredEntries: 4096
+      maxDeferredBytes: 4194304
 ```
 
-`lexical` 限制输入、token 和解码；`document` 限制重复键和路径发布状态；`plan` 限制
-不可变订阅计划；`facts` 限制临时规则结果，包括之后被覆盖的值。它们独立于网关物理
-上限和 WAF 规范执行预算。全部字段必填，未知字段会被拒绝。
+`results.maxFacts` bounds allocated candidate/profile/change/outcome/capture
+record slots, including reusable free slots and spare vector capacity. It does
+not count only matching rules or live matches. Name/value storage, state bitmaps
+and the named-demand index instead consume the retained-byte/work budgets.
 
-只有初始能力检查判定不支持时，才使用普通全量执行器，例如非 JSON 解析器或不支持的
-规则组合。开始执行后的解析、存储或预算失败不会切换执行器。`detectionOnly` 保留
-引擎对畸形正文的既有处理，但资源预算和存储错误仍会拒绝。重复键遵循完整执行器的
-最终值语义。
+Physical inspection limits are independent of logical WAF and Gateway body
+limits. A physical failure rejects in DetectionOnly too and cannot be retried
+through another parser. Malformed JSON retains the existing DetectionOnly
+metadata behavior. Duplicate keys replace earlier subtrees; malformed syntax and
+physical work already consumed cannot be erased by later duplicate replacement.
+Full configurations with unsupported broad dynamic JSON value dependencies are
+rejected during validation, including configurations using default JSON limits.
+Use finite named dependencies where later transaction values are required.
 
-JSON 路径需显式启用，因为 CPU 成本取决于规则数量和请求形状，重复键或畸形输入可能
-更慢。现有 WAF 运行时字节指标只报告已安装事务的规范逻辑计费，不包含临时 JSON 容量，
-也不表示整个请求内存或 RSS。
-现有正文检查字节计数只覆盖前缀检查，不包含普通全量检查和 JSON 快照扫描。
+Logical publication checks use fixed priority: source/prelude, name length,
+depth, entries, decoded bytes, traversal work, then combined totals. Each limit
+remains independent; competing failures may differ from the former DOM parser.
+Depth is independently configurable; there is no historical 127-container guard.
+WAF runtime-byte metrics represent logical transaction accounting, not physical
+inspection capacity or RSS. Prefix inspected-byte metrics exclude full scans.
+
 
 ### 响应和配置更新
 

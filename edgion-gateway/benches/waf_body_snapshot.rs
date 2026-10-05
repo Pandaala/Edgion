@@ -171,29 +171,8 @@ fn generation(subscribers: usize, sparse_queries: bool) -> CompiledGeneration {
 }
 
 // Benchmark envelopes only: these values are not production recommendations.
-fn limits() -> JsonExecutionLimits {
-    JsonExecutionLimits {
-        lexical: JsonStreamLimits::default(),
-        document: JsonDocumentLimits {
-            max_retained_bytes: 16 * 1024 * 1024,
-            max_key_bytes: 1024 * 1024,
-            max_members: 65_536,
-            max_events: 131_072,
-            max_path_bytes: 16 * 1024,
-            max_depth: 64,
-            max_work: 128 * 1024 * 1024,
-        },
-        plan: JsonPlanLimits {
-            max_subscribers: 128,
-            max_retained_bytes: 1024 * 1024,
-        },
-        facts: JsonFactLimits {
-            max_facts: 131_072,
-            max_retained_bytes: 32 * 1024 * 1024,
-            // Includes speculative work for all shared-group pattern mappings.
-            max_work: 1024 * 1024 * 1024,
-        },
-    }
+fn limits() -> JsonInspectionLimits {
+    JsonInspectionLimits::default()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -205,22 +184,55 @@ struct ResultSnapshot {
     logical_retained_bytes: usize,
 }
 
-fn canonical_error(error: JsonExecutionError) -> RuntimeError {
-    match error {
-        JsonExecutionError::Runtime(error) => error,
-        JsonExecutionError::Body(JsonBodyError::Body(kind)) => RuntimeError::Body { kind },
-        error => panic!("independent structured failure is not a comparable runtime result: {error:?}"),
-    }
-}
-
 fn fixture(name: &str) -> Vec<u8> {
+    if matches!(name, "small_plain" | "small_escaped") {
+        let value = if name == "small_escaped" {
+            "\\u0068\\u0069\\u0074"
+        } else {
+            "hit"
+        };
+        return format!(
+            "{{{}}}",
+            (0..32)
+                .map(|i| format!("\"key{i:03}\":\"{value}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+        .into_bytes();
+    }
+    if name == "sibling_objects" {
+        return format!(
+            "[{}]",
+            (0..128)
+                .map(|_| "{\"name\":\"hit\",\"value\":0}")
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+        .into_bytes();
+    }
     if matches!(name, "query_single" | "query_many" | "query_sparse") {
         return b"{}".to_vec();
     }
     if name == "large_scalar" {
         return format!("{{\"value\":\"{}HIT\"}}", "x".repeat(256 * 1024)).into_bytes();
     }
-    let value = "x".repeat(253) + "HIT";
+    if name == "wide_no_hits" {
+        return format!(
+            "{{{}}}",
+            (0..10_000)
+                .rev()
+                .map(|i| format!("\"k{i:05}\":\"{}\"", "x".repeat(16)))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+        .into_bytes();
+    }
+    let value = if name == "escaped_hits" {
+        "\\u0078".repeat(253) + "\\u0048\\u0049\\u0054"
+    } else {
+        "x".repeat(253) + "HIT"
+    };
+
     if name == "duplicates_last_miss" {
         return format!(
             "{{{},\"same\":\"miss\"}}",
@@ -231,7 +243,7 @@ fn fixture(name: &str) -> Vec<u8> {
         )
         .into_bytes();
     }
-    assert!(matches!(name, "wide_hits" | "malformed_tail"));
+    assert!(matches!(name, "wide_hits" | "escaped_hits" | "malformed_tail"));
     let mut body = format!(
         "{{{}}}",
         (0..256)
@@ -321,7 +333,10 @@ fn reference(
 ) -> ResultSnapshot {
     let mut tx = transaction(generation, mode, request);
     let outcome = tx
-        .publish_request_body(RequestBody::new(body, BodyProcessorSelection::Auto))
+        .publish_request_body(RequestBody::new(
+            Bytes::copy_from_slice(body),
+            BodyProcessorSelection::Auto,
+        ))
         .and_then(|()| tx.execute_request_body());
     snapshot(&tx, outcome)
 }
@@ -329,32 +344,20 @@ fn reference(
 async fn inspect<'g>(
     generation: &'g CompiledGeneration,
     view: &BodyStorageView,
-    structured: bool,
+    explicit_limits: bool,
     mode: RuleEngineMode,
     request: &RequestFixture,
 ) -> (Transaction<'g>, ResultSnapshot) {
     let mut tx = transaction(generation, mode, request);
-    let outcome = if structured {
-        tx.start_json_request_body(BodyProcessorSelection::Auto, limits())
-            .unwrap();
-        let mut reader = view.snapshot_reader().unwrap();
-        let expected_len = reader.len();
-        let mut seen = 0u64;
-        while let Some(chunk) = reader.next_chunk().await.unwrap() {
-            assert!(!chunk.is_empty() && chunk.len() <= CHUNK_BYTES);
-            seen = seen.checked_add(chunk.len() as u64).unwrap();
-            tx.feed_json_request_body(JsonStreamInput::Data(&chunk)).unwrap();
-        }
-        assert_eq!(seen, expected_len);
-        tx.feed_json_request_body(JsonStreamInput::Complete)
-            .and_then(|()| tx.finish_json_request_body())
-            .map_err(canonical_error)
+    let body = view.read_all().await.unwrap();
+    assert_eq!(body.len() as u64, view.len().unwrap());
+    let input = RequestBody::new(body, BodyProcessorSelection::Auto);
+    let outcome = if explicit_limits {
+        tx.publish_request_body_with_json_limits(input, limits())
     } else {
-        let body = view.read_all().await.unwrap();
-        assert_eq!(body.len() as u64, view.len().unwrap());
-        tx.publish_request_body(RequestBody::new(&body, BodyProcessorSelection::Auto))
-            .and_then(|()| tx.execute_request_body())
-    };
+        tx.publish_request_body(input)
+    }
+    .and_then(|()| tx.execute_request_body());
     let result = snapshot(&tx, outcome);
     (tx, result)
 }
@@ -362,7 +365,7 @@ async fn inspect<'g>(
 async fn sample(
     generation: &CompiledGeneration,
     spill: bool,
-    structured: bool,
+    explicit_limits: bool,
     mode: RuleEngineMode,
     expected: &ResultSnapshot,
     request: &RequestFixture,
@@ -392,11 +395,11 @@ async fn sample(
     assert_eq!(probe.memory_bytes_to_isolate(), Some(if spill { 0 } else { len }));
     drop(probe);
     let inspection = Stage::start();
-    let (tx, actual) = inspect(generation, &view, structured, mode, request).await;
+    let (tx, actual) = inspect(generation, &view, explicit_limits, mode, request).await;
     let mut inspection = inspection.finish();
     assert_eq!(
         &actual, expected,
-        "{name}, spill={spill}, structured={structured}, {mode:?}"
+        "{name}, spill={spill}, explicit_limits={explicit_limits}, {mode:?}"
     );
     black_box(&tx);
     drop(tx);
@@ -462,7 +465,7 @@ fn allocator_self_check() {
 async fn verify_edited_snapshot(generation: &CompiledGeneration) {
     let request = RequestFixture::new("wide_hits");
     for memory_limit in [1, 1024] {
-        for structured in [false, true] {
+        for explicit_limits in [false, true] {
             let (mut storage, view) = BodyStorage::new(memory_limit, 1024);
             storage.write(&Bytes::from_static(br#"{"x":"miss"}"#)).await.unwrap();
             storage.finish().await.unwrap();
@@ -478,7 +481,7 @@ async fn verify_edited_snapshot(generation: &CompiledGeneration) {
             );
             drop(probe);
             let expected = reference(generation, br#"{"x":"HIT"}"#, RuleEngineMode::On, &request);
-            let (tx, actual) = inspect(generation, &view, structured, RuleEngineMode::On, &request).await;
+            let (tx, actual) = inspect(generation, &view, explicit_limits, RuleEngineMode::On, &request).await;
             assert_eq!(actual, expected);
             drop(tx);
         }
@@ -503,7 +506,17 @@ fn main() {
     let cases: &[&str] = if query_cases {
         &["query_single", "query_many", "query_sparse"]
     } else {
-        &["wide_hits", "duplicates_last_miss", "malformed_tail", "large_scalar"]
+        &[
+            "small_plain",
+            "small_escaped",
+            "sibling_objects",
+            "wide_hits",
+            "wide_no_hits",
+            "escaped_hits",
+            "duplicates_last_miss",
+            "malformed_tail",
+            "large_scalar",
+        ]
     };
     for subscribers in [1, 8, 32] {
         for &name in cases {
@@ -522,19 +535,42 @@ fn main() {
                 } else {
                     assert!(expected.outcome.is_ok(), "fixture must reach execution: {expected:?}");
                 }
+                if name == "wide_no_hits" {
+                    assert!(expected.outcome.as_ref().unwrap().findings().is_empty());
+                } else if matches!(name, "wide_hits" | "escaped_hits") {
+                    let outcome = expected.outcome.as_ref().unwrap();
+                    assert_eq!(outcome.findings().len(), subscribers);
+                    assert_eq!(outcome.omitted_findings(), 0);
+                }
+                if name == "escaped_hits" {
+                    assert_eq!(
+                        expected.outcome,
+                        reference(&generation, &fixture("wide_hits"), mode, &request).outcome
+                    );
+                }
                 for spill in [false, true] {
-                    for structured in [false, true] {
+                    for explicit_limits in [false, true] {
                         // Warm runtime/storage infrastructure, never reuse the measured capture.
-                        runtime.block_on(sample(&generation, spill, structured, mode, &expected, &request));
+                        runtime.block_on(sample(&generation, spill, explicit_limits, mode, &expected, &request));
                         for index in 0..samples {
-                            let (len, capture, inspection) =
-                                runtime.block_on(sample(&generation, spill, structured, mode, &expected, &request));
+                            let (len, capture, inspection) = runtime.block_on(sample(
+                                &generation,
+                                spill,
+                                explicit_limits,
+                                mode,
+                                &expected,
+                                &request,
+                            ));
                             let prefix = format!(
                                 "1,{MODE},{},{},{name},{len},{subscribers},{mode:?},{},{},{index}",
                                 std::env::consts::ARCH,
                                 std::env::consts::OS,
                                 if spill { "spill_warm_cache" } else { "memory" },
-                                if structured { "structured" } else { "complete" }
+                                if explicit_limits {
+                                    "explicit_limits"
+                                } else {
+                                    "default_limits"
+                                }
                             );
                             report(&prefix, "capture", &capture);
                             report(&prefix, "inspection", &inspection);

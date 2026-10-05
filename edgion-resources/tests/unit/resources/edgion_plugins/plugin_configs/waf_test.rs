@@ -566,17 +566,16 @@ fn json_budget_value() -> serde_json::Value {
     serde_json::json!({
         "lexical": {"maxSourceBytes": 1, "maxRawTokenBytes": 2, "maxDecodedBytes": 3,
             "maxEvents": 4, "maxDepth": 5, "maxRetainedBytes": 6, "maxWork": 7},
-        "document": {"maxRetainedBytes": 8, "maxKeyBytes": 9, "maxMembers": 10,
-            "maxEvents": 11, "maxPathBytes": 12, "maxDepth": 13, "maxWork": 14},
-        "plan": {"maxSubscribers": 15, "maxRetainedBytes": 16},
-        "facts": {"maxFacts": 17, "maxRetainedBytes": 18, "maxWork": 19}
+        "structure": {"maxRetainedBytes": 8, "maxKeyBytes": 9, "maxMembers": 10,
+            "maxPathBytes": 12, "maxDepth": 13, "maxWork": 14},
+        "results": {"maxFacts": 17, "maxRetainedBytes": 18, "maxWork": 19, "maxCandidates": 20, "maxDeferredEntries": 21, "maxDeferredBytes": 22}
     })
 }
 
 #[test]
 fn json_budgets_require_every_numeric_field_and_reject_unknown_fields() {
     let value = json_budget_value();
-    for group in ["lexical", "document", "plan", "facts"] {
+    for group in ["lexical", "structure", "results"] {
         let mut missing_group = value.clone();
         missing_group.as_object_mut().unwrap().remove(group);
         assert!(serde_json::from_value::<WafJsonConfig>(missing_group).is_err());
@@ -608,7 +607,7 @@ fn json_budgets_map_exactly_and_preserve_restrictive_zero_limits() {
     let value = json_budget_value();
     let config: WafJsonConfig = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(serde_json::to_value(config).unwrap(), value);
-    let limits = config.execution_limits();
+    let limits = config.inspection_limits();
     assert_eq!(
         limits.lexical,
         edgion_waf::seclang::JsonStreamLimits {
@@ -622,23 +621,29 @@ fn json_budgets_map_exactly_and_preserve_restrictive_zero_limits() {
         }
     );
     assert_eq!(
-        limits.document,
-        edgion_waf::seclang::JsonDocumentLimits {
+        limits.structure,
+        edgion_waf::seclang::JsonStructureLimits {
             max_retained_bytes: 8,
             max_key_bytes: 9,
             max_members: 10,
-            max_events: 11,
             max_path_bytes: 12,
             max_depth: 13,
             max_work: 14,
         }
     );
-    assert_eq!((limits.plan.max_subscribers, limits.plan.max_retained_bytes), (15, 16));
     assert_eq!(
         (
-            limits.facts.max_facts,
-            limits.facts.max_retained_bytes,
-            limits.facts.max_work
+            limits.results.candidates,
+            limits.results.deferred_entries,
+            limits.results.deferred_bytes
+        ),
+        (20, 21, 22)
+    );
+    assert_eq!(
+        (
+            limits.results.records,
+            limits.results.retained_bytes,
+            limits.results.work
         ),
         (17, 18, 19)
     );
@@ -649,11 +654,11 @@ fn json_budgets_map_exactly_and_preserve_restrictive_zero_limits() {
         }
     }
     let zero: WafJsonConfig = serde_json::from_value(zero).unwrap();
-    let limits = zero.execution_limits();
+    let limits = zero.inspection_limits();
     assert_eq!(limits.lexical.max_source_bytes, 0);
-    assert_eq!(limits.document.max_events, 0);
-    assert_eq!(limits.plan.max_subscribers, 0);
-    assert_eq!(limits.facts.max_work, 0);
+    assert_eq!(limits.structure.max_members, 0);
+    assert_eq!(limits.results.candidates, 0);
+    assert_eq!(limits.results.work, 0);
 }
 
 #[test]
@@ -715,4 +720,82 @@ fn json_full_only_validation_agrees_for_shape_inline_resolved_and_support() {
         .unwrap()
         .compile_generation()
         .is_ok());
+}
+
+#[test]
+fn full_json_admission_rejects_dynamic_broad_values_with_default_or_explicit_limits() {
+    let source = "SecRule ARGS \"@contains %{TX.private_operand}\" \"id:42,phase:2,pass\"\n";
+    for explicit in [false, true] {
+        let mut config = WafConfig {
+            rules: source.into(),
+            request_body: WafRequestBodyConfig {
+                inspection: WafRequestBodyInspection::Full,
+                json: explicit.then(|| serde_json::from_value(json_budget_value()).unwrap()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let error = config.compile_generation().err().unwrap();
+        assert!(error.contains("rule 42"));
+        assert!(!error.contains("private_operand"));
+        assert_eq!(
+            config.inspect_support().failure.unwrap().category,
+            "unsupported_json_dependency"
+        );
+        let (mut reference, mut bundle) = test_bundle("bundle", 42);
+        bundle.data.rules[0].content = source.into();
+        bundle.data.digest = Some(bundle.data.compute_digest());
+        bundle.digest = bundle.data.compute_digest();
+        reference.expected_digest = Some(bundle.digest.clone());
+        config.rules.clear();
+        config.policy_ref.name = "policy".into();
+        config.resolved_policy = Some(WafPolicyData {
+            default_profile: "default".into(),
+            profiles: BTreeMap::from([(
+                "default".into(),
+                WafProfile {
+                    bundle_refs: vec![reference],
+                },
+            )]),
+        });
+        config.selected_profile = Some("default".into());
+        config.resolved_ref_indices = vec![0];
+        config.resolved_bundles = Some(vec![bundle]);
+        config.owner_namespace = Some("default".into());
+        assert!(config.compile_generation().err().unwrap().contains("rule 42"));
+    }
+}
+
+#[test]
+fn obsolete_json_budget_groups_are_rejected() {
+    for key in ["document", "plan", "facts"] {
+        let mut value = json_budget_value();
+        value[key] = serde_json::json!({});
+        assert!(serde_json::from_value::<WafJsonConfig>(value).is_err());
+    }
+}
+
+#[test]
+fn dynamic_json_fixture_profiles_keep_valid_invalid_and_zero_limit_purposes() {
+    for tree in ["integration", "k8s"] {
+        for phase in ["v1", "v2", "detection", "invalid", "zero_source"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../edgion-tests/{tree}/conf/EdgionPlugins/Waf/DynamicTest/updates/to_json_{phase}/EdgionPlugins_waf-dynamic.yaml"
+            ));
+            let document: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let config: WafConfig = serde_yaml::from_value(document["spec"]["waf"].clone()).unwrap();
+            assert_eq!(config.request_body.prefix_size_bytes().is_err(), phase == "invalid");
+            assert_eq!(
+                config
+                    .request_body
+                    .json
+                    .unwrap()
+                    .inspection_limits()
+                    .lexical
+                    .max_source_bytes
+                    == 0,
+                phase == "zero_source"
+            );
+        }
+    }
 }

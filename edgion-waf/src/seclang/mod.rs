@@ -5,10 +5,10 @@ mod body;
 mod compiler;
 mod directive;
 mod include;
-mod json_body;
-mod json_document;
+mod json_checker;
+mod json_number;
+mod json_scratch;
 mod json_stream;
-mod json_summary;
 mod operator;
 mod semantic;
 mod source;
@@ -19,18 +19,17 @@ mod transform;
 
 pub(crate) use semantic::validate_executable_profile;
 
-pub use json_body::{JsonBodyAdapter, JsonBodyConfig, JsonBodyError, JsonBodySummary};
-
-pub use json_document::{
-    JsonDocument, JsonDocumentError, JsonDocumentEvent, JsonDocumentLimit, JsonDocumentLimits, JsonDocumentSinkError,
-    JsonDocumentUsage,
+pub use json_checker::{
+    JsonChecker, JsonCheckerError, JsonCheckerSink, JsonCheckerSinkError, JsonScalarKind, JsonSemanticSummary,
+    JsonStructureLimit, JsonStructureLimits, JsonStructureUsage,
 };
+
+pub use json_number::JsonNumber;
 
 pub use json_stream::{
     JsonStream, JsonStreamError, JsonStreamInput, JsonStreamLimit, JsonStreamLimits, JsonStreamSinkError,
     JsonStreamToken, JsonStreamUsage,
 };
-pub use json_summary::{JsonMatchRetention, JsonMatchSummary, JsonMatchSummaryError};
 
 pub use directive::{
     parse_directives, Directive, DirectiveArity, DirectiveDocument, DirectiveField, DirectiveKind, DirectiveLimits,
@@ -43,23 +42,22 @@ pub use action::{
     ActionValue, ActionValueSpelling, EmptyActionKind,
 };
 pub use body::{
-    validate_json_publication, BodyError, BodyLimits, BodyProcessorSelection, JsonPublicationError,
-    JsonPublicationSummary, RequestBody, DEFAULT_MAX_BODY_DECODED_BYTES, DEFAULT_MAX_BODY_DEPTH,
-    DEFAULT_MAX_BODY_ENTRIES, DEFAULT_MAX_BODY_NAME_BYTES, DEFAULT_MAX_BODY_WORK_BYTES, DEFAULT_MAX_MULTIPART_HEADERS,
-    DEFAULT_MAX_MULTIPART_PARTS, DEFAULT_MAX_REQUEST_BODY_BYTES,
+    BodyError, BodyLimits, BodyProcessorSelection, JsonPublicationSummary, RequestBody, DEFAULT_MAX_BODY_DECODED_BYTES,
+    DEFAULT_MAX_BODY_DEPTH, DEFAULT_MAX_BODY_ENTRIES, DEFAULT_MAX_BODY_NAME_BYTES, DEFAULT_MAX_BODY_WORK_BYTES,
+    DEFAULT_MAX_MULTIPART_HEADERS, DEFAULT_MAX_MULTIPART_PARTS, DEFAULT_MAX_REQUEST_BODY_BYTES,
 };
 pub use compiler::{
     compile_validated, CompiledGeneration, CompiledRuleMemberView, CompiledRuleUnitView, CompiledScheduleEntryKind,
     CompiledScheduleEntryView, CompiledTargetPlanView, CompiledTargetRecordView, CompiledTargetSelectorKind,
-    CompilerError, CompilerInvariant, CompilerLimits, EvaluationMode, Intervention, JsonExecutionError,
-    JsonExecutionLimit, JsonExecutionLimits, JsonFactLimits, JsonPlanLimits, PhaseOutcome, PhraseAssetFailure,
-    PhraseAssetRequest, PhraseAssetSink, PhraseAssetSinkError, PhraseAssetSource, PhraseMatcherErrorKind,
-    RequestBodyExecutionClass, RequestBodyExecutionSummary, RequestBodyPrefixCompletion, RequestHead, RequestHeader,
-    ResponseHead, ResponseHeader, ResponseWindow, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits,
-    RuntimeMatcherError, RuntimeTransformError, Transaction, DEFAULT_MAX_RUNTIME_CAPTURE_BYTES,
-    DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES, DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES, DEFAULT_MAX_RUNTIME_COOKIES,
-    DEFAULT_MAX_RUNTIME_FINDINGS, DEFAULT_MAX_RUNTIME_HEADERS, DEFAULT_MAX_RUNTIME_HEADER_BYTES,
-    DEFAULT_MAX_RUNTIME_INPUT_BYTES, DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES,
+    CompilerError, CompilerInvariant, CompilerLimits, EvaluationMode, Intervention, JsonInspectionLimits,
+    JsonInspectionUnsupported, JsonInspectionUnsupportedReason, JsonResultLimit, JsonResultLimits, PhaseOutcome,
+    PhraseAssetFailure, PhraseAssetRequest, PhraseAssetSink, PhraseAssetSinkError, PhraseAssetSource,
+    PhraseMatcherErrorKind, RequestBodyExecutionClass, RequestBodyExecutionSummary, RequestBodyPrefixCompletion,
+    RequestHead, RequestHeader, ResponseHead, ResponseHeader, ResponseWindow, RuleEngineMode, RuleFinding,
+    RuntimeError, RuntimeLimits, RuntimeMatcherError, RuntimeTransformError, Transaction,
+    DEFAULT_MAX_RUNTIME_CAPTURE_BYTES, DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES, DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES,
+    DEFAULT_MAX_RUNTIME_COOKIES, DEFAULT_MAX_RUNTIME_FINDINGS, DEFAULT_MAX_RUNTIME_HEADERS,
+    DEFAULT_MAX_RUNTIME_HEADER_BYTES, DEFAULT_MAX_RUNTIME_INPUT_BYTES, DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES,
     DEFAULT_MAX_RUNTIME_OPERATOR_EVALUATIONS, DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES,
     DEFAULT_MAX_RUNTIME_QUERY_ARGUMENTS, DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS,
     DEFAULT_MAX_RUNTIME_RESPONSE_HEADER_BYTES, DEFAULT_MAX_RUNTIME_RESPONSE_WINDOW_BYTES,
@@ -119,3 +117,7 @@ pub use tokenizer::{
     tokenize_document, QuoteStyle, Token, TokenizeError, TokenizedDocument, TokenizedLine, TokenizerLimits,
     DEFAULT_MAX_TOKENIZER_OWNED_BYTES, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TOKENS_PER_LINE, DEFAULT_MAX_TOKEN_BYTES,
 };
+
+#[cfg(test)]
+#[path = "../../tests/unit/seclang/mod_test/measurements.rs"]
+pub(crate) mod measurements;

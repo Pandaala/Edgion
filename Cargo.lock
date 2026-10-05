@@ -1987,6 +1987,7 @@ name = "edgion-waf"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "bytes",
  "memchr",
  "regex-automata",
  "regex-syntax",
@@ -1997,6 +1998,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "thiserror 2.0.20",
+ "zmij",
 ]
 
 [[package]]

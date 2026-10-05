@@ -54,3 +54,13 @@ report bounds, resource schema, or publication path changes.
   report with a reusable resource-layer API.
 - `waf-rule-bundles-and-assets`: typed `EdgionConfigData` bundles are resolved
   before strict publication compilation; local source inspection does not bind them.
+
+## Native JSON inspection admission
+
+Full request-body configurations validate the immutable JSON dependency plan in
+both local-inline and resolved-policy compilation. Omitted `requestBody.json`
+selects deterministic checker defaults, not bypass. Unsupported broad dynamic
+JSON value operands reject publication with rule/member/reason attribution and
+without source operands. Explicit overrides use lexical/structure/results; all
+fields are required and zero remains restrictive. Prefix admission remains its
+separate capability check.

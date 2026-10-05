@@ -1,8 +1,12 @@
+#[cfg(test)]
+use crate::seclang::measurements::{self, Event};
 use std::borrow::Cow;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use json_inspection::{CandidateId, InspectionBudget};
+use json_inspection_runtime::{map_store_error, JsonPublication};
 use thiserror::Error;
 
 use crate::matcher::{
@@ -19,7 +23,8 @@ use super::super::transform::{
 };
 use super::{CollectionKind, CompiledGeneration, Phase};
 
-pub use json_rules::{JsonExecutionError, JsonExecutionLimit, JsonExecutionLimits, JsonFactLimits, JsonPlanLimits};
+pub use json_inspection::ResultLimits as JsonResultLimits;
+pub use json_inspection_runtime::{JsonInspectionLimits, JsonResultLimit};
 
 pub const DEFAULT_MAX_RUNTIME_INPUT_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_MAX_RUNTIME_HEADERS: usize = 1_024;
@@ -284,6 +289,16 @@ impl<'input> RequestHead<'input> {
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeError {
+    #[error("JSON checker failed: {kind}")]
+    JsonChecker { kind: crate::seclang::JsonCheckerError },
+    #[error("JSON inspection result limit exceeded")]
+    JsonResultLimit {
+        kind: json_inspection_runtime::JsonResultLimit,
+    },
+    #[error("JSON inspection state is inconsistent")]
+    JsonInspectionState,
+    #[error("JSON inspection dependency is unsupported for rule {rule_id}")]
+    JsonUnsupported { rule_id: u64 },
     #[error("request input has {actual} bytes, exceeding the limit of {limit}")]
     InputByteLimit { actual: usize, limit: usize },
     #[error("request has {actual} headers, exceeding the limit of {limit}")]
@@ -496,11 +511,14 @@ enum SelectedBytes {
     MatchedVar,
     MatchedVars(usize),
     CtlProcessor,
+    Json(CandidateId),
+    JsonMetadata,
     Count { digits: [u8; 40], start: u8 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectedName {
+    Json(CandidateId),
     Request(ByteRange),
     Body(usize),
     Response(usize),
@@ -514,8 +532,31 @@ impl SelectedValue {
         request: &'value RequestState,
         tx: &'value TxState,
         response: Option<&'value ResponseState>,
+        json_budget: Option<&mut InspectionBudget>,
     ) -> Result<&'value [u8], RuntimeError> {
         match &self.value {
+            SelectedBytes::Json(id) => {
+                let body = request
+                    .body
+                    .as_ref()
+                    .and_then(RequestBodyPublication::json)
+                    .ok_or(RuntimeError::JsonInspectionState)?;
+                let candidate = body
+                    .results()?
+                    .candidate(json_budget.ok_or(RuntimeError::JsonInspectionState)?, *id)
+                    .map_err(map_store_error)?;
+                if self.collection == CollectionKind::ArgsNames {
+                    Ok(candidate.name)
+                } else {
+                    candidate.deferred.ok_or(RuntimeError::JsonInspectionState)
+                }
+            }
+            SelectedBytes::JsonMetadata => request
+                .body
+                .as_ref()
+                .and_then(RequestBodyPublication::json)
+                .and_then(|body| body.metadata_value(self.collection))
+                .ok_or(RuntimeError::JsonInspectionState),
             SelectedBytes::Request(range) => Ok(request.bytes_at(*range)),
             SelectedBytes::Body(index) => request
                 .body
@@ -555,8 +596,9 @@ impl SelectedValue {
         request: &'value RequestState,
         tx: &'value TxState,
         response: Option<&'value ResponseState>,
+        json_budget: Option<&mut InspectionBudget>,
     ) -> Result<Option<&'value [u8]>, RuntimeError> {
-        selected_name_bytes(self.name, request, tx, response)
+        selected_name_bytes(self.name, request, tx, response, json_budget)
     }
 }
 
@@ -565,8 +607,18 @@ fn selected_name_bytes<'value>(
     request: &'value RequestState,
     tx: &'value TxState,
     response: Option<&'value ResponseState>,
+    json_budget: Option<&mut InspectionBudget>,
 ) -> Result<Option<&'value [u8]>, RuntimeError> {
     name.map(|name| match name {
+        SelectedName::Json(id) => request
+            .body
+            .as_ref()
+            .and_then(RequestBodyPublication::json)
+            .ok_or(RuntimeError::JsonInspectionState)?
+            .results()?
+            .candidate(json_budget.ok_or(RuntimeError::JsonInspectionState)?, id)
+            .map(|candidate| candidate.name)
+            .map_err(map_store_error),
         SelectedName::Request(range) => Ok(request.bytes_at(range)),
         SelectedName::Body(index) => request
             .body
@@ -595,40 +647,41 @@ fn selected_name_bytes<'value>(
 
 const COLLECTION_COUNT: usize = CollectionKind::ALL.len();
 
-enum JsonBodyOwned {
-    Collecting(json_rules::JsonOwnedCollector),
-    Completed(json_rules::JsonCompletedFacts),
-}
-
-enum RequestBodyPublication {
+enum RequestBodyPublication<'generation> {
+    Json(Vec<JsonPublication<'generation>>),
     Materialized(BodyPublication),
-    Metadata(crate::seclang::JsonPublicationSummary),
 }
-impl RequestBodyPublication {
+impl RequestBodyPublication<'_> {
+    fn json(&self) -> Option<&JsonPublication<'_>> {
+        match self {
+            Self::Json(body) => body.first(),
+            _ => None,
+        }
+    }
     fn materialized(&self) -> Option<&BodyPublication> {
         match self {
             Self::Materialized(body) => Some(body),
-            Self::Metadata(_) => None,
+            Self::Json(_) => None,
         }
     }
     fn entry_count(&self) -> usize {
         match self {
             Self::Materialized(body) => body.entries.len(),
-            Self::Metadata(body) => body.entries,
+            Self::Json(body) => body.first().map_or(0, |body| body.summary.entries),
         }
     }
     fn retained_bytes(&self) -> usize {
         match self {
             Self::Materialized(body) => body.retained_bytes,
-            Self::Metadata(body) => body.retained_bytes,
+            Self::Json(body) => body.first().map_or(0, |body| body.summary.retained_bytes),
         }
     }
 }
 
-struct RequestState {
+struct RequestState<'generation> {
     bytes: Vec<u8>,
     collections: [Vec<CollectionValue>; COLLECTION_COUNT],
-    body: Option<RequestBodyPublication>,
+    body: Option<RequestBodyPublication<'generation>>,
     entry_count: usize,
     retained_bytes: usize,
 }
@@ -650,20 +703,12 @@ struct TxEntry {
     value: Vec<u8>,
 }
 
-#[derive(Clone, Copy)]
-struct VirtualMatches {
-    count: usize,
-    /// All matched payload lengths plus the final singular name/value lengths.
-    payload_bytes: usize,
-}
-
 #[derive(Default)]
 struct TxState {
     entries: Vec<TxEntry>,
     matched_var: Option<Vec<u8>>,
     matched_var_name: Option<Vec<u8>>,
     matched_vars: Vec<TxEntry>,
-    virtual_matches: Option<VirtualMatches>,
     removed_units: Vec<usize>,
     target_exclusions: Vec<ActiveTargetExclusion>,
     request_body_processor: Option<super::super::BodyProcessorSelection>,
@@ -696,6 +741,7 @@ struct ChainBranch {
     setvar_actions: usize,
 }
 
+#[derive(Clone)]
 enum GenerationHandle<'generation> {
     Borrowed(&'generation CompiledGeneration),
     Shared(Arc<CompiledGeneration>),
@@ -728,13 +774,16 @@ pub enum RequestBodyPrefixCompletion {
 
 pub struct Transaction<'generation> {
     generation: GenerationHandle<'generation>,
-    request: RequestState,
+    request: RequestState<'generation>,
+    json_budget: Option<InspectionBudget>,
+    json_failure: Option<RuntimeError>,
     next_phase: u8,
     limits: RuntimeLimits,
     group_scratch: Vec<MatchScratch>,
     boolean_scratch: Vec<RegexBooleanScratch>,
     capture_scratch: Vec<RegexCaptureScratch>,
     scratch_bytes: usize,
+    selected_scratch: Vec<SelectedValue>,
     detector_work_bytes: usize,
     ctl_work_bytes: usize,
     tx: TxState,
@@ -748,8 +797,6 @@ pub struct Transaction<'generation> {
     // Cold 0/1 owner: ordinary transactions keep no completed JSON allocation.
     // The fixed owner allocation is physical execution state, separate from
     // reference logical retention counters and independently bounded fact arenas.
-    json_body_state: Vec<JsonBodyOwned>,
-    json_collection_error: Option<json_rules::JsonExecutionError>,
     request_prefix_completion: Option<RequestBodyPrefixCompletion>,
 }
 
@@ -891,12 +938,15 @@ impl<'generation> Transaction<'generation> {
         Ok(Self {
             generation,
             request,
+            json_budget: None,
+            json_failure: None,
             next_phase: Phase::RequestHeaders as u8,
             limits,
             group_scratch,
             boolean_scratch,
             capture_scratch,
             scratch_bytes,
+            selected_scratch: Vec::new(),
             detector_work_bytes: 0,
             ctl_work_bytes: 0,
             tx: TxState::default(),
@@ -907,8 +957,6 @@ impl<'generation> Transaction<'generation> {
             rule_engine_mode,
             request_body_stream: None,
             stream_member_matches: None,
-            json_body_state: Vec::new(),
-            json_collection_error: None,
             request_prefix_completion: None,
         })
     }
@@ -946,8 +994,8 @@ impl<'generation> Transaction<'generation> {
         self.execute_phase(Phase::RequestHeaders)
     }
 
-    pub fn publish_request_body(&mut self, body: RequestBody<'_>) -> Result<(), RuntimeError> {
-        self.ensure_no_json_collection()?;
+    fn publish_non_json_body(&mut self, body: RequestBody) -> Result<(), RuntimeError> {
+        self.ensure_json_healthy()?;
         if self.next_phase() != Some(Phase::RequestBody) {
             return Err(RuntimeError::PhaseOrder {
                 expected: self.next_phase(),
@@ -965,21 +1013,21 @@ impl<'generation> Transaction<'generation> {
             .first_value(CollectionKind::ArgsCombinedSize)
             .ok_or(RuntimeError::GenerationInvariant)
             .and_then(parse_usize)?;
-        let body = RequestBody::new(body.bytes(), self.tx.request_body_processor.unwrap_or(body.processor()));
+
         let raw_policy = self
             .tx
             .force_request_body_variable
             .map(|value| value == super::OnOff::On);
         let publication = if raw_policy.is_some() {
             build_publication_with_raw_policy(
-                body,
+                &body,
                 content_type,
                 head_args_combined_size,
                 self.limits.body,
                 raw_policy,
             )
         } else {
-            build_publication(body, content_type, head_args_combined_size, self.limits.body)
+            build_publication(&body, content_type, head_args_combined_size, self.limits.body)
         };
         let (publication, body_error) = match publication {
             Ok(publication) => (publication, None),
@@ -989,14 +1037,14 @@ impl<'generation> Transaction<'generation> {
                 (
                     if raw_policy.is_some() {
                         build_fallback_publication_with_raw_policy(
-                            body,
+                            &body,
                             content_type,
                             head_args_combined_size,
                             self.limits.body,
                             raw_policy,
                         )
                     } else {
-                        build_fallback_publication(body, content_type, head_args_combined_size, self.limits.body)
+                        build_fallback_publication(&body, content_type, head_args_combined_size, self.limits.body)
                     }
                     .map_err(|kind| RuntimeError::Body { kind })?,
                     Some(error),
@@ -1009,7 +1057,7 @@ impl<'generation> Transaction<'generation> {
 
     fn publish_body_state(
         &mut self,
-        publication: RequestBodyPublication,
+        publication: RequestBodyPublication<'generation>,
         body_error: Option<BodyError>,
     ) -> Result<(), RuntimeError> {
         let entry_count = self
@@ -1043,231 +1091,21 @@ impl<'generation> Transaction<'generation> {
         Ok(())
     }
 
-    /// Start bounded JSON evaluation after request-header execution, for a NEW
-    /// complete source. No source bytes are consumed by this method. This is the
-    /// only operation that may reset a previous provisional failure. Callers must
-    /// never restart on the remainder of a consumed transport source. Rejected
-    /// admission leaves previous sticky failures intact.
-    ///
-    /// `Unsupported` permits ordinary publication only on initial admission with
-    /// no earlier collection failure. An unsupported restart does not unblock
-    /// ordinary publication. Allocation, budget and runtime failures must not be
-    /// treated as unsupported capability or silently retried through another lane.
-    /// The processor must resolve to JSON; generation eligibility is checked here.
-    /// All independent budgets are explicit; canonical limits and modes are taken
-    /// from this transaction. The caller must enforce its transport byte cap.
-    pub fn start_json_request_body(
-        &mut self,
-        processor: super::super::BodyProcessorSelection,
-        limits: json_rules::JsonExecutionLimits,
-    ) -> Result<(), json_rules::JsonExecutionError> {
-        use super::super::{BodyProcessorSelection, JsonBodyConfig};
-        use json_rules::{JsonExecutionError, JsonOwnedCollector, JsonSubscriberPlan};
-        if self.next_phase() != Some(Phase::RequestBody) {
-            return Err(RuntimeError::PhaseOrder {
-                expected: self.next_phase(),
-                actual: Phase::RequestBody,
-            }
-            .into());
-        }
-        if self.request.body.is_some() {
-            return Err(RuntimeError::RequestBodyAlreadyPublished.into());
-        }
-        if self.json_collection_active() {
-            return Err(JsonExecutionError::State);
-        }
-        if self.request_body_stream.is_some()
-            || self.stream_member_matches.is_some()
-            || self.request_prefix_completion.is_some()
-        {
-            return Err(JsonExecutionError::State);
-        }
-        if self.tx.force_request_body_variable.is_some()
-            || self.tx.request_body_processor.is_some()
-            || !self.tx.removed_units.is_empty()
-            || !self.tx.target_exclusions.is_empty()
-        {
-            return Err(JsonExecutionError::Unsupported);
-        }
-        let selected = if processor == BodyProcessorSelection::Auto {
-            processor_from_content_type(
-                self.request
-                    .first_named(CollectionKind::RequestHeaders, b"content-type", true),
-            )
-        } else {
-            processor
-        };
-        if selected != BodyProcessorSelection::Json {
-            return Err(JsonExecutionError::Unsupported);
-        }
-        let head_args_combined_size = self
-            .request
-            .first_value(CollectionKind::ArgsCombinedSize)
-            .ok_or(RuntimeError::GenerationInvariant)
-            .and_then(parse_usize)?;
-        let plan = JsonSubscriberPlan::for_generation(&self.generation, limits.plan)?;
-        let config = JsonBodyConfig {
-            lexical: limits.lexical,
-            document: limits.document,
-            body: self.limits.body,
-            head_args_combined_size,
-            retain_raw_body: None,
-            detection_only: self.rule_engine_mode == RuleEngineMode::DetectionOnly,
-        };
-        let mut collector = JsonOwnedCollector::new(plan, self.limits, self.evaluation_mode, config, limits.facts);
-        for record in self.request.collection_records(CollectionKind::Args)? {
-            let name = record.name.ok_or(RuntimeError::GenerationInvariant)?;
-            collector.add_query(
-                &self.generation,
-                &mut self.group_scratch,
-                self.request.bytes_at(name),
-                self.request.bytes_at(record.value),
-            )?;
-        }
-        let mut owner = Vec::new();
-        owner.try_reserve_exact(1).map_err(|_| JsonExecutionError::Allocation)?;
-        owner.push(JsonBodyOwned::Collecting(collector));
-        self.json_body_state = owner;
-        self.json_collection_error = None;
-        Ok(())
-    }
-
-    fn json_collection_active(&self) -> bool {
-        matches!(self.json_body_state.first(), Some(JsonBodyOwned::Collecting(_)))
-    }
-    fn json_collection_blocked(&self) -> bool {
-        self.json_collection_active() || self.json_collection_error.is_some()
-    }
-    fn ensure_no_json_collection(&self) -> Result<(), RuntimeError> {
-        if self.json_collection_blocked() {
-            return Err(RuntimeError::GenerationInvariant);
-        }
-        Ok(())
-    }
-    fn fail_json_collection(&mut self, error: json_rules::JsonExecutionError) -> json_rules::JsonExecutionError {
-        self.json_body_state = Vec::new();
-        self.json_collection_error = Some(error);
-        error
-    }
-
-    /// Feed one event with temporary generation and matcher scratch borrows.
-    /// Complete seals provisional results; finish performs publication. Any later
-    /// input before finish poisons this provisional source. After publication,
-    /// rejected transport calls leave committed state and retry facts untouched.
-    /// Data is borrowed only for this call; chunks are never buffered for replay.
-    /// Send `Abandoned` on a cancelled source, or drop the transaction. Collection
-    /// failures release provisional storage and stay sticky until a valid restart.
-    pub fn feed_json_request_body(
-        &mut self,
-        input: super::super::JsonStreamInput<'_>,
-    ) -> Result<(), json_rules::JsonExecutionError> {
-        use super::super::JsonBodyError;
-        use json_rules::JsonExecutionError;
-        if let Some(error) = self.json_collection_error {
+    fn ensure_json_healthy(&self) -> Result<(), RuntimeError> {
+        if let Some(error) = self.json_failure {
             return Err(error);
         }
-        let Some(JsonBodyOwned::Collecting(collector)) = self.json_body_state.first_mut() else {
-            return Err(if self.request.body.is_some() {
-                JsonExecutionError::AlreadyComplete
-            } else {
-                JsonExecutionError::State
-            });
-        };
-        let result = collector.feed(&self.generation, &mut self.group_scratch, input);
-        if let Err(error) = result {
-            let error = match error {
-                JsonExecutionError::Body(JsonBodyError::Body(kind)) => {
-                    JsonExecutionError::Runtime(RuntimeError::Body { kind })
-                }
-                error => error,
-            };
-            return Err(self.fail_json_collection(error));
+        if let Some(error) = self.json_budget.as_ref().and_then(InspectionBudget::failure) {
+            return Err(map_store_error(error));
         }
         Ok(())
     }
-
-    /// Publish only a sealed complete source, then use the ordinary scheduler.
-    /// Scheduled failures retain completed facts for execute_request_body retry;
-    /// prepublication failures release all provisional owner capacity.
-    /// Calling before `Complete` poisons the source. Success releases replay facts
-    /// while preserving logical body/TX accounting. After publication, retry a
-    /// scheduled failure with `execute_request_body`, not this method.
-    /// DetectionOnly records malformed JSON in `request_body_error` and uses the
-    /// canonical fallback without body arguments (query arguments remain);
-    /// independent resource failures
-    /// remain errors in every mode. It also suppresses rule interventions.
-    /// This method may return a deny intervention; it does not forward a request.
-    pub fn finish_json_request_body(&mut self) -> Result<PhaseOutcome, json_rules::JsonExecutionError> {
-        use json_rules::JsonExecutionError;
-        if let Some(error) = self.json_collection_error {
-            return Err(error);
-        }
-        if !self.json_collection_active() {
-            return Err(if self.request.body.is_some() {
-                JsonExecutionError::AlreadyComplete
-            } else {
-                JsonExecutionError::State
-            });
-        }
-        let Some(JsonBodyOwned::Collecting(collector)) = self.json_body_state.pop() else {
-            return Err(JsonExecutionError::State);
-        };
-        let completed = match collector.into_completed() {
-            Ok(completed) => completed,
-            Err(error) => return Err(self.fail_json_collection(error)),
-        };
-        let summary = match completed.summary() {
-            Ok(summary) => summary,
-            Err(error) => return Err(self.fail_json_collection(error.into())),
-        };
-        if let Err(error) = self.publish_body_state(
-            RequestBodyPublication::Metadata(summary.publication),
-            summary.body_error,
-        ) {
-            return Err(self.fail_json_collection(error.into()));
-        }
-        // pop retained the preallocated 0/1 owner's capacity; no allocation or
-        // other fallible operation separates publication from retry-state attach.
-        self.json_body_state.push(JsonBodyOwned::Completed(completed));
-        self.execute_request_body().map_err(JsonExecutionError::Runtime)
-    }
-
-    /// Synchronous proof convenience; transport users must feed persistent state
-    /// directly rather than accumulating chunks to call this method. Exhausting
-    /// all inputs before finish preserves atomic rejection of trailing events.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "structured transaction route is not selected by the Gateway")
-    )]
-    fn execute_json_body_inputs<'input>(
-        &mut self,
-        processor: super::super::BodyProcessorSelection,
-        inputs: impl IntoIterator<Item = super::super::JsonStreamInput<'input>>,
-        limits: json_rules::JsonExecutionLimits,
-    ) -> Result<PhaseOutcome, json_rules::JsonExecutionError> {
-        self.start_json_request_body(processor, limits)?;
-        for input in inputs {
-            self.feed_json_request_body(input)?;
-        }
-        self.finish_json_request_body()
-    }
-
     pub fn execute_request_body(&mut self) -> Result<PhaseOutcome, RuntimeError> {
-        self.ensure_no_json_collection()?;
+        self.ensure_json_healthy()?;
         if self.request.body.is_none() {
             return Err(RuntimeError::RequestBodyNotPublished);
         }
-        if self.next_phase() == Some(Phase::RequestBody)
-            && matches!(self.request.body, Some(RequestBodyPublication::Metadata(_)))
-            && self.json_body_state.is_empty()
-        {
-            return Err(RuntimeError::GenerationInvariant);
-        }
-        let result = self.execute_phase(Phase::RequestBody);
-        if result.is_ok() {
-            self.json_body_state = Vec::new();
-        }
-        result
+        self.execute_phase(Phase::RequestBody)
     }
 
     /// Decide phase two over borrowed prefix bytes without publishing a complete body.
@@ -1277,7 +1115,7 @@ impl<'generation> Transaction<'generation> {
         limit: usize,
         completion: RequestBodyPrefixCompletion,
     ) -> Result<PhaseOutcome, RuntimeError> {
-        self.ensure_no_json_collection()?;
+        self.ensure_json_healthy()?;
         if self.next_phase() != Some(Phase::RequestBody) {
             return Err(RuntimeError::PhaseOrder {
                 expected: self.next_phase(),
@@ -1368,6 +1206,8 @@ impl<'generation> Transaction<'generation> {
             &transformed,
             member.runtime_expansion_byte_limit,
             self.evaluation_mode,
+            None,
+            self.json_budget.as_mut(),
         )
         .map(|(matched, _)| matched)
     }
@@ -1378,7 +1218,7 @@ impl<'generation> Transaction<'generation> {
 
     /// Prepare the exact constant-memory raw-body lane selected by the compiler.
     pub fn start_request_body_stream(&mut self) -> Result<(), RuntimeError> {
-        self.ensure_no_json_collection()?;
+        self.ensure_json_healthy()?;
         if self.next_phase() != Some(Phase::RequestBody) {
             return Err(RuntimeError::PhaseOrder {
                 expected: self.next_phase(),
@@ -1486,7 +1326,7 @@ impl<'generation> Transaction<'generation> {
         chunk: &[u8],
         end_of_stream: bool,
     ) -> Result<Option<PhaseOutcome>, RuntimeError> {
-        self.ensure_no_json_collection()?;
+        self.ensure_json_healthy()?;
         let mut early_finalize = false;
         {
             let stream = self
@@ -1566,7 +1406,10 @@ impl<'generation> Transaction<'generation> {
             overrides[member_index] = Some(positive != operator.negated);
         }
         self.stream_member_matches = Some(overrides);
-        self.publish_request_body(RequestBody::new(&[], super::super::BodyProcessorSelection::Raw))?;
+        self.publish_request_body(RequestBody::new(
+            bytes::Bytes::new(),
+            super::super::BodyProcessorSelection::Raw,
+        ))?;
         let outcome = self.execute_request_body();
         self.stream_member_matches = None;
         outcome.map(Some)
@@ -1655,6 +1498,7 @@ impl<'generation> Transaction<'generation> {
         advance: bool,
         prefix: Option<&[u8]>,
     ) -> Result<PhaseOutcome, RuntimeError> {
+        self.ensure_json_healthy()?;
         let mut prefix_work = 0_usize;
         let expected = self.next_phase();
         if expected != Some(phase) {
@@ -1769,54 +1613,7 @@ impl<'generation> Transaction<'generation> {
             .member_start
             .checked_add(unit.member_count)
             .ok_or(RuntimeError::Arithmetic)?;
-        let mut initial = self.tx.try_clone()?;
-        initial.clear_matches();
-        if unit.phase == Phase::RequestBody {
-            if let Some(JsonBodyOwned::Completed(facts)) = self.json_body_state.first() {
-                let subscribers = self
-                    .generation
-                    .json_capability
-                    .subscribers()
-                    .ok_or(RuntimeError::GenerationInvariant)?;
-                if let Ok(subscriber) =
-                    subscribers.binary_search_by_key(&unit.member_start, |subscriber| subscriber.member)
-                {
-                    if unit.member_count != 1 {
-                        return Err(RuntimeError::GenerationInvariant);
-                    }
-                    let outcome = facts.replay_subscriber(&self.generation, subscriber, initial.retained_bytes)?;
-                    if outcome.match_count == 0 {
-                        return Ok(false);
-                    }
-                    let payload_bytes = outcome
-                        .final_tx_bytes
-                        .checked_sub(initial.retained_bytes)
-                        .and_then(|bytes| bytes.checked_sub(outcome.match_count.checked_mul(size_of::<TxEntry>())?))
-                        .ok_or(RuntimeError::Arithmetic)?;
-                    initial.virtual_matches = Some(VirtualMatches {
-                        count: outcome.match_count,
-                        payload_bytes,
-                    });
-                    initial.recount();
-                    let capture_keys = try_clone_byte_vectors(&self.capture_keys)?;
-                    return self.commit_unit_match(unit, initial, capture_keys);
-                }
-                // Missing replay facts are safe only for a wholly body-independent
-                // unit. Keep SecAction, captures, static TX writes and chains on
-                // the ordinary evaluator, including its match clearing semantics.
-                let members = self
-                    .generation
-                    .members
-                    .get(unit.member_start..end)
-                    .ok_or(RuntimeError::GenerationInvariant)?;
-                if members
-                    .iter()
-                    .any(|member| self.generation.member_requires_request_body(*member))
-                {
-                    return Err(RuntimeError::GenerationInvariant);
-                }
-            }
-        }
+        let mut initial = self.tx.try_clone_for_unit()?;
         if unit.member_count == 1 {
             let matches = match prefix_match {
                 Some(matched) => Self::boolean_member_matches(matched)?,
@@ -1945,139 +1742,165 @@ impl<'generation> Transaction<'generation> {
             return Ok(matches);
         };
         let target_plan = member.target_plan.ok_or(RuntimeError::GenerationInvariant)?;
-        let selected = select_values(
-            &self.generation,
-            &self.request,
-            tx,
-            self.response.as_ref(),
-            &mut self.boolean_scratch,
-            &mut self.ctl_work_bytes,
-            SelectionParams {
-                unit_id,
-                plan_id: target_plan,
-                limit: self.limits.max_selected_values,
-                work_limit: self.limits.max_operator_work_bytes,
-            },
-        )?;
-        let transformations = member
-            .transformation_plan
-            .and_then(|id| self.generation.transformation_plans.get(id))
-            .and_then(|plan| {
-                let end = plan.transformation_start.checked_add(plan.transformation_count)?;
-                self.generation.transformations.get(plan.transformation_start..end)
-            })
-            .unwrap_or_default();
-        let multi_match = member_has_action(&self.generation, member, super::super::ActionKind::MultiMatch)?;
-        let mut work = 0_usize;
-        let mut matches = Vec::new();
-        matches
-            .try_reserve_exact(if stop_after_first {
-                1
-            } else {
-                self.limits.max_selected_values.min(selected.len())
-            })
-            .map_err(|_| RuntimeError::Allocation)?;
-        for selected in selected {
-            let value = selected.bytes(&self.request, tx, self.response.as_ref())?;
-            let transform_limits = TransformLimits {
-                max_output_bytes: self.limits.max_transformation_output_bytes,
-                max_work_bytes: self.limits.max_transformation_work_bytes,
-            };
-            let transformed_values = if multi_match {
-                apply_transformations_multimatch(value, transformations, transform_limits)
-                    .map_err(map_transform_error)?
-            } else {
-                let mut values = Vec::new();
-                values.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
-                values.push(
-                    apply_transformations(value, transformations, transform_limits).map_err(map_transform_error)?,
-                );
-                values
-            };
-            for transformed in transformed_values {
-                let detector_work = match operator.operand {
-                    super::CompiledOperatorOperand::DetectSqli { .. } => {
-                        crate::injection::work_cost(crate::injection::Kind::Sqli, transformed.len())
-                    }
-                    super::CompiledOperatorOperand::DetectXss => {
-                        crate::injection::work_cost(crate::injection::Kind::Xss, transformed.len())
-                    }
-                    _ => Some(0),
-                }
-                .ok_or(RuntimeError::DetectorInputLimit {
-                    limit: crate::injection::MAX_INPUT_BYTES,
+        let old_capacity_bytes = self
+            .selected_scratch
+            .capacity()
+            .checked_mul(size_of::<SelectedValue>())
+            .ok_or(RuntimeError::Arithmetic)?;
+        let other_scratch_bytes = self
+            .scratch_bytes
+            .checked_sub(old_capacity_bytes)
+            .ok_or(RuntimeError::Arithmetic)?;
+        let fixed_bytes = self
+            .retained_bytes()
+            .checked_sub(old_capacity_bytes)
+            .and_then(|bytes| bytes.checked_add(tx.retained_bytes.saturating_sub(self.tx.retained_bytes)))
+            .ok_or(RuntimeError::Arithmetic)?;
+        let capacity_bytes =
+            self.limits
+                .max_retained_bytes
+                .checked_sub(fixed_bytes)
+                .ok_or(RuntimeError::RetainedByteLimit {
+                    limit: self.limits.max_retained_bytes,
                 })?;
-                if detector_work != 0 {
-                    self.detector_work_bytes = self
-                        .detector_work_bytes
-                        .checked_add(detector_work)
-                        .ok_or(RuntimeError::Arithmetic)?;
-                    if self.detector_work_bytes > self.limits.max_operator_work_bytes {
-                        return Err(RuntimeError::OperatorWorkLimit {
-                            limit: self.limits.max_operator_work_bytes,
-                        });
-                    }
-                }
-                charge_operator_work(
-                    &mut work,
-                    value
-                        .len()
-                        .checked_add(transformed.len())
-                        .and_then(|value| value.checked_add(detector_work))
+        if old_capacity_bytes > capacity_bytes {
+            return Err(RuntimeError::RetainedByteLimit {
+                limit: self.limits.max_retained_bytes,
+            });
+        }
+        let mut selected = std::mem::take(&mut self.selected_scratch);
+        selected.clear();
+        let result = (|| {
+            let selection_result = select_values(
+                &self.generation,
+                &self.request,
+                tx,
+                self.response.as_ref(),
+                &mut self.boolean_scratch,
+                &mut self.ctl_work_bytes,
+                SelectionParams {
+                    unit_id,
+                    plan_id: target_plan,
+                    limit: self.limits.max_selected_values,
+                    work_limit: self.limits.max_operator_work_bytes,
+                },
+                self.json_budget.as_mut(),
+                &mut selected,
+                SelectionStorage {
+                    capacity_bytes,
+                    retained_limit: self.limits.max_retained_bytes,
+                },
+            );
+            self.scratch_bytes = other_scratch_bytes
+                .checked_add(
+                    selected
+                        .capacity()
+                        .checked_mul(size_of::<SelectedValue>())
                         .ok_or(RuntimeError::Arithmetic)?,
-                    self.limits,
-                )?;
-                let (positive, fingerprint) = evaluate_operator(
-                    &self.generation,
-                    &self.request,
+                )
+                .ok_or(RuntimeError::Arithmetic)?;
+            selection_result?;
+            let transformations = member
+                .transformation_plan
+                .and_then(|id| self.generation.transformation_plans.get(id))
+                .and_then(|plan| {
+                    let end = plan.transformation_start.checked_add(plan.transformation_count)?;
+                    self.generation.transformations.get(plan.transformation_start..end)
+                })
+                .unwrap_or_default();
+            let multi_match = member_has_action(&self.generation, member, super::super::ActionKind::MultiMatch)?;
+            let mut work = 0_usize;
+            let mut matches = Vec::new();
+            let match_limit = if stop_after_first { 1 } else { selected.len() };
+            for selected in selected.iter().copied() {
+                let mut context = SingleInputContext {
+                    generation: &self.generation,
+                    request: &self.request,
                     tx,
-                    &mut self.group_scratch,
-                    &mut self.boolean_scratch,
-                    &mut self.capture_scratch,
-                    operator,
-                    &transformed,
-                    member.runtime_expansion_byte_limit,
-                    self.evaluation_mode,
-                )?;
-                if positive != operator.negated {
-                    let captures = if operator.negated {
-                        Vec::new()
-                    } else {
-                        extract_captures(
-                            &self.generation,
-                            &mut self.capture_scratch,
+                    group_scratch: &mut self.group_scratch,
+                    boolean_scratch: &mut self.boolean_scratch,
+                    capture_scratch: &mut self.capture_scratch,
+                    scan_cache: None,
+                    json_budget: self.json_budget.as_mut(),
+                };
+                let matched = if let SelectedBytes::Json(id) = selected.value {
+                    json_inspection_runtime::evaluate_json_selected(
+                        &mut context,
+                        SingleInputPlan {
                             operator,
-                            &transformed,
-                            self.limits,
-                            self.evaluation_mode,
-                            fingerprint,
-                        )?
-                    };
-                    let (matched_var, matched_var_name) =
-                        matched_variable(&self.request, tx, self.response.as_ref(), selected, &transformed)?;
-                    if matches.len() == self.limits.max_operator_evaluations {
-                        return Err(RuntimeError::OperatorEvaluationLimit {
-                            limit: self.limits.max_operator_evaluations,
-                        });
+                            transformations,
+                            multi_match,
+                            runtime_expansion_byte_limit: member.runtime_expansion_byte_limit,
+                            limits: self.limits,
+                            evaluation_mode: self.evaluation_mode,
+                        },
+                        member_id,
+                        id,
+                        selected.collection,
+                        &mut work,
+                        &mut self.detector_work_bytes,
+                        matches.len(),
+                    )?
+                } else {
+                    let value = selected.bytes(
+                        &self.request,
+                        tx,
+                        self.response.as_ref(),
+                        context.json_budget.as_deref_mut(),
+                    )?;
+                    evaluate_single_input(
+                        &mut context,
+                        SingleInputPlan {
+                            operator,
+                            transformations,
+                            multi_match,
+                            runtime_expansion_byte_limit: member.runtime_expansion_byte_limit,
+                            limits: self.limits,
+                            evaluation_mode: self.evaluation_mode,
+                        },
+                        value,
+                        &mut work,
+                        &mut self.detector_work_bytes,
+                        matches.len(),
+                        |transformed| {
+                            matched_variable(&self.request, tx, self.response.as_ref(), selected, transformed)
+                        },
+                    )?
+                };
+                if let Some(matched) = matched {
+                    if matches.len() == matches.capacity() {
+                        let target = matches.capacity().saturating_mul(2).max(1).min(match_limit);
+                        matches
+                            .try_reserve_exact(target - matches.len())
+                            .map_err(|_| RuntimeError::Allocation)?;
                     }
-                    let matched = MemberMatch {
-                        captures,
-                        matched_var: Some(matched_var),
-                        matched_var_name: Some(matched_var_name),
-                    };
-                    charge_operator_work(&mut work, member_match_bytes(&matched)?, self.limits)?;
                     matches.push(matched);
                     if stop_after_first {
                         return Ok(matches);
                     }
-                    break;
                 }
             }
+            Ok(matches)
+        })();
+        selected.clear();
+        let actual_bytes = selected
+            .capacity()
+            .checked_mul(size_of::<SelectedValue>())
+            .ok_or(RuntimeError::Arithmetic)?;
+        if actual_bytes > capacity_bytes {
+            self.scratch_bytes = other_scratch_bytes;
+            return Err(RuntimeError::RetainedByteLimit {
+                limit: self.limits.max_retained_bytes,
+            });
         }
-        Ok(matches)
+        self.scratch_bytes = other_scratch_bytes
+            .checked_add(actual_bytes)
+            .ok_or(RuntimeError::Arithmetic)?;
+        self.selected_scratch = selected;
+        result
     }
 
-    fn validate_runtime_actions(&self, unit: super::CompiledRuleUnit, tx: &TxState) -> Result<(), RuntimeError> {
+    fn validate_runtime_actions(&mut self, unit: super::CompiledRuleUnit, tx: &TxState) -> Result<(), RuntimeError> {
         let end = unit
             .member_start
             .checked_add(unit.member_count)
@@ -2113,6 +1936,7 @@ impl<'generation> Transaction<'generation> {
                         tx,
                         template,
                         member.runtime_expansion_byte_limit,
+                        self.json_budget.as_mut(),
                     )?;
                 }
             }
@@ -2263,6 +2087,7 @@ impl<'generation> Transaction<'generation> {
                 staged,
                 setvar.key,
                 member.runtime_expansion_byte_limit,
+                self.json_budget.as_mut(),
             )?;
             match setvar.operation {
                 super::SetVarOperation::Delete => staged.delete(&key),
@@ -2273,6 +2098,7 @@ impl<'generation> Transaction<'generation> {
                         staged,
                         setvar,
                         member.runtime_expansion_byte_limit,
+                        self.json_budget.as_mut(),
                     )?;
                     staged.set(key, value, self.limits)?;
                 }
@@ -2284,6 +2110,7 @@ impl<'generation> Transaction<'generation> {
                         staged,
                         setvar,
                         member.runtime_expansion_byte_limit,
+                        self.json_budget.as_mut(),
                     )?;
                     let delta = parse_i64(&value)?;
                     let result = if setvar.operation == super::SetVarOperation::Add {
@@ -2379,7 +2206,282 @@ fn tagged_units(
     Ok(&refs[start..end])
 }
 
-fn extract_captures(
+// Shared by ordinary selected values and the upcoming provisional JSON
+// collector. Context supplies existing programs and scratch, never a second
+// operator implementation. Matched identity construction runs only on a match.
+struct SingleInputContext<'a> {
+    generation: &'a CompiledGeneration,
+    request: &'a RequestState<'a>,
+    tx: &'a TxState,
+    group_scratch: &'a mut [MatchScratch],
+    boolean_scratch: &'a mut [RegexBooleanScratch],
+    capture_scratch: &'a mut [RegexCaptureScratch],
+    scan_cache: Option<&'a mut StageScanCache>,
+    json_budget: Option<&'a mut InspectionBudget>,
+}
+
+struct SingleInputPlan<'a> {
+    operator: super::CompiledOperatorPlan,
+    transformations: &'a [super::super::TransformationKind],
+    multi_match: bool,
+    runtime_expansion_byte_limit: usize,
+    limits: RuntimeLimits,
+    evaluation_mode: EvaluationMode,
+}
+
+fn evaluate_single_input(
+    context: &mut SingleInputContext<'_>,
+    plan: SingleInputPlan<'_>,
+    value: &[u8],
+    work: &mut usize,
+    detector_work_bytes: &mut usize,
+    matched_count: usize,
+    make_matched: impl Fn(&[u8]) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
+) -> Result<Option<MemberMatch>, RuntimeError> {
+    let transform_limits = TransformLimits {
+        max_output_bytes: plan.limits.max_transformation_output_bytes,
+        max_work_bytes: plan.limits.max_transformation_work_bytes,
+    };
+    let transformed_values = if plan.multi_match {
+        apply_transformations_multimatch(value, plan.transformations, transform_limits).map_err(map_transform_error)?
+    } else {
+        let mut values = Vec::new();
+        values.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
+        values.push(apply_transformations(value, plan.transformations, transform_limits).map_err(map_transform_error)?);
+        values
+    };
+    for transformed in transformed_values {
+        if let Some(matched) = evaluate_transformed_input(
+            context,
+            &plan,
+            &transformed,
+            value.len(),
+            work,
+            detector_work_bytes,
+            matched_count,
+            &make_matched,
+        )? {
+            return Ok(Some(matched));
+        }
+    }
+    Ok(None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_transformed_input(
+    context: &mut SingleInputContext<'_>,
+    plan: &SingleInputPlan<'_>,
+    transformed: &[u8],
+    original_bytes: usize,
+    work: &mut usize,
+    detector_work_bytes: &mut usize,
+    matched_count: usize,
+    make_matched: impl FnOnce(&[u8]) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
+) -> Result<Option<MemberMatch>, RuntimeError> {
+    let mut accounting = OrderedStageAccounting {
+        original_bytes,
+        limits: plan.limits,
+        work,
+        detector_work_bytes,
+    };
+    let captures =
+        inspect_predicate_stage(context, plan, transformed, &mut accounting).map_err(|error| match error {
+            PredicateStageFailure::Semantic { error, .. }
+            | PredicateStageFailure::Physical(error)
+            | PredicateStageFailure::Observer(error) => error,
+        })?;
+    captures
+        .map(|captures| {
+            let (value, name) = make_matched(transformed)?;
+            finish_member_match(captures, value, name, matched_count, work, plan.limits)
+        })
+        .transpose()
+}
+fn finish_member_match(
+    captures: Vec<CaptureEntry>,
+    value: Vec<u8>,
+    name: Vec<u8>,
+    matched_count: usize,
+    work: &mut usize,
+    limits: RuntimeLimits,
+) -> Result<MemberMatch, RuntimeError> {
+    if matched_count == limits.max_operator_evaluations {
+        return Err(RuntimeError::OperatorEvaluationLimit {
+            limit: limits.max_operator_evaluations,
+        });
+    }
+    let matched = MemberMatch {
+        captures,
+        matched_var: Some(value),
+        matched_var_name: Some(name),
+    };
+    charge_operator_work(work, member_match_bytes(&matched)?, limits)?;
+    Ok(matched)
+}
+
+#[derive(Clone, Copy)]
+enum PredicateCheckpoint {
+    DetectorInput,
+    Operator,
+    Captures,
+}
+
+enum PredicateStageFailure<E> {
+    Semantic {
+        checkpoint: PredicateCheckpoint,
+        error: RuntimeError,
+    },
+    Physical(RuntimeError),
+    Observer(E),
+}
+
+impl<E> PredicateStageFailure<E> {
+    fn at(checkpoint: PredicateCheckpoint, error: RuntimeError) -> Self {
+        if matches!(error, RuntimeError::Allocation | RuntimeError::Arithmetic) {
+            Self::Physical(error)
+        } else {
+            Self::Semantic { checkpoint, error }
+        }
+    }
+}
+
+impl<E> From<RuntimeError> for PredicateStageFailure<E> {
+    fn from(error: RuntimeError) -> Self {
+        Self::at(PredicateCheckpoint::Captures, error)
+    }
+}
+
+/// Observer failures are physical inspection failures. Predicate/capture errors
+/// retain their semantic checkpoint so a provisional collector can defer them.
+trait PredicateStageObserver {
+    type Error;
+    fn observes_physical_work(&self) -> bool {
+        false
+    }
+    fn operator_work(&mut self, _work: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn charge_stage(&mut self, transformed_bytes: usize, detector_work: usize) -> Result<(), Self::Error>;
+    fn before_captures(&mut self, transformed_bytes: usize) -> Result<(), Self::Error>;
+    fn captures(&mut self, captures: &[CaptureEntry]) -> Result<(), Self::Error>;
+    fn admit_capture_allocation(&mut self, current_bytes: usize, required_bytes: usize) -> Result<(), Self::Error>;
+    fn capture_capacity(&mut self, actual_bytes: usize) -> Result<(), Self::Error>;
+}
+
+struct OrderedStageAccounting<'a> {
+    original_bytes: usize,
+    limits: RuntimeLimits,
+    work: &'a mut usize,
+    detector_work_bytes: &'a mut usize,
+}
+
+impl PredicateStageObserver for OrderedStageAccounting<'_> {
+    type Error = RuntimeError;
+    fn charge_stage(&mut self, transformed_bytes: usize, detector_work: usize) -> Result<(), RuntimeError> {
+        if detector_work != 0 {
+            *self.detector_work_bytes = self
+                .detector_work_bytes
+                .checked_add(detector_work)
+                .ok_or(RuntimeError::Arithmetic)?;
+            if *self.detector_work_bytes > self.limits.max_operator_work_bytes {
+                return Err(RuntimeError::OperatorWorkLimit {
+                    limit: self.limits.max_operator_work_bytes,
+                });
+            }
+        }
+        charge_operator_work(
+            self.work,
+            self.original_bytes
+                .checked_add(transformed_bytes)
+                .and_then(|bytes| bytes.checked_add(detector_work))
+                .ok_or(RuntimeError::Arithmetic)?,
+            self.limits,
+        )
+    }
+    fn before_captures(&mut self, _transformed_bytes: usize) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+    fn captures(&mut self, _captures: &[CaptureEntry]) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+    fn admit_capture_allocation(&mut self, _current_bytes: usize, _required_bytes: usize) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+    fn capture_capacity(&mut self, _actual_bytes: usize) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+}
+
+fn detector_work_for_stage(plan: super::CompiledOperatorPlan, len: usize) -> Result<usize, RuntimeError> {
+    match plan.operand {
+        super::CompiledOperatorOperand::DetectSqli { .. } => {
+            crate::injection::work_cost(crate::injection::Kind::Sqli, len)
+        }
+        super::CompiledOperatorOperand::DetectXss => crate::injection::work_cost(crate::injection::Kind::Xss, len),
+        _ => Some(0),
+    }
+    .ok_or(RuntimeError::DetectorInputLimit {
+        limit: crate::injection::MAX_INPUT_BYTES,
+    })
+}
+
+fn inspect_predicate_stage<O: PredicateStageObserver>(
+    context: &mut SingleInputContext<'_>,
+    plan: &SingleInputPlan<'_>,
+    transformed: &[u8],
+    observer: &mut O,
+) -> Result<Option<Vec<CaptureEntry>>, PredicateStageFailure<O::Error>> {
+    let detector_work = detector_work_for_stage(plan.operator, transformed.len())
+        .map_err(|error| PredicateStageFailure::at(PredicateCheckpoint::DetectorInput, error))?;
+    observer
+        .charge_stage(transformed.len(), detector_work)
+        .map_err(PredicateStageFailure::Observer)?;
+    if observer.observes_physical_work() {
+        let work = physical_operator_work(context, plan.operator, transformed.len())
+            .map_err(PredicateStageFailure::Physical)?;
+        observer.operator_work(work).map_err(PredicateStageFailure::Observer)?;
+    }
+    let (positive, fingerprint) = evaluate_operator(
+        context.generation,
+        context.request,
+        context.tx,
+        context.group_scratch,
+        context.boolean_scratch,
+        context.capture_scratch,
+        plan.operator,
+        transformed,
+        plan.runtime_expansion_byte_limit,
+        plan.evaluation_mode,
+        context.scan_cache.as_deref_mut(),
+        context.json_budget.as_deref_mut(),
+    )
+    .map_err(|error| PredicateStageFailure::at(PredicateCheckpoint::Operator, error))?;
+    if positive == plan.operator.negated {
+        return Ok(None);
+    }
+    let captures = if plan.operator.negated {
+        Vec::new()
+    } else {
+        observer
+            .before_captures(transformed.len())
+            .map_err(PredicateStageFailure::Observer)?;
+        extract_captures(
+            context.generation,
+            context.capture_scratch,
+            plan.operator,
+            transformed,
+            plan.limits,
+            plan.evaluation_mode,
+            fingerprint,
+            observer,
+        )?
+    };
+    observer.captures(&captures).map_err(PredicateStageFailure::Observer)?;
+    Ok(Some(captures))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extract_captures<O: PredicateStageObserver>(
     generation: &CompiledGeneration,
     scratch: &mut [RegexCaptureScratch],
     plan: super::CompiledOperatorPlan,
@@ -2387,7 +2489,8 @@ fn extract_captures(
     limits: RuntimeLimits,
     evaluation_mode: EvaluationMode,
     fingerprint: Option<crate::injection::Fingerprint>,
-) -> Result<Vec<CaptureEntry>, RuntimeError> {
+    observer: &mut O,
+) -> Result<Vec<CaptureEntry>, PredicateStageFailure<O::Error>> {
     if !matches!(
         plan.operand,
         super::CompiledOperatorOperand::Regex(super::RegexPlanRef::Capture(_))
@@ -2397,9 +2500,20 @@ fn extract_captures(
         return Ok(Vec::new());
     }
     let mut captures = Vec::new();
+    let initial = limits
+        .max_capture_entries
+        .min(64)
+        .checked_mul(size_of::<CaptureEntry>())
+        .ok_or(RuntimeError::Arithmetic)?;
+    observer
+        .admit_capture_allocation(0, initial)
+        .map_err(PredicateStageFailure::Observer)?;
     captures
         .try_reserve_exact(limits.max_capture_entries.min(64))
         .map_err(|_| RuntimeError::Allocation)?;
+    observer
+        .capture_capacity(capture_retained_bytes(&captures)?)
+        .map_err(PredicateStageFailure::Observer)?;
     match plan.operand {
         super::CompiledOperatorOperand::Regex(super::RegexPlanRef::Capture(program)) => {
             let regex = generation
@@ -2414,9 +2528,9 @@ fn extract_captures(
                 };
                 let value = input.get(range).ok_or(RuntimeError::GenerationInvariant)?;
                 let (digits, start) = decimal_bytes(index);
-                push_capture(&mut captures, &digits[start..], value, limits)?;
+                push_capture(&mut captures, &digits[start..], value, limits, observer)?;
                 if let Some(name) = regex.capture_name(index) {
-                    push_capture(&mut captures, name.as_bytes(), value, limits)?;
+                    push_capture(&mut captures, name.as_bytes(), value, limits, observer)?;
                 }
             }
         }
@@ -2433,27 +2547,29 @@ fn extract_captures(
             let value = input
                 .get(matched.start()..matched.end())
                 .ok_or(RuntimeError::GenerationInvariant)?;
-            push_capture(&mut captures, b"0", value, limits)?;
+            push_capture(&mut captures, b"0", value, limits, observer)?;
         }
         super::CompiledOperatorOperand::DetectSqli { capture: true } => {
             let fingerprint = fingerprint.ok_or(RuntimeError::GenerationInvariant)?;
-            push_capture(&mut captures, b"0", fingerprint.as_bytes(), limits)?;
+            push_capture(&mut captures, b"0", fingerprint.as_bytes(), limits, observer)?;
         }
         _ => {}
     }
     Ok(captures)
 }
 
-fn push_capture(
+fn push_capture<O: PredicateStageObserver>(
     captures: &mut Vec<CaptureEntry>,
     key: &[u8],
     value: &[u8],
     limits: RuntimeLimits,
-) -> Result<(), RuntimeError> {
+    observer: &mut O,
+) -> Result<(), PredicateStageFailure<O::Error>> {
     if captures.len() == limits.max_capture_entries {
         return Err(RuntimeError::CaptureEntryLimit {
             limit: limits.max_capture_entries,
-        });
+        }
+        .into());
     }
     let current = captures.iter().try_fold(0_usize, |total, capture| {
         total
@@ -2468,13 +2584,84 @@ fn push_capture(
     if actual > limits.max_capture_bytes {
         return Err(RuntimeError::CaptureByteLimit {
             limit: limits.max_capture_bytes,
-        });
+        }
+        .into());
     }
-    captures.push(CaptureEntry {
-        key: owned_copy(key)?,
-        value: owned_copy(value)?,
-    });
+    let retained = capture_retained_bytes(captures)?;
+    let extra_slot = if captures.len() == captures.capacity() {
+        size_of::<CaptureEntry>()
+    } else {
+        0
+    };
+    let required = retained
+        .checked_add(extra_slot)
+        .and_then(|bytes| bytes.checked_add(key.len()))
+        .and_then(|bytes| bytes.checked_add(value.len()))
+        .ok_or(RuntimeError::Arithmetic)?;
+    let peak = if extra_slot != 0 {
+        required
+            .checked_add(
+                captures
+                    .capacity()
+                    .checked_mul(size_of::<CaptureEntry>())
+                    .ok_or(RuntimeError::Arithmetic)?,
+            )
+            .ok_or(RuntimeError::Arithmetic)?
+    } else {
+        required
+    };
+    observer
+        .admit_capture_allocation(retained, peak)
+        .map_err(PredicateStageFailure::Observer)?;
+    captures.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
+    let descriptors = capture_retained_bytes(captures)?;
+    observer
+        .capture_capacity(descriptors)
+        .map_err(PredicateStageFailure::Observer)?;
+    observer
+        .admit_capture_allocation(
+            descriptors,
+            descriptors.checked_add(key.len()).ok_or(RuntimeError::Arithmetic)?,
+        )
+        .map_err(PredicateStageFailure::Observer)?;
+    let key = owned_copy(key)?;
+    #[cfg(test)]
+    measurements::record(Event::TemporaryCaptureCopyBytes, key.len());
+    let with_key = descriptors
+        .checked_add(key.capacity())
+        .ok_or(RuntimeError::Arithmetic)?;
+    observer
+        .capture_capacity(with_key)
+        .map_err(PredicateStageFailure::Observer)?;
+    observer
+        .admit_capture_allocation(
+            with_key,
+            with_key.checked_add(value.len()).ok_or(RuntimeError::Arithmetic)?,
+        )
+        .map_err(PredicateStageFailure::Observer)?;
+    let value = owned_copy(value)?;
+    #[cfg(test)]
+    measurements::record(Event::TemporaryCaptureCopyBytes, value.len());
+    observer
+        .capture_capacity(with_key.checked_add(value.capacity()).ok_or(RuntimeError::Arithmetic)?)
+        .map_err(PredicateStageFailure::Observer)?;
+    captures.push(CaptureEntry { key, value });
     Ok(())
+}
+
+fn capture_retained_bytes(captures: &Vec<CaptureEntry>) -> Result<usize, RuntimeError> {
+    captures.iter().try_fold(
+        captures
+            .capacity()
+            .checked_mul(size_of::<CaptureEntry>())
+            .ok_or(RuntimeError::Arithmetic)?,
+        |bytes, entry| {
+            bytes
+                .checked_add(entry.key.capacity())
+                .and_then(|bytes| bytes.checked_add(entry.value.capacity()))
+                .ok_or(RuntimeError::Arithmetic)
+        },
+    )
 }
 
 fn matched_variable(
@@ -2485,8 +2672,13 @@ fn matched_variable(
     transformed: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>), RuntimeError> {
     let value = owned_copy(transformed)?;
-    let collection = selected.collection.as_str().as_bytes();
-    let selected_name = selected.name_bytes(request, tx, response)?;
+    let selected_name = selected.name_bytes(request, tx, response, None)?;
+    let name = matched_variable_name(selected.collection, selected_name)?;
+    Ok((value, name))
+}
+
+fn matched_variable_name(collection: CollectionKind, selected_name: Option<&[u8]>) -> Result<Vec<u8>, RuntimeError> {
+    let collection = collection.as_str().as_bytes();
     let name_len = selected_name.map_or(0, |name| name.len().saturating_add(1));
     let capacity = collection.len().checked_add(name_len).ok_or(RuntimeError::Arithmetic)?;
     let mut name = Vec::new();
@@ -2496,7 +2688,7 @@ fn matched_variable(
         name.push(b':');
         name.extend_from_slice(selected_name);
     }
-    Ok((value, name))
+    Ok(name)
 }
 
 fn apply_member_match(
@@ -2505,9 +2697,6 @@ fn apply_member_match(
     matched: MemberMatch,
     limits: RuntimeLimits,
 ) -> Result<(), RuntimeError> {
-    if staged.virtual_matches.is_some() {
-        return Err(RuntimeError::GenerationInvariant);
-    }
     if let (Some(value), Some(name)) = (&matched.matched_var, &matched.matched_var_name) {
         if staged.matched_vars.len() == limits.max_tx_variables {
             return Err(RuntimeError::TxVariableLimit {
@@ -2662,14 +2851,6 @@ impl TxState {
         Ok(())
     }
 
-    fn clear_matches(&mut self) {
-        self.matched_var = None;
-        self.matched_var_name = None;
-        self.matched_vars.clear();
-        self.virtual_matches = None;
-        self.recount();
-    }
-
     fn get(&self, key: &[u8]) -> Option<&[u8]> {
         self.entries
             .iter()
@@ -2715,8 +2896,20 @@ impl TxState {
     }
 
     fn try_clone(&self) -> Result<Self, RuntimeError> {
+        self.try_clone_with_matches(true)
+    }
+
+    fn try_clone_for_unit(&self) -> Result<Self, RuntimeError> {
+        self.try_clone_with_matches(false)
+    }
+
+    fn try_clone_with_matches(&self, keep_matches: bool) -> Result<Self, RuntimeError> {
         let entries = try_clone_entries(&self.entries)?;
-        let matched_vars = try_clone_entries(&self.matched_vars)?;
+        let matched_vars = if keep_matches {
+            try_clone_entries(&self.matched_vars)?
+        } else {
+            Vec::new()
+        };
         let mut removed_units = Vec::new();
         removed_units
             .try_reserve_exact(self.removed_units.len())
@@ -2727,18 +2920,27 @@ impl TxState {
             .try_reserve_exact(self.target_exclusions.len())
             .map_err(|_| RuntimeError::Allocation)?;
         target_exclusions.extend_from_slice(&self.target_exclusions);
-        Ok(Self {
+        let mut cloned = Self {
             entries,
-            matched_var: self.matched_var.as_deref().map(owned_copy).transpose()?,
-            matched_var_name: self.matched_var_name.as_deref().map(owned_copy).transpose()?,
+            matched_var: if keep_matches {
+                self.matched_var.as_deref().map(owned_copy).transpose()?
+            } else {
+                None
+            },
+            matched_var_name: if keep_matches {
+                self.matched_var_name.as_deref().map(owned_copy).transpose()?
+            } else {
+                None
+            },
             matched_vars,
-            virtual_matches: self.virtual_matches,
             removed_units,
             target_exclusions,
             request_body_processor: self.request_body_processor,
             force_request_body_variable: self.force_request_body_variable,
             retained_bytes: self.retained_bytes,
-        })
+        };
+        cloned.recount();
+        Ok(cloned)
     }
 
     fn recount(&mut self) {
@@ -2755,12 +2957,6 @@ impl TxState {
             .saturating_add(self.matched_var.as_ref().map_or(0, Vec::len))
             .saturating_add(self.matched_var_name.as_ref().map_or(0, Vec::len))
             .saturating_add(self.matched_vars.len().saturating_mul(size_of::<TxEntry>()))
-            .saturating_add(self.virtual_matches.map_or(0, |matched| {
-                matched
-                    .count
-                    .saturating_mul(size_of::<TxEntry>())
-                    .saturating_add(matched.payload_bytes)
-            }))
             .saturating_add(self.removed_units.len().saturating_mul(size_of::<usize>()))
             .saturating_add(
                 self.target_exclusions
@@ -2796,13 +2992,14 @@ fn setvar_value(
     tx: &TxState,
     setvar: super::CompiledSetVar,
     member_limit: usize,
+    json_budget: Option<&mut InspectionBudget>,
 ) -> Result<Vec<u8>, RuntimeError> {
     if let Some(constant) = setvar.constant {
         let (digits, start) = signed_decimal_bytes(constant);
         return owned_copy(&digits[start..]);
     }
     if let Some(template) = setvar.value {
-        return expand_template(generation, request, tx, template, member_limit);
+        return expand_template(generation, request, tx, template, member_limit, json_budget);
     }
     Ok(Vec::new())
 }
@@ -2880,6 +3077,7 @@ struct SelectionParams {
     work_limit: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn select_values(
     generation: &CompiledGeneration,
     request: &RequestState,
@@ -2888,7 +3086,10 @@ fn select_values(
     scratch: &mut [RegexBooleanScratch],
     ctl_work: &mut usize,
     params: SelectionParams,
-) -> Result<Vec<SelectedValue>, RuntimeError> {
+    mut json_budget: Option<&mut InspectionBudget>,
+    selected: &mut Vec<SelectedValue>,
+    storage: SelectionStorage,
+) -> Result<(), RuntimeError> {
     let SelectionParams {
         unit_id,
         plan_id,
@@ -2910,15 +3111,24 @@ fn select_values(
     let exclude_start = tx.target_exclusions.partition_point(|entry| entry.unit < unit_id);
     let exclude_end = tx.target_exclusions.partition_point(|entry| entry.unit <= unit_id);
     let exclusions = &tx.target_exclusions[exclude_start..exclude_end];
-    let mut selected = Vec::new();
-    selected
-        .try_reserve(limit.min(request.entry_count.saturating_add(records.len())))
-        .map_err(|_| RuntimeError::Allocation)?;
     for target in records {
-        let candidates = collection_candidates(request, tx, response, target.collection)?;
+        let json_count = if target.modifier == super::TargetModifier::Count
+            && target.selector == super::CompiledTargetSelector::None
+            && exclusions.is_empty()
+            && matches!(target.collection, CollectionKind::Args | CollectionKind::ArgsNames)
+        {
+            request
+                .body
+                .as_ref()
+                .and_then(RequestBodyPublication::json)
+                .map(JsonPublication::argument_count)
+        } else {
+            None
+        };
+        let mut candidates = CandidateCursor::new(target.collection, json_count.is_none());
         match target.modifier {
             super::TargetModifier::None => {
-                for candidate in candidates {
+                while let Some(candidate) = candidates.next(request, tx, response, json_budget.as_deref_mut())? {
                     if selector_matches(
                         generation,
                         request,
@@ -2928,12 +3138,23 @@ fn select_values(
                         target.collection,
                         target.selector,
                         candidate,
+                        json_budget.as_deref_mut(),
                     )? && !ctl_excludes_value(
-                        generation, request, tx, response, scratch, exclusions, candidate, ctl_work, work_limit,
+                        generation,
+                        request,
+                        tx,
+                        response,
+                        scratch,
+                        exclusions,
+                        candidate,
+                        ctl_work,
+                        work_limit,
+                        json_budget.as_deref_mut(),
                     )? {
                         if selected.len() == limit {
                             return Err(RuntimeError::SelectedValueLimit { limit });
                         }
+                        storage.reserve(selected, limit)?;
                         selected.push(candidate);
                     }
                 }
@@ -2952,6 +3173,7 @@ fn select_values(
                             target.collection,
                             target.selector,
                             candidate,
+                            json_budget.as_deref_mut(),
                         )?;
                     if !remove {
                         selected[write] = candidate;
@@ -2961,8 +3183,8 @@ fn select_values(
                 selected.truncate(write);
             }
             super::TargetModifier::Count => {
-                let mut count = 0_usize;
-                for candidate in candidates {
+                let mut count = json_count.unwrap_or(0);
+                while let Some(candidate) = candidates.next(request, tx, response, json_budget.as_deref_mut())? {
                     if selector_matches(
                         generation,
                         request,
@@ -2972,8 +3194,18 @@ fn select_values(
                         target.collection,
                         target.selector,
                         candidate,
+                        json_budget.as_deref_mut(),
                     )? && !ctl_excludes_value(
-                        generation, request, tx, response, scratch, exclusions, candidate, ctl_work, work_limit,
+                        generation,
+                        request,
+                        tx,
+                        response,
+                        scratch,
+                        exclusions,
+                        candidate,
+                        ctl_work,
+                        work_limit,
+                        json_budget.as_deref_mut(),
                     )? {
                         count = count.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
                     }
@@ -2982,6 +3214,7 @@ fn select_values(
                     return Err(RuntimeError::SelectedValueLimit { limit });
                 }
                 let (digits, start) = decimal_bytes(count);
+                storage.reserve(selected, limit)?;
                 selected.push(SelectedValue {
                     collection: target.collection,
                     name: None,
@@ -2993,7 +3226,7 @@ fn select_values(
             }
         }
     }
-    Ok(selected)
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3007,6 +3240,7 @@ fn ctl_excludes_value(
     candidate: SelectedValue,
     work: &mut usize,
     limit: usize,
+    mut json_budget: Option<&mut InspectionBudget>,
 ) -> Result<bool, RuntimeError> {
     for exclusion in exclusions {
         *work = work.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
@@ -3019,7 +3253,7 @@ fn ctl_excludes_value(
         *work = work
             .checked_add(
                 candidate
-                    .name_bytes(request, tx, response)?
+                    .name_bytes(request, tx, response, json_budget.as_deref_mut())?
                     .map_or(1, |name| name.len().saturating_add(1)),
             )
             .ok_or(RuntimeError::Arithmetic)?;
@@ -3035,6 +3269,7 @@ fn ctl_excludes_value(
             exclusion.collection,
             exclusion.selector,
             candidate,
+            json_budget.as_deref_mut(),
         )? {
             return Ok(true);
         }
@@ -3042,133 +3277,197 @@ fn ctl_excludes_value(
     Ok(false)
 }
 
-fn collection_candidates(
-    request: &RequestState,
-    tx: &TxState,
-    response: Option<&ResponseState>,
-    collection: CollectionKind,
-) -> Result<Vec<SelectedValue>, RuntimeError> {
-    if matches!(request.body, Some(RequestBodyPublication::Metadata(_)))
-        && super::collection_requires_request_body(collection)
-    {
-        return Err(RuntimeError::GenerationInvariant);
-    }
-    let mut candidates = Vec::new();
-    match collection {
-        CollectionKind::ReqbodyProcessor if request.body.is_none() && tx.request_body_processor.is_some() => {
-            candidates.push(SelectedValue {
-                collection,
-                name: None,
-                value: SelectedBytes::CtlProcessor,
+#[derive(Clone, Copy)]
+struct SelectionStorage {
+    capacity_bytes: usize,
+    retained_limit: usize,
+}
+
+impl SelectionStorage {
+    fn reserve(self, selected: &mut Vec<SelectedValue>, limit: usize) -> Result<(), RuntimeError> {
+        if selected.len() < selected.capacity() {
+            return Ok(());
+        }
+        let maximum = limit.min(self.capacity_bytes / size_of::<SelectedValue>());
+        if selected.len() >= maximum {
+            return Err(RuntimeError::RetainedByteLimit {
+                limit: self.retained_limit,
             });
         }
-        CollectionKind::Tx => {
-            candidates
-                .try_reserve_exact(tx.entries.len())
-                .map_err(|_| RuntimeError::Allocation)?;
-            for index in 0..tx.entries.len() {
-                candidates.push(SelectedValue {
-                    collection,
-                    name: Some(SelectedName::Tx(index)),
-                    value: SelectedBytes::Tx(index),
-                });
-            }
+        let target = selected.capacity().saturating_mul(2).max(4).min(maximum);
+        selected
+            .try_reserve_exact(target - selected.len())
+            .map_err(|_| RuntimeError::Allocation)?;
+        if selected
+            .capacity()
+            .checked_mul(size_of::<SelectedValue>())
+            .ok_or(RuntimeError::Arithmetic)?
+            > self.capacity_bytes
+        {
+            return Err(RuntimeError::RetainedByteLimit {
+                limit: self.retained_limit,
+            });
         }
-        CollectionKind::MatchedVar => {
-            if tx.matched_var.is_some() {
-                candidates.push(SelectedValue {
+        Ok(())
+    }
+}
+
+struct CandidateCursor {
+    collection: CollectionKind,
+    include_json: bool,
+    stage: u8,
+    index: usize,
+    next_json: Option<CandidateId>,
+}
+
+impl CandidateCursor {
+    fn new(collection: CollectionKind, include_json: bool) -> Self {
+        Self {
+            collection,
+            include_json,
+            stage: 0,
+            index: 0,
+            next_json: None,
+        }
+    }
+
+    fn next(
+        &mut self,
+        request: &RequestState,
+        tx: &TxState,
+        response: Option<&ResponseState>,
+        json_budget: Option<&mut InspectionBudget>,
+    ) -> Result<Option<SelectedValue>, RuntimeError> {
+        let collection = self.collection;
+        let selected = |name, value| {
+            Some(SelectedValue {
+                collection,
+                name,
+                value,
+            })
+        };
+        let index = self.index;
+        match collection {
+            CollectionKind::ReqbodyProcessor if request.body.is_none() && tx.request_body_processor.is_some() => {
+                self.index = 1;
+                Ok((index == 0).then_some(SelectedValue {
+                    collection,
+                    name: None,
+                    value: SelectedBytes::CtlProcessor,
+                }))
+            }
+            CollectionKind::Tx | CollectionKind::MatchedVars => {
+                let count = if collection == CollectionKind::Tx {
+                    tx.entries.len()
+                } else {
+                    tx.matched_vars.len()
+                };
+                if index == count {
+                    return Ok(None);
+                }
+                self.index += 1;
+                Ok(if collection == CollectionKind::Tx {
+                    selected(Some(SelectedName::Tx(index)), SelectedBytes::Tx(index))
+                } else {
+                    selected(
+                        Some(SelectedName::MatchedVars(index)),
+                        SelectedBytes::MatchedVars(index),
+                    )
+                })
+            }
+            CollectionKind::MatchedVar => {
+                self.index = 1;
+                Ok((index == 0 && tx.matched_var.is_some()).then_some(SelectedValue {
                     collection,
                     name: None,
                     value: SelectedBytes::MatchedVar,
-                });
+                }))
             }
-        }
-        CollectionKind::MatchedVars => {
-            candidates
-                .try_reserve_exact(tx.matched_vars.len())
-                .map_err(|_| RuntimeError::Allocation)?;
-            for index in 0..tx.matched_vars.len() {
-                candidates.push(SelectedValue {
-                    collection,
-                    name: Some(SelectedName::MatchedVars(index)),
-                    value: SelectedBytes::MatchedVars(index),
-                });
-            }
-        }
-        CollectionKind::ResponseHeaders | CollectionKind::ResponseStatus => {
-            if let Some(response) = response {
-                let count = response
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.collection == collection)
-                    .count();
-                candidates
-                    .try_reserve_exact(count)
-                    .map_err(|_| RuntimeError::Allocation)?;
-                for (index, entry) in response.entries.iter().enumerate() {
-                    if entry.collection != collection {
-                        continue;
+            CollectionKind::ResponseHeaders | CollectionKind::ResponseStatus => {
+                if let Some(response) = response {
+                    while let Some(entry) = response.entries.get(self.index) {
+                        let index = self.index;
+                        self.index += 1;
+                        if entry.collection == collection {
+                            return Ok(selected(
+                                entry.name.as_ref().map(|_| SelectedName::Response(index)),
+                                SelectedBytes::Response(index),
+                            ));
+                        }
                     }
-                    candidates.push(SelectedValue {
-                        collection,
-                        name: entry.name.as_ref().map(|_| SelectedName::Response(index)),
-                        value: SelectedBytes::Response(index),
-                    });
                 }
+                Ok(None)
             }
-        }
-        CollectionKind::ResponseBody => {
-            if response.and_then(|response| response.window.as_ref()).is_some() {
-                candidates.push(SelectedValue {
-                    collection,
-                    name: None,
-                    value: SelectedBytes::ResponseWindow,
-                });
+            CollectionKind::ResponseBody => {
+                self.index = 1;
+                Ok(
+                    (index == 0 && response.and_then(|response| response.window.as_ref()).is_some()).then_some(
+                        SelectedValue {
+                            collection,
+                            name: None,
+                            value: SelectedBytes::ResponseWindow,
+                        },
+                    ),
+                )
             }
-        }
-        _ => {
-            let records = request.collection_records(collection)?;
-            let body_overrides_head = matches!(
-                collection,
-                CollectionKind::ArgsCombinedSize | CollectionKind::ReqbodyProcessor
-            ) && request.body.is_some();
-            let body_count = request
-                .body
-                .as_ref()
-                .and_then(RequestBodyPublication::materialized)
-                .map_or(0, |body| {
-                    body.entries
-                        .iter()
-                        .filter(|entry| entry.collection == collection)
-                        .count()
-                });
-            candidates
-                .try_reserve_exact(records.len().saturating_add(body_count))
-                .map_err(|_| RuntimeError::Allocation)?;
-            if !body_overrides_head {
-                for candidate in records {
-                    candidates.push(SelectedValue {
+            _ => {
+                if self.stage == 0 {
+                    let overrides = matches!(
                         collection,
-                        name: candidate.name.map(SelectedName::Request),
-                        value: SelectedBytes::Request(candidate.value),
-                    });
-                }
-            }
-            if let Some(body) = request.body.as_ref().and_then(RequestBodyPublication::materialized) {
-                for (index, entry) in body.entries.iter().enumerate() {
-                    if entry.collection != collection {
-                        continue;
+                        CollectionKind::ArgsCombinedSize | CollectionKind::ReqbodyProcessor
+                    ) && request.body.is_some();
+                    let records = request.collection_records(collection)?;
+                    if !overrides {
+                        if let Some(candidate) = records.get(self.index) {
+                            self.index += 1;
+                            return Ok(selected(
+                                candidate.name.map(SelectedName::Request),
+                                SelectedBytes::Request(candidate.value),
+                            ));
+                        }
                     }
-                    candidates.push(SelectedValue {
-                        collection,
-                        name: entry.name.as_ref().map(|_| SelectedName::Body(index)),
-                        value: SelectedBytes::Body(index),
-                    });
+                    self.stage = 1;
+                    self.index = 0;
+                    self.next_json = request
+                        .body
+                        .as_ref()
+                        .and_then(RequestBodyPublication::json)
+                        .and_then(|body| body.results.as_ref())
+                        .and_then(|results| results.receipt)
+                        .map(|receipt| receipt.head);
                 }
+                if self.stage == 1 {
+                    if let Some(body) = request.body.as_ref().and_then(RequestBodyPublication::json) {
+                        if self.include_json && matches!(collection, CollectionKind::Args | CollectionKind::ArgsNames) {
+                            if let Some(id) = self.next_json {
+                                let results = body.results.as_ref().ok_or(RuntimeError::JsonInspectionState)?;
+                                let budget = json_budget.ok_or(RuntimeError::JsonInspectionState)?;
+                                self.next_json = results.candidate(budget, id).map_err(map_store_error)?.next;
+                                return Ok(selected(Some(SelectedName::Json(id)), SelectedBytes::Json(id)));
+                            }
+                        } else if body.metadata_value(collection).is_some() {
+                            self.stage = 2;
+                            return Ok(selected(None, SelectedBytes::JsonMetadata));
+                        }
+                    }
+                    self.stage = 2;
+                }
+                if let Some(body) = request.body.as_ref().and_then(RequestBodyPublication::materialized) {
+                    while let Some(entry) = body.entries.get(self.index) {
+                        let index = self.index;
+                        self.index += 1;
+                        if entry.collection == collection {
+                            return Ok(selected(
+                                entry.name.as_ref().map(|_| SelectedName::Body(index)),
+                                SelectedBytes::Body(index),
+                            ));
+                        }
+                    }
+                }
+                Ok(None)
             }
         }
     }
-    Ok(candidates)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3181,8 +3480,9 @@ fn selector_matches(
     collection: CollectionKind,
     selector: super::CompiledTargetSelector,
     candidate: SelectedValue,
+    json_budget: Option<&mut InspectionBudget>,
 ) -> Result<bool, RuntimeError> {
-    let name = candidate.name_bytes(request, tx, response)?;
+    let name = candidate.name_bytes(request, tx, response, json_budget)?;
     match selector {
         super::CompiledTargetSelector::None => Ok(true),
         super::CompiledTargetSelector::Literal(expected) => {
@@ -3247,7 +3547,90 @@ fn charge_operator_work(work: &mut usize, added: usize, limits: RuntimeLimits) -
     }
     Ok(())
 }
-fn evaluate_matcher_operand(
+/// Valid only during one borrowed operator stage; never keyed by buffer address.
+#[derive(Default)]
+struct StageScanCache {
+    scanned: Vec<usize>,
+    #[cfg(test)]
+    scans: usize,
+}
+
+fn physical_operator_work(
+    context: &SingleInputContext<'_>,
+    plan: super::CompiledOperatorPlan,
+    len: usize,
+) -> Result<usize, RuntimeError> {
+    let mut work = len.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
+    match plan.operand {
+        super::CompiledOperatorOperand::Matcher {
+            group, pattern_count, ..
+        } => {
+            let cache = context.scan_cache.as_deref().ok_or(RuntimeError::GenerationInvariant)?;
+            work = cache
+                .scanned
+                .len()
+                .checked_mul(2)
+                .and_then(|v| v.checked_add(pattern_count))
+                .and_then(|v| v.checked_add(1))
+                .ok_or(RuntimeError::Arithmetic)?;
+            if !cache.scanned.contains(&group) {
+                let count = context
+                    .generation
+                    .groups
+                    .get(group)
+                    .ok_or(RuntimeError::GenerationInvariant)?
+                    .matcher
+                    .pattern_count();
+                work = work
+                    .checked_add(
+                        len.checked_add(1)
+                            .and_then(|v| v.checked_mul(count.checked_add(1)?))
+                            .ok_or(RuntimeError::Arithmetic)?,
+                    )
+                    .ok_or(RuntimeError::Arithmetic)?;
+            }
+        }
+        super::CompiledOperatorOperand::String { template, .. }
+        | super::CompiledOperatorOperand::Integer {
+            operand: super::CompiledIntegerOperand::Template(template),
+            ..
+        } => {
+            let template = context
+                .generation
+                .templates
+                .get(template)
+                .ok_or(RuntimeError::GenerationInvariant)?;
+            work = work
+                .checked_add(template.static_bytes)
+                .and_then(|v| v.checked_add(template.segment_count.checked_mul(2)?))
+                .ok_or(RuntimeError::Arithmetic)?;
+            if let super::CompiledOperatorOperand::String { relation, .. } = plan.operand {
+                let (haystack, needle) = match relation {
+                    super::StringRelation::Contains => (len, template.static_bytes),
+                    super::StringRelation::Within => (template.static_bytes, len),
+                    _ => (0, 0),
+                };
+                if needle != 0 && needle <= haystack {
+                    let comparisons = (haystack - needle + 1)
+                        .checked_mul(needle)
+                        .ok_or(RuntimeError::Arithmetic)?;
+                    work = work.checked_add(comparisons).ok_or(RuntimeError::Arithmetic)?;
+                }
+            }
+        }
+        super::CompiledOperatorOperand::IpNetworks { count, .. } => {
+            work = work.checked_add(count).ok_or(RuntimeError::Arithmetic)?;
+        }
+        _ => {}
+    }
+    Ok(work)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared matcher operands and optional stage cache stay explicit"
+)]
+fn evaluate_matcher_operand_cached(
     generation: &CompiledGeneration,
     group_scratch: &mut [MatchScratch],
     group: usize,
@@ -3255,20 +3638,50 @@ fn evaluate_matcher_operand(
     pattern_count: usize,
     input: &[u8],
     evaluation_mode: EvaluationMode,
+    cache: Option<&mut StageScanCache>,
 ) -> Result<bool, RuntimeError> {
     let matcher = generation.groups.get(group).ok_or(RuntimeError::GenerationInvariant)?;
     let scratch = group_scratch.get_mut(group).ok_or(RuntimeError::GenerationInvariant)?;
     let end = pattern_start
         .checked_add(pattern_count)
         .ok_or(RuntimeError::Arithmetic)?;
+    if cache.as_ref().is_some_and(|cache| cache.scanned.contains(&group)) {
+        let result = scratch.contains_any_in_range(matcher.matcher.pattern_count(), pattern_start..end);
+        #[cfg(test)]
+        measurements::record(Event::RangeQueries, 1);
+        #[cfg(test)]
+        measurements::record(Event::RangeQueryFailures, usize::from(result.is_none()));
+        return result.ok_or(RuntimeError::GenerationInvariant);
+    }
+    // Capacity was admitted by the collector before this callback. No hidden
+    // growth is permitted in the canonical matcher seam.
+    if cache
+        .as_ref()
+        .is_some_and(|cache| cache.scanned.len() == cache.scanned.capacity())
+    {
+        return Err(RuntimeError::GenerationInvariant);
+    }
     let matches = match evaluation_mode {
         EvaluationMode::Accelerated => matcher.matcher.scan(input, scratch),
         EvaluationMode::Reference => matcher.matcher.scan_reference(input, scratch),
     }
     .map_err(map_matcher_error)?;
-    matches
-        .contains_any_in_range(pattern_start..end)
-        .ok_or(RuntimeError::GenerationInvariant)
+    #[cfg(test)]
+    measurements::record(Event::FullScans, 1);
+    let result = matches.contains_any_in_range(pattern_start..end);
+    #[cfg(test)]
+    measurements::record(Event::RangeQueries, 1);
+    #[cfg(test)]
+    measurements::record(Event::RangeQueryFailures, usize::from(result.is_none()));
+    let result = result.ok_or(RuntimeError::GenerationInvariant)?;
+    if let Some(cache) = cache {
+        cache.scanned.push(group);
+        #[cfg(test)]
+        {
+            cache.scans += 1;
+        }
+    }
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3283,28 +3696,32 @@ fn evaluate_operator(
     input: &[u8],
     member_runtime_limit: usize,
     evaluation_mode: EvaluationMode,
+    scan_cache: Option<&mut StageScanCache>,
+    json_budget: Option<&mut InspectionBudget>,
 ) -> Result<(bool, Option<crate::injection::Fingerprint>), RuntimeError> {
     let mut fingerprint = None;
     let positive = match plan.operand {
         super::CompiledOperatorOperand::String { relation, template } => {
-            let operand = expand_template(generation, request, tx, template, member_runtime_limit)?;
+            let operand =
+                operator_template_operand(generation, request, tx, template, member_runtime_limit, json_budget)?;
             Ok(match relation {
                 super::StringRelation::BeginsWith => input.starts_with(&operand),
                 super::StringRelation::Contains => contains(input, &operand),
                 super::StringRelation::EndsWith => input.ends_with(&operand),
-                super::StringRelation::Equals => input == operand,
+                super::StringRelation::Equals => input == operand.as_ref(),
                 super::StringRelation::Within => contains(&operand, input),
             })
         }
         super::CompiledOperatorOperand::Integer { relation, operand } => {
             let expected = match operand {
                 super::CompiledIntegerOperand::Static(value) => value,
-                super::CompiledIntegerOperand::Template(template) => parse_i64(&expand_template(
+                super::CompiledIntegerOperand::Template(template) => parse_i64(&operator_template_operand(
                     generation,
                     request,
                     tx,
                     template,
                     member_runtime_limit,
+                    json_budget,
                 )?)?,
             };
             let actual = parse_i64(input)?;
@@ -3367,7 +3784,7 @@ fn evaluate_operator(
             group,
             pattern_start,
             pattern_count,
-        } => evaluate_matcher_operand(
+        } => evaluate_matcher_operand_cached(
             generation,
             group_scratch,
             group,
@@ -3375,6 +3792,7 @@ fn evaluate_operator(
             pattern_count,
             input,
             evaluation_mode,
+            scan_cache,
         ),
         super::CompiledOperatorOperand::CapturePhrase(program) => {
             let matcher = generation
@@ -3391,12 +3809,70 @@ fn evaluate_operator(
     Ok((positive, fingerprint))
 }
 
+fn static_template_operand(
+    generation: &CompiledGeneration,
+    template_id: usize,
+    member_limit: usize,
+) -> Result<Option<&[u8]>, RuntimeError> {
+    let template = generation
+        .templates
+        .get(template_id)
+        .ok_or(RuntimeError::GenerationInvariant)?;
+    let end = template
+        .segment_start
+        .checked_add(template.segment_count)
+        .ok_or(RuntimeError::Arithmetic)?;
+    let segments = generation
+        .segments
+        .get(template.segment_start..end)
+        .ok_or(RuntimeError::GenerationInvariant)?;
+    if segments
+        .iter()
+        .any(|segment| matches!(segment.kind, super::CompiledSegmentKind::Macro(_)))
+    {
+        return Ok(None);
+    }
+    let limit = template.runtime_byte_limit.min(member_limit);
+    let mut start = None;
+    let mut len = 0usize;
+    for segment in segments {
+        let super::CompiledSegmentKind::Literal(range) = segment.kind else {
+            return Err(RuntimeError::GenerationInvariant);
+        };
+        let bytes = generation_bytes(&generation.bytes, range)?;
+        let base = *start.get_or_insert(range.start);
+        if base.checked_add(len).ok_or(RuntimeError::Arithmetic)? != range.start {
+            return Err(RuntimeError::GenerationInvariant);
+        }
+        len = checked_runtime_append(len, bytes.len(), limit)?;
+    }
+    match start {
+        Some(start) => generation_bytes(&generation.bytes, super::ByteRange { start, len }).map(Some),
+        None => Ok(Some(&[])),
+    }
+}
+
+fn operator_template_operand<'g>(
+    generation: &'g CompiledGeneration,
+    request: &RequestState,
+    tx: &TxState,
+    template: usize,
+    limit: usize,
+    json_budget: Option<&mut InspectionBudget>,
+) -> Result<Cow<'g, [u8]>, RuntimeError> {
+    match static_template_operand(generation, template, limit)? {
+        Some(value) => Ok(Cow::Borrowed(value)),
+        None => expand_template(generation, request, tx, template, limit, json_budget).map(Cow::Owned),
+    }
+}
+
 fn expand_template(
     generation: &CompiledGeneration,
     request: &RequestState,
     tx: &TxState,
     template_id: usize,
     member_limit: usize,
+    mut json_budget: Option<&mut InspectionBudget>,
 ) -> Result<Vec<u8>, RuntimeError> {
     let template = *generation
         .templates
@@ -3426,7 +3902,15 @@ fn expand_template(
                     .get(macro_id)
                     .ok_or(RuntimeError::GenerationInvariant)?;
                 let key = generation_bytes(&generation.bytes, reference.key)?;
-                let value = macro_value(request, tx, reference.source, key)?;
+                let value = macro_value(
+                    generation,
+                    macro_id,
+                    request,
+                    tx,
+                    reference.source,
+                    key,
+                    json_budget.as_deref_mut(),
+                )?;
                 append_runtime(&mut output, value.unwrap_or_default(), limit)?;
             }
         }
@@ -3435,13 +3919,38 @@ fn expand_template(
 }
 
 fn macro_value<'request>(
+    generation: &CompiledGeneration,
+    macro_id: usize,
     request: &'request RequestState,
     tx: &'request TxState,
     source: super::MacroSource,
     key: &[u8],
+    json_budget: Option<&mut InspectionBudget>,
 ) -> Result<Option<&'request [u8]>, RuntimeError> {
     Ok(match source {
-        super::MacroSource::Args => request.first_named(CollectionKind::Args, key, false),
+        super::MacroSource::Args => {
+            if let Some(value) = request.first_named(CollectionKind::Args, key, false) {
+                Some(value)
+            } else if let Some(results) = request
+                .body
+                .as_ref()
+                .and_then(RequestBodyPublication::json)
+                .and_then(|body| body.results.as_ref())
+            {
+                let demand = generation
+                    .json_inspection
+                    .macro_demands
+                    .get(macro_id)
+                    .copied()
+                    .flatten()
+                    .ok_or(RuntimeError::JsonInspectionState)?;
+                results
+                    .named_value(json_budget.ok_or(RuntimeError::JsonInspectionState)?, demand)
+                    .map_err(map_store_error)?
+            } else {
+                None
+            }
+        }
         super::MacroSource::RequestHeaders => request.first_named(CollectionKind::RequestHeaders, key, true),
         super::MacroSource::RemoteAddr => request.first_value(CollectionKind::RemoteAddr),
         super::MacroSource::RequestLine => request.first_value(CollectionKind::RequestLine),
@@ -3631,7 +4140,7 @@ fn phase_index(phase: Phase) -> usize {
     phase as usize - 1
 }
 
-impl RequestState {
+impl RequestState<'_> {
     fn build(request: RequestHead<'_>, limits: RuntimeLimits) -> Result<Self, RuntimeError> {
         if request.headers.len() > limits.max_headers {
             return Err(RuntimeError::HeaderLimit {
@@ -3964,11 +4473,6 @@ impl RequestState {
     }
 
     fn first_named(&self, collection: CollectionKind, key: &[u8], ascii_insensitive: bool) -> Option<&[u8]> {
-        if matches!(self.body, Some(RequestBodyPublication::Metadata(_)))
-            && super::collection_requires_request_body(collection)
-        {
-            return None;
-        }
         let head = self.collection_records(collection).ok()?.iter().find_map(|record| {
             let name = self.bytes_at(record.name?);
             let matched = if ascii_insensitive {
@@ -3995,10 +4499,13 @@ impl RequestState {
     }
 
     fn first_value(&self, collection: CollectionKind) -> Option<&[u8]> {
-        if matches!(self.body, Some(RequestBodyPublication::Metadata(_)))
-            && super::collection_requires_request_body(collection)
+        if let Some(value) = self
+            .body
+            .as_ref()
+            .and_then(RequestBodyPublication::json)
+            .and_then(|body| body.metadata_value(collection))
         {
-            return None;
+            return Some(value);
         }
         if collection == CollectionKind::ArgsCombinedSize {
             if let Some(body) = self.body.as_ref().and_then(RequestBodyPublication::materialized) {
@@ -4265,12 +4772,9 @@ fn request_body_processor(headers: &[RequestHeader<'_>]) -> super::super::BodyPr
 #[path = "../../tests/unit/seclang/transaction_test.rs"]
 mod tests;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "internal JSON transaction execution is not selected by the Gateway"
-    )
-)]
-#[path = "json_rules.rs"]
-mod json_rules;
+#[path = "json_inspection.rs"]
+mod json_inspection;
+#[path = "json_inspection_collector.rs"]
+mod json_inspection_collector;
+#[path = "json_inspection_runtime.rs"]
+mod json_inspection_runtime;

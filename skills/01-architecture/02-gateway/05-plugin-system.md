@@ -44,13 +44,18 @@ Execution flow notes:
   complete capture path. Existing complete caches are reused and their logical
   body is frozen after prefix inspection. See the
   [prefix admission contract](../../04-review/http-body/regression-guards/waf-prefix-before-dispatch.md).
-  Optional full-only `requestBody.json` supplies explicit lexical/document/plan/fact
-  budgets for the bounded JSON transaction API. Admission runs before capture;
-  only initial unsupported capability selects ordinary full evaluation. Successful
-  admission captures at the EGC physical cap, checks independent exact lengths,
-  feeds the canonical immutable snapshot reader and waits for actual reader EOF
-  before completing Phase 2. It does not use relay callbacks or create a second
-  body cache. JSON limits are resolved once in the immutable WAF runtime.
+  Optional full-only `requestBody.json` supplies lexical/structure/results limits;
+  omission selects bounded engine defaults. Both inline and resolved Full
+  configurations reject JSON dependencies requiring a complete field-value map.
+  After phase-one controls, processor preflight precedes capture at the EGC cap.
+  Gateway proves complete availability and checks physical, WAF and applicable
+  JSON source caps before one canonical body read, then verifies its length.
+  The native checker scans the stable Bytes source once, borrowing plain values
+  and retaining only required metadata, match results and named deferred values.
+  Resident bodies share their existing allocation; spilled or edited bodies may
+  need canonical BodyStorage materialization. There is no DOM fallback or second
+  body cache. Limits and dispatch plans are resolved before request processing.
+  See [fused JSON inspection](../../04-review/waf/regression-guards/fused-json-inspection.md).
 - Within each phase, plugins run in registration order.
 - If any plugin returns `ErrTerminateRequest` or `ErrResponse`, the phase terminates immediately and subsequent plugins are skipped.
 - In the UpstreamResponseBodyFilter phase, when multiple plugins return Duration values, the maximum is used (the strictest limit takes effect).

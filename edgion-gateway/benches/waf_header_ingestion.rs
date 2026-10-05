@@ -390,7 +390,7 @@ fn execute_response(generation: &Arc<CompiledGeneration>, headers: &[ResponseHea
         .execute_request_headers()
         .expect("benchmark request phase must advance");
     transaction
-        .publish_request_body(RequestBody::new(&[], BodyProcessorSelection::Auto))
+        .publish_request_body(RequestBody::new(bytes::Bytes::new(), BodyProcessorSelection::Auto))
         .expect("benchmark empty request body must publish");
     transaction
         .execute_request_body()
