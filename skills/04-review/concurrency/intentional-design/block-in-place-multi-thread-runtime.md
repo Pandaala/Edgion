@@ -29,9 +29,11 @@ Fix suggestions of the form "replace `block_in_place` with `spawn_blocking`" or
 
 **1. The sync trait is intentional; `block_in_place` is the only viable bridge**
 
-`UpstreamResponseFilter` is deliberately sync — the Pingora
-`upstream_response_filter` hook is a sync context (see the trait doc in
-`edgion-gateway/src/plugins/runtime/traits/upstream_response_filter.rs`). DSL is
+`UpstreamResponseFilter` is deliberately sync (see the trait doc in
+`edgion-gateway/src/plugins/runtime/traits/upstream_response_filter.rs`), even
+though the current Pingora `upstream_response_filter` hook is async. The
+historical dependency-based sync explanation was corrected during P090-009;
+see [the current phase boundary](../../plugin-runtime/compatibility-constraints/filter-iteration-control-sync-phase-tradeoff.md). DSL is
 the only impl that needs to run async work (redis / http builtins), so it must
 bridge sync→async. On a multi-thread runtime a bare `Handle::block_on` from a
 worker thread panics ("Cannot block the current thread from within a runtime");

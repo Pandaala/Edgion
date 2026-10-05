@@ -19,7 +19,7 @@ before applying a decision to current code.
 
 ## Compatibility constraints
 
-- [Plugin Chain Has No Envoy-Style Iteration Control (StopIteration / async pause-resume) — DESIGN-TRADEOFF (accepted)](compatibility-constraints/filter-iteration-control-sync-phase-tradeoff.md)
+- [Response plugin iteration and fork async capability boundaries](compatibility-constraints/filter-iteration-control-sync-phase-tradeoff.md)
 
 ## Regression guards
 

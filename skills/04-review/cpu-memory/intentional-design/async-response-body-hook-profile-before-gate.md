@@ -8,12 +8,20 @@ knowledge_type: intentional-design
 
 ## Conclusion
 
-The allocation mechanism is real, but the public Pingora no-work predicate is
-declined under the available evidence. A release measurement of the current `ProxyHttp` default
+The public Pingora no-work predicate remains declined without representative
+profiling. The 2026-08-11 historical measurement of the then-current `ProxyHttp` default
 confirmed one 16-byte allocation per hook call with jemalloc. An isolated
 Edgion-shaped benchmark showed that a conservative predicate removes the outer
 allocation on deliberately idle later chunks, while installed async processors
 retain their own nested boxed-future allocations.
+
+P090-009 source inspection on 2026-10-05 found that locked fork
+`0b0d8bba9609655bfd7db0fe0add6818bc0ee937` now returns a zero-sized ready future
+for the default upstream body hook and delegates the typed default directly
+to it. That default requires no allocator storage; the historical 16-byte
+result is not a measurement of this implementation. Edgion overrides remain
+async and must be profiled separately. No new allocation benchmark was run.
+See [the current hook capability boundary](../../plugin-runtime/compatibility-constraints/filter-iteration-control-sync-phase-tradeoff.md).
 
 The repository has no production-representative response chunk-count
 distribution and no measurement of the fraction of chunks that are idle after
