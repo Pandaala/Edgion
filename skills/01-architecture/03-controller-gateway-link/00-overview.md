@@ -121,13 +121,24 @@ GatewayClass/Gateway/EdgionGatewayConfig caches are injected into effective read
 
 ## Operational limits
 
-- A serialized List snapshot larger than 64 MiB is rejected.
+- List snapshots and Watch batches share a 512 MiB payload safety budget. Controller rejects
+  oversized raw JSON before compression; Gateway checks both encoded bytes and the declared
+  uncompressed size, then requires the decoded length to match exactly. Oversize payloads fail
+  with gRPC `ResourceExhausted`; compression does not bypass the decoded-payload budget.
+- Payloads larger than 32 MiB use Zstd level 3 only when it reduces their size; otherwise they
+  retain identity encoding. The gRPC message budget is 512 MiB plus 64 KiB for protobuf metadata.
 - The TLS accept path permits at most 256 in-flight handshakes, with a 10-second handshake timeout
   and a 30-second handoff timeout.
-- Internal list/watch forwarding channels are bounded (currently 100 entries).
+- Each Watch subscription has four data queues, each with capacity 1: typed events, JSON
+  conversion, server forwarding, and gRPC forwarding. These preserve backpressure; their entry
+  counts do not bound total process memory. The separate WatchServerMeta queue has capacity 8,
+  and the TLS connection handoff queue has capacity 64.
 
-Large EndpointSlice snapshots that exceed the List cap cannot complete initial sync; diagnose size
-and sharding rather than treating the failure as a transient Watch error.
+Snapshots exceeding the 512 MiB raw JSON budget cannot complete initial sync; diagnose size
+and sharding rather than treating the failure as a transient Watch error. Raw snapshots,
+compressed caches, transport buffers, and decoded resources can coexist, so this budget is not
+a process-memory cap. See the [bounded-payload regression guard](../../04-review/conf-sync/regression-guards/bounded-payload-compression.md)
+for implementation evidence and verification limits.
 
 ## Channel security (mTLS)
 

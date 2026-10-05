@@ -56,13 +56,23 @@ Watch's four payload queues have capacity one, preserving backpressure with fewe
 retained batches. Typed batches and the event ring remain count-bounded, not
 byte-bounded. The previous small-event memory estimate is no longer applicable.
 
+The [protocol overview](../../../01-architecture/03-controller-gateway-link/00-overview.md#operational-limits)
+describes this same transport budget and scopes capacity one to each Watch
+subscription's typed-event, JSON-conversion, server-forwarding and gRPC-forwarding
+queues (`ServerCache::watch`/`watch_json`, `ConfigSyncServer::watch`, and
+`ConfigSyncGrpcServer::watch`). The separate WatchServerMeta queue remains eight,
+and the TLS connection handoff queue remains 64. `payload::encode` checks raw JSON
+before compression; `payload::decode` bounds encoded bytes and declared decoded
+size, and validates the exact decoded length. Compression cannot admit a raw
+snapshot over the budget.
+
 No pagination, resource deduplication, WAF-only bypass, or old-wire compatibility
 shim is introduced. Controller/Gateway must be upgraded together for the explicit
 payload envelope. Federation still uses its independent raw payload protocol.
 
 ## Verification and re-evaluation
 
-Verification in this fix:
+Historical transport-fix verification (runtime tests not rerun for the documentation alignment):
 
 - Common payload unit tests: 7 passed.
 - Controller `--lib conf_sync` with `--no-default-features --features allocator-system`:
@@ -91,7 +101,17 @@ commands actually run; this page does not claim a full end-to-end WAF traffic ru
 Re-evaluate for snapshots exceeding the budget, measured transient-memory pressure,
 slow receivers, protocol changes, or a requirement for independently upgraded peers.
 
+The docs-only overview alignment passed independent read-only review, applied
+formatting and the formatting check, workspace all-target check and Clippy,
+agent-doc, SSA-force, metrics inventory, Pingora source policy, Gateway API
+transform contract and unit-test layout checks. No runtime or integration tests
+were added or rerun for this documentation correction.
+
 ## Resolution references
 
 - `waf-conf-sync-message-size-contract`: cross-cutting transport defect exposed by
   WAF bundle sizes and repeated resolved bundles; user chose compression over paging.
+- `align-conf-sync-operational-limits-overview` / `D0017`: docs-only correction of
+  the overview's stale 64 MiB List cap and 100-entry forwarding claim against the
+  current shared codec and all four Watch data queues. Runtime behavior, resource
+  validation, metadata queues, and TLS limits are unchanged.
