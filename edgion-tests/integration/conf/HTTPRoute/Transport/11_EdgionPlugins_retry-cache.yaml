@@ -1,0 +1,17 @@
+# Force the canonical BodyStorage owner without changing the payload.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: transport-retry-cache
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: transport-retry-cache
+        source: |
+          if req.body.sha256() != req.header("x-expected-body-sha256") {
+            return deny(422, "retry body digest mismatch")
+          }
+        errorPolicy: deny

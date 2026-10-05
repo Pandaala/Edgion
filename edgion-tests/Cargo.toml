@@ -126,8 +126,9 @@ bytes.workspace = true
 tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+pingora-core.workspace = true
+pingora-http.workspace = true
 
 [dev-dependencies]
-pingora-http.workspace = true
 wiremock.workspace = true
 tempfile.workspace = true

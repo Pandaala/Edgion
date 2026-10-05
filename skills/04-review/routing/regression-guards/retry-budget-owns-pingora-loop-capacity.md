@@ -11,25 +11,35 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-Ordinary HTTP and GRPC routes use one public retry contract: `attempts` is the
+Ordinary policy-driven HTTP and GRPC retries use one public contract: `attempts` is the
 number of retries after the initial upstream request, so total upstream requests
 are bounded by `1 + attempts`. A route's `rules[].retry.attempts` overrides
-`EdgionGatewayConfig.spec.retry.attempts`, whose default is 2. The shared
-representable domain is `0..=i32::MAX`, matching the Gateway API route field.
+`EdgionGatewayConfig.spec.retry.attempts`, whose default is 2. The global
+resource accepts `0..=i32::MAX`; the current Gateway API route retry field
+requires `1..=i32::MAX`. Use the global zero default to disable policy-driven
+retries; an explicit `rules[].retry.attempts: 0` is rejected at ingest.
+P090-008 revalidated this distinction against `HTTPRouteRetry::validation_error`
+and the vendored v1.6.2 Experimental schema.
 
 Pingora's `ServerConf.max_retries` counts loop iterations including the initial
 request. Edgion therefore configures it to `i32::MAX + 1`; it is capacity for
 the public route budget, not a second operator-visible retry policy.
 
 Raising that capacity also removed the only bound on retries Pingora decides by
-itself. `handle_read_header_error` marks h2 GOAWAY, RST_STREAM(REFUSED_STREAM),
-HTTP/1.1-required downgrade, and reused-connection IO errors as
+itself. At locked fork `0b0d8bb`, `handle_read_header_error` marks peer-qualified
+h2 GOAWAY, RST_STREAM(REFUSED_STREAM), and local protocol/downgrade outcomes as
 `RetryType::Decided(true)` before `error_while_proxy` ever sees them, and
-`RetryType::decide_reuse` is a no-op once a decision exists, so neither the route
-retry budget nor the AI dispatch budget can veto them. `error_while_proxy`
+`RetryType::decide_reuse` is a no-op once a decision exists, so the route
+retry budget cannot veto them through `decide_reuse` alone. Real IO errors now
+arrive as `ReusedOnly`, not `Decided(true)`, and pass the ordinary reuse gates.
+The explicit ambiguous-H2 guard and AI dispatcher can revoke pre-decided
+outcomes; see [the method-safety policy table](retry-non-idempotent-method-guard.md).
+`error_while_proxy`
 therefore counts those pre-decided failures in `EdgionHttpContext::pingora_decided_retries`
-and clamps them at `MAX_PINGORA_DECIDED_RETRIES` (16, the former
-`ServerConf.max_retries` default). Retries this callback sets itself are not
+and permits at most `MAX_PINGORA_DECIDED_RETRIES` (16) retries. An always-refused
+origin therefore sees exactly 17 requests including the initial attempt,
+then `UpstreamTransportRetryCeiling`. This is a retry count, distinct from the
+former 16-iteration Pingora loop. Retries this callback sets itself are not
 counted; they already passed their own gates.
 
 ## Rationale and evidence
@@ -61,8 +71,19 @@ above the maximum in the global resource, the `1 + attempts` decision boundary,
 gateway publication fallback, runtime hot reload, CRD parity, and the explicit
 Pingora loop capacity. The Pingora-decided ceiling is covered by the
 `pingora_decided_retries_are_bounded_by_the_fail_safe_ceiling` unit test and
-end-to-end by the `HTTPRoute/Protocol/H2TrailerMalformed` integration suite,
-whose upstream answers every stream with RST_STREAM(REFUSED_STREAM).
+the P090-008 `HTTPRoute/Transport` `refused_ceiling` cases assert exact
+request/effect counts and the terminal diagnostic. The older
+`HTTPRoute/Protocol/H2TrailerMalformed` suite checks error/liveness behavior
+against an always-refused origin but does not establish the exact ceiling.
+
+Fresh P090-008 verification on 2026-10-05 passed the route-budget unit tests
+(3/3), override unit tests (11/11), and the full Transport suite (145/145,
+including 12 retained explicit unsupported-shape skips). Both new
+`refused_ceiling` cases executed and proved exactly 17 origin requests, zero
+application effects, and `UpstreamTransportRetryCeiling`. The reviewed
+[policy and acceptance record](retry-non-idempotent-method-guard.md#acceptance-evidence-and-limits)
+distinguishes controlled-origin results from source/unit evidence and records
+the local integration environment limits.
 
 Re-evaluate if Gateway API changes the type or bounds of `retry.attempts`, Pingora changes `max_retries` semantics, or retry counting no
 longer increments before upstream selection. Also re-evaluate D0010 if AI's

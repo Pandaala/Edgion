@@ -68,6 +68,10 @@ impl Malformed {
 /// The script an individual request runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Behavior {
+    /// Trace-keyed retry acceptance: reject before processing, or commit a
+    /// simulated operation before a controlled failure. Zero reset_first
+    /// means every attempt fails; otherwise later attempts echo successfully.
+    RetryProbe(RetryFailure),
     /// Read the whole body, then respond with the framing report headers.
     Echo,
     /// Respond at `at_bytes`, before the request body is complete.
@@ -94,6 +98,7 @@ pub enum Behavior {
 impl Behavior {
     pub fn as_str(self) -> &'static str {
         match self {
+            Behavior::RetryProbe(failure) => failure.as_str(),
             Behavior::Echo => "echo",
             Behavior::EarlyResponse => "early-response",
             Behavior::Hang => "hang",
@@ -108,6 +113,11 @@ impl Behavior {
 
     pub fn parse(raw: &str) -> Option<Self> {
         Some(match raw.trim().to_ascii_lowercase().as_str() {
+            "retry-tcp-reset" => Behavior::RetryProbe(RetryFailure::TcpReset),
+            "retry-refused" => Behavior::RetryProbe(RetryFailure::Refused),
+            "retry-goaway" => Behavior::RetryProbe(RetryFailure::Goaway),
+            "retry-status" => Behavior::RetryProbe(RetryFailure::Status),
+            "retry-timeout" => Behavior::RetryProbe(RetryFailure::Timeout),
             "echo" => Behavior::Echo,
             "early-response" => Behavior::EarlyResponse,
             "hang" => Behavior::Hang,
@@ -125,6 +135,31 @@ impl Behavior {
             "malformed-content-length-understated" => Behavior::Malformed(Malformed::ContentLengthUnderstated),
             _ => return None,
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetryFailure {
+    TcpReset,
+    Refused,
+    Goaway,
+    Status,
+    Timeout,
+}
+
+impl RetryFailure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TcpReset => "retry-tcp-reset",
+            Self::Refused => "retry-refused",
+            Self::Goaway => "retry-goaway",
+            Self::Status => "retry-status",
+            Self::Timeout => "retry-timeout",
+        }
+    }
+
+    pub fn fails(self, ordinal: u32, reset_first: usize) -> bool {
+        reset_first == 0 || ordinal <= reset_first as u32
     }
 }
 
@@ -333,6 +368,11 @@ mod tests {
             "close",
             "grpc-say-hello",
             "informational-then-hang-first",
+            "retry-tcp-reset",
+            "retry-refused",
+            "retry-goaway",
+            "retry-status",
+            "retry-timeout",
             "malformed-cl-and-te",
             "malformed-chunk-size-overstated",
             "malformed-chunk-size-understated",

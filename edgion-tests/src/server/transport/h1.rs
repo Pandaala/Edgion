@@ -18,7 +18,7 @@ use super::h1_wire::{
     parse_request_head, read_head, render_malformed, render_response, BodyItem, BodyPump, RenderedResponse, RequestHead,
 };
 use super::recorder::{self, TransportEvent, LISTENER_H1};
-use super::script::{AfterResponse, Behavior, UpScript};
+use super::script::{AfterResponse, Behavior, RetryFailure, UpScript};
 
 /// How long a `hang` script parks before giving the connection back.
 const HANG_PARK: Duration = Duration::from_secs(120);
@@ -131,7 +131,10 @@ async fn handle_conn(tcp: TcpStream, conn: u32) -> Result<(), String> {
         if let Some(trace) = script.trace_id.as_deref() {
             recorder::bind_trace(LISTENER_H1, conn, trace);
         }
-        let trace_request_ordinal = if script.behavior == Behavior::InformationalThenHangFirst {
+        let trace_request_ordinal = if matches!(
+            script.behavior,
+            Behavior::InformationalThenHangFirst | Behavior::RetryProbe(_)
+        ) {
             script.trace_id.as_deref().map(recorder::note_trace_request)
         } else {
             None
@@ -183,6 +186,40 @@ async fn run_request(
     let mut state = BodyState::default();
 
     match script.behavior {
+        Behavior::RetryProbe(failure) => {
+            let ordinal = ctx.trace_request_ordinal.ok_or("retry probe requires a trace id")?;
+            if matches!(failure, RetryFailure::Refused | RetryFailure::Goaway) {
+                return Err("H2-only retry probe used on an H1 listener".into());
+            }
+            if pump_body(io, &mut pump, ctx, &mut state, None).await? == PumpStop::PeerClosed {
+                return Ok(ConnOutcome::Close);
+            }
+            recorder::record(
+                ctx.event(recorder::KIND_EFFECT_APPLIED)
+                    .len(state.total)
+                    .detail(&format!("{:x}", state.digest.clone().finalize())),
+            );
+            if !failure.fails(ordinal, script.reset_first) {
+                return respond(io, ctx, head, script, &state).await;
+            }
+            match failure {
+                RetryFailure::TcpReset => {
+                    recorder::record(ctx.event(recorder::KIND_RESP_DONE).code("TCP_RST"));
+                    Ok(ConnOutcome::ResetTcp)
+                }
+                RetryFailure::Status => {
+                    let mut failed = script.clone();
+                    failed.status = 503;
+                    respond(io, ctx, head, &failed, &state).await
+                }
+                RetryFailure::Timeout => {
+                    recorder::record(ctx.event(recorder::KIND_RESP_DONE).code("HANG"));
+                    park_until_peer_closes(io, ctx).await;
+                    Ok(ConnOutcome::Close)
+                }
+                RetryFailure::Refused | RetryFailure::Goaway => unreachable!("checked above"),
+            }
+        }
         Behavior::Echo | Behavior::Malformed(_) => {
             if pump_body(io, &mut pump, ctx, &mut state, None).await? == PumpStop::PeerClosed {
                 return Ok(ConnOutcome::Close);

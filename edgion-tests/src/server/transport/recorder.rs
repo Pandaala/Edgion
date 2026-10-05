@@ -39,6 +39,9 @@ pub const KIND_REQ_HEADERS: &str = "ReqHeaders";
 /// A request body chunk was received. Exactly one carries `end_stream: true`
 /// per completed request body, including the empty ones.
 pub const KIND_REQ_DATA: &str = "ReqData";
+/// A retry-probe script committed one simulated application operation. The
+/// length and digest describe its complete input, not transport acceptance.
+pub const KIND_EFFECT_APPLIED: &str = "EffectApplied";
 /// Real trailer fields were observed (an H1 `Trailer:` declaration alone, or a
 /// bare `0\r\n\r\n`, does not count).
 pub const KIND_REQ_TRAILERS: &str = "ReqTrailers";

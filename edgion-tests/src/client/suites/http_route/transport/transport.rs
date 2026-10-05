@@ -75,6 +75,9 @@ use std::time::{Duration, Instant};
 #[path = "downstream_timeout.rs"]
 mod downstream_timeout;
 
+#[path = "retry_policy.rs"]
+mod retry_policy;
+
 // ===========================================================================
 // The combination matrix
 // ===========================================================================
@@ -487,14 +490,16 @@ static SHAPES: &[ShapeDef] = &[
 ///
 /// The runner rejects a completely empty selection, while this exact count also
 /// detects a non-empty matrix that silently loses only some combinations.
-const EXPECTED_TRANSPORT_CASES: usize = 80;
+const EXPECTED_TRANSPORT_CASES: usize = 145;
 
 // ===========================================================================
 // The case wrapper
 // ===========================================================================
 
 fn expected_case_count() -> usize {
-    SHAPES.iter().map(|s| s.combos.len() + s.skips.len()).sum::<usize>() + downstream_timeout::CASE_COUNT
+    SHAPES.iter().map(|s| s.combos.len() + s.skips.len()).sum::<usize>()
+        + downstream_timeout::CASE_COUNT
+        + retry_policy::CASE_COUNT
 }
 
 pub struct TransportTestSuite;
@@ -510,7 +515,9 @@ impl TestSuite for TransportTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        let mut cases = Vec::new();
+        // Fresh-connection retry controls run before the existing shapes warm
+        // either upstream pool. Their faults close every exercised connection.
+        let mut cases = retry_policy::test_cases();
         for shape in SHAPES {
             for combo in shape.combos {
                 let combo = *combo;

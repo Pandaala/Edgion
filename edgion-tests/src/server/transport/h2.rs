@@ -22,7 +22,9 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
 
 use super::recorder::{self, TransportEvent, LISTENER_H2};
-use super::script::{AfterResponse, Behavior, UpScript};
+use super::script::{AfterResponse, Behavior, RetryFailure, UpScript};
+
+mod retry_wire;
 
 fn parse_grpc_timeout(raw: &http::HeaderValue) -> Option<(u64, char)> {
     let bytes = raw.as_bytes();
@@ -134,9 +136,25 @@ enum ConnStep {
 struct StreamHandles {
     goaway: mpsc::Sender<h2::Reason>,
     flush: mpsc::Sender<oneshot::Sender<()>>,
+    faults: mpsc::Sender<retry_wire::Command>,
 }
 
 impl StreamHandles {
+    async fn fault(&self, fault: retry_wire::Fault) -> bool {
+        let (completed, result) = oneshot::channel();
+        if self
+            .faults
+            .send(retry_wire::Command { fault, completed })
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        matches!(
+            tokio::time::timeout(FLUSH_BARRIER_TIMEOUT, result).await,
+            Ok(Ok(Ok(())))
+        )
+    }
     /// Park until everything this stream has queued is on the wire, and report
     /// whether that is what happened.
     ///
@@ -162,11 +180,13 @@ impl StreamHandles {
             return false;
         }
         matches!(tokio::time::timeout(FLUSH_BARRIER_TIMEOUT, rx).await, Ok(Ok(())))
+            && self.fault(retry_wire::Fault::Flush).await
     }
 }
 
 async fn handle_conn(tcp: TcpStream, conn: u32) -> Result<(), String> {
-    let mut h2conn = h2s::handshake(tcp).await.map_err(|e| format!("h2 handshake: {e}"))?;
+    let (io, faults, bridge) = retry_wire::bridge(tcp);
+    let mut h2conn = h2s::handshake(io).await.map_err(|e| format!("h2 handshake: {e}"))?;
     // Streams are served in their own tasks so that resetting one stream never
     // tears the connection down — a case asserting "the pooled H2 connection
     // stayed usable" needs the backend not to close it.
@@ -175,6 +195,7 @@ async fn handle_conn(tcp: TcpStream, conn: u32) -> Result<(), String> {
     let handles = StreamHandles {
         goaway: goaway_tx,
         flush: flush_tx,
+        faults,
     };
     let mut streams = Vec::new();
 
@@ -241,6 +262,9 @@ async fn handle_conn(tcp: TcpStream, conn: u32) -> Result<(), String> {
     for task in streams {
         let _ = task.await;
     }
+    drop(h2conn);
+    drop(handles);
+    bridge.finish().await?;
     Ok(())
 }
 
@@ -248,11 +272,14 @@ struct ReqCtx {
     conn: u32,
     stream: u32,
     trace: Option<String>,
+    trace_request_ordinal: Option<u32>,
 }
 
 impl ReqCtx {
     fn event(&self, kind: &str) -> TransportEvent {
-        TransportEvent::new(LISTENER_H2, self.conn, self.stream, kind).trace(self.trace.as_deref())
+        TransportEvent::new(LISTENER_H2, self.conn, self.stream, kind)
+            .trace(self.trace.as_deref())
+            .trace_request_ordinal(self.trace_request_ordinal)
     }
 }
 
@@ -293,6 +320,11 @@ async fn handle_stream(
         conn,
         stream,
         trace: script.trace_id.clone(),
+        trace_request_ordinal: if matches!(script.behavior, Behavior::RetryProbe(_)) {
+            script.trace_id.as_deref().map(recorder::note_trace_request)
+        } else {
+            None
+        },
     };
 
     let method = req.method().to_string();
@@ -333,6 +365,79 @@ async fn handle_stream(
     let mut state = BodyState::default();
 
     match script.behavior {
+        Behavior::RetryProbe(failure) => {
+            let Some(ordinal) = ctx.trace_request_ordinal else {
+                respond.send_reset(h2::Reason::PROTOCOL_ERROR);
+                return;
+            };
+            let fails = failure.fails(ordinal, script.reset_first);
+            if fails && matches!(failure, RetryFailure::Refused | RetryFailure::Goaway) {
+                // No body delivery or simulated operation precedes the protocol
+                // promise that this request has not been processed.
+                if failure == RetryFailure::Refused {
+                    respond.send_reset(h2::Reason::REFUSED_STREAM);
+                    if handles.wait_for_flush().await {
+                        recorder::record(ctx.event(recorder::KIND_RESP_DONE).code("REFUSED_STREAM"));
+                    }
+                } else if handles.wait_for_flush().await
+                    && handles
+                        .fault(retry_wire::Fault::Goaway {
+                            last_stream: stream.saturating_sub(2),
+                        })
+                        .await
+                {
+                    recorder::record(ctx.event(recorder::KIND_RESP_DONE).code("GOAWAY_UNPROCESSED"));
+                }
+                return;
+            }
+            if pump_body(&mut body, &ctx, &mut state, None).await == PumpStop::PeerReset {
+                return;
+            }
+            recorder::record(
+                ctx.event(recorder::KIND_EFFECT_APPLIED)
+                    .len(state.total)
+                    .detail(&format!("{:x}", state.digest.clone().finalize())),
+            );
+            if !fails {
+                respond_h2(
+                    &mut respond,
+                    &mut body,
+                    &ctx,
+                    &script,
+                    &mut state,
+                    headers_eos,
+                    &handles,
+                )
+                .await;
+                return;
+            }
+            match failure {
+                RetryFailure::TcpReset => {
+                    if handles.fault(retry_wire::Fault::TcpReset).await {
+                        recorder::record(ctx.event(recorder::KIND_RESP_DONE).code("TCP_RST"));
+                    }
+                }
+                RetryFailure::Status => {
+                    let mut failed = script.clone();
+                    failed.status = 503;
+                    respond_h2(
+                        &mut respond,
+                        &mut body,
+                        &ctx,
+                        &failed,
+                        &mut state,
+                        headers_eos,
+                        &handles,
+                    )
+                    .await;
+                }
+                RetryFailure::Timeout => {
+                    recorder::record(ctx.event(recorder::KIND_RESP_DONE).code("HANG"));
+                    park_until_peer_resets(&mut respond, &ctx).await;
+                }
+                RetryFailure::Refused | RetryFailure::Goaway => unreachable!("handled before processing"),
+            }
+        }
         Behavior::Echo | Behavior::Malformed(_) => {
             if pump_body(&mut body, &ctx, &mut state, None).await == PumpStop::PeerReset {
                 return;

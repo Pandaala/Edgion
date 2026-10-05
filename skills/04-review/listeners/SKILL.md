@@ -14,6 +14,7 @@ before applying a decision to current code.
 - [Explicit Linux host tuning baseline](intentional-design/linux-host-tuning-baseline.md)
 - [Gateway recreation requires a data-plane restart](intentional-design/gateway-recreation-requires-restart.md)
 - [Serial connection admission with optional Redis limits](intentional-design/bounded-serial-connection-admission.md)
+- [Graceful upgrade descriptor error boundary](intentional-design/graceful-upgrade-descriptor-error-boundary.md)
 
 ## Compatibility constraints
 

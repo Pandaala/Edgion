@@ -46,6 +46,34 @@ async fn ambiguous_decided_h2_errors_do_not_replay_post_by_default() {
     }
 }
 
+#[tokio::test]
+async fn decided_h2_policy_distinguishes_ambiguous_and_protocol_qualified_errors() {
+    let peer = HttpPeer::new("127.0.0.1:30001", false, String::new());
+    for error_type in [ErrorType::InvalidH2, ErrorType::H2Downgrade, ErrorType::H2Error] {
+        for incoming_decision in [false, true] {
+            for completed_attempts in [1, 3] {
+                let (mut session, _client) = live_h1_session().await;
+                let mut error = pingora_core::Error::new_up(error_type.clone());
+                error.set_retry(incoming_decision);
+                let mut ctx = EdgionHttpContext::default();
+                ctx.try_cnt = completed_attempts;
+                let result = decide_retry(&peer, &mut session, error, &mut ctx, false);
+                // An unfrozen synthetic Session has Disabled backing. Positive
+                // replay and frozen Never use the real-origin integration path.
+                let expected = incoming_decision && error_type == ErrorType::H2Error;
+                assert_eq!(
+                    result.retry(),
+                    expected,
+                    "{error_type:?}, decided={incoming_decision}, attempts={completed_attempts}"
+                );
+                // Real transport tests qualify H2Error using peer protocol
+                // evidence. A synthetic H2Error does not itself prove safety;
+                // the fork dispatcher owns its final structural replay veto.
+            }
+        }
+    }
+}
+
 #[test]
 fn ambiguous_decided_h2_retry_requires_every_safety_gate() {
     let cases = [

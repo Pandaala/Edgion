@@ -44,6 +44,7 @@ pub const LISTENER_H2: &str = "h2";
 pub const KIND_CONN_ACCEPTED: &str = "ConnAccepted";
 pub const KIND_REQ_HEADERS: &str = "ReqHeaders";
 pub const KIND_REQ_DATA: &str = "ReqData";
+pub const KIND_EFFECT_APPLIED: &str = "EffectApplied";
 pub const KIND_REQ_TRAILERS: &str = "ReqTrailers";
 pub const KIND_PEER_RESET: &str = "PeerReset";
 pub const KIND_PEER_GOAWAY: &str = "PeerGoaway";
