@@ -1,0 +1,25 @@
+# Deferred Issue Index
+
+| ID | Status | Canonical task | Discovered in |
+|----|--------|----------------|---------------|
+| D0001 | resolved | `skills/04-review/supply-chain/regression-guards/allocator-feature-surface.md` | B0001 |
+| D0002 | resolved | `skills/04-review/supply-chain/regression-guards/rustls-tls13-encryption-level-validation.md` | B0001 |
+| D0003 | resolved | `skills/04-review/admin-api/regression-guards/gateway-admin-bearer-boundary.md` | B0003 |
+| D0004 | resolved | `skills/04-review/admin-api/mandatory-design/gateway-admin-configclient-redaction.md` | B0003 |
+| D0005 | resolved | `skills/04-review/deserialization/intentional-design/gateway-process-config-unknown-fields-advisory.md` | B0009 |
+| D0006 | ready-for-separate-task | `tasks/todo/define-gatewayclass-process-config-ownership.md` | B0011 |
+| D0007 | ready-for-separate-task | `tasks/todo/add-etcd-linksys-health-flip-reporting.md` | B0035 |
+| D0008 | resolved | `skills/04-review/plugin-runtime/regression-guards/extension-ref-tokenized-plugin-log-contract.md` | B0043 |
+| D0009 | resolved | `skills/04-review/routing/regression-guards/retry-budget-owns-pingora-loop-capacity.md` | B0056 |
+| D0010 | resolved-with-D0009 | `skills/04-review/routing/regression-guards/retry-budget-owns-pingora-loop-capacity.md` | B0056 |
+| D0011 | coverage-added | `skills/04-review/cors/regression-guards/preflight-policy-egc-hot-reload.md` | B0065 |
+| D0012 | resolved | `skills/04-review/listeners/regression-guards/egc-runtime-snapshot-publication.md` | B0066 |
+| D0013 | coverage-added | `skills/04-review/http1/regression-guards/duplicate-host.md` | B0066 |
+| D0014 | resolved | `skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md` | B0075 |
+| D0015 | resolved | `skills/04-review/tls/regression-guards/mtls-config-reorder.md` | B0075 |
+| D0016 | needs-investigation | `tasks/todo/allowed-san-regex-ignore-case-contract.md` | B0078 |
+| D0017 | ready-for-separate-task | `tasks/todo/align-conf-sync-operational-limits-overview.md` | B0077 |
+| D0018 | needs-investigation | `tasks/todo/conf-sync-client-expiry-watch-installed-identity.md` | B0080 |
+| D0019 | needs-design | `tasks/todo/prepare-httpdns-runtime-and-config-audit.md` | B0083 |
+| D0020 | needs-design | `tasks/todo/define-httpdns-endpoint-egress-policy.md` | B0083 |
+| D0021 | needs-design | `tasks/todo/define-etcd-linksys-unused-config-fields.md` | B0084 |

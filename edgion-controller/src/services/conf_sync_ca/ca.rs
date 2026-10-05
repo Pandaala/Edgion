@@ -29,7 +29,7 @@ pub struct Ca {
 /// trust anchor at provisioning time), not raced the way a leaf is against a
 /// concurrently-connecting gateway, so `not_before` is left at `now_utc()` —
 /// no backdate slack needed here.
-fn ca_params(ttl: time::Duration) -> CertificateParams {
+fn ca_params(ttl: time::Duration) -> Result<CertificateParams> {
     let mut p = CertificateParams::default();
     p.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     p.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
@@ -39,8 +39,11 @@ fn ca_params(ttl: time::Duration) -> CertificateParams {
         dn
     };
     p.not_before = OffsetDateTime::now_utc();
-    p.not_after = OffsetDateTime::now_utc() + ttl;
-    p
+    p.not_after = p
+        .not_before
+        .checked_add(ttl)
+        .context("CA validity exceeds supported date range")?;
+    Ok(p)
 }
 
 impl Ca {
@@ -50,7 +53,7 @@ impl Ca {
     /// [`Ca::load_from_pem`] so there is a single owned-`Issuer` construction path.
     pub fn generate_root(ttl: time::Duration) -> Result<Ca> {
         let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).context("CA keygen")?;
-        let params = ca_params(ttl);
+        let params = ca_params(ttl)?;
         let cert = params.self_signed(&key).context("self-sign CA cert")?;
         let cert_pem = cert.pem();
         let key_pem = key.serialize_pem();
@@ -62,7 +65,7 @@ impl Ca {
     /// to validate chains signed after renewal; no coordination needed.
     pub fn renew_root_same_key(&self, ca_ttl: time::Duration) -> Result<Ca> {
         let key = KeyPair::from_pem(self.ca_key_pem()).context("reload CA key for renewal")?;
-        let params = ca_params(ca_ttl);
+        let params = ca_params(ca_ttl)?;
         let cert = params.self_signed(&key).context("re-self-sign CA cert")?;
         Ca::load_from_pem(&cert.pem(), self.ca_key_pem())
     }
@@ -111,8 +114,11 @@ impl Ca {
             dn
         };
         p.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-        p.not_before = OffsetDateTime::now_utc() - super::cert_util::BACKDATE_SLACK;
-        p.not_after = OffsetDateTime::now_utc() + ttl;
+        let now = OffsetDateTime::now_utc();
+        p.not_before = now - super::cert_util::BACKDATE_SLACK;
+        p.not_after = now
+            .checked_add(ttl)
+            .context("leaf validity exceeds supported date range")?;
         let cert = p.signed_by(&key, &self.issuer).context("sign server cert")?;
         Ok(LeafPem {
             cert_pem: cert.pem(),
@@ -132,8 +138,11 @@ impl Ca {
             dn
         };
         p.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-        p.not_before = OffsetDateTime::now_utc() - super::cert_util::BACKDATE_SLACK;
-        p.not_after = OffsetDateTime::now_utc() + ttl;
+        let now = OffsetDateTime::now_utc();
+        p.not_before = now - super::cert_util::BACKDATE_SLACK;
+        p.not_after = now
+            .checked_add(ttl)
+            .context("leaf validity exceeds supported date range")?;
         let cert = p.signed_by(&key, &self.issuer).context("sign client cert")?;
         Ok(LeafPem {
             cert_pem: cert.pem(),

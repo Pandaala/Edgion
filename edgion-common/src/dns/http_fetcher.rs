@@ -88,7 +88,3 @@ impl HttpDnsFetcher for ReqwestHttpDnsFetcher {
         String::from_utf8(buf).map_err(|e| DnsError::Parse(e.to_string()))
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/dns/http_fetcher_test.rs"]
-mod tests;

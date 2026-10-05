@@ -92,3 +92,13 @@ async fn guard_txn_detects_inplace_overwrite() {
         "guard must reject an in-place overwrite that preserves create_revision"
     );
 }
+
+#[test]
+fn namespace_projection_preserves_empty_logical_keys() {
+    assert_eq!(strip_namespace("/app/", Some("/app/")), "");
+    assert_eq!(strip_namespace("/app/key", Some("/app/")), "key");
+    assert_eq!(strip_namespace("/café/key", Some("/café/")), "key");
+    assert_eq!(strip_namespace("other", Some("/app/")), "other");
+    assert_eq!(strip_namespace("key", None), "key");
+    assert_eq!(strip_namespace("key", Some("")), "key");
+}

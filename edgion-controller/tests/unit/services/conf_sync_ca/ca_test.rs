@@ -99,3 +99,22 @@ fn renew_root_same_key_keeps_trust() {
     let (_, new_na) = parse_cert_window(renewed.ca_cert_pem()).unwrap();
     assert!(new_na >= old_na);
 }
+
+#[test]
+fn unrepresentable_configured_lifetimes_return_errors() {
+    use edgion_common::conf_sync::{cert_duration::CertDuration, config::ConfSyncRotationConfig};
+
+    // A valid duration need not fit in an absolute certificate timestamp.
+    let config = ConfSyncRotationConfig {
+        ca_ttl: CertDuration::parse("10000000y").unwrap(),
+        ..Default::default()
+    };
+    config.validate_numeric().unwrap();
+    let ttl = config.ca_ttl.as_time();
+    assert!(Ca::generate_root(ttl).is_err());
+
+    let ca = Ca::generate_root(::time::Duration::days(3650)).unwrap();
+    assert!(ca.renew_root_same_key(ttl).is_err());
+    assert!(ca.sign_server(&["localhost".to_string()], ttl).is_err());
+    assert!(ca.sign_client(ttl).is_err());
+}

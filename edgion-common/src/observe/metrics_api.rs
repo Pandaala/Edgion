@@ -9,9 +9,9 @@
 //!   `gateway_request_duration_ms` histogram; Controller has no
 //!   histograms in scope).
 //!
-//! This module exposes the recorder install as an idempotent operation
-//! guarded by a `OnceLock<PrometheusHandle>`, so subsequent callers in the
-//! same process see a `Result::Ok(())` instead of a panic.
+//! Recorder installation belongs to serial process startup. A
+//! `OnceLock<PrometheusHandle>` makes subsequent serial calls return `Ok(())`.
+//! Concurrent first calls can return an already-installed recorder error.
 
 use crate::observe::cardinality_guard::{CardinalityGuard, CardinalityMode};
 use axum::{
@@ -49,9 +49,9 @@ pub struct RecorderConfig<'a> {
 
 /// Install the global Prometheus recorder.
 ///
-/// Idempotent: the first call does the install; subsequent calls in the
-/// same process are no-ops that return `Ok(())` so combined-mode test
-/// harnesses (and future in-process topologies) do not panic.
+/// Idempotent for serial startup calls: after successful installation,
+/// subsequent calls return `Ok(())`. Concurrent first calls are not serialized;
+/// the losing caller can receive the global recorder's installation error.
 pub fn install_global_recorder(cfg: RecorderConfig<'_>) -> Result<(), String> {
     if PROMETHEUS_HANDLE.get().is_some() {
         return Ok(());
@@ -80,10 +80,7 @@ pub fn install_global_recorder(cfg: RecorderConfig<'_>) -> Result<(), String> {
     };
     install?;
 
-    // If another thread raced us between the `get()` check above and this
-    // point, prefer the first winner and drop our handle silently. This is
-    // exceedingly unlikely in the single-threaded bin/cli setup path but
-    // keeps the function honestly idempotent.
+    // Only the caller that installed the global recorder reaches this point.
     let _ = PROMETHEUS_HANDLE.set(handle);
 
     tracing::info!(

@@ -45,8 +45,9 @@ pub fn parse_retry_after(value: &str, now: SystemTime) -> Option<Duration> {
 /// Supported wire forms are the bounded Edgion/Gateway API duration grammar
 /// used by OpenAI-style `x-ratelimit-reset-*` headers, an absolute Unix epoch
 /// second, or an absolute RFC3339 timestamp. Invalid and overflowing values
-/// return `None`; past absolute timestamps return zero so callers can reject
-/// them without treating malformed data as a cooldown.
+/// return `None`; RFC3339 timestamps before the Unix epoch also return `None`.
+/// Supported past absolute timestamps return zero so callers can reject them
+/// without treating malformed data as a cooldown.
 pub fn parse_rate_limit_reset(value: &str, now: SystemTime) -> Option<Duration> {
     let value = value.trim();
     if value.is_empty() {
@@ -71,7 +72,7 @@ pub fn parse_rate_limit_reset(value: &str, now: SystemTime) -> Option<Duration> 
 ///
 /// Unlike [`parse_rate_limit_reset`], this accepts no duration or epoch-number
 /// alternatives. Past deadlines return `Duration::ZERO`; malformed or
-/// unrepresentable timestamps return `None`.
+/// unrepresentable timestamps and timestamps before the Unix epoch return `None`.
 pub fn parse_rfc3339_deadline(value: &str, now: SystemTime) -> Option<Duration> {
     let timestamp = chrono::DateTime::parse_from_rfc3339(value.trim()).ok()?;
     let seconds = u64::try_from(timestamp.timestamp()).ok()?;

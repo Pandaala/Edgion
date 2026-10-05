@@ -135,3 +135,24 @@ fn etcd_reports_only_published_health_transitions() {
     assert!(client.published_health().update(false, false));
     assert_eq!(degraded.load(Ordering::Relaxed), 1);
 }
+
+#[tokio::test]
+async fn connection_options_errors_prevent_all_dials() {
+    use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
+    let _guard = crate::link_sys_core::outbound_tls::outbound_tls_test_guard();
+    let mut config = minimal_config();
+    config.tls = Some(TlsConfig {
+        enabled: true,
+        outbound: OutboundTlsLocal {
+            verify: Some(false),
+            ..Default::default()
+        },
+        resolved_ca_certificates: None,
+        resolved_client_certificate: None,
+    });
+    // No endpoints can be dialed; the TLS error must precede endpoint validation.
+    let Err(error) = connect_with_config(&[], &config, &no_auth()).await else {
+        panic!("invalid TLS options must prevent connection");
+    };
+    assert!(error.to_string().contains("OutboundTlsVerifyUnsupported"));
+}

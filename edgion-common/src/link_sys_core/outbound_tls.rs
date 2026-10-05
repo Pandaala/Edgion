@@ -37,9 +37,23 @@ pub struct ResolvedOutboundTls {
     pub ca: EffectiveCa,
     /// `(cert_pem, key_pem)` when a client-identity Secret was provided.
     pub client_identity: Option<(Vec<u8>, Zeroizing<Vec<u8>>)>,
-    /// Carries the resolved `OutboundTlsValidation` for Phase 2 SNI/SAN
-    /// enforcement. Unused by the data plane in Phase 1.
+    /// Effective identity and trust policy. Transports must enforce hostname/SAN
+    /// constraints or reject them before dialing.
     pub san: Option<OutboundTlsValidation>,
+}
+
+impl ResolvedOutboundTls {
+    /// Refuse identity constraints when a transport cannot enforce them.
+    /// Call after resolution so inherited validation is checked as well.
+    pub(crate) fn reject_unsupported_identity_policy(&self, provider: &str) -> anyhow::Result<()> {
+        if let Some(validation) = &self.san {
+            anyhow::ensure!(
+                validation.hostname.is_none() && validation.subject_alt_names.as_ref().is_none_or(Vec::is_empty),
+                "{provider} TLS hostname/subjectAltNames policy is unsupported by this transport"
+            );
+        }
+        Ok(())
+    }
 }
 
 // ============================================================================

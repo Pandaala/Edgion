@@ -1,98 +1,95 @@
 ---
 name: etcd-monitor-handle-not-aborted
-description: EtcdLinkClient now stores its health-monitor JoinHandle and aborts it in shutdown(), so the task is deterministically terminated and cannot hold the client read lock against the shutdown write lock. Reject re-reports claiming the monitor task is spawned-and-forgotten / not joined on shutdown.
+description: Etcd monitor cancellation ownership, lock-free RPC waits, and the limits of abort-only retirement and publication guarantees.
 knowledge_type: regression-guards
 ---
 
-# link-sys F-012 (etcd) — health-monitor `JoinHandle` is now stored and aborted on shutdown
+# Etcd health-monitor cancellation and retirement boundaries
 
-**Status:** ✅ fixed · 2026-05-25
-**Severity:** Low (BadLogic) — spawned-and-forgotten monitor task; shutdown could block on the client write lock and had no exit confirmation
+## Current conclusion
 
-## Conclusion
+`EtcdLinkClient` in `edgion-common/src/link_sys_core/providers/etcd/client.rs`
+stores its monitor `JoinHandle`. `mark_retired` deactivates health reporting,
+sets `retired`, signals `shutdown_tx`, and takes and aborts the monitor handle.
+`shutdown` calls that path before clearing the stored client under its write
+lock and resetting local health/endpoint coverage. The monitor is not a
+spawned-and-forgotten task.
 
-`EtcdLinkClient` (`edgion-common/src/link_sys_core/providers/etcd/client.rs`) now holds
-`monitor_handle: parking_lot::Mutex<Option<JoinHandle<()>>>`. `start_health_monitor` stores the
-handle returned by `tokio::spawn`, and `shutdown` takes the handle and calls `handle.abort()`
-right after sending the cooperative `shutdown_tx` signal and **before** acquiring the `client`
-write lock. The task is therefore deterministically terminated, and a monitor parked in
-`mc.status().await` / `Client::connect().await` (holding the `client` read lock) is cancelled at
-its next await point so the `client.write()` in `shutdown` cannot block for the full etcd call
-timeout.
+The health probe clones the client inside a short read-lock scope and releases
+the guard before awaiting `status()`. Reconnect and endpoint probes likewise
+perform network IO without holding the client lock. Consequently a slow RPC
+does not hold the read lock against shutdown. This is established by lock
+scope, not by assuming that `abort()` synchronously releases a network-held lock.
 
-Re-reports of the form "the etcd health monitor is `tokio::spawn`ed and the `JoinHandle` dropped /
-the monitor task is never joined or aborted on shutdown / `shutdown` can block on the write lock
-for the etcd timeout / no confirmation the task exited" are **not accepted** — verify the current
-`shutdown` aborts `monitor_handle` before `client.write()` before re-reporting.
+`JoinHandle::abort()` requests cancellation; it does not wait for task exit.
+An already-running poll can continue synchronous work until it yields or
+completes. An `.await` whose future is immediately ready need not yield.
+Neither an abort request nor dropping the handle proves that all task-local
+resources have already been dropped when `shutdown()` returns. The current
+implementation does not join the task and provides no exit acknowledgement.
 
-## What was wrong (before the fix)
+## Retirement and publication guarantees
 
-`start_health_monitor` called `tokio::spawn(...)` and dropped the returned handle; `EtcdLinkClient`
-had no field to keep it. `shutdown` sent `shutdown_tx.send(true)` (cooperative) and immediately did
-`self.client.write().await`. Two consequences:
+The following mechanisms have different scopes:
 
-1. **Write-lock contention.** The monitor holds `client.read()` across `mc.status().await`
-   (line ~183) and the reconnect `Client::connect().await` runs while a writer is waiting. Tokio's
-   `RwLock` is write-preferring once a writer waits, so `shutdown` could stall up to the etcd call
-   timeout (a few seconds) before clearing the client.
-2. **No exit confirmation.** With the handle gone, `shutdown` (and `spawn_shutdown_if_present` in
-   `runtime/store.rs`, itself run inside a `tokio::spawn`) had no way to ensure the monitor had
-   stopped before the surrounding runtime was torn down — risking stale log lines or a task that
-   never runs its exit path.
+- The monitor checks `retired` around its waits and before attempting recovery
+  publication. These checks stop work when retirement is observed; they are
+  not a transaction with the later client write-lock acquisition.
+- `PublishedHealth::deactivate` and `update` share a mutex in
+  `edgion-common/src/link_sys_core/health.rs`. Deactivation is a real barrier for
+  reporter callbacks: later updates cannot report for the retired generation.
+  It does not prevent changes to that object's local health value.
+- The persistent runner transfers health publication ownership with the
+  current-client swap. The Gateway runtime table withdraws current lookup on
+  removal. A retired object's internal client slot is not that table, and old
+  caller-held handles have the provider's existing semantics.
+- The reconnect branch checks `retired` before `client.write().await`, but does
+  not recheck after acquiring the lock. The source therefore does not establish
+  a strict no-write-after-retirement barrier for that slot. In particular, do
+  not infer such a barrier solely from abort: a poll that passed the check can
+  overlap shutdown and reach an immediately-ready lock acquisition. Endpoint
+  coverage and local health writes also are not task-exit acknowledgements.
 
-## Why the fix is correct
+The accepted
+[provider-owned removal contract](../../link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md)
+permits asynchronous retirement and old external handles; it does not claim
+that all retired transport state is destroyed synchronously. Verify the actual
+caller and publication boundary before classifying a late old-object update.
+A requirement that shutdown finish all monitor work or prohibit every late
+internal write needs separate synchronization or join evidence. This page must
+not suppress a concrete violation of such a requirement.
 
-The cooperative `shutdown_tx` path is kept for the common case (a task parked at the `select!`
-sleep wakes on the watch change and logs its own shutdown line). `handle.abort()` is the hard
-backstop: it requests cancellation at the next await point, which (a) guarantees the task is
-terminated regardless of where it is in the loop and (b) releases the `client` read lock if the
-task was mid `status()` / `connect()`, so the subsequent `client.write()` proceeds immediately
-instead of waiting out the etcd timeout. Ordering matters — abort is issued **before** the write
-lock acquisition for exactly this reason.
+## Historical evidence
 
-`abort()` without a join is sufficient because the monitor holds no unwind-critical state (no
-buffered data to flush, no external resource to release beyond the `Arc<RwLock<Option<Client>>>`,
-which Rust drops safely). This mirrors the sibling Webhook `health_task` path
-(`providers/webhook/manager.rs`), which also aborts without joining. The Elasticsearch `bulk_task`
-(`providers/elasticsearch/client.rs`) is the one provider that additionally awaits with a timeout —
-because it must drain buffered docs before returning; etcd has nothing to drain. The
-`parking_lot::Mutex` is held only for the brief `take()` / store, never across an await, so there
-is no lock-ordering or hold-across-await hazard.
+Finding `link-sys-F012` was recorded as fixed on 2026-05-25 when the stored
+monitor handle and abort backstop replaced a dropped spawn handle. The original
+review described a read guard held across a health RPC and motivated abort as a
+way to release that guard. That description is historical: the current probe
+clones and unlocks before IO.
 
-## Fix Suggestions Not Accepted
+The earlier page also claimed deterministic completed termination, immediate
+lock release, and exit confirmation from abort without joining. Those claims
+were stronger than the implementation and are superseded by the boundaries
+above. Retaining an abort handle addresses cancellation ownership, not exit
+confirmation. Sibling Webhook abort-only decisions are lifecycle precedents,
+not proof of completion for this monitor.
 
-- "Await the handle (with a timeout) like the ES `bulk_task` instead of fire-and-forget abort" —
-  the ES await exists to drain buffered documents; the etcd monitor has no drainable state, so an
-  await only adds latency and a timeout branch for no benefit. Abort-only matches the Webhook
-  `health_task` precedent.
-- "Use a `tokio::sync::Mutex` for `monitor_handle` to stay async-consistent" — the handle is only
-  ever `take()`/stored synchronously and never touched across an await, so a sync
-  `parking_lot::Mutex` is correct and avoids an unnecessary `.await`; this matches the ES
-  `bulk_task` field type.
-- "Drop the cooperative `shutdown_tx` signal now that we abort" — keep it: the cooperative path
-  gives the common-case task a clean, logged exit; abort is the backstop for the mid-call case.
+## Verification and re-evaluation
 
-## Re-evaluation Triggers
+The 2026-09-27 source review inspected the monitor, retirement/shutdown paths,
+`PublishedHealth`, and the current provider-removal contract. No new runtime
+stress test or task-exit test was run for this documentation correction.
+Historical test results do not establish present concurrency guarantees.
 
-Re-open only if:
-
-- `start_health_monitor` reverts to dropping the spawn handle, or `shutdown` stops aborting it
-  (re-opening the spawned-and-forgotten / write-lock-contention window).
-- The monitor task gains drainable state (buffered writes, an external lease to release) — then the
-  abort-only policy must be upgraded to a bounded join like the ES `bulk_task`.
-
-## Reference Cases
-
-- link-sys-F012 etcd (review finding, `tasks/link/`, 2026-05-25)
-- [link-sys-F014](../intentional-design/webhook-active-health-abort-only.md) — the sibling webhook
-  `health_task` abort-only decision; explains why that task needs no cooperative watch signal
-  (holds no lock across awaits, unlike this etcd monitor).
-- `providers/webhook/manager.rs` `health_task` — sibling abort-only monitor handle (same policy).
-- `providers/elasticsearch/client.rs` `bulk_task` — sibling that additionally awaits to drain.
-- [link-sys-F011](../superseded/webhook-manager-rwlock-intentional.md) — superseded
-  Webhook runtime/JoinHandle coupling decision; not a current registry constraint.
-- backends-F002 — sibling "spawned task handle management on a config-sync–driven store" fix.
+Re-evaluate when publication ordering, concurrent init/shutdown, monitor-handle
+installation, lock scopes, or caller-held handle semantics change; when a
+concrete late update affects current lookup; or when the task gains buffered
+writes, leases, or other state requiring bounded cleanup. Keep the synchronous
+handle mutex short and outside awaits. Do not add cross-provider teardown
+barriers merely to imitate a provider with drainable buffers.
 
 ## Resolution references
 
-- `link-sys-F012` — 2026-05-25.
+- `link-sys-F012` — stored handle and abort backstop, 2026-05-25.
+- [Webhook abort-only history](../intentional-design/webhook-active-health-abort-only.md).
+- [Superseded Webhook registry coupling](../superseded/webhook-manager-rwlock-intentional.md).

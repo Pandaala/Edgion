@@ -438,3 +438,53 @@ fn apply_custom_ca_pem_multi_cert_in_single_bundle() {
         builder_result.err()
     );
 }
+
+#[test]
+fn incapable_builders_reject_local_and_inherited_identity_policy() {
+    use edgion_resources::resources::backend_tls_policy::SubjectAltName;
+    use edgion_resources::resources::common::OutboundTlsConfig;
+    let _guard = outbound_tls::outbound_tls_test_guard();
+    for validation in [
+        OutboundTlsValidation {
+            hostname: Some("example.com".into()),
+            ..Default::default()
+        },
+        OutboundTlsValidation {
+            subject_alt_names: Some(vec![SubjectAltName {
+                san_type: edgion_resources::resources::backend_tls_policy::SubjectAltNameType::Hostname,
+                hostname: Some("example.com".into()),
+                uri: None,
+            }]),
+            ..Default::default()
+        },
+    ] {
+        for inherited in [false, true] {
+            outbound_tls::set_outbound_global_default(OutboundTlsConfig {
+                validation: inherited.then(|| validation.clone()),
+                ..Default::default()
+            });
+            let mut tls = TlsConfig {
+                enabled: true,
+                outbound: OutboundTlsLocal {
+                    validation: (!inherited).then(|| validation.clone()),
+                    ..Default::default()
+                },
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
+            };
+            assert!(build_rustls_client_config(&tls).is_err());
+            assert!(apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test").is_err());
+            // A local empty validation block shadows inherited identity constraints.
+            tls.outbound.validation = Some(OutboundTlsValidation::default());
+            assert!(build_rustls_client_config(&tls).unwrap().is_none());
+            assert!(apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test").is_ok());
+        }
+    }
+}
+
+#[test]
+fn custom_ca_rejects_truncated_trailing_certificate() {
+    let (pem, _, _) = gen_ca_and_leaf();
+    let bundle = format!("{pem}-----BEGIN CERTIFICATE-----\nYWJj\n").into_bytes();
+    assert!(apply_custom_ca_pem(reqwest::Client::builder(), &[bundle]).is_err());
+}

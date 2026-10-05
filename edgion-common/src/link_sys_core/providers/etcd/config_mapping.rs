@@ -144,6 +144,8 @@ fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
         )
     })?;
 
+    resolved.reject_unsupported_identity_policy("Etcd")?;
+
     let mut tls_options = TlsOptions::new();
 
     if let EffectiveCa::Custom(bundles) = &resolved.ca {

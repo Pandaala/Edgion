@@ -89,16 +89,33 @@ fn pingora_h1_header_log_targets_have_an_error_floor() {
 
 #[tokio::test]
 async fn test_logging_from_different_threads() {
-    let temp_dir = std::env::temp_dir().join("edgion_test_multithread");
+    const CHILD_ENV: &str = "EDGION_MULTITHREAD_LOGGING_TEST_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "observe::logs::tests::test_logging_from_different_threads",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env("RUST_LOG", "info")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        return;
+    }
+
+    // Installing the global subscriber is isolated to this child process.
+    let temp_dir = tempfile::tempdir().unwrap();
     let config = LogConfig {
-        log_dir: temp_dir,
+        log_dir: temp_dir.path().to_path_buf(),
         file_prefix: "multithread".to_string(),
         json_format: false,
         console: false,
         level: "info".to_string(),
     };
 
-    let _guard = init_logging(config).await.unwrap();
+    let guard = init_logging(config).await.unwrap();
 
     tokio::spawn(async {
         tracing::info!("Log from tokio task");
@@ -112,5 +129,9 @@ async fn test_logging_from_different_threads() {
     .join()
     .unwrap();
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Both producers finished; dropping the worker guard flushes queued lines.
+    drop(guard);
+    let output = std::fs::read_to_string(temp_dir.path().join("multithread.log")).unwrap();
+    assert!(output.contains("Log from tokio task"), "{output}");
+    assert!(output.contains("Log from regular thread"), "{output}");
 }

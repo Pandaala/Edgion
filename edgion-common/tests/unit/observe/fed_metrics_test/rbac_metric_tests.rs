@@ -1,4 +1,6 @@
+use super::tests::assert_sample;
 use super::*;
+use metrics_exporter_prometheus::PrometheusBuilder;
 
 /// Name constants for the RBAC metrics must follow the `edgion_fed_` prefix
 /// convention and use only lowercase ASCII + underscores.
@@ -29,7 +31,7 @@ fn rbac_metric_names_are_stable_and_valid() {
     }
 }
 
-/// `record_rbac_denied` must not panic for any bounded (verb, kind, source) triple,
+/// Every bounded (verb, kind, source) triple has its own incrementing counter,
 /// including the sentinel "unknown" values used for unclassified requests.
 #[test]
 fn rbac_denied_counter_increments_without_panic() {
@@ -60,45 +62,89 @@ fn rbac_denied_counter_increments_without_panic() {
         labels::rbac_source::CLI_TOKEN,
         labels::rbac_source::UNKNOWN,
     ];
-    for verb in verbs {
-        for kind in kinds {
-            for source in sources {
-                // Must not panic; the metrics crate no-op recorder handles absent recorder.
-                record_rbac_denied(verb, kind, source);
+    let recorder = PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    metrics::with_local_recorder(&recorder, || {
+        for verb in verbs {
+            for kind in kinds {
+                for source in sources {
+                    record_rbac_denied(verb, kind, source);
+                    record_rbac_denied(verb, kind, source);
+                }
             }
         }
-    }
+        let output = handle.render();
+        for verb in verbs {
+            for kind in kinds {
+                for source in sources {
+                    assert_sample(
+                        &output,
+                        names::RBAC_DENIED_TOTAL,
+                        &[("verb", verb), ("kind", kind), ("source", source)],
+                        2.0,
+                    );
+                }
+            }
+        }
+    });
 }
 
-/// `record_kill_switch_state` must not panic for both `true` and `false`.
+/// The kill-switch gauge follows operator intent in both directions.
 #[test]
 fn kill_switch_gauge_does_not_panic() {
-    record_kill_switch_state(true);
-    record_kill_switch_state(false);
-    // Toggle back to enabled to leave gauge in a known state.
-    record_kill_switch_state(true);
+    let recorder = PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    metrics::with_local_recorder(&recorder, || {
+        for enabled in [true, false, true] {
+            record_kill_switch_state(enabled);
+            assert_sample(
+                &handle.render(),
+                names::KILL_SWITCH_STATE,
+                &[],
+                if enabled { 1.0 } else { 0.0 },
+            );
+        }
+    });
 }
 
-/// `record_client_running` must not panic for both `true` and `false`.
+/// The running gauge follows the client lifecycle independently of intent.
 /// It is a separate gauge from the kill switch on purpose: a non-leader
 /// replica reports kill_switch=1 (operator intent) with client_running=0.
 #[test]
 fn client_running_gauge_does_not_panic() {
-    record_client_running(true);
-    record_client_running(false);
+    let recorder = PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    metrics::with_local_recorder(&recorder, || {
+        record_kill_switch_state(true);
+        for running in [true, false] {
+            record_client_running(running);
+            let output = handle.render();
+            assert_sample(&output, names::CLIENT_RUNNING, &[], if running { 1.0 } else { 0.0 });
+            assert_sample(&output, names::KILL_SWITCH_STATE, &[], 1.0);
+        }
+    });
 }
 
-/// `record_rbac_denied` with the `source` label must not panic for
-/// the cli_token source, confirming the three bounded source values are usable.
+/// The three bounded sources remain distinct even for the same verb and kind.
 #[test]
 fn rbac_denied_with_source_label_increments_without_panic() {
     use super::labels::rbac_source;
-    // The canonical case: a cli token denied on Secret.
-    record_rbac_denied("get", "Secret", rbac_source::CLI_TOKEN);
-    record_rbac_denied("list", "EdgionConfigData", rbac_source::CENTER);
-    record_rbac_denied("unknown", "unknown", rbac_source::UNKNOWN);
-    // All three bounded source values work.
-    for source in [rbac_source::CENTER, rbac_source::CLI_TOKEN, rbac_source::UNKNOWN] {
-        record_rbac_denied("watch", "HTTPRoute", source);
-    }
+    let recorder = PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    metrics::with_local_recorder(&recorder, || {
+        for (index, source) in [rbac_source::CENTER, rbac_source::CLI_TOKEN, rbac_source::UNKNOWN]
+            .into_iter()
+            .enumerate()
+        {
+            for _ in 0..=index {
+                record_rbac_denied("watch", "HTTPRoute", source);
+            }
+            assert_sample(
+                &handle.render(),
+                names::RBAC_DENIED_TOTAL,
+                &[("verb", "watch"), ("kind", "HTTPRoute"), ("source", source)],
+                (index + 1) as f64,
+            );
+        }
+    });
 }

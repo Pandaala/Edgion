@@ -344,3 +344,32 @@ async fn tencent_preset_parses_semicolon_delimited_ignoring_user_response() {
         ]
     );
 }
+
+#[test]
+fn dotted_json_path_preserves_pointer_metacharacters() {
+    let fmt = HttpDnsResponseFormat {
+        ip_path: Some("data.a~/b.0".to_string()),
+        ..Default::default()
+    };
+    let ips = parse_body(&fmt, r#"{"data":{"a~/b":[["192.0.2.1"]],"a~":{"b":[["192.0.2.2"]]}}}"#).unwrap();
+    assert_eq!(ips, vec!["192.0.2.1".parse::<IpAddr>().unwrap()]);
+}
+
+#[test]
+fn borrowed_candidates_preserve_format_specific_whitespace_and_order() {
+    let fmt = HttpDnsResponseFormat::default();
+    let ips = parse_body(
+        &fmt,
+        r#"{"ips":[" 192.0.2.1 ",null,"bad","192.0.2.2","192.0.2.2","[::1]"]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        ips,
+        vec!["192.0.2.2".parse::<IpAddr>().unwrap(), "::1".parse().unwrap()]
+    );
+    let ips = parse_body(&fmt, r#"{"ips":" 192.0.2.1 ,bad,192.0.2.1, [::1] "}"#).unwrap();
+    assert_eq!(
+        ips,
+        vec!["192.0.2.1".parse::<IpAddr>().unwrap(), "::1".parse().unwrap()]
+    );
+}

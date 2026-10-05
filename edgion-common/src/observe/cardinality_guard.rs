@@ -1,8 +1,7 @@
 //! Runtime cardinality guard: a `metrics::Recorder` wrapper that caps the number
 //! of distinct series (name + labels) registered against the inner recorder.
 //!
-//! Rationale and coverage boundary: design spec
-//! docs/superpowers/specs/2026-07-20-metrics-observability-hardening-design.md §4.4.
+//! Metric discipline: skills/03-coding/observability/01-metrics.md.
 //! Covers only metrics that flow through the recorder; `resource_abnormal` is
 //! hand-rendered and capped separately. Counts lifetime-distinct keys.
 
@@ -103,12 +102,6 @@ impl<R: Recorder> CardinalityGuard<R> {
         self.rejected.increment(1);
         if !self.breached.swap(true, Ordering::Relaxed) {
             self.limit_active.set(1.0);
-            tracing::error!(
-                target: "edgion_metrics",
-                cap = self.cap,
-                mode = ?self.mode,
-                "metrics cardinality cap reached; new series are being rejected (enforce) or flagged (observe)"
-            );
         }
     }
 }
