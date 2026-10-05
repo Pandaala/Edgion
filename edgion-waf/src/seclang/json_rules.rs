@@ -271,9 +271,9 @@ impl Facts {
         name: &[u8],
         value: &[u8],
     ) -> Result<JsonFactRange, JsonExecutionError> {
-        self.evaluate_with_reuse::<true, true>(plan, scratch, runtime, mode, ScalarInput::Body(name, value))
+        self.evaluate_with_reuse::<true>(plan, scratch, runtime, mode, ScalarInput::Body(name, value))
     }
-    fn evaluate_with_reuse<const REUSE: bool, const FAST_RESERVE: bool>(
+    fn evaluate_with_reuse<const REUSE: bool>(
         &mut self,
         plan: SubscriberView<'_>,
         scratch: &mut [MatchScratch],
@@ -368,28 +368,23 @@ impl Facts {
                     self.limits.max_retained_bytes,
                 )?;
             }
-            // Spare fact capacity was already admitted against both arenas.
-            // A query-header reserve above protects that existing capacity too.
-            // Keep the unconditional count check even if Vec overallocated.
-            if !FAST_RESERVE || self.values.len() == self.values.capacity() {
-                let header_bytes = self
-                    .query_headers
-                    .capacity()
-                    .checked_mul(size_of::<QueryHeader>())
-                    .ok_or(JsonExecutionError::Arithmetic)?;
-                let fact_bytes = self
-                    .limits
-                    .max_retained_bytes
-                    .checked_sub(header_bytes)
-                    .ok_or(byte_error)?;
-                reserve(
-                    &mut self.values,
-                    self.limits.max_facts,
-                    fact_bytes,
-                    JsonExecutionLimit::Facts,
-                    self.limits.max_retained_bytes,
-                )?;
-            }
+            let header_bytes = self
+                .query_headers
+                .capacity()
+                .checked_mul(size_of::<QueryHeader>())
+                .ok_or(JsonExecutionError::Arithmetic)?;
+            let fact_bytes = self
+                .limits
+                .max_retained_bytes
+                .checked_sub(header_bytes)
+                .ok_or(byte_error)?;
+            reserve(
+                &mut self.values,
+                self.limits.max_facts,
+                fact_bytes,
+                JsonExecutionLimit::Facts,
+                self.limits.max_retained_bytes,
+            )?;
             let operator = plan.generation.operator_plans[subscriber.member].ok_or(JsonExecutionError::State)?;
             let CompiledOperatorOperand::Matcher {
                 group,
@@ -680,7 +675,7 @@ impl JsonCollectionCore {
         if self.started {
             return Err(self.fail(JsonExecutionError::State));
         }
-        match self.facts.evaluate_with_reuse::<true, true>(
+        match self.facts.evaluate_with_reuse::<true>(
             plan,
             scratch,
             self.runtime,

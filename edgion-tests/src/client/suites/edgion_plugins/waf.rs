@@ -1,5 +1,7 @@
 //! Native WAF hot-reload integration phase suites.
 
+#[path = "waf_json_wire.rs"]
+pub(crate) mod json_wire;
 #[path = "waf_wire.rs"]
 mod wire;
 
@@ -448,6 +450,62 @@ impl TestSuite for WafDynamicUpdatedTestSuite {
         ]
     }
 }
+
+pub struct WafDynamicJsonV1TestSuite;
+pub struct WafDynamicJsonV2TestSuite;
+pub struct WafDynamicJsonDetectionTestSuite;
+pub struct WafDynamicJsonZeroSourceTestSuite;
+
+macro_rules! json_phase_suite {
+    ($type:ident, $title:literal, $version:literal, $detection:literal, $zero:literal) => {
+        impl TestSuite for $type {
+            fn name(&self) -> &str {
+                $title
+            }
+            fn test_cases(&self) -> Vec<TestCase> {
+                vec![
+                    request_case(
+                        "waf_json_generation_ready",
+                        "ordinary Phase 1 confirms JSON generation readiness",
+                        $version,
+                        None,
+                        200,
+                    ),
+                    json_wire::matrix($version, $detection, $zero),
+                ]
+            }
+        }
+    };
+}
+
+json_phase_suite!(
+    WafDynamicJsonV1TestSuite,
+    "Native WAF Dynamic - JSON V1",
+    "json-v1",
+    false,
+    false
+);
+json_phase_suite!(
+    WafDynamicJsonV2TestSuite,
+    "Native WAF Dynamic - JSON V2",
+    "json-v2",
+    false,
+    false
+);
+json_phase_suite!(
+    WafDynamicJsonDetectionTestSuite,
+    "Native WAF Dynamic - JSON Detection",
+    "json-v1",
+    true,
+    false
+);
+json_phase_suite!(
+    WafDynamicJsonZeroSourceTestSuite,
+    "Native WAF Dynamic - JSON Zero Source",
+    "json-v1",
+    false,
+    true
+);
 
 phase_suite!(
     WafDynamicRecoveredTestSuite,

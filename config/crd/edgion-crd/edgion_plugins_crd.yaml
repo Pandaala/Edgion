@@ -73,6 +73,84 @@ spec:
                         prefixSize:
                           type: string
                           description: "Prefix window from 1 byte through 1 MiB; defaults to 64KiB when omitted. Only valid with prefix inspection."
+                        json:
+                          type: object
+                          description: "Explicit bounded JSON snapshot evaluation budgets; only valid with full inspection. No budget defaults are selected."
+                          required: [lexical, document, plan, facts]
+                          properties:
+                            lexical:
+                              type: object
+                              required: [maxSourceBytes, maxRawTokenBytes, maxDecodedBytes, maxEvents, maxDepth, maxRetainedBytes, maxWork]
+                              properties:
+                                maxSourceBytes:
+                                  type: integer
+                                  minimum: 0
+                                maxRawTokenBytes:
+                                  type: integer
+                                  minimum: 0
+                                maxDecodedBytes:
+                                  type: integer
+                                  minimum: 0
+                                maxEvents:
+                                  type: integer
+                                  minimum: 0
+                                maxDepth:
+                                  type: integer
+                                  minimum: 0
+                                maxRetainedBytes:
+                                  type: integer
+                                  minimum: 0
+                                maxWork:
+                                  type: integer
+                                  minimum: 0
+                            document:
+                              type: object
+                              required: [maxRetainedBytes, maxKeyBytes, maxMembers, maxEvents, maxPathBytes, maxDepth, maxWork]
+                              properties:
+                                maxRetainedBytes:
+                                  type: integer
+                                  minimum: 0
+                                maxKeyBytes:
+                                  type: integer
+                                  minimum: 0
+                                maxMembers:
+                                  type: integer
+                                  minimum: 0
+                                maxEvents:
+                                  type: integer
+                                  minimum: 0
+                                maxPathBytes:
+                                  type: integer
+                                  minimum: 0
+                                maxDepth:
+                                  type: integer
+                                  minimum: 0
+                                maxWork:
+                                  type: integer
+                                  minimum: 0
+                            plan:
+                              type: object
+                              required: [maxSubscribers, maxRetainedBytes]
+                              properties:
+                                maxSubscribers:
+                                  type: integer
+                                  minimum: 0
+                                maxRetainedBytes:
+                                  type: integer
+                                  minimum: 0
+                            facts:
+                              type: object
+                              required: [maxFacts, maxRetainedBytes, maxWork]
+                              properties:
+                                maxFacts:
+                                  type: integer
+                                  minimum: 0
+                                maxRetainedBytes:
+                                  type: integer
+                                  minimum: 0
+                                maxWork:
+                                  type: integer
+                                  minimum: 0
                 # ============================================
                 # Request Stage Plugins (async)
                 # ============================================

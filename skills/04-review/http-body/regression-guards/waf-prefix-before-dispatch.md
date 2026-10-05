@@ -73,6 +73,29 @@ registered request-body buffer and request relay contracts.
 
 ## Verification and re-evaluation
 
+### Explicit full JSON snapshot adapter
+
+Optional `requestBody.json` is accepted only with full inspection and requires
+explicit independent lexical/document/plan/fact limits. It attempts engine JSON
+admission after Phase 1; only initial `Unsupported` can choose ordinary complete
+publication. Resource errors or any post-admission error never choose fallback.
+Canonical capture still uses the EGC physical cap. Recheck cached length, immutable
+reader length and accumulated input, because `ensure_request_body`'s cached branch
+does not enforce its optional cap. Source and canonical WAF caps remain independent.
+
+Transport bodyless knowledge comes only from the immutable request snapshot, not
+live headers or zero length. `Complete` follows actual reader `None` with exact
+length parity, never a reached byte count. All snapshot reads and final decisions
+are awaited before `GoodNext`. Reader errors abandon provisional state; cancellation
+drops the local transaction and reader. The existing full-mode replay, retry and
+later mutation policy remains unchanged. The installed-transaction runtime gauge
+still reports canonical logical accounting and excludes provisional JSON capacity.
+The inspected-body byte counter's existing emit site remains prefix-only; full
+and JSON snapshot observations remain an explicit task 06 gate.
+
+Fresh continuation verification is tracked in `tasks/waf-todo/05-gateway-hybrid-request-body-path.md`;
+historical prefix test results below do not prove JSON wire or performance acceptance.
+
 Prefix rules execute lazily in the canonical phase schedule. An enforced deny
 ends evaluation immediately; unreachable rules cannot replace that decision
 with a work-budget error. Detection-only and nonmatching rules still consume

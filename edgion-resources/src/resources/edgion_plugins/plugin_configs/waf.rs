@@ -4,10 +4,10 @@ use edgion_waf::matcher::RegexProgramError;
 use edgion_waf::seclang::{
     compile_rule_bundles, compile_with_includes, inspect_compatibility, CompatibilityLimits, CompatibilityReport,
     CompiledGeneration, CompilerError, DirectiveLocation, FoldRequiredKind, FrontendError, FrontendLimits,
-    IncludeFailure, IncludeRequest, IncludeSink, IncludeSource, Phase, PhaseDefaults, RuleBundleMember,
-    RuleBundleSource, SemanticError, SemanticLocation, SemanticValidationContext, SemanticValidationError, SourceError,
-    SourcePosition, SyntaxError, UnavailableCapability, DEFAULT_REQUEST_BODY_PREFIX_BYTES,
-    MAX_REQUEST_BODY_PREFIX_BYTES,
+    IncludeFailure, IncludeRequest, IncludeSink, IncludeSource, JsonDocumentLimits, JsonExecutionLimits,
+    JsonFactLimits, JsonPlanLimits, JsonStreamLimits, Phase, PhaseDefaults, RuleBundleMember, RuleBundleSource,
+    SemanticError, SemanticLocation, SemanticValidationContext, SemanticValidationError, SourceError, SourcePosition,
+    SyntaxError, UnavailableCapability, DEFAULT_REQUEST_BODY_PREFIX_BYTES, MAX_REQUEST_BODY_PREFIX_BYTES,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -75,6 +75,94 @@ pub enum WafRequestBodyInspection {
     Full,
 }
 
+/// Explicit independent JSON lexical budgets. Zero remains restrictive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WafJsonLexicalLimits {
+    pub max_source_bytes: usize,
+    pub max_raw_token_bytes: usize,
+    pub max_decoded_bytes: usize,
+    pub max_events: usize,
+    pub max_depth: usize,
+    pub max_retained_bytes: usize,
+    pub max_work: usize,
+}
+
+/// Explicit independent JSON document budgets. Zero remains restrictive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WafJsonDocumentLimits {
+    pub max_retained_bytes: usize,
+    pub max_key_bytes: usize,
+    pub max_members: usize,
+    pub max_events: usize,
+    pub max_path_bytes: usize,
+    pub max_depth: usize,
+    pub max_work: usize,
+}
+
+/// Explicit independent JSON plan budgets. Zero remains restrictive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WafJsonPlanLimits {
+    pub max_subscribers: usize,
+    pub max_retained_bytes: usize,
+}
+
+/// Explicit independent JSON facts budgets. Zero remains restrictive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WafJsonFactsLimits {
+    pub max_facts: usize,
+    pub max_retained_bytes: usize,
+    pub max_work: usize,
+}
+
+/// Opt-in JSON snapshot execution with no implicit production budgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WafJsonConfig {
+    pub lexical: WafJsonLexicalLimits,
+    pub document: WafJsonDocumentLimits,
+    pub plan: WafJsonPlanLimits,
+    pub facts: WafJsonFactsLimits,
+}
+
+impl WafJsonConfig {
+    /// Copy explicit budgets into the immutable runtime without normalization.
+    pub fn execution_limits(&self) -> JsonExecutionLimits {
+        JsonExecutionLimits {
+            lexical: JsonStreamLimits {
+                max_source_bytes: self.lexical.max_source_bytes,
+                max_raw_token_bytes: self.lexical.max_raw_token_bytes,
+                max_decoded_bytes: self.lexical.max_decoded_bytes,
+                max_events: self.lexical.max_events,
+                max_depth: self.lexical.max_depth,
+                max_retained_bytes: self.lexical.max_retained_bytes,
+                max_work: self.lexical.max_work,
+            },
+            document: JsonDocumentLimits {
+                max_retained_bytes: self.document.max_retained_bytes,
+                max_key_bytes: self.document.max_key_bytes,
+                max_members: self.document.max_members,
+                max_events: self.document.max_events,
+                max_path_bytes: self.document.max_path_bytes,
+                max_depth: self.document.max_depth,
+                max_work: self.document.max_work,
+            },
+            plan: JsonPlanLimits {
+                max_subscribers: self.plan.max_subscribers,
+                max_retained_bytes: self.plan.max_retained_bytes,
+            },
+            facts: JsonFactLimits {
+                max_facts: self.facts.max_facts,
+                max_retained_bytes: self.facts.max_retained_bytes,
+                max_work: self.facts.max_work,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WafRequestBodyConfig {
@@ -83,11 +171,17 @@ pub struct WafRequestBodyConfig {
     /// Prefix window, default 64 KiB, at most 1 MiB. Only valid in prefix mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix_size: Option<String>,
+    /// Explicit JSON snapshot budgets; only valid in full mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json: Option<WafJsonConfig>,
 }
 
 impl WafRequestBodyConfig {
     /// Resolve once during configuration validation and plugin construction.
     pub fn prefix_size_bytes(&self) -> Result<usize, String> {
+        if self.json.is_some() && self.inspection != WafRequestBodyInspection::Full {
+            return Err("requestBody.json is only valid with full inspection".to_string());
+        }
         if self.inspection == WafRequestBodyInspection::Full && self.prefix_size.is_some() {
             return Err("requestBody.prefixSize is only valid with prefix inspection".to_string());
         }
@@ -972,7 +1066,7 @@ impl WafConfig {
         if self.request_body.prefix_size_bytes().is_err() {
             report.failure = Some(WafSupportFailure::new(
                 "invalid_config",
-                "Correct requestBody inspection and prefixSize",
+                "Correct requestBody inspection, prefixSize and JSON budgets",
             ));
             return report;
         }

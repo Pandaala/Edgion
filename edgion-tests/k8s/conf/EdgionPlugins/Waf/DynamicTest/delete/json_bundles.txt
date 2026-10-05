@@ -1,0 +1,2 @@
+EdgionConfigData/edgion-default/waf-rules-json-v1
+EdgionConfigData/edgion-default/waf-rules-json-v2

@@ -42,6 +42,22 @@ fn control() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicControlTestSuite)
 }
 
+fn json_v1() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicJsonV1TestSuite)
+}
+
+fn json_v2() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicJsonV2TestSuite)
+}
+
+fn json_detection() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicJsonDetectionTestSuite)
+}
+
+fn json_zero_source() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicJsonZeroSourceTestSuite)
+}
+
 fn bundle_v1() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicBundleV1TestSuite)
 }
@@ -165,7 +181,67 @@ async fn wait_tampered_bundle_processed(ctx: &ScenarioCtx, prior_generations: &[
         .context("tampered WAF bundle did not reach Controller and Gateway"))
 }
 
+async fn wait_invalid_json_processed(ctx: &ScenarioCtx) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut last = None;
+    while tokio::time::Instant::now() < deadline {
+        let result = async {
+            for gateway in [false, true] {
+                let resource = plugin_resource(ctx, gateway).await?;
+                ensure!(
+                    resource["spec"]["waf"]["requestBody"]["inspection"] == "prefix",
+                    "invalid JSON candidate has not reached {}",
+                    if gateway { "Gateway" } else { "Controller" }
+                );
+                ensure!(
+                    resource["spec"]["waf"]["requestBody"]["json"].is_object(),
+                    "JSON opt-in was lost"
+                );
+                let conditions = crate::dynamic::status::conditions(&resource)?;
+                ensure!(
+                    conditions
+                        .iter()
+                        .any(|condition| condition["type"] == "Accepted" && condition["status"] == "False"),
+                    "invalid full-only JSON configuration was accepted"
+                );
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) => last = Some(error),
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("invalid JSON candidate was not observed")))
+}
+
 static PHASES: &[PhaseSuite] = &[
+    PhaseSuite {
+        name: "json-v1",
+        factory: json_v1,
+    },
+    PhaseSuite {
+        name: "json-invalid-retained",
+        factory: json_v1,
+    },
+    PhaseSuite {
+        name: "json-v2",
+        factory: json_v2,
+    },
+    PhaseSuite {
+        name: "json-detection",
+        factory: json_detection,
+    },
+    PhaseSuite {
+        name: "json-zero-source",
+        factory: json_zero_source,
+    },
+    PhaseSuite {
+        name: "json-recreated",
+        factory: json_v1,
+    },
     PhaseSuite {
         name: "configured-prefix",
         factory: configured_prefix,
@@ -250,8 +326,46 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         ctx.wait_phase(scenario, "injection", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/to_control").await?;
         ctx.wait_phase(scenario, "control", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_json_v1").await?;
+        ctx.wait_phase(scenario, "json-v1", Duration::from_secs(20)).await?;
+        ctx.apply_dir("updates/to_json_invalid").await?;
+        wait_invalid_json_processed(&ctx).await?;
+        ctx.wait_phase(scenario, "json-invalid-retained", Duration::from_secs(20))
+            .await?;
+        ctx.apply_dir("updates/to_json_v1").await?;
+        ctx.wait_phase(scenario, "json-v1", Duration::from_secs(20)).await?;
+        let paused = suites::edgion_plugins::PausedJsonUpload::start(&ctx.test_ctx)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        ctx.apply_dir("updates/to_json_v2").await?;
+        // New requests must prove V2 ready while the old upload remains open.
+        // Local Continue pinned its V1 transaction before this publication.
+        ctx.wait_phase(scenario, "json-v2", Duration::from_secs(20)).await?;
+        paused.finish().await.map_err(anyhow::Error::msg)?;
+        ctx.apply_dir("updates/to_json_detection").await?;
+        ctx.wait_phase(scenario, "json-detection", Duration::from_secs(20))
+            .await?;
+        ctx.apply_dir("updates/to_json_v1").await?;
+        ctx.wait_phase(scenario, "json-v1", Duration::from_secs(20)).await?;
+        let paused_budget = suites::edgion_plugins::PausedJsonUpload::start(&ctx.test_ctx)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        ctx.apply_dir("updates/to_json_zero_source").await?;
+        ctx.wait_phase(scenario, "json-zero-source", Duration::from_secs(20))
+            .await?;
+        // Fresh requests prove the new zero-byte budget is enforced even in
+        // DetectionOnly. The open V1 request keeps its nonzero budget and On mode.
+        paused_budget.finish().await.map_err(anyhow::Error::msg)?;
+        ctx.apply_dir("updates/to_json_v1").await?;
+        ctx.wait_phase(scenario, "json-v1", Duration::from_secs(20)).await?;
+        ctx.delete_resources("delete/json_resources.txt").await?;
+        ctx.wait_phase(scenario, "deleted", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_json_v1").await?;
+        ctx.wait_phase(scenario, "json-recreated", Duration::from_secs(20))
+            .await?;
         ctx.apply_dir("updates/to_recovered").await?;
         ctx.wait_phase(scenario, "recovered", Duration::from_secs(15)).await?;
+        ctx.delete_resources("delete/json_bundles.txt").await?;
         ctx.apply_dir("updates/to_bundle_v1").await?;
         ctx.wait_phase(scenario, "bundle-v1", Duration::from_secs(15)).await?;
         let prior_generations = publication_generations(&ctx).await?;

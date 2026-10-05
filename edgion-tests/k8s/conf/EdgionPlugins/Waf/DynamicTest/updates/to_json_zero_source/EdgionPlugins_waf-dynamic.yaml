@@ -1,0 +1,36 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: waf-dynamic
+  namespace: edgion-default
+spec:
+  waf:
+    mode: detectionOnly
+    requestBody:
+      inspection: full
+      json:
+        lexical:
+          maxSourceBytes: 0
+          maxRawTokenBytes: 524288
+          maxDecodedBytes: 2097152
+          maxEvents: 8192
+          maxDepth: 32
+          maxRetainedBytes: 1048576
+          maxWork: 16777216
+        document:
+          maxRetainedBytes: 1048576
+          maxKeyBytes: 65536
+          maxMembers: 4096
+          maxEvents: 8192
+          maxPathBytes: 4096
+          maxDepth: 32
+          maxWork: 16777216
+        plan:
+          maxSubscribers: 128
+          maxRetainedBytes: 65536
+        facts:
+          maxFacts: 8192
+          maxRetainedBytes: 1048576
+          maxWork: 33554432
+    policyRef:
+      name: waf-policy

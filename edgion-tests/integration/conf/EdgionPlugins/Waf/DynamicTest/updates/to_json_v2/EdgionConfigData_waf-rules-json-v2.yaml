@@ -1,0 +1,24 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-rules-json-v2
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: '1'
+      profile: json-v2
+      provenance: edgion-tests/waf-dynamic
+      digest: 3d39e074e16f3d4c7372e684c1564736048161d0aaf55ccabdb6d73fcfcf78f5
+      roots:
+      - main.conf
+      rules:
+      - name: main.conf
+        content: 'SecRule REQUEST_HEADERS:X-Waf-Version "!@streq json-v2" "id:6101,phase:1,deny,status:451"
+
+          SecRule ARGS:q "@pm query-deny" "id:6102,phase:2,deny,status:409"
+
+          SecRule ARGS "@pm forbidden" "id:6103,phase:2,deny,status:406"
+
+          '

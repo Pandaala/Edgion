@@ -68,6 +68,7 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 | `priority` | no | `0` | Tie breaker within one attachment scope from `0` through `65535`; a larger value wins |
 | `requestBody.inspection` | no | `prefix` | Inspect a bounded prefix before backend dispatch, or use `full` for complete-body inspection |
 | `requestBody.prefixSize` | no | `64KiB` | Prefix window from 1 byte through `1MiB`, using size strings such as `16KiB`, `100k`, or `1m`; only valid with `prefix` |
+| `requestBody.json` | no | disabled | Explicit independent budgets for incremental JSON evaluation of a complete shared snapshot; only valid with `full` |
 
 For a disruptive `deny` or `block` action, `status` must be a final HTTP status
 from `200` through `599`. Informational responses, including `101 Switching
@@ -343,6 +344,77 @@ The engine has fixed limits for source size, rule counts, regex automata,
 matcher scratch, transaction collections, transformations, body decoding,
 findings, and retained bytes. Limit failures are closed failures; they never
 fall back to an unbounded path.
+
+## Explicit JSON snapshot evaluation
+
+For eligible JSON rules, `requestBody.json` evaluates the complete shared body
+snapshot in bounded chunks without materializing a disk-backed body as one
+contiguous value. The Gateway still waits for complete capture and the WAF decision
+before sending request headers or body to the backend. It uses the same memory/disk
+storage and replay policy as ordinary full inspection.
+
+Set `inspection: full` and supply all budgets below. Values are integers: byte
+fields count bytes, count/depth fields count their named objects, and work fields
+bound engine work. No JSON budget has a production default; zero is a restrictive
+limit. The following small evaluation envelope is an example, not a recommended
+deployment policy. Measure your rules and request mix before enabling it.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: application-waf-json
+  namespace: default
+spec:
+  waf:
+    policyRef:
+      name: application-waf-policy
+    requestBody:
+      inspection: full
+      json:
+        lexical:
+          maxSourceBytes: 1048576
+          maxRawTokenBytes: 65536
+          maxDecodedBytes: 2097152
+          maxEvents: 16384
+          maxDepth: 32
+          maxRetainedBytes: 262144
+          maxWork: 16777216
+        document:
+          maxRetainedBytes: 2097152
+          maxKeyBytes: 65536
+          maxMembers: 16384
+          maxEvents: 16384
+          maxPathBytes: 4096
+          maxDepth: 32
+          maxWork: 16777216
+        plan:
+          maxSubscribers: 64
+          maxRetainedBytes: 65536
+        facts:
+          maxFacts: 131072
+          maxRetainedBytes: 8388608
+          maxWork: 67108864
+```
+
+The `lexical` budgets bound input/token decoding, `document` bounds duplicate-key
+and path publication state, `plan` admits the immutable subscriber plan, and `facts`
+bounds provisional per-value rule results, including overwritten values. These
+limits are independent of the Gateway physical cap and canonical WAF execution
+limits. All keys are required and unknown keys are rejected.
+
+Only unsupported initial admission uses the ordinary full evaluator, including
+non-JSON processors and unsupported rule combinations. A parser, storage or budget
+failure after admission never retries through that evaluator. Detection-only mode
+keeps canonical malformed-body handling, but resource and storage failures still
+reject. Duplicate keys retain the complete evaluator's final-value semantics.
+
+JSON evaluation is opt-in because CPU cost depends on rule count and request shape;
+duplicate-heavy or malformed input may cost more. Existing WAF runtime-byte metrics
+report canonical installed-transaction accounting and exclude provisional JSON
+capacity; they do not report total request memory or RSS.
+The inspected-body byte counter currently covers prefix inspection and excludes
+ordinary full and JSON snapshot scans.
 
 ## Reload behavior
 

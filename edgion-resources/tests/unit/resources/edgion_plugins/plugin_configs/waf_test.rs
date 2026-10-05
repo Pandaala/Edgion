@@ -561,3 +561,158 @@ fn plugin_requires_one_policy_reference_and_accepts_one_profile_selector() {
         assert!(!properties.contains_key(field), "{field}");
     }
 }
+
+fn json_budget_value() -> serde_json::Value {
+    serde_json::json!({
+        "lexical": {"maxSourceBytes": 1, "maxRawTokenBytes": 2, "maxDecodedBytes": 3,
+            "maxEvents": 4, "maxDepth": 5, "maxRetainedBytes": 6, "maxWork": 7},
+        "document": {"maxRetainedBytes": 8, "maxKeyBytes": 9, "maxMembers": 10,
+            "maxEvents": 11, "maxPathBytes": 12, "maxDepth": 13, "maxWork": 14},
+        "plan": {"maxSubscribers": 15, "maxRetainedBytes": 16},
+        "facts": {"maxFacts": 17, "maxRetainedBytes": 18, "maxWork": 19}
+    })
+}
+
+#[test]
+fn json_budgets_require_every_numeric_field_and_reject_unknown_fields() {
+    let value = json_budget_value();
+    for group in ["lexical", "document", "plan", "facts"] {
+        let mut missing_group = value.clone();
+        missing_group.as_object_mut().unwrap().remove(group);
+        assert!(serde_json::from_value::<WafJsonConfig>(missing_group).is_err());
+        for field in value[group].as_object().unwrap().keys() {
+            let mut missing = value.clone();
+            missing[group].as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<WafJsonConfig>(missing).is_err(),
+                "{group}.{field}"
+            );
+            let mut invalid = value.clone();
+            invalid[group][field] = serde_json::json!(-1);
+            assert!(
+                serde_json::from_value::<WafJsonConfig>(invalid).is_err(),
+                "{group}.{field}"
+            );
+        }
+        let mut unknown = value.clone();
+        unknown[group]["unknownBudget"] = serde_json::json!(0);
+        assert!(serde_json::from_value::<WafJsonConfig>(unknown).is_err());
+    }
+    let mut unknown = value;
+    unknown["unknownGroup"] = serde_json::json!({});
+    assert!(serde_json::from_value::<WafJsonConfig>(unknown).is_err());
+}
+
+#[test]
+fn json_budgets_map_exactly_and_preserve_restrictive_zero_limits() {
+    let value = json_budget_value();
+    let config: WafJsonConfig = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(config).unwrap(), value);
+    let limits = config.execution_limits();
+    assert_eq!(
+        limits.lexical,
+        edgion_waf::seclang::JsonStreamLimits {
+            max_source_bytes: 1,
+            max_raw_token_bytes: 2,
+            max_decoded_bytes: 3,
+            max_events: 4,
+            max_depth: 5,
+            max_retained_bytes: 6,
+            max_work: 7,
+        }
+    );
+    assert_eq!(
+        limits.document,
+        edgion_waf::seclang::JsonDocumentLimits {
+            max_retained_bytes: 8,
+            max_key_bytes: 9,
+            max_members: 10,
+            max_events: 11,
+            max_path_bytes: 12,
+            max_depth: 13,
+            max_work: 14,
+        }
+    );
+    assert_eq!((limits.plan.max_subscribers, limits.plan.max_retained_bytes), (15, 16));
+    assert_eq!(
+        (
+            limits.facts.max_facts,
+            limits.facts.max_retained_bytes,
+            limits.facts.max_work
+        ),
+        (17, 18, 19)
+    );
+    let mut zero = value;
+    for group in zero.as_object_mut().unwrap().values_mut() {
+        for field in group.as_object_mut().unwrap().values_mut() {
+            *field = serde_json::json!(0);
+        }
+    }
+    let zero: WafJsonConfig = serde_json::from_value(zero).unwrap();
+    let limits = zero.execution_limits();
+    assert_eq!(limits.lexical.max_source_bytes, 0);
+    assert_eq!(limits.document.max_events, 0);
+    assert_eq!(limits.plan.max_subscribers, 0);
+    assert_eq!(limits.facts.max_work, 0);
+}
+
+#[test]
+fn json_full_only_validation_agrees_for_shape_inline_resolved_and_support() {
+    let json: WafJsonConfig = serde_json::from_value(json_budget_value()).unwrap();
+    let mut inline = WafConfig {
+        rules: "SecAction \"id:1,phase:2,pass\"\n".into(),
+        policy_ref: EdgionConfigDataRef {
+            name: "policy".into(),
+            ..Default::default()
+        },
+        request_body: WafRequestBodyConfig {
+            json: Some(json),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(
+        inline.validate_shape().err().as_deref(),
+        Some("requestBody.json is only valid with full inspection")
+    );
+    assert!(inline.compile_generation().is_err());
+    inline.policy_ref = EdgionConfigDataRef::default();
+    assert_eq!(inline.inspect_support().failure.unwrap().category, "invalid_config");
+    inline.request_body.inspection = WafRequestBodyInspection::Full;
+    assert!(inline.compile_generation().is_ok());
+    assert!(inline.inspect_support().strict_validation_passed);
+
+    let (bundle_ref, bundle) = test_bundle("bundle", 1);
+    let mut resolved = WafConfig {
+        policy_ref: EdgionConfigDataRef {
+            name: "policy".into(),
+            ..Default::default()
+        },
+        resolved_policy: Some(WafPolicyData {
+            profiles: BTreeMap::from([(
+                "default".into(),
+                WafProfile {
+                    bundle_refs: vec![bundle_ref],
+                },
+            )]),
+            default_profile: "default".into(),
+        }),
+        selected_profile: Some("default".into()),
+        resolved_ref_indices: vec![0],
+        resolved_bundles: Some(vec![bundle]),
+        owner_namespace: Some("default".into()),
+        request_body: WafRequestBodyConfig {
+            json: Some(json),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert!(resolved.compile_generation().is_err());
+    resolved.request_body.inspection = WafRequestBodyInspection::Full;
+    assert!(resolved.compile_generation().is_ok());
+    let wire = serde_json::to_value(&resolved).unwrap();
+    assert!(serde_json::from_value::<WafConfig>(wire)
+        .unwrap()
+        .compile_generation()
+        .is_ok());
+}

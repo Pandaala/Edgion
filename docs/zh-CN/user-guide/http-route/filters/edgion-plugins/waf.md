@@ -59,6 +59,7 @@ spec:
 | `priority` | 否 | `0` | 0–65535，仅在同一挂载范围内按较大值优先 |
 | `requestBody.inspection` | 否 | `prefix` | `prefix` 提前检查指定窗口；`full` 检查完整有界请求体 |
 | `requestBody.prefixSize` | 否 | `64KiB` | 前缀窗口，1 字节至 `1MiB`，支持 `16KiB`、`100k`、`1m` 等大小字符串；仅用于 `prefix` |
+| `requestBody.json` | 否 | 关闭 | 为完整共享快照的 JSON 增量执行显式提供独立预算；仅用于 `full` |
 
 规则源码不会写入错误响应、日志或指标，网关管理接口将其脱敏。
 
@@ -258,6 +259,70 @@ Phase 2 中仅检查头部、URI 或查询参数集合（`ARGS_GET`、`ARGS_GET_
 `detectionOnly` 不会忽略传输、存储或物理上限错误。
 
 ## 响应及热更新
+
+### 显式启用 JSON 快照执行
+
+对支持的 JSON 规则，`requestBody.json` 分块检查完整共享快照，不把磁盘正文再次物化为
+一个连续字节值。网关仍在完整捕获并完成 WAF 判断后才向后端发送请求头和正文，复用
+全量模式的内存／磁盘存储和重试策略。
+
+设置 `inspection: full`，并提供全部预算字段。数值为整数：字节字段按字节计，数量和
+深度字段按对象计，work 字段限制引擎工作量。JSON 预算没有生产默认值；零表示严格的
+零上限。下面是小规模评估示例，不是推荐部署参数；启用前应测量实际规则和请求类型。
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: application-waf-json
+  namespace: default
+spec:
+  waf:
+    policyRef:
+      name: application-waf-policy
+    requestBody:
+      inspection: full
+      json:
+        lexical:
+          maxSourceBytes: 1048576
+          maxRawTokenBytes: 65536
+          maxDecodedBytes: 2097152
+          maxEvents: 16384
+          maxDepth: 32
+          maxRetainedBytes: 262144
+          maxWork: 16777216
+        document:
+          maxRetainedBytes: 2097152
+          maxKeyBytes: 65536
+          maxMembers: 16384
+          maxEvents: 16384
+          maxPathBytes: 4096
+          maxDepth: 32
+          maxWork: 16777216
+        plan:
+          maxSubscribers: 64
+          maxRetainedBytes: 65536
+        facts:
+          maxFacts: 131072
+          maxRetainedBytes: 8388608
+          maxWork: 67108864
+```
+
+`lexical` 限制输入、token 和解码；`document` 限制重复键和路径发布状态；`plan` 限制
+不可变订阅计划；`facts` 限制临时规则结果，包括之后被覆盖的值。它们独立于网关物理
+上限和 WAF 规范执行预算。全部字段必填，未知字段会被拒绝。
+
+只有初始能力检查判定不支持时，才使用普通全量执行器，例如非 JSON 解析器或不支持的
+规则组合。开始执行后的解析、存储或预算失败不会切换执行器。`detectionOnly` 保留
+引擎对畸形正文的既有处理，但资源预算和存储错误仍会拒绝。重复键遵循完整执行器的
+最终值语义。
+
+JSON 路径需显式启用，因为 CPU 成本取决于规则数量和请求形状，重复键或畸形输入可能
+更慢。现有 WAF 运行时字节指标只报告已安装事务的规范逻辑计费，不包含临时 JSON 容量，
+也不表示整个请求内存或 RSS。
+现有正文检查字节计数只覆盖前缀检查，不包含普通全量检查和 JSON 快照扫描。
+
+### 响应和配置更新
 
 Phase 3 在响应头发送给客户端前执行。主上游响应始终流式处理，配置不允许完整
 `RESPONSE_BODY` 聚合；phase 4 使用有界响应语义，phase 5 对正常完成的事务执行一次。
