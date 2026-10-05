@@ -303,20 +303,30 @@ for seg in segments {
 
 ### 4.3 for...in range() (Range Loop)
 
-`range(start, end)` generates a sequence of integers from `start` (inclusive) to `end` (exclusive), returned as strings.
-
-> Note: Each element produced by `range()` is a string (`"0"`, `"1"`, ...), not an integer.
+In a direct `for i in range(start, end)` loop, `i` is an `Int`, starting at `start` (inclusive) and increasing by 1 until `end` (exclusive).
 
 ```dsl
 // Iterate from 0 to 9
 for i in range(0, 10) {
-    // i is the string "0", "1", ..., "9"
-    let header_name = "X-Retry-" + i
+    // i is the integer 0, 1, ..., 9
+    let header_name = "X-Retry-" + to_str(i)
     req.remove_header(header_name)
 }
 ```
 
-`range(start, end)` generates at most `min(max_list_len, 1000)` elements (where `max_list_len` is the per-plugin VM limit, default 1024). Any elements beyond that cap are silently truncated.
+A direct range loop does not create a list, so the list truncation cap of the `range()` expression does not apply. It is subject to `maxLoopIterations` (default 100) and the whole script's `maxSteps` (default 10000); exceeding either budget produces a runtime error rather than silent truncation.
+
+When used in an expression, such as an assignment to a variable, `range(start, end)` returns a `List` of numeric strings:
+
+```dsl
+let nums = range(0, 10)
+for item in nums {
+    // item is the string "0", "1", ..., "9"
+    req.remove_header("X-Retry-" + item)
+}
+```
+
+This expression form generates at most `min(max_list_len, 1000)` elements (`max_list_len` corresponds to the `maxListLen` configuration, default 1024); any beyond that cap are silently truncated. Iterating over the returned list is still subject to the VM loop and step budgets. See the [range API reference](api-reference.md#range).
 
 ### 4.4 while (Conditional Loop)
 

@@ -75,9 +75,9 @@ the Gateway factories are independent trust boundaries. Duplicating defaults
 or bounds in Gateway types was also rejected; their defaults now refer to the
 resource constants.
 
-This contract does not replace stricter consumer bounds: `range` still has a
-1,000-element ceiling, request Body uploads still use the gateway physical
-body cap, response conversion still uses `maxStringLen`, and bytecode retains
+This contract does not replace stricter consumer bounds: the `range()`
+expression still has a 1,000-element ceiling, request Body uploads still use
+the gateway physical body cap, response conversion still uses `maxStringLen`, and bytecode retains
 its compile-time structural limits. It is not an absolute size guarantee for
 every collection returned by an API: the fixed three-field top-level HTTP
 result Map and Redis result envelope retain their documented schemas, while a
@@ -86,7 +86,51 @@ header-name Lists use their independent 256-element hard cap. It does not
 change DSL error policy, response streaming, the outbound client, or Tokio
 bridging.
 
+### Direct range loops and range expressions
+
+The two source forms consume different budgets:
+
+- `for i in range(start, end)` is lowered by `parse_for_stmt` in
+  `edgion-dsl/src/parser/stmt.rs` to `StmtKind::ForRange`.
+  `compile_for_range` in `edgion-dsl/src/compiler/loop_.rs` initializes the
+  local from the start expression, compares it with the cached end expression,
+  and increments it by the integer constant 1. With integer bounds, the loop
+  variable is an `Int`; no `BuiltinId::Range` call or List is produced.
+- `let nums = range(start, end)` calls `BuiltinId::Range` in Gateway
+  `lang/builtins.rs`. It constructs a `Value::List` of numeric strings and
+  silently truncates its length to `min(max_list_len, 1000)`.
+
+Both the direct loop and a later `for item in nums` use VM loop counters and
+the execution-wide step budget. `LoopBack` raises `LoopLimitExceeded` on an
+excess counter; `tick_step` raises `StepLimitExceeded` when instructions
+exhaust the step budget. The expression's collection cap does not silently
+truncate a direct loop. Other operations in the body retain their own limits.
+
+The bilingual language-syntax guides previously applied the expression's
+string type and list truncation to the direct-loop example. The corrected
+examples use `to_str(i)` for the integer loop variable and show a separate
+assignment followed by string-list iteration. The Chinese API reference now
+also includes the configured list cap, matching the English reference.
+
 ## Verification and re-evaluation
+
+Documentation correction verified on 2026-10-05:
+
+- Traced the current parser, loop compiler, VM counter/step checks, and
+  `BuiltinId::Range`; read the existing parser/compiler, control-flow,
+  range-list truncation, and sandbox tests as source evidence.
+- Checked both direct-loop and assigned-list examples in the bilingual
+  syntax guides. Their executable lines match across languages, and both
+  `api-reference.md#range` links resolve to existing headings.
+- `cargo fmt --all`, `cargo check --workspace --all-targets`, and
+  `cargo clippy --workspace --all-targets` passed without warning output.
+- Agent-doc, SSA-force, metrics-inventory, Pingora-source, Gateway API
+  transform-contract, and unit-test-layout guards passed.
+- Independent Astra read-only review approved the range-form distinction,
+  bilingual examples, budget evidence, and knowledge scope.
+- No production code or tests changed. No Rust tests or integration suites
+  were executed for this documentation correction; earlier test results
+  below remain historical evidence.
 
 Verified on 2026-09-13:
 
@@ -111,6 +155,11 @@ policy, or the shared outbound timeout contract changes. A new runtime-limit
 field must join `resolve_runtime_limits`, its boundary tests, both user-doc
 languages, and its `VmLimits` or `DslRuntime` consumer.
 
+Re-evaluate the range-form distinction if parser lowering, range-loop
+compilation, loop/step accounting, the List element type, or the expression's
+configured or hard cap changes. Keep the two user-facing syntax examples and
+both language versions aligned with their respective consumers.
+
 Verified on 2026-09-14 for the `http.call` Map boundary:
 
 - Synthetic in-memory responses passed focused tests for retaining exactly the
@@ -127,6 +176,9 @@ Verified on 2026-09-14 for the `http.call` Map boundary:
 
 ## Resolution references
 
+- `correct-dsl-direct-for-range-documentation.md` (P3 documentation task):
+  corrects the bilingual direct-loop explanation and the Chinese expression
+  cap reference without changing the parser, compiler, VM, or builtin behavior.
 - `bound-dsl-runtime-limit-scalars.md` (created 2026-09-10, P1 bugfix task):
   fixed by the resource-owned scalar contract and Gateway factory parity on
   2026-09-13.

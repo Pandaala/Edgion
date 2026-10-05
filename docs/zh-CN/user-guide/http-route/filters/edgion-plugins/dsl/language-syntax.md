@@ -299,20 +299,30 @@ for seg in segments {
 
 ### 4.3 for...in range()（范围循环）
 
-`range(start, end)` 生成从 `start`（含）到 `end`（不含）的整数序列，以字符串形式返回。
-
-> 注意：`range()` 生成的列表中每个元素均为字符串类型（`"0"`、`"1"`），而非整数。
+直接写 `for i in range(start, end)` 时，`i` 是 `Int`，从 `start`（含）开始，每次加 1，直到 `end`（不含）。
 
 ```dsl
 // 遍历 0 到 9
 for i in range(0, 10) {
-    // i 是字符串 "0", "1", ..., "9"
-    let header_name = "X-Retry-" + i
+    // i 是整数 0、1、...、9
+    let header_name = "X-Retry-" + to_str(i)
     req.remove_header(header_name)
 }
 ```
 
-`range(start, end)` 最多生成 `min(max_list_len, 1000)` 个元素（其中 `max_list_len` 是单个插件 VM 的限制，默认 1024）。超出上限的元素会被静默截断。
+直接范围循环不生成列表，因此不受 `range()` 表达式的列表截断上限影响。它受 `maxLoopIterations`（默认 100）和整个脚本的 `maxSteps`（默认 10000）限制；超出任一预算会产生运行时错误，而不是静默截断。
+
+在表达式中使用 `range(start, end)`（例如先赋值给变量）时，它返回数字字符串组成的 `List`：
+
+```dsl
+let nums = range(0, 10)
+for item in nums {
+    // item 是字符串 "0"、"1"、...、"9"
+    req.remove_header("X-Retry-" + item)
+}
+```
+
+这种表达式形式最多生成 `min(max_list_len, 1000)` 个元素（`max_list_len` 对应 `maxListLen` 配置，默认 1024），超出部分会被静默截断。遍历返回的列表仍受 VM 循环和指令预算限制。详见 [range API 参考](api-reference.md#range)。
 
 ### 4.4 while（条件循环）
 
