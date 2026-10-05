@@ -211,3 +211,7 @@ required-features = ["test-util"]
 [[bench]]
 name = "waf_header_ingestion"
 harness = false
+
+[[bench]]
+name = "waf_body_snapshot"
+harness = false

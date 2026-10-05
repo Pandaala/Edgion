@@ -1059,3 +1059,50 @@ fn next_random(state: &mut u64) -> u64 {
     *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
     *state
 }
+
+#[test]
+fn member_pattern_ranges_preserve_word_boundaries_and_reject_invalid_ranges() {
+    let patterns = (0..130).map(|i| format!("#{i:03}#")).collect::<Vec<_>>();
+    let specs = patterns
+        .iter()
+        .map(|value| PatternSpec::Phrase {
+            value,
+            ascii_case_insensitive: false,
+        })
+        .collect::<Vec<_>>();
+    let matcher = CompiledMatcher::compile(&specs, MatcherLimits::default()).unwrap();
+    let mut scratch = matcher.create_scratch();
+    for reference in [false, true] {
+        let results = if reference {
+            matcher.scan_reference(b"#000# #064# #129#", &mut scratch)
+        } else {
+            matcher.scan(b"#000# #064# #129#", &mut scratch)
+        }
+        .unwrap();
+        let cases = [
+            (0..0, Some(false)),
+            (0..1, Some(true)),
+            (1..64, Some(false)),
+            (63..65, Some(true)),
+            (65..129, Some(false)),
+            (129..130, Some(true)),
+            (130..130, Some(false)),
+            (0..130, Some(true)),
+            (130..131, None),
+            (usize::MAX..usize::MAX, None),
+        ];
+        for (range, expected) in &cases {
+            assert_eq!(results.contains_any_in_range(range.clone()), *expected);
+        }
+        assert_eq!(
+            results.contains_any_in_range(std::ops::Range { start: 65, end: 64 }),
+            None
+        );
+        for (range, expected) in cases {
+            assert_eq!(scratch.contains_any_in_range(130, range), expected);
+        }
+        assert_eq!(scratch.contains_any_in_range(129, 0..1), None);
+        assert!(matcher.scan(b"none", &mut scratch).unwrap().is_empty());
+        assert_eq!(scratch.contains_any_in_range(130, 0..130), Some(false));
+    }
+}

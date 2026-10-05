@@ -13,6 +13,10 @@ impl IncludeSource for NoIncludes {
 }
 
 fn generation(source: &str) -> CompiledGeneration {
+    generation_with_frontend_limits(source, FrontendLimits::default())
+}
+
+fn generation_with_frontend_limits(source: &str, limits: FrontendLimits) -> CompiledGeneration {
     let defaults = [
         Phase::RequestHeaders,
         Phase::RequestBody,
@@ -28,7 +32,7 @@ fn generation(source: &str) -> CompiledGeneration {
         &mut NoIncludes,
         None,
         context,
-        FrontendLimits::default(),
+        limits,
     )
     .unwrap()
     .into_parts()
@@ -1731,6 +1735,8 @@ fn ctl_processor_and_force_raw_body_apply_before_publication() {
         .body
         .as_ref()
         .unwrap()
+        .materialized()
+        .unwrap()
         .entries
         .iter()
         .any(|entry| entry.collection == CollectionKind::RequestBody));
@@ -1931,5 +1937,1613 @@ impl RequestState {
             let name = record.name.map(|range| self.bytes_at(range));
             (name, self.bytes_at(record.value))
         })
+    }
+}
+
+#[test]
+fn body_macro_cannot_start_raw_stream_and_keeps_complete_body_value() {
+    let generation = generation("SecRule REQUEST_URI \"@streq %{ARGS.json.key}\" \"id:1,phase:2,deny,status:403\"\n");
+    let mut transaction = Transaction::new(&generation, request(&[], b"/blocked"), RuntimeLimits::default()).unwrap();
+    transaction.execute_request_headers().unwrap();
+    assert!(matches!(
+        transaction.start_request_body_stream(),
+        Err(RuntimeError::GenerationInvariant)
+    ));
+    transaction
+        .publish_request_body(RequestBody::new(
+            br#"{"key":"/blocked"}"#,
+            super::super::super::BodyProcessorSelection::Json,
+        ))
+        .unwrap();
+    let outcome = transaction.execute_request_body().unwrap();
+    assert_eq!(outcome.findings()[0].rule_id(), 1);
+    assert!(outcome.intervention().is_some());
+}
+
+#[test]
+fn structured_reference_duplicate_replacement_removes_earlier_hits_before_rules_run() {
+    let generation = generation("SecRule ARGS \"@contains attack\" \"id:1,phase:2,deny,status:403\"\n");
+    for (body, blocked) in [
+        (br#"{"key":"attack","key":"safe"}"#.as_slice(), false),
+        (br#"{"key":{"removed":"attack"},"key":{"kept":"safe"}}"#, false),
+        (br#"{"key":"safe","key":"attack"}"#, true),
+    ] {
+        let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        transaction.execute_request_headers().unwrap();
+        transaction
+            .publish_request_body(RequestBody::new(
+                body,
+                super::super::super::BodyProcessorSelection::Json,
+            ))
+            .unwrap();
+        let outcome = transaction.execute_request_body().unwrap();
+        let ids: Vec<_> = outcome.findings().iter().map(|finding| finding.rule_id()).collect();
+        assert_eq!(ids, if blocked { vec![1] } else { vec![] });
+        assert_eq!(
+            outcome.intervention().map(|intervention| intervention.rule_id()),
+            blocked.then_some(1)
+        );
+    }
+}
+
+#[test]
+fn structured_reference_standalone_actions_count_each_matching_value_in_reference_order() {
+    let generation = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:'tx.count=0'\"\n",
+        "SecRule ARGS \"@contains attack\" \"id:2,phase:2,pass,setvar:'tx.name_%{TX.count}=%{MATCHED_VAR_NAME}',setvar:'tx.value_%{TX.count}=%{MATCHED_VAR}',setvar:'tx.count=+1'\"\n",
+        "SecRule TX:count \"@eq 2\" \"id:3,phase:2,pass,setvar:'tx.observed=yes'\"\n",
+    ));
+    let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    transaction.execute_request_headers().unwrap();
+    transaction
+        .publish_request_body(RequestBody::new(
+            br#"{"z":"attack-last","m":"safe","a":"attack-first"}"#,
+            super::super::super::BodyProcessorSelection::Json,
+        ))
+        .unwrap();
+    let outcome = transaction.execute_request_body().unwrap();
+    assert_eq!(
+        outcome
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>(),
+        [2, 3]
+    );
+    assert!(outcome.intervention().is_none());
+    assert_eq!(transaction.tx_value(b"count"), Some(b"2".as_slice()));
+    assert_eq!(transaction.tx_value(b"name_0"), Some(b"ARGS:json.a".as_slice()));
+    assert_eq!(transaction.tx_value(b"value_0"), Some(b"attack-first".as_slice()));
+    assert_eq!(transaction.tx_value(b"name_1"), Some(b"ARGS:json.z".as_slice()));
+    assert_eq!(transaction.tx_value(b"value_1"), Some(b"attack-last".as_slice()));
+    assert_eq!(transaction.tx_value(b"name_2"), None);
+    assert_eq!(transaction.tx_value(b"observed"), Some(b"yes".as_slice()));
+}
+
+#[test]
+fn structured_reference_negation_is_per_value_and_empty_collection_does_not_match() {
+    let generation = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:'tx.count=0'\"\n",
+        "SecRule ARGS \"!@streq forbidden\" \"id:2,phase:2,pass,setvar:'tx.count=+1',setvar:'tx.last=%{MATCHED_VAR}'\"\n",
+    ));
+    for (body, count, last) in [
+        (
+            br#"{"a":"forbidden","b":"safe","c":"other"}"#.as_slice(),
+            b"2".as_slice(),
+            Some(b"other".as_slice()),
+        ),
+        (br#"{"a":"forbidden","b":"safe"}"#, b"1", Some(b"safe".as_slice())),
+        (br#"{"a":"forbidden","b":"forbidden"}"#, b"0", None),
+        (b"{}", b"0", None),
+    ] {
+        let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        transaction.execute_request_headers().unwrap();
+        transaction
+            .publish_request_body(RequestBody::new(
+                body,
+                super::super::super::BodyProcessorSelection::Json,
+            ))
+            .unwrap();
+        let outcome = transaction.execute_request_body().unwrap();
+        assert_eq!(
+            outcome
+                .findings()
+                .iter()
+                .map(|finding| finding.rule_id())
+                .collect::<Vec<_>>(),
+            if last.is_some() { vec![2] } else { vec![] }
+        );
+        assert!(outcome.intervention().is_none());
+        assert_eq!(transaction.tx_value(b"count"), Some(count));
+        assert_eq!(transaction.tx_value(b"last"), last);
+    }
+}
+
+#[test]
+fn structured_reference_chain_children_can_observe_matches_and_captures() {
+    let generation = generation(concat!(
+        "SecRule ARGS:json.a \"@rx ^alpha-([0-9]+)$\" \"id:1,phase:2,pass,capture,chain,setvar:'tx.root_name=%{MATCHED_VAR_NAME}'\"\n",
+        "SecRule MATCHED_VAR \"@streq alpha-1\" \"chain,setvar:'tx.child_scalar=%{MATCHED_VAR}'\"\n",
+        "SecRule MATCHED_VARS:ARGS:json.a \"@streq alpha-1\" \"setvar:'tx.child_collection=%{MATCHED_VAR}',setvar:'tx.capture_seen=%{TX.1}'\"\n",
+    ));
+    let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    transaction.execute_request_headers().unwrap();
+    transaction
+        .publish_request_body(RequestBody::new(
+            br#"{"a":"alpha-1"}"#,
+            super::super::super::BodyProcessorSelection::Json,
+        ))
+        .unwrap();
+    let outcome = transaction.execute_request_body().unwrap();
+    assert_eq!(
+        outcome
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>(),
+        [1]
+    );
+    assert_eq!(transaction.tx_value(b"root_name"), Some(b"ARGS:json.a".as_slice()));
+    assert_eq!(transaction.tx_value(b"child_scalar"), Some(b"alpha-1".as_slice()));
+    assert_eq!(transaction.tx_value(b"child_collection"), Some(b"alpha-1".as_slice()));
+    assert_eq!(transaction.tx_value(b"capture_seen"), Some(b"1".as_slice()));
+}
+
+#[test]
+fn structured_reference_later_units_keep_captures_but_clear_match_observers() {
+    let generation = generation(concat!(
+        "SecRule ARGS \"@rx ^([a-z]+)-([0-9]+)$\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule MATCHED_VAR \"@streq beta-2\" \"id:2,phase:2,pass,setvar:'tx.scalar_leak=yes'\"\n",
+        "SecRule MATCHED_VARS \"@streq alpha-1\" \"id:3,phase:2,pass,setvar:'tx.collection_leak=yes'\"\n",
+        "SecAction \"id:4,phase:2,pass,setvar:'tx.persisted_capture=%{TX.1}',setvar:'tx.cleared=%{MATCHED_VAR}'\"\n",
+        "SecRule TX:1 \"@streq beta\" \"id:5,phase:2,deny,status:403\"\n",
+    ));
+    let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    transaction.execute_request_headers().unwrap();
+    transaction
+        .publish_request_body(RequestBody::new(
+            br#"{"z":"beta-2","a":"alpha-1"}"#,
+            super::super::super::BodyProcessorSelection::Json,
+        ))
+        .unwrap();
+    let outcome = transaction.execute_request_body().unwrap();
+    assert_eq!(
+        outcome
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>(),
+        [1, 4, 5]
+    );
+    assert_eq!(outcome.intervention().unwrap().rule_id(), 5);
+    assert_eq!(transaction.tx_value(b"0"), Some(b"beta-2".as_slice()));
+    assert_eq!(transaction.tx_value(b"1"), Some(b"beta".as_slice()));
+    assert_eq!(transaction.tx_value(b"2"), Some(b"2".as_slice()));
+    assert_eq!(transaction.tx_value(b"persisted_capture"), Some(b"beta".as_slice()));
+    assert_eq!(transaction.tx_value(b"scalar_leak"), None);
+    assert_eq!(transaction.tx_value(b"collection_leak"), None);
+    assert_eq!(transaction.tx_value(b"cleared"), Some(b"".as_slice()));
+}
+
+#[test]
+fn structured_reference_pure_silent_rule_still_enforces_matching_value_count_limit() {
+    let generation = generation("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,nolog,noauditlog\"\n");
+    for (body, succeeds) in [
+        (br#"["hit","hit"]"#.as_slice(), true),
+        (br#"["hit","hit","hit"]"#, false),
+    ] {
+        let limits = RuntimeLimits {
+            max_tx_variables: 2,
+            ..RuntimeLimits::default()
+        };
+        let mut transaction = Transaction::new(&generation, request(&[], b"/"), limits).unwrap();
+        transaction.execute_request_headers().unwrap();
+        transaction
+            .publish_request_body(RequestBody::new(
+                body,
+                super::super::super::BodyProcessorSelection::Json,
+            ))
+            .unwrap();
+        let result = transaction.execute_request_body();
+        if succeeds {
+            let outcome = result.unwrap();
+            assert_eq!(
+                outcome
+                    .findings()
+                    .iter()
+                    .map(|finding| finding.rule_id())
+                    .collect::<Vec<_>>(),
+                [1]
+            );
+            assert!(outcome.intervention().is_none());
+        } else {
+            assert_eq!(result.unwrap_err(), RuntimeError::TxVariableLimit { limit: 2 });
+        }
+    }
+}
+
+#[test]
+fn structured_reference_pure_silent_rule_checks_intermediate_matched_byte_limit() {
+    let generation = generation("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,nolog,noauditlog\"\n");
+    let large = format!("hit{}", "x".repeat(1000));
+    let body = format!(r#"{{"a":"{large}","z":"hit"}}"#);
+    // A short final match cannot erase the earlier, larger matched-value state.
+    // No action or later rule reads MATCHED_VAR(S), but their limits still apply.
+    for (limit, succeeds) in [(1500, false), (2500, true)] {
+        let limits = RuntimeLimits {
+            max_tx_bytes: limit,
+            ..RuntimeLimits::default()
+        };
+        let mut transaction = Transaction::new(&generation, request(&[], b"/"), limits).unwrap();
+        transaction.execute_request_headers().unwrap();
+        transaction
+            .publish_request_body(RequestBody::new(
+                body.as_bytes(),
+                super::super::super::BodyProcessorSelection::Json,
+            ))
+            .unwrap();
+        let result = transaction.execute_request_body();
+        if succeeds {
+            let outcome = result.unwrap();
+            assert_eq!(
+                outcome
+                    .findings()
+                    .iter()
+                    .map(|finding| finding.rule_id())
+                    .collect::<Vec<_>>(),
+                [1]
+            );
+            assert!(outcome.intervention().is_none());
+        } else {
+            assert_eq!(result.unwrap_err(), RuntimeError::TxByteLimit { limit });
+        }
+    }
+}
+
+#[test]
+fn structured_reference_committed_match_charge_survives_nonmatching_next_phase() {
+    let generation = generation(concat!(
+        "SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass,nolog,noauditlog\"\n",
+        "SecRule REQUEST_URI \"@streq /never\" \"id:2,phase:3,pass\"\n",
+    ));
+    let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    transaction.execute_request_headers().unwrap();
+    transaction
+        .publish_request_body(RequestBody::new(
+            br#"{"a":"hit","z":"hit-again"}"#,
+            super::super::super::BodyProcessorSelection::Json,
+        ))
+        .unwrap();
+    let before_match = transaction.retained_bytes();
+    let outcome = transaction.execute_request_body().unwrap();
+    assert_eq!(outcome.findings()[0].rule_id(), 1);
+    assert!(transaction.retained_bytes() > before_match);
+    transaction.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+    let before_nonmatch = transaction.retained_bytes();
+    let outcome = transaction.execute_response_headers().unwrap();
+    assert_eq!(outcome.evaluated_units(), 1);
+    assert!(outcome.findings().is_empty());
+    assert_eq!(transaction.retained_bytes(), before_nonmatch);
+}
+
+#[test]
+fn structured_reference_enforced_deny_hides_later_error_but_detection_only_does_not() {
+    let generation = generation(concat!(
+        "SecRule ARGS:json.a \"@pm hit\" \"id:1,phase:2,deny,status:403\"\n",
+        "SecRule ARGS:json.z \"@pm hit\" \"id:2,phase:2,pass\"\n",
+    ));
+    let body = format!(r#"{{"z":"{}","a":"hit"}}"#, "x".repeat(512));
+    for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+        let mut transaction = Transaction::new_with_modes(
+            &generation,
+            request(&[], b"/"),
+            RuntimeLimits {
+                max_operator_work_bytes: 256,
+                ..RuntimeLimits::default()
+            },
+            EvaluationMode::Accelerated,
+            mode,
+        )
+        .unwrap();
+        transaction.execute_request_headers().unwrap();
+        transaction
+            .publish_request_body(RequestBody::new(
+                body.as_bytes(),
+                super::super::super::BodyProcessorSelection::Json,
+            ))
+            .unwrap();
+        let result = transaction.execute_request_body();
+        if mode == RuleEngineMode::On {
+            let outcome = result.unwrap();
+            assert_eq!(outcome.evaluated_units(), 1);
+            assert_eq!(outcome.intervention().unwrap().rule_id(), 1);
+        } else {
+            assert_eq!(result.unwrap_err(), RuntimeError::OperatorWorkLimit { limit: 256 });
+        }
+    }
+}
+
+#[test]
+fn json_match_summary_retention_matches_complete_transaction_thresholds() {
+    use crate::seclang::JsonMatchSummary;
+
+    for seed in ["", "existing-state"] {
+        let prefix = if seed.is_empty() {
+            String::new()
+        } else {
+            format!("SecAction \"id:1,phase:1,pass,setvar:'tx.seed={seed}'\"\n")
+        };
+        let source = format!("{prefix}SecRule ARGS \"@pm hit\" \"id:2,phase:2,pass,nolog,noauditlog\"\n");
+        let generation = generation(&source);
+        // Enumerate all sequences of up to three short/medium/long matches.
+        // Reverse source keys so reference sorting, rather than arrival order,
+        // determines the retention peak.
+        for length in 0..=3_u32 {
+            for mut choice in 0..3_usize.pow(length) {
+                let mut fields = Vec::new();
+                let mut summary = JsonMatchSummary::new(size_of::<TxEntry>());
+                for index in 0..length {
+                    let value_len = [3, 80, 512][choice % 3];
+                    choice /= 3;
+                    let key = format!("k{index}");
+                    let value = format!("hit{}", "x".repeat(value_len - 3));
+                    summary.append(format!("ARGS:json.{key}").len(), value.len()).unwrap();
+                    fields.push(format!("\"{key}\":\"{value}\""));
+                }
+                fields.reverse();
+                let body = format!("{{{}}}", fields.join(","));
+                let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+                let before_headers = tx.retained_bytes();
+                tx.execute_request_headers().unwrap();
+                let base = tx.retained_bytes() - before_headers;
+                tx.publish_request_body(RequestBody::new(
+                    body.as_bytes(),
+                    super::super::super::BodyProcessorSelection::Json,
+                ))
+                .unwrap();
+                let before_body = tx.retained_bytes();
+                let expected = summary.retention(base).unwrap();
+                let outcome = tx.execute_request_body().unwrap();
+                assert_eq!(outcome.findings().len(), usize::from(length != 0));
+                assert_eq!(tx.retained_bytes() - before_body + base, expected.final_bytes);
+
+                if length == 0 {
+                    assert_eq!(expected.peak_bytes, base);
+                    continue;
+                }
+                for (limit, succeeds) in [(expected.peak_bytes, true), (expected.peak_bytes - 1, false)] {
+                    let mut tx = Transaction::new(
+                        &generation,
+                        request(&[], b"/"),
+                        RuntimeLimits {
+                            max_tx_bytes: limit,
+                            ..RuntimeLimits::default()
+                        },
+                    )
+                    .unwrap();
+                    tx.execute_request_headers().unwrap();
+                    tx.publish_request_body(RequestBody::new(
+                        body.as_bytes(),
+                        super::super::super::BodyProcessorSelection::Json,
+                    ))
+                    .unwrap();
+                    let result = tx.execute_request_body();
+                    if succeeds {
+                        assert_eq!(result.unwrap().findings()[0].rule_id(), 2);
+                    } else {
+                        assert_eq!(result.unwrap_err(), RuntimeError::TxByteLimit { limit });
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn json_execution_limits() -> json_rules::JsonExecutionLimits {
+    use crate::seclang::{JsonDocumentLimits, JsonStreamLimits};
+    json_rules::JsonExecutionLimits {
+        lexical: JsonStreamLimits::default(),
+        document: JsonDocumentLimits {
+            max_retained_bytes: 16 * 1024 * 1024,
+            max_key_bytes: 1024 * 1024,
+            max_members: 65_536,
+            max_events: 131_072,
+            max_path_bytes: 16 * 1024,
+            max_depth: 64,
+            max_work: 128 * 1024 * 1024,
+        },
+        plan: json_rules::JsonPlanLimits {
+            max_subscribers: 128,
+            max_retained_bytes: 1024 * 1024,
+        },
+        facts: json_rules::JsonFactLimits {
+            max_facts: 131_072,
+            max_retained_bytes: 32 * 1024 * 1024,
+            max_work: 128 * 1024 * 1024,
+        },
+    }
+}
+
+fn json_runtime_error(error: json_rules::JsonExecutionError) -> RuntimeError {
+    match error {
+        json_rules::JsonExecutionError::Runtime(error) => error,
+        json_rules::JsonExecutionError::Body(crate::seclang::JsonBodyError::Body(kind)) => RuntimeError::Body { kind },
+        error => panic!("unexpected independent streaming failure: {error:?}"),
+    }
+}
+
+fn compare_json_transaction(source: &str, body: &[u8], split: usize, limits: RuntimeLimits, mode: RuleEngineMode) {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation(source);
+    let mut reference = Transaction::new_with_modes(
+        &generation,
+        request(&[], b"/?q=hit&q=miss"),
+        limits,
+        EvaluationMode::Accelerated,
+        mode,
+    )
+    .unwrap();
+    let mut streamed = Transaction::new_with_modes(
+        &generation,
+        request(&[], b"/?q=hit&q=miss"),
+        limits,
+        EvaluationMode::Accelerated,
+        mode,
+    )
+    .unwrap();
+    assert_eq!(reference.execute_request_headers(), streamed.execute_request_headers());
+    let expected = reference
+        .publish_request_body(RequestBody::new(body, BodyProcessorSelection::Json))
+        .and_then(|()| reference.execute_request_body());
+    let actual = streamed
+        .execute_json_body_inputs(
+            BodyProcessorSelection::Json,
+            [
+                JsonStreamInput::Data(&body[..split]),
+                JsonStreamInput::Data(&body[split..]),
+                JsonStreamInput::Complete,
+            ],
+            json_execution_limits(),
+        )
+        .map_err(json_runtime_error);
+    assert_eq!(actual, expected);
+    assert_eq!(streamed.next_phase(), reference.next_phase());
+    assert_eq!(streamed.request_body_error(), reference.request_body_error());
+    assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+    assert_eq!(streamed.request.entry_count, reference.request.entry_count);
+    assert_eq!(streamed.request.body.is_some(), reference.request.body.is_some());
+    assert_eq!(streamed.tx_value(b"seed"), reference.tx_value(b"seed"));
+    let entries = |tx: &TxState| {
+        tx.entries
+            .iter()
+            .map(|entry| (entry.key.clone(), entry.value.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(entries(&streamed.tx), entries(&reference.tx));
+    assert_eq!(streamed.capture_keys, reference.capture_keys);
+    // Runtime errors leave Phase 2 and earlier commits available to a retry.
+    if expected.is_ok() {
+        assert!(streamed.json_body_state.is_empty());
+        assert_eq!(streamed.json_body_state.capacity(), 0);
+    }
+    if expected.is_err() && reference.request.body.is_some() {
+        assert_eq!(streamed.json_body_state.len(), 1);
+        assert_eq!(streamed.execute_request_body(), reference.execute_request_body());
+        assert_eq!(entries(&streamed.tx), entries(&reference.tx));
+        assert_eq!(streamed.capture_keys, reference.capture_keys);
+        assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+        assert_eq!(streamed.next_phase(), reference.next_phase());
+    }
+}
+
+#[test]
+fn json_transaction_schedule_matches_complete_body_at_every_split() {
+    let source = concat!(
+        "SecAction \"id:9,phase:1,pass,setvar:tx.seed=5\"\n",
+        "SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass,tag:'test',severity:NOTICE\"\n",
+        "SecRule ARGS \"@pm absent\" \"id:2,phase:2,pass,nolog,noauditlog\"\n",
+        "SecRule ARGS_NAMES \"!@pm absent\" \"id:3,phase:2,deny,status:418\"\n",
+        "SecRule ARGS:json.a \"@pm hit\" \"id:4,phase:2,pass,t:lowercase\"\n",
+    );
+    for input in [
+        b"".as_slice(),
+        b"{}",
+        b"null",
+        b"[]",
+        b" ",
+        b"[",
+        br#"{"a":"HIT","a":"hit","z":[null,"miss"]}"#,
+        br#"{"a.b":"hit","a":{"b":"miss"}}"#,
+    ] {
+        for split in 0..=input.len() {
+            for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+                for max_findings in [0, 1, 8] {
+                    compare_json_transaction(
+                        source,
+                        input,
+                        split,
+                        RuntimeLimits {
+                            max_findings,
+                            ..RuntimeLimits::default()
+                        },
+                        mode,
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn json_transaction_deny_hides_deferred_errors_and_detection_mode_retries_them() {
+    let source = concat!(
+        "SecRule ARGS:json.a \"@pm hit\" \"id:1,phase:2,deny,status:403\"\n",
+        "SecRule ARGS:json.z \"@pm hit\" \"id:2,phase:2,pass\"\n",
+    );
+    let body = format!(r#"{{"z":"{}","a":"hit"}}"#, "x".repeat(512));
+    for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+        compare_json_transaction(
+            source,
+            body.as_bytes(),
+            19,
+            RuntimeLimits {
+                max_transformation_output_bytes: 32,
+                ..RuntimeLimits::default()
+            },
+            mode,
+        );
+        compare_json_transaction(
+            source,
+            body.as_bytes(),
+            31,
+            RuntimeLimits {
+                max_operator_work_bytes: 256,
+                ..RuntimeLimits::default()
+            },
+            mode,
+        );
+    }
+}
+
+#[test]
+fn json_transaction_preserves_publication_and_runtime_limit_order() {
+    let source =
+        "SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\nSecRule ARGS_NAMES \"@pm json\" \"id:2,phase:2,pass\"\n";
+    let body = br#"{"a":"hit","z":"hit-again"}"#;
+    for max_operator_evaluations in [0, 1, 2, 8] {
+        for max_selected_values in [0, 1, 3, 8] {
+            for max_tx_variables in [0, 1, 8] {
+                compare_json_transaction(
+                    source,
+                    body,
+                    9,
+                    RuntimeLimits {
+                        max_operator_evaluations,
+                        max_selected_values,
+                        max_tx_variables,
+                        ..RuntimeLimits::default()
+                    },
+                    RuleEngineMode::On,
+                );
+            }
+        }
+    }
+    for max_tx_bytes in [0, 32, 96, 160, 1024] {
+        compare_json_transaction(
+            source,
+            body,
+            0,
+            RuntimeLimits {
+                max_tx_bytes,
+                ..RuntimeLimits::default()
+            },
+            RuleEngineMode::On,
+        );
+    }
+    for max_body_entries in [0, 1, 2, 3, 6, 7] {
+        compare_json_transaction(
+            source,
+            body,
+            4,
+            RuntimeLimits {
+                body: crate::seclang::BodyLimits {
+                    max_entries: max_body_entries,
+                    ..crate::seclang::BodyLimits::default()
+                },
+                ..RuntimeLimits::default()
+            },
+            RuleEngineMode::On,
+        );
+    }
+}
+
+#[test]
+fn json_transaction_publication_admission_matches_exact_collection_and_retention_caps() {
+    use crate::seclang::BodyProcessorSelection;
+    let source = concat!(
+        "SecRule REQUEST_METHOD \"@streq GET\" \"id:1,phase:1,pass\"\n",
+        "SecRule ARGS \"@pm hit\" \"id:2,phase:2,pass\"\n",
+    );
+    let generation = generation(source);
+    let body = br#"{"a":"hit"}"#;
+    let mut probe = Transaction::new(&generation, request(&[], b"/?q=hit&q=miss"), RuntimeLimits::default()).unwrap();
+    probe.execute_request_headers().unwrap();
+    probe
+        .publish_request_body(RequestBody::new(body, BodyProcessorSelection::Json))
+        .unwrap();
+    for max_collection_entries in [probe.request.entry_count - 1, probe.request.entry_count] {
+        for max_retained_bytes in [
+            probe.retained_bytes() - 1,
+            probe.retained_bytes(),
+            probe.retained_bytes() + 1024,
+        ] {
+            compare_json_transaction(
+                source,
+                body,
+                2,
+                RuntimeLimits {
+                    max_collection_entries,
+                    max_retained_bytes,
+                    ..RuntimeLimits::default()
+                },
+                RuleEngineMode::On,
+            );
+        }
+    }
+}
+
+#[test]
+fn json_transaction_retention_matches_response_admission_and_later_match_replacement() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation(concat!(
+        "SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n",
+        "SecRule REQUEST_URI \"@streq /never\" \"id:2,phase:3,pass\"\n",
+        "SecRule REQUEST_METHOD \"@streq GET\" \"id:3,phase:4,pass\"\n",
+        "SecRule REQUEST_METHOD \"@streq GET\" \"id:4,phase:5,pass\"\n",
+    ));
+    let body = br#"{"a":"hit","z":"hit-again"}"#;
+    for extra_retention in [0, 1, 8, 64, 4096] {
+        let mut reference = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        let mut streamed = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        reference.execute_request_headers().unwrap();
+        streamed.execute_request_headers().unwrap();
+        reference
+            .publish_request_body(RequestBody::new(body, BodyProcessorSelection::Json))
+            .unwrap();
+        let expected = reference.execute_request_body().unwrap();
+        let actual = streamed
+            .execute_json_body_inputs(
+                BodyProcessorSelection::Json,
+                [JsonStreamInput::Data(body), JsonStreamInput::Complete],
+                json_execution_limits(),
+            )
+            .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+        assert!(streamed.tx.virtual_matches.is_some());
+        assert!(streamed.json_body_state.is_empty());
+        let cap = reference.retained_bytes() + extra_retention;
+        reference.limits.max_retained_bytes = cap;
+        streamed.limits.max_retained_bytes = cap;
+        let expected = reference.publish_response_head(ResponseHead::new(200, &[]));
+        assert_eq!(streamed.publish_response_head(ResponseHead::new(200, &[])), expected);
+        assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+        if expected.is_err() {
+            continue;
+        }
+        assert_eq!(
+            streamed.execute_response_headers(),
+            reference.execute_response_headers()
+        );
+        assert!(streamed.tx.virtual_matches.is_some());
+        assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+        let expected = reference.execute_response_window(ResponseWindow::new(b"hit", true));
+        assert_eq!(
+            streamed.execute_response_window(ResponseWindow::new(b"hit", true)),
+            expected
+        );
+        assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+        assert!(streamed.response.as_ref().unwrap().window.is_none());
+        assert_eq!(streamed.next_phase(), reference.next_phase());
+        if expected.is_ok() {
+            assert!(streamed.tx.virtual_matches.is_none());
+            assert_eq!(streamed.execute_logging(), reference.execute_logging());
+            assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+        }
+    }
+}
+
+#[test]
+fn json_transaction_rejects_unsupported_admission_before_consuming_input() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let source = "SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n";
+    let compiled = generation(source);
+    let mut tx = Transaction::new(&compiled, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    let input =
+        || std::iter::from_fn(|| -> Option<JsonStreamInput<'static>> { panic!("input consumed before admission") });
+    assert!(matches!(
+        tx.execute_json_body_inputs(BodyProcessorSelection::Json, input(), json_execution_limits()),
+        Err(json_rules::JsonExecutionError::Runtime(RuntimeError::PhaseOrder { .. }))
+    ));
+    tx.execute_request_headers().unwrap();
+    assert!(tx
+        .execute_json_body_inputs(BodyProcessorSelection::Xml, input(), json_execution_limits())
+        .is_err());
+    assert!(tx.request.body.is_none());
+    tx.publish_request_body(RequestBody::new(b"{}", BodyProcessorSelection::Json))
+        .unwrap();
+    assert!(matches!(
+        tx.execute_json_body_inputs(BodyProcessorSelection::Json, input(), json_execution_limits()),
+        Err(json_rules::JsonExecutionError::Runtime(
+            RuntimeError::RequestBodyAlreadyPublished
+        ))
+    ));
+
+    for target in [
+        "ARGS",
+        "ARGS_NAMES",
+        "ARGS_COMBINED_SIZE",
+        "REQUEST_BODY",
+        "REQUEST_BODY_LENGTH",
+        "REQBODY_PROCESSOR",
+        "FILES_NAMES",
+    ] {
+        let source = format!("{source}SecRule {target} \"@pm hit\" \"id:2,phase:3,pass\"\n");
+        let generation = generation(&source);
+        let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        assert_eq!(
+            tx.execute_json_body_inputs(BodyProcessorSelection::Json, input(), json_execution_limits()),
+            Err(json_rules::JsonExecutionError::Unsupported)
+        );
+        assert!(tx.request.body.is_none());
+    }
+}
+
+#[test]
+fn json_transaction_incomplete_abandoned_and_trailing_input_install_no_publication() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation("SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n");
+    for inputs in [
+        vec![JsonStreamInput::Data(b"{}")],
+        vec![JsonStreamInput::Data(b"{"), JsonStreamInput::Abandoned],
+        vec![JsonStreamInput::Complete, JsonStreamInput::Data(b"x")],
+    ] {
+        let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        let before = tx.retained_bytes();
+        assert!(tx
+            .execute_json_body_inputs(BodyProcessorSelection::Json, inputs, json_execution_limits())
+            .is_err());
+        assert!(tx.request.body.is_none());
+        assert!(tx.json_body_state.is_empty());
+        assert_eq!(tx.retained_bytes(), before);
+        assert_eq!(tx.next_phase(), Some(Phase::RequestBody));
+        assert!(tx
+            .execute_json_body_inputs(
+                BodyProcessorSelection::Json,
+                [JsonStreamInput::Data(b"{}"), JsonStreamInput::Complete],
+                json_execution_limits()
+            )
+            .is_ok());
+    }
+}
+
+#[test]
+fn json_transaction_later_matched_readers_clear_inherited_state_and_chains_see_new_matches() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation(concat!(
+        "SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n",
+        "SecRule MATCHED_VARS \"@contains hit\" \"id:2,phase:3,pass,setvar:tx.inherited=1\"\n",
+        "SecRule REQUEST_METHOD \"@streq GET\" \"id:3,phase:3,pass,chain\"\n",
+        "SecRule MATCHED_VARS \"@contains GET\" \"setvar:tx.chain=1\"\n",
+    ));
+    let mut reference = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    let mut streamed = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    reference.execute_request_headers().unwrap();
+    streamed.execute_request_headers().unwrap();
+    let body = br#"{"a":"hit"}"#;
+    reference
+        .publish_request_body(RequestBody::new(body, BodyProcessorSelection::Json))
+        .unwrap();
+    assert_eq!(
+        streamed
+            .execute_json_body_inputs(
+                BodyProcessorSelection::Json,
+                [JsonStreamInput::Data(body), JsonStreamInput::Complete],
+                json_execution_limits()
+            )
+            .unwrap(),
+        reference.execute_request_body().unwrap()
+    );
+    reference.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+    streamed.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+    let actual = streamed.execute_response_headers().unwrap();
+    assert_eq!(actual, reference.execute_response_headers().unwrap());
+    assert_eq!(
+        actual
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>(),
+        [3]
+    );
+    assert_eq!(streamed.tx_value(b"inherited"), None);
+    assert_eq!(streamed.tx_value(b"chain"), Some(b"1".as_slice()));
+    assert!(streamed.tx.virtual_matches.is_none());
+    assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+}
+
+#[test]
+fn json_transaction_resolves_auto_processor_and_rejects_raw_lane_conflicts() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let json_generation = generation("SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n");
+    let headers = [RequestHeader::new(b"content-type", b"application/problem+json")];
+    let mut tx = Transaction::new(&json_generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    tx.execute_json_body_inputs(
+        BodyProcessorSelection::Auto,
+        [JsonStreamInput::Data(b"{}"), JsonStreamInput::Complete],
+        json_execution_limits(),
+    )
+    .unwrap();
+    assert!(matches!(
+        tx.start_request_body_stream(),
+        Err(RuntimeError::PhaseOrder { .. })
+    ));
+    assert!(matches!(
+        tx.execute_request_body(),
+        Err(RuntimeError::PhaseOrder { .. })
+    ));
+
+    let raw_generation = generation("SecRule REQUEST_BODY \"@pm hit\" \"id:1,phase:2,pass\"\n");
+    let mut tx = Transaction::new(&raw_generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    tx.start_request_body_stream().unwrap();
+    let before = tx.retained_bytes();
+    let inputs =
+        std::iter::from_fn(|| -> Option<JsonStreamInput<'static>> { panic!("raw lane conflict consumed input") });
+    assert_eq!(
+        tx.execute_json_body_inputs(BodyProcessorSelection::Json, inputs, json_execution_limits()),
+        Err(json_rules::JsonExecutionError::State)
+    );
+    assert!(tx.request.body.is_none());
+    assert!(tx.request_body_stream.is_some());
+    assert_eq!(tx.retained_bytes(), before);
+}
+
+#[test]
+fn json_transaction_source_and_fact_failures_leave_request_unpublished() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation("SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n");
+    for source_failure in [false, true] {
+        let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        let before = tx.retained_bytes();
+        let mut limits = json_execution_limits();
+        if source_failure {
+            limits.lexical.max_source_bytes = 0;
+        } else {
+            limits.facts.max_facts = 0;
+        }
+        assert!(tx
+            .execute_json_body_inputs(
+                BodyProcessorSelection::Json,
+                [JsonStreamInput::Data(br#"{"a":"hit"}"#), JsonStreamInput::Complete],
+                limits
+            )
+            .is_err());
+        assert!(tx.request.body.is_none());
+        assert!(tx.json_body_state.is_empty());
+        assert_eq!(tx.retained_bytes(), before);
+        assert_eq!(tx.next_phase(), Some(Phase::RequestBody));
+    }
+}
+
+#[test]
+fn json_persistent_interleaved_chunks_match_reference_without_replacing_scratch() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation(concat!(
+        "SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass,t:lowercase\"\n",
+        "SecRule ARGS_NAMES \"!@pm absent\" \"id:2,phase:2,deny,status:418\"\n",
+    ));
+    for body in [
+        br#"{"a":"HIT","a":"miss","z":["hit",null]}"#.as_slice(),
+        b"{}",
+        b"[",
+        b"",
+    ] {
+        for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+            let limits = RuntimeLimits::default();
+            let make = || {
+                Transaction::new_with_modes(
+                    &generation,
+                    request(&[], b"/?q=hit"),
+                    limits,
+                    EvaluationMode::Accelerated,
+                    mode,
+                )
+                .unwrap()
+            };
+            let mut reference = make();
+            let mut streamed = make();
+            reference.execute_request_headers().unwrap();
+            streamed.execute_request_headers().unwrap();
+            let scratch = (
+                streamed.group_scratch.as_ptr(),
+                streamed.group_scratch.capacity(),
+                streamed.scratch_bytes,
+            );
+            let before = streamed.retained_bytes();
+            streamed
+                .start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+                .unwrap();
+            for byte in body.chunks(1) {
+                streamed.feed_json_request_body(JsonStreamInput::Data(b"")).unwrap();
+                let mut callback_buffer = byte.to_vec();
+                streamed
+                    .feed_json_request_body(JsonStreamInput::Data(&callback_buffer))
+                    .unwrap();
+                callback_buffer.fill(0);
+                assert!(streamed.request.body.is_none());
+                assert_eq!(streamed.retained_bytes(), before);
+                assert_eq!(
+                    scratch,
+                    (
+                        streamed.group_scratch.as_ptr(),
+                        streamed.group_scratch.capacity(),
+                        streamed.scratch_bytes
+                    )
+                );
+            }
+            let actual = streamed
+                .feed_json_request_body(JsonStreamInput::Complete)
+                .and_then(|()| {
+                    assert!(streamed.request.body.is_none());
+                    streamed.finish_json_request_body()
+                })
+                .map_err(json_runtime_error);
+            let expected = reference
+                .publish_request_body(RequestBody::new(body, BodyProcessorSelection::Json))
+                .and_then(|()| reference.execute_request_body());
+            assert_eq!(actual, expected);
+            assert_eq!(streamed.next_phase(), reference.next_phase());
+            assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+            assert_eq!(streamed.request_body_error(), reference.request_body_error());
+            assert_eq!(
+                scratch,
+                (
+                    streamed.group_scratch.as_ptr(),
+                    streamed.group_scratch.capacity(),
+                    streamed.scratch_bytes
+                )
+            );
+        }
+    }
+}
+
+#[test]
+fn json_persistent_abandonment_is_sticky_and_new_source_restart_is_explicit() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation("SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n");
+    let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    let before = tx.retained_bytes();
+    tx.start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+        .unwrap();
+    tx.feed_json_request_body(JsonStreamInput::Data(br#"{"a":"hit","b":"unfinished"#))
+        .unwrap();
+    let error = tx.feed_json_request_body(JsonStreamInput::Abandoned).unwrap_err();
+    assert_eq!(tx.feed_json_request_body(JsonStreamInput::Complete), Err(error));
+    assert_eq!(tx.finish_json_request_body(), Err(error));
+    assert_eq!(tx.retained_bytes(), before);
+    assert!(tx.request.body.is_none());
+    assert_eq!(tx.json_body_state.capacity(), 0);
+    assert!(tx
+        .publish_request_body(RequestBody::new(b"{}", BodyProcessorSelection::Json))
+        .is_err());
+    assert!(tx.start_request_body_stream().is_err());
+    assert!(tx.execute_request_body_stream_chunk(b"ignored", true).is_err());
+    assert!(tx
+        .execute_request_body_prefix(b"", 1, RequestBodyPrefixCompletion::EndOfStream)
+        .is_err());
+    assert!(tx
+        .start_json_request_body(BodyProcessorSelection::Xml, json_execution_limits())
+        .is_err());
+    assert_eq!(tx.feed_json_request_body(JsonStreamInput::Data(b"{}")), Err(error));
+    // Restart supplies the complete replacement document, never the old suffix.
+    tx.start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+        .unwrap();
+    tx.feed_json_request_body(JsonStreamInput::Data(br#"{"a":"hit"}"#))
+        .unwrap();
+    tx.feed_json_request_body(JsonStreamInput::Complete).unwrap();
+    assert_eq!(tx.finish_json_request_body().unwrap().findings.len(), 1);
+    assert_eq!(tx.json_body_state.capacity(), 0);
+}
+
+#[test]
+fn json_persistent_sealed_and_collecting_states_reject_competing_entrypoints() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation("SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n");
+    let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    tx.start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+        .unwrap();
+    tx.feed_json_request_body(JsonStreamInput::Data(br#"{"a":"hit"}"#))
+        .unwrap();
+    for sealed in [false, true] {
+        if sealed {
+            tx.feed_json_request_body(JsonStreamInput::Complete).unwrap();
+        }
+        assert!(tx
+            .start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+            .is_err());
+        assert!(tx
+            .publish_request_body(RequestBody::new(b"{}", BodyProcessorSelection::Json))
+            .is_err());
+        assert!(tx.start_request_body_stream().is_err());
+        assert!(tx.execute_request_body_stream_chunk(b"ignored", true).is_err());
+        assert!(tx
+            .execute_request_body_prefix(b"", 1, RequestBodyPrefixCompletion::EndOfStream)
+            .is_err());
+        assert!(tx.execute_request_body().is_err());
+        assert!(tx.request.body.is_none());
+    }
+    let outcome = tx.finish_json_request_body().unwrap();
+    assert_eq!(outcome.findings.len(), 1);
+    let retained = tx.retained_bytes();
+    let phase = tx.next_phase();
+    for input in [
+        JsonStreamInput::Complete,
+        JsonStreamInput::Data(b"x"),
+        JsonStreamInput::Abandoned,
+    ] {
+        assert!(tx.feed_json_request_body(input).is_err());
+        assert_eq!(tx.retained_bytes(), retained);
+        assert_eq!(tx.next_phase(), phase);
+        assert!(tx.request.body.is_some());
+    }
+    assert!(tx.finish_json_request_body().is_err());
+    assert_eq!(tx.retained_bytes(), retained);
+    assert_eq!(tx.json_body_state.capacity(), 0);
+}
+
+#[test]
+fn json_persistent_unfinished_or_trailing_inputs_release_provisional_state() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation("SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n");
+    for trailing in [None, Some(JsonStreamInput::Complete), Some(JsonStreamInput::Data(b"x"))] {
+        let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        let before = tx.retained_bytes();
+        tx.start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+            .unwrap();
+        tx.feed_json_request_body(JsonStreamInput::Data(br#"{"a":"hit"}"#))
+            .unwrap();
+        let error = if let Some(input) = trailing {
+            tx.feed_json_request_body(JsonStreamInput::Complete).unwrap();
+            tx.feed_json_request_body(input).unwrap_err()
+        } else {
+            tx.finish_json_request_body().unwrap_err()
+        };
+        assert_eq!(tx.finish_json_request_body(), Err(error));
+        assert_eq!(tx.feed_json_request_body(JsonStreamInput::Complete), Err(error));
+        assert_eq!(tx.json_body_state.capacity(), 0);
+        assert!(tx.request.body.is_none());
+        assert_eq!(tx.retained_bytes(), before);
+    }
+}
+
+#[test]
+fn json_persistent_owned_transaction_drop_releases_generation_in_each_lifecycle() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = Arc::new(generation("SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n"));
+    for stage in 0..4 {
+        let mut tx =
+            Transaction::new_shared(Arc::clone(&generation), request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        tx.start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+            .unwrap();
+        tx.feed_json_request_body(JsonStreamInput::Data(br#"{"a":"hit"}"#))
+            .unwrap();
+        if stage > 0 {
+            tx.feed_json_request_body(JsonStreamInput::Complete).unwrap();
+        }
+        if stage == 2 {
+            tx.finish_json_request_body().unwrap();
+        }
+        if stage == 3 {
+            assert!(tx.feed_json_request_body(JsonStreamInput::Abandoned).is_err());
+        }
+        assert_eq!(Arc::strong_count(&generation), 2);
+        drop(tx);
+        assert_eq!(Arc::strong_count(&generation), 1);
+    }
+}
+
+#[test]
+fn json_persistent_transport_misuse_preserves_published_retry_facts() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation(concat!(
+        "SecRule ARGS:json.a \"@pm hit\" \"id:1,phase:2,pass\"\n",
+        "SecRule ARGS:json.z \"@pm hit\" \"id:2,phase:2,pass\"\n",
+    ));
+    let limits = RuntimeLimits {
+        max_transformation_output_bytes: 16,
+        ..RuntimeLimits::default()
+    };
+    let body = format!(r#"{{"a":"hit","z":"{}"}}"#, "x".repeat(32));
+    let mut tx = Transaction::new(&generation, request(&[], b"/"), limits).unwrap();
+    let mut reference = Transaction::new(&generation, request(&[], b"/"), limits).unwrap();
+    tx.execute_request_headers().unwrap();
+    reference.execute_request_headers().unwrap();
+    reference
+        .publish_request_body(RequestBody::new(body.as_bytes(), BodyProcessorSelection::Json))
+        .unwrap();
+    let expected = reference.execute_request_body();
+    tx.start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+        .unwrap();
+    tx.feed_json_request_body(JsonStreamInput::Data(body.as_bytes()))
+        .unwrap();
+    tx.feed_json_request_body(JsonStreamInput::Complete).unwrap();
+    assert_eq!(tx.finish_json_request_body().map_err(json_runtime_error), expected);
+    assert!(expected.is_err());
+    assert_eq!(tx.json_body_state.len(), 1);
+    let retained = tx.retained_bytes();
+    let capacity = tx.json_body_state.capacity();
+    for input in [
+        JsonStreamInput::Data(b"x"),
+        JsonStreamInput::Abandoned,
+        JsonStreamInput::Complete,
+    ] {
+        assert!(tx.feed_json_request_body(input).is_err());
+        assert!(tx.finish_json_request_body().is_err());
+        assert!(tx
+            .start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+            .is_err());
+        assert_eq!(tx.json_body_state.len(), 1);
+        assert_eq!(tx.json_body_state.capacity(), capacity);
+        assert_eq!(tx.retained_bytes(), retained);
+        assert_eq!(tx.execute_request_body(), reference.execute_request_body());
+        assert_eq!(tx.retained_bytes(), reference.retained_bytes());
+    }
+}
+
+#[test]
+fn json_cached_plan_is_shared_while_transaction_facts_remain_isolated() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = Arc::new(generation(
+        "SecRule ARGS \"@pm hit\" \"id:1,phase:2,deny,status:418\"\n",
+    ));
+    let shared_plan = generation.json_capability.subscribers().unwrap().as_ptr();
+    let mut first =
+        Transaction::new_shared(Arc::clone(&generation), request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    let mut second =
+        Transaction::new_shared(Arc::clone(&generation), request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    first.execute_request_headers().unwrap();
+    second.execute_request_headers().unwrap();
+    first
+        .start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+        .unwrap();
+    second
+        .start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+        .unwrap();
+    assert_eq!(
+        first.generation.json_capability.subscribers().unwrap().as_ptr(),
+        shared_plan
+    );
+    assert_eq!(
+        second.generation.json_capability.subscribers().unwrap().as_ptr(),
+        shared_plan
+    );
+    assert_ne!(first.group_scratch.as_ptr(), second.group_scratch.as_ptr());
+    first
+        .feed_json_request_body(JsonStreamInput::Data(br#"{"a":"hit"}"#))
+        .unwrap();
+    second
+        .feed_json_request_body(JsonStreamInput::Data(br#"{"a":"miss"}"#))
+        .unwrap();
+    second.feed_json_request_body(JsonStreamInput::Complete).unwrap();
+    assert!(second.finish_json_request_body().unwrap().findings().is_empty());
+    first.feed_json_request_body(JsonStreamInput::Complete).unwrap();
+    let first_result = first.finish_json_request_body().unwrap();
+    assert_eq!(first_result.findings().len(), 1);
+    assert!(first_result.intervention().is_some());
+    assert_eq!(Arc::strong_count(&generation), 3);
+    assert_eq!(generation.json_capability.subscribers().unwrap().as_ptr(), shared_plan);
+}
+
+#[test]
+fn json_cached_plan_keeps_inflight_generation_when_a_new_generation_is_compiled() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let old = Arc::new(generation(
+        "SecRule ARGS \"@pm hit\" \"id:1,phase:2,deny,status:418\"\n",
+    ));
+    let mut inflight = Transaction::new_shared(Arc::clone(&old), request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    inflight.execute_request_headers().unwrap();
+    inflight
+        .start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+        .unwrap();
+    inflight
+        .feed_json_request_body(JsonStreamInput::Data(br#"{"a":"hi"#))
+        .unwrap();
+    let replacement = Arc::new(generation(
+        "SecRule ARGS \"@pm miss\" \"id:2,phase:2,deny,status:419\"\n",
+    ));
+    assert_ne!(
+        old.json_capability.subscribers().unwrap().as_ptr(),
+        replacement.json_capability.subscribers().unwrap().as_ptr()
+    );
+    let mut fresh =
+        Transaction::new_shared(Arc::clone(&replacement), request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    fresh.execute_request_headers().unwrap();
+    let fresh_result = fresh
+        .execute_json_body_inputs(
+            BodyProcessorSelection::Json,
+            [JsonStreamInput::Data(br#"{"a":"hit"}"#), JsonStreamInput::Complete],
+            json_execution_limits(),
+        )
+        .unwrap();
+    assert!(fresh_result.findings().is_empty());
+    inflight
+        .feed_json_request_body(JsonStreamInput::Data(br#"t"}"#))
+        .unwrap();
+    inflight.feed_json_request_body(JsonStreamInput::Complete).unwrap();
+    assert_eq!(inflight.finish_json_request_body().unwrap().findings().len(), 1);
+    assert_eq!(Arc::strong_count(&old), 2);
+    assert_eq!(Arc::strong_count(&replacement), 2);
+}
+
+#[test]
+fn json_mixed_actions_predicates_and_match_replacement_follow_reference_order() {
+    let source = concat!(
+        "SecAction \"id:1,phase:2,pass,setvar:tx.seed=1\"\n",
+        "SecRule TX:seed \"@eq 1\" \"id:2,phase:2,pass,setvar:tx.seed=+2\"\n",
+        "SecRule ARGS:json.a \"@pm hit\" \"id:3,phase:2,pass\"\n",
+        "SecRule REQUEST_METHOD \"@streq POST\" \"id:4,phase:2,pass,setvar:tx.seed=99\"\n",
+        "SecRule ARGS_NAMES \"@pm json\" \"id:5,phase:2,pass\"\n",
+        "SecRule REQUEST_METHOD \"@streq GET\" \"id:6,phase:2,pass,setvar:tx.seed=-1\"\n",
+        "SecAction \"id:7,phase:2,pass,setvar:tx.extra=value\"\n",
+        "SecRule ARGS:json.a \"@pm hit\" \"id:8,phase:2,deny,status:418\"\n",
+        "SecAction \"id:9,phase:2,pass,setvar:!tx.extra\"\n",
+    );
+    for body in [br#"{"a":"hit","b":"miss"}"#.as_slice(), br#"{"a":"miss"}"#, b"{}", b"["] {
+        for split in 0..=body.len() {
+            for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+                compare_json_transaction(source, body, split, RuntimeLimits::default(), mode);
+            }
+        }
+    }
+}
+
+#[test]
+fn json_mixed_captures_and_ordinary_chains_preserve_tx_across_json_replay() {
+    let source = concat!(
+        "SecRule REQUEST_METHOD \"@rx ^(GET)$\" \"id:1,phase:2,pass,capture,chain\"\n",
+        "SecRule TX:1 \"@streq GET\" \"setvar:tx.seed=7\"\n",
+        "SecRule ARGS \"@pm hit\" \"id:2,phase:2,pass\"\n",
+        "SecRule TX:1 \"@streq GET\" \"id:3,phase:2,pass,chain,setvar:tx.seed=+1\"\n",
+        "SecRule REQUEST_METHOD \"@streq GET\" \"setvar:tx.extra=kept\"\n",
+        "SecRule REQUEST_METHOD \"@streq POST\" \"id:4,phase:2,pass,chain,setvar:tx.seed=99\"\n",
+        "SecRule ARGS_GET:q \"@streq hit\" \"setvar:tx.extra=wrong\"\n",
+        "SecRule REQUEST_METHOD \"@streq GET\" \"id:6,phase:2,pass,chain\"\n",
+        "SecRule MATCHED_VARS \"@streq GET\" \"setvar:tx.own_match=yes\"\n",
+        "SecRule ARGS_NAMES \"!@pm absent\" \"id:5,phase:2,pass\"\n",
+    );
+    let body = br#"{"a":"hit","a":"miss","b":["hit","miss"]}"#;
+    for split in 0..=body.len() {
+        compare_json_transaction(source, body, split, RuntimeLimits::default(), RuleEngineMode::On);
+    }
+}
+
+#[test]
+fn json_mixed_skips_and_denial_hide_only_unreached_deferred_errors() {
+    let body = format!(r#"{{"a":"hit","z":"{}"}}"#, "x".repeat(128));
+    for jump in ["skip:1", "skipAfter:AFTER", "deny,status:418"] {
+        for method in ["GET", "POST"] {
+            let source = format!(
+                concat!(
+                    "SecRule REQUEST_METHOD \"@streq {}\" \"id:1,phase:2,pass,{}\"\n",
+                    "SecRule ARGS:json.z \"@pm hit\" \"id:2,phase:2,pass\"\n",
+                    "SecMarker AFTER\n",
+                    "SecRule ARGS:json.a \"@pm hit\" \"id:3,phase:2,pass\"\n",
+                    "SecAction \"id:4,phase:2,pass,setvar:tx.seed=9\"\n",
+                ),
+                method, jump
+            );
+            let source = source.replace("pass,deny", "deny");
+            for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+                compare_json_transaction(
+                    &source,
+                    body.as_bytes(),
+                    19,
+                    RuntimeLimits {
+                        max_transformation_output_bytes: 16,
+                        ..RuntimeLimits::default()
+                    },
+                    mode,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn json_mixed_runtime_limits_and_retry_state_match_complete_publication() {
+    let source = concat!(
+        "SecAction \"id:1,phase:2,pass,setvar:tx.seed=1\"\n",
+        "SecRule ARGS \"@pm hit\" \"id:2,phase:2,pass\"\n",
+        "SecRule REQUEST_METHOD \"@rx ^(GET)$\" \"id:3,phase:2,pass,capture,setvar:tx.seed=+1\"\n",
+        "SecRule ARGS_NAMES \"@pm json\" \"id:4,phase:2,pass\"\n",
+        "SecAction \"id:5,phase:2,pass,setvar:tx.extra=more\"\n",
+    );
+    let body = br#"{"a":"hit","b":["hit","miss"]}"#;
+    let default = RuntimeLimits::default();
+    for value in [0, 1, 2, 4, 8, 16, 32, 128, 512] {
+        for limits in [
+            RuntimeLimits {
+                max_tx_variables: value,
+                ..default
+            },
+            RuntimeLimits {
+                max_tx_bytes: value,
+                ..default
+            },
+            RuntimeLimits {
+                max_selected_values: value,
+                ..default
+            },
+            RuntimeLimits {
+                max_operator_evaluations: value,
+                ..default
+            },
+            RuntimeLimits {
+                max_operator_work_bytes: value,
+                ..default
+            },
+            RuntimeLimits {
+                max_findings: value,
+                ..default
+            },
+        ] {
+            compare_json_transaction(source, body, 12, limits, RuleEngineMode::On);
+        }
+    }
+}
+
+#[test]
+fn json_mixed_zero_subscribers_still_uses_ordinary_schedule_and_canonical_body_charge() {
+    let source = concat!(
+        "SecAction \"id:1,phase:2,pass,setvar:tx.seed=5\"\n",
+        "SecRule ARGS_GET:q \"@streq hit\" \"id:2,phase:2,pass,setvar:tx.seed=+1\"\n",
+        "SecRule TX:seed \"@eq 6\" \"id:3,phase:2,deny,status:418\"\n",
+    );
+    for body in [br#"{"a":"hit"}"#.as_slice(), b"{}", b"[", b""] {
+        compare_json_transaction(source, body, 0, RuntimeLimits::default(), RuleEngineMode::On);
+    }
+}
+
+#[test]
+fn json_mixed_retry_reexecutes_preceding_committed_ordinary_actions() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let generation = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.seed=5\"\n",
+        "SecAction \"id:2,phase:2,pass,setvar:tx.seed=+1\"\n",
+        "SecRule ARGS \"@pm hit\" \"id:3,phase:2,pass\"\n",
+    ));
+    let limits = RuntimeLimits {
+        max_transformation_output_bytes: 16,
+        ..RuntimeLimits::default()
+    };
+    let body = format!(r#"{{"a":"{}"}}"#, "x".repeat(64));
+    let mut reference = Transaction::new(&generation, request(&[], b"/"), limits).unwrap();
+    let mut streamed = Transaction::new(&generation, request(&[], b"/"), limits).unwrap();
+    reference.execute_request_headers().unwrap();
+    streamed.execute_request_headers().unwrap();
+    reference
+        .publish_request_body(RequestBody::new(body.as_bytes(), BodyProcessorSelection::Json))
+        .unwrap();
+    streamed
+        .start_json_request_body(BodyProcessorSelection::Json, json_execution_limits())
+        .unwrap();
+    streamed
+        .feed_json_request_body(JsonStreamInput::Data(body.as_bytes()))
+        .unwrap();
+    streamed.feed_json_request_body(JsonStreamInput::Complete).unwrap();
+    let error = streamed.finish_json_request_body().map_err(json_runtime_error);
+    assert!(error.is_err());
+    assert_eq!(error, reference.execute_request_body());
+    for expected in [6, 7, 8] {
+        let expected = expected.to_string();
+        assert_eq!(streamed.tx_value(b"seed"), Some(expected.as_bytes()));
+        assert_eq!(streamed.tx_value(b"seed"), reference.tx_value(b"seed"));
+        assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+        assert_eq!(streamed.json_body_state.len(), 1);
+        assert_eq!(streamed.execute_request_body(), reference.execute_request_body());
+    }
+}
+
+#[test]
+fn json_mixed_missing_descriptor_never_falls_back_to_unavailable_body_values() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let mut generation = generation("SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n");
+    // Simulate a broken private compiled capability: omission is not permission
+    // to evaluate a body-dependent rule against metadata-only publication.
+    generation.json_capability = super::super::json_plan::JsonCapability::Eligible(Vec::new());
+    let mut tx = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    assert_eq!(
+        tx.execute_json_body_inputs(
+            BodyProcessorSelection::Json,
+            [JsonStreamInput::Data(br#"{"a":"hit"}"#), JsonStreamInput::Complete],
+            json_execution_limits()
+        ),
+        Err(json_rules::JsonExecutionError::Runtime(
+            RuntimeError::GenerationInvariant
+        ))
+    );
+    assert_eq!(tx.next_phase(), Some(Phase::RequestBody));
+    assert_eq!(tx.execute_request_body(), Err(RuntimeError::GenerationInvariant));
+}
+
+#[test]
+fn json_mixed_retained_boundary_includes_ordinary_tx_and_capture_base() {
+    use crate::seclang::BodyProcessorSelection;
+    let source = format!(
+        concat!(
+            "SecAction \"id:1,phase:2,pass,setvar:tx.seed={}\"\n",
+            "SecRule REQUEST_METHOD \"@rx ^(GET)$\" \"id:2,phase:2,pass,capture\"\n",
+            "SecRule ARGS \"@pm hit\" \"id:3,phase:2,pass\"\n",
+        ),
+        "x".repeat(128)
+    );
+    let body = format!(r#"{{"a":"hit{}","b":"hit{}"}}"#, "x".repeat(64), "y".repeat(64));
+    let generation = generation(&source);
+    let mut reference =
+        Transaction::new(&generation, request(&[], b"/?q=hit&q=miss"), RuntimeLimits::default()).unwrap();
+    reference.execute_request_headers().unwrap();
+    reference
+        .publish_request_body(RequestBody::new(body.as_bytes(), BodyProcessorSelection::Json))
+        .unwrap();
+    reference.execute_request_body().unwrap();
+    assert_eq!(reference.tx_value(b"1"), Some(b"GET".as_slice()));
+    assert_eq!(reference.tx_value(b"seed").unwrap().len(), 128);
+    let retained = reference.retained_bytes();
+    for max_retained_bytes in [retained - 1, retained, retained + 1] {
+        compare_json_transaction(
+            &source,
+            body.as_bytes(),
+            31,
+            RuntimeLimits {
+                max_retained_bytes,
+                ..RuntimeLimits::default()
+            },
+            RuleEngineMode::On,
+        );
+    }
+}
+
+#[test]
+fn json_macros_query_to_tx_dynamic_operators_keys_and_chain_matches_match_reference() {
+    let source = concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.seed=%{ARGS.q},setvar:tx.method=GET\"\n",
+        "SecRule ARGS_GET:q \"@streq %{TX.seed}\" \"id:2,phase:2,pass,setvar:tx.key_%{MATCHED_VAR}=%{MATCHED_VAR_NAME},msg:'%{REQUEST_LINE}',logdata:'%{REMOTE_ADDR}'\"\n",
+        "SecRule ARGS \"@pm hit\" \"id:3,phase:2,pass\"\n",
+        "SecAction \"id:4,phase:2,pass,setvar:tx.inherited=%{MATCHED_VAR}\"\n",
+        "SecRule REQUEST_METHOD \"@rx ^(GET)$\" \"id:5,phase:2,pass,capture,chain,setvar:tx.capture=%{TX.1}\"\n",
+        "SecRule TX:1 \"@streq %{MATCHED_VAR}\" \"setvar:tx.chain=%{MATCHED_VAR_NAME}\"\n",
+        "SecRule REQUEST_METHOD \"@streq %{TX.method}\" \"id:6,phase:2,pass,msg:'%{MATCHED_VAR}',logdata:'%{TX.capture}'\"\n",
+        "SecRule ARGS_NAMES \"@pm json\" \"id:7,phase:2,pass\"\n",
+    );
+    for body in [br#"{"a":"hit"}"#.as_slice(), br#"{"a":"miss"}"#, b"{}", b"["] {
+        for split in 0..=body.len() {
+            compare_json_transaction(source, body, split, RuntimeLimits::default(), RuleEngineMode::On);
+        }
+    }
+}
+
+#[test]
+fn json_macros_later_phases_clear_virtual_matches_and_keep_materialized_tx() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    let source = concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.seed=%{REQUEST_HEADERS.X-Seed}\"\n",
+        "SecRule ARGS \"@pm hit\" \"id:2,phase:2,pass\"\n",
+        "SecRule REQUEST_METHOD \"@streq POST\" \"id:3,phase:2,pass,msg:'%{MATCHED_VAR}'\"\n",
+        "SecAction \"id:4,phase:3,pass,setvar:tx.inherited=%{MATCHED_VAR},setvar:tx.inherited_name=%{MATCHED_VAR_NAME}\"\n",
+        "SecRule REQUEST_METHOD \"@streq %{TX.seed}\" \"id:5,phase:3,pass,setvar:tx.own=%{MATCHED_VAR},msg:'%{MATCHED_VAR_NAME}'\"\n",
+        "SecRule TX:own \"@streq %{TX.seed}\" \"id:6,phase:4,pass,logdata:'%{TX.own}'\"\n",
+        "SecAction \"id:7,phase:5,pass,setvar:tx.logged=%{TX.own},msg:'%{REQUEST_LINE}'\"\n",
+    );
+    let generation = generation(source);
+    let headers = [RequestHeader::new(b"X-Seed", b"GET")];
+    let make = || Transaction::new(&generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+    let mut reference = make();
+    let mut streamed = make();
+    assert_eq!(reference.execute_request_headers(), streamed.execute_request_headers());
+    let body = br#"{"a":"hit"}"#;
+    reference
+        .publish_request_body(RequestBody::new(body, BodyProcessorSelection::Json))
+        .unwrap();
+    assert_eq!(
+        streamed
+            .execute_json_body_inputs(
+                BodyProcessorSelection::Json,
+                [JsonStreamInput::Data(body), JsonStreamInput::Complete],
+                json_execution_limits()
+            )
+            .unwrap(),
+        reference.execute_request_body().unwrap()
+    );
+    assert!(streamed.tx.virtual_matches.is_some());
+    reference.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+    streamed.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+    assert_eq!(
+        streamed.execute_response_headers(),
+        reference.execute_response_headers()
+    );
+    for key in [b"inherited".as_slice(), b"inherited_name"] {
+        assert_eq!(streamed.tx_value(key), Some(b"".as_slice()));
+        assert_eq!(streamed.tx_value(key), reference.tx_value(key));
+    }
+    assert_eq!(streamed.tx_value(b"own"), Some(b"GET".as_slice()));
+    assert_eq!(
+        streamed.execute_response_window(ResponseWindow::new(b"", true)),
+        reference.execute_response_window(ResponseWindow::new(b"", true))
+    );
+    assert_eq!(streamed.execute_logging(), reference.execute_logging());
+    assert_eq!(streamed.tx_value(b"logged"), Some(b"GET".as_slice()));
+    assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+}
+
+#[test]
+fn json_macros_expansion_limits_skips_denial_and_retry_match_reference() {
+    use crate::seclang::{BodyProcessorSelection, JsonStreamInput};
+    for action in ["pass", "pass,skip:1", "deny,status:418"] {
+        let source = format!(concat!(
+            "SecAction \"id:1,phase:1,pass,setvar:tx.seed={}\"\n",
+            "SecRule ARGS \"@pm hit\" \"id:2,phase:2,pass\"\n",
+            "SecRule REQUEST_METHOD \"@streq GET\" \"id:3,phase:2,{}\"\n",
+            "SecRule REQUEST_METHOD \"@streq GET\" \"id:4,phase:2,pass,setvar:tx.rollback=yes,msg:'%{{TX.seed}}%{{TX.seed}}'\"\n",
+        ), "x".repeat(40), action);
+        let mut frontend = FrontendLimits::default();
+        frontend.compiler.max_template_runtime_bytes = 64;
+        let generation = generation_with_frontend_limits(&source, frontend);
+        for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+            let make = || {
+                Transaction::new_with_modes(
+                    &generation,
+                    request(&[], b"/"),
+                    RuntimeLimits::default(),
+                    EvaluationMode::Accelerated,
+                    mode,
+                )
+                .unwrap()
+            };
+            let mut reference = make();
+            let mut streamed = make();
+            reference.execute_request_headers().unwrap();
+            streamed.execute_request_headers().unwrap();
+            let body = br#"{"a":"hit"}"#;
+            reference
+                .publish_request_body(RequestBody::new(body, BodyProcessorSelection::Json))
+                .unwrap();
+            let actual = streamed
+                .execute_json_body_inputs(
+                    BodyProcessorSelection::Json,
+                    [JsonStreamInput::Data(body), JsonStreamInput::Complete],
+                    json_execution_limits(),
+                )
+                .map_err(json_runtime_error);
+            assert_eq!(actual, reference.execute_request_body());
+            let fails = action == "pass" || action.starts_with("deny") && mode == RuleEngineMode::DetectionOnly;
+            assert_eq!(actual.is_err(), fails);
+            assert_eq!(streamed.tx_value(b"rollback"), None);
+            assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+            if fails {
+                assert_eq!(actual, Err(RuntimeError::ValueByteLimit { actual: 80, limit: 64 }));
+                assert_eq!(streamed.execute_request_body(), reference.execute_request_body());
+                assert_eq!(streamed.retained_bytes(), reference.retained_bytes());
+            }
+        }
     }
 }

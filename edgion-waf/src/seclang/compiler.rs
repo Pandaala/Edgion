@@ -17,11 +17,15 @@ use super::{
     ValidatedSemanticDocument,
 };
 
+#[path = "json_plan.rs"]
+mod json_plan;
+
 #[path = "transaction.rs"]
 mod transaction;
 
 pub use transaction::{
-    EvaluationMode, Intervention, PhaseOutcome, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead,
+    EvaluationMode, Intervention, JsonExecutionError, JsonExecutionLimit, JsonExecutionLimits, JsonFactLimits,
+    JsonPlanLimits, PhaseOutcome, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead,
     ResponseHeader, ResponseWindow, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits, RuntimeMatcherError,
     RuntimeTransformError, Transaction, DEFAULT_MAX_RUNTIME_CAPTURE_BYTES, DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES,
     DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES, DEFAULT_MAX_RUNTIME_COOKIES, DEFAULT_MAX_RUNTIME_FINDINGS,
@@ -779,6 +783,7 @@ struct CompiledMarker {
 #[derive(Debug)]
 #[expect(dead_code, reason = "transaction execution consumes the immutable compiled arenas")]
 pub struct CompiledGeneration {
+    json_capability: json_plan::JsonCapability,
     prefix_validation: Result<(), &'static str>,
     requires_complete_request_body: bool,
     bytes: Vec<u8>,
@@ -825,6 +830,7 @@ pub enum CompiledScheduleEntryKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestBodyExecutionClass {
     StreamingRaw,
+    /// Reserved until structured publication preserves duplicate and ordering semantics.
     StreamingStructured,
     BoundedSnapshot,
     Unsupported,
@@ -1296,6 +1302,11 @@ fn classify_request_body_unit(generation: &CompiledGeneration, unit: CompiledRul
         return RequestBodyExecutionClass::Unsupported;
     };
     for (member_offset, member) in members.iter().enumerate() {
+        // Body macros can occur on body-independent targets or on SecAction,
+        // which has no target plan. They still require the parsed publication.
+        if generation.member_has_body_macro(*member) {
+            class = merge_request_body_class(class, RequestBodyExecutionClass::BoundedSnapshot);
+        }
         let Some(target_plan_id) = member.target_plan else {
             continue;
         };
@@ -1309,6 +1320,13 @@ fn classify_request_body_unit(generation: &CompiledGeneration, unit: CompiledRul
         let mut raw_body_target = false;
         let mut structured_body_target = false;
         for record in records {
+            if record.collection == CollectionKind::Xml {
+                if let CompiledTargetSelector::Path(range) = record.selector {
+                    if !matches!(byte_range(&generation.target_bytes, range), Ok(b"/*" | b"//@*")) {
+                        return RequestBodyExecutionClass::Unsupported;
+                    }
+                }
+            }
             match record.collection {
                 CollectionKind::RequestBody | CollectionKind::RequestBodyLength => {
                     raw_body_target = true;
@@ -1341,7 +1359,11 @@ fn classify_request_body_unit(generation: &CompiledGeneration, unit: CompiledRul
             }
         }
         if structured_body_target {
-            class = merge_request_body_class(class, RequestBodyExecutionClass::StreamingStructured);
+            // A structured target alone does not prove incremental equivalence.
+            // JSON duplicate keys replace earlier subtrees, and object traversal
+            // order affects captures and actions. Keep complete publication until
+            // a processor-specific execution plan proves these semantics exact.
+            class = merge_request_body_class(class, RequestBodyExecutionClass::BoundedSnapshot);
         }
         if !raw_body_target {
             continue;
@@ -3639,6 +3661,7 @@ impl CompiledGeneration {
                 .then(left.unit.cmp(&right.unit))
         });
         let mut generation = Self {
+            json_capability: json_plan::JsonCapability::Unsupported,
             prefix_validation: Ok(()),
             requires_complete_request_body: false,
             bytes,
@@ -3669,6 +3692,9 @@ impl CompiledGeneration {
             matcher_charged_bytes: work.matcher_charged_bytes,
             peak_bytes: work.peak_bytes,
         };
+        generation.json_capability = json_plan::JsonCapability::compile(&generation, &mut work)?;
+        generation.compiler_owned_bytes = work.compiler_owned_bytes;
+        generation.peak_bytes = work.peak_bytes;
         generation.prefix_validation = generation.check_request_body_prefix();
         generation.requires_complete_request_body = generation.has_complete_request_body_dependency();
         Ok(generation)

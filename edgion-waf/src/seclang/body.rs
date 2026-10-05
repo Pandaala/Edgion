@@ -1,7 +1,7 @@
 use memchr::memmem::Finder;
 use thiserror::Error;
 
-use super::CollectionKind;
+use super::{CollectionKind, JsonDocument, JsonDocumentEvent};
 
 pub const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_MAX_BODY_ENTRIES: usize = 65_536;
@@ -191,12 +191,7 @@ fn build_publication_inner(
     parse_derived_views: bool,
     force_raw_body: Option<bool>,
 ) -> Result<BodyPublication, BodyError> {
-    if body.bytes.len() > limits.max_body_bytes {
-        return Err(BodyError::ByteLimit {
-            actual: body.bytes.len(),
-            limit: limits.max_body_bytes,
-        });
-    }
+    check_body_bytes(body.bytes.len(), limits)?;
     let processor = if body.processor == BodyProcessorSelection::Auto {
         processor_from_content_type(content_type)
     } else {
@@ -225,19 +220,7 @@ fn build_publication_inner(
             BodyProcessorSelection::Xml => parse_xml(body.bytes, &mut builder)?,
         }
     }
-    let body_args_size = builder.entries.iter().try_fold(0_usize, |total, entry| {
-        if entry.collection != CollectionKind::Args {
-            return Ok(total);
-        }
-        total
-            .checked_add(entry.name.as_ref().map_or(0, Vec::len))
-            .and_then(|value| value.checked_add(entry.value.len()))
-            .ok_or(BodyError::Arithmetic)
-    })?;
-    let combined_size = head_args_combined_size
-        .checked_add(body_args_size)
-        .ok_or(BodyError::Arithmetic)?
-        .to_string();
+    let combined_size = builder.accounting.combined_size(head_args_combined_size)?.to_string();
     builder.push(CollectionKind::ArgsCombinedSize, None, combined_size.as_bytes(), false)?;
     builder.finish()
 }
@@ -275,24 +258,152 @@ fn ends_with_ascii_case(value: &[u8], suffix: &[u8]) -> bool {
         .is_some_and(|ending| ending.eq_ignore_ascii_case(suffix))
 }
 
-struct BodyBuilder {
-    limits: BodyLimits,
-    entries: Vec<BodyEntry>,
-    decoded_bytes: usize,
-    work_bytes: usize,
-    multipart_parts: usize,
-    multipart_headers: usize,
+/// Length-only validation of a successfully completed JSON document.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum JsonPublicationError {
+    /// The document is active, failed, or abandoned; no successful completion is available.
+    #[error("JSON publication requires a successfully completed document")]
+    IncompleteDocument,
+    #[error(transparent)]
+    Body(#[from] BodyError),
 }
 
-impl BodyBuilder {
+/// Logical complete-body publication costs, not the reducer's allocation usage.
+/// `retained_bytes` includes the materialized entry descriptors and payload
+/// lengths; this validator does not allocate or retain those payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JsonPublicationSummary {
+    /// Includes optional raw bytes, processor/length metadata, and final combined size.
+    pub entries: usize,
+    /// Sum of published name and value lengths, including repeated ARGS_NAMES bytes.
+    pub decoded_bytes: usize,
+    /// Source bytes plus surviving JSON visit path lengths; excludes lexical/reducer work.
+    pub work_bytes: usize,
+    /// Surviving body ARGS name and value bytes, excluding ARGS_NAMES copies.
+    pub body_args_combined_size: usize,
+    /// Head ARGS bytes plus `body_args_combined_size`.
+    pub args_combined_size: usize,
+    /// Decoded bytes plus logical materialized entry descriptors, not allocated capacity.
+    pub retained_bytes: usize,
+}
+
+/// Replay canonical publication checks against trusted surviving JSON metadata.
+///
+/// The document must already have completed successfully. Lexical/reducer errors,
+/// their precedence against the body prelude, and empty HTTP bodies belong to a
+/// `JsonBodyAdapter`; this function does not reinterpret failed or empty
+/// documents as valid JSON. `retain_raw_body` explicitly controls logical raw
+/// body publication, including its entry and byte costs. Head ARGS bytes are
+/// added only after all surviving JSON traversal checks, as in materialization.
+/// This validates publication accounting only: a standalone `JsonDocument`
+/// can use syntax limits beyond the reference body parser's recursion limit.
+/// Use `JsonBodyAdapter` for reference body syntax and prelude parity within
+/// its separate streaming resource budgets.
+/// Subscriber results are ignored. No payloads are allocated or reconstructed.
+pub fn validate_json_publication<S: Copy>(
+    document: &JsonDocument<S>,
+    head_args_combined_size: usize,
+    limits: BodyLimits,
+    retain_raw_body: bool,
+) -> Result<JsonPublicationSummary, JsonPublicationError> {
+    let events = document.events().ok_or(JsonPublicationError::IncompleteDocument)?;
+    let source_bytes = document.lexical_usage().source_bytes;
+    let mut accounting = BodyAccounting::json_prelude(source_bytes, limits, retain_raw_body)?;
+    for event in events {
+        accounting.replay_json(event)?;
+    }
+    Ok(accounting.finish_json(head_args_combined_size)?)
+}
+
+fn decimal_bytes(value: usize) -> usize {
+    value.checked_ilog10().map_or(1, |digits| digits as usize + 1)
+}
+
+fn check_body_bytes(actual: usize, limits: BodyLimits) -> Result<(), BodyError> {
+    if actual > limits.max_body_bytes {
+        return Err(BodyError::ByteLimit {
+            actual,
+            limit: limits.max_body_bytes,
+        });
+    }
+    Ok(())
+}
+
+fn check_name_bytes(actual: usize, limit: usize) -> Result<(), BodyError> {
+    if actual > limit {
+        return Err(BodyError::NameByteLimit { limit });
+    }
+    Ok(())
+}
+
+pub(super) struct BodyAccounting {
+    limits: BodyLimits,
+    entries: usize,
+    decoded_bytes: usize,
+    work_bytes: usize,
+    body_args_size: usize,
+}
+
+impl BodyAccounting {
+    pub(super) fn json_prelude(
+        source_bytes: usize,
+        limits: BodyLimits,
+        retain_raw_body: bool,
+    ) -> Result<Self, BodyError> {
+        check_body_bytes(source_bytes, limits)?;
+        let mut accounting = Self::new(limits);
+        accounting.charge_work(source_bytes)?;
+        if retain_raw_body {
+            accounting.push(CollectionKind::RequestBody, None, source_bytes)?;
+        }
+        accounting.push(CollectionKind::RequestBodyLength, None, decimal_bytes(source_bytes))?;
+        accounting.push(
+            CollectionKind::ReqbodyProcessor,
+            None,
+            BodyProcessorSelection::Json.as_bytes().len(),
+        )?;
+        Ok(accounting)
+    }
+
+    pub(super) fn replay_json<S: Copy>(&mut self, event: JsonDocumentEvent<S>) -> Result<(), BodyError> {
+        match event {
+            JsonDocumentEvent::ExtendPath { path_bytes } => check_name_bytes(path_bytes, self.limits.max_name_bytes),
+            JsonDocumentEvent::Visit { path_bytes, depth } => self.visit_json(path_bytes, depth),
+            JsonDocumentEvent::Scalar {
+                path_bytes,
+                value_bytes,
+                ..
+            } => {
+                self.push(CollectionKind::Args, Some(path_bytes), value_bytes)?;
+                self.push(CollectionKind::ArgsNames, Some(path_bytes), path_bytes)
+            }
+        }
+    }
+
+    pub(super) fn finish_json(mut self, head_args_combined_size: usize) -> Result<JsonPublicationSummary, BodyError> {
+        let args_combined_size = self.combined_size(head_args_combined_size)?;
+        self.push(
+            CollectionKind::ArgsCombinedSize,
+            None,
+            decimal_bytes(args_combined_size),
+        )?;
+        Ok(JsonPublicationSummary {
+            entries: self.entries,
+            decoded_bytes: self.decoded_bytes,
+            work_bytes: self.work_bytes,
+            body_args_combined_size: self.body_args_size,
+            args_combined_size,
+            retained_bytes: self.retained_bytes()?,
+        })
+    }
+
     fn new(limits: BodyLimits) -> Self {
         Self {
             limits,
-            entries: Vec::new(),
+            entries: 0,
             decoded_bytes: 0,
             work_bytes: 0,
-            multipart_parts: 0,
-            multipart_headers: 0,
+            body_args_size: 0,
         }
     }
 
@@ -306,26 +417,32 @@ impl BodyBuilder {
         Ok(())
     }
 
+    fn visit_json(&mut self, path_bytes: usize, depth: usize) -> Result<(), BodyError> {
+        if depth > self.limits.max_depth {
+            return Err(BodyError::DepthLimit {
+                limit: self.limits.max_depth,
+            });
+        }
+        self.charge_work(path_bytes)
+    }
+
     fn push(
         &mut self,
         collection: CollectionKind,
-        name: Option<&[u8]>,
-        value: &[u8],
-        xml_attribute: bool,
+        name_bytes: Option<usize>,
+        value_bytes: usize,
     ) -> Result<(), BodyError> {
-        if self.entries.len() == self.limits.max_entries {
+        if self.entries == self.limits.max_entries {
             return Err(BodyError::EntryLimit {
                 limit: self.limits.max_entries,
             });
         }
-        if name.is_some_and(|name| name.len() > self.limits.max_name_bytes) {
-            return Err(BodyError::NameByteLimit {
-                limit: self.limits.max_name_bytes,
-            });
+        if let Some(name_bytes) = name_bytes {
+            check_name_bytes(name_bytes, self.limits.max_name_bytes)?;
         }
-        let added = name
-            .map_or(0, <[u8]>::len)
-            .checked_add(value.len())
+        let added = name_bytes
+            .unwrap_or(0)
+            .checked_add(value_bytes)
             .ok_or(BodyError::Arithmetic)?;
         self.decoded_bytes = self.decoded_bytes.checked_add(added).ok_or(BodyError::Arithmetic)?;
         if self.decoded_bytes > self.limits.max_decoded_bytes {
@@ -333,6 +450,59 @@ impl BodyBuilder {
                 limit: self.limits.max_decoded_bytes,
             });
         }
+        // ARGS bytes are a subset of the successfully checked decoded bytes.
+        // Only combining them with head ARGS can newly overflow at finish time.
+        if collection == CollectionKind::Args {
+            self.body_args_size = self.body_args_size.checked_add(added).ok_or(BodyError::Arithmetic)?;
+        }
+        self.entries = self.entries.checked_add(1).ok_or(BodyError::Arithmetic)?;
+        Ok(())
+    }
+
+    fn combined_size(&self, head_args_combined_size: usize) -> Result<usize, BodyError> {
+        head_args_combined_size
+            .checked_add(self.body_args_size)
+            .ok_or(BodyError::Arithmetic)
+    }
+
+    fn retained_bytes(&self) -> Result<usize, BodyError> {
+        let descriptors = self
+            .entries
+            .checked_mul(std::mem::size_of::<BodyEntry>())
+            .ok_or(BodyError::Arithmetic)?;
+        self.decoded_bytes.checked_add(descriptors).ok_or(BodyError::Arithmetic)
+    }
+}
+
+struct BodyBuilder {
+    accounting: BodyAccounting,
+    entries: Vec<BodyEntry>,
+    multipart_parts: usize,
+    multipart_headers: usize,
+}
+
+impl BodyBuilder {
+    fn new(limits: BodyLimits) -> Self {
+        Self {
+            accounting: BodyAccounting::new(limits),
+            entries: Vec::new(),
+            multipart_parts: 0,
+            multipart_headers: 0,
+        }
+    }
+
+    fn charge_work(&mut self, bytes: usize) -> Result<(), BodyError> {
+        self.accounting.charge_work(bytes)
+    }
+
+    fn push(
+        &mut self,
+        collection: CollectionKind,
+        name: Option<&[u8]>,
+        value: &[u8],
+        xml_attribute: bool,
+    ) -> Result<(), BodyError> {
+        self.accounting.push(collection, name.map(<[u8]>::len), value.len())?;
         self.entries.try_reserve(1).map_err(|_| BodyError::Allocation)?;
         self.entries.push(BodyEntry {
             collection,
@@ -344,33 +514,17 @@ impl BodyBuilder {
     }
 
     fn finish(self) -> Result<BodyPublication, BodyError> {
-        let retained_bytes = self
-            .entries
-            .iter()
-            .try_fold(0_usize, |total, entry| {
-                total
-                    .checked_add(entry.name.as_ref().map_or(0, Vec::len))
-                    .and_then(|value| value.checked_add(entry.value.len()))
-                    .ok_or(BodyError::Arithmetic)
-            })?
-            .checked_add(
-                self.entries
-                    .len()
-                    .checked_mul(std::mem::size_of::<BodyEntry>())
-                    .ok_or(BodyError::Arithmetic)?,
-            )
-            .ok_or(BodyError::Arithmetic)?;
         Ok(BodyPublication {
+            retained_bytes: self.accounting.retained_bytes()?,
             entries: self.entries,
-            retained_bytes,
         })
     }
 
     fn add_multipart_part(&mut self) -> Result<(), BodyError> {
         self.multipart_parts = self.multipart_parts.checked_add(1).ok_or(BodyError::Arithmetic)?;
-        if self.multipart_parts > self.limits.max_multipart_parts {
+        if self.multipart_parts > self.accounting.limits.max_multipart_parts {
             return Err(BodyError::MultipartPartLimit {
-                limit: self.limits.max_multipart_parts,
+                limit: self.accounting.limits.max_multipart_parts,
             });
         }
         Ok(())
@@ -378,9 +532,9 @@ impl BodyBuilder {
 
     fn add_multipart_header(&mut self) -> Result<(), BodyError> {
         self.multipart_headers = self.multipart_headers.checked_add(1).ok_or(BodyError::Arithmetic)?;
-        if self.multipart_headers > self.limits.max_multipart_headers {
+        if self.multipart_headers > self.accounting.limits.max_multipart_headers {
             return Err(BodyError::MultipartHeaderLimit {
-                limit: self.limits.max_multipart_headers,
+                limit: self.accounting.limits.max_multipart_headers,
             });
         }
         Ok(())
@@ -413,17 +567,12 @@ fn flatten_json(
     depth: usize,
     builder: &mut BodyBuilder,
 ) -> Result<(), BodyError> {
-    if depth > builder.limits.max_depth {
-        return Err(BodyError::DepthLimit {
-            limit: builder.limits.max_depth,
-        });
-    }
-    builder.charge_work(path.len())?;
+    builder.accounting.visit_json(path.len(), depth)?;
     match value {
         serde_json::Value::Object(object) => {
             for (key, value) in object {
                 let previous = path.len();
-                append_path(path, key.as_bytes(), builder.limits.max_name_bytes)?;
+                append_path(path, key.as_bytes(), builder.accounting.limits.max_name_bytes)?;
                 flatten_json(value, path, depth + 1, builder)?;
                 path.truncate(previous);
             }
@@ -432,7 +581,7 @@ fn flatten_json(
             for (index, value) in array.iter().enumerate() {
                 let previous = path.len();
                 let index = index.to_string();
-                append_path(path, index.as_bytes(), builder.limits.max_name_bytes)?;
+                append_path(path, index.as_bytes(), builder.accounting.limits.max_name_bytes)?;
                 flatten_json(value, path, depth + 1, builder)?;
                 path.truncate(previous);
             }
@@ -461,9 +610,7 @@ fn append_path(path: &mut Vec<u8>, component: &[u8], limit: usize) -> Result<(),
         .checked_add(1)
         .and_then(|value| value.checked_add(component.len()))
         .ok_or(BodyError::Arithmetic)?;
-    if actual > limit {
-        return Err(BodyError::NameByteLimit { limit });
-    }
+    check_name_bytes(actual, limit)?;
     path.try_reserve(1 + component.len())
         .map_err(|_| BodyError::Allocation)?;
     path.push(b'.');
@@ -809,9 +956,9 @@ fn parse_xml(input: &[u8], builder: &mut BodyBuilder) -> Result<(), BodyError> {
                 }
             }
             let depth = elements.len().checked_add(1).ok_or(BodyError::Arithmetic)?;
-            if depth > builder.limits.max_depth {
+            if depth > builder.accounting.limits.max_depth {
                 return Err(BodyError::DepthLimit {
-                    limit: builder.limits.max_depth,
+                    limit: builder.accounting.limits.max_depth,
                 });
             }
             parse_xml_attributes(opening, builder)?;

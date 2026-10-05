@@ -470,3 +470,663 @@ fn request_body_debug_is_content_free() {
     assert!(!rendered.contains("private"));
     assert!(rendered.contains("14"));
 }
+
+#[test]
+fn json_duplicate_subtrees_replace_prior_values_before_sorted_publication() {
+    let publication = publication(
+        br#"{"z":"last","key":{"discarded":"attack"},"key":{"kept":"safe"},"a":[]}"#,
+        BodyProcessorSelection::Json,
+        None,
+    );
+    assert_eq!(
+        values(&publication, CollectionKind::Args),
+        [
+            (Some(b"json.a".as_slice()), b"0".as_slice()),
+            (Some(b"json.key.kept".as_slice()), b"safe".as_slice()),
+            (Some(b"json.z".as_slice()), b"last".as_slice()),
+        ]
+    );
+}
+
+#[test]
+fn json_reference_limits_apply_to_surviving_subtrees() {
+    let overwritten = br#"{"a":{"long_name":["long-value","second"]},"a":0}"#;
+    let surviving = br#"{"a":{"long_name":["long-value","second"]}}"#;
+    let cases = [
+        (
+            BodyLimits {
+                max_depth: 1,
+                ..BodyLimits::default()
+            },
+            BodyError::DepthLimit { limit: 1 },
+        ),
+        (
+            BodyLimits {
+                max_name_bytes: 6,
+                ..BodyLimits::default()
+            },
+            BodyError::NameByteLimit { limit: 6 },
+        ),
+        (
+            BodyLimits {
+                max_entries: 5,
+                ..BodyLimits::default()
+            },
+            BodyError::EntryLimit { limit: 5 },
+        ),
+        (
+            BodyLimits {
+                max_decoded_bytes: 27,
+                ..BodyLimits::default()
+            },
+            BodyError::DecodedByteLimit { limit: 27 },
+        ),
+    ];
+    for (limits, expected_error) in cases {
+        let result = build_publication(
+            RequestBody::new(overwritten, BodyProcessorSelection::Json),
+            None,
+            0,
+            limits,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&result, CollectionKind::Args),
+            [(Some(b"json.a".as_slice()), b"0".as_slice())]
+        );
+        assert_eq!(
+            build_publication(
+                RequestBody::new(surviving, BodyProcessorSelection::Json),
+                None,
+                0,
+                limits,
+            )
+            .err(),
+            Some(expected_error)
+        );
+    }
+    // Source bytes are always charged, but only surviving node paths add work.
+    let work_limit = overwritten.len() + b"json".len() + b"json.a".len();
+    let result = build_publication(
+        RequestBody::new(overwritten, BodyProcessorSelection::Json),
+        None,
+        0,
+        BodyLimits {
+            max_work_bytes: work_limit,
+            ..BodyLimits::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.entries.len(), 5);
+    assert_eq!(
+        build_publication(
+            RequestBody::new(overwritten, BodyProcessorSelection::Json),
+            None,
+            0,
+            BodyLimits {
+                max_work_bytes: work_limit - 1,
+                ..BodyLimits::default()
+            },
+        )
+        .err(),
+        Some(BodyError::WorkLimit { limit: work_limit - 1 })
+    );
+}
+
+#[test]
+fn json_external_path_collisions_preserve_distinct_entries_and_reference_order() {
+    let result = publication(
+        br#"{"a.b":"literal","a":{"b":"nested"},"":"empty","arr":[{},[],null]}"#,
+        BodyProcessorSelection::Json,
+        None,
+    );
+    assert_eq!(
+        values(&result, CollectionKind::Args),
+        [
+            (Some(b"json.".as_slice()), b"empty".as_slice()),
+            (Some(b"json.a.b".as_slice()), b"nested".as_slice()),
+            (Some(b"json.a.b".as_slice()), b"literal".as_slice()),
+            (Some(b"json.arr.1".as_slice()), b"0".as_slice()),
+            (Some(b"json.arr.2".as_slice()), b"".as_slice()),
+            (Some(b"json.arr".as_slice()), b"3".as_slice()),
+        ]
+    );
+}
+
+#[test]
+fn json_numbers_publish_reference_normalization_including_scalar_roots() {
+    for (input, expected) in [
+        (b"1e2".as_slice(), b"100.0".as_slice()),
+        (b"-0".as_slice(), b"-0.0".as_slice()),
+        (b"1.500".as_slice(), b"1.5".as_slice()),
+        (b"18446744073709551615".as_slice(), b"18446744073709551615".as_slice()),
+    ] {
+        let result = publication(input, BodyProcessorSelection::Json, None);
+        assert_eq!(
+            values(&result, CollectionKind::Args),
+            [(Some(b"json".as_slice()), expected)]
+        );
+    }
+}
+
+#[test]
+fn json_duplicate_replacement_cannot_hide_invalid_earlier_values() {
+    for body in [
+        br#"{"a":1e400,"a":0}"#.as_slice(),
+        br#"{"a":[1,],"a":0}"#.as_slice(),
+        b"{\"a\":\"\xff\",\"a\":0}".as_slice(),
+    ] {
+        assert_eq!(
+            build_publication(
+                RequestBody::new(body, BodyProcessorSelection::Json),
+                None,
+                0,
+                BodyLimits::default(),
+            )
+            .err(),
+            Some(BodyError::Malformed {
+                processor: BodyProcessorSelection::Json
+            }),
+        );
+    }
+}
+
+struct JsonDocumentFixture {
+    document: crate::seclang::JsonDocument<usize>,
+    scalars: Vec<(String, Vec<u8>)>,
+}
+
+fn document_fixture(input: &[u8], split: usize) -> JsonDocumentFixture {
+    use crate::seclang::{JsonDocument, JsonDocumentLimits, JsonStreamInput, JsonStreamLimits};
+
+    let mut document = JsonDocument::new(
+        JsonStreamLimits::default(),
+        JsonDocumentLimits {
+            max_retained_bytes: 16 * 1024 * 1024,
+            max_key_bytes: 2 * 1024 * 1024,
+            max_members: 65_536,
+            max_events: 131_072,
+            max_path_bytes: 16 * 1024,
+            max_depth: 64,
+            max_work: 128 * 1024 * 1024,
+        },
+    );
+    // Test-only payload table lets a fixed-size result identify the exact
+    // borrowed callback value after duplicate removal and reference sorting.
+    let mut scalars = Vec::new();
+    let mut sink = |path: &str, value: &[u8]| {
+        let id = scalars.len();
+        scalars.push((path.to_owned(), value.to_vec()));
+        Ok(id)
+    };
+    document
+        .feed(JsonStreamInput::Data(&input[..split]), &mut sink)
+        .unwrap();
+    assert!(document.events().is_none());
+    document
+        .feed(JsonStreamInput::Data(&input[split..]), &mut sink)
+        .unwrap();
+    assert!(document.events().is_none());
+    document.feed(JsonStreamInput::Complete, &mut sink).unwrap();
+    JsonDocumentFixture { document, scalars }
+}
+
+fn replay_document_publication(
+    input: &[u8],
+    fixture: &JsonDocumentFixture,
+    limits: BodyLimits,
+) -> Result<BodyPublication, BodyError> {
+    use crate::seclang::JsonDocumentEvent;
+
+    if input.len() > limits.max_body_bytes {
+        return Err(BodyError::ByteLimit {
+            actual: input.len(),
+            limit: limits.max_body_bytes,
+        });
+    }
+    let mut builder = BodyBuilder::new(limits);
+    builder.charge_work(input.len())?;
+    builder.push(
+        CollectionKind::RequestBodyLength,
+        None,
+        input.len().to_string().as_bytes(),
+        false,
+    )?;
+    builder.push(CollectionKind::ReqbodyProcessor, None, b"JSON", false)?;
+    let mut combined_size = 17_usize;
+    for event in fixture.document.events().unwrap() {
+        match event {
+            JsonDocumentEvent::ExtendPath { path_bytes } => {
+                if path_bytes > limits.max_name_bytes {
+                    return Err(BodyError::NameByteLimit {
+                        limit: limits.max_name_bytes,
+                    });
+                }
+            }
+            JsonDocumentEvent::Visit { path_bytes, depth } => {
+                if depth > limits.max_depth {
+                    return Err(BodyError::DepthLimit {
+                        limit: limits.max_depth,
+                    });
+                }
+                builder.charge_work(path_bytes)?;
+            }
+            JsonDocumentEvent::Scalar {
+                path_bytes,
+                value_bytes,
+                result,
+            } => {
+                let (path, value) = &fixture.scalars[result];
+                assert_eq!(path_bytes, path.len());
+                assert_eq!(value_bytes, value.len());
+                builder.push(CollectionKind::Args, Some(path.as_bytes()), value, false)?;
+                builder.push(CollectionKind::ArgsNames, Some(path.as_bytes()), path.as_bytes(), false)?;
+                combined_size += path.len() + value.len();
+            }
+        }
+    }
+    builder.push(
+        CollectionKind::ArgsCombinedSize,
+        None,
+        combined_size.to_string().as_bytes(),
+        false,
+    )?;
+    builder.finish()
+}
+
+fn assert_document_publication(input: &[u8], fixture: &JsonDocumentFixture, limits: BodyLimits) {
+    let actual = replay_document_publication(input, fixture, limits);
+    let expected = build_publication(RequestBody::new(input, BodyProcessorSelection::Json), None, 17, limits);
+    let validated = validate_json_publication(&fixture.document, 17, limits, false);
+    match (actual, expected) {
+        (Ok(actual), Ok(expected)) => {
+            let summary = validated.unwrap();
+            assert_eq!(summary.entries, expected.entries.len());
+            assert_eq!(summary.retained_bytes, expected.retained_bytes);
+            let decoded: usize = expected
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_ref().map_or(0, |name| name.len()) + entry.value.len())
+                .sum();
+            let args: usize = expected
+                .entries
+                .iter()
+                .filter(|entry| entry.collection == CollectionKind::Args)
+                .map(|entry| entry.name.as_ref().map_or(0, |name| name.len()) + entry.value.len())
+                .sum();
+            assert_eq!(summary.decoded_bytes, decoded);
+            assert_eq!(summary.body_args_combined_size, args);
+            assert_eq!(summary.args_combined_size, 17 + args);
+            assert_eq!(actual.retained_bytes, expected.retained_bytes);
+            let view = |publication: BodyPublication| {
+                publication
+                    .entries
+                    .into_iter()
+                    .map(|entry| (entry.collection, entry.name, entry.value))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(view(actual), view(expected));
+        }
+        (Err(actual), Err(expected)) => {
+            assert_eq!(actual, expected);
+            assert_eq!(validated, Err(JsonPublicationError::Body(expected)));
+        }
+        _ => panic!("document replay and complete publication disagree on success"),
+    }
+}
+
+#[test]
+fn incremental_json_document_matches_complete_publication_at_every_split() {
+    for input in [
+        b"{}".as_slice(),
+        b"[]",
+        b"null",
+        b"\"root\"",
+        b"1e2",
+        b"-0",
+        br#"{"a":{}}"#,
+        br#"{"a":[]}"#,
+        br#"[[],{},null]"#,
+        br#"{"z":"last","a":"first","m":true}"#,
+        br#"{"a.b":"literal","a":{"b":"nested"},"":"empty"}"#,
+        br#"{"a":0,"\u0061":1}"#,
+        br#"{"a":{"discard":[1,2]},"a":"kept"}"#,
+        br#"{"a":"removed","a":{}}"#,
+        br#"[0,1,2,3,4,5,6,7,8,9,10,11]"#,
+        br#"{"n":18446744073709551615,"f":1.500,"b":false}"#,
+        br#"{"a":{"x":1,"x":2},"b":{"x":3},"a":{"x":4}}"#,
+        r#"{"é":1,"a":0,"\u00e9":2,"ñ":3}"#.as_bytes(),
+    ] {
+        for split in 0..=input.len() {
+            let fixture = document_fixture(input, split);
+            assert_document_publication(input, &fixture, BodyLimits::default());
+        }
+    }
+}
+
+#[test]
+fn incremental_json_document_preserves_competing_publication_limit_order() {
+    for input in [
+        b"{}".as_slice(),
+        b"[]",
+        b"null",
+        br#"{"a":{}}"#,
+        br#"{"a":[]}"#,
+        br#"{"z":[],"a":{"b":"long"}}"#,
+        br#"{"a":{"discard":[1,2]},"a":0}"#,
+        br#"[[],{},null]"#,
+    ] {
+        let fixture = document_fixture(input, input.len() / 2);
+        // Cross limits deliberately: error precedence matters when more than
+        // one bound would fail, including metadata prelude and empty nodes.
+        for max_entries in [0, 1, 2, 3, 4, 5, 8, 12] {
+            for max_name_bytes in [0, 3, 4, 6, 8] {
+                for max_depth in [0, 1, 2] {
+                    for max_decoded_bytes in [0, 5, 12, 24, 60] {
+                        for max_work_bytes in [0, input.len(), input.len() + 4, input.len() + 20, 128] {
+                            assert_document_publication(
+                                input,
+                                &fixture,
+                                BodyLimits {
+                                    max_entries,
+                                    max_name_bytes,
+                                    max_depth,
+                                    max_decoded_bytes,
+                                    max_work_bytes,
+                                    ..BodyLimits::default()
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // Dense work thresholds also detect off-by-one visit lengths on
+        // empty containers, whose paths never appear in scalar callbacks.
+        for max_work_bytes in input.len()..=input.len() + 128 {
+            assert_document_publication(
+                input,
+                &fixture,
+                BodyLimits {
+                    max_work_bytes,
+                    ..BodyLimits::default()
+                },
+            );
+        }
+        for max_body_bytes in [input.len() - 1, input.len()] {
+            assert_document_publication(
+                input,
+                &fixture,
+                BodyLimits {
+                    max_body_bytes,
+                    ..BodyLimits::default()
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn json_reference_prelude_limits_precede_syntax_but_traversal_limits_do_not() {
+    let malformed = br#"{"long_name":0} trailing"#;
+    for (limits, error) in [
+        (
+            BodyLimits {
+                max_entries: 0,
+                ..BodyLimits::default()
+            },
+            BodyError::EntryLimit { limit: 0 },
+        ),
+        (
+            BodyLimits {
+                max_work_bytes: 0,
+                ..BodyLimits::default()
+            },
+            BodyError::WorkLimit { limit: 0 },
+        ),
+        (
+            BodyLimits {
+                max_name_bytes: 0,
+                max_depth: 0,
+                ..BodyLimits::default()
+            },
+            BodyError::Malformed {
+                processor: BodyProcessorSelection::Json,
+            },
+        ),
+    ] {
+        assert_eq!(
+            build_publication(
+                RequestBody::new(malformed, BodyProcessorSelection::Json),
+                None,
+                0,
+                limits,
+            )
+            .err(),
+            Some(error)
+        );
+    }
+}
+
+#[test]
+fn incremental_json_document_matches_generated_nested_duplicate_objects() {
+    fn next(state: &mut u64) -> usize {
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (*state >> 32) as usize
+    }
+    fn value(state: &mut u64, depth: usize) -> String {
+        match next(state) % if depth == 0 { 4 } else { 6 } {
+            0 => "null".to_owned(),
+            1 => next(state).is_multiple_of(2).to_string(),
+            2 => format!("{}e-1", next(state) % 1000),
+            3 => serde_json::to_string(["text", "", "quote\"slash\\", "é"][next(state) % 4]).unwrap(),
+            4 => {
+                let mut members = Vec::new();
+                for _ in 0..next(state) % 6 {
+                    let key = ["a", "b", "a", "a.b", ""][next(state) % 5];
+                    members.push(format!(
+                        "{}:{}",
+                        serde_json::to_string(key).unwrap(),
+                        value(state, depth - 1)
+                    ));
+                }
+                format!("{{{}}}", members.join(","))
+            }
+            _ => {
+                let mut children = Vec::new();
+                for _ in 0..next(state) % 5 {
+                    children.push(value(state, depth - 1));
+                }
+                format!("[{}]", children.join(","))
+            }
+        }
+    }
+    for seed in 1..=128 {
+        let mut state = seed;
+        let input = value(&mut state, 4);
+        for split in [0, input.len() / 3, input.len()] {
+            let fixture = document_fixture(input.as_bytes(), split);
+            assert_document_publication(input.as_bytes(), &fixture, BodyLimits::default());
+            for max_entries in [3, 7, 15] {
+                assert_document_publication(
+                    input.as_bytes(),
+                    &fixture,
+                    BodyLimits {
+                        max_entries,
+                        ..BodyLimits::default()
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn publication_accounting_keeps_literal_cross_format_boundaries() {
+    use BodyProcessorSelection::{Json, Multipart, Raw, UrlEncoded, Xml};
+    // Literal counts were derived from the pre-extraction implementation.
+    // Only the descriptor size remains platform-dependent.
+    let multipart = b"--x\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nb\r\n--x--\r\n";
+    let cases = [
+        (Raw, b"abc".as_slice(), None, false, None, 4, 9, 3, b"17".as_slice()),
+        (Raw, b"abc", None, false, Some(false), 3, 6, 3, b"17"),
+        (Raw, b"", None, false, None, 4, 6, 0, b"17"),
+        (Json, b"", None, false, None, 3, 7, 0, b"17"),
+        (Json, b"", None, false, Some(true), 4, 7, 0, b"17"),
+        (UrlEncoded, b"a=b", None, false, None, 6, 20, 6, b"19"),
+        (Json, br#"{"a":1}"#, None, false, None, 5, 26, 17, b"24"),
+        (Json, br#"{"a":1}"#, None, false, Some(true), 6, 33, 17, b"24"),
+        (Xml, br#"<r a="x">y</r>"#, None, false, None, 5, 10, 23, b"17"),
+        (
+            Multipart,
+            multipart,
+            Some(b"multipart/form-data; boundary=x".as_slice()),
+            false,
+            None,
+            7,
+            59,
+            104,
+            b"19",
+        ),
+        (Json, b"[", None, true, None, 4, 8, 1, b"17"),
+        (Json, b"[", None, true, Some(false), 3, 7, 1, b"17"),
+    ];
+    for (processor, body, content_type, fallback, raw, entries, decoded, work, combined) in cases {
+        let build = |limits| {
+            let body = RequestBody::new(body, processor);
+            if fallback {
+                build_fallback_publication_with_raw_policy(body, content_type, 17, limits, raw)
+            } else {
+                build_publication_with_raw_policy(body, content_type, 17, limits, raw)
+            }
+        };
+        let limits = BodyLimits {
+            max_body_bytes: body.len(),
+            max_entries: entries,
+            max_decoded_bytes: decoded,
+            max_work_bytes: work,
+            ..BodyLimits::default()
+        };
+        let publication = build(limits).unwrap();
+        assert_eq!(publication.entries.len(), entries);
+        assert_eq!(
+            publication.retained_bytes,
+            decoded + entries * std::mem::size_of::<BodyEntry>()
+        );
+        assert_eq!(
+            values(&publication, CollectionKind::ArgsCombinedSize),
+            [(None, combined)]
+        );
+        if processor == Multipart {
+            assert_eq!(
+                values(&publication, CollectionKind::FilesCombinedSize),
+                [(None, b"1".as_slice())]
+            );
+        }
+        assert_eq!(
+            build(BodyLimits {
+                max_entries: entries - 1,
+                ..limits
+            })
+            .err(),
+            Some(BodyError::EntryLimit { limit: entries - 1 })
+        );
+        assert_eq!(
+            build(BodyLimits {
+                max_decoded_bytes: decoded - 1,
+                ..limits
+            })
+            .err(),
+            Some(BodyError::DecodedByteLimit { limit: decoded - 1 })
+        );
+        if work != 0 {
+            assert_eq!(
+                build(BodyLimits {
+                    max_work_bytes: work - 1,
+                    ..limits
+                })
+                .err(),
+                Some(BodyError::WorkLimit { limit: work - 1 })
+            );
+        }
+    }
+}
+
+#[test]
+fn completed_json_accounting_preserves_raw_and_head_overflow_boundaries() {
+    for input in [b"{}".as_slice(), b"null", br#"{"a":1}"#, b"[1,2]"] {
+        let fixture = document_fixture(input, 1);
+        for raw in [false, true] {
+            for head in [0, 9, 99, usize::MAX] {
+                for max_entries in [2, 3, 4, 5, 6, 16] {
+                    let limits = BodyLimits {
+                        max_entries,
+                        ..BodyLimits::default()
+                    };
+                    let expected = build_publication_with_raw_policy(
+                        RequestBody::new(input, BodyProcessorSelection::Json),
+                        None,
+                        head,
+                        limits,
+                        Some(raw),
+                    );
+                    let actual = validate_json_publication(&fixture.document, head, limits, raw);
+                    match (actual, expected) {
+                        (Ok(actual), Ok(expected)) => {
+                            assert_eq!(actual.entries, expected.entries.len());
+                            assert_eq!(actual.retained_bytes, expected.retained_bytes);
+                        }
+                        (Err(JsonPublicationError::Body(actual)), Err(expected)) => assert_eq!(actual, expected),
+                        _ => panic!("completed validator and materialization disagree"),
+                    }
+                }
+            }
+        }
+        assert!(fixture.document.events().is_some());
+    }
+    let fixture = document_fixture(br#"{"a":1}"#, 3);
+    for raw in [false, true] {
+        let summary = validate_json_publication(&fixture.document, 17, BodyLimits::default(), raw).unwrap();
+        assert_eq!(summary.work_bytes, 17);
+        assert_eq!(summary.decoded_bytes, if raw { 33 } else { 26 });
+    }
+}
+
+#[test]
+fn json_publication_requires_successful_completion_before_budget_checks() {
+    use crate::seclang::{JsonDocument, JsonDocumentLimits, JsonStreamInput, JsonStreamLimits};
+    for ending in [None, Some(JsonStreamInput::Complete), Some(JsonStreamInput::Abandoned)] {
+        let mut document = JsonDocument::<()>::new(
+            JsonStreamLimits::default(),
+            JsonDocumentLimits {
+                max_retained_bytes: 4096,
+                max_key_bytes: 128,
+                max_members: 32,
+                max_events: 64,
+                max_path_bytes: 128,
+                max_depth: 8,
+                max_work: 4096,
+            },
+        );
+        document.feed(JsonStreamInput::Data(b"["), |_, _| Ok(())).unwrap();
+        if let Some(ending) = ending {
+            assert!(document.feed(ending, |_, _| Ok(())).is_err());
+        }
+        assert_eq!(
+            validate_json_publication(
+                &document,
+                usize::MAX,
+                BodyLimits {
+                    max_body_bytes: 0,
+                    max_entries: 0,
+                    max_work_bytes: 0,
+                    ..BodyLimits::default()
+                },
+                true
+            ),
+            Err(JsonPublicationError::IncompleteDocument)
+        );
+    }
+}

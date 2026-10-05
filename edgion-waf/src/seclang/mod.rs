@@ -5,6 +5,10 @@ mod body;
 mod compiler;
 mod directive;
 mod include;
+mod json_body;
+mod json_document;
+mod json_stream;
+mod json_summary;
 mod operator;
 mod semantic;
 mod source;
@@ -14,6 +18,19 @@ mod tokenizer;
 mod transform;
 
 pub(crate) use semantic::validate_executable_profile;
+
+pub use json_body::{JsonBodyAdapter, JsonBodyConfig, JsonBodyError, JsonBodySummary};
+
+pub use json_document::{
+    JsonDocument, JsonDocumentError, JsonDocumentEvent, JsonDocumentLimit, JsonDocumentLimits, JsonDocumentSinkError,
+    JsonDocumentUsage,
+};
+
+pub use json_stream::{
+    JsonStream, JsonStreamError, JsonStreamInput, JsonStreamLimit, JsonStreamLimits, JsonStreamSinkError,
+    JsonStreamToken, JsonStreamUsage,
+};
+pub use json_summary::{JsonMatchRetention, JsonMatchSummary, JsonMatchSummaryError};
 
 pub use directive::{
     parse_directives, Directive, DirectiveArity, DirectiveDocument, DirectiveField, DirectiveKind, DirectiveLimits,
@@ -26,14 +43,16 @@ pub use action::{
     ActionValue, ActionValueSpelling, EmptyActionKind,
 };
 pub use body::{
-    BodyError, BodyLimits, BodyProcessorSelection, RequestBody, DEFAULT_MAX_BODY_DECODED_BYTES, DEFAULT_MAX_BODY_DEPTH,
+    validate_json_publication, BodyError, BodyLimits, BodyProcessorSelection, JsonPublicationError,
+    JsonPublicationSummary, RequestBody, DEFAULT_MAX_BODY_DECODED_BYTES, DEFAULT_MAX_BODY_DEPTH,
     DEFAULT_MAX_BODY_ENTRIES, DEFAULT_MAX_BODY_NAME_BYTES, DEFAULT_MAX_BODY_WORK_BYTES, DEFAULT_MAX_MULTIPART_HEADERS,
     DEFAULT_MAX_MULTIPART_PARTS, DEFAULT_MAX_REQUEST_BODY_BYTES,
 };
 pub use compiler::{
     compile_validated, CompiledGeneration, CompiledRuleMemberView, CompiledRuleUnitView, CompiledScheduleEntryKind,
     CompiledScheduleEntryView, CompiledTargetPlanView, CompiledTargetRecordView, CompiledTargetSelectorKind,
-    CompilerError, CompilerInvariant, CompilerLimits, EvaluationMode, Intervention, PhaseOutcome, PhraseAssetFailure,
+    CompilerError, CompilerInvariant, CompilerLimits, EvaluationMode, Intervention, JsonExecutionError,
+    JsonExecutionLimit, JsonExecutionLimits, JsonFactLimits, JsonPlanLimits, PhaseOutcome, PhraseAssetFailure,
     PhraseAssetRequest, PhraseAssetSink, PhraseAssetSinkError, PhraseAssetSource, PhraseMatcherErrorKind,
     RequestBodyExecutionClass, RequestBodyExecutionSummary, RequestBodyPrefixCompletion, RequestHead, RequestHeader,
     ResponseHead, ResponseHeader, ResponseWindow, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits,

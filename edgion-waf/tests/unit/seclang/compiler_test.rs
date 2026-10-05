@@ -1225,7 +1225,7 @@ fn public_generation_classifies_phase_two_execution_conservatively() {
         classes,
         [
             Some(RequestBodyExecutionClass::StreamingRaw),
-            Some(RequestBodyExecutionClass::StreamingStructured),
+            Some(RequestBodyExecutionClass::BoundedSnapshot),
             Some(RequestBodyExecutionClass::BoundedSnapshot),
             Some(RequestBodyExecutionClass::StreamingRaw),
             None,
@@ -1234,8 +1234,8 @@ fn public_generation_classifies_phase_two_execution_conservatively() {
     );
     let summary = generation.request_body_execution_summary();
     assert_eq!(summary.streaming_raw_rule_units(), 2);
-    assert_eq!(summary.streaming_structured_rule_units(), 1);
-    assert_eq!(summary.bounded_snapshot_rule_units(), 2);
+    assert_eq!(summary.streaming_structured_rule_units(), 0);
+    assert_eq!(summary.bounded_snapshot_rule_units(), 3);
     assert_eq!(summary.unsupported_rule_units(), 0);
     assert!(summary.requires_request_body());
 }
@@ -1330,5 +1330,237 @@ fn public_generation_final_retained_and_peak_limits_are_exact() {
             );
             assert_eq!(result.is_ok(), succeeds, "case {case}: {result:?}");
         });
+    }
+}
+
+#[test]
+fn structured_phase_two_rules_require_complete_publication() {
+    for (target, operator, actions) in [
+        ("ARGS", "@pm attack", ""),
+        ("ARGS:json.key", "@rx attack", ",capture"),
+        ("ARGS:/^json/", "!@contains attack", ""),
+        ("&ARGS", "@eq 0", ""),
+        ("ARGS|!ARGS:json.safe", "@pm attack", ""),
+        ("ARGS_NAMES", "@contains key", ",t:lowercase"),
+        ("ARGS_COMBINED_SIZE", "@gt 1", ""),
+        ("FILES", "@contains file", ""),
+        ("FILES_NAMES", "@contains file", ""),
+        ("FILES_COMBINED_SIZE", "@gt 1", ""),
+        ("MULTIPART_PART_HEADERS", "@contains file", ""),
+        ("XML:/*", "@contains attack", ""),
+        ("XML://@*", "@contains attack", ""),
+        ("ARGS", "@pm attack", ",t:urlDecodeUni"),
+        ("ARGS", "@pm attack", ",setvar:tx.score=+1"),
+        ("ARGS", "@pm attack", ",chain"),
+    ] {
+        let mut source = format!("SecRule {target} \"{operator}\" \"id:1,phase:2,pass{actions}\"\n");
+        if actions == ",chain" {
+            source.push_str("SecRule REQUEST_HEADERS \"@contains next\" \"t:none\"\n");
+        }
+        with_validated(&source, |validated| {
+            let generation = compile_validated(validated, None, CompilerLimits::default()).unwrap();
+            assert_eq!(
+                generation.rule_units().next().unwrap().request_body_execution_class(),
+                Some(RequestBodyExecutionClass::BoundedSnapshot),
+                "{source}"
+            );
+        });
+    }
+}
+
+#[test]
+fn body_macros_require_snapshot_even_without_body_targets() {
+    for source in [
+        "SecRule REQUEST_URI \"@contains /\" \"id:1,phase:2,pass,chain\"\nSecRule REQUEST_HEADERS \"@streq %{ARGS.json.key}\" \"t:none\"\n",
+        "SecAction \"id:1,phase:2,pass,setvar:tx.%{ARGS.json.key}=1\"\n",
+        "SecAction \"id:1,phase:2,pass,msg:'%{ARGS.json.key}'\"\n",
+        "SecRule REQUEST_URI \"@streq %{ARGS.json.key}\" \"id:1,phase:2,pass\"\n",
+        "SecRule REQUEST_URI \"@contains /\" \"id:1,phase:2,pass,setvar:tx.value=%{ARGS.json.key}\"\n",
+        "SecAction \"id:1,phase:2,pass,setvar:tx.value=%{ARGS.json.key}\"\n",
+    ] {
+        with_validated(source, |validated| {
+            let generation = compile_validated(validated, None, CompilerLimits::default()).unwrap();
+            let summary = generation.request_body_execution_summary();
+            assert!(summary.requires_request_body());
+            assert_eq!(summary.streaming_raw_rule_units(), 0, "{source}");
+            assert_eq!(summary.streaming_structured_rule_units(), 0, "{source}");
+            assert_eq!(summary.bounded_snapshot_rule_units(), 1, "{source}");
+        });
+    }
+}
+
+#[test]
+fn unavailable_phase_two_targets_dominate_supported_lanes() {
+    for target in ["XML:/root", "ARGS|XML:/root", "REQUEST_BODY|XML:/root"] {
+        let source = format!("SecRule {target} \"@pm attack\" \"id:1,phase:2,pass\"\n");
+        with_validated(&source, |validated| {
+            let generation = compile_validated(validated, None, CompilerLimits::default()).unwrap();
+            assert_eq!(
+                generation.rule_units().next().unwrap().request_body_execution_class(),
+                Some(RequestBodyExecutionClass::Unsupported),
+                "{source}"
+            );
+        });
+    }
+}
+
+#[test]
+fn chain_child_structured_target_requires_snapshot_for_entire_unit() {
+    with_validated(
+        "SecRule REQUEST_URI \"@contains /\" \"id:1,phase:2,pass,chain\"\nSecRule ARGS \"@pm attack\" \"t:none\"\n",
+        |validated| {
+            let generation = compile_validated(validated, None, CompilerLimits::default()).unwrap();
+            assert_eq!(
+                generation
+                    .request_body_execution_summary()
+                    .bounded_snapshot_rule_units(),
+                1
+            );
+            assert_eq!(
+                generation.request_body_execution_summary().streaming_raw_rule_units(),
+                0
+            );
+        },
+    );
+}
+
+#[test]
+fn json_capability_allocation_failure_is_explicit_and_unsupported_never_allocates() {
+    let eligible = "SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n";
+    let unsupported = format!("{eligible}SecRule ARGS \"@contains hit\" \"id:2,phase:2,pass\"\n");
+    let empty = "SecRule REQUEST_METHOD \"@streq GET\" \"id:3,phase:1,pass\"\n";
+    for (source, should_allocate) in [(eligible, true), (unsupported.as_str(), false), (empty, false)] {
+        with_validated(source, |validated| {
+            COMPILER_ALLOCATION_FAILURE.with(|failure| failure.set(Some("compiled JSON subscriber plan")));
+            let result = compile_validated(validated, None, CompilerLimits::default());
+            COMPILER_ALLOCATION_FAILURE.with(|failure| failure.set(None));
+            if should_allocate {
+                assert_eq!(
+                    result.unwrap_err(),
+                    CompilerError::Allocation {
+                        operation: "compiled JSON subscriber plan"
+                    }
+                );
+            } else {
+                let generation = result.unwrap();
+                match &generation.json_capability {
+                    json_plan::JsonCapability::Unsupported => assert_eq!(source, unsupported),
+                    json_plan::JsonCapability::Eligible(descriptors) => {
+                        assert_eq!(source, empty);
+                        assert!(descriptors.is_empty());
+                        assert_eq!(descriptors.capacity(), 0);
+                    }
+                }
+            }
+        });
+    }
+}
+
+#[test]
+fn json_capability_descriptors_follow_rule_order_and_are_generation_specific() {
+    for (first, second) in [
+        ("ARGS:json.a", "ARGS_NAMES:json.b"),
+        ("ARGS_NAMES:json.z", "ARGS:json.x"),
+    ] {
+        let source = format!(
+            "SecRule REQUEST_METHOD \"@streq GET\" \"id:9,phase:1,pass\"\nSecRule {first} \"@pm hit\" \"id:1,phase:2,pass\"\nSecRule {second} \"!@pm miss\" \"id:2,phase:2,pass,t:lowercase\"\n"
+        );
+        with_validated(&source, |validated| {
+            let generation = compile_validated(validated, None, CompilerLimits::default()).unwrap();
+            let json_plan::JsonCapability::Eligible(descriptors) = &generation.json_capability else {
+                panic!("eligible plan missing")
+            };
+            let units: Vec<_> = generation
+                .units
+                .iter()
+                .filter(|unit| unit.phase == Phase::RequestBody)
+                .collect();
+            assert_eq!(descriptors.len(), 2);
+            for (descriptor, unit) in descriptors.iter().zip(units) {
+                assert_eq!(descriptor.member, unit.member_start);
+                let member = &generation.members[unit.member_start];
+                let target =
+                    &generation.target_records[generation.target_plans[member.target_plan.unwrap()].record_start];
+                assert_eq!(descriptor.collection, target.collection);
+                assert_eq!(descriptor.selector, target.selector);
+            }
+            let bytes = descriptors.capacity() * size_of::<json_plan::JsonSubscriberDescriptor>();
+            assert!(bytes > 0);
+            assert!(generation.compiler_owned_bytes() >= bytes);
+            assert!(generation.compilation_peak_bytes() >= generation.retained_bytes());
+        });
+    }
+}
+
+#[test]
+fn json_capability_charges_exact_capacity_and_rejects_each_budget_before_allocation() {
+    let source = concat!(
+        "SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"\n",
+        "SecRule ARGS_NAMES \"@pm json\" \"id:2,phase:2,pass\"\n",
+    );
+    let generation = with_validated(source, |validated| {
+        compile_validated(validated, None, CompilerLimits::default()).unwrap()
+    });
+    let make_work = |limits| MatcherCompileWork {
+        limits,
+        validated_bytes: 11,
+        working_bytes: 7,
+        compiler_owned_bytes: 13,
+        matcher_charged_bytes: 17,
+        peak_bytes: 48,
+        requirement_cursors: [0; 8],
+    };
+    let mut baseline = make_work(CompilerLimits::default());
+    let plan = json_plan::JsonCapability::compile(&generation, &mut baseline).unwrap();
+    let actual_bytes = plan.retained_bytes();
+    assert!(actual_bytes > 0);
+    assert_eq!(baseline.compiler_owned_bytes, 13 + actual_bytes);
+    assert_eq!(baseline.matcher_charged_bytes, 17);
+    assert_eq!(baseline.peak_bytes, 48 + actual_bytes);
+    let exact = CompilerLimits {
+        max_compiler_owned_non_matcher_bytes: 13 + actual_bytes,
+        max_generation_bytes: 30 + actual_bytes,
+        max_compilation_peak_bytes: 48 + actual_bytes,
+        ..CompilerLimits::default()
+    };
+    let mut work = make_work(exact);
+    assert!(json_plan::JsonCapability::compile(&generation, &mut work).is_ok());
+    // First-excess uses required descriptor bytes, so rejection must precede
+    // even a deliberately failed allocator. Peak includes live source/work bytes.
+    let required = 2 * size_of::<json_plan::JsonSubscriberDescriptor>();
+    for (limits, expected) in [
+        (
+            CompilerLimits {
+                max_compiler_owned_non_matcher_bytes: 13 + required - 1,
+                ..exact
+            },
+            CompilerError::OwnedByteLimit {
+                limit: 13 + required - 1,
+            },
+        ),
+        (
+            CompilerLimits {
+                max_generation_bytes: 30 + required - 1,
+                ..exact
+            },
+            CompilerError::GenerationByteLimit {
+                limit: 30 + required - 1,
+            },
+        ),
+        (
+            CompilerLimits {
+                max_compilation_peak_bytes: 48 + required - 1,
+                ..exact
+            },
+            CompilerError::PeakByteLimit {
+                limit: 48 + required - 1,
+            },
+        ),
+    ] {
+        let mut work = make_work(limits);
+        COMPILER_ALLOCATION_FAILURE.with(|failure| failure.set(Some("compiled JSON subscriber plan")));
+        let result = json_plan::JsonCapability::compile(&generation, &mut work);
+        COMPILER_ALLOCATION_FAILURE.with(|failure| failure.set(None));
+        assert_eq!(result.unwrap_err(), expected);
     }
 }

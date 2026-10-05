@@ -2580,6 +2580,25 @@ pub struct MatchScratch {
     regex_matches: RegexPatternSet,
 }
 
+impl MatchScratch {
+    /// Query the most recent successful scan. Callers must establish that this
+    /// scratch still belongs to that scan's matcher and input before reuse.
+    pub(crate) fn contains_any_in_range(
+        &self,
+        expected_patterns: usize,
+        range: std::ops::Range<usize>,
+    ) -> Option<bool> {
+        if self.pattern_count != expected_patterns {
+            return None;
+        }
+        MatchResults {
+            matched_words: &self.matched_words,
+            pattern_count: self.pattern_count,
+        }
+        .contains_any_in_range(range)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct MatcherStreamState {
     pattern_count: usize,
@@ -2616,6 +2635,15 @@ impl MatchResults<'_> {
         self.matched_words
             .get(word_index)
             .is_some_and(|word| word & (1_u64 << bit_index) != 0)
+    }
+
+    /// Query only a member's pattern range; invalid ranges are invariant errors
+    /// for callers, not silently truncated nonmatches.
+    pub(crate) fn contains_any_in_range(self, range: std::ops::Range<usize>) -> Option<bool> {
+        if range.start > range.end || range.end > self.pattern_count {
+            return None;
+        }
+        Some(range.map(PatternId).any(|pattern| self.contains(pattern)))
     }
 
     /// Iterate over every matching ID exactly once in source order.

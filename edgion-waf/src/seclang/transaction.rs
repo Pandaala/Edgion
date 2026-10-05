@@ -19,6 +19,8 @@ use super::super::transform::{
 };
 use super::{CollectionKind, CompiledGeneration, Phase};
 
+pub use json_rules::{JsonExecutionError, JsonExecutionLimit, JsonExecutionLimits, JsonFactLimits, JsonPlanLimits};
+
 pub const DEFAULT_MAX_RUNTIME_INPUT_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_MAX_RUNTIME_HEADERS: usize = 1_024;
 pub const DEFAULT_MAX_RUNTIME_HEADER_BYTES: usize = 4 * 1024 * 1024;
@@ -518,6 +520,7 @@ impl SelectedValue {
             SelectedBytes::Body(index) => request
                 .body
                 .as_ref()
+                .and_then(RequestBodyPublication::materialized)
                 .and_then(|body| body.entries.get(*index))
                 .map(|entry| entry.value.as_slice())
                 .ok_or(RuntimeError::GenerationInvariant),
@@ -568,6 +571,7 @@ fn selected_name_bytes<'value>(
         SelectedName::Body(index) => request
             .body
             .as_ref()
+            .and_then(RequestBodyPublication::materialized)
             .and_then(|body| body.entries.get(index))
             .and_then(|entry| entry.name.as_deref())
             .ok_or(RuntimeError::GenerationInvariant),
@@ -591,10 +595,40 @@ fn selected_name_bytes<'value>(
 
 const COLLECTION_COUNT: usize = CollectionKind::ALL.len();
 
+enum JsonBodyOwned {
+    Collecting(json_rules::JsonOwnedCollector),
+    Completed(json_rules::JsonCompletedFacts),
+}
+
+enum RequestBodyPublication {
+    Materialized(BodyPublication),
+    Metadata(crate::seclang::JsonPublicationSummary),
+}
+impl RequestBodyPublication {
+    fn materialized(&self) -> Option<&BodyPublication> {
+        match self {
+            Self::Materialized(body) => Some(body),
+            Self::Metadata(_) => None,
+        }
+    }
+    fn entry_count(&self) -> usize {
+        match self {
+            Self::Materialized(body) => body.entries.len(),
+            Self::Metadata(body) => body.entries,
+        }
+    }
+    fn retained_bytes(&self) -> usize {
+        match self {
+            Self::Materialized(body) => body.retained_bytes,
+            Self::Metadata(body) => body.retained_bytes,
+        }
+    }
+}
+
 struct RequestState {
     bytes: Vec<u8>,
     collections: [Vec<CollectionValue>; COLLECTION_COUNT],
-    body: Option<BodyPublication>,
+    body: Option<RequestBodyPublication>,
     entry_count: usize,
     retained_bytes: usize,
 }
@@ -616,12 +650,20 @@ struct TxEntry {
     value: Vec<u8>,
 }
 
+#[derive(Clone, Copy)]
+struct VirtualMatches {
+    count: usize,
+    /// All matched payload lengths plus the final singular name/value lengths.
+    payload_bytes: usize,
+}
+
 #[derive(Default)]
 struct TxState {
     entries: Vec<TxEntry>,
     matched_var: Option<Vec<u8>>,
     matched_var_name: Option<Vec<u8>>,
     matched_vars: Vec<TxEntry>,
+    virtual_matches: Option<VirtualMatches>,
     removed_units: Vec<usize>,
     target_exclusions: Vec<ActiveTargetExclusion>,
     request_body_processor: Option<super::super::BodyProcessorSelection>,
@@ -703,6 +745,11 @@ pub struct Transaction<'generation> {
     rule_engine_mode: RuleEngineMode,
     request_body_stream: Option<RequestBodyStreamState>,
     stream_member_matches: Option<Vec<Option<bool>>>,
+    // Cold 0/1 owner: ordinary transactions keep no completed JSON allocation.
+    // The fixed owner allocation is physical execution state, separate from
+    // reference logical retention counters and independently bounded fact arenas.
+    json_body_state: Vec<JsonBodyOwned>,
+    json_collection_error: Option<json_rules::JsonExecutionError>,
     request_prefix_completion: Option<RequestBodyPrefixCompletion>,
 }
 
@@ -860,6 +907,8 @@ impl<'generation> Transaction<'generation> {
             rule_engine_mode,
             request_body_stream: None,
             stream_member_matches: None,
+            json_body_state: Vec::new(),
+            json_collection_error: None,
             request_prefix_completion: None,
         })
     }
@@ -898,6 +947,7 @@ impl<'generation> Transaction<'generation> {
     }
 
     pub fn publish_request_body(&mut self, body: RequestBody<'_>) -> Result<(), RuntimeError> {
+        self.ensure_no_json_collection()?;
         if self.next_phase() != Some(Phase::RequestBody) {
             return Err(RuntimeError::PhaseOrder {
                 expected: self.next_phase(),
@@ -954,10 +1004,18 @@ impl<'generation> Transaction<'generation> {
             }
             Err(kind) => return Err(RuntimeError::Body { kind }),
         };
+        self.publish_body_state(RequestBodyPublication::Materialized(publication), body_error)
+    }
+
+    fn publish_body_state(
+        &mut self,
+        publication: RequestBodyPublication,
+        body_error: Option<BodyError>,
+    ) -> Result<(), RuntimeError> {
         let entry_count = self
             .request
             .entry_count
-            .checked_add(publication.entries.len())
+            .checked_add(publication.entry_count())
             .ok_or(RuntimeError::Arithmetic)?;
         if entry_count > self.limits.max_collection_entries {
             return Err(RuntimeError::CollectionEntryLimit {
@@ -967,7 +1025,7 @@ impl<'generation> Transaction<'generation> {
         let request_retained = self
             .request
             .retained_bytes
-            .checked_add(publication.retained_bytes)
+            .checked_add(publication.retained_bytes())
             .ok_or(RuntimeError::Arithmetic)?;
         let total_retained = request_retained
             .checked_add(self.scratch_bytes)
@@ -985,11 +1043,231 @@ impl<'generation> Transaction<'generation> {
         Ok(())
     }
 
+    /// Start bounded JSON evaluation after request-header execution, for a NEW
+    /// complete source. No source bytes are consumed by this method. This is the
+    /// only operation that may reset a previous provisional failure. Callers must
+    /// never restart on the remainder of a consumed transport source. Rejected
+    /// admission leaves previous sticky failures intact.
+    ///
+    /// `Unsupported` permits ordinary publication only on initial admission with
+    /// no earlier collection failure. An unsupported restart does not unblock
+    /// ordinary publication. Allocation, budget and runtime failures must not be
+    /// treated as unsupported capability or silently retried through another lane.
+    /// The processor must resolve to JSON; generation eligibility is checked here.
+    /// All independent budgets are explicit; canonical limits and modes are taken
+    /// from this transaction. The caller must enforce its transport byte cap.
+    pub fn start_json_request_body(
+        &mut self,
+        processor: super::super::BodyProcessorSelection,
+        limits: json_rules::JsonExecutionLimits,
+    ) -> Result<(), json_rules::JsonExecutionError> {
+        use super::super::{BodyProcessorSelection, JsonBodyConfig};
+        use json_rules::{JsonExecutionError, JsonOwnedCollector, JsonSubscriberPlan};
+        if self.next_phase() != Some(Phase::RequestBody) {
+            return Err(RuntimeError::PhaseOrder {
+                expected: self.next_phase(),
+                actual: Phase::RequestBody,
+            }
+            .into());
+        }
+        if self.request.body.is_some() {
+            return Err(RuntimeError::RequestBodyAlreadyPublished.into());
+        }
+        if self.json_collection_active() {
+            return Err(JsonExecutionError::State);
+        }
+        if self.request_body_stream.is_some()
+            || self.stream_member_matches.is_some()
+            || self.request_prefix_completion.is_some()
+        {
+            return Err(JsonExecutionError::State);
+        }
+        if self.tx.force_request_body_variable.is_some()
+            || self.tx.request_body_processor.is_some()
+            || !self.tx.removed_units.is_empty()
+            || !self.tx.target_exclusions.is_empty()
+        {
+            return Err(JsonExecutionError::Unsupported);
+        }
+        let selected = if processor == BodyProcessorSelection::Auto {
+            processor_from_content_type(
+                self.request
+                    .first_named(CollectionKind::RequestHeaders, b"content-type", true),
+            )
+        } else {
+            processor
+        };
+        if selected != BodyProcessorSelection::Json {
+            return Err(JsonExecutionError::Unsupported);
+        }
+        let head_args_combined_size = self
+            .request
+            .first_value(CollectionKind::ArgsCombinedSize)
+            .ok_or(RuntimeError::GenerationInvariant)
+            .and_then(parse_usize)?;
+        let plan = JsonSubscriberPlan::for_generation(&self.generation, limits.plan)?;
+        let config = JsonBodyConfig {
+            lexical: limits.lexical,
+            document: limits.document,
+            body: self.limits.body,
+            head_args_combined_size,
+            retain_raw_body: None,
+            detection_only: self.rule_engine_mode == RuleEngineMode::DetectionOnly,
+        };
+        let mut collector = JsonOwnedCollector::new(plan, self.limits, self.evaluation_mode, config, limits.facts);
+        for record in self.request.collection_records(CollectionKind::Args)? {
+            let name = record.name.ok_or(RuntimeError::GenerationInvariant)?;
+            collector.add_query(
+                &self.generation,
+                &mut self.group_scratch,
+                self.request.bytes_at(name),
+                self.request.bytes_at(record.value),
+            )?;
+        }
+        let mut owner = Vec::new();
+        owner.try_reserve_exact(1).map_err(|_| JsonExecutionError::Allocation)?;
+        owner.push(JsonBodyOwned::Collecting(collector));
+        self.json_body_state = owner;
+        self.json_collection_error = None;
+        Ok(())
+    }
+
+    fn json_collection_active(&self) -> bool {
+        matches!(self.json_body_state.first(), Some(JsonBodyOwned::Collecting(_)))
+    }
+    fn json_collection_blocked(&self) -> bool {
+        self.json_collection_active() || self.json_collection_error.is_some()
+    }
+    fn ensure_no_json_collection(&self) -> Result<(), RuntimeError> {
+        if self.json_collection_blocked() {
+            return Err(RuntimeError::GenerationInvariant);
+        }
+        Ok(())
+    }
+    fn fail_json_collection(&mut self, error: json_rules::JsonExecutionError) -> json_rules::JsonExecutionError {
+        self.json_body_state = Vec::new();
+        self.json_collection_error = Some(error);
+        error
+    }
+
+    /// Feed one event with temporary generation and matcher scratch borrows.
+    /// Complete seals provisional results; finish performs publication. Any later
+    /// input before finish poisons this provisional source. After publication,
+    /// rejected transport calls leave committed state and retry facts untouched.
+    /// Data is borrowed only for this call; chunks are never buffered for replay.
+    /// Send `Abandoned` on a cancelled source, or drop the transaction. Collection
+    /// failures release provisional storage and stay sticky until a valid restart.
+    pub fn feed_json_request_body(
+        &mut self,
+        input: super::super::JsonStreamInput<'_>,
+    ) -> Result<(), json_rules::JsonExecutionError> {
+        use super::super::JsonBodyError;
+        use json_rules::JsonExecutionError;
+        if let Some(error) = self.json_collection_error {
+            return Err(error);
+        }
+        let Some(JsonBodyOwned::Collecting(collector)) = self.json_body_state.first_mut() else {
+            return Err(if self.request.body.is_some() {
+                JsonExecutionError::AlreadyComplete
+            } else {
+                JsonExecutionError::State
+            });
+        };
+        let result = collector.feed(&self.generation, &mut self.group_scratch, input);
+        if let Err(error) = result {
+            let error = match error {
+                JsonExecutionError::Body(JsonBodyError::Body(kind)) => {
+                    JsonExecutionError::Runtime(RuntimeError::Body { kind })
+                }
+                error => error,
+            };
+            return Err(self.fail_json_collection(error));
+        }
+        Ok(())
+    }
+
+    /// Publish only a sealed complete source, then use the ordinary scheduler.
+    /// Scheduled failures retain completed facts for execute_request_body retry;
+    /// prepublication failures release all provisional owner capacity.
+    /// Calling before `Complete` poisons the source. Success releases replay facts
+    /// while preserving logical body/TX accounting. After publication, retry a
+    /// scheduled failure with `execute_request_body`, not this method.
+    /// DetectionOnly records malformed JSON in `request_body_error` and uses the
+    /// canonical fallback without body arguments (query arguments remain);
+    /// independent resource failures
+    /// remain errors in every mode. It also suppresses rule interventions.
+    /// This method may return a deny intervention; it does not forward a request.
+    pub fn finish_json_request_body(&mut self) -> Result<PhaseOutcome, json_rules::JsonExecutionError> {
+        use json_rules::JsonExecutionError;
+        if let Some(error) = self.json_collection_error {
+            return Err(error);
+        }
+        if !self.json_collection_active() {
+            return Err(if self.request.body.is_some() {
+                JsonExecutionError::AlreadyComplete
+            } else {
+                JsonExecutionError::State
+            });
+        }
+        let Some(JsonBodyOwned::Collecting(collector)) = self.json_body_state.pop() else {
+            return Err(JsonExecutionError::State);
+        };
+        let completed = match collector.into_completed() {
+            Ok(completed) => completed,
+            Err(error) => return Err(self.fail_json_collection(error)),
+        };
+        let summary = match completed.summary() {
+            Ok(summary) => summary,
+            Err(error) => return Err(self.fail_json_collection(error.into())),
+        };
+        if let Err(error) = self.publish_body_state(
+            RequestBodyPublication::Metadata(summary.publication),
+            summary.body_error,
+        ) {
+            return Err(self.fail_json_collection(error.into()));
+        }
+        // pop retained the preallocated 0/1 owner's capacity; no allocation or
+        // other fallible operation separates publication from retry-state attach.
+        self.json_body_state.push(JsonBodyOwned::Completed(completed));
+        self.execute_request_body().map_err(JsonExecutionError::Runtime)
+    }
+
+    /// Synchronous proof convenience; transport users must feed persistent state
+    /// directly rather than accumulating chunks to call this method. Exhausting
+    /// all inputs before finish preserves atomic rejection of trailing events.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "structured transaction route is not selected by the Gateway")
+    )]
+    fn execute_json_body_inputs<'input>(
+        &mut self,
+        processor: super::super::BodyProcessorSelection,
+        inputs: impl IntoIterator<Item = super::super::JsonStreamInput<'input>>,
+        limits: json_rules::JsonExecutionLimits,
+    ) -> Result<PhaseOutcome, json_rules::JsonExecutionError> {
+        self.start_json_request_body(processor, limits)?;
+        for input in inputs {
+            self.feed_json_request_body(input)?;
+        }
+        self.finish_json_request_body()
+    }
+
     pub fn execute_request_body(&mut self) -> Result<PhaseOutcome, RuntimeError> {
+        self.ensure_no_json_collection()?;
         if self.request.body.is_none() {
             return Err(RuntimeError::RequestBodyNotPublished);
         }
-        self.execute_phase(Phase::RequestBody)
+        if self.next_phase() == Some(Phase::RequestBody)
+            && matches!(self.request.body, Some(RequestBodyPublication::Metadata(_)))
+            && self.json_body_state.is_empty()
+        {
+            return Err(RuntimeError::GenerationInvariant);
+        }
+        let result = self.execute_phase(Phase::RequestBody);
+        if result.is_ok() {
+            self.json_body_state = Vec::new();
+        }
+        result
     }
 
     /// Decide phase two over borrowed prefix bytes without publishing a complete body.
@@ -999,6 +1277,7 @@ impl<'generation> Transaction<'generation> {
         limit: usize,
         completion: RequestBodyPrefixCompletion,
     ) -> Result<PhaseOutcome, RuntimeError> {
+        self.ensure_no_json_collection()?;
         if self.next_phase() != Some(Phase::RequestBody) {
             return Err(RuntimeError::PhaseOrder {
                 expected: self.next_phase(),
@@ -1099,6 +1378,7 @@ impl<'generation> Transaction<'generation> {
 
     /// Prepare the exact constant-memory raw-body lane selected by the compiler.
     pub fn start_request_body_stream(&mut self) -> Result<(), RuntimeError> {
+        self.ensure_no_json_collection()?;
         if self.next_phase() != Some(Phase::RequestBody) {
             return Err(RuntimeError::PhaseOrder {
                 expected: self.next_phase(),
@@ -1206,6 +1486,7 @@ impl<'generation> Transaction<'generation> {
         chunk: &[u8],
         end_of_stream: bool,
     ) -> Result<Option<PhaseOutcome>, RuntimeError> {
+        self.ensure_no_json_collection()?;
         let mut early_finalize = false;
         {
             let stream = self
@@ -1490,6 +1771,52 @@ impl<'generation> Transaction<'generation> {
             .ok_or(RuntimeError::Arithmetic)?;
         let mut initial = self.tx.try_clone()?;
         initial.clear_matches();
+        if unit.phase == Phase::RequestBody {
+            if let Some(JsonBodyOwned::Completed(facts)) = self.json_body_state.first() {
+                let subscribers = self
+                    .generation
+                    .json_capability
+                    .subscribers()
+                    .ok_or(RuntimeError::GenerationInvariant)?;
+                if let Ok(subscriber) =
+                    subscribers.binary_search_by_key(&unit.member_start, |subscriber| subscriber.member)
+                {
+                    if unit.member_count != 1 {
+                        return Err(RuntimeError::GenerationInvariant);
+                    }
+                    let outcome = facts.replay_subscriber(&self.generation, subscriber, initial.retained_bytes)?;
+                    if outcome.match_count == 0 {
+                        return Ok(false);
+                    }
+                    let payload_bytes = outcome
+                        .final_tx_bytes
+                        .checked_sub(initial.retained_bytes)
+                        .and_then(|bytes| bytes.checked_sub(outcome.match_count.checked_mul(size_of::<TxEntry>())?))
+                        .ok_or(RuntimeError::Arithmetic)?;
+                    initial.virtual_matches = Some(VirtualMatches {
+                        count: outcome.match_count,
+                        payload_bytes,
+                    });
+                    initial.recount();
+                    let capture_keys = try_clone_byte_vectors(&self.capture_keys)?;
+                    return self.commit_unit_match(unit, initial, capture_keys);
+                }
+                // Missing replay facts are safe only for a wholly body-independent
+                // unit. Keep SecAction, captures, static TX writes and chains on
+                // the ordinary evaluator, including its match clearing semantics.
+                let members = self
+                    .generation
+                    .members
+                    .get(unit.member_start..end)
+                    .ok_or(RuntimeError::GenerationInvariant)?;
+                if members
+                    .iter()
+                    .any(|member| self.generation.member_requires_request_body(*member))
+                {
+                    return Err(RuntimeError::GenerationInvariant);
+                }
+            }
+        }
         if unit.member_count == 1 {
             let matches = match prefix_match {
                 Some(matched) => Self::boolean_member_matches(matched)?,
@@ -1691,16 +2018,15 @@ impl<'generation> Transaction<'generation> {
                         });
                     }
                 }
-                work = work
-                    .checked_add(value.len())
-                    .and_then(|value| value.checked_add(transformed.len()))
-                    .and_then(|value| value.checked_add(detector_work))
-                    .ok_or(RuntimeError::Arithmetic)?;
-                if work > self.limits.max_operator_work_bytes {
-                    return Err(RuntimeError::OperatorWorkLimit {
-                        limit: self.limits.max_operator_work_bytes,
-                    });
-                }
+                charge_operator_work(
+                    &mut work,
+                    value
+                        .len()
+                        .checked_add(transformed.len())
+                        .and_then(|value| value.checked_add(detector_work))
+                        .ok_or(RuntimeError::Arithmetic)?,
+                    self.limits,
+                )?;
                 let (positive, fingerprint) = evaluate_operator(
                     &self.generation,
                     &self.request,
@@ -1739,14 +2065,7 @@ impl<'generation> Transaction<'generation> {
                         matched_var: Some(matched_var),
                         matched_var_name: Some(matched_var_name),
                     };
-                    work = work
-                        .checked_add(member_match_bytes(&matched)?)
-                        .ok_or(RuntimeError::Arithmetic)?;
-                    if work > self.limits.max_operator_work_bytes {
-                        return Err(RuntimeError::OperatorWorkLimit {
-                            limit: self.limits.max_operator_work_bytes,
-                        });
-                    }
+                    charge_operator_work(&mut work, member_match_bytes(&matched)?, self.limits)?;
                     matches.push(matched);
                     if stop_after_first {
                         return Ok(matches);
@@ -2186,6 +2505,9 @@ fn apply_member_match(
     matched: MemberMatch,
     limits: RuntimeLimits,
 ) -> Result<(), RuntimeError> {
+    if staged.virtual_matches.is_some() {
+        return Err(RuntimeError::GenerationInvariant);
+    }
     if let (Some(value), Some(name)) = (&matched.matched_var, &matched.matched_var_name) {
         if staged.matched_vars.len() == limits.max_tx_variables {
             return Err(RuntimeError::TxVariableLimit {
@@ -2344,6 +2666,7 @@ impl TxState {
         self.matched_var = None;
         self.matched_var_name = None;
         self.matched_vars.clear();
+        self.virtual_matches = None;
         self.recount();
     }
 
@@ -2409,6 +2732,7 @@ impl TxState {
             matched_var: self.matched_var.as_deref().map(owned_copy).transpose()?,
             matched_var_name: self.matched_var_name.as_deref().map(owned_copy).transpose()?,
             matched_vars,
+            virtual_matches: self.virtual_matches,
             removed_units,
             target_exclusions,
             request_body_processor: self.request_body_processor,
@@ -2431,6 +2755,12 @@ impl TxState {
             .saturating_add(self.matched_var.as_ref().map_or(0, Vec::len))
             .saturating_add(self.matched_var_name.as_ref().map_or(0, Vec::len))
             .saturating_add(self.matched_vars.len().saturating_mul(size_of::<TxEntry>()))
+            .saturating_add(self.virtual_matches.map_or(0, |matched| {
+                matched
+                    .count
+                    .saturating_mul(size_of::<TxEntry>())
+                    .saturating_add(matched.payload_bytes)
+            }))
             .saturating_add(self.removed_units.len().saturating_mul(size_of::<usize>()))
             .saturating_add(
                 self.target_exclusions
@@ -2718,6 +3048,11 @@ fn collection_candidates(
     response: Option<&ResponseState>,
     collection: CollectionKind,
 ) -> Result<Vec<SelectedValue>, RuntimeError> {
+    if matches!(request.body, Some(RequestBodyPublication::Metadata(_)))
+        && super::collection_requires_request_body(collection)
+    {
+        return Err(RuntimeError::GenerationInvariant);
+    }
     let mut candidates = Vec::new();
     match collection {
         CollectionKind::ReqbodyProcessor if request.body.is_none() && tx.request_body_processor.is_some() => {
@@ -2797,12 +3132,16 @@ fn collection_candidates(
                 collection,
                 CollectionKind::ArgsCombinedSize | CollectionKind::ReqbodyProcessor
             ) && request.body.is_some();
-            let body_count = request.body.as_ref().map_or(0, |body| {
-                body.entries
-                    .iter()
-                    .filter(|entry| entry.collection == collection)
-                    .count()
-            });
+            let body_count = request
+                .body
+                .as_ref()
+                .and_then(RequestBodyPublication::materialized)
+                .map_or(0, |body| {
+                    body.entries
+                        .iter()
+                        .filter(|entry| entry.collection == collection)
+                        .count()
+                });
             candidates
                 .try_reserve_exact(records.len().saturating_add(body_count))
                 .map_err(|_| RuntimeError::Allocation)?;
@@ -2815,7 +3154,7 @@ fn collection_candidates(
                     });
                 }
             }
-            if let Some(body) = &request.body {
+            if let Some(body) = request.body.as_ref().and_then(RequestBodyPublication::materialized) {
                 for (index, entry) in body.entries.iter().enumerate() {
                     if entry.collection != collection {
                         continue;
@@ -2873,6 +3212,7 @@ fn selector_matches(
             let entry = request
                 .body
                 .as_ref()
+                .and_then(RequestBodyPublication::materialized)
                 .and_then(|body| body.entries.get(index))
                 .ok_or(RuntimeError::GenerationInvariant)?;
             if entry.collection != CollectionKind::Xml {
@@ -2896,6 +3236,39 @@ fn selector_matches(
             regex.is_match(name, scratch).map_err(map_regex_scratch_error)
         }
     }
+}
+
+fn charge_operator_work(work: &mut usize, added: usize, limits: RuntimeLimits) -> Result<(), RuntimeError> {
+    *work = work.checked_add(added).ok_or(RuntimeError::Arithmetic)?;
+    if *work > limits.max_operator_work_bytes {
+        return Err(RuntimeError::OperatorWorkLimit {
+            limit: limits.max_operator_work_bytes,
+        });
+    }
+    Ok(())
+}
+fn evaluate_matcher_operand(
+    generation: &CompiledGeneration,
+    group_scratch: &mut [MatchScratch],
+    group: usize,
+    pattern_start: usize,
+    pattern_count: usize,
+    input: &[u8],
+    evaluation_mode: EvaluationMode,
+) -> Result<bool, RuntimeError> {
+    let matcher = generation.groups.get(group).ok_or(RuntimeError::GenerationInvariant)?;
+    let scratch = group_scratch.get_mut(group).ok_or(RuntimeError::GenerationInvariant)?;
+    let end = pattern_start
+        .checked_add(pattern_count)
+        .ok_or(RuntimeError::Arithmetic)?;
+    let matches = match evaluation_mode {
+        EvaluationMode::Accelerated => matcher.matcher.scan(input, scratch),
+        EvaluationMode::Reference => matcher.matcher.scan_reference(input, scratch),
+    }
+    .map_err(map_matcher_error)?;
+    matches
+        .contains_any_in_range(pattern_start..end)
+        .ok_or(RuntimeError::GenerationInvariant)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2994,22 +3367,15 @@ fn evaluate_operator(
             group,
             pattern_start,
             pattern_count,
-        } => {
-            let matcher = generation.groups.get(group).ok_or(RuntimeError::GenerationInvariant)?;
-            let scratch = group_scratch.get_mut(group).ok_or(RuntimeError::GenerationInvariant)?;
-            let end = pattern_start
-                .checked_add(pattern_count)
-                .ok_or(RuntimeError::Arithmetic)?;
-            let matches = match evaluation_mode {
-                EvaluationMode::Accelerated => matcher.matcher.scan(input, scratch),
-                EvaluationMode::Reference => matcher.matcher.scan_reference(input, scratch),
-            }
-            .map_err(map_matcher_error)?;
-            let found = matches
-                .iter()
-                .any(|pattern| (pattern_start..end).contains(&pattern.as_usize()));
-            Ok(found)
-        }
+        } => evaluate_matcher_operand(
+            generation,
+            group_scratch,
+            group,
+            pattern_start,
+            pattern_count,
+            input,
+            evaluation_mode,
+        ),
         super::CompiledOperatorOperand::CapturePhrase(program) => {
             let matcher = generation
                 .capture_phrases
@@ -3090,11 +3456,16 @@ fn generation_bytes(bytes: &[u8], range: super::ByteRange) -> Result<&[u8], Runt
     bytes.get(range.start..end).ok_or(RuntimeError::GenerationInvariant)
 }
 
-fn append_runtime(output: &mut Vec<u8>, value: &[u8], limit: usize) -> Result<(), RuntimeError> {
-    let actual = output.len().checked_add(value.len()).ok_or(RuntimeError::Arithmetic)?;
+fn checked_runtime_append(current: usize, added: usize, limit: usize) -> Result<usize, RuntimeError> {
+    let actual = current.checked_add(added).ok_or(RuntimeError::Arithmetic)?;
     if actual > limit {
         return Err(RuntimeError::ValueByteLimit { actual, limit });
     }
+    Ok(actual)
+}
+
+fn append_runtime(output: &mut Vec<u8>, value: &[u8], limit: usize) -> Result<(), RuntimeError> {
+    checked_runtime_append(output.len(), value.len(), limit)?;
     output.extend_from_slice(value);
     Ok(())
 }
@@ -3593,6 +3964,11 @@ impl RequestState {
     }
 
     fn first_named(&self, collection: CollectionKind, key: &[u8], ascii_insensitive: bool) -> Option<&[u8]> {
+        if matches!(self.body, Some(RequestBodyPublication::Metadata(_)))
+            && super::collection_requires_request_body(collection)
+        {
+            return None;
+        }
         let head = self.collection_records(collection).ok()?.iter().find_map(|record| {
             let name = self.bytes_at(record.name?);
             let matched = if ascii_insensitive {
@@ -3603,7 +3979,7 @@ impl RequestState {
             matched.then(|| self.bytes_at(record.value))
         });
         head.or_else(|| {
-            self.body.as_ref()?.entries.iter().find_map(|entry| {
+            self.body.as_ref()?.materialized()?.entries.iter().find_map(|entry| {
                 if entry.collection != collection {
                     return None;
                 }
@@ -3619,8 +3995,13 @@ impl RequestState {
     }
 
     fn first_value(&self, collection: CollectionKind) -> Option<&[u8]> {
+        if matches!(self.body, Some(RequestBodyPublication::Metadata(_)))
+            && super::collection_requires_request_body(collection)
+        {
+            return None;
+        }
         if collection == CollectionKind::ArgsCombinedSize {
-            if let Some(body) = &self.body {
+            if let Some(body) = self.body.as_ref().and_then(RequestBodyPublication::materialized) {
                 if let Some(value) = body
                     .entries
                     .iter()
@@ -3637,6 +4018,7 @@ impl RequestState {
             .or_else(|| {
                 self.body
                     .as_ref()?
+                    .materialized()?
                     .entries
                     .iter()
                     .find_map(|entry| (entry.collection == collection).then_some(entry.value.as_slice()))
@@ -3882,3 +4264,13 @@ fn request_body_processor(headers: &[RequestHeader<'_>]) -> super::super::BodyPr
 #[cfg(test)]
 #[path = "../../tests/unit/seclang/transaction_test.rs"]
 mod tests;
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "internal JSON transaction execution is not selected by the Gateway"
+    )
+)]
+#[path = "json_rules.rs"]
+mod json_rules;

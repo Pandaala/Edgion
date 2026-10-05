@@ -11,6 +11,7 @@ use edgion_waf::seclang::{
     SemanticValidationContext, Transaction,
 };
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 const MAX_FIXTURE_FILES: usize = 4_096;
 const MAX_FIXTURE_FILE_BYTES: usize = 4 * 1024 * 1024;
@@ -898,4 +899,107 @@ fn pinned_crs_ftw_offline_profile_is_deterministic_when_configured() {
         "every admitted negative stage must remain clean"
     );
     assert_eq!(admitted, passed + mismatched);
+}
+
+/// Explicit inspection gate: never silently succeeds without the external corpus.
+#[test]
+#[ignore = "requires the pinned CRS checkout and an explicit inventory output path"]
+fn pinned_crs_phase_two_capability_inventory() {
+    let tests_root =
+        PathBuf::from(std::env::var_os("EDGION_WAF_CRS_TESTS_DIR").expect("set the pinned CRS tests directory"));
+    let output =
+        PathBuf::from(std::env::var_os("EDGION_WAF_CRS_INVENTORY_OUTPUT").expect("set the inventory JSON output path"));
+    let crs_root = tests_root
+        .ancestors()
+        .nth(3)
+        .expect("use the CRS tests/regression/tests layout");
+    // Hash the actual parser inputs, not merely the downloaded archive label.
+    // Length prefixes prevent ambiguous filename/content concatenations.
+    let mut files = fs::read_dir(crs_root.join("rules"))
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .collect::<Vec<_>>();
+    files.sort_by_key(|entry| entry.file_name());
+    assert_eq!(files.len(), 50, "the pinned rules directory changed");
+    let mut source_hash = Sha256::new();
+    for entry in &files {
+        assert!(
+            entry.file_type().unwrap().is_file(),
+            "rules inputs must be regular files"
+        );
+        let name = entry.file_name().into_string().expect("pinned filenames are UTF-8");
+        let bytes = fs::read(entry.path()).unwrap();
+        source_hash.update((name.len() as u64).to_be_bytes());
+        source_hash.update(name.as_bytes());
+        source_hash.update((bytes.len() as u64).to_be_bytes());
+        source_hash.update(&bytes);
+    }
+    let source_digest = format!("{:x}", source_hash.finalize());
+    assert_eq!(
+        source_digest, "4b51b7a909056215848b248195c6d9ffb4f140836a835b7e0ae9b3d5e95ff46e",
+        "use unmodified CRS v4.25.1 rules"
+    );
+    let generation = compile_ftw_generation(crs_root);
+    let mut lanes = BTreeMap::<String, usize>::new();
+    let mut shapes = BTreeMap::<String, usize>::new();
+    let mut units = Vec::new();
+    for unit in generation
+        .rule_units()
+        .filter(|unit| unit.phase() == Phase::RequestBody)
+    {
+        let lane = format!("{:?}", unit.request_body_execution_class().unwrap());
+        *lanes.entry(lane.clone()).or_default() += 1;
+        let mut members = Vec::new();
+        for member in unit.members() {
+            let targets = member
+                .target_plan()
+                .map(|plan| {
+                    plan.records().map(|target| {
+                let shape = format!("{:?}/{:?}/{:?}", target.collection(), target.modifier(), target.selector_kind());
+                *shapes.entry(shape.clone()).or_default() += 1;
+                serde_json::json!({
+                    "shape": shape,
+                    "selector": target.selector_bytes().map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+                })
+            }).collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            members.push(serde_json::json!({
+                "targets": targets,
+                "operator": member.operator_kind().map(|kind| format!("{kind:?}")),
+                "negated": member.operator_negated(),
+                "transformations": member.transformations().unwrap_or_default().iter().map(|kind| format!("{kind:?}")).collect::<Vec<_>>(),
+            }));
+        }
+        units.push(serde_json::json!({"id": unit.id(), "lane": lane, "members": members}));
+    }
+    assert_eq!(units.len(), 289, "admitted Phase 2 coverage changed");
+    assert_eq!(
+        lanes,
+        BTreeMap::from([("BoundedSnapshot".to_owned(), 215), ("StreamingRaw".to_owned(), 74)])
+    );
+    // Freeze the full observed IDs/member/target/operator/transform projection,
+    // not just counts that could hide one-for-one substitutions.
+    let projection = serde_json::to_vec(&units).unwrap();
+    let projection_digest = format!("{:x}", Sha256::digest(&projection));
+    assert_eq!(
+        projection_digest, "f996b6d70f2d52152bbd5da782b4c62e7a58466e10c02571ccc22c47777d3b36",
+        "review changes to the admitted target/operator inventory"
+    );
+    let report = serde_json::json!({
+        "scope": "exploratory target/operator inventory, not strict production acceptance or action/macro proof",
+        "crs_version": "4.25.1",
+        "rules_files": files.len(),
+        "rules_sha256": source_digest,
+        "projection_sha256": projection_digest,
+        "phase2_units": units.len(),
+        "lanes": lanes,
+        "target_shapes": shapes,
+        "units": units,
+    });
+    fs::write(output, serde_json::to_vec_pretty(&report).unwrap()).expect("write the requested inventory report");
+    println!(
+        "phase2_units={} lanes={} target_shapes={}",
+        report["phase2_units"], report["lanes"], report["target_shapes"]
+    );
 }
