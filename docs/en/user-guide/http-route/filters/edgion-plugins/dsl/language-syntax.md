@@ -527,7 +527,14 @@ let path_sep = "C:\\Users\\alice"
 let quoted = "she said \"hello\""
 ```
 
-Raw string literals and multi-line literal syntax are not supported. For complex content, use escape sequences or string concatenation.
+Ordinary double-quoted strings can also contain an actual newline; newlines inside the quotes are preserved in the string value. The following has the same value as `multiline_msg` above:
+
+```dsl
+let literal_newline_msg = "line one
+line two"
+```
+
+There is no dedicated raw-string or triple-quote syntax. Escape sequences are still processed in ordinary double-quoted strings that span multiple lines. For complex content, you can also use escape sequences or string concatenation.
 
 ---
 

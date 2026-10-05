@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Ordinary quoted strings preserve newlines](regression-guards/quoted-string-newline-contract.md)
+
 - [External host results enforce cumulative byte budgets](regression-guards/host-result-byte-budgets.md)
 
 - [Builtin argument capacity and operand-stack validation](regression-guards/builtin-argument-capacity-and-stack-validation.md)

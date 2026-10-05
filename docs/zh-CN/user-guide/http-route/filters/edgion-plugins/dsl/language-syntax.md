@@ -520,7 +520,14 @@ let path_sep = "C:\\Users\\alice"
 let quoted = "she said \"hello\""
 ```
 
-字符串不支持原始字符串（raw string）或多行字面量语法。如需包含复杂内容，使用转义序列或字符串拼接。
+普通双引号字符串也可以直接包含实际换行；引号内的换行会保留在字符串值中。下面的写法与上面的 `multiline_msg` 具有相同的值：
+
+```dsl
+let literal_newline_msg = "line one
+line two"
+```
+
+语言没有专用的原始字符串（raw string）或三引号语法。普通双引号字符串跨行时仍会处理转义序列。复杂内容也可以使用转义序列或字符串拼接。
 
 ---
 
