@@ -31,6 +31,10 @@ pub struct KeyValueRaw {
     pub create_revision: i64,
 }
 
+fn strip_namespace<'a>(key: &'a str, namespace: Option<&str>) -> &'a str {
+    namespace.and_then(|prefix| key.strip_prefix(prefix)).unwrap_or(key)
+}
+
 // ============================================================================
 // KV Operations
 // ============================================================================
@@ -112,18 +116,11 @@ impl EtcdLinkClient {
             .await
             .map_err(|e| anyhow::anyhow!("Etcd GET prefix {}: {:?}", prefix, e))?;
 
-        let ns_len = self.namespace().map(|n| n.len()).unwrap_or(0);
         Ok(resp
             .kvs()
             .iter()
             .map(|kv| {
-                let key = kv.key_str().unwrap_or("").to_string();
-                // Strip namespace prefix from returned key
-                let stripped = if ns_len > 0 && key.len() > ns_len {
-                    key[ns_len..].to_string()
-                } else {
-                    key
-                };
+                let stripped = strip_namespace(kv.key_str().unwrap_or(""), self.namespace()).to_string();
                 (stripped, kv.value().to_vec(), kv.mod_revision())
             })
             .collect())
@@ -149,17 +146,11 @@ impl EtcdLinkClient {
 
         let cluster_revision = resp.header().map(|h| h.revision()).unwrap_or(0);
 
-        let ns_len = self.namespace().map(|n| n.len()).unwrap_or(0);
         let items = resp
             .kvs()
             .iter()
             .map(|kv| {
-                let key = kv.key_str().unwrap_or("").to_string();
-                let stripped = if ns_len > 0 && key.len() > ns_len {
-                    key[ns_len..].to_string()
-                } else {
-                    key
-                };
+                let stripped = strip_namespace(kv.key_str().unwrap_or(""), self.namespace()).to_string();
                 (stripped, kv.value().to_vec(), kv.mod_revision())
             })
             .collect();
@@ -412,7 +403,7 @@ impl EtcdLinkClient {
     /// Watch all keys with a given prefix, starting from a specific revision.
     ///
     /// Used by ConfCenter to resume watching after init-phase or reconnection.
-    /// Events with `mod_revision <= start_revision` are excluded by etcd.
+    /// The start revision is inclusive; resume after a snapshot at its revision + 1.
     pub async fn watch_prefix_from_revision(&self, prefix: &str, start_revision: i64) -> Result<WatchStream> {
         let mut client = self
             .get_client()

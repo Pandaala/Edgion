@@ -54,6 +54,8 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
     )
     .map_err(|e| anyhow::anyhow!("LinkSys TLS configuration error: {e:?}"))?;
 
+    resolved.reject_unsupported_identity_policy("LinkSys")?;
+
     // Nothing to configure: system CA + no client identity → caller uses
     // the library's default TLS connector.
     let has_custom_ca = matches!(resolved.ca, EffectiveCa::Custom(_));
@@ -109,25 +111,6 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
     Ok(Some(client_config))
 }
 
-/// Split a multi-certificate PEM bundle into individual certificate PEM blocks.
-///
-/// Handles multiple certificates concatenated in a single PEM buffer, where each
-/// certificate is wrapped in `-----BEGIN CERTIFICATE-----` and `-----END CERTIFICATE-----`.
-fn split_pem_certificates(pem: &[u8]) -> Vec<Vec<u8>> {
-    let s = String::from_utf8_lossy(pem);
-    let mut certs = Vec::new();
-    let mut current = String::new();
-    for line in s.lines() {
-        current.push_str(line);
-        current.push('\n');
-        if line == "-----END CERTIFICATE-----" {
-            certs.push(current.clone().into_bytes());
-            current.clear();
-        }
-    }
-    certs
-}
-
 /// Apply custom CA PEM bundles to a reqwest `ClientBuilder` with REPLACE
 /// semantics: disables the built-in root certificates, then adds each supplied
 /// PEM bundle as a trust anchor.
@@ -144,12 +127,10 @@ pub fn apply_custom_ca_pem(
     let mut builder = builder.tls_built_in_root_certs(false);
     anyhow::ensure!(!bundles.is_empty(), "TLS: custom CA bundle contains no certificates");
     for bundle in bundles {
-        // Split the bundle into individual PEM blocks (handles root + intermediate chains).
-        let pem_blocks = split_pem_certificates(bundle.as_slice());
-        anyhow::ensure!(!pem_blocks.is_empty(), "TLS: custom CA bundle contains no certificates");
-        for cert_pem in pem_blocks {
-            let cert =
-                reqwest::Certificate::from_pem(cert_pem.as_slice()).context("TLS: invalid CA certificate PEM")?;
+        let parsed = crate::tls_validation::parse_canonical_ca_bundle(bundle)
+            .map_err(|_| anyhow::anyhow!("TLS: invalid CA certificate PEM bundle"))?;
+        for der in parsed.certificates_der {
+            let cert = reqwest::Certificate::from_der(&der).context("TLS: invalid CA certificate DER")?;
             builder = builder.add_root_certificate(cert);
         }
     }
@@ -175,6 +156,8 @@ pub fn apply_resolved_outbound_tls(
         provider,
     )
     .map_err(|e| anyhow::anyhow!("{provider} TLS configuration error: {e:?}"))?;
+
+    resolved.reject_unsupported_identity_policy(provider)?;
 
     let mut builder = builder;
     if !resolved.verify {

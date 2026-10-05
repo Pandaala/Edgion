@@ -185,13 +185,7 @@ impl EtcdLinkClient {
     /// Sets up the etcd connection and spawns a background task that monitors
     /// connection health and reconnects with exponential backoff on failure.
     pub async fn init(&self) -> Result<()> {
-        let options = build_connect_options(&self.config, &self.auth_state())?;
-
-        // If no options were configured, use defaults (with dial timeout)
-        let connect_options = options.unwrap_or_else(default_connect_options);
-
-        // Connect to etcd
-        let client = etcd_client::Client::connect(&self.endpoints, Some(connect_options))
+        let client = connect_with_config(&self.endpoints, &self.config, &self.auth_state())
             .await
             .map_err(|e| anyhow::anyhow!("Etcd [{}] connect failed: {:?}", self.name, e))?;
 
@@ -297,9 +291,7 @@ impl EtcdLinkClient {
                     );
 
                     // Attempt reconnect
-                    let options = build_connect_options(&config, &auth_state).ok().flatten();
-                    let connect_options = options.unwrap_or_else(default_connect_options);
-                    match etcd_client::Client::connect(&endpoints, Some(connect_options)).await {
+                    match connect_with_config(&endpoints, &config, &auth_state).await {
                         Ok(new_client) => {
                             if retired.load(Ordering::Relaxed) {
                                 return;
@@ -408,11 +400,10 @@ impl EtcdLinkClient {
         // Cooperative exit for the common case: a task parked at the select
         // sleep wakes on the watch change and logs its own shutdown line.
         let _ = self.shutdown_tx.send(true);
-        // Hard backstop: abort the monitor so a task mid `status()` / `connect()`
-        // (holding the `client` read lock) is cancelled at its next await point,
-        // releasing the read lock so the `client.write()` below cannot block for
-        // the full etcd call timeout. The task holds no unwind-critical state, so
-        // abort (no join) is sufficient — same as the Webhook health_task path.
+        // Request cancellation without joining. An already-running poll may
+        // continue until it yields; abort is not a no-write-after-retirement
+        // barrier. Network calls hold no client lock, and health reporting was
+        // deactivated by mark_retired before cleanup began.
         if let Some(handle) = self.monitor_handle.lock().take() {
             handle.abort();
         }
@@ -424,6 +415,16 @@ impl EtcdLinkClient {
     }
 }
 
+/// Initial, recovery and probe connections share the same fail-closed options.
+async fn connect_with_config(
+    endpoints: &[String],
+    config: &EtcdClientConfig,
+    auth_state: &CredentialState<BasicAuthMaterial>,
+) -> Result<etcd_client::Client> {
+    let options = build_connect_options(config, auth_state)?.unwrap_or_else(default_connect_options);
+    Ok(etcd_client::Client::connect(endpoints, Some(options)).await?)
+}
+
 async fn sample_endpoint_live(
     endpoints: &[String],
     config: &EtcdClientConfig,
@@ -432,13 +433,9 @@ async fn sample_endpoint_live(
 ) -> usize {
     let mut live = 0;
     for endpoint in endpoints {
-        let options = build_connect_options(config, auth_state)
-            .ok()
-            .flatten()
-            .unwrap_or_else(default_connect_options);
         let reachable = match tokio::time::timeout(
             probe_timeout,
-            etcd_client::Client::connect(std::slice::from_ref(endpoint), Some(options)),
+            connect_with_config(std::slice::from_ref(endpoint), config, auth_state),
         )
         .await
         {

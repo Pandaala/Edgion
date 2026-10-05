@@ -280,3 +280,25 @@ fn test_health_probe_timeout_defaults_when_unset() {
     };
     assert_eq!(health_probe_timeout(&crd2), Duration::from_millis(5_000));
 }
+
+#[test]
+fn etcd_rejects_inherited_hostname_policy() {
+    use crate::link_sys_core::outbound_tls;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use edgion_resources::resources::common::{OutboundTlsConfig, OutboundTlsLocal};
+    let _guard = outbound_tls::outbound_tls_test_guard();
+    outbound_tls::set_outbound_global_default(OutboundTlsConfig {
+        validation: Some(OutboundTlsValidation {
+            hostname: Some("example.com".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let tls = TlsConfig {
+        enabled: true,
+        outbound: OutboundTlsLocal::default(),
+        resolved_ca_certificates: None,
+        resolved_client_certificate: None,
+    };
+    assert!(build_tls_options(&tls).is_err());
+}
