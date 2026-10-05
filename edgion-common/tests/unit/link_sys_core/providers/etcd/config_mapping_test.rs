@@ -36,6 +36,7 @@ fn minimal_config(endpoints: Vec<String>) -> EtcdClientConfig {
         max_call_recv_size: None,
         user_agent: None,
         reject_old_cluster: None,
+        min_cluster_version: None,
         observability: None,
     }
 }
@@ -131,7 +132,6 @@ fn test_with_dial_timeout() {
         timeout: Some(EtcdTimeout {
             dial: Some(3000),
             request: None,
-            keep_alive: None,
         }),
         ..minimal_config(vec!["http://localhost:2379".to_string()])
     };
@@ -145,7 +145,6 @@ fn test_dial_timeout_clamped() {
         timeout: Some(EtcdTimeout {
             dial: Some(999_999),
             request: None,
-            keep_alive: None,
         }),
         ..minimal_config(vec!["http://localhost:2379".to_string()])
     };
@@ -244,7 +243,6 @@ fn test_health_probe_timeout_uses_configured_request() {
         timeout: Some(EtcdTimeout {
             dial: None,
             request: Some(10_000),
-            keep_alive: None,
         }),
         ..minimal_config(vec!["http://localhost:2379".to_string()])
     };
@@ -257,7 +255,6 @@ fn test_health_probe_timeout_clamps_to_max() {
         timeout: Some(EtcdTimeout {
             dial: None,
             request: Some(999_999),
-            keep_alive: None,
         }),
         ..minimal_config(vec!["http://localhost:2379".to_string()])
     };
@@ -274,7 +271,6 @@ fn test_health_probe_timeout_defaults_when_unset() {
         timeout: Some(EtcdTimeout {
             dial: Some(3_000),
             request: None,
-            keep_alive: None,
         }),
         ..minimal_config(vec!["http://localhost:2379".to_string()])
     };

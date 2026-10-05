@@ -39,14 +39,43 @@ pub fn build_connect_options(
     crd: &EtcdClientConfig,
     auth: &CredentialState<BasicAuthMaterial>,
 ) -> Result<Option<ConnectOptions>> {
+    build_options(crd, auth, true)
+}
+
+/// Options for caller-injected IO. TLS is resolved by the canonical dialer.
+pub fn admitted_connect_options(
+    crd: &EtcdClientConfig,
+    auth: &CredentialState<BasicAuthMaterial>,
+) -> Result<ConnectOptions> {
+    Ok(build_options(crd, auth, false)?.unwrap_or_else(default_connect_options))
+}
+
+fn build_options(
+    crd: &EtcdClientConfig,
+    auth: &CredentialState<BasicAuthMaterial>,
+    include_tls: bool,
+) -> Result<Option<ConnectOptions>> {
     let mut options = ConnectOptions::new();
     let mut has_options = false;
 
+    if let Some(limit) = crd.max_call_send_size {
+        options = options.with_max_send_message_size(limit);
+        has_options = true;
+    }
+    if let Some(limit) = crd.max_call_recv_size {
+        options = options.with_max_recv_message_size(limit);
+        has_options = true;
+    }
+    if let Some(agent) = &crd.user_agent {
+        options = options.with_user_agent(agent.clone());
+        has_options = true;
+    }
     if crd.auth.is_some() {
         let m = crate::link_sys_core::credential::require_basic_material(auth, "Etcd")?.ok_or_else(|| {
             anyhow::anyhow!("Etcd auth configured in CRD but credential state is NotRequired (internal bug)")
         })?;
         let user = m.username.as_deref().unwrap_or("");
+        options.check_send_size_lower_bound(user.len().saturating_add(m.password.len()))?;
         options = options.with_user(user, m.password.as_str());
         has_options = true;
     }
@@ -54,7 +83,7 @@ pub fn build_connect_options(
     // TLS — parse CA / mTLS material from the CRD (inline + resolved Secret)
     // and feed it into etcd-client's `TlsOptions`.
     if let Some(tls) = &crd.tls {
-        if tls.enabled {
+        if tls.enabled && include_tls {
             let tls_options = build_tls_options(tls)?;
             options = options.with_tls(tls_options);
             has_options = true;

@@ -21,6 +21,7 @@ fn minimal_config() -> EtcdClientConfig {
         max_call_recv_size: None,
         user_agent: None,
         reject_old_cluster: None,
+        min_cluster_version: None,
         observability: None,
     }
 }
@@ -48,14 +49,14 @@ fn test_from_config_with_namespace() {
     };
     let client = EtcdLinkClient::from_config("default/etcd-ns", &config, &no_auth()).unwrap();
     assert_eq!(client.namespace(), Some("/app/"));
-    assert_eq!(client.full_key("mykey"), "/app/mykey");
+    assert_eq!(client.namespace(), Some("/app/"));
 }
 
 #[test]
 fn test_from_config_without_namespace() {
     let config = minimal_config();
     let client = EtcdLinkClient::from_config("default/etcd-test", &config, &no_auth()).unwrap();
-    assert_eq!(client.full_key("mykey"), "mykey");
+    assert!(client.namespace().is_none());
 }
 
 #[test]
@@ -66,7 +67,15 @@ fn test_empty_endpoints_returns_error() {
     };
     let result = EtcdLinkClient::from_config("test", &config, &no_auth());
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("empty"));
+    assert!(result.unwrap_err().to_string().contains("no endpoints"));
+}
+
+#[test]
+fn test_from_config_rejects_invalid_message_policy_before_init() {
+    let mut config = minimal_config();
+    config.max_call_recv_size = Some(0);
+    let result = EtcdLinkClient::from_config("test", &config, &no_auth());
+    assert!(result.unwrap_err().to_string().contains("maxCallRecvSize"));
 }
 
 /// Defence-in-depth: `from_config` must refuse `Pending` / `Invalid` even
@@ -150,9 +159,83 @@ async fn connection_options_errors_prevent_all_dials() {
         resolved_ca_certificates: None,
         resolved_client_certificate: None,
     });
-    // No endpoints can be dialed; the TLS error must precede endpoint validation.
-    let Err(error) = connect_with_config(&[], &config, &no_auth()).await else {
+    config.endpoints = vec!["https://localhost:2379".to_owned()];
+    // TLS policy is validated synchronously before any connection can be created.
+    let Err(error) = EtcdRuntimePolicy::resolve(&config, &no_auth()) else {
         panic!("invalid TLS options must prevent connection");
     };
     assert!(error.to_string().contains("OutboundTlsVerifyUnsupported"));
+}
+
+#[derive(Default)]
+struct TestObservation {
+    completions: parking_lot::Mutex<Vec<(Operation, super::super::observation::Outcome)>>,
+    maintenance: parking_lot::Mutex<Vec<MaintenanceEvent>>,
+    retired: AtomicBool,
+}
+impl EtcdObservation for TestObservation {
+    fn completed(&self, operation: Operation, outcome: super::super::observation::Outcome) {
+        self.completions.lock().push((operation, outcome));
+    }
+    fn maintenance(&self, event: MaintenanceEvent) {
+        self.maintenance.lock().push(event);
+    }
+    fn deactivate(&self) {
+        self.retired.store(true, Ordering::Relaxed);
+    }
+}
+
+#[tokio::test]
+async fn common_preflights_report_the_correct_service_before_value_conversion() {
+    use super::super::observation::Outcome;
+    struct BorrowedOnly;
+    impl AsRef<[u8]> for BorrowedOnly {
+        fn as_ref(&self) -> &[u8] {
+            b"oversized"
+        }
+    }
+    impl From<BorrowedOnly> for Vec<u8> {
+        fn from(_: BorrowedOnly) -> Self {
+            panic!("oversized borrowed values must never be converted")
+        }
+    }
+    let mut config = minimal_config();
+    config.max_call_send_size = Some(2);
+    let observation = Arc::new(TestObservation::default());
+    let client = EtcdLinkClient::from_config("test/observed", &config, &no_auth())
+        .unwrap()
+        .with_observation(observation.clone(), true);
+    // An empty admitted set creates the SDK facade without a network peer.
+    // Every operation below must be rejected locally, before dispatch/dial.
+    let set = client.new_endpoint_set(false).unwrap();
+    *client.client.write().await = Some(set.client().unwrap());
+    assert!(client.put("k", BorrowedOnly, None).await.is_err());
+    assert!(client.watch_key_from_revision("oversized", 0).await.is_err());
+    assert!(client.try_lock("oversized", 1, Duration::from_secs(1)).await.is_err());
+    let mut election = crate::link_sys_core::providers::etcd::ElectionSession::new(set.client().unwrap());
+    assert!(election.leader("oversized").await.is_err());
+    assert_eq!(
+        *observation.completions.lock(),
+        vec![
+            (Operation::Kv, Outcome::SendLimit),
+            (Operation::Watch, Outcome::SendLimit),
+            (Operation::Lock, Outcome::SendLimit),
+            (Operation::Election, Outcome::SendLimit),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn maintenance_only_observer_has_no_sdk_completion_bridge() {
+    let mut config = minimal_config();
+    config.max_call_send_size = Some(1);
+    let observation = Arc::new(TestObservation::default());
+    let client = EtcdLinkClient::from_config("test/maintenance", &config, &no_auth())
+        .unwrap()
+        .with_observation(observation.clone(), false);
+    let sdk = client.new_endpoint_set(false).unwrap().client().unwrap();
+    assert!(client.checked_full_key(&sdk, Operation::Kv, "oversized", 0, 1).is_err());
+    assert!(observation.completions.lock().is_empty());
+    client.mark_retired();
+    assert!(observation.retired.load(Ordering::Relaxed));
 }

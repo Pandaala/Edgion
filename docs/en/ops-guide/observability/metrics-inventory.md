@@ -54,6 +54,7 @@ EdgionBackend retains its separate withdrawal policy.
 | edgion_request_body_storage_io_failures_total | Counter | gateway | operation (spill_create/spill_write/replay_read/materialize_read/snapshot_read), reason (admission_timeout/admission_closed/execution_timeout/join_error/io_error) | self | Request-body storage operation failures. Admission timeout means the fixed storage lane was saturated before work reached the blocking pool; execution timeout means admitted work exceeded its deadline | alert on sustained increase, especially `reason="admission_timeout"` |
 | edgion_request_body_storage_io_inflight | Gauge | gateway | none | self | Storage file operations holding one of the fixed process-wide permits, including work queued in the blocking pool | alert when pinned at 32 together with increasing admission timeouts |
 | edgion_link_sys_es_bulk_channel_full_total | Counter | gateway | none | self | Elasticsearch producer→bulk-loop channel was full at submit time; raise `bulk.channelSize` | - |
+| edgion_link_sys_etcd_operations_total | Counter | gateway | link, operation (kv/watch/lease/auth/maintenance/cluster/lock/election), outcome (ok/send_limit/recv_limit/timeout/transport/protocol/policy/canceled) | self | Optional completed Etcd RPCs or terminated streams; one event per stream lifetime, never per message | - |
 | edgion_link_sys_health | Gauge | gateway | link | self | Published LinkSys client health sampled at scrape time: 1 = healthy, 0 = unhealthy; a deleted client's last series may remain until idle eviction or process exit | - |
 | edgion_link_sys_health_flips_total | Counter | gateway | link, direction (recovered/degraded) | self | Health transitions from the currently published Redis, Etcd, Elasticsearch, Kafka, and OTLP LinkSys generations; candidate initialization, publication/replacement baselines, deletion, duplicate observations, and retired generations do not increment it | - |
 | edgion_ldap_auth_errors_total | Counter | gateway | kind (unreachable/timeout/bind_fail/tls_san_mismatch) | self | LDAP auth plugin error counter by failure kind | - |
@@ -176,3 +177,24 @@ OTLP LinkSys health uses a validated `namespace/name` in the existing `link` lab
 Several log outputs referencing one resource share one health series and probe.
 The gauge reports TCP reachability, not export acknowledgment; endpoint URIs and
 resolved addresses are never labels.
+
+### Optional Etcd operation counters
+
+`observability.metrics.enabled` registers eight success series per validated
+LinkSys `namespace/name`; the other 56 fixed operation/outcome combinations are
+registered only on first use. The upper bound is 64 series per distinct link key,
+not per provider generation. The provider default cap of 200 (maximum 10000)
+is an active-provider bound, not a process-lifetime metric budget: 200 fully
+expanded links already require 12800 series. All registrations use the shared
+recorder cardinality guard and compete with other metrics for its default 10000
+lifetime-distinct-key budget. Enforce rejects new keys at the configured budget;
+Observe only reports excess, and cap zero disables that bound. Configuration
+churn retains this budget usage even after idle series eviction. Idle eviction
+can be disabled and must not be relied upon as a cardinality bound.
+
+Cached handles belonging to active generations are touched before scrape;
+retired generations are not touched. The testing store-stats response reports
+all live Etcd metric owners, including retired owners retained by unfinished
+RPCs/streams, plus deduplicated bounded keys and `keys_truncated`. These are
+residue diagnostics, not new production metrics. Completion recording is fenced
+by retirement and never logs request keys, values, endpoints, or credentials.

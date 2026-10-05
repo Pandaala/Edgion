@@ -949,6 +949,47 @@ fn redis_endpoint_validation_sets_accepted_false_without_echoing_input() {
     assert!(!accepted.message.contains("secret"));
 }
 
+#[test]
+fn etcd_policy_is_rejected_at_typed_and_offline_ingest_and_runtime() {
+    let (ctx, _runtime) = make_ctx(HashMap::new());
+    let handler = LinkSysHandler::new();
+    for policy in [
+        serde_json::json!({"rejectOldCluster": true}),
+        serde_json::json!({"keepAlive": {"time": 1}}),
+        serde_json::json!({"observability": {"logging": {"level": "info"}}}),
+    ] {
+        let mut config = policy;
+        config["endpoints"] = serde_json::json!(["http://etcd.example:2379"]);
+        let value = serde_json::json!({"apiVersion": "edgion.io/v1", "kind": "LinkSys",
+            "metadata": {"name": "etcd-policy", "namespace": "default"},
+            "spec": {"type": "etcd", "config": config}});
+        let typed: LinkSys = serde_json::from_value(value.clone()).unwrap();
+        let offline: LinkSys =
+            crate::conf_mgr::conf_center::common::parse_resource_content_offline(&value.to_string()).unwrap();
+        for mut resource in [typed, offline] {
+            let errors = handler.preparse(&mut resource, &ctx);
+            assert!(!errors.is_empty());
+            handler.update_status(&mut resource, &ctx, &errors);
+            let status = resource.status.as_ref().unwrap().clone().into_local().unwrap();
+            assert!(status
+                .conditions
+                .iter()
+                .any(|condition| condition.type_ == "Accepted" && condition.status == "False"));
+            let SystemConfig::Etcd(config) = &resource.spec.config else {
+                panic!("expected Etcd")
+            };
+            assert!(
+                edgion_common::link_sys_core::providers::etcd::EtcdLinkClient::from_config(
+                    "default/etcd-policy",
+                    config,
+                    &edgion_common::link_sys_core::credential::CredentialState::NotRequired,
+                )
+                .is_err()
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_redis_tls_secret_ref_resolution() {
     use edgion_resources::credentials::resolvers::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
@@ -1482,6 +1523,7 @@ async fn etcd_with_hostname_rejected_phase1() {
                 max_call_recv_size: None,
                 user_agent: None,
                 reject_old_cluster: None,
+                min_cluster_version: None,
                 observability: None,
             }),
         },

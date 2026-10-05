@@ -351,7 +351,6 @@ impl EtcdConfig {
         let timeout = Some(EtcdTimeout {
             dial: Some(self.connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS)),
             request: self.request_timeout_ms,
-            keep_alive: None,
         });
         let keep_alive = Some(EtcdKeepAlive {
             time: Some(self.keep_alive_time_secs.unwrap_or(DEFAULT_KEEP_ALIVE_TIME_SECS)),
@@ -372,6 +371,7 @@ impl EtcdConfig {
                 max_call_recv_size: None,
                 user_agent: None,
                 reject_old_cluster: None,
+                min_cluster_version: None,
                 observability: None,
             },
             auth_state,

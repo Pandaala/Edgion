@@ -20,7 +20,7 @@
 //!    [`unknown_field_warnings`] from the Admin write path (`api/common.rs`).
 //!
 //! `validationErrors` additionally carries side-effect-free shared business
-//! validation for `EdgionPlugins` and HTTPRoute request transforms. The plugin
+//! validation for `EdgionPlugins`, `LinkSys` and HTTPRoute request transforms. The plugin
 //! check matches the conf_sync preparse path except for DSL VM initialization,
 //! which requires the Gateway runtime. No equivalent exists yet for
 //! `EdgionStreamPlugins`; its check mutates plugin-policy state and requires a
@@ -167,6 +167,10 @@ pub async fn validate_kind(
     // `validationErrors`: only kinds with side-effect-free shared business
     // validation available outside the full apply handler are included here.
     let validation_errors: Vec<String> = match kind {
+        ResourceKind::LinkSys => {
+            let linksys: LinkSys = parse_resource_and_update_version(&content, false)?;
+            linksys.validate_config()
+        }
         ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource_and_update_version(&content, false)?;
             plugins.validate_plugins()

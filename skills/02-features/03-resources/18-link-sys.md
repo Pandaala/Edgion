@@ -173,7 +173,6 @@ spec:
     timeout:                      # ms
       dial: 5000
       request: 10000
-      keepAlive: 30000
     keepAlive:                    # HTTP/2 keepalive, in seconds
       time: 30
       timeout: 10
@@ -184,9 +183,10 @@ spec:
     maxCallRecvSize: 4194304
     userAgent: "edgion-gateway/v1"
     rejectOldCluster: true
+    minClusterVersion: "3.5.0"
     observability:
       logging: { enabled: true, level: info }
-      metrics: { enabled: true, labels: { env: prod } }
+      metrics: { enabled: true }
 ```
 
 - `auth` likewise uses `BasicAuthResolver` (username + password, both typically required for etcd).

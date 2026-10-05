@@ -231,9 +231,7 @@ impl LinkSys {
                 errors.extend(redis_config.validation_errors());
             }
             SystemConfig::Etcd(etcd_config) => {
-                if etcd_config.endpoints.is_empty() {
-                    errors.push("Etcd configuration has no endpoints".to_string());
-                }
+                errors.extend(etcd_config.validation_errors());
             }
             SystemConfig::Elasticsearch(es_config) => {
                 if es_config.endpoints.is_empty() {

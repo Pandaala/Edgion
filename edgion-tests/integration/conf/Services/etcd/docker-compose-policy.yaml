@@ -1,0 +1,64 @@
+# Owned by the existing Etcd LinkSys runner; no additional Edgion topology.
+services:
+  member-a:
+    image: quay.io/coreos/etcd:v3.5.17
+    ports:
+      - "127.0.0.1:${ETCD_POLICY_A_PORT}:2379"
+    volumes:
+      - "${ETCD_POLICY_CERT_DIR}:/certs:ro"
+    environment:
+      ETCD_NAME: member-a
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_CLIENT_URLS: https://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: https://127.0.0.1:${ETCD_POLICY_A_PORT}
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://member-a:2380
+      ETCD_INITIAL_CLUSTER: member-a=http://member-a:2380,member-b=http://member-b:2380,member-c=http://member-c:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_INITIAL_CLUSTER_TOKEN: edgion-policy-test
+      ETCD_CERT_FILE: /certs/server.crt
+      ETCD_KEY_FILE: /certs/server.key
+      ETCD_CLIENT_CERT_AUTH: "false"
+    restart: "no"
+  member-b:
+    image: quay.io/coreos/etcd:v3.5.17
+    ports:
+      - "127.0.0.1:${ETCD_POLICY_B_PORT}:2379"
+    volumes:
+      - "${ETCD_POLICY_CERT_DIR}:/certs:ro"
+    environment:
+      ETCD_NAME: member-b
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_CLIENT_URLS: https://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: https://127.0.0.1:${ETCD_POLICY_B_PORT}
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://member-b:2380
+      ETCD_INITIAL_CLUSTER: member-a=http://member-a:2380,member-b=http://member-b:2380,member-c=http://member-c:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_INITIAL_CLUSTER_TOKEN: edgion-policy-test
+      ETCD_CERT_FILE: /certs/server.crt
+      ETCD_KEY_FILE: /certs/server.key
+      ETCD_TRUSTED_CA_FILE: /certs/ca.crt
+      ETCD_CLIENT_CERT_AUTH: "true"
+    restart: "no"
+  member-c:
+    image: quay.io/coreos/etcd:v3.5.17
+    ports:
+      - "127.0.0.1:${ETCD_POLICY_C_PORT}:2379"
+    volumes:
+      - "${ETCD_POLICY_CERT_DIR}:/certs:ro"
+    environment:
+      ETCD_NAME: member-c
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_CLIENT_URLS: https://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: https://127.0.0.1:${ETCD_POLICY_C_PORT}
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://member-c:2380
+      ETCD_INITIAL_CLUSTER: member-a=http://member-a:2380,member-b=http://member-b:2380,member-c=http://member-c:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_INITIAL_CLUSTER_TOKEN: edgion-policy-test
+      ETCD_CERT_FILE: /certs/server.crt
+      ETCD_KEY_FILE: /certs/server.key
+      ETCD_TRUSTED_CA_FILE: /certs/ca.crt
+      ETCD_CLIENT_CERT_AUTH: "true"
+    restart: "no"

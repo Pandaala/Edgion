@@ -186,6 +186,7 @@ conf_center:
   controller_name: edgion.io/gateway-controller
   endpoints: ["${ETCD_ENDPOINT}"]
   key_prefix: "${ETCD_PREFIX}"
+  request_timeout_ms: 1000
   leader_election:
     identity: "${name}"
     grpc_addr: "${adv_ip}:${grpc}"
@@ -296,6 +297,25 @@ LEASELESS=$(election_kvs | jq -r 'select(.lease == "0") | .key_b64' | wc -l | tr
 [[ "$(leader_admin_from_etcd)" == "$LEADER_ADV_ADMIN" ]] \
     || { log_error "lowest-create_revision key does not match the ready controller"; exit 1; }
 log_success "2 lease-attached keys; lowest create_revision names controller-$([[ "$LEADER" == "A" ]] && echo a || echo b)"
+
+# A queued campaign must survive many ordinary unary request deadlines without
+# replacing its lease or create_revision. Poll the real election keys throughout.
+CAMPAIGN_BASELINE=$(election_kvs | jq -s -c 'sort_by(.key_b64)')
+CAMPAIGN_UNTIL=$((SECONDS + 5))
+while [ "$SECONDS" -lt "$CAMPAIGN_UNTIL" ]; do
+    CURRENT_CAMPAIGNS=$(election_kvs | jq -s -c 'sort_by(.key_b64)')
+    [[ "$CURRENT_CAMPAIGNS" == "$CAMPAIGN_BASELINE" ]] || {
+        log_error "campaign changed across unary request deadlines"; exit 1;
+    }
+    [[ "$(ready_code "$LEADER_PROBE")" == "200" ]] || {
+        log_error "leader lost readiness during stable campaign observation"; exit 1;
+    }
+    [[ "$(ready_code "$FOLLOWER_PROBE")" == "503" ]] || {
+        log_error "standby became ready during stable campaign observation"; exit 1;
+    }
+    sleep 0.2
+done
+log_success "blocked campaign and leader survived five unary timeout periods"
 
 # ---------------------------------------------------------------------------
 # (d) kill -9 the leader; the standby must WIN THE ELECTION within

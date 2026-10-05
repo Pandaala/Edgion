@@ -17,6 +17,7 @@ fn minimal_config() -> EtcdClientConfig {
         max_call_recv_size: None,
         user_agent: None,
         reject_old_cluster: None,
+        min_cluster_version: None,
         observability: None,
     }
 }

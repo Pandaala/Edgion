@@ -12,7 +12,6 @@ before applying a decision to current code.
 ## Intentional design
 
 - [DSL `run_upstream_response_filter` `block_in_place` Requires Multi-Thread Runtime — DESIGN-TRADEOFF (documented)](intentional-design/block-in-place-multi-thread-runtime.md)
-- [Etcd LinkSys health_probe_timeout — request:0 Zero-Duration Timeout (GIGO)](intentional-design/etcd-health-probe-timeout-zero-request-gigo.md)
 - [etcd Leadership Gate Cannot Fence a Stale Leader at the Transaction Boundary — ACCEPTED-RISK](intentional-design/etcd-leadership-gate-not-fenced-at-txn.md)
 - [`CacheData::reset()` dispatches `full_set` under the write lock — DESIGN-TRADEOFF](intentional-design/full-set-under-write-lock-intentional.md)
 - [`LeaderHandle` 100–200ms Polling is Not Worth Replacing With watch::channel](intentional-design/leader-handle-polling.md)
@@ -63,6 +62,8 @@ before applying a decision to current code.
 - [RwLock `.unwrap()` Review Decision Rule](review-evidence/rwlock-unwrap-rule.md)
 
 ## Superseded decisions
+
+- [Former Etcd zero-timeout deferral](superseded/etcd-health-probe-timeout-zero-request-gigo.md)
 
 - [Former WebhookManager RwLock decision](superseded/webhook-manager-rwlock-intentional.md)
 - [LinkSys webhook `extract_ready_ips` IPv6 bracketing (link-sys-F001, controller path)](superseded/webhook-extract-ready-ips-ipv6-brackets.md)

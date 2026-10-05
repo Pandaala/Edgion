@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Etcd configuration and early message boundaries](regression-guards/etcd-configuration-and-message-boundaries.md)
+
 - [Removed Webhook fields produce unknown-field feedback](regression-guards/webhook-removed-fields-unknown-feedback.md)
 - [LinkSys providers share TLS fingerprint encoding](regression-guards/shared-tls-fingerprint-encoding.md)
 - [Published generation owns LinkSys health transitions](regression-guards/published-generation-health-transition-ownership.md)

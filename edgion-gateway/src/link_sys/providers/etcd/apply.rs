@@ -14,7 +14,9 @@ use crate::link_sys::runtime::health_probe::health_transition_reporter;
 use crate::link_sys::runtime::runner::ApplyOwner;
 use edgion_common::link_sys_core::providers::etcd::config_mapping::{MAX_DIAL_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS};
 
-use super::EtcdLinkClient;
+use super::{gateway_observation::GatewayEtcdObserver, EtcdLinkClient};
+use crate::plugins::http::common::outbound::egress::{default_block_private, egress_dns_cache_ttl, EgressPolicy};
+use edgion_resources::resources::link_sys::etcd::normalize_etcd_endpoint;
 
 pub struct EtcdApply;
 
@@ -47,8 +49,18 @@ impl ApplyOwner for EtcdApply {
         let auth = credential::basic_state(incoming);
         let fingerprint = fingerprint_etcd(incoming)?;
         let (rebuild, secret, rv) = fingerprint.into_parts();
+        anyhow::ensure!(incoming.key_name_str() == key, "Etcd LinkSys key mismatch");
+        let observer = GatewayEtcdObserver::new(key, config)?;
+        let completions = observer.observes_completions();
         Ok(Arc::new(
             EtcdLinkClient::from_config(key, config, &auth)?
+                .with_observation(observer, completions)
+                .with_egress_policy(
+                    EgressPolicy {
+                        block_private: default_block_private(),
+                    },
+                    egress_dns_cache_ttl(),
+                )
                 .with_gateway_apply_meta(rebuild, secret, rv)
                 .with_health_transition_reporter(health_transition_reporter(key)),
         ))
@@ -78,6 +90,8 @@ pub fn fingerprint_etcd(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
         anyhow::bail!("fingerprint_etcd called with a non-Etcd LinkSys");
     };
 
+    let errors = cfg.validation_errors();
+    anyhow::ensure!(errors.is_empty(), "Invalid Etcd configuration: {}", errors.join("; "));
     let mut rebuild = FingerprintHasher::new();
     rebuild.tag(2); // etcd kind tag
     hash_rebuild_fields(&mut rebuild, cfg);
@@ -94,24 +108,55 @@ pub fn fingerprint_etcd(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
 }
 
 fn hash_rebuild_fields(h: &mut FingerprintHasher, cfg: &EtcdClientConfig) {
-    let mut endpoints = cfg.endpoints.clone();
+    let mut endpoints: Vec<_> = cfg
+        .endpoints
+        .iter()
+        .map(|endpoint| normalize_etcd_endpoint(endpoint).expect("validated Etcd endpoint"))
+        .collect();
     endpoints.sort();
+    endpoints.dedup();
     h.u64(endpoints.len() as u64);
     for endpoint in &endpoints {
         h.bytes(endpoint.as_bytes());
     }
 
-    h.opt_str(cfg.namespace.as_deref());
+    h.opt_str(cfg.namespace.as_deref().filter(|value| !value.is_empty()));
+    h.u64(cfg.auto_sync_interval.unwrap_or(0));
+    h.u64(cfg.max_call_send_size.unwrap_or(u32::MAX as usize) as u64);
+    h.u64(cfg.max_call_recv_size.unwrap_or(4 * 1024 * 1024) as u64);
+    h.opt_str(cfg.user_agent.as_deref());
+    h.opt_bool(Some(cfg.reject_old_cluster.unwrap_or(false)));
+    if let Some(version) = cfg.parsed_min_cluster_version().expect("validated Etcd version") {
+        for part in version {
+            h.u64(part);
+        }
+    }
+    let observability = cfg.observability.as_ref();
+    h.opt_bool(Some(
+        observability
+            .and_then(|v| v.metrics.as_ref())
+            .is_some_and(|v| v.enabled),
+    ));
+    let logging = observability.and_then(|v| v.logging.as_ref());
+    h.opt_bool(Some(logging.is_some_and(|v| v.enabled)));
+    h.opt_str(Some(logging.and_then(|v| v.level.as_deref()).unwrap_or("info")));
+    match logging.and_then(|v| v.slow_log_threshold) {
+        Some(value) => {
+            h.tag(1);
+            h.u64(value);
+        }
+        None => h.tag(0),
+    }
 
-    // Keep-alive is applied only when both time and timeout are set
-    // (`build_connect_options`); a partial object is a no-op at runtime.
+    // Validation requires the complete keep-alive pair; only an empty object
+    // is equivalent to an absent policy.
     match cfg.keep_alive.as_ref() {
         Some(ka) => {
             if let (Some(time), Some(timeout)) = (ka.time, ka.timeout) {
                 h.tag(1);
                 h.u64(time);
                 h.u64(timeout);
-                h.opt_bool(ka.permit_without_stream);
+                h.opt_bool(Some(ka.permit_without_stream.unwrap_or(false)));
             } else {
                 h.tag(0);
             }
@@ -141,7 +186,6 @@ fn hash_rebuild_fields(h: &mut FingerprintHasher, cfg: &EtcdClientConfig) {
                     h.u64(request.min(MAX_REQUEST_TIMEOUT_MS));
                 }
             }
-            // timeout.keep_alive is Ignore (D16).
         }
     }
 

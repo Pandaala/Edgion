@@ -26,6 +26,10 @@ impl ElectionSession {
 
     /// Blocks server-side until elected. Cancel by dropping the future.
     pub async fn campaign(&mut self, name: &str, value: Vec<u8>, lease_id: i64) -> Result<LeaderKey> {
+        self.client.check_send_size_lower_bound_for(
+            etcd_client::observation::Operation::Election,
+            name.len().saturating_add(value.len()),
+        )?;
         let resp = self
             .client
             .campaign(name, value, lease_id)
@@ -44,6 +48,8 @@ impl ElectionSession {
     /// leaves the cached leader unchanged — so both collapse to `None` here and
     /// we avoid depending on a specific error code or message string.
     pub async fn leader(&mut self, name: &str) -> Result<Option<Vec<u8>>> {
+        self.client
+            .check_send_size_lower_bound_for(etcd_client::observation::Operation::Election, name.len())?;
         match self.client.leader(name).await {
             Ok(resp) => Ok(resp.kv().map(|kv| kv.value().to_vec())),
             Err(_) => Ok(None),

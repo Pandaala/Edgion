@@ -169,6 +169,7 @@ fn create_etcd_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> L
                 max_call_recv_size: None,
                 user_agent: None,
                 reject_old_cluster: None,
+                min_cluster_version: None,
                 observability: None,
             }),
         },

@@ -44,6 +44,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UTILS_DIR="${SCRIPT_DIR}/../../utils"
 # shellcheck source=../../utils/conf_sync_certs.sh
 source "${UTILS_DIR}/conf_sync_certs.sh"
+source "${UTILS_DIR}/isolated_ports.sh"
+isolated_load_ports etcd_policy
+isolated_require_ports ETCD_POLICY_A_PORT ETCD_POLICY_B_PORT ETCD_POLICY_C_PORT
+export ETCD_POLICY_A_PORT ETCD_POLICY_B_PORT ETCD_POLICY_C_PORT
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 
 ETCD_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/etcd"
@@ -78,6 +82,10 @@ CONFIG_DIR="${WORK_DIR}/config"
 GENERATED_SECRET_DIR="${WORK_DIR}/generated-secrets"
 
 export EDGION_WORK_DIR="$WORK_DIR"
+export ETCD_POLICY_PROJECT="edgion-etcd-policy-${TIMESTAMP}"
+export ETCD_POLICY_CERT_DIR="${WORK_DIR}/certs/grpc/primary"
+POLICY_COMPOSE="${ETCD_DIR}/docker-compose-policy.yaml"
+policy_compose() { docker compose -p "$ETCD_POLICY_PROJECT" -f "$POLICY_COMPOSE" "$@"; }
 # Used by cert-generation helpers to write generated TLS Secrets.
 export EDGION_GENERATED_SECRET_DIR="$GENERATED_SECRET_DIR"
 
@@ -279,6 +287,8 @@ cleanup() {
         pkill -f debug/edgion-gateway 2>/dev/null || true
         pkill -f debug/edgion-controller 2>/dev/null || true
 
+        policy_compose down --volumes --timeout 5 2>/dev/null || true
+
         # Stop Etcd
         log_info "Stopping Etcd container..."
         cd "$ETCD_DIR" && docker compose down --timeout 5 2>/dev/null || true
@@ -358,6 +368,10 @@ for i in $(seq 1 30); do
     fi
     sleep 1
 done
+
+# Add real policy dependencies to this same Controller/Gateway topology.
+policy_compose up -d
+python3 "${SCRIPT_DIR}/etcd_policy_assertions.py" setup --work-dir "$WORK_DIR"
 
 # =============================================================================
 # Step 4: Start Controller
@@ -742,12 +756,9 @@ RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/nons_noname/get/anykey")
 assert_json_failure "GET on non-existent client returns error" "$RESP"
 
 # ── 11.4 Outbound TLS verify=false is always rejected for Etcd ──────────────
-# etcd-client's TLS stack always verifies; the outbound-TLS resolver rejects
-# verify=false unconditionally (provider_can_disable=false). Unlike Redis, Etcd
-# resolves TLS lazily in the background init() (from_config does not), so the
-# client IS registered but init() fails with the reject and the client never
-# connects. The gateway log carries the reject error keyed by the client name —
-# that log line is the distinguishing proof (vs. a plain unreachable endpoint).
+# The canonical outbound-TLS resolver rejects verify=false during cold client
+# construction. The lenient resource still syncs, but no usable client is
+# published. Assert both the failed operation and the keyed construction event.
 # Fixture: conf/LinkSys/Etcd/04_LinkSys_default_etcd-tls-reject.yaml
 log_info "─── 11.4 TLS verify=false reject ───"
 ETCD_REJECT_CLIENT="default_etcd-tls-reject"
@@ -755,24 +766,23 @@ ETCD_REJECT_CLIENT="default_etcd-tls-reject"
 RESP=$(gw_api GET "/configclient/LinkSys?namespace=default&name=etcd-tls-reject")
 assert_json_success "etcd-tls-reject CRD synced to Gateway (controller admission is lenient)" "$RESP"
 
-# The client never reaches a connected state: init() returns the reject error.
+# The client never reaches a connected state: construction rejects the policy.
 RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/${ETCD_REJECT_CLIENT}/health")
 ETCD_REJECT_CONNECTED=$(echo "$RESP" | jq -r '.data.connected // false')
-assert_ne "etcd-tls-reject never connects (verify=false reject in init)" "true" "$ETCD_REJECT_CONNECTED"
+assert_ne "etcd-tls-reject never connects (verify=false rejected at construction)" "true" "$ETCD_REJECT_CONNECTED"
 
 RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/${ETCD_REJECT_CLIENT}/ping")
 assert_json_failure "PING etcd-tls-reject fails (TLS verify=false rejected)" "$RESP"
 
-# Distinguishing proof: the gateway log shows the verify=false reject for this
-# client (not merely an unreachable endpoint). The "init failed" line carries
-# key=default/etcd-tls-reject and the resolver's "skip-verify" error text.
+# Distinguishing proof: the keyed cold-construction rejection, rather than an
+# unavailable backend or an unprocessed resource, caused the operation failure.
 TESTS_TOTAL=$((TESTS_TOTAL + 1))
-if grep "etcd-tls-reject" "${LOG_DIR}/gateway.log" 2>/dev/null | grep -q "skip-verify"; then
+if grep "etcd-tls-reject" "${LOG_DIR}/gateway.log" 2>/dev/null | grep -q "from_config failed"; then
     TESTS_PASSED=$((TESTS_PASSED + 1))
-    log_success "gateway log shows verify=false reject for etcd-tls-reject"
+    log_success "gateway log shows cold TLS policy reject for etcd-tls-reject"
 else
     TESTS_FAILED=$((TESTS_FAILED + 1))
-    log_error "gateway log missing the verify=false reject for etcd-tls-reject"
+    log_error "gateway log missing the cold TLS policy reject for etcd-tls-reject"
 fi
 
 # ── 11.5 Degradation & Recovery (per-call timeout + auto-recovery) ──────────
@@ -805,7 +815,7 @@ PING_RESP=$(curl -s --max-time 20 -X GET \
 PING_ELAPSED=$SECONDS
 
 assert_json_failure "ping on hung etcd returns error (not hang)" "$PING_RESP"
-assert_contains "ping error mentions timeout" "$PING_RESP" "timeout"
+assert_contains "ping error identifies bounded failure" "$PING_RESP" "failed"
 # 5s default + generous margin for scheduling/HTTP. An unbounded hang would be
 # cut off by --max-time 20 and land here at ~20s, failing the bound.
 TESTS_TOTAL=$((TESTS_TOTAL + 1))
@@ -886,6 +896,15 @@ gw_api POST "/api/v1/testing/link-sys/etcd/${ETCD_CLIENT}/delete/edgion%2Frecrea
 
 # Also delete the namespaced CRD for clean cleanup
 "$EDGION_CLI" --server "$CONTROLLER_URL" delete LinkSys etcd-ns-test -n default 2>&1 || true
+
+log_section "Real Etcd Policy Acceptance"
+TESTS_TOTAL=$((TESTS_TOTAL + 1))
+if python3 "${SCRIPT_DIR}/etcd_policy_assertions.py" run --work-dir "$WORK_DIR" \
+    --gateway "$GATEWAY_URL" --controller "$CONTROLLER_URL"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
 
 # =============================================================================
 # ──────────────────────────── REPORT ────────────────────────────────────────

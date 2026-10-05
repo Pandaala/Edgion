@@ -1,4 +1,56 @@
 use super::*;
+
+#[tokio::test]
+async fn etcd_policy_validation_is_read_only_and_uses_shared_rules() {
+    let (state, tmp) = make_state().await;
+    for (policy, expected) in [
+        (serde_json::json!({"rejectOldCluster": true}), Some("minClusterVersion")),
+        (serde_json::json!({"keepAlive": {"time": 1}}), Some("keepAlive")),
+        (
+            serde_json::json!({"observability": {"metrics": {"labels": {"extra": "value"}}}}),
+            Some("labels"),
+        ),
+        (
+            serde_json::json!({"observability": {"logging": {"level": "info"}}}),
+            Some("logging"),
+        ),
+        (
+            serde_json::json!({"rejectOldCluster": true, "minClusterVersion": "3.5.0", "maxCallRecvSize": 1024}),
+            None,
+        ),
+    ] {
+        let mut config = policy;
+        config["endpoints"] = serde_json::json!(["http://etcd.example:2379"]);
+        let document = serde_json::json!({
+            "apiVersion": "edgion.io/v1", "kind": "LinkSys",
+            "metadata": {"name": "etcd-policy", "namespace": "default", "resourceVersion": "17"},
+            "spec": {"type": "etcd", "config": config}
+        });
+        let response = validate_kind(
+            State(state.clone()),
+            Path("LinkSys".into()),
+            Bytes::from(document.to_string()),
+        )
+        .await
+        .unwrap()
+        .0
+        .data
+        .unwrap();
+        assert_eq!(response.ok, expected.is_none());
+        assert!(response.schema_errors.is_empty());
+        assert!(response.unknown_fields.is_empty());
+        if let Some(expected) = expected {
+            assert!(
+                response.validation_errors.iter().any(|error| error.contains(expected)),
+                "{:?}",
+                response.validation_errors
+            );
+        }
+        let parsed: LinkSys = parse_resource_and_update_version(&document.to_string(), false).unwrap();
+        assert_eq!(parsed.metadata.resource_version.as_deref(), Some("17"));
+        assert!(std::fs::read_dir(tmp.path()).unwrap().next().is_none());
+    }
+}
 use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
 
 async fn make_state() -> (Arc<AdminState>, tempfile::TempDir) {

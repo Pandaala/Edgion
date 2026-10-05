@@ -384,6 +384,7 @@ async fn clear_access_logs() -> Json<ApiResponse<String>> {
 /// Response for /api/v1/debug/store-stats
 #[derive(Serialize)]
 struct StoreStatsResponse {
+    etcd_operation_metrics: crate::observe::metrics::registry::EtcdOperationMetricStats,
     wasm_shared_data_metrics: crate::observe::metrics::registry::WasmSharedDataMetricStats,
     plugin_publication: crate::plugins::publication::PublicationStats,
     plugin_publication_inventory: crate::plugins::publication::PublicationInventory,
@@ -605,6 +606,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
 
     let publication = crate::plugins::publication::global_publisher().snapshot();
     Json(ApiResponse::ok_body(StoreStatsResponse {
+        etcd_operation_metrics: crate::observe::metrics::GatewayMetrics::etcd_operation_metric_stats(100),
         wasm_shared_data_metrics: crate::observe::metrics::registry::wasm_shared_data_metric_stats(),
         plugin_publication: publication.stats(),
         plugin_publication_inventory: publication.inventory().clone(),
@@ -1120,8 +1122,13 @@ async fn etcd_health_one(Path(name): Path<String>) -> Json<ApiResponse<serde_jso
         Err(e) => return e,
     };
     let health = client.health_status().await;
+    let (live, configured) = client.endpoint_coverage();
     match serde_json::to_value(health) {
-        Ok(v) => Json(ApiResponse::ok_body(v)),
+        Ok(mut v) => {
+            v["live_endpoints"] = serde_json::json!(live);
+            v["configured_endpoints"] = serde_json::json!(configured);
+            Json(ApiResponse::ok_body(v))
+        }
         Err(e) => Json(ApiResponse::err_body(format!("Serialize error: {}", e))),
     }
 }
@@ -1170,10 +1177,7 @@ async fn etcd_put(Path(name): Path<String>, Json(body): Json<EtcdPutRequest>) ->
         Ok(c) => c,
         Err(e) => return e,
     };
-    match client
-        .put(&body.key, body.value.as_bytes().to_vec(), body.lease_id)
-        .await
-    {
+    match client.put(&body.key, body.value.as_bytes(), body.lease_id).await {
         Ok(()) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": body.key,
             "value": body.value,

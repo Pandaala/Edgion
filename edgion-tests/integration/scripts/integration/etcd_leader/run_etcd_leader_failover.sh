@@ -160,6 +160,7 @@ conf_center:
   controller_name: edgion.io/gateway-controller
   endpoints: ["${ETCD_ENDPOINT}"]
   key_prefix: "${ETCD_PREFIX}"
+  request_timeout_ms: 1000
   leader_election:
     identity: "${name}"
     grpc_addr: "${adv_ip}:${grpc}"
@@ -352,19 +353,22 @@ log_success "gateway followed the new leader and received route-two ${TOOK}s aft
 # (4) a controller reload must NOT rotate the gateway away
 # ---------------------------------------------------------------------------
 log_section "(4) leader reload does not rotate the gateway away"
-# tracing output goes to the file logger (console: false), not stdout.
-gw_rotations() { cat "${GW_WD}"/logs/edgion-gateway*.log 2>/dev/null | grep -c "rotating conf_sync channel" || true; }
+# Channel installation cancels the old generation and wakes the resource
+# watchers. Controller reload only sends switch_event on the same channel, so
+# these installation events must not increase. Keep the nonzero failover guard.
+# Tracing output goes to the file logger (console: false), not stdout.
+gw_installations() { cat "${GW_WD}"/logs/edgion-gateway*.log 2>/dev/null | grep -c "channel reinstalled" || true; }
 
 # Settle first: (3) proves config sync via the per-kind loops, but the meta
 # coordinator may still be finishing its own failover laps. Measuring the
 # reload against a still-rotating baseline would attribute failover tail
-# rotations to the reload. Wait until the rotation count is stable for 10s.
+# notifications to the reload. Wait until their count is stable for 10s.
 SETTLED=0
 STABLE_SINCE=$(date +%s)
-LAST_COUNT=$(gw_rotations)
+LAST_COUNT=$(gw_installations)
 for _ in $(seq 1 60); do
     sleep 2
-    NOW_COUNT=$(gw_rotations)
+    NOW_COUNT=$(gw_installations)
     if [[ "$NOW_COUNT" != "$LAST_COUNT" ]]; then
         LAST_COUNT=$NOW_COUNT
         STABLE_SINCE=$(date +%s)
@@ -373,14 +377,14 @@ for _ in $(seq 1 60); do
         break
     fi
 done
-[[ "$SETTLED" -eq 1 ]] || { log_error "gateway rotation never settled after the failover (count still moving: ${LAST_COUNT})"; exit 1; }
-log_info "coordinator settled (${LAST_COUNT} total rotations during failover)"
+[[ "$SETTLED" -eq 1 ]] || { log_error "gateway channel installation events never settled after the failover (count still moving: ${LAST_COUNT})"; exit 1; }
+log_info "coordinator settled (${LAST_COUNT} channel installation notifications during failover)"
 
-ROTATIONS_BEFORE=$(gw_rotations)
-# Sanity: the failover in (3) must have produced at least one real rotation —
+INSTALLATIONS_BEFORE=$(gw_installations)
+# Sanity: the failover in (3) must have produced installation notifications —
 # if this is 0 the log path is wrong and the (4) assertion would be vacuous.
-[[ "${ROTATIONS_BEFORE:-0}" -ge 1 ]] \
-    || { log_error "expected >=1 rotation during the failover, found ${ROTATIONS_BEFORE} (log path wrong?)"; exit 1; }
+[[ "${INSTALLATIONS_BEFORE:-0}" -ge 1 ]] \
+    || { log_error "expected >=1 channel installation notification during the failover, found ${INSTALLATIONS_BEFORE} (log path wrong?)"; exit 1; }
 RELOAD_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST \
     -H "Authorization: Bearer ${EDGION_ADMIN_TOKEN}" "http://127.0.0.1:${STANDBY_ADMIN}/api/v1/reload")
 [[ "$RELOAD_CODE" == "200" || "$RELOAD_CODE" == "202" ]] \
@@ -403,14 +407,14 @@ for _ in $(seq 1 30); do
 done
 [[ "$SYNCED" -eq 1 ]] || { log_error "route-three did not reach the gateway after the reload"; exit 1; }
 
-ROTATIONS_AFTER=$(gw_rotations)
-[[ "${ROTATIONS_AFTER:-0}" -eq "${ROTATIONS_BEFORE:-0}" ]] || {
-    log_error "the gateway rotated during a reload (before=${ROTATIONS_BEFORE} after=${ROTATIONS_AFTER}) — reload must be a same-address reconnect (spec §7.4 H2)"
+INSTALLATIONS_AFTER=$(gw_installations)
+[[ "${INSTALLATIONS_AFTER:-0}" -eq "${INSTALLATIONS_BEFORE:-0}" ]] || {
+    log_error "the gateway rotated during a reload (before=${INSTALLATIONS_BEFORE} after=${INSTALLATIONS_AFTER}) — reload must be a same-address reconnect (spec §7.4 H2)"
     exit 1
 }
 # The dead ex-leader must still be dead-and-not-leader (no flap back).
 [[ "$(ready_code "$LEADER_PROBE")" != "200" ]] || { log_error "killed ex-leader reports ready"; exit 1; }
-log_success "reload stayed on the same controller (rotations ${ROTATIONS_BEFORE:-0} -> ${ROTATIONS_AFTER:-0}); route-three synced"
+log_success "reload stayed on the same controller (installation notifications ${INSTALLATIONS_BEFORE:-0} -> ${INSTALLATIONS_AFTER:-0}); route-three synced"
 
 log_section "All assertions passed"
 TEST_PASSED=1
