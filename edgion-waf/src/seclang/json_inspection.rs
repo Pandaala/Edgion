@@ -339,6 +339,19 @@ struct Lease {
     len: usize,
     class: u8,
 }
+/// Minted only after sealing: the arena never frees or reuses this range again.
+/// Keeping a handle does not retain the original body or allocate another owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SealedMatchValue {
+    owner: u64,
+    offset: usize,
+    len: usize,
+}
+impl SealedMatchValue {
+    pub(super) fn len(self) -> usize {
+        self.len
+    }
+}
 struct BytePool {
     owner: u64,
     bytes: Vec<u8>,
@@ -1301,16 +1314,16 @@ pub(super) struct CaptureView<'a> {
     pub value: &'a [u8],
     pub next: Option<CaptureId>,
 }
-pub(super) enum OutcomeValue<'a> {
+pub(super) enum OutcomeValue {
     Match {
-        value: &'a [u8],
+        value: SealedMatchValue,
         first_capture: Option<CaptureId>,
     },
     Error(CheckpointError),
 }
-pub(super) struct OutcomeView<'a> {
+pub(super) struct OutcomeView {
     pub stage: usize,
-    pub result: OutcomeValue<'a>,
+    pub result: OutcomeValue,
 }
 
 impl SealedResults<'_> {
@@ -1471,7 +1484,7 @@ impl SealedResults<'_> {
         budget: &mut InspectionBudget,
         owner: CandidateId,
         id: OutcomeId,
-    ) -> Result<OutcomeView<'_>> {
+    ) -> Result<OutcomeView> {
         budget.checked(self.records.owner, |budget| {
             budget.work(1)?;
             self.records.candidates.get(owner.0)?;
@@ -1480,16 +1493,36 @@ impl SealedResults<'_> {
                 return Err(StoreError::Identity);
             }
             let result = match outcome.result {
-                StoredOutcome::Match { value, captures, .. } => OutcomeValue::Match {
-                    value: self.records.bytes.read(value)?,
-                    first_capture: captures,
-                },
+                StoredOutcome::Match { value, captures, .. } => {
+                    self.records.bytes.read(value)?;
+                    OutcomeValue::Match {
+                        value: SealedMatchValue {
+                            owner: value.owner,
+                            offset: value.offset,
+                            len: value.len,
+                        },
+                        first_capture: captures,
+                    }
+                }
                 StoredOutcome::Error(error) => OutcomeValue::Error(error),
             };
             Ok(OutcomeView {
                 stage: outcome.stage,
                 result,
             })
+        })
+    }
+    pub(super) fn match_value(&self, budget: &mut InspectionBudget, value: SealedMatchValue) -> Result<&[u8]> {
+        budget.checked(self.records.owner, |budget| {
+            budget.work(1)?;
+            if value.owner != self.records.owner {
+                return Err(StoreError::Identity);
+            }
+            self.records
+                .bytes
+                .bytes
+                .get(value.offset..add(value.offset, value.len)?)
+                .ok_or(StoreError::Identity)
         })
     }
     pub(super) fn capture(

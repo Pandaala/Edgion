@@ -503,9 +503,16 @@ fn replay_static(
                             });
                             next = capture.next;
                         }
-                        let value = owned_copy(value)?;
                         let name = matched_variable_name(selected.collection, Some(candidate.name))?;
-                        return finish_member_match(captures, value, name, matched_count, work, plan.limits).map(Some);
+                        return finish_member_match(
+                            captures,
+                            MatchValue::Json(*value),
+                            name,
+                            matched_count,
+                            work,
+                            plan.limits,
+                        )
+                        .map(Some);
                     }
                 }
             }

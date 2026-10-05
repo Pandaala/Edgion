@@ -55,7 +55,18 @@ fn compare(source: &str, json: &[u8], form: &[u8], uri: &[u8], limits: RuntimeLi
         let actual = fused.execute_request_body();
         let expected = ordinary.execute_request_body();
         assert_eq!(actual, expected);
-        assert_eq!(fused.tx.matched_var, ordinary.tx.matched_var);
+        assert_eq!(
+            fused
+                .tx
+                .matched_var
+                .as_ref()
+                .map(|value| value.bytes(&fused.request, fused.json_budget.as_mut()).unwrap()),
+            ordinary
+                .tx
+                .matched_var
+                .as_ref()
+                .map(|value| value.bytes(&ordinary.request, ordinary.json_budget.as_mut()).unwrap()),
+        );
         assert_eq!(fused.tx.matched_var_name, ordinary.tx.matched_var_name);
         assert_eq!(
             fused
@@ -82,6 +93,110 @@ fn static_mixed_targets_captures_transforms_and_chains_match_form_runtime() {
         "SecRule TX:root \"@streq hit\" \"setvar:'tx.chain=done'\"\n",
         "SecRule ARGS:json.a|ARGS:json.a|!ARGS:json.b \"!@contains absent\" \"id:3,phase:2,pass\"\n",
     ), br#"{"b":"miss","a":"HIT"}"#, b"json.a=HIT&json.b=miss", b"/?q=hit", RuntimeLimits::default());
+}
+
+#[test]
+fn sealed_replay_and_chain_clones_reference_one_payload() {
+    let generation = compile(concat!(
+        "SecRule ARGS \"@pm hit first\" \"id:1,phase:2,pass,t:lowercase\"\n",
+        "SecRule ARGS \"@pm hit second\" \"id:2,phase:2,pass,t:lowercase\"\n",
+    ));
+    for padding in [0, 262_144] {
+        let mut input = b"{\"a\":\"".to_vec();
+        input.extend(std::iter::repeat_n(b'x', padding));
+        input.extend_from_slice(b"HIT\"}");
+        let mut tx = Transaction::new(&generation, head(b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        tx.publish_request_body(RequestBody::new(Bytes::from(input), BodyProcessorSelection::Json))
+            .unwrap();
+        let publication = tx.request.body.as_ref().unwrap().json().unwrap();
+        assert!(publication.source.is_none());
+        assert_eq!(tx.json_budget.as_ref().unwrap().usage().matched_bytes, padding + 3);
+
+        let mut first = tx.evaluate_member_matches(0, 0, &TxState::default(), true).unwrap();
+        let second = tx.evaluate_member_matches(1, 1, &TxState::default(), true).unwrap();
+        let original = first[0].matched_var.as_ref().unwrap();
+        assert!(matches!(original, MatchValue::Json(_)));
+        assert_eq!(original, second[0].matched_var.as_ref().unwrap());
+        let bytes = original.bytes(&tx.request, tx.json_budget.as_mut()).unwrap();
+        assert_eq!(&bytes[padding..], b"hit");
+        let pointer = bytes.as_ptr();
+
+        let mut staged = TxState::default();
+        apply_member_match(&mut staged, &mut Vec::new(), first.pop().unwrap(), tx.limits).unwrap();
+        let branch = staged.try_clone().unwrap();
+        assert_eq!(staged.retained_bytes, branch.retained_bytes);
+        assert!(staged.retained_bytes >= 2 * (padding + 3));
+        for state in [&staged, &branch] {
+            for value in [state.matched_var.as_ref().unwrap(), &state.matched_vars[0].value] {
+                assert_eq!(
+                    value.bytes(&tx.request, tx.json_budget.as_mut()).unwrap().as_ptr(),
+                    pointer
+                );
+            }
+            for selected in [SelectedBytes::MatchedVar, SelectedBytes::MatchedVars(0)] {
+                assert_eq!(
+                    SelectedValue {
+                        collection: CollectionKind::MatchedVar,
+                        name: None,
+                        value: selected
+                    }
+                    .bytes(&tx.request, state, None, tx.json_budget.as_mut())
+                    .unwrap()
+                    .as_ptr(),
+                    pointer
+                );
+            }
+        }
+        tx.json_budget.as_mut().unwrap().work(usize::MAX).unwrap_err();
+        assert!(staged
+            .matched_var
+            .as_ref()
+            .unwrap()
+            .bytes(&tx.request, tx.json_budget.as_mut())
+            .is_err());
+    }
+}
+
+#[test]
+fn shared_json_observers_preserve_captures_chain_macros_and_rollback() {
+    compare(concat!(
+        "SecRule ARGS:json.a \"@rx (hit)\" \"id:1,phase:2,pass,capture,t:lowercase,chain,setvar:'tx.root=%{MATCHED_VAR}'\"\n",
+        "SecRule ARGS:json.b \"@streq miss\" \"chain\"\n",
+        "SecRule MATCHED_VARS:ARGS:json.a \"@streq hit\" \"chain\"\n",
+        "SecRule MATCHED_VAR \"@streq hit\" \"setvar:'tx.shared=%{MATCHED_VAR}',setvar:'tx.capture=%{TX.1}'\"\n",
+        "SecRule ARGS:json.a \"@streq hit\" \"id:2,phase:2,pass,t:lowercase,chain,setvar:tx.leaked=bad\"\n",
+        "SecRule ARGS:json.b \"@streq absent\"\n",
+        "SecRule TX:shared \"@streq hit\" \"id:3,phase:2,pass\"\n",
+        "SecRule &TX:leaked \"@eq 0\" \"id:4,phase:2,pass\"\n",
+    ), br#"{"a":"old","a":"HIT","b":"miss"}"#, b"json.a=HIT&json.b=miss", b"/", RuntimeLimits::default());
+}
+
+#[test]
+fn shared_large_match_still_enforces_transaction_byte_limit() {
+    let generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n");
+    let mut input = b"{\"a\":\"".to_vec();
+    input.extend(std::iter::repeat_n(b'x', 8192));
+    input.extend_from_slice(b"hit\"}");
+    let value_len = 8192 + 3;
+    let mut tx = Transaction::new(
+        &generation,
+        head(b"/"),
+        RuntimeLimits {
+            max_tx_bytes: 2 * value_len - 1,
+            ..RuntimeLimits::default()
+        },
+    )
+    .unwrap();
+    tx.execute_request_headers().unwrap();
+    tx.publish_request_body(RequestBody::new(Bytes::from(input), BodyProcessorSelection::Json))
+        .unwrap();
+    assert!(matches!(
+        tx.execute_request_body(),
+        Err(RuntimeError::TxByteLimit { .. })
+    ));
+    assert!(tx.tx.matched_var.is_none());
+    assert!(tx.tx.matched_vars.is_empty());
 }
 #[test]
 fn dynamic_named_name_and_length_modes_match_form_runtime() {

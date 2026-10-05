@@ -226,7 +226,10 @@ fn literal_regex_dispatch_named_dependencies_and_negated_captures() {
         panic!("missing negated match")
     };
     let view = sealed.outcome(&mut budget, first, outcome).unwrap();
-    assert!(matches!(view.result, OutcomeValue::Match { value: b"safe", .. }));
+    let OutcomeValue::Match { value, .. } = view.result else {
+        panic!("expected match")
+    };
+    assert_eq!(sealed.match_value(&mut budget, value).unwrap(), b"safe");
 }
 
 #[test]
@@ -292,7 +295,7 @@ fn positive_captures_and_stored_payload_share_the_peak_capacity_budget() {
     else {
         panic!("unexpected predicate error")
     };
-    assert_eq!(value, b"secret123");
+    assert_eq!(sealed.match_value(&mut budget, value).unwrap(), b"secret123");
     let capture = sealed.capture(&mut budget, id, outcome, captures.unwrap()).unwrap();
     assert_eq!((capture.key, capture.value), (b"0".as_slice(), b"secret123".as_slice()));
     // Store growth clips geometric reservations to the available cap. Find the

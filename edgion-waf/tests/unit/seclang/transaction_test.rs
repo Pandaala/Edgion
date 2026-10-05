@@ -2421,11 +2421,11 @@ fn new_unit_clone_omits_matches_but_preserves_entries_and_controls() {
     state.set(b"capture".to_vec(), b"persistent".to_vec(), limits).unwrap();
     state.add_removed_unit(7, limits).unwrap();
     state.request_body_processor = Some(crate::seclang::BodyProcessorSelection::Json);
-    state.matched_var = Some(vec![b'x'; 4096]);
+    state.matched_var = Some(vec![b'x'; 4096].into());
     state.matched_var_name = Some(b"ARGS:json.name".to_vec());
     state.matched_vars.push(TxEntry {
         key: b"ARGS:json.name".to_vec(),
-        value: vec![b'x'; 4096],
+        value: vec![b'x'; 4096].into(),
     });
     state.recount();
     let full = state.try_clone().unwrap();
@@ -2533,7 +2533,12 @@ fn selection_cursor_preserves_target_multiplicity_exclusions_and_count() {
         assert_eq!(
             matches
                 .iter()
-                .map(|matched| matched.matched_var.as_deref().unwrap())
+                .map(|matched| matched
+                    .matched_var
+                    .as_ref()
+                    .unwrap()
+                    .bytes(&transaction.request, None)
+                    .unwrap())
                 .collect::<Vec<_>>(),
             [b"one".as_slice(), b"three".as_slice(), b"one".as_slice()]
         );
@@ -2541,7 +2546,15 @@ fn selection_cursor_preserves_target_multiplicity_exclusions_and_count() {
             .evaluate_member_matches(1, 1, &TxState::default(), false)
             .unwrap();
         assert_eq!(count.len(), 1);
-        assert_eq!(count[0].matched_var.as_deref(), Some(b"3".as_slice()));
+        assert_eq!(
+            count[0]
+                .matched_var
+                .as_ref()
+                .unwrap()
+                .bytes(&transaction.request, None)
+                .unwrap(),
+            b"3"
+        );
     }
 }
 

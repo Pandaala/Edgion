@@ -5,7 +5,7 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use json_inspection::{CandidateId, InspectionBudget};
+use json_inspection::{CandidateId, InspectionBudget, SealedMatchValue};
 use json_inspection_runtime::{map_store_error, JsonPublication};
 use thiserror::Error;
 
@@ -577,12 +577,17 @@ impl SelectedValue {
                 .get(*index)
                 .map(|entry| entry.value.as_slice())
                 .ok_or(RuntimeError::GenerationInvariant),
-            SelectedBytes::MatchedVar => tx.matched_var.as_deref().ok_or(RuntimeError::GenerationInvariant),
+            SelectedBytes::MatchedVar => tx
+                .matched_var
+                .as_ref()
+                .ok_or(RuntimeError::GenerationInvariant)?
+                .bytes(request, json_budget),
             SelectedBytes::MatchedVars(index) => tx
                 .matched_vars
                 .get(*index)
-                .map(|entry| entry.value.as_slice())
-                .ok_or(RuntimeError::GenerationInvariant),
+                .ok_or(RuntimeError::GenerationInvariant)?
+                .value
+                .bytes(request, json_budget),
             SelectedBytes::CtlProcessor => tx
                 .request_body_processor
                 .map(super::super::BodyProcessorSelection::as_bytes)
@@ -698,17 +703,61 @@ struct ResponseState {
     retained_bytes: usize,
 }
 
-struct TxEntry {
+struct TxEntry<V = Vec<u8>> {
     key: Vec<u8>,
-    value: Vec<u8>,
+    value: V,
+}
+
+/// JSON handles refer only to the immutable request-owned result arena. Owned
+/// values preserve the fallible ordinary matching path and logical byte charges.
+#[derive(Debug, PartialEq, Eq)]
+enum MatchValue {
+    Owned(Vec<u8>),
+    Json(SealedMatchValue),
+}
+impl From<Vec<u8>> for MatchValue {
+    fn from(value: Vec<u8>) -> Self {
+        Self::Owned(value)
+    }
+}
+impl MatchValue {
+    fn len(&self) -> usize {
+        match self {
+            Self::Owned(value) => value.len(),
+            Self::Json(value) => value.len(),
+        }
+    }
+    fn try_clone(&self) -> Result<Self, RuntimeError> {
+        match self {
+            Self::Owned(value) => owned_copy(value).map(Self::Owned),
+            Self::Json(value) => Ok(Self::Json(*value)),
+        }
+    }
+    fn bytes<'value>(
+        &'value self,
+        request: &'value RequestState,
+        budget: Option<&mut InspectionBudget>,
+    ) -> Result<&'value [u8], RuntimeError> {
+        match self {
+            Self::Owned(value) => Ok(value),
+            Self::Json(value) => request
+                .body
+                .as_ref()
+                .and_then(RequestBodyPublication::json)
+                .ok_or(RuntimeError::JsonInspectionState)?
+                .results()?
+                .match_value(budget.ok_or(RuntimeError::JsonInspectionState)?, *value)
+                .map_err(map_store_error),
+        }
+    }
 }
 
 #[derive(Default)]
 struct TxState {
     entries: Vec<TxEntry>,
-    matched_var: Option<Vec<u8>>,
+    matched_var: Option<MatchValue>,
     matched_var_name: Option<Vec<u8>>,
-    matched_vars: Vec<TxEntry>,
+    matched_vars: Vec<TxEntry<MatchValue>>,
     removed_units: Vec<usize>,
     target_exclusions: Vec<ActiveTargetExclusion>,
     request_body_processor: Option<super::super::BodyProcessorSelection>,
@@ -731,7 +780,7 @@ struct CaptureEntry {
 #[derive(Default)]
 struct MemberMatch {
     captures: Vec<CaptureEntry>,
-    matched_var: Option<Vec<u8>>,
+    matched_var: Option<MatchValue>,
     matched_var_name: Option<Vec<u8>>,
 }
 
@@ -2299,7 +2348,7 @@ fn evaluate_transformed_input(
 }
 fn finish_member_match(
     captures: Vec<CaptureEntry>,
-    value: Vec<u8>,
+    value: impl Into<MatchValue>,
     name: Vec<u8>,
     matched_count: usize,
     work: &mut usize,
@@ -2312,7 +2361,7 @@ fn finish_member_match(
     }
     let matched = MemberMatch {
         captures,
-        matched_var: Some(value),
+        matched_var: Some(value.into()),
         matched_var_name: Some(name),
     };
     charge_operator_work(work, member_match_bytes(&matched)?, limits)?;
@@ -2709,7 +2758,7 @@ fn apply_member_match(
             .map_err(|_| RuntimeError::Allocation)?;
         staged.matched_vars.push(TxEntry {
             key: owned_copy(name)?,
-            value: owned_copy(value)?,
+            value: value.try_clone()?,
         });
     }
     staged.matched_var = matched.matched_var;
@@ -2776,7 +2825,7 @@ fn member_match_bytes(matched: &MemberMatch) -> Result<usize, RuntimeError> {
         },
     )?;
     capture_bytes
-        .checked_add(matched.matched_var.as_ref().map_or(0, Vec::len))
+        .checked_add(matched.matched_var.as_ref().map_or(0, MatchValue::len))
         .and_then(|value| value.checked_add(matched.matched_var_name.as_ref().map_or(0, Vec::len)))
         .and_then(|value| value.checked_add(size_of::<MemberMatch>()))
         .ok_or(RuntimeError::Arithmetic)
@@ -2906,7 +2955,17 @@ impl TxState {
     fn try_clone_with_matches(&self, keep_matches: bool) -> Result<Self, RuntimeError> {
         let entries = try_clone_entries(&self.entries)?;
         let matched_vars = if keep_matches {
-            try_clone_entries(&self.matched_vars)?
+            let mut cloned = Vec::new();
+            cloned
+                .try_reserve_exact(self.matched_vars.len())
+                .map_err(|_| RuntimeError::Allocation)?;
+            for entry in &self.matched_vars {
+                cloned.push(TxEntry {
+                    key: owned_copy(&entry.key)?,
+                    value: entry.value.try_clone()?,
+                });
+            }
+            cloned
         } else {
             Vec::new()
         };
@@ -2923,7 +2982,7 @@ impl TxState {
         let mut cloned = Self {
             entries,
             matched_var: if keep_matches {
-                self.matched_var.as_deref().map(owned_copy).transpose()?
+                self.matched_var.as_ref().map(MatchValue::try_clone).transpose()?
             } else {
                 None
             },
@@ -2954,9 +3013,9 @@ impl TxState {
                     .map(|entry| entry.key.len().saturating_add(entry.value.len()))
                     .sum::<usize>(),
             )
-            .saturating_add(self.matched_var.as_ref().map_or(0, Vec::len))
+            .saturating_add(self.matched_var.as_ref().map_or(0, MatchValue::len))
             .saturating_add(self.matched_var_name.as_ref().map_or(0, Vec::len))
-            .saturating_add(self.matched_vars.len().saturating_mul(size_of::<TxEntry>()))
+            .saturating_add(self.matched_vars.len().saturating_mul(size_of::<TxEntry<MatchValue>>()))
             .saturating_add(self.removed_units.len().saturating_mul(size_of::<usize>()))
             .saturating_add(
                 self.target_exclusions
@@ -3955,7 +4014,11 @@ fn macro_value<'request>(
         super::MacroSource::RemoteAddr => request.first_value(CollectionKind::RemoteAddr),
         super::MacroSource::RequestLine => request.first_value(CollectionKind::RequestLine),
         super::MacroSource::Tx => tx.get(key),
-        super::MacroSource::MatchedVar => tx.matched_var.as_deref(),
+        super::MacroSource::MatchedVar => tx
+            .matched_var
+            .as_ref()
+            .map(|value| value.bytes(request, json_budget))
+            .transpose()?,
         super::MacroSource::MatchedVarName => tx.matched_var_name.as_deref(),
     })
 }

@@ -49,6 +49,13 @@ Implementation ownership is split deliberately:
   Transaction selection uses a candidate cursor and bounded reusable reference
   scratch, charged to aggregate retained bytes even while taken for evaluation.
   New-unit clones omit old match observers; chain-branch clones remain complete.
+  Static JSON match values use opaque handles into the sealed request-owned result
+  arena. Replay, match observers and chain clones share the payload; owned dynamic
+  values retain fallible copies. All match reads and macros resolve the handle with
+  owner/range and sticky physical-work checks. Minting before sealing or reclaiming
+  result bytes afterward would invalidate this ownership contract. Semantic value
+  lengths remain charged even when storage is shared; actual metadata sizes are
+  charged consistently on ordinary and fused paths.
   Match vectors grow only for actual hits. Cursor traversal may change competing
   physical-limit versus selector-error timing compared with eager enumeration.
 
@@ -117,3 +124,10 @@ encoding so optional links occupy one machine word. Bounds-checked node access
 and scoped arena lifetime remain mandatory; these IDs are not persistent sink
 receipts. Key offsets/public limits remain usize. Growth admission uses actual
 Member/Frame size, including when layout changes reduce physical work or heap use.
+
+The sealed-value follow-up and scoped verification are recorded in
+[the shared replay results](../../../../tasks/pending/waf-json-checker/18-shared-replay-results.md).
+Re-evaluate when result arenas become mutable after publication, request publication
+can be replaced while match observers survive, or matches can escape the transaction.
+Keep shared-pointer, cross-owner/range, macro/chain/rollback and logical TX budget
+tests. Fewer allocations do not imply lower cumulative bytes for very short values.

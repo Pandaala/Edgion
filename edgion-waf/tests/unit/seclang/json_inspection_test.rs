@@ -123,10 +123,13 @@ fn sealed_captures_and_changes_preserve_order() {
         .change(&mut budget, id, p.record.unwrap(), first.next.unwrap())
         .unwrap();
     assert_eq!(sealed.records.changes.get(first.next.unwrap().0).unwrap().step, 75);
-    let OutcomeValue::Match { value, first_capture } = sealed.outcome(&mut budget, id, outcome).unwrap().result else {
+    let OutcomeValue::Match {
+        value, first_capture, ..
+    } = sealed.outcome(&mut budget, id, outcome).unwrap().result
+    else {
         panic!("expected match")
     };
-    assert_eq!(value, b"blocked");
+    assert_eq!(sealed.match_value(&mut budget, value).unwrap(), b"blocked");
     let mut next = first_capture;
     for key in [b"0", b"1", b"2"] {
         let capture = sealed.capture(&mut budget, id, outcome, next.unwrap()).unwrap();
@@ -467,12 +470,19 @@ fn shared_payload_preserves_sealed_values_and_independent_captures() {
     let receipt = finish(&mut s, id, &[0]);
     s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
     let (sealed, mut budget) = s.into_sealed().unwrap();
+    let mut shared_value = None;
     for (outcome, expected) in [(first, b"one"), (second, b"two")] {
-        let OutcomeValue::Match { value, first_capture } = sealed.outcome(&mut budget, id, outcome).unwrap().result
+        let OutcomeValue::Match {
+            value, first_capture, ..
+        } = sealed.outcome(&mut budget, id, outcome).unwrap().result
         else {
             panic!("expected match")
         };
-        assert_eq!(value, b"abc");
+        assert_eq!(sealed.match_value(&mut budget, value).unwrap(), b"abc");
+        if let Some(previous) = shared_value {
+            assert_eq!(value, previous);
+        }
+        shared_value = Some(value);
         assert_eq!(
             sealed
                 .capture(&mut budget, id, outcome, first_capture.unwrap())
@@ -481,6 +491,75 @@ fn shared_payload_preserves_sealed_values_and_independent_captures() {
             expected
         );
     }
+}
+
+#[test]
+fn sealed_match_handles_reject_foreign_ranges_and_latch_work_failure() {
+    let g = generation();
+    let seal = || {
+        let mut s = store(&g);
+        let id = s.begin_candidate(b"json.x", 7, JsonScalarKind::String, None).unwrap();
+        let outcome = s.record_match(id, 0, 0, b"blocked").unwrap();
+        s.complete_profile(id, 0).unwrap();
+        let receipt = finish(&mut s, id, &[0]);
+        s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+        let (sealed, mut budget) = s.into_sealed().unwrap();
+        let OutcomeValue::Match { value, .. } = sealed.outcome(&mut budget, id, outcome).unwrap().result else {
+            panic!("expected match")
+        };
+        (sealed, budget, value)
+    };
+    let (original, mut original_budget, foreign) = seal();
+    for case in 0..5 {
+        let (sealed, mut budget, local) = seal();
+        let (value, expected) = match case {
+            0 => (foreign, StoreError::Identity),
+            1 => (
+                SealedMatchValue {
+                    offset: sealed.records.bytes.bytes.len(),
+                    ..local
+                },
+                StoreError::Identity,
+            ),
+            2 => (
+                SealedMatchValue {
+                    offset: usize::MAX,
+                    ..local
+                },
+                StoreError::Arithmetic,
+            ),
+            3 => {
+                budget.limits.work = budget.usage.work;
+                (local, StoreError::Work)
+            }
+            _ => {
+                budget.owner = foreign.owner;
+                (local, StoreError::Identity)
+            }
+        };
+        assert_eq!(sealed.match_value(&mut budget, value).unwrap_err(), expected);
+        assert_eq!(budget.failure(), Some(expected));
+        assert!(sealed.match_value(&mut budget, local).is_err());
+    }
+    assert_eq!(original.match_value(&mut original_budget, foreign).unwrap(), b"blocked");
+}
+
+#[test]
+fn empty_sealed_match_value_resolves_without_payload_allocation() {
+    let g = generation();
+    let mut s = store(&g);
+    let id = s.begin_candidate(b"json.x", 0, JsonScalarKind::String, None).unwrap();
+    let outcome = s.record_match(id, 0, 0, b"").unwrap();
+    s.complete_profile(id, 0).unwrap();
+    let receipt = finish(&mut s, id, &[0]);
+    s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+    let (sealed, mut budget) = s.into_sealed().unwrap();
+    let OutcomeValue::Match { value, .. } = sealed.outcome(&mut budget, id, outcome).unwrap().result else {
+        panic!("expected match")
+    };
+    assert_eq!(value.len(), 0);
+    assert!(sealed.match_value(&mut budget, value).unwrap().is_empty());
+    assert_eq!(budget.usage().matched_bytes, 0);
 }
 
 #[test]
