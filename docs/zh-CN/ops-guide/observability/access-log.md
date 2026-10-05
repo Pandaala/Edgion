@@ -60,7 +60,7 @@ access_log:
 | `output.localFile.rotation.max_files` | Integer | none | 保留的轮转文件最大数量 |
 | `output.es` | Object | none | 将 access log 发送到 Elasticsearch（通过 `link_sys`）。设置 `linkSysRef.namespace` 和 `linkSysRef.name` 以引用目标 LinkSys 资源 |
 
-原始客户端入口 URI（`request_uri`）由单独的顶层 `access_log_options` 段控制，而非 `access_log` 块——见[特殊字段](#特殊字段)。
+客户端入口路径与查询（`request_uri`）由单独的顶层 `access_log_options` 段控制，而非 `access_log` 块——见[特殊字段](#特殊字段)。
 
 > `output` 块也接受 `es` sink。当 Elasticsearch 生产者→批量循环通道已满时，非阻塞的 access-log 提交会被丢弃，并递增 `edgion_access_log_dropped_total`。见[监控指标](./metrics.md)。
 
@@ -210,7 +210,7 @@ Authorization: Bearer <admin-token>
 | `grpc_method` | String | gRPC 方法名（仅 gRPC 请求） |
 | `sni` | String | TLS 服务器名指示（仅 TLS 连接） |
 | `tls_id` | String | TLS 连接/会话标识符（仅 TLS 连接） |
-| `request_uri` | String | 客户端入口原始 URI；**仅当** `access_log_options.includeRawUri: true` 时输出 |
+| `request_uri` | String | 规范化或重写前的客户端入口路径与查询；**仅当** `access_log_options.includeRawUri: true` 时输出 |
 
 ### `match_info` 字段
 
@@ -449,7 +449,7 @@ spec:
 
 ### 原始请求 URI
 
-默认情况下日志记录规范化后的 `path`。要同时捕获客户端发送的原始 URI（规范化/重写之前），在顶层 `access_log_options` 段启用 `includeRawUri`：
+默认情况下日志记录规范化后的 `path`。要同时捕获规范化或重写前的客户端入口路径与查询，在顶层 `access_log_options` 段启用 `includeRawUri`。对于 HTTP/1 absolute-form，请求行中的 scheme 与 authority 不包含在此字段中：
 
 ```yaml
 access_log:
@@ -462,7 +462,7 @@ access_log_options:
   includeRawUri: true
 ```
 
-原始 URI 随后出现在 `request_uri` 字段中。调试路径重写或 URL 编码问题时有用，但会增加每行大小，因此仅在排查时启用。
+入口路径与查询随后出现在 `request_uri` 字段中。调试路径重写或 URL 编码问题时有用，但会增加每行大小，因此仅在排查时启用。
 
 ## 常见配置场景
 

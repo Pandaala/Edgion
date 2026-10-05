@@ -894,3 +894,55 @@ fn ref_denied_entries_are_skipped() {
     let keys = resolve_ip_list_ref_keys(Some(&refs), "ns");
     assert_eq!(keys, vec!["ns/a".to_string()]); // "other/b" dropped
 }
+
+#[test]
+fn unsupported_extension_removes_indexes_and_recovers_full_and_partial() {
+    use edgion_resources::resources::edgion_plugins::RegionDef;
+    let ip = ip_list_resource("shared", true, None, "10.0.0.0/8");
+    let mut region = region_route_resource("shared", None);
+    if let ConfigEntry::RegionRouteOverride(overlay) = &mut Arc::make_mut(&mut region).spec.data {
+        overlay.regions = Some(vec![RegionDef {
+            name: "region".into(),
+            hash_range: [0, 9],
+            backend_endpoint: "backend:80".into(),
+            tls: false,
+            failover_to: None,
+        }]);
+    }
+    for full in [true, false] {
+        for valid in [&ip, &region] {
+            let store = EdgionConfigDataStore::new();
+            let publish = |value| {
+                let data = HashMap::from([("ns/shared".to_string(), value)]);
+                if full {
+                    store.full_set(&data);
+                } else {
+                    store.partial_update(HashMap::new(), data, HashSet::new());
+                }
+            };
+            publish(Arc::clone(valid));
+            let old = store.capture_snapshot();
+            let mut unknown = (**valid).clone();
+            unknown.spec.data = ConfigEntry::Unsupported;
+            publish(Arc::new(unknown));
+            assert!(matches!(
+                store.get_raw_by_key("ns/shared").unwrap().spec.data,
+                ConfigEntry::Unsupported
+            ));
+            assert!(snapshot_matcher(&store.capture_snapshot(), "ns/shared").is_none());
+            assert!(!store.snapshot.load().indexes.region_tables.contains_key("ns/shared"));
+            publish(Arc::clone(valid));
+            if matches!(valid.spec.data, ConfigEntry::IpList(_)) {
+                assert!(snapshot_matcher(&store.capture_snapshot(), "ns/shared").is_some());
+                assert!(snapshot_matcher(&old, "ns/shared").is_some());
+            } else {
+                assert!(store
+                    .get_region_route_by_key("ns/shared")
+                    .unwrap()
+                    .1
+                    .unwrap()
+                    .accepts_modulo(10));
+            }
+        }
+    }
+}

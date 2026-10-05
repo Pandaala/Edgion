@@ -303,8 +303,6 @@ fn http_request_config_updates_joint_pair_and_pins_in_flight_value() {
         mode: PreflightMode::AllOptions,
         status_code: 299,
     });
-    initial.spec.security_protect =
-        Some(serde_json::from_value(serde_json::json!({"rejectDuplicateHost": false})).unwrap());
     let mut add = HashMap::new();
     add.insert("http-request-policy".to_string(), Arc::new(initial));
     handler.partial_update(add, HashMap::new(), HashSet::new());
@@ -325,7 +323,6 @@ fn http_request_config_updates_joint_pair_and_pins_in_flight_value() {
             status_code: 299,
         }
     );
-    assert!(!in_flight.reject_duplicate_host);
 
     let mut updated = make_config("http-request-policy");
     updated.spec.forwarded_headers.remote_ip_header = "X-Updated-Remote-IP".to_string();
@@ -336,8 +333,6 @@ fn http_request_config_updates_joint_pair_and_pins_in_flight_value() {
         mode: PreflightMode::CorsStandard,
         status_code: 205,
     });
-    updated.spec.security_protect =
-        Some(serde_json::from_value(serde_json::json!({"rejectDuplicateHost": true})).unwrap());
     let mut update = HashMap::new();
     update.insert("http-request-policy".to_string(), Arc::new(updated));
     handler.partial_update(HashMap::new(), update, HashSet::new());
@@ -355,7 +350,6 @@ fn http_request_config_updates_joint_pair_and_pins_in_flight_value() {
             status_code: 205,
         }
     );
-    assert!(next.reject_duplicate_host);
     assert_eq!(in_flight.remote_ip_header, "x-initial-remote-ip");
     assert!(!in_flight.request_body.enabled);
     assert_eq!(in_flight.request_body.memory_buffer_bytes, 256 * 1024);
@@ -371,7 +365,6 @@ fn http_request_config_updates_joint_pair_and_pins_in_flight_value() {
             status_code: 299,
         }
     );
-    assert!(!in_flight.reject_duplicate_host);
 
     handler.partial_update(
         HashMap::new(),
@@ -385,7 +378,6 @@ fn http_request_config_updates_joint_pair_and_pins_in_flight_value() {
     ));
     assert!(Arc::ptr_eq(&get_resolved_gateway_config(Some("missing")), &default));
     assert!(Arc::ptr_eq(&get_resolved_gateway_config(None), &default));
-    assert!(default.reject_duplicate_host);
     assert_eq!(default.downstream_keepalive_request_limit, 10_000);
 }
 
@@ -400,7 +392,7 @@ fn runtime_egc_hot_reload_pins_security_and_compiled_http_policy() {
         "securityProtect": {
             "xForwardedForLimit": 31, "requireSniHostMatch": false,
             "allowLoopbackUpstream": true, "fallbackSni": "old.example.com",
-            "tlsProxyLogRecord": false, "rejectDuplicateHost": false
+            "tlsProxyLogRecord": false
         },
         "httpTimeout": {"client": {"readTimeout": "3s"}, "backend": {"defaultConnectTimeout": "4s"}},
         "tcpTimeout": {"connectTimeout": "5s", "idleTimeout": "6s"},
@@ -415,7 +407,6 @@ fn runtime_egc_hot_reload_pins_security_and_compiled_http_policy() {
     assert!(old.allow_loopback_upstream);
     assert_eq!(old.fallback_sni.as_deref(), Some("old.example.com"));
     assert!(!old.tls_proxy_log_record);
-    assert!(!old.reject_duplicate_host);
     assert_eq!(old.retry_attempts, 7);
     assert!(old.enable_compression);
     assert_eq!(old.downstream_keepalive_request_limit, 19);
@@ -441,7 +432,7 @@ fn runtime_egc_hot_reload_pins_security_and_compiled_http_policy() {
     assert_eq!(next.x_forwarded_for_limit, Some(8));
     assert_eq!(next.fallback_sni.as_deref(), Some("new.example.com"));
     assert_eq!(next.downstream_keepalive_request_limit, 10_000);
-    assert!(next.require_sni_host_match && next.tls_proxy_log_record && next.reject_duplicate_host);
+    assert!(next.require_sni_host_match && next.tls_proxy_log_record);
     assert!(!next.allow_loopback_upstream && !next.enable_compression);
     assert!(next.real_ip_extractor.is_none());
     assert_eq!(next.parsed_timeouts.client.read_timeout, Duration::from_secs(60));

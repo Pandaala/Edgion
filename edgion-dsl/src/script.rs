@@ -12,17 +12,44 @@ use crate::bytecode::{CompiledScript, Constant, OpCode};
 use crate::validator::{compile_dsl_source, ValidationLimits, Validator};
 
 /// True for zero-input, single-value-push opcodes. When the `argc` opcodes
-/// preceding a `CallBuiltin` are all of this kind, they map 1:1 to the argc
-/// arguments (each argument is exactly one instruction), so the deepest push at
-/// `i-argc` is provably the first argument. Any other opcode consumes stack,
-/// meaning an argument spanned multiple instructions and the positional guess is
-/// unreliable. This is an explicit allowlist: unknown / future opcodes default
-/// to "not a single push", keeping `check_redis_link_names` conservative.
+/// preceding a `CallBuiltin` are all of this kind and control flow cannot enter
+/// the middle of that window, they map 1:1 to the argc arguments. Any other
+/// opcode means the positional guess is unreliable. This is an explicit
+/// allowlist: unknown / future opcodes default to "not a single push".
 fn is_single_push_op(op: &OpCode) -> bool {
     matches!(
         op,
         OpCode::LoadConst(_) | OpCode::LoadNil | OpCode::LoadTrue | OpCode::LoadFalse | OpCode::GetLocal(_)
     )
+}
+
+/// A jump into the middle of the push window can skip its apparent first
+/// argument. Invalid targets are also ambiguous for direct callers; configured
+/// bytecode is rejected separately by `Validator` before this check runs.
+fn has_jump_into_window(code: &[OpCode], first_arg_pos: usize, call_pos: usize) -> bool {
+    let (Ok(start), Ok(call), Ok(code_len)) = (
+        i64::try_from(first_arg_pos),
+        i64::try_from(call_pos),
+        i64::try_from(code.len()),
+    ) else {
+        return true;
+    };
+    code.iter().enumerate().any(|(source, op)| {
+        let offset = match op {
+            OpCode::Jump(offset) | OpCode::JumpIfFalse(offset) | OpCode::LoopBack(offset) => *offset,
+            _ => return false,
+        };
+        let Ok(source) = i64::try_from(source) else {
+            return true;
+        };
+        let Some(target) = source
+            .checked_add(1)
+            .and_then(|next| next.checked_add(i64::from(offset)))
+        else {
+            return true;
+        };
+        target < 0 || target > code_len || (target > start && target <= call)
+    })
 }
 
 /// Compile source code to CompiledScript, or deserialize from pre-compiled bytecode.
@@ -70,10 +97,9 @@ pub fn resolve_script(
 /// remaining false-negative case.
 pub fn check_redis_link_names(script: &CompiledScript, valid_names: &HashSet<&str>) -> Result<(), String> {
     // Scan for redis.* CallBuiltin at index i. The first argument (link name)
-    // lies at i-argc only when every preceding argument is a single-instruction
-    // push — i.e. all argc opcodes in [i-argc, i) are zero-input single pushes.
-    // A stack-consuming opcode in that window means some argument spanned
-    // multiple instructions, so i-argc is unreliable and the check is skipped.
+    // lies at i-argc only when all argc opcodes in [i-argc, i) are zero-input
+    // single pushes and no jump can enter after the first push. Otherwise the
+    // positional guess is unreliable and the check is skipped.
     for (i, op) in script.code.iter().enumerate() {
         if let OpCode::CallBuiltin(id, argc) = op {
             if id.is_redis_builtin() && *argc >= 1 {
@@ -82,7 +108,9 @@ pub fn check_redis_link_names(script: &CompiledScript, valid_names: &HashSet<&st
                     continue;
                 }
                 // Only enforce when the positional guess is provably correct.
-                if !script.code[first_arg_pos..i].iter().all(is_single_push_op) {
+                if !script.code[first_arg_pos..i].iter().all(is_single_push_op)
+                    || has_jump_into_window(&script.code, first_arg_pos, i)
+                {
                     continue;
                 }
                 if let Some(OpCode::LoadConst(k)) = script.code.get(first_arg_pos) {

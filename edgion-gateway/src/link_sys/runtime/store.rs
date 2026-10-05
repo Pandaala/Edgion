@@ -323,7 +323,7 @@ impl ProviderKind {
             SystemConfig::Kafka(_) => Some(Self::Kafka),
             SystemConfig::Otlp(_) => Some(Self::Otlp),
             SystemConfig::Webhook(_) => Some(Self::Webhook),
-            SystemConfig::HttpDns(_) | SystemConfig::CredentialSource(_) => None,
+            SystemConfig::HttpDns(_) | SystemConfig::CredentialSource(_) | SystemConfig::Unsupported => None,
         }
     }
 }
@@ -663,7 +663,7 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
                 Err(error) => tracing::error!(key, label = "Webhook", error = %error, "LinkSys preparation failed"),
             }
         }
-        SystemConfig::HttpDns(_) | SystemConfig::CredentialSource(_) => {}
+        SystemConfig::HttpDns(_) | SystemConfig::CredentialSource(_) | SystemConfig::Unsupported => {}
     }
     if !was_registered && entries.contains_key(key) {
         counts[kind as usize] += 1;

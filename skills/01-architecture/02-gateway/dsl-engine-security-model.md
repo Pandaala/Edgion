@@ -41,6 +41,18 @@ These are the `VmLimits` fields and where every breach is raised. **When adding 
 | `max_list_len` | 1_024 | List construction lives entirely in builtins — `builtins.rs:510-549` (`split` pre-allocation estimate, `range` with `hard_cap = max_list_len.min(1000)`); also bounds `req.header_names` / `resp.header_names` via their own hard 256 cap (predates Point 02) |
 | `max_map_size` | 512 | `vm.rs` `MakeMap`, `http.call` response-header retained-prefix traversal, `redis.hgetall` rejection, and the compile-time `MakeMap(n)` operand check in `edgion-dsl` |
 
+VM Value admission has separate fixed limits in `edgion-dsl/src/value.rs`:
+64 Map levels, 32,768 aggregate Map entries plus List elements, and 262,144
+aggregate Map-key bytes per Value. `vm.rs` preflights VM-built Maps before
+their `IndexMap` allocation and checks values as they enter the VM stack.
+`GetLocal` and `IndexGet` precharge deep copies; `Equal` and `NotEqual`
+precharge recursive comparisons. Every shape traversal consumes a fixed
+16 MiB-equivalent per-execution work budget (32 units per container item,
+one per visited or copied Map-key byte or compared string byte). These limits do not
+replace the configurable per-container limits or the operand-stack limit.
+Host builtins may allocate result Maps before VM stack admission; the fixed
+Value limits do not claim to bound that producer-side aggregation.
+
 `DslConfig::resolve_runtime_limits` owns the defaults and accepted ranges for
 these fields: steps `1..=1_000_000`, loop iterations and calls
 `1..=100_000`, stack depth `1..=1_024`, string bytes `1..=1_048_576`, List

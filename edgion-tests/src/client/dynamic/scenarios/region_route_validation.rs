@@ -29,6 +29,7 @@ enum Phase {
     Missing,
     Disabled,
     WrongType,
+    Unsupported,
     Omitted,
     OneHop,
     Chain,
@@ -92,6 +93,7 @@ impl Phase {
             _ => {}
         }
         let data = match self {
+            Self::Unsupported => json!({"type": "FutureOverlay", "config": {"discarded": true}}),
             Self::WrongType => json!({"type": "Selector", "config": {"active": "unused"}}),
             Self::Omitted => json!({"type": "RegionRouteOverride", "config": {}}),
             _ => json!({"type": "RegionRouteOverride", "config": {"regions": regions}}),
@@ -112,6 +114,7 @@ impl Phase {
                 | Self::MissingTarget
                 | Self::Cycle
                 | Self::Empty
+                | Self::Unsupported
         )
     }
 
@@ -181,7 +184,7 @@ phases! {
     malformed_endpoint => MalformedEndpoint, self_target => SelfTarget,
     missing_target => MissingTarget, cycle => Cycle, empty => Empty,
     missing => Missing, disabled => Disabled, wrong_type => WrongType,
-    omitted => Omitted, one_hop => OneHop, chain => Chain,
+    unsupported => Unsupported, omitted => Omitted, one_hop => OneHop, chain => Chain,
 }
 
 fn authed(ctx: &TestContext, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -248,7 +251,8 @@ async fn resource(ctx: &TestContext, kind: &str, name: &str, gateway: bool) -> R
 
 fn condition(resource: &Value, type_: &str, expected: bool) -> Result<()> {
     let conditions = resource
-        .pointer("/status/conditions")
+        .pointer("/spec/currentStatus/conditions")
+        .or_else(|| resource.pointer("/status/conditions"))
         .and_then(Value::as_array)
         .context("missing status.conditions")?;
     let condition = conditions
@@ -285,7 +289,11 @@ fn assert_overlay(actual: &Value, expected: &Value) -> Result<()> {
 }
 
 async fn check_phase(ctx: &TestContext, phase: Phase) -> Result<()> {
-    let expected = phase.resource();
+    let mut expected = phase.resource();
+    if phase == Phase::Unsupported {
+        expected.as_mut().context("unsupported overlay absent")?["spec"]["data"] =
+            json!({"type": "Unsupported", "config": {}});
+    }
     let controller = resource(ctx, "EdgionConfigData", OVERLAY, false).await?;
     let gateway = resource(ctx, "EdgionConfigData", OVERLAY, true).await?;
     match &expected {
@@ -293,6 +301,26 @@ async fn check_phase(ctx: &TestContext, phase: Phase) -> Result<()> {
             let controller = controller.as_ref().context("Controller overlay absent")?;
             assert_overlay(controller, expected).context("Controller overlay")?;
             condition(controller, "Accepted", !phase.standalone_invalid())?;
+            if phase == Phase::Unsupported {
+                let accepted = controller
+                    .pointer("/spec/currentStatus/conditions")
+                    .or_else(|| controller.pointer("/status/conditions"))
+                    .and_then(Value::as_array)
+                    .context("missing status.conditions")?
+                    .iter()
+                    .find(|condition| condition["type"] == "Accepted")
+                    .context("missing Accepted condition")?;
+                ensure!(
+                    accepted["reason"] == "Invalid",
+                    "unsupported overlay must report Invalid"
+                );
+                for resource in [controller, gateway.as_ref().context("Gateway overlay absent")?] {
+                    ensure!(
+                        resource["spec"]["data"]["config"] == json!({}),
+                        "unknown payload survived publication"
+                    );
+                }
+            }
             assert_overlay(gateway.as_ref().context("Gateway overlay absent")?, expected)
                 .context("Gateway publication")?;
         }
@@ -594,12 +622,13 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
         (Phase::Missing, "missing"),
         (Phase::Disabled, "disabled"),
         (Phase::WrongType, "wrong_type"),
+        (Phase::Unsupported, "unsupported"),
         (Phase::Omitted, "omitted"),
     ] {
         // A distinct previous target b detects accidental retention of a last-good overlay.
         publish(ctx, Phase::Replacement, "replacement").await?;
         publish(ctx, phase, name).await?;
-        if phase.standalone_invalid() && phase != Phase::Empty {
+        if phase.standalone_invalid() && !matches!(phase, Phase::Empty | Phase::Unsupported) {
             // Also validate the complete table when clearing an already absent field.
             failover(&ctx.test_ctx, "c", "", 422).await?;
         }
@@ -648,8 +677,28 @@ pub static SCENARIO: &Scenario = &Scenario {
 
 #[cfg(test)]
 mod tests {
+    use super::condition;
     use serde::Deserialize;
     use serde_yaml::Value;
+
+    #[test]
+    fn status_checks_use_current_projection_and_reject_stale_generation() {
+        let mut resource = serde_json::json!({
+            "metadata": {"generation": 3},
+            "spec": {"currentStatus": {"conditions": [
+                {"type": "Accepted", "status": "False", "observedGeneration": 3}
+            ]}},
+            "status": {"conditions": [
+                {"type": "Accepted", "status": "True", "observedGeneration": 3}
+            ]}
+        });
+        assert!(condition(&resource, "Accepted", false).is_ok());
+        assert!(condition(&resource, "Accepted", true).is_err());
+        resource["spec"]["currentStatus"]["conditions"][0]["observedGeneration"] = serde_json::json!(2);
+        assert!(condition(&resource, "Accepted", false).is_err());
+        resource["spec"] = serde_json::json!({});
+        assert!(condition(&resource, "Accepted", true).is_ok());
+    }
 
     fn documents(content: &str) -> Vec<Value> {
         serde_yaml::Deserializer::from_str(content)

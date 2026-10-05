@@ -13,6 +13,26 @@ LinkSys defines Redis, Etcd, Elasticsearch, Webhook, Kafka, OTLP, HttpDns, and
 credentialSource configuration. It is used by access logging, rate limiting,
 Webhook key resolution, DNS resolution, CredentialInjector, and related features.
 
+## Open Extension Types
+
+`spec.type` is an open CRD string. Known variants keep their typed validation,
+including strict credential substructures and nested enums. Unknown variants decode
+as a schema-hidden `Unsupported` unit marker; their name and payload are discarded.
+Controller reports `Accepted=False/Invalid` and still publishes the replacement.
+The normalized marker serializes with an empty `config: {}` to preserve the required
+CRD envelope. It survives conf_sync and cannot initialize a provider. Admin writes
+persist this normalized value; after upgrading, reapply the original supported
+configuration to recover its discarded type and payload.
+
+On replacement, Controller clears obsolete Secret/cross-namespace edges and
+credential-source desired state/results, then requeues dependents. Gateway full and
+partial updates retire any old provider through the existing wrong-kind removal.
+HTTPDNS references resolve against the current raw LinkSys and retain their existing
+System-resolver fallback on a missing or wrong-type target. Existing borrowed handles
+and asynchronous cleanup follow normal deletion semantics. Reapplying a supported
+type allows recovery. Adding a provider requires Rust/runtime wiring and tests,
+not an extension-name CRD whitelist update.
+
 ## Source code locations
 
 | Purpose | Path |

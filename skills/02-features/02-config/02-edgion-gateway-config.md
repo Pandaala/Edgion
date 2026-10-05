@@ -94,7 +94,6 @@ spec:
     fallbackSni: ""                         # string?, fallback value when the client provides no SNI
     tlsProxyLogRecord: true                 # bool, record TLS proxy connection logs
     allowLoopbackUpstream: false            # bool, explicit loopback upstream opt-in
-    rejectDuplicateHost: true               # bool, reject duplicate HTTP/1.1 Host fields
 
   # ─── Request-body buffering policy ───
   requestBody:
@@ -241,11 +240,11 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 | `fallbackSni` | `String?` | — | Fallback hostname when the client does not provide SNI |
 | `tlsProxyLogRecord` | `bool` | `true` | Record TLS proxy connection logs |
 | `allowLoopbackUpstream` | `bool` | `false` | Explicitly allow loopback upstream; link-local / metadata are not allowed |
-| `rejectDuplicateHost` | `bool` | `true` | Reject HTTP/1.1 requests containing multiple Host field lines with 400. |
 
 Omitting the entire `securityProtect` block disables the XFF byte cap. A present
-block with an omitted `xForwardedForLimit` uses 200. New HTTP requests use updated
-XFF, SNI/Host, duplicate-Host and loopback policies; new TCP/TLS connections and
+block with an omitted `xForwardedForLimit` uses 200. Pingora rejects duplicate
+HTTP/1.1 Host fields during protocol parsing. New HTTP requests use updated
+XFF, SNI/Host and loopback policies; new TCP/TLS connections and
 UDP sessions use updated loopback policies. TLS proxy logging is connection-pinned,
 and fallback SNI applies to new handshakes.
 

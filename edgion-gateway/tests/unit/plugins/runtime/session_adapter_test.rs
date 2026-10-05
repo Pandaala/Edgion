@@ -79,6 +79,51 @@ async fn path_only_rewrite_keeps_h2_authority_without_host() {
 }
 
 #[tokio::test]
+async fn path_only_rewrite_keeps_h1_absolute_request_target() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"GET http://example.com/original?scope=read HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    let mut ctx = EdgionHttpContext::default();
+
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    adapter.set_upstream_uri("/rewritten?scope=read").unwrap();
+
+    assert_eq!(session.req_header().uri.to_string(), "/rewritten?scope=read");
+    assert_eq!(
+        session.req_header().raw_path(),
+        b"http://example.com/rewritten?scope=read"
+    );
+    assert!(ctx.uri_finalized);
+}
+
+#[tokio::test]
+async fn asterisk_rewrite_rejects_h1_absolute_request_target_without_mutation() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"OPTIONS http://example.com/original HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    let mut ctx = EdgionHttpContext::default();
+
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert!(adapter.set_upstream_uri("*").is_err());
+
+    assert_eq!(session.req_header().uri.to_string(), "/original");
+    assert_eq!(session.req_header().raw_path(), b"http://example.com/original");
+    assert!(!ctx.uri_finalized);
+}
+
+#[tokio::test]
 async fn upstream_host_rewrite_updates_h2_authority_and_host() {
     use tokio::io::AsyncWriteExt;
 
@@ -127,6 +172,25 @@ async fn invalid_upstream_host_leaves_uri_and_header_unchanged() {
     let header = session.req_header();
     assert_eq!(header.uri.to_string(), "https://original.example.com/original");
     assert_eq!(header.headers.get("Host").unwrap(), "original.example.com");
+}
+
+#[tokio::test]
+async fn plugin_created_userinfo_host_fails_pingora_egress_validation() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: original.example.com\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    let mut ctx = EdgionHttpContext::default();
+
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    adapter.set_upstream_host("user@evil.example.com").unwrap();
+
+    assert!(pingora_core::protocols::http::authority::validate_request_authority(session.req_header()).is_err());
 }
 
 #[tokio::test]

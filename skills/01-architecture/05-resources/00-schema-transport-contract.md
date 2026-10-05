@@ -43,6 +43,11 @@ guard open string plugin discriminators and config preservation. Unsupported nam
 through typed sentinel validation and fail-closed runtimes, not CRD whitelists. These guards do
 not make the plugin `config` bodies structural. Nested condition enums remain separately guarded.
 
+LinkSys `spec.type` and EdgionConfigData `spec.data.type` are also open strings,
+guarded by `cicd/checks/check_open_extension_types.py`. Unknown names decode to
+schema-hidden invalid markers and withdraw stale runtime state. Known configurations,
+credential substructures, ACME challenge types, and resource kinds remain typed.
+
 Tagged-enum CRDs such as plugins, stream plugins, ACME, LinkSys, and EdgionConfigData preserve
 unknown config fields and are not covered field-by-field. Review their `#[schemars(skip)]`, serde,
 and redaction annotations manually.

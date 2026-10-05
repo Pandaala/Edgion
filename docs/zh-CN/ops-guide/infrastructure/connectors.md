@@ -16,6 +16,14 @@
 
 `LinkSys` 是命名空间作用域的资源，短名称为 `lsys`。`kubectl get linksys` 可一览 `Accepted` 和 `ResolvedRefs` 状态条件。
 
+### 不支持的连接器类型
+
+CRD 的 `spec.type` 接受开放字符串，新增受支持的连接器名称不需要重新安装类型白名单。
+当前 Edgion 版本不支持该类型时，Controller 报告 `Accepted=False/Invalid`。
+此类更新会撤下同名的旧连接器；修正类型或升级 Edgion 后，需要重新应用原始配置才能恢复。
+类型化 Admin 写入和视图会丢弃未知类型与配置，仅保留无效标记和空的 `config: {}`。
+已知凭据字段和嵌套配置枚举仍执行原有校验。
+
 ### 更新和删除
 
 同类型的普通更新会复用未变化的连接配置。在同一个 namespace/name 下修改

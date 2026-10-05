@@ -1200,3 +1200,30 @@ async fn last_registry_owner_drop_stops_runner_without_waiting_for_arc_drop() {
     assert!(runner.current().is_none());
     runner.await_join().await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn unsupported_extension_retires_every_provider_and_recovers_full_and_partial() {
+    for full in [true, false] {
+        for resource in resources(InjectedSecret::Valid) {
+            let registry = RuntimeRegistry::new();
+            let original = one(resource.clone());
+            registry.apply(1, &original, &HashSet::new(), &original, full, false);
+            let old = registry.get("test/link").unwrap();
+            let mut unsupported = resource;
+            unsupported.spec.config = SystemConfig::Unsupported;
+            let unknown = one(unsupported);
+            registry.apply(2, &unknown, &HashSet::new(), &unknown, full, false);
+            assert!(registry.get("test/link").is_none());
+            assert!(registry.entries.load().is_empty());
+            assert!(old.stopped.load(Ordering::Acquire));
+            registry.apply(3, &original, &HashSet::new(), &original, full, false);
+            let current = registry.get("test/link").unwrap();
+            assert!(!Arc::ptr_eq(&old, &current));
+            assert!(current.kind() == old.kind());
+            old.stop();
+            assert!(Arc::ptr_eq(&current, &registry.get("test/link").unwrap()));
+            // No yield before cancellation: no provider performs network IO.
+            drop(registry);
+        }
+    }
+}

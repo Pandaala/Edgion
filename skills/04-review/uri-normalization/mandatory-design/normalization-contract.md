@@ -31,7 +31,7 @@ The following scenarios **still need to be reported**:
 
 2. **DSL security rules mixing `req.path` and `req.request_path` in the same decision chain without an intent comment** — prompt the reviewer to confirm operator intent; the two views differ in semantics, mixing them may be a logic error
 
-3. **Upstream is sensitive to literal `%2F` and the business depends on raw forwarding** — Edgion path normalization does not rewrite `req_header().uri`; the upstream receives the raw entry form (this is a design commitment, not a vulnerability). This behavior must be made explicit in documentation/comments
+3. **Upstream is sensitive to literal `%2F` and the business depends on raw forwarding** — route matching uses the normalized path, while the forwarding choice is made at upstream-peer finalization. With `edgion.io/forward-raw-path: "true"` (or the global raw-forward setting), the upstream receives the raw entry form; the default writes the normalized path. This choice must be made explicit in documentation/comments
 
 4. **`keyMatch` / `keyExist` with `key: {type: path}` written as if targeting raw** (containing `%XX` literals) — prompt the operator: `KeyGet::Path` is compared after normalization; `%XX` literals will not match; should change to `key: {type: requestPath}` (`KeyGet::RequestPath`) or fix to a normalized form
 
@@ -85,18 +85,19 @@ self.inner.req_header_mut().set_uri(parsed);
 
 **Consequence**: ctx cache (`normalized_current_path`) becomes inconsistent with pingora uri, causing ACL / access_log / routing decisions to read a stale path.
 
-**Path-changing locations** (each must be immediately followed by `ctx.uri_finalized = true`):
+**Path-changing locations** (each must set `ctx.uri_finalized = true` after a successful write):
 
 1. `edgion-gateway/src/plugins/runtime/session_adapter.rs::set_upstream_uri`
    - Triggered by rewrite plugins (url_rewrite / proxy_rewrite / DSL `req.set_uri` / Gateway API URLRewrite filter)
-   - Write order: preserve current scheme/authority for a path-only rewrite,
-     `set_uri(parsed)` → `refresh_normalized_path(req, cfg)` → `uri_finalized = true`
+   - Write order: preserve the current request-target authority through
+     `set_path_only_request_target` → `refresh_normalized_path(req, cfg)` →
+     `uri_finalized = true`
 
 2. `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer_http` single-point decision block (newly added in v4)
    - Entry check `!ctx.uri_finalized`
-   - Write order (only the `want_raw=false` branch calls set_uri): preserve
-     current scheme/authority while replacing the normalized path/query,
-     `set_uri(normalized)` → `uri_finalized = true` (set unconditionally)
+   - Write order (only the `want_raw=false` branch changes the target):
+     `set_path_only_request_target(normalized)` → `uri_finalized = true`
+     (set unconditionally)
 
 **Authority-only exception**: `session_adapter.rs::set_upstream_host` may call
 `set_uri` to replace an existing URI authority alongside the Host header. This
@@ -104,8 +105,8 @@ keeps HTTP/2 `:authority` aligned with an explicit upstream Host rewrite. It
 does not change the path or query, so it neither refreshes the normalized path
 nor sets `uri_finalized`; the path forwarding decision still runs normally.
 
-**Rule 2.1**: If `set_uri` calls at the path-changing locations above are not
-immediately followed by `uri_finalized = true` → report mandatorily.
+**Rule 2.1**: If a path-changing write above is not followed by
+`uri_finalized = true` → report mandatorily.
 
 **All rewrite plugins** must change paths via the trait method `session.set_upstream_uri()`; bare calls are not allowed.
 
@@ -119,8 +120,24 @@ Neither path finalizes the forwarding choice. Rebuilding every target from
 HTTP/2 authority. The consumer regression tests are
 `stripping_query_credential_preserves_absolute_request_target` and
 `stripping_query_credential_preserves_h2_authority_without_host`.
-The same authority-preserving helper covers normalized path forwarding and
-path-only URI rewrites; an explicit absolute rewrite replaces authority.
+The same target-preserving helper covers normalized path forwarding and
+path-only URI rewrites. HTTP/1 absolute-form stores its scheme and authority
+only in Pingora's `raw_path()`, so these writes use Pingora's canonical
+`raw_target_authority` classification and `set_raw_path()` to keep the target
+form. HTTP/2 keeps scheme and authority in the URI. An explicit absolute
+rewrite replaces authority. A path-only rewrite to `*` is rejected before
+changing an absolute-form target; concatenating it after the authority would
+change the authority itself.
+
+At fork revision `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`, the
+`HTTPRoute/Transport` integration suite observes the normalized target,
+query, and authority at both HTTP/1 and HTTP/2 origins for all four
+downstream/upstream combinations. `EdgionPlugins/PathNormalization/ForwardView`
+checks absolute-form default, raw-path, normalized-path, and URLRewrite
+consumers against the origin's path and query. The local integration runner
+also enables `includeRawUri` and checks the unchanged entry path and query
+through `AccessLogClient`; the shared Kubernetes suite runs the origin checks
+without that local admin capability.
 
 ---
 
@@ -141,3 +158,4 @@ path-only URI rewrites; an explicit absolute rewrite replaces authority.
 - `g8-005` — —.
 - `path-norm-F001` — 2026-05-26.
 - `path-norm-F002` — 2026-05-26.
+- `P090-003` — 2026-09-26; HTTP/1 absolute-form path writes preserve Pingora's raw target authority.

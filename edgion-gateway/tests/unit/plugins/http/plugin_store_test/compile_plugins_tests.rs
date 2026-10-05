@@ -1055,10 +1055,10 @@ fn valid_waf_builds_one_logical_filter_for_each_supported_gateway_hook() {
 
 #[test]
 fn invalid_waf_update_retains_the_last_known_good_generation() {
-    let valid = compile_plugins(&waf_resource(
+    let valid = compile_source(&waf_resource(
         "SecRule REQUEST_URI \"@contains /blocked\" \"id:1,phase:1,deny\"\n",
     ));
-    let invalid = compile_plugins(&waf_resource("SecRule invalid-("));
+    let invalid = compile_source(&waf_resource("SecRule invalid-("));
     assert!(!invalid.is_activatable);
     assert!(invalid.retain_previous_on_invalid_update);
     assert!(invalid.preparse_errors.iter().any(|error| error.starts_with("waf: ")));
@@ -1087,6 +1087,20 @@ fn invalid_waf_update_retains_the_last_known_good_generation() {
     ));
 }
 
+/// Compile a resource while keeping its source spec as store input. Published
+/// views drop resolved WAF bundles, so feeding `compiled.spec` back into a
+/// store would recompile an unresolved generation.
+fn compile_source(resource: &EdgionPlugins) -> Arc<CompiledPlugins> {
+    let compiled = compile_plugins(resource);
+    Arc::new(CompiledPlugins {
+        spec: Arc::new(resource.clone()),
+        plugin_runtime: Arc::clone(&compiled.plugin_runtime),
+        preparse_errors: compiled.preparse_errors.clone(),
+        is_activatable: compiled.is_activatable,
+        retain_previous_on_invalid_update: compiled.retain_previous_on_invalid_update,
+    })
+}
+
 fn bundled_waf_resource(id: u64) -> EdgionPlugins {
     waf_resource(&format!(
         "SecRule REQUEST_URI \"@contains /blocked\" \"id:{id},phase:1,deny\"\n"
@@ -1096,14 +1110,14 @@ fn bundled_waf_resource(id: u64) -> EdgionPlugins {
 #[test]
 fn bundled_waf_reloads_retain_invalid_update_and_pin_in_flight_generation() {
     let key = "default/native-waf".to_string();
-    let first = compile_plugins(&bundled_waf_resource(100));
-    let second = compile_plugins(&bundled_waf_resource(101));
+    let first = compile_source(&bundled_waf_resource(100));
+    let second = compile_source(&bundled_waf_resource(101));
     assert!(first.is_activatable, "{:?}", first.preparse_errors);
     assert!(second.is_activatable, "{:?}", second.preparse_errors);
 
     let mut unavailable = bundled_waf_resource(102);
     unavailable.spec.waf.as_mut().unwrap().resolved_bundles = None;
-    let invalid = compile_plugins(&unavailable);
+    let invalid = compile_source(&unavailable);
     assert!(!invalid.is_activatable);
     assert!(invalid.retain_previous_on_invalid_update);
 
@@ -1118,7 +1132,7 @@ fn bundled_waf_reloads_retain_invalid_update_and_pin_in_flight_generation() {
     let retained = store.get_plugin_runtime(&key).unwrap();
     assert!(Arc::ptr_eq(first_filter(&current), first_filter(&retained)));
 
-    let rollback = compile_plugins(&bundled_waf_resource(100));
+    let rollback = compile_source(&bundled_waf_resource(100));
     assert!(rollback.is_activatable);
     store.apply_delta(
         HashMap::new(),
@@ -1192,7 +1206,7 @@ async fn policy_restriction_survives_invalid_program_publication() {
                 }
                 let key = old.key_name();
                 let store = PluginStore::new();
-                store.replace_all(HashMap::from([(key.clone(), compile_plugins(&old))]));
+                store.replace_all(HashMap::from([(key.clone(), compile_source(&old))]));
                 let in_flight = store.get_plugin_runtime(&key).unwrap();
                 let action = if case == "bypass" {
                     PluginPolicyAction::Bypass
@@ -1200,7 +1214,7 @@ async fn policy_restriction_survives_invalid_program_publication() {
                     PluginPolicyAction::Block { status: 451 }
                 };
                 store.set_test_policy(Some(policy_config("RequestHeaderModifier", action)));
-                let update = HashMap::from([(key.clone(), compile_plugins(&incoming))]);
+                let update = HashMap::from([(key.clone(), compile_source(&incoming))]);
                 if full_snapshot {
                     store.replace_all(update);
                 } else {
@@ -1272,12 +1286,12 @@ async fn mirror_authorization_updates_never_retain_cross_namespace_lkg() {
                 Some(mirror_config("default", false)),
                 Some(mirror_config("retargeted", false)),
             ] {
-                let previous = compile_plugins(&mirror_program_resource(
+                let previous = compile_source(&mirror_program_resource(
                     program,
                     true,
                     Some(mirror_config("other", false)),
                 ));
-                let incoming = compile_plugins(&mirror_program_resource(program, false, incoming_mirror));
+                let incoming = compile_source(&mirror_program_resource(program, false, incoming_mirror));
                 assert!(previous.is_activatable);
                 assert!(!incoming.is_activatable);
                 assert!(incoming.retain_previous_on_invalid_update);
@@ -1304,7 +1318,7 @@ async fn mirror_authorization_updates_never_retain_cross_namespace_lkg() {
                     PluginRunningResult::ErrResponse { status: 500, .. }
                 ));
 
-                let recovered = compile_plugins(&mirror_program_resource(
+                let recovered = compile_source(&mirror_program_resource(
                     program,
                     true,
                     Some(mirror_config("other", true)),
@@ -1379,9 +1393,9 @@ fn mirror_lkg_boundary_checks_incoming_and_preserves_inert_or_local_mirrors() {
                 let key = "default/native-waf".to_string();
                 let store = PluginStore::new();
                 store.set_test_policy(action.map(|action| policy_config("RequestMirror", action)));
-                store.replace_all(HashMap::from([(key.clone(), compile_plugins(&old_resource))]));
+                store.replace_all(HashMap::from([(key.clone(), compile_source(&old_resource))]));
                 let previous_runtime = store.get_plugin_runtime(&key).unwrap();
-                let replacement = HashMap::from([(key.clone(), compile_plugins(&new_resource))]);
+                let replacement = HashMap::from([(key.clone(), compile_source(&new_resource))]);
                 if full_snapshot {
                     store.replace_all(replacement);
                 } else {
@@ -1413,10 +1427,10 @@ fn mirror_lkg_boundary_checks_incoming_and_preserves_inert_or_local_mirrors() {
 #[test]
 fn invalid_waf_same_key_add_replaces_last_known_good_and_fails_closed() {
     let key = "default/native-waf".to_string();
-    let valid = compile_plugins(&waf_resource(
+    let valid = compile_source(&waf_resource(
         "SecRule REQUEST_URI \"@contains /blocked\" \"id:1,phase:1,deny\"\n",
     ));
-    let invalid = compile_plugins(&waf_resource("SecRule invalid-("));
+    let invalid = compile_source(&waf_resource("SecRule invalid-("));
     let store = PluginStore::new();
 
     store.apply_delta(
@@ -1440,14 +1454,14 @@ fn invalid_waf_same_key_add_replaces_last_known_good_and_fails_closed() {
 #[test]
 fn waf_store_publishes_atomically_and_pins_in_flight_generations() {
     let key = "default/native-waf".to_string();
-    let first = compile_plugins(&waf_resource(
+    let first = compile_source(&waf_resource(
         "SecRule REQUEST_URI \"@contains /first\" \"id:1,phase:1,deny\"\n",
     ));
-    let second = compile_plugins(&waf_resource(
+    let second = compile_source(&waf_resource(
         "SecRule REQUEST_URI \"@contains /second\" \"id:2,phase:1,deny\"\n",
     ));
-    let invalid = compile_plugins(&waf_resource("SecRule invalid-("));
-    let recovered = compile_plugins(&waf_resource(
+    let invalid = compile_source(&waf_resource("SecRule invalid-("));
+    let recovered = compile_source(&waf_resource(
         "SecRule REQUEST_URI \"@contains /third\" \"id:3,phase:1,deny\"\n",
     ));
     let store = PluginStore::new();
@@ -1498,13 +1512,13 @@ fn waf_store_publishes_atomically_and_pins_in_flight_generations() {
 #[test]
 fn waf_reload_storm_never_publishes_an_invalid_or_partial_runtime() {
     let key = "default/native-waf".to_string();
-    let first = compile_plugins(&waf_resource(
+    let first = compile_source(&waf_resource(
         "SecRule REQUEST_URI \"@contains /first\" \"id:1,phase:1,deny\"\n",
     ));
-    let second = compile_plugins(&waf_resource(
+    let second = compile_source(&waf_resource(
         "SecRule REQUEST_URI \"@contains /second\" \"id:2,phase:1,deny\"\n",
     ));
-    let invalid = compile_plugins(&waf_resource("SecRule invalid-("));
+    let invalid = compile_source(&waf_resource("SecRule invalid-("));
     let store = Arc::new(PluginStore::new());
     store.replace_all(HashMap::from([(key.clone(), Arc::clone(&first))]));
 
@@ -1516,20 +1530,11 @@ fn waf_reload_storm_never_publishes_an_invalid_or_partial_runtime() {
                 for _ in 0..10_000 {
                     let published = store.scope().http(&key).expect("reload never removes the active WAF");
                     let runtime = &published.plugin_runtime;
-                    let rules = &published
-                        .spec
-                        .spec
-                        .waf
-                        .as_ref()
-                        .unwrap()
-                        .resolved_bundles
-                        .as_ref()
-                        .unwrap()[0]
-                        .data
-                        .rules[0]
-                        .content;
+                    // Published views drop bundle sources; a clean activatable
+                    // view can only come from the first or second generation.
                     assert!(published.is_activatable);
-                    assert!(rules.contains("/first") || rules.contains("/second"));
+                    assert!(published.preparse_errors.is_empty());
+                    assert!(published.spec.spec.waf.as_ref().unwrap().resolved_bundles.is_none());
                     assert_eq!(runtime.request_plugins_count(), 1);
                     assert_eq!(first_filter(runtime).name(), "Waf");
                     assert_eq!(runtime.upstream_response_plugins_count(), 1);

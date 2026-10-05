@@ -11,7 +11,6 @@ pub fn new_ctx(edgion_http: &EdgionHttpProxy) -> EdgionHttpContext {
     ctx.request_body_config = ctx.egc.request_body;
     ctx.remote_ip_header = ctx.egc.remote_ip_header.clone();
     ctx.preflight_policy = ctx.egc.preflight_policy;
-    ctx.reject_duplicate_host = ctx.egc.reject_duplicate_host;
     global_metrics().ctx_created();
     ctx
 }

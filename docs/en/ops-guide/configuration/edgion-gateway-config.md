@@ -65,7 +65,6 @@ spec:
     requireSniHostMatch: true
     fallbackSni: ""
     tlsProxyLogRecord: true
-    rejectDuplicateHost: true
 
   requestBody:
     enabled: true
@@ -110,7 +109,7 @@ looking up the EGC name. Deletion and same-name recreation update the same handl
 
 | Configuration | When the updated value applies |
 |---|---|
-| HTTP timeouts, retries, RealIp, XFF and SNI/Host checks, duplicate Host checks, request body, forwarded headers, preflight, compression, HTTP loopback permission | Each new HTTP request captures one configuration generation and keeps it through retries and response processing |
+| HTTP timeouts, retries, RealIp, XFF and SNI/Host checks, request body, forwarded headers, preflight, compression, HTTP loopback permission | Each new HTTP request captures one configuration generation and keeps it through retries and response processing |
 | `server.downstreamKeepaliveRequestLimit` | The first HTTP/1 request captures a budget for its connection; later requests on that connection retain it |
 | `tcpTimeout`, TCP/TLS loopback permission, `tlsProxyLogRecord` | Each new L4 proxy connection captures its policy and retains it through retries, relay, and logging |
 | UDP loopback permission | Each newly created UDP session; existing sessions retain their policy |
@@ -222,7 +221,9 @@ Controller preparse warns rather than refusing to publish, so the Gateway applie
 | `fallbackSni` | `String` | — | Fallback hostname used when the client provides no SNI |
 | `tlsProxyLogRecord` | `Boolean` | `true` | Record TLS proxy connection logs |
 | `allowLoopbackUpstream` | `Boolean` | `false` | Explicitly allow loopback upstream addresses for this GatewayClass. Link-local / metadata ranges remain blocked |
-| `rejectDuplicateHost` | `Boolean` | `true` | Gateway-level duplicate `Host` check. Pingora 0.9 rejects duplicate HTTP/1.1 `Host` fields during protocol parsing before this setting is consulted, so `false` does not permit them |
+
+Pingora rejects duplicate HTTP/1.1 `Host` fields during protocol parsing. This
+behavior has no Gateway configuration switch.
 
 If the entire `securityProtect` block is absent, the XFF byte cap is disabled.
 If the block is present and `xForwardedForLimit` is omitted, its default is 200.

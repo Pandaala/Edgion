@@ -155,14 +155,10 @@ pub enum EdgionPlugin {
     Wasm(WasmConfig),
     /// Non-executable marker for a plugin type this binary does not support.
     /// Validation rejects the containing resource, including disabled entries.
-    #[serde(
-        other,
-        deserialize_with = "crate::resources::common::discard_unsupported_plugin_config"
-    )]
+    #[serde(other, deserialize_with = "crate::resources::common::discard_unsupported_config")]
     #[schemars(skip)]
     Unsupported,
     // TODO: Add more custom Edgion plugins here (no `Edgion` prefix on the variant name)
-    // Waf(WafConfig),
     // Cache(CacheConfig),
     // Transform(TransformConfig),
     // ...

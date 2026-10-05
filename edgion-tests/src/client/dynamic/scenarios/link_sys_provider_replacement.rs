@@ -21,6 +21,7 @@ enum Phase {
     Absent,
     WebhookV1,
     Redis,
+    Unsupported,
     WebhookV2,
     Deleted,
 }
@@ -30,7 +31,7 @@ impl Phase {
         match self {
             Self::WebhookV1 | Self::WebhookV2 => Some("webhook"),
             Self::Redis => Some("redis"),
-            Self::Absent | Self::Deleted => None,
+            Self::Absent | Self::Deleted | Self::Unsupported => None,
         }
     }
 }
@@ -87,6 +88,9 @@ fn absent() -> Box<dyn TestSuite> {
 fn webhook_v1() -> Box<dyn TestSuite> {
     Box::new(ReplacementSuite(Phase::WebhookV1, Duration::ZERO))
 }
+fn unsupported() -> Box<dyn TestSuite> {
+    Box::new(ReplacementSuite(Phase::Unsupported, Duration::ZERO))
+}
 fn redis() -> Box<dyn TestSuite> {
     Box::new(ReplacementSuite(Phase::Redis, Duration::ZERO))
 }
@@ -101,6 +105,10 @@ fn deleted() -> Box<dyn TestSuite> {
 }
 
 static PHASES: &[PhaseSuite] = &[
+    PhaseSuite {
+        name: "unsupported",
+        factory: unsupported,
+    },
     PhaseSuite {
         name: "absent",
         factory: absent,
@@ -274,15 +282,55 @@ async fn check_traffic(ctx: &TestContext, phase: Phase) -> Result<()> {
     Ok(())
 }
 
+fn local_conditions(resource: &Value) -> Result<&Vec<Value>> {
+    // Published Kubernetes status retains all deployment observations; currentStatus
+    // carries the observation computed by the Controller serving this connection.
+    resource
+        .pointer("/spec/currentStatus/conditions")
+        .or_else(|| resource.pointer("/status/conditions"))
+        .and_then(Value::as_array)
+        .context("missing current LinkSys conditions")
+}
+
 async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
     for gateway in [false, true] {
         let current = resource(ctx, "LinkSys", NAME, gateway).await?;
-        if let Some(provider) = phase.provider() {
+        if let Some(provider) = phase
+            .provider()
+            .or((phase == Phase::Unsupported).then_some("unsupported"))
+        {
             let current = current.context("current LinkSys is absent")?;
             ensure!(
                 current["spec"]["type"] == provider,
                 "LinkSys provider has not converged"
             );
+            if !gateway {
+                let conditions = local_conditions(&current)?;
+                let accepted = conditions
+                    .iter()
+                    .find(|condition| condition["type"] == "Accepted")
+                    .context("missing Accepted condition")?;
+                let expected = if phase == Phase::Unsupported { "False" } else { "True" };
+                ensure!(accepted["status"] == expected, "unexpected Accepted status");
+                if phase == Phase::Unsupported {
+                    ensure!(
+                        accepted["reason"] == "Invalid",
+                        "unsupported LinkSys must report Invalid"
+                    );
+                }
+                if let Some(generation) = current["metadata"]["generation"].as_i64() {
+                    ensure!(
+                        accepted["observedGeneration"] == generation,
+                        "stale Accepted generation"
+                    );
+                }
+            }
+            if phase == Phase::Unsupported {
+                ensure!(
+                    current["spec"]["config"] == serde_json::json!({}),
+                    "unknown payload survived publication"
+                );
+            }
             if matches!(phase, Phase::WebhookV1 | Phase::WebhookV2) {
                 let version = if phase == Phase::WebhookV1 { "v1" } else { "v2" };
                 ensure!(
@@ -352,6 +400,17 @@ async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
     Ok(())
 }
 
+async fn apply_unsupported(ctx: &ScenarioCtx) -> Result<()> {
+    // This topology-independent fixture also runs when conf_root points at k8s/conf.
+    ctx.test_ctx
+        .apply_yaml(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/LinkSys/Redis/ProviderReplacement/DynamicTest/updates/unsupported.yaml"
+        )))
+        .await
+        .map_err(anyhow::Error::msg)
+}
+
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
         let result = async {
@@ -359,9 +418,17 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             cleanup(&ctx).await?;
             ctx.apply_dir("initial/").await?;
             ctx.wait_phase(SCENARIO, "webhook_v1", TIMEOUT).await?;
+            apply_unsupported(&ctx).await?;
+            ctx.wait_phase(SCENARIO, "unsupported", TIMEOUT).await?;
+            ctx.apply_dir("initial/01_LinkSys.yaml").await?;
+            ctx.wait_phase(SCENARIO, "webhook_v1", TIMEOUT).await?;
 
             // Only one LinkSys changes per transition: no full-set/reload or
             // consumer re-apply is allowed to repair a stale provider entry.
+            ctx.apply_dir("updates/redis.yaml").await?;
+            ctx.wait_phase(SCENARIO, "redis", TIMEOUT).await?;
+            apply_unsupported(&ctx).await?;
+            ctx.wait_phase(SCENARIO, "unsupported", TIMEOUT).await?;
             ctx.apply_dir("updates/redis.yaml").await?;
             ctx.wait_phase(SCENARIO, "redis", TIMEOUT).await?;
             ctx.apply_dir("updates/webhook-v2.yaml").await?;
@@ -402,7 +469,7 @@ pub static SCENARIO: &Scenario = &Scenario {
 
 #[cfg(test)]
 mod tests {
-    use super::{AUTH, KEY, NAME, NS};
+    use super::{local_conditions, AUTH, KEY, NAME, NS};
     use edgion_resources::{EdgionPlugins, HTTPRoute, LinkSys};
     use serde_json::Value;
 
@@ -414,6 +481,22 @@ mod tests {
                 $path
             ))
         };
+    }
+
+    #[test]
+    fn conditions_use_current_projection_and_native_fallback() {
+        let resource = serde_json::json!({
+            "spec": {"currentStatus": {"conditions": [{"type": "Accepted", "status": "False"}]}},
+            "status": {"controllers": [{"controllerName": "foreign", "status": {
+                "conditions": [{"type": "Accepted", "status": "True"}]
+            }}]}
+        });
+        assert_eq!(local_conditions(&resource).unwrap()[0]["status"], "False");
+        let native = serde_json::json!({"status": {"conditions": [{"type": "Accepted", "status": "True"}]}});
+        assert_eq!(local_conditions(&native).unwrap()[0]["status"], "True");
+        let mut missing_projection = resource;
+        missing_projection["spec"] = serde_json::json!({});
+        assert!(local_conditions(&missing_projection).is_err());
     }
 
     #[test]

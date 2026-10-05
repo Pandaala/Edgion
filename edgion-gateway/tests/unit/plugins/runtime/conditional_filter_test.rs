@@ -1,6 +1,7 @@
 use super::*;
 use crate::plugins::runtime::conditions::{Condition, KeyExistCondition, KeyMatchCondition};
 use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::plugins::runtime::traits::test_helpers::setup_condition_input_mocks;
 use edgion_resources::common::KeyGet;
 use edgion_resources::resources::edgion_plugins::conditions::{ConditionSet, MatchCore};
 use mockall::predicate::*;
@@ -102,10 +103,7 @@ fn run_on_method(method: &str) -> PluginConditions {
 
 fn session_with_method(method: &str) -> MockPluginSession {
     let mut session = MockPluginSession::new();
-    session
-        .expect_key_get()
-        .with(eq(KeyGet::Method))
-        .return_const(Some(method.to_string()));
+    setup_condition_input_mocks(&mut session, &[(KeyGet::Method, method)]);
     session
 }
 
@@ -167,10 +165,7 @@ async fn test_conditional_filter_runs_when_conditions_satisfied() {
     let filter = ConditionalRequestFilter::new(Box::new(inner), Some(conditions));
 
     let mut session = MockPluginSession::new();
-    session
-        .expect_key_get()
-        .with(eq(KeyGet::Method))
-        .return_const(Some("POST".to_string()));
+    setup_condition_input_mocks(&mut session, &[(KeyGet::Method, "POST")]);
     let mut log = PluginLog::new("test");
 
     let result = filter.run_request(&mut session, &mut log).await;
@@ -202,10 +197,7 @@ async fn test_conditional_filter_skips_when_run_condition_not_met() {
 
     // But request is GET
     let mut session = MockPluginSession::new();
-    session
-        .expect_key_get()
-        .with(eq(KeyGet::Method))
-        .return_const(Some("GET".to_string()));
+    setup_condition_input_mocks(&mut session, &[(KeyGet::Method, "GET")]);
     let mut log = PluginLog::new("test");
 
     let result = filter.run_request(&mut session, &mut log).await;
@@ -235,12 +227,15 @@ async fn test_conditional_filter_skips_when_skip_condition_met() {
 
     // Request has X-Internal header
     let mut session = MockPluginSession::new();
-    session
-        .expect_key_get()
-        .with(eq(KeyGet::Header {
-            name: "X-Internal".to_string(),
-        }))
-        .return_const(Some("true".to_string()));
+    setup_condition_input_mocks(
+        &mut session,
+        &[(
+            KeyGet::Header {
+                name: "X-Internal".to_string(),
+            },
+            "true",
+        )],
+    );
 
     let mut log = PluginLog::new("test");
 
@@ -271,12 +266,7 @@ async fn test_conditional_filter_runs_when_skip_condition_not_met() {
 
     // Request does NOT have X-Internal header
     let mut session = MockPluginSession::new();
-    session
-        .expect_key_get()
-        .with(eq(KeyGet::Header {
-            name: "X-Internal".to_string(),
-        }))
-        .return_const(None);
+    setup_condition_input_mocks(&mut session, &[]);
 
     let mut log = PluginLog::new("test");
 
@@ -307,12 +297,15 @@ async fn test_condition_log_recorded_on_skip() {
 
     // Request has X-Internal header - should skip
     let mut session = MockPluginSession::new();
-    session
-        .expect_key_get()
-        .with(eq(KeyGet::Header {
-            name: "X-Internal".to_string(),
-        }))
-        .return_const(Some("true".to_string()));
+    setup_condition_input_mocks(
+        &mut session,
+        &[(
+            KeyGet::Header {
+                name: "X-Internal".to_string(),
+            },
+            "true",
+        )],
+    );
     let mut log = PluginLog::new("test");
 
     let _ = filter.run_request(&mut session, &mut log).await;
@@ -345,10 +338,7 @@ async fn test_condition_log_recorded_on_run_not_met() {
 
     // Request is GET - run condition not met
     let mut session = MockPluginSession::new();
-    session
-        .expect_key_get()
-        .with(eq(KeyGet::Method))
-        .return_const(Some("GET".to_string()));
+    setup_condition_input_mocks(&mut session, &[(KeyGet::Method, "GET")]);
     let mut log = PluginLog::new("test");
 
     let _ = filter.run_request(&mut session, &mut log).await;

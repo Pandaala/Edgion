@@ -297,6 +297,8 @@ async fn handle_stream(
 
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
+    let target = req.uri().path_and_query().map(|value| value.as_str()).unwrap_or("/");
+    let authority = req.uri().authority().map(|value| value.as_str()).unwrap_or("");
     let content_length = req
         .headers()
         .get("content-length")
@@ -319,6 +321,8 @@ async fn handle_stream(
         .transfer_encoding(transfer_encoding)
         .method(&method)
         .path(&path)
+        .target(target)
+        .authority(authority)
         .behavior(script.behavior.as_str());
     if let Some((value, unit)) = req.headers().get("grpc-timeout").and_then(parse_grpc_timeout) {
         headers_event = headers_event.grpc_timeout(value, unit);

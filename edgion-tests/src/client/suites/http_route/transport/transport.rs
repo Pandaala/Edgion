@@ -280,6 +280,25 @@ const SKIP_H2_NO_EXPECT_CONTINUE: &str =
 
 static SHAPES: &[ShapeDef] = &[
     ShapeDef {
+        name: "authority_target_forwarding",
+        description: "The upstream observes the expected target, query and authority across four protocol combinations",
+        combos: &Combo::TRANSPORT,
+        skips: &[],
+        absent_kinds: &[],
+        asserted_kinds: kinds_head_only,
+        run: shape_fn!(shape_authority_target_forwarding),
+    },
+    ShapeDef {
+        name: "h1_authority_rejection_lifecycle",
+        description:
+            "Two valid requests reuse one HTTP/1 connection; duplicate Host and CONNECT are rejected before upstream",
+        combos: &Combo::DOWN_H1,
+        skips: &[],
+        absent_kinds: &[],
+        asserted_kinds: kinds_head_only,
+        run: shape_fn!(shape_h1_authority_rejection_lifecycle),
+    },
+    ShapeDef {
         name: "recorder_self_test",
         description: "The recorder reports the framing this combination is supposed to produce (runs first)",
         combos: &Combo::TRANSPORT,
@@ -468,7 +487,7 @@ static SHAPES: &[ShapeDef] = &[
 ///
 /// The runner rejects a completely empty selection, while this exact count also
 /// detects a non-empty matrix that silently loses only some combinations.
-const EXPECTED_TRANSPORT_CASES: usize = 74;
+const EXPECTED_TRANSPORT_CASES: usize = 80;
 
 // ===========================================================================
 // The case wrapper
@@ -949,6 +968,172 @@ async fn head_for(probe: &TransportProbe, trace: &str, combo: Combo) -> Result<T
 // ===========================================================================
 // Shapes — upstream side
 // ===========================================================================
+
+async fn shape_authority_target_forwarding(
+    ctx: TestContext,
+    combo: Combo,
+    probe: Arc<TransportProbe>,
+) -> Result<String, String> {
+    let trace = probe.trace_id().to_string();
+    let origin_target = "/%61uthority-check?scope=read";
+    let normalized_target = "/authority-check?scope=read";
+    let client_target = if combo.down == Proto::H1 {
+        format!("http://{}{origin_target}", combo.host())
+    } else {
+        origin_target.to_string()
+    };
+    let outcome = drive(
+        &ctx,
+        combo,
+        "GET",
+        &client_target,
+        &ctrl(&[
+            ("x-up-behavior", "echo"),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
+        ]),
+        BodyPlan::Bodyless,
+        Duration::from_secs(5),
+    )
+    .await?;
+    if outcome.status != Some(200) {
+        return Err(format!("valid authority request failed: {}", outcome.describe()));
+    }
+
+    let head = head_for(&probe, &trace, combo).await?;
+    let expected_target = if combo.down == Proto::H1 && combo.up == Proto::H1 {
+        format!("http://{}{normalized_target}", combo.host())
+    } else {
+        normalized_target.to_string()
+    };
+    if head.target.as_deref() != Some(expected_target.as_str()) {
+        return Err(format!(
+            "upstream target differs: expected {expected_target}, observed {:?}",
+            head.target
+        ));
+    }
+    let expected_authority = if combo.down == Proto::H2 {
+        format!("{}:{}", combo.host(), ctx.http_port)
+    } else {
+        combo.host().to_string()
+    };
+    if head.authority.as_deref() != Some(expected_authority.as_str()) {
+        return Err(format!(
+            "upstream authority differs: expected {expected_authority}, observed {:?}",
+            head.authority
+        ));
+    }
+    Ok(format!(
+        "upstream {} target={expected_target} authority={expected_authority}",
+        combo.up.tag()
+    ))
+}
+
+async fn shape_h1_authority_rejection_lifecycle(
+    ctx: TestContext,
+    combo: Combo,
+    probe: Arc<TransportProbe>,
+) -> Result<String, String> {
+    let valid_trace = probe.trace_id().to_string();
+    let mut conn = RawH1Conn::connect(&ctx.target_host, ctx.http_port).await?;
+    for _ in 0..2 {
+        conn.write_head(
+            "GET",
+            "/authority-reuse",
+            combo.host(),
+            &[
+                ("x-up-behavior", "echo"),
+                (
+                    "traceparent",
+                    &crate::access_log_client::traceparent_for_marker(&valid_trace),
+                ),
+            ],
+        )
+        .await?;
+        let response = conn.read_response_head(Duration::from_secs(5)).await?;
+        if response.status != 200 {
+            return Err(format!("valid reused request returned {}", response.status));
+        }
+        conn.read_body(&response, Duration::from_secs(5)).await?;
+    }
+    let snapshot = probe.snapshot_of(&valid_trace).await?;
+    if snapshot.count_matching(|event| event.is(KIND_REQ_HEADERS) && event.tagged(&valid_trace)) != 2 {
+        return Err("two valid requests did not reach the upstream on one downstream connection".to_string());
+    }
+
+    let bad_trace = format!("{valid_trace}-duplicate-host");
+    let bad_request = render_h1_head(
+        "GET",
+        "/authority-reuse",
+        combo.host(),
+        &[
+            ("Host", "other.example.com"),
+            (
+                "traceparent",
+                &crate::access_log_client::traceparent_for_marker(&bad_trace),
+            ),
+        ],
+    );
+    conn.write_raw(bad_request.as_bytes()).await?;
+    let rejected = conn.read_response_head(Duration::from_secs(5)).await?;
+    if rejected.status != 400 || !conn.wait_for_close(Duration::from_secs(2)).await? {
+        return Err(format!(
+            "duplicate Host did not return 400 and close the HTTP/1 connection: {rejected}"
+        ));
+    }
+    probe
+        .expect_none_for(
+            &bad_trace,
+            "duplicate Host upstream request",
+            Duration::from_millis(300),
+            |event| event.is(KIND_REQ_HEADERS) && event.tagged(&bad_trace),
+        )
+        .await?;
+    if probe
+        .snapshot_of(&bad_trace)
+        .await?
+        .count_matching(|event| event.is(KIND_REQ_HEADERS) && event.tagged(&bad_trace))
+        != 0
+    {
+        return Err("duplicate Host reached the upstream".to_string());
+    }
+
+    let connect_trace = format!("{valid_trace}-connect");
+    let mut connect = RawH1Conn::connect(&ctx.target_host, ctx.http_port).await?;
+    let connect_request = format!(
+        "CONNECT {}:443 HTTP/1.1\r\nHost: {}:443\r\ntraceparent: {}\r\n\r\n",
+        combo.host(),
+        combo.host(),
+        crate::access_log_client::traceparent_for_marker(&connect_trace)
+    );
+    connect.write_raw(connect_request.as_bytes()).await?;
+    let refused = connect.read_response_head(Duration::from_secs(5)).await?;
+    if refused.status != 405 {
+        return Err(format!(
+            "CONNECT admission changed: expected 405, got {}",
+            refused.status
+        ));
+    }
+    probe
+        .expect_none_for(
+            &connect_trace,
+            "CONNECT upstream request",
+            Duration::from_millis(300),
+            |event| event.is(KIND_REQ_HEADERS) && event.tagged(&connect_trace),
+        )
+        .await?;
+    if probe
+        .snapshot_of(&connect_trace)
+        .await?
+        .count_matching(|event| event.is(KIND_REQ_HEADERS) && event.tagged(&connect_trace))
+        != 0
+    {
+        return Err("refused CONNECT reached the upstream".to_string());
+    }
+    Ok(
+        "two valid requests reused one H1 connection; duplicate Host closed it and CONNECT remained disabled"
+            .to_string(),
+    )
+}
 
 async fn shape_recorder_self_test(
     ctx: TestContext,

@@ -6,7 +6,7 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-Every operator-facing typed `EdgionConfigData` payload, including
+Ordinary operator-facing typed `EdgionConfigData` payloads, including
 `RequestAccessUrlAllowList`, must remain deserializable when an otherwise valid
 document contains an unknown non-credential field. The shared schema walker
 reports the exact path; apply remains warn-not-block, while the read-only Admin
@@ -15,6 +15,13 @@ validate endpoint returns `ok: false` with `unknownFieldCheck: "performed"`.
 Credential and authentication sub-structures remain strict. In particular,
 `SecretObjectReference`, SecretMatch, and HMAC credential shapes keep their
 `deny_unknown_fields` boundary.
+
+This advisory rule excludes `ProxyProtocolTrust`, `WafRuleBundle`, and `WafPolicy`:
+their security-sensitive payloads reject unknown config fields. It also excludes
+unknown extension discriminators. An unsupported `spec.data.type` decodes into an
+invalid marker, reports `Accepted=False`, and replaces the old generation so typed
+consumer state is withdrawn. The historical resource-wide wording below applies
+only to ordinary data fields, not these stricter policy or type boundaries.
 
 ## Core rationale
 

@@ -184,11 +184,6 @@ spec:
                       type: boolean
                       description: "Allow loopback upstream addresses for this Gateway (default false)"
                       default: false
-                    rejectDuplicateHost:
-                      type: boolean
-                      description: "Reject HTTP/1.1 requests with more than one Host header (default true)"
-                      default: true
-
                 requestBody:
                   type: object
                   description: "GatewayClass-wide request-body buffering policy."

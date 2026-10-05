@@ -5,6 +5,7 @@ use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::edgion_config_data::EdgionConfigDataSpec;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -177,8 +178,62 @@ async fn waf_policy_dependency_requeues_before_plugin_and_type_switch_clears_edg
 
     let mut replacement = resource();
     replacement.metadata.name = Some("policy".into());
-    let _ = handler.parse(replacement, &ctx).await;
+    replacement.spec.data = edgion_resources::resources::edgion_config_data::ConfigEntry::Unsupported;
+    replacement.metadata.generation = Some(2);
+    let ProcessResult::Continue(mut unknown) = handler.parse(replacement, &ctx).await else {
+        panic!("unknown type must continue to replace stale state");
+    };
+    let errors = unknown.validate_pre_parse();
+    handler.update_status(&mut unknown, &ctx, &errors);
+    let accepted = unknown
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|c| c.type_ == "Accepted")
+        .unwrap();
+    assert_eq!(accepted.status, "False");
+    assert_eq!(accepted.reason, "Invalid");
+    assert_eq!(accepted.observed_generation, Some(2));
     assert!(runtime.edgion_config_data_refs.get_refs("default/rules").is_empty());
+    assert!(matches!(
+        runtime
+            .edgion_config_data_store
+            .get(Some("default"), "policy")
+            .unwrap()
+            .spec
+            .data,
+        edgion_resources::resources::edgion_config_data::ConfigEntry::Unsupported
+    ));
+    handler.on_change(&unknown, &ctx).await;
+    let item = tokio::time::timeout(Duration::from_secs(1), plugin_processor.workqueue().dequeue())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.key, "default/plugin");
+    plugin_processor.workqueue().done(&item.key);
+    let mut recovered = policy;
+    recovered.metadata.generation = Some(3);
+    let ProcessResult::Continue(mut recovered) = handler.parse(recovered, &ctx).await else {
+        panic!("must recover")
+    };
+    let errors = recovered.validate_pre_parse();
+    handler.update_status(&mut recovered, &ctx, &errors);
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/rules"),
+        vec!["EdgionConfigData:default/policy"]
+    );
+    let accepted = recovered
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|c| c.type_ == "Accepted")
+        .unwrap();
+    assert_eq!(accepted.status, "True");
+    assert_eq!(accepted.observed_generation, Some(3));
 }
 
 #[test]
@@ -210,4 +265,28 @@ fn waf_policy_required_failure_sets_resolved_refs_without_partial_warning() {
         .conditions
         .iter()
         .all(|condition| condition.type_ != condition_types::PARTIALLY_INVALID));
+}
+
+#[test]
+fn unsupported_bundle_cannot_satisfy_strict_waf_policy_reference() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let mut target = resource();
+    target.metadata.name = Some("rules".into());
+    target.spec.data = edgion_resources::resources::edgion_config_data::ConfigEntry::Unsupported;
+    runtime
+        .edgion_config_data_store
+        .update(HashMap::from([("default/rules".into(), target)]), &HashSet::new());
+    let mut policy = waf_policy();
+    EdgionConfigDataHandler::new().update_status(&mut policy, &ctx, &[]);
+    let refs = policy
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|c| c.type_ == "ResolvedRefs")
+        .unwrap();
+    assert_eq!(refs.status, "False");
+    assert!(refs.message.contains("has the wrong type"));
 }

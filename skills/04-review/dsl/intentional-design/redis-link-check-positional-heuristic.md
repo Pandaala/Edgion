@@ -6,14 +6,14 @@ knowledge_type: intentional-design
 
 # `check_redis_link_names` Positional Heuristic — FIXED (fail-open), PIN-IN-PLACE
 
-**Status**: Resolved (plugins-http-dsl-F015, 2026-05-26) — see `check_redis_link_names` + `is_single_push_op` in `edgion-dsl/src/script.rs`.
-**Tests**: `edgion-dsl/tests/unit/script_test.rs::check_accepts_declared_link_with_multi_instruction_sibling_arg` (regression for the false-positive 500) and `check_fails_open_when_layout_is_ambiguous` (documents fail-open); `check_rejects_unknown_redis_link` still locks the all-literal reject path.
+**Status**: The fail-open policy from plugins-http-dsl-F015 (2026-05-26) remains; the original single-push proof has since been narrowed for control-flow entry. See `check_redis_link_names`, `is_single_push_op`, and `has_jump_into_window` in `edgion-dsl/src/script.rs`.
+**Tests**: `edgion-dsl/tests/unit/script_test.rs` covers multi-instruction arguments, valid serialized bytecode with forward-jump and loop-back ingress, a direct-check conditional-jump case, and a provable unknown literal.
 
 ## Conclusion
 
-The compile-time redis link-name check is a **fail-open** bytecode heuristic. It guesses the link-name argument position as `i - argc` (the deepest push before a `redis.* CallBuiltin` at index `i`), but only enforces the `linkSysRefs` membership check when the layout is **provably unambiguous** — i.e. every one of the `argc` opcodes in `[i-argc, i)` is a zero-input single-value push (`is_single_push_op`: `LoadConst`, `LoadNil`, `LoadTrue`, `LoadFalse`, `GetLocal`). Otherwise it skips the check and lets the runtime `ok=false` path handle an undeclared link. A positional miss must **never** reject a valid config.
+The compile-time redis link-name check is a **fail-open** bytecode heuristic. It guesses the link-name argument position as `i - argc` (the deepest push before a `redis.* CallBuiltin` at index `i`). It enforces `linkSysRefs` membership only if every opcode in `[i-argc, i)` is a zero-input single-value push **and** no `Jump`, `JumpIfFalse`, or `LoopBack` can target `(i-argc, i]`. A jump to the window's first opcode is safe because that push still executes. Any ambiguous layout, control-flow entry, or invalid jump target skips the check; the runtime `ok=false` path remains responsible for undeclared links. A positional miss must never reject a valid config.
 
-Findings of the form "`i - argc` can land mid-expression and wrongly reject a valid plugin / fail-close the route with 500" describe the **pre-fix** behavior and are not accepted against current code — verify the `is_single_push_op` guard is present before re-reporting.
+The original mid-expression false positive was fixed by the single-push guard. That guard alone was insufficient for serialized bytecode with jumps. Verify both the window and control-flow guards before treating a new positional false positive as historical.
 
 ## Core Rationale
 
@@ -32,9 +32,11 @@ CallBuiltin(RedisGet, 2)    pos 3 = i, argc = 2
 
 `i - argc = 1` → `LoadConst("X-Key")`, which is not in `linkSysRefs`, so the old code returned `Err` even though `"cache"` is correctly declared.
 
-**2. Why the "all-single-push window" guard is sound, not another heuristic**
+**2. Why the single-push window also needs a control-flow guard**
 
-The guard is provably equivalent to "every argument is a single instruction": just before the call the stack holds exactly `argc` argument values. If the `argc` preceding opcodes are *all* zero-input single pushes, they add exactly `argc` values, so each argument maps 1:1 to one opcode and `i-argc` is provably `arg[0]`. Conversely, if any argument spans multiple instructions, its final (stack-consuming) opcode lands inside the `[i-argc, i)` window, so the window is *not* all single pushes and the check skips. No false positive survives.
+The original conclusion that an all-single-push window *by itself* proves the first argument was too strong. A validated bytecode program may jump past the apparent first push and enter at a later push in the window. For example, `LoadConst("cache"), Jump(1), LoadConst("typo"), LoadConst("key"), CallBuiltin(RedisGet, 2)` reaches the call with `"cache"` and `"key"`, although the positional scan sees `"typo"` at `i-argc`. The validator checks jump structure and stack heights, but accepts this control flow. Rejecting `"typo"` would fail-close a valid plugin.
+
+When every opcode in the window is a single push and no jump targets its interior or the call, sequential execution from the window's start supplies the `argc` topmost arguments in order. A target at the window start still executes every push. A target after it may skip a push, so the static check must abstain. The scan also abstains for invalid jump targets when called directly on unvalidated bytecode; the normal `resolve_script` path rejects those targets in `Validator` first. This remains a bounded best-effort check, not whole-program value provenance analysis.
 
 **3. Why a bytecode-level fix, not the issue's "move to the AST/compiler layer"**
 
@@ -45,12 +47,14 @@ The guard is provably equivalent to "every argument is a single instruction": ju
 - **"Just drop the `return Err` path entirely (fail-open everything)"** (the issue's interim suggestion): unnecessarily guts the check for the common all-literal case it was designed for (typo detection). The window guard keeps the check active when it is provably correct.
 - **"Move the check to the AST/compiler layer"**: does not cover the direct-`bytecode` input path (see Rationale 3). Allowed only as an *additional* layer, never as a replacement for the bytecode-level guard.
 - **"Add the opcode to a denylist of stack-consuming ops"**: the implementation is an explicit *allowlist* on purpose — unknown / future opcodes must default to "not a single push" so a new opcode can only make the check *more* conservative, never re-introduce a false positive.
+- **"Rely on the single-push window alone"**: serialized bytecode can branch into its interior while passing the validator's stack-height checks.
 
 ## Re-evaluation Triggers
 
 Re-open only if:
 
 - A new zero-input single-push `OpCode` variant is added and `is_single_push_op` is not updated (the check silently skips cases it could enforce — a correctness-of-coverage regression, never a false positive).
+- A new control-flow opcode or jump-target convention is added; update the ingress check before relying on the positional proof.
 - The redis link name is ever made a runtime-dynamic (non-literal) value — then static checking is impossible by construction and the runtime `ok=false` path is the only guard.
 
 ## Reference Cases

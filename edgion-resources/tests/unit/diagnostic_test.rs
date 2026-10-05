@@ -39,7 +39,6 @@ fn diagnostic_codes_serialize_as_stable_strings() {
             EdgionErrorCode::PathInvalidPercentEncoding,
             "PathInvalidPercentEncoding",
         ),
-        (EdgionErrorCode::DuplicateHostHeader, "DuplicateHostHeader"),
         (EdgionErrorCode::RouteNotFound, "RouteNotFound"),
         (EdgionErrorCode::SniHostMismatch, "SniHostMismatch"),
         (EdgionErrorCode::ClientClosed, "ClientClosed"),

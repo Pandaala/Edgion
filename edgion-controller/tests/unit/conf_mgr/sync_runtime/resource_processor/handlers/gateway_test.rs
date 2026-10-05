@@ -2198,3 +2198,37 @@ fn validate_plugin_ref_fallback_to_gateway_ns() {
     assert!(result.is_some());
     assert!(result.unwrap().contains("my-ns/my-plugin"));
 }
+
+#[test]
+fn proxy_protocol_unsupported_extension_invalidates_previous_trust_and_recovers() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = proxy_protocol_test_context(runtime.clone());
+    let gateway = make_proxy_protocol_gateway(r#"{"source":"resourceRef","resourceRef":{"name":"policy"}}"#);
+    let resource_ref = ResourceRef::new(ResourceKind::Gateway, Some("default".into()), "gateway".into());
+    for (kind, expected_valid) in [
+        ("ProxyProtocolTrust", true),
+        ("FutureTrust", false),
+        ("ProxyProtocolTrust", true),
+    ] {
+        let target: EdgionConfigData = serde_json::from_value(serde_json::json!({
+            "apiVersion":"edgion.io/v1","kind":"EdgionConfigData","metadata":{"namespace":"default","name":"policy"},
+            "spec":{"data":{"type":kind,"config":{"mode":"required"}}}
+        }))
+        .unwrap();
+        runtime
+            .edgion_config_data_store
+            .update(HashMap::from([("default/policy".into(), target)]), &HashSet::new());
+        let resolved = resolve_inbound_proxy_protocol(&gateway, &ctx, &resource_ref);
+        if expected_valid {
+            assert!(matches!(resolved, ResolvedInboundProxyProtocol::Ready { .. }));
+        } else {
+            assert!(matches!(
+                resolved,
+                ResolvedInboundProxyProtocol::Invalid {
+                    code: ProxyProtocolConfigErrorCode::ReferenceWrongType,
+                    ..
+                }
+            ));
+        }
+    }
+}

@@ -177,12 +177,12 @@ fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str
     }
     let input = ws(&input[2..]);
 
-    // Check for "range(start, end)"
-    if input.starts_with("range(") || input.starts_with("range (") {
-        let input = input
-            .strip_prefix("range(")
-            .or_else(|| input.strip_prefix("range ("))
-            .expect("guard ensures one of these matches");
+    // Check for "range(start, end)" after any accepted whitespace or comments.
+    if let Some(input) = input
+        .strip_prefix("range")
+        .map(ws)
+        .and_then(|rest| rest.strip_prefix('('))
+    {
         let input = ws(input);
         let (input, start) = expr::parse_expr(input, ctx)?;
         let input = ws(input);

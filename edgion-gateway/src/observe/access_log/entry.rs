@@ -154,9 +154,9 @@ pub struct AccessLogEntry<'a> {
 
     pub request_info: &'a RequestInfo,
 
-    /// Entry-time raw URI (raw path + raw query). Populated only when
-    /// `access_log_options.includeRawUri: true`. Carries the exact URI
-    /// the client sent, before any path normalization.
+    /// Entry-time path and query. Populated only when
+    /// `access_log_options.includeRawUri: true`. Excludes the scheme and
+    /// authority of an HTTP/1 absolute-form request target.
     #[serde(
         skip_serializing_if = "Option::is_none",
         serialize_with = "edgion_resources::sensitive::masked_opt::serialize"

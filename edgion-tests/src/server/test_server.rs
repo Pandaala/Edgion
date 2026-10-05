@@ -2840,11 +2840,12 @@ async fn catch_all_handler(
     req: AxumRequest<Body>,
 ) -> impl IntoResponse {
     let mut resp = format!(
-        "Server: {}\nClient: {}\nMethod: {}\nPath: {}\n",
+        "Server: {}\nClient: {}\nMethod: {}\nPath: {}\nQuery: {}\n",
         server_addr,
         addr,
         req.method(),
-        req.uri().path()
+        req.uri().path(),
+        req.uri().query().unwrap_or_default()
     );
     // Echo headers in the same format as `echo_handler` so plugin tests that
     // rewrite the URI to an unmapped path can still verify header rewrites.

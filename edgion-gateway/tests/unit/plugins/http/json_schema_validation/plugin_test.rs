@@ -213,10 +213,7 @@ async fn conditionally_skipped_validator_does_not_claim_request_slot() {
     );
     let active = plugin(json!({"type": "object"}));
     let mut session = session(br#"{"name":"Ada"}"#, "application/json");
-    session
-        .expect_key_get()
-        .with(mockall::predicate::eq(KeyGet::Method))
-        .return_const(Some("GET".to_string()));
+    session.expect_get_method().return_const("GET".to_string());
 
     let mut skipped_log = PluginLog::new(skipped.name());
     assert_eq!(

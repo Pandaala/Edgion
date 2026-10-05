@@ -32,6 +32,8 @@ async fn all_serve_shutdown_during_bootstrap_or_backoff_stops_without_restart() 
             }),
             "default",
         );
+        // Version probes run through the writer; share the injected transport.
+        center.writer = KubernetesStorage::new_unconnected_for_test().with_client_for_test(client.clone());
         let leader = LeaderElection::new(
             client.clone(),
             InternalLeaderElectionConfig {

@@ -32,6 +32,17 @@ The following limits are tracked independently on each request and do not interf
 | HTTP request Body | `httpMaxRequestBodyBytes` | 1 MiB | 1 byte | 32 MiB | Maximum opaque request Body sent by one outbound call |
 | HTTP response body | `httpMaxResponseBodyBytes` | 1 MiB | 1 byte | 1 MiB | Maximum response bytes retained by one outbound call |
 
+The VM also has fixed, non-configurable Value limits: at most 64 nested Map
+levels, 32,768 total Map entries plus List elements in one Value, and 262,144
+bytes of Map keys in one Value. Each execution has a 16 MiB equivalent work
+budget for Value shape inspection, cloning, and equality. The work account
+charges 32 units per container item and one unit per visited or copied Map-key byte or
+compared string byte. These limits are separate from the configurable
+per-Map `maxMapSize`, per-List `maxListLen`, and operand `maxStackDepth`.
+The VM checks values when they enter its stack and checks VM-built Maps before
+construction. A host builtin may have already allocated its result before
+that admission check; these limits do not bound producer-side aggregation.
+
 ### Limit Details
 
 **maxSteps (Maximum Execution Steps)**
@@ -195,6 +206,10 @@ boundary described below.
 | `LoopLimitExceeded` | Loop iteration limit exceeded | A single loop has too many iterations |
 | `CallLimitExceeded` | Function call limit exceeded | Too many built-in function calls |
 | `StackOverflow` | Stack depth limit exceeded | Expression nesting is too deep |
+| `MapTooDeep` | A Value exceeds 64 nested Map levels | Recursive Map nesting is too deep |
+| `ValueTooManyItems` | A Value exceeds 32,768 total Map entries and List elements | Aggregate container growth is too large |
+| `ValueKeysTooLong` | A Value exceeds 262,144 Map-key bytes | Aggregate Map keys are too large |
+| `ValueWorkLimitExceeded` | Value work exceeds the fixed 16 MiB equivalent budget | Repeated traversal, cloning, or comparison is too expensive |
 | `StringTooLong` | String length limit exceeded | Concatenation result exceeds `maxStringLen` |
 | `RegexError` | Regex failure | Regex parsing or execution failed |
 | `ApiError` | API call or argument validation failed | Includes PluginSession failures and invalid URL/method/headers or a direct IP literal rejected by the `http.call()` SSRF precheck; a DNS-resolved address rejected at dial time returns `status = 0` |

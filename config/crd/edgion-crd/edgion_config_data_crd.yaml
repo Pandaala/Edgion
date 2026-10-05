@@ -42,16 +42,6 @@ spec:
                     type:
                       type: string
                       description: "Variant tag. Determines the shape of `config`."
-                      enum:
-                        - KeyList
-                        - IpList
-                        - RequestAccessUrlAllowList
-                        - ProxyProtocolTrust
-                        - Selector
-                        - RegionRouteOverride
-                        - WafRuleBundle
-                        - WafPolicy
-                        - Misc
                     config:
                       type: object
                       description: |

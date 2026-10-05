@@ -212,6 +212,7 @@ impl EdgionConfigDataStore {
 
         for (key, ed) in raw {
             match &ed.spec.data {
+                ConfigEntry::Unsupported => {}
                 ConfigEntry::KeyList(_) => {
                     // No typed index — no request-time consumer.
                 }
@@ -343,7 +344,8 @@ impl EdgionConfigDataStore {
             | ConfigEntry::Misc(_)
             | ConfigEntry::ProxyProtocolTrust(_)
             | ConfigEntry::WafRuleBundle(_)
-            | ConfigEntry::WafPolicy(_) => {}
+            | ConfigEntry::WafPolicy(_)
+            | ConfigEntry::Unsupported => {}
         }
     }
 

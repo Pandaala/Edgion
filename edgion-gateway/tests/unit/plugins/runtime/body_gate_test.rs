@@ -1,6 +1,7 @@
 //! Unit tests for `body_gate.rs` (see `super`).
 use super::*;
 use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+use crate::plugins::runtime::traits::test_helpers::setup_condition_input_mocks;
 use crate::EdgionHttpContext;
 use bytes::Bytes;
 use edgion_resources::common::KeyGet;
@@ -217,10 +218,7 @@ async fn secondary_skip_runs_inner_without_buffering() {
     let gate = BodyGatedRequestFilter::new(Box::new(inner), req);
 
     let mut session = MockPluginSession::new();
-    session.expect_key_get().returning(|key| match key {
-        KeyGet::Method => Some("GET".to_string()),
-        _ => None,
-    });
+    setup_condition_input_mocks(&mut session, &[(KeyGet::Method, "GET")]);
     // read_request_body must NOT be called; no expectation set.
 
     let mut log = PluginLog::new("test");
@@ -257,7 +255,7 @@ async fn secondary_regex_condition_is_compiled_and_evaluated() {
     let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), req);
 
     let mut session = base_session();
-    session.expect_key_get().return_const(Some("POST".to_string()));
+    setup_condition_input_mocks(&mut session, &[(KeyGet::Method, "POST")]);
     session
         .expect_read_request_body()
         .returning(|_| Err(BodyReadError::Unimplemented));

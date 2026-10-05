@@ -164,3 +164,34 @@ fn control_plane_service_over_controller_default() {
         other => panic!("expected service to win control-plane, got {other:?}"),
     }
 }
+
+#[test]
+fn unsupported_linksys_does_not_reuse_httpdns_and_falls_back_to_system() {
+    use edgion_resources::resources::link_sys::SystemConfig;
+    let reference = Some(ResolverCandidate::HttpDnsRef(LinkSysKey {
+        namespace: "dns".into(),
+        name: "resolver".into(),
+    }));
+    let fallback = Some(ResolverCandidate::Servers(vec!["9.9.9.9".into()]));
+    for config in [
+        SystemConfig::HttpDns(dummy_httpdns()),
+        SystemConfig::Unsupported,
+        SystemConfig::HttpDns(dummy_httpdns()),
+    ] {
+        // This is the same typed projection used by Gateway's raw LinkSys lookup.
+        let spec = resolve_effective_spec(&[reference.clone(), fallback.clone()], |_| {
+            config.as_http_dns().cloned()
+        });
+        match config {
+            SystemConfig::Unsupported => {
+                assert!(matches!(spec, ResolverSpec::System))
+            }
+            SystemConfig::HttpDns(_) => assert!(matches!(spec, ResolverSpec::HttpDns(_))),
+            _ => unreachable!(),
+        }
+    }
+    assert!(matches!(
+        resolve_effective_spec(&[reference], |_| SystemConfig::Unsupported.as_http_dns().cloned()),
+        ResolverSpec::System
+    ));
+}

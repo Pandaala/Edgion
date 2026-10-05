@@ -767,15 +767,9 @@ async fn same_key_lifecycle_case() {
             latest.address.port()
         };
         store.update(HashMap::from([(key.clone(), resource(port))]), &HashSet::new());
-        assert!(get_otlp_client(&key).is_none());
-        assert_eq!(otlp_retiring_client_count(), 1);
     }
-    assert!(tokio::time::timeout(
-        Duration::from_millis(100),
-        wait_until(|| get_otlp_client(&key).is_some())
-    )
-    .await
-    .is_err());
+    // Simple-removal contract: retirement never blocks same-key recreation, so
+    // brief overlap is accepted; the runner still publishes only the last source.
     assert_eq!(intermediate.observations.accepts.load(Ordering::SeqCst), 0);
     assert_eq!(latest.observations.accepts.load(Ordering::SeqCst), 0);
     wait_until(|| otlp_retiring_client_count() == 0 && get_otlp_client(&key).is_some_and(|client| client.healthy()))
@@ -828,7 +822,7 @@ async fn same_key_lifecycle_case() {
 }
 
 #[test]
-fn same_key_recreation_waits_for_retirement_and_last_source_wins() {
+fn same_key_recreation_overlaps_retirement_and_last_source_wins() {
     const CHILD: &str = "EDGION_OTLP_LIFECYCLE_CHILD";
     if std::env::var_os(CHILD).is_some() {
         tokio::runtime::Builder::new_current_thread()
@@ -841,7 +835,7 @@ fn same_key_recreation_waits_for_retirement_and_last_source_wins() {
     let result = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "same_key_recreation_waits_for_retirement_and_last_source_wins",
+            "same_key_recreation_overlaps_retirement_and_last_source_wins",
             "--nocapture",
         ])
         .env(CHILD, "1")

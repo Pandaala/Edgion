@@ -1,0 +1,9 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: linksys-provider-replacement
+  namespace: edgion-test
+spec:
+  type: futureConnector
+  config:
+    discarded: true

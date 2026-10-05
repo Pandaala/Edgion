@@ -32,10 +32,7 @@ pub enum EdgionStreamPlugin {
     /// only `DirectPeerIp`-sourced rules are legal here (no XFF at L4).
     GeoIpLocation(GeoIpLocationConfig),
     /// Non-executable marker; source validation rejects even disabled entries.
-    #[serde(
-        other,
-        deserialize_with = "crate::resources::common::discard_unsupported_plugin_config"
-    )]
+    #[serde(other, deserialize_with = "crate::resources::common::discard_unsupported_config")]
     #[schemars(skip)]
     Unsupported,
 }

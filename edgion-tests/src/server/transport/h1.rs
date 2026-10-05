@@ -150,6 +150,8 @@ async fn handle_conn(tcp: TcpStream, conn: u32) -> Result<(), String> {
                 .transfer_encoding(head.transfer_encoding().map(|v| v.to_string()))
                 .method(&head.method)
                 .path(&head.path)
+                .target(&head.path)
+                .authority(head.get("host").unwrap_or(""))
                 .behavior(script.behavior.as_str()),
         );
 

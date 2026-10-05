@@ -210,7 +210,7 @@ Nested one level deep under the top-level `request_info` object (see [Top-level 
 | `grpc_method` | String | gRPC method name (gRPC requests only) |
 | `sni` | String | TLS Server Name Indication (TLS connections only) |
 | `tls_id` | String | TLS connection/session identifier (TLS connections only) |
-| `request_uri` | String | Raw client-entry URI; emitted **only** when `access_log_options.includeRawUri: true` |
+| `request_uri` | String | Client-entry path and query before normalization or rewrites; emitted **only** when `access_log_options.includeRawUri: true` |
 
 ### `match_info` fields
 
@@ -527,7 +527,7 @@ Both fields declared by the `audit-fields` resource [above](#it-is-a-declaration
 
 ### Raw request URI
 
-By default the log records the normalized `path`. To also capture the exact URI as the client sent it (before normalization / rewrites), enable `includeRawUri` under the top-level `access_log_options` section:
+By default the log records the normalized `path`. To also capture the client-entry path and query before normalization or rewrites, enable `includeRawUri` under the top-level `access_log_options` section. For HTTP/1 absolute-form, this field omits the scheme and authority:
 
 ```yaml
 access_log:

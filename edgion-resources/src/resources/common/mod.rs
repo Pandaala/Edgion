@@ -193,10 +193,21 @@ pub struct TcpKeepaliveConfig {
     pub count: usize,
 }
 
-/// Discard opaque config for a non-executable unsupported plugin sentinel.
+/// Discard opaque config for a non-executable unsupported extension sentinel.
 /// Known variants still deserialize their concrete configuration normally.
-pub(crate) fn discard_unsupported_plugin_config<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<(), D::Error> {
+pub(crate) fn discard_unsupported_config<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<(), D::Error> {
     <serde::de::IgnoredAny as serde::Deserialize>::deserialize(deserializer).map(|_| ())
 }
+
+/// Borrowed adjacent-tag envelope shared by resource extension serializers.
+/// Delegating the config keeps its normal redaction adapters and avoids a JSON copy.
+#[derive(serde::Serialize)]
+pub(crate) struct ExtensionEnvelope<'a, T: serde::Serialize + ?Sized> {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub config: &'a T,
+}
+
+/// Required config envelope for unsupported extensions, with no retained payload.
+#[derive(serde::Serialize)]
+pub(crate) struct EmptyExtensionConfig {}

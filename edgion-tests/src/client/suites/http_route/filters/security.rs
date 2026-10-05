@@ -19,6 +19,107 @@ use tokio::net::TcpStream;
 pub struct HttpSecurityTestSuite;
 
 impl HttpSecurityTestSuite {
+    fn test_malformed_request_line_delimiters() -> TestCase {
+        TestCase::new(
+            "malformed_request_line_delimiters",
+            "Invalid request-line separators are rejected before HTTP routing",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let addr = ctx.http_url().split("://").nth(1).unwrap_or_default().to_string();
+                    let host = ctx.http_host.unwrap_or_else(|| "test.example.com".to_string());
+                    for request_line in ["GET\t/echo HTTP/1.1", "GET /echo\tHTTP/1.1", "GET  /echo HTTP/1.1"] {
+                        let mut stream = match TcpStream::connect(&addr).await {
+                            Ok(stream) => stream,
+                            Err(error) => {
+                                return TestResult::failed(start.elapsed(), format!("connect failed: {error}"))
+                            }
+                        };
+                        let request = format!("{request_line}\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+                        if let Err(error) = stream.write_all(request.as_bytes()).await {
+                            return TestResult::failed(start.elapsed(), format!("write failed: {error}"));
+                        }
+                        let mut wire = Vec::new();
+                        if let Err(error) = stream.read_to_end(&mut wire).await {
+                            return TestResult::failed(start.elapsed(), format!("read failed: {error}"));
+                        }
+                        let response = String::from_utf8_lossy(&wire);
+                        if !response.starts_with("HTTP/1.1 400") {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("{request_line:?}: expected 400, got {:?}", response.lines().next()),
+                            );
+                        }
+                    }
+                    TestResult::passed(start.elapsed())
+                })
+            },
+        )
+    }
+
+    fn test_absolute_form_authority() -> TestCase {
+        TestCase::new(
+            "absolute_form_authority",
+            "Absolute-form authority is checked before routing and the valid request reaches the origin",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let addr = ctx.http_url().split("://").nth(1).unwrap_or_default().to_string();
+                    let host = ctx.http_host.clone().unwrap_or_else(|| "test.example.com".to_string());
+                    let cases = [
+                        (format!("http://{host}/echo?scope=read"), host.clone(), 200),
+                        (format!("http://{host}:80/echo?scope=read"), format!("{host}:80"), 200),
+                        ("http://attacker.example/echo?scope=read".to_string(), host.clone(), 400),
+                        (format!("http://user@{host}/echo?scope=read"), host.clone(), 400),
+                        (
+                            "http://[::1]:8443/echo?scope=read".to_string(),
+                            "[::1]:8443".to_string(),
+                            404,
+                        ),
+                    ];
+                    for (target, authority, expected) in cases {
+                        let mut stream = match TcpStream::connect(&addr).await {
+                            Ok(stream) => stream,
+                            Err(error) => {
+                                return TestResult::failed(start.elapsed(), format!("connect failed: {error}"))
+                            }
+                        };
+                        let request =
+                            format!("GET {target} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
+                        if let Err(error) = stream.write_all(request.as_bytes()).await {
+                            return TestResult::failed(start.elapsed(), format!("write failed: {error}"));
+                        }
+                        let mut wire = Vec::new();
+                        if let Err(error) = stream.read_to_end(&mut wire).await {
+                            return TestResult::failed(start.elapsed(), format!("read failed: {error}"));
+                        }
+                        let response = String::from_utf8_lossy(&wire);
+                        let status = response
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .and_then(|code| code.parse::<u16>().ok());
+                        if status != Some(expected) {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("{target}: expected {expected}, got {:?}", response.lines().next()),
+                            );
+                        }
+                        if expected == 200
+                            && (!response.contains("Path: /echo") || !response.contains(&format!("host: {}", host)))
+                        {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("origin did not observe expected path and Host for {target}"),
+                            );
+                        }
+                    }
+                    TestResult::passed(start.elapsed())
+                })
+            },
+        )
+    }
+
     fn test_missing_hostname() -> TestCase {
         TestCase::new(
             "missing_hostname",
@@ -366,6 +467,8 @@ impl TestSuite for HttpSecurityTestSuite {
             Self::test_empty_hostname(),
             Self::test_duplicate_host_headers(),
             Self::test_duplicate_host_headers_mixed_case(),
+            Self::test_absolute_form_authority(),
+            Self::test_malformed_request_line_delimiters(),
             Self::test_valid_hostname(),
             Self::test_hostname_with_port(),
         ]

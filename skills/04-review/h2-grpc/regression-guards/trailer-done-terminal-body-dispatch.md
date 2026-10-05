@@ -8,9 +8,41 @@ knowledge_type: regression-guards
 
 ## Recorded conclusion
 
-Fixed: `upstream_response_body_filter` now receives `end_of_stream = true` exactly once for every normal termination, including an H2 response ending in trailers and one ending in a bare `Done` — previously neither reached the body filter, so a withholding processor (Anthropic `process_non_streaming`, Guardrail `RawWindow`) silently dropped the whole response. A per-response `TerminalBodyDispatch` latch picks the single dispatching task; released bytes are emitted and cache-admitted ahead of the terminating task. `Failed` claims the latch without dispatching. Adjacent P4 observation gap in the DOWNSTREAM `response_body_filter` tracked separately in `tasks/todo/downstream-response-body-filter-trailer-eos-gap.md` — that hook is documented observation-only, so byte-loss re-reports against it are not defects.
+Fixed: `upstream_response_body_filter` now receives `end_of_stream = true` exactly once for every normal termination, including an H2 response ending in trailers and one ending in a bare `Done` — previously neither reached the body filter, so a withholding processor (Anthropic `process_non_streaming`, Guardrail `RawWindow`) silently dropped the whole response. A per-response `TerminalBodyDispatch` latch picks the single dispatching task; released bytes are emitted and cache-admitted ahead of the terminating task. `Failed` claims the latch without dispatching. The adjacent P4 downstream observation fix and its contract boundary are recorded below.
 
 ## Evidence boundary
+
+### Downstream observation follow-up
+
+`downstream-response-body-filter-trailer-eos-gap` is implemented locally in the
+sibling Pingora worktree based on `0b0d8bba` after explicit user authorization
+on 2026-09-25. The canonical
+fork record at `edgion-changes/review/h2-grpc/trailer-done-terminal-body-dispatch.md`
+(`Downstream terminal observation` section)
+owns the separate downstream latch, empty terminal callback, and rejection of
+nonempty synthetic output. This task corrects an observation gap; no production
+byte-loss impact was established. Edgion has no production override of this downstream hook, and its
+lockfile still selects `7c24c0dd`; the local fix has not been adopted or published.
+
+After independent review and targeted verification, the user explicitly
+requested removal of the original task despite the unrelated baseline test
+failures. Three default-retry unit tests still fail on the clean Pingora
+baseline with the same dependency lockfile and remain tracked in the
+separate baseline investigation at
+`edgion-changes/pending-issues/default-retry-policy-test-baseline.md`.
+Task removal does not claim a green full-library suite or dependency adoption.
+Do not interpret the older upstream/compression closure evidence below as a
+successful check of this local downstream change.
+
+The hook permits observation and representation-preserving transformations.
+Buffering by itself does not imply a total-length change, so the original
+blanket dismissal of withheld-byte reports was too broad. The newly synthesized
+Trailer/Done callback's no-output rule is an explicitly approved boundary;
+deferred output support would require a separate design. Evaluate any future
+buffering report against its actual framing and lifecycle instead of treating
+the observation-only scope of this fix as the entire hook contract.
+
+### Historical evidence
 
 This decision was migrated from an earlier review record. The historical source paths,
 verification claims, and assumptions describe that resolution, not a new code audit.

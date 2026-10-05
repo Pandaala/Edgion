@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 pub mod auth_realm;
 pub mod body_requirement;
 pub mod conditions;
-pub mod custom_plugins;
 pub mod dye;
 pub mod edgion_plugin;
 pub mod entry;

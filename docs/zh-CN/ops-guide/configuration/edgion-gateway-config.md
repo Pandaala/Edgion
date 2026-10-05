@@ -65,7 +65,6 @@ spec:
     requireSniHostMatch: true
     fallbackSni: ""
     tlsProxyLogRecord: true
-    rejectDuplicateHost: true
 
   requestBody:
     enabled: true
@@ -207,7 +206,8 @@ Controller preparse 只告警、不阻止发布，因此 Gateway 侧做了同样
 | `fallbackSni` | `String` | — | 客户端未提供 SNI 时使用的备用主机名 |
 | `tlsProxyLogRecord` | `Boolean` | `true` | 是否记录 TLS 代理连接日志 |
 | `allowLoopbackUpstream` | `Boolean` | `false` | 显式放行该 GatewayClass 的 loopback upstream；link-local / metadata 仍然拒绝 |
-| `rejectDuplicateHost` | `Boolean` | `true` | 拒绝同一 HTTP/1.1 请求里出现多于一个 `Host:` 头部行，返回 `400 Bad Request`(RFC 9110 §7.2,Host smuggling 防御)。仅在需要兼容会发重复 `Host` 行的旧式中间件时关闭 |
+
+Pingora 在协议解析阶段拒绝包含多个 `Host` 头部字段的 HTTP/1.1 请求；网关没有用于关闭此校验的配置项。
 
 省略整个 `securityProtect` 块时，不启用 XFF 字节上限；配置该块但省略
 `xForwardedForLimit` 时，该字段默认为 200。

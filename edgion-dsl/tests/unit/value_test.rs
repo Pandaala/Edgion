@@ -84,3 +84,118 @@ fn body_rejects_implicit_string_coercion() {
     assert_eq!(err.got(), "Body");
     assert!(body.try_as_str().is_err());
 }
+
+fn map_chain(depth: usize) -> Value {
+    let mut value = Value::Nil;
+    for _ in 0..depth {
+        let mut map = IndexMap::new();
+        map.insert("x".to_string(), value);
+        value = Value::Map(Box::new(map));
+    }
+    value
+}
+
+#[test]
+fn value_shape_enforces_map_depth_boundary() {
+    let mut work = ValueWorkBudget::default();
+    assert!(map_chain(MAX_VALUE_MAP_DEPTH).inspect_shape(&mut work).is_ok());
+    let mut work = ValueWorkBudget::default();
+    assert!(matches!(
+        map_chain(MAX_VALUE_MAP_DEPTH + 1).inspect_shape(&mut work),
+        Err(RuntimeError::MapTooDeep {
+            limit: MAX_VALUE_MAP_DEPTH
+        })
+    ));
+}
+
+#[test]
+fn value_shape_counts_all_container_items_and_key_bytes() {
+    let items = Value::List(vec![Arc::from("x"); MAX_VALUE_CONTAINER_ITEMS]);
+    assert!(items.inspect_shape(&mut ValueWorkBudget::default()).is_ok());
+    let items = Value::List(vec![Arc::from("x"); MAX_VALUE_CONTAINER_ITEMS + 1]);
+    assert!(matches!(
+        items.inspect_shape(&mut ValueWorkBudget::default()),
+        Err(RuntimeError::ValueTooManyItems { .. })
+    ));
+
+    let mut map = IndexMap::new();
+    map.insert("k".repeat(MAX_VALUE_MAP_KEY_BYTES), Value::Nil);
+    assert!(Value::Map(Box::new(map))
+        .inspect_shape(&mut ValueWorkBudget::default())
+        .is_ok());
+    let mut map = IndexMap::new();
+    map.insert("k".repeat(MAX_VALUE_MAP_KEY_BYTES + 1), Value::Nil);
+    assert!(matches!(
+        Value::Map(Box::new(map)).inspect_shape(&mut ValueWorkBudget::default()),
+        Err(RuntimeError::ValueKeysTooLong { .. })
+    ));
+}
+
+#[test]
+fn value_shape_counts_branching_maps_and_charges_each_walk() {
+    let mut value = Value::Map(Box::new(IndexMap::new()));
+    for _ in 0..14 {
+        let mut map = IndexMap::new();
+        map.insert("a".to_string(), value.clone());
+        map.insert("b".to_string(), value);
+        value = Value::Map(Box::new(map));
+    }
+    assert!(value.inspect_shape(&mut ValueWorkBudget::default()).is_ok());
+    let mut map = IndexMap::new();
+    map.insert("a".to_string(), value.clone());
+    map.insert("b".to_string(), value);
+    assert!(matches!(
+        Value::Map(Box::new(map)).inspect_shape(&mut ValueWorkBudget::default()),
+        Err(RuntimeError::ValueTooManyItems { .. })
+    ));
+
+    let wide = Value::List(vec![Arc::from("x"); 1024]);
+    let mut work = ValueWorkBudget::default();
+    loop {
+        match wide.inspect_shape(&mut work) {
+            Ok(shape) => {
+                if let Err(error) = work.charge_clone(shape) {
+                    assert!(matches!(error, RuntimeError::ValueWorkLimitExceeded { .. }));
+                    break;
+                }
+            }
+            Err(error) => {
+                assert!(matches!(error, RuntimeError::ValueWorkLimitExceeded { .. }));
+                break;
+            }
+        }
+    }
+}
+
+#[test]
+fn implicit_string_len_matches_owned_coercion_for_map_keys() {
+    let values = [
+        Value::List(vec![]),
+        Value::List(vec![Arc::from("x"); 1000]),
+        Value::Map(Box::new(IndexMap::new())),
+        Value::Int(i64::MIN),
+        Value::Bool(false),
+        Value::Nil,
+    ];
+    for value in values {
+        let expected = value.implicit_string_len().expect("value should coerce");
+        let actual = value.try_into_string().expect("value should coerce");
+        assert_eq!(expected, actual.len());
+    }
+    assert_eq!(Value::List(vec![]).implicit_string_len().unwrap(), 6);
+
+    let mut shape = ValueShape::map_root();
+    shape
+        .add_map_entry(MAX_VALUE_MAP_KEY_BYTES - 6, ValueShape::default())
+        .unwrap();
+    shape
+        .add_map_entry(
+            Value::List(vec![]).implicit_string_len().unwrap(),
+            ValueShape::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        shape.add_map_entry(1, ValueShape::default()),
+        Err(RuntimeError::ValueKeysTooLong { .. })
+    ));
+}

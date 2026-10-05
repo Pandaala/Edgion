@@ -15,10 +15,7 @@ pub enum TlsRouteStreamPlugin {
     /// IP Restriction at TLS route level (same check, richer context)
     IpRestriction(Box<IpRestrictionConfig>),
     /// Non-executable marker; source validation rejects even disabled entries.
-    #[serde(
-        other,
-        deserialize_with = "crate::resources::common::discard_unsupported_plugin_config"
-    )]
+    #[serde(other, deserialize_with = "crate::resources::common::discard_unsupported_config")]
     #[schemars(skip)]
     Unsupported,
 }

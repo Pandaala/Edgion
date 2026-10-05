@@ -4,4 +4,4 @@ metadata:
   name: duplicate-host-policy-hot-reload
 spec:
   securityProtect:
-    rejectDuplicateHost: false
+    xForwardedForLimit: 128
