@@ -326,7 +326,9 @@ pub(super) fn evaluate_json_selected(
         mode.value
     };
     let name = candidate.name;
-    let make_matched = |value: &[u8]| Ok((owned_copy(value)?, matched_variable_name(collection, Some(name))?));
+    let make_matched = |value: &[u8], _: Option<&mut InspectionBudget>| {
+        Ok((owned_copy(value)?, matched_variable_name(collection, Some(name))?))
+    };
     match mode {
         JsonMemberMode::StaticFact(group) => replay_static(
             results,
@@ -499,11 +501,15 @@ fn replay_static(
                             captures.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
                             captures.push(CaptureEntry {
                                 key: owned_copy(capture.key)?,
-                                value: owned_copy(capture.value)?,
+                                value: MatchValue::Json(capture.value),
                             });
                             next = capture.next;
                         }
-                        let name = matched_variable_name(selected.collection, Some(candidate.name))?;
+                        let name = MatchValue::Json(
+                            results
+                                .qualified_name(budget, selected.id, selected.collection)
+                                .map_err(map_store_error)?,
+                        );
                         return finish_member_match(
                             captures,
                             MatchValue::Json(*value),

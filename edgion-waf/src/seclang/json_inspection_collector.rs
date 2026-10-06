@@ -587,7 +587,10 @@ impl TransformObserver for ProfileObserver<'_, '_, '_> {
                         outcome
                     };
                     for entry in &captures {
-                        observer.store.add_capture(outcome, &entry.key, &entry.value)?;
+                        let MatchValue::Owned(value) = &entry.value else {
+                            return Err(CollectorError::State);
+                        };
+                        observer.store.add_capture(outcome, &entry.key, value)?;
                     }
                     drop(captures);
                     run.terminal = true;

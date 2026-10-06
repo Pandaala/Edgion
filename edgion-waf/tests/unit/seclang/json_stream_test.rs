@@ -905,3 +905,184 @@ fn spilled_token_storage_is_reused_until_terminal_release() {
     assert!(stream.token.is_empty());
     assert_eq!(stream.feed(JsonStreamInput::Complete, |_| panic!("terminal")), failure);
 }
+
+// Frozen pre-batching lexical path: identical chunk ownership and delimiter work.
+impl JsonStream {
+    pub(super) fn borrow_string_prefix_sequential<F>(
+        &mut self,
+        bytes: &[u8],
+        key: bool,
+        sink: &mut F,
+    ) -> Result<usize, JsonStreamError>
+    where
+        F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
+    {
+        for (offset, &byte) in bytes.iter().enumerate() {
+            charge(
+                &mut self.usage.source_bytes,
+                1,
+                self.limits.max_source_bytes,
+                JsonStreamLimit::SourceBytes,
+            )?;
+            #[cfg(test)]
+            measurements::record(Event::SourceBytes, 1);
+            self.work(1)?;
+            self.raw_byte()?;
+            if self.utf8_remaining != 0 {
+                self.utf8(byte)?;
+                self.decoded(1)?;
+                continue;
+            }
+            match byte {
+                b'"' => {
+                    self.work(offset)?;
+                    self.event()?;
+                    let value = std::str::from_utf8(&bytes[..offset]).map_err(|_| JsonStreamError::Utf8)?;
+                    sink(if key {
+                        JsonStreamToken::Key(value)
+                    } else {
+                        JsonStreamToken::String(value)
+                    })
+                    .map_err(|_| JsonStreamError::SinkRejected)?;
+                    self.lexical = Lexical::Idle;
+                    if key {
+                        *self.stack.last_mut().ok_or(JsonStreamError::Syntax)? = Frame::ObjectColon;
+                    }
+                    return Ok(offset + 1);
+                }
+                b'\\' => {
+                    self.work(offset)?;
+                    self.retain_token_bytes(&bytes[..offset])?;
+                    self.lexical = Lexical::String {
+                        key,
+                        escape: EscapeState::Slash,
+                    };
+                    return Ok(offset + 1);
+                }
+                0..=0x1f => return Err(JsonStreamError::Syntax),
+                _ => {
+                    self.utf8(byte)?;
+                    self.decoded(1)?;
+                }
+            }
+        }
+        self.work(bytes.len())?;
+        self.retain_token_bytes(bytes)?;
+        Ok(bytes.len())
+    }
+}
+
+fn tokenize_ascii_mode(
+    chunks: &[&[u8]],
+    limits: JsonStreamLimits,
+    sequential: bool,
+) -> (Result<(), JsonStreamError>, Vec<OwnedToken>, JsonStreamUsage, usize) {
+    let mut stream = JsonStream::new(limits);
+    stream.sequential_ascii = sequential;
+    let mut tokens = Vec::new();
+    let mut result = Ok(());
+    for input in chunks
+        .iter()
+        .copied()
+        .map(JsonStreamInput::Data)
+        .chain([JsonStreamInput::Complete])
+    {
+        result = stream.feed(input, |token| {
+            tokens.push(token.into());
+            Ok(())
+        });
+        if result.is_err() {
+            break;
+        }
+    }
+    if let Err(error) = result {
+        assert_eq!(
+            stream.feed(JsonStreamInput::Complete, |_| panic!("sticky error emitted")),
+            Err(error)
+        );
+    }
+    (result, tokens, stream.usage(), stream.raw_token_bytes)
+}
+
+#[test]
+fn ascii_batch_matches_sequential_errors_and_all_counters_at_every_boundary() {
+    let mut sources = vec![
+        br#"{"ordinary key":"ordinary value","ordinary key":"replacement"}"#.to_vec(),
+        br#"["plain-prefix\nrest","plain-prefix\u20ac",true]"#.to_vec(),
+        "[\"plain-prefix-é-suffix\",\"plain-prefix-€\"]".as_bytes().to_vec(),
+        br#""ordinary incomplete"#.to_vec(),
+        br#"["ordinary",]"#.to_vec(),
+    ];
+    // Every byte class can end the admitted ASCII prefix, including DEL.
+    for byte in 0..=u8::MAX {
+        sources.push(vec![b'"', b'a', b'b', byte, b'c', b'"']);
+    }
+    for source in sources {
+        for split in 0..=source.len() {
+            let chunks = [&source[..split], &source[split..]];
+            assert_eq!(
+                tokenize_ascii_mode(&chunks, JsonStreamLimits::default(), false),
+                tokenize_ascii_mode(&chunks, JsonStreamLimits::default(), true),
+                "default limits, split {split}"
+            );
+        }
+        // All source/raw/decoded/work caps near any consumed prefix, plus
+        // competing caps, must preserve partially admitted counters and priority.
+        for cap in 0..=source.len() * 3 + 3 {
+            for kind in 0..7 {
+                let mut limits = JsonStreamLimits::default();
+                match kind {
+                    0 => limits.max_source_bytes = cap,
+                    1 => limits.max_raw_token_bytes = cap,
+                    2 => limits.max_decoded_bytes = cap,
+                    3 => limits.max_work = cap,
+                    4 => {
+                        limits.max_source_bytes = cap;
+                        limits.max_raw_token_bytes = cap;
+                        limits.max_decoded_bytes = cap;
+                        limits.max_work = cap;
+                    }
+                    5 => limits.max_events = cap,
+                    _ => limits.max_retained_bytes = cap,
+                }
+                for split in 0..=source.len() {
+                    let chunks = [&source[..split], &source[split..]];
+                    assert_eq!(
+                        tokenize_ascii_mode(&chunks, limits, false),
+                        tokenize_ascii_mode(&chunks, limits, true),
+                        "cap {cap}, kind {kind}, split {split}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ascii_batch_preserves_spill_and_delimiter_validation_work() {
+    for len in [1023, 1024, 1025, 4095, 4096, 4097] {
+        let source = format!("\"{}\"", "a".repeat(len));
+        for split in [0, 1, 2, len / 2, len, len + 1, len + 2] {
+            let chunks = [&source.as_bytes()[..split], &source.as_bytes()[split..]];
+            let baseline = tokenize_ascii_mode(&chunks, JsonStreamLimits::default(), true);
+            baseline.0.unwrap();
+            for work in [baseline.2.work - 1, baseline.2.work, baseline.2.work + 1] {
+                for retained in [
+                    0,
+                    baseline.2.peak_retained_bytes.saturating_sub(1),
+                    baseline.2.peak_retained_bytes,
+                ] {
+                    let limits = JsonStreamLimits {
+                        max_work: work,
+                        max_retained_bytes: retained,
+                        ..JsonStreamLimits::default()
+                    };
+                    assert_eq!(
+                        tokenize_ascii_mode(&chunks, limits, false),
+                        tokenize_ascii_mode(&chunks, limits, true)
+                    );
+                }
+            }
+        }
+    }
+}

@@ -2422,9 +2422,9 @@ fn new_unit_clone_omits_matches_but_preserves_entries_and_controls() {
     state.add_removed_unit(7, limits).unwrap();
     state.request_body_processor = Some(crate::seclang::BodyProcessorSelection::Json);
     state.matched_var = Some(vec![b'x'; 4096].into());
-    state.matched_var_name = Some(b"ARGS:json.name".to_vec());
+    state.matched_var_name = Some(b"ARGS:json.name".to_vec().into());
     state.matched_vars.push(TxEntry {
-        key: b"ARGS:json.name".to_vec(),
+        key: b"ARGS:json.name".to_vec().into(),
         value: vec![b'x'; 4096].into(),
     });
     state.recount();
@@ -2432,7 +2432,7 @@ fn new_unit_clone_omits_matches_but_preserves_entries_and_controls() {
     assert_eq!(full.retained_bytes, state.retained_bytes);
     assert_eq!(full.matched_vars.len(), 1);
     let unit = state.try_clone_for_unit().unwrap();
-    assert_eq!(unit.get(b"capture"), Some(b"persistent".as_slice()));
+    assert_eq!(unit.get(b"capture"), Some(&MatchValue::Owned(b"persistent".to_vec())));
     assert_eq!(unit.removed_units, [7]);
     assert_eq!(unit.request_body_processor, state.request_body_processor);
     assert!(unit.matched_var.is_none());
@@ -2578,4 +2578,241 @@ fn retained_selection_capacity_is_checked_before_staged_branch_selection() {
     ));
     assert_eq!(transaction.detector_work_bytes, before);
     assert!(transaction.selected_scratch.is_empty());
+}
+
+#[test]
+fn unit_match_buffer_reuses_capacity_and_keeps_loaned_storage_charged() {
+    let generation = generation(concat!(
+        "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n",
+        "SecRule ARGS \"@contains hit\" \"id:2,phase:2,pass\"\n",
+    ));
+    let mut transaction = Transaction::new(
+        &generation,
+        request(&[], b"/?a=hit&b=hit&c=hit"),
+        RuntimeLimits::default(),
+    )
+    .unwrap();
+    let original_scratch = transaction.scratch_bytes;
+    assert!(transaction.evaluate_unit(0, None).unwrap());
+    let pointer = transaction.match_scratch.as_ptr();
+    let capacity = transaction.match_scratch.capacity();
+    assert!(capacity >= 3);
+    assert!(transaction.match_scratch.is_empty());
+    assert_eq!(transaction.match_scratch_bytes, capacity * size_of::<MemberMatch>());
+    assert_eq!(
+        transaction.scratch_bytes,
+        original_scratch
+            + transaction.selected_scratch.capacity() * size_of::<SelectedValue>()
+            + transaction.match_scratch_bytes
+    );
+    assert!(transaction.evaluate_unit(1, None).unwrap());
+    assert_eq!(transaction.match_scratch.as_ptr(), pointer);
+    assert_eq!(transaction.match_scratch.capacity(), capacity);
+    assert!(transaction.match_scratch.is_empty());
+    assert_eq!(transaction.tx.matched_vars.len(), 3);
+}
+
+#[test]
+fn unit_match_buffer_returns_after_action_error_and_early_chain_commit() {
+    let generation = generation(concat!(
+        "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,setvar:'tx.saved=done'\"\n",
+        "SecRule ARGS \"@rx (hit)\" \"id:2,phase:2,pass,capture,chain\"\n",
+        "SecRule TX:1 \"@streq hit\" \"\"\n",
+    ));
+    let mut transaction = Transaction::new(
+        &generation,
+        request(&[], b"/?a=hit&b=hit&c=hit"),
+        RuntimeLimits {
+            max_setvar_actions: 0,
+            ..RuntimeLimits::default()
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        transaction.evaluate_unit(0, None),
+        Err(RuntimeError::SetVarActionLimit { limit: 0 })
+    ));
+    assert!(transaction.tx_value(b"saved").is_none());
+    assert!(transaction.match_scratch.is_empty());
+    assert!(transaction.selected_scratch.is_empty());
+    let pointer = transaction.match_scratch.as_ptr();
+    let capacity = transaction.match_scratch.capacity();
+    transaction.limits.max_setvar_actions = 10;
+    assert!(transaction.evaluate_unit(0, None).unwrap());
+    assert_eq!(transaction.tx_value(b"saved"), Some(b"done".as_slice()));
+    assert!(transaction.evaluate_unit(1, None).unwrap());
+    assert_eq!(transaction.tx_value(b"1"), Some(b"hit".as_slice()));
+    assert_eq!(transaction.match_scratch.as_ptr(), pointer);
+    assert_eq!(transaction.match_scratch.capacity(), capacity);
+    assert!(transaction.match_scratch.is_empty());
+    assert_eq!(transaction.match_scratch_bytes, capacity * size_of::<MemberMatch>());
+}
+
+#[test]
+fn match_buffer_growth_admits_overlap_and_reuses_at_exact_capacity_limit() {
+    let size = size_of::<MemberMatch>();
+    let mut matches = Vec::new();
+    let mut scratch = 100;
+    let mut charged = 0;
+    let storage = MatchStorage {
+        fixed_bytes: 100,
+        retained_limit: 100 + size,
+        limit: 2,
+    };
+    storage
+        .push(&mut matches, MemberMatch::default(), &mut scratch, &mut charged)
+        .unwrap();
+    let pointer = matches.as_ptr();
+    assert_eq!(matches.capacity(), 1);
+    assert_eq!(scratch, 100 + size);
+    assert_eq!(charged, size);
+    let limit = 100 + 3 * size - 1;
+    assert_eq!(
+        MatchStorage {
+            retained_limit: limit,
+            ..storage
+        }
+        .push(&mut matches, MemberMatch::default(), &mut scratch, &mut charged),
+        Err(RuntimeError::RetainedByteLimit { limit })
+    );
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches.as_ptr(), pointer);
+    assert_eq!(scratch, 100 + size);
+    matches.clear();
+    storage
+        .push(&mut matches, MemberMatch::default(), &mut scratch, &mut charged)
+        .unwrap();
+    assert_eq!(matches.as_ptr(), pointer);
+    assert_eq!(charged, size);
+    MatchStorage {
+        retained_limit: 100 + 3 * size,
+        ..storage
+    }
+    .push(&mut matches, MemberMatch::default(), &mut scratch, &mut charged)
+    .unwrap();
+    assert_eq!(matches.capacity(), 2);
+    assert_eq!(scratch, 100 + 2 * size);
+    assert_eq!(charged, 2 * size);
+}
+
+#[test]
+fn no_hit_units_never_allocate_the_match_buffer() {
+    let generation = generation("SecRule ARGS \"@streq absent\" \"id:1,phase:2,pass\"\n");
+    let mut transaction =
+        Transaction::new(&generation, request(&[], b"/?a=one&b=two"), RuntimeLimits::default()).unwrap();
+    assert!(!transaction.evaluate_unit(0, None).unwrap());
+    assert_eq!(transaction.match_scratch.capacity(), 0);
+    assert_eq!(transaction.match_scratch_bytes, 0);
+    assert!(transaction.selected_scratch.capacity() >= 2);
+}
+
+#[test]
+fn capture_descriptor_capacity_tracks_operator_bound_and_optional_groups() {
+    for (pattern, input, slots, keys) in [
+        ("^(a)$", b"a".as_slice(), 4, vec![b"0".as_slice(), b"1"]),
+        ("^(a)(b)?$", b"a".as_slice(), 6, vec![b"0".as_slice(), b"1"]),
+        (
+            "^(?P<word>a)$",
+            b"a".as_slice(),
+            4,
+            vec![b"0".as_slice(), b"1", b"word"],
+        ),
+    ] {
+        let generation = generation(&format!(
+            "SecRule REQUEST_HEADERS:X-Probe \"@rx {pattern}\" \"id:1,phase:1,pass,capture\"\n"
+        ));
+        let headers = [RequestHeader::new(b"X-Probe", input)];
+        let mut transaction = Transaction::new(&generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        let matches = transaction
+            .evaluate_member_matches(0, 0, &TxState::default(), false)
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].captures.capacity(), slots);
+        assert_eq!(
+            matches[0]
+                .captures
+                .iter()
+                .map(|capture| capture.key.as_slice())
+                .collect::<Vec<_>>(),
+            keys
+        );
+    }
+}
+
+#[test]
+fn smaller_capture_reservation_preserves_named_entry_limits_and_large_growth() {
+    let compiled = generation("SecRule REQUEST_HEADERS:X-Probe \"@rx ^(?P<word>a)$\" \"id:1,phase:1,pass,capture\"\n");
+    let headers = [RequestHeader::new(b"X-Probe", b"a")];
+    for limit in [0, 2, 3] {
+        let mut transaction = Transaction::new(
+            &compiled,
+            request(&headers, b"/"),
+            RuntimeLimits {
+                max_capture_entries: limit,
+                ..RuntimeLimits::default()
+            },
+        )
+        .unwrap();
+        let result = transaction.evaluate_member_matches(0, 0, &TxState::default(), false);
+        if limit == 3 {
+            let matches = result.unwrap();
+            assert_eq!(matches[0].captures.len(), 3);
+            assert_eq!(matches[0].captures.capacity(), 3);
+        } else {
+            assert!(matches!(result, Err(RuntimeError::CaptureEntryLimit { limit: actual }) if actual == limit));
+        }
+    }
+    let pattern = (0..34).map(|index| format!("(?P<g{index}>a)")).collect::<String>();
+    let source = format!("SecRule REQUEST_HEADERS:X-Probe \"@rx ^{pattern}$\" \"id:1,phase:1,pass,capture\"\n");
+    let mut frontend = FrontendLimits::default();
+    frontend.compiler.regex.max_capture_slots = 128;
+    frontend.compiler.regex.max_named_groups = 40;
+    let compiled = generation_with_frontend_limits(&source, frontend);
+    let input = "a".repeat(34);
+    let headers = [RequestHeader::new(b"X-Probe", input.as_bytes())];
+    for limit in [68, 69] {
+        let mut transaction = Transaction::new(
+            &compiled,
+            request(&headers, b"/"),
+            RuntimeLimits {
+                max_capture_entries: limit,
+                ..RuntimeLimits::default()
+            },
+        )
+        .unwrap();
+        let result = transaction.evaluate_member_matches(0, 0, &TxState::default(), false);
+        if limit == 69 {
+            let matches = result.unwrap();
+            assert_eq!(matches[0].captures.len(), 69);
+            assert!(matches[0].captures.capacity() >= 69);
+            assert_eq!(matches[0].captures.last().unwrap().key, b"g33");
+        } else {
+            assert!(matches!(result, Err(RuntimeError::CaptureEntryLimit { limit: 68 })));
+        }
+    }
+}
+
+#[test]
+fn phrase_and_sqli_capture_reserve_one_descriptor() {
+    for (operator, input, captured) in [
+        ("@pm token", b"a token here".as_slice(), b"token".as_slice()),
+        ("@detectSQLi", b"1 OR 1=1".as_slice(), b"1&1".as_slice()),
+    ] {
+        let generation = generation(&format!(
+            "SecRule REQUEST_HEADERS:X-Probe \"{operator}\" \"id:1,phase:1,pass,capture\"\n"
+        ));
+        let headers = [RequestHeader::new(b"X-Probe", input)];
+        let mut transaction = Transaction::new(&generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        let matches = transaction
+            .evaluate_member_matches(0, 0, &TxState::default(), false)
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].captures.len(), 1);
+        assert_eq!(matches[0].captures.capacity(), 1);
+        assert_eq!(matches[0].captures[0].key, b"0");
+        assert_eq!(
+            matches[0].captures[0].value.bytes(&transaction.request, None).unwrap(),
+            captured
+        );
+    }
 }

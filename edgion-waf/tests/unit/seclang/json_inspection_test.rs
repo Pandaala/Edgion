@@ -42,6 +42,84 @@ fn finish(s: &mut ResultStore<'_>, id: CandidateId, profiles: &[usize]) -> Recei
     let proof = s.completion_proof(id, profiles).unwrap();
     s.complete_candidate(proof).unwrap()
 }
+
+#[test]
+fn summary_no_hit_requires_completed_sole_profile_and_exact_survivor_count() {
+    let g = generation();
+    assert_eq!(g.json_inspection.summary_profile(), Some(0));
+    for (complete, count, expected) in [(true, 1, true), (false, 1, false), (true, 0, false)] {
+        let mut s = store(&g);
+        let id = s.begin_candidate(b"json.a", 4, JsonScalarKind::String, None).unwrap();
+        if complete {
+            s.complete_profile(id, 0).unwrap();
+        }
+        let receipt = finish(&mut s, id, if complete { &[0] } else { &[] });
+        s.seal(
+            Some(receipt),
+            JsonSemanticSummary {
+                argument_count: count,
+                argument_value_bytes: 4,
+                ..JsonSemanticSummary::default()
+            },
+        )
+        .unwrap();
+        let (results, budget) = s.into_sealed().unwrap();
+        assert_eq!(
+            results.admits_summary_no_hit(&budget, &g, RuntimeLimits::default(), EvaluationMode::Accelerated, 7),
+            expected
+        );
+        assert!(!results.admits_summary_no_hit(&budget, &g, RuntimeLimits::default(), EvaluationMode::Reference, 7));
+        assert!(!results.admits_summary_no_hit(
+            &budget,
+            &g,
+            RuntimeLimits {
+                max_selected_values: 1,
+                ..RuntimeLimits::default()
+            },
+            EvaluationMode::Accelerated,
+            7
+        ));
+        let other = generation();
+        assert!(!results.admits_summary_no_hit(
+            &budget,
+            &other,
+            RuntimeLimits::default(),
+            EvaluationMode::Accelerated,
+            7
+        ));
+        let foreign = InspectionBudget::empty_publication(ResultLimits::default()).unwrap();
+        assert!(!results.admits_summary_no_hit(&foreign, &g, RuntimeLimits::default(), EvaluationMode::Accelerated, 7));
+    }
+}
+
+#[test]
+fn summary_no_hit_rejects_reclaimed_profile_and_change_slots() {
+    let g = generation();
+    let mut s = store(&g);
+    let old = s.begin_candidate(b"json.a", 4, JsonScalarKind::String, None).unwrap();
+    s.record_changed_step(old, 0, 0, 4).unwrap();
+    s.complete_profile(old, 0).unwrap();
+    let old_receipt = finish(&mut s, old, &[0]);
+    s.discard(old_receipt).unwrap();
+    assert_eq!(s.usage().live_profiles, 0);
+    assert_eq!(s.usage().live_changes, 0);
+    let id = s.begin_candidate(b"json.a", 4, JsonScalarKind::String, None).unwrap();
+    s.complete_profile(id, 0).unwrap();
+    let receipt = finish(&mut s, id, &[0]);
+    s.seal(
+        Some(receipt),
+        JsonSemanticSummary {
+            argument_count: 1,
+            argument_value_bytes: 4,
+            ..JsonSemanticSummary::default()
+        },
+    )
+    .unwrap();
+    let (results, mut budget) = s.into_sealed().unwrap();
+    assert!(!results.admits_summary_no_hit(&budget, &g, RuntimeLimits::default(), EvaluationMode::Accelerated, 7));
+    budget.work(usize::MAX).unwrap_err();
+    assert!(!results.admits_summary_no_hit(&budget, &g, RuntimeLimits::default(), EvaluationMode::Accelerated, 0));
+}
 #[test]
 fn wide_no_hit_storage_uses_sparse_profile_records() {
     let mut source = String::new();
@@ -134,7 +212,7 @@ fn sealed_captures_and_changes_preserve_order() {
     for key in [b"0", b"1", b"2"] {
         let capture = sealed.capture(&mut budget, id, outcome, next.unwrap()).unwrap();
         assert_eq!(capture.key, key);
-        assert_eq!(capture.value, b"hit");
+        assert_eq!(sealed.match_value(&mut budget, capture.value).unwrap(), b"hit");
         next = capture.next;
     }
     assert!(next.is_none());
@@ -483,13 +561,10 @@ fn shared_payload_preserves_sealed_values_and_independent_captures() {
             assert_eq!(value, previous);
         }
         shared_value = Some(value);
-        assert_eq!(
-            sealed
-                .capture(&mut budget, id, outcome, first_capture.unwrap())
-                .unwrap()
-                .value,
-            expected
-        );
+        let capture = sealed
+            .capture(&mut budget, id, outcome, first_capture.unwrap())
+            .unwrap();
+        assert_eq!(sealed.match_value(&mut budget, capture.value).unwrap(), expected);
     }
 }
 
@@ -590,4 +665,384 @@ fn shared_outcomes_still_obey_record_work_and_capacity_limits() {
         assert_eq!(s.usage().matched_bytes, 0);
         assert_eq!(s.record_shared_match(id, 1, 0, token), Err(expected));
     }
+}
+
+#[test]
+fn byte_pool_large_page_boundaries_and_sorted_insertion_keep_leases_stable() {
+    for (len, size) in [
+        (0, 0),
+        (4095, 4096),
+        (4096, 4096),
+        (4097, 8192),
+        (8191, 8192),
+        (8192, 8192),
+        (8193, 12288),
+        (12289, 16384),
+    ] {
+        assert_eq!(BytePool::allocation_size(len), Ok(size));
+    }
+    assert_eq!(BytePool::allocation_size(usize::MAX), Err(StoreError::Arithmetic));
+    assert_eq!(BytePool::allocation_size(usize::MAX - 4095), Ok(usize::MAX - 4095));
+    let mut budget = InspectionBudget::empty_publication(ResultLimits::default()).unwrap();
+    let mut pool = BytePool::new(budget.owner);
+    assert_eq!(pool.heads.len(), 13);
+    assert_eq!(pool.large_heads.capacity(), 0);
+    let large = pool.copy(&vec![b'z'; 12289], &mut budget).unwrap();
+    pool.free(large, &mut budget).unwrap();
+    let middle = pool.copy(&vec![b'm'; 8193], &mut budget).unwrap();
+    let small = pool.copy(&vec![b's'; 4097], &mut budget).unwrap();
+    assert_eq!(
+        pool.large_heads.iter().map(|class| class.size).collect::<Vec<_>>(),
+        [8192, 12288, 16384]
+    );
+    assert_eq!(pool.read(middle).unwrap(), vec![b'm'; 8193]);
+    assert_eq!(pool.read(small).unwrap(), vec![b's'; 4097]);
+    let retained = budget.usage.retained_bytes;
+    let reused = pool.copy(&vec![b'r'; 12290], &mut budget).unwrap();
+    assert_eq!(reused.offset, large.offset);
+    assert_eq!(reused.size, large.size);
+    assert_eq!(budget.usage.retained_bytes, retained);
+    // Free pre-insertion leases after their class indices have moved.
+    pool.free(middle, &mut budget).unwrap();
+    pool.free(small, &mut budget).unwrap();
+    assert_eq!(pool.alloc(9000, &mut budget).unwrap().offset, middle.offset);
+    assert_eq!(pool.alloc(5000, &mut budget).unwrap().offset, small.offset);
+    assert_eq!(
+        budget.usage.retained_bytes,
+        pool.bytes.capacity() + pool.large_heads.capacity() * size_of::<LargeClass>()
+    );
+}
+
+#[test]
+fn byte_pool_large_heads_capacity_work_and_owner_failures_are_sticky() {
+    for failure in [
+        StoreError::Capacity,
+        StoreError::Work,
+        StoreError::Identity,
+        StoreError::Arithmetic,
+    ] {
+        let mut budget = InspectionBudget::empty_publication(ResultLimits::default()).unwrap();
+        let mut pool = BytePool::new(budget.owner);
+        let lease = pool.alloc(8193, &mut budget).unwrap();
+        pool.free(lease, &mut budget).unwrap();
+        if failure == StoreError::Capacity {
+            for len in [12289, 16385, 20481] {
+                let lease = pool.alloc(len, &mut budget).unwrap();
+                pool.free(lease, &mut budget).unwrap();
+            }
+            assert_eq!(pool.large_heads.len(), pool.large_heads.capacity());
+        }
+        let heads = pool.large_heads.len();
+        let bytes = pool.bytes.len();
+        let expected = match failure {
+            StoreError::Capacity => {
+                budget.limits.retained_bytes = budget.usage.retained_bytes;
+                pool.alloc(4097, &mut budget).map(|_| ())
+            }
+            StoreError::Work => {
+                // One comparison is allowed; insertion/shift work must fail before mutation.
+                budget.limits.work = budget.usage.work + 1;
+                pool.alloc(4097, &mut budget).map(|_| ())
+            }
+            StoreError::Identity => {
+                let mut foreign = lease;
+                foreign.owner += 1;
+                assert!(matches!(pool.read(foreign), Err(StoreError::Identity)));
+                pool.free(foreign, &mut budget)
+            }
+            StoreError::Arithmetic => pool.alloc(usize::MAX, &mut budget).map(|_| ()),
+            _ => unreachable!(),
+        };
+        assert_eq!(expected, Err(failure));
+        assert_eq!(pool.large_heads.len(), heads);
+        assert_eq!(pool.bytes.len(), bytes);
+        assert_eq!(pool.alloc(0, &mut budget).err(), Some(failure));
+        assert_eq!(pool.free(lease, &mut budget), Err(failure));
+        assert_eq!(budget.work(0), Err(failure));
+    }
+    let mut budget = InspectionBudget::empty_publication(ResultLimits {
+        retained_bytes: 8192,
+        ..ResultLimits::default()
+    })
+    .unwrap();
+    let mut pool = BytePool::new(budget.owner);
+    assert_eq!(pool.alloc(4097, &mut budget).err(), Some(StoreError::Capacity));
+    assert_eq!(pool.bytes.len(), 0);
+    assert_eq!(
+        budget.usage.retained_bytes,
+        pool.large_heads.capacity() * size_of::<LargeClass>()
+    );
+    assert!(budget.usage.retained_bytes > 0);
+    // The same budget and payload fit exactly only when class-head metadata fits too.
+    let mut budget = InspectionBudget::empty_publication(ResultLimits {
+        retained_bytes: 8192 + 4 * size_of::<LargeClass>(),
+        ..ResultLimits::default()
+    })
+    .unwrap();
+    let mut pool = BytePool::new(budget.owner);
+    let lease = pool.alloc(4097, &mut budget).unwrap();
+    assert_eq!(lease.size, 8192);
+    assert_eq!(pool.large_heads.capacity(), 4);
+    assert_eq!(budget.usage.retained_bytes, 8192 + 4 * size_of::<LargeClass>());
+}
+
+#[test]
+fn byte_pool_foreign_budget_and_malformed_large_lease_fail_without_reuse() {
+    let mut budget = InspectionBudget::empty_publication(ResultLimits::default()).unwrap();
+    let mut pool = BytePool::new(budget.owner);
+    let lease = pool.alloc(8193, &mut budget).unwrap();
+    let mut foreign = InspectionBudget::empty_publication(ResultLimits::default()).unwrap();
+    assert_eq!(pool.alloc(8193, &mut foreign).err(), Some(StoreError::Identity));
+    assert_eq!(foreign.failure(), Some(StoreError::Identity));
+    assert_eq!(budget.failure(), None);
+    assert_eq!(pool.bytes.len(), lease.size);
+    let mut invalid = lease;
+    invalid.size = 8192;
+    assert_eq!(pool.read(invalid).err(), Some(StoreError::Identity));
+    invalid = lease;
+    invalid.offset = pool.bytes.len();
+    assert_eq!(pool.free(invalid, &mut budget), Err(StoreError::Identity));
+    assert_eq!(pool.large_heads[0].head, None);
+    assert_eq!(pool.alloc(0, &mut budget).err(), Some(StoreError::Identity));
+}
+
+#[test]
+fn byte_pool_large_class_exact_retained_boundary_includes_heads() {
+    let exact = 8192 + 4 * size_of::<LargeClass>();
+    for cap in [exact - 1, exact] {
+        let mut budget = InspectionBudget::empty_publication(ResultLimits {
+            retained_bytes: cap,
+            ..ResultLimits::default()
+        })
+        .unwrap();
+        let mut pool = BytePool::new(budget.owner);
+        let result = pool.alloc(4097, &mut budget);
+        if cap < exact {
+            assert_eq!(result.err(), Some(StoreError::Capacity));
+            assert_eq!(pool.bytes.len(), 0);
+            assert_eq!(budget.failure(), Some(StoreError::Capacity));
+        } else {
+            assert_eq!(result.unwrap().size, 8192);
+            assert_eq!(budget.usage.retained_bytes, exact);
+        }
+    }
+}
+
+#[test]
+fn sparse_qualified_names_seal_only_surviving_hit_views_and_validate_generation() {
+    let g = compile(
+        concat!(
+            "SecRule ARGS|ARGS_NAMES \"@contains blocked\" \"id:1,phase:2,pass\"\n",
+            "SecRule ARGS \"@contains blocked\" \"id:2,phase:2,pass\"\n",
+        ),
+        CompilerLimits::default(),
+    )
+    .unwrap();
+    let mut s = store(&g);
+    let stale = s
+        .begin_candidate(b"json.replaced", 7, JsonScalarKind::String, None)
+        .unwrap();
+    s.record_match(stale, 0, 0, b"blocked").unwrap();
+    for profile in 0..g.json_inspection.profiles.len() {
+        s.complete_profile(stale, profile).unwrap();
+    }
+    let old = finish(
+        &mut s,
+        stale,
+        &(0..g.json_inspection.profiles.len()).collect::<Vec<_>>(),
+    );
+    s.discard(old).unwrap();
+    let id = s
+        .begin_candidate(b"json.replaced", 7, JsonScalarKind::String, None)
+        .unwrap();
+    assert_eq!(id.0.slot, stale.0.slot);
+    assert_ne!(id.0.generation, stale.0.generation);
+    for group in 0..g.json_inspection.groups.len() {
+        s.record_match(id, group, 0, b"blocked").unwrap();
+    }
+    for profile in 0..g.json_inspection.profiles.len() {
+        s.complete_profile(id, profile).unwrap();
+    }
+    let receipt = finish(&mut s, id, &(0..g.json_inspection.profiles.len()).collect::<Vec<_>>());
+    s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+    let (sealed, mut budget) = s.into_sealed().unwrap();
+    assert_eq!(sealed.records.qualified_names.len(), 2);
+    for collection in [CollectionKind::Args, CollectionKind::ArgsNames] {
+        let handle = sealed.qualified_name(&mut budget, id, collection).unwrap();
+        let again = sealed.qualified_name(&mut budget, id, collection).unwrap();
+        assert_eq!(handle, again);
+        let expected = format!("{}:json.replaced", collection.as_str());
+        assert_eq!(sealed.match_value(&mut budget, handle).unwrap(), expected.as_bytes());
+    }
+    assert_eq!(
+        sealed.qualified_name(&mut budget, stale, CollectionKind::Args),
+        Err(StoreError::Identity)
+    );
+    assert_eq!(budget.failure(), Some(StoreError::Identity));
+
+    let mut no_hit = store(&g);
+    let id = no_hit
+        .begin_candidate(b"json.miss", 4, JsonScalarKind::String, None)
+        .unwrap();
+    for profile in 0..g.json_inspection.profiles.len() {
+        no_hit.complete_profile(id, profile).unwrap();
+    }
+    let receipt = finish(
+        &mut no_hit,
+        id,
+        &(0..g.json_inspection.profiles.len()).collect::<Vec<_>>(),
+    );
+    no_hit.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+    let (sealed, _) = no_hit.into_sealed().unwrap();
+    assert_eq!(sealed.records.qualified_names.capacity(), 0);
+}
+
+#[test]
+fn qualified_name_sort_is_bounded_metered_and_orders_reused_slots() {
+    let g = generation();
+    let mut s = store(&g);
+    let ids: Vec<_> = (0..9)
+        .map(|_| s.begin_candidate(b"name", 0, JsonScalarKind::String, None).unwrap())
+        .collect();
+    let lease = s.records.candidates.get(ids[0].0).unwrap().name;
+    let make_rows = || {
+        ids.iter()
+            .rev()
+            .map(|candidate| QualifiedName {
+                candidate: *candidate,
+                collection: CollectionKind::Args,
+                value: lease,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut rows = make_rows();
+    let start = s.budget.usage.work;
+    sort_qualified_names(&mut rows, &mut s.budget).unwrap();
+    let cost = s.budget.usage.work - start;
+    assert!(cost > rows.len());
+    assert!(rows.windows(2).all(|pair| pair[0].key() < pair[1].key()));
+    for limit in [cost - 1, cost] {
+        let mut budget = InspectionBudget::empty_publication(ResultLimits {
+            work: limit,
+            ..ResultLimits::default()
+        })
+        .unwrap();
+        let result = sort_qualified_names(&mut make_rows(), &mut budget);
+        assert_eq!(result.is_ok(), limit == cost);
+        if limit < cost {
+            assert_eq!(budget.failure(), Some(StoreError::Work));
+        }
+    }
+}
+
+#[test]
+fn sealed_capture_and_name_handles_reject_foreign_or_out_of_bounds_observation() {
+    let g = generation();
+    let make = || {
+        let mut s = store(&g);
+        let id = s.begin_candidate(b"json.x", 3, JsonScalarKind::String, None).unwrap();
+        let outcome = s.record_match(id, 0, 0, b"hit").unwrap();
+        s.add_capture(outcome, b"1", b"hit").unwrap();
+        s.complete_profile(id, 0).unwrap();
+        let receipt = finish(&mut s, id, &[0]);
+        s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+        let (sealed, mut budget) = s.into_sealed().unwrap();
+        let name = sealed.qualified_name(&mut budget, id, CollectionKind::Args).unwrap();
+        let OutcomeValue::Match { first_capture, .. } = sealed.outcome(&mut budget, id, outcome).unwrap().result else {
+            panic!("expected match");
+        };
+        let value = sealed
+            .capture(&mut budget, id, outcome, first_capture.unwrap())
+            .unwrap()
+            .value;
+        (sealed, budget, name, value)
+    };
+    let (first, _, foreign_name, foreign_capture) = make();
+    let (second, mut budget, name, capture) = make();
+    for foreign in [foreign_name, foreign_capture] {
+        assert_eq!(second.observe_match_value(foreign), Err(StoreError::Identity));
+    }
+    for local in [name, capture] {
+        let invalid = SealedMatchValue {
+            offset: second.records.bytes.bytes.len(),
+            ..local
+        };
+        assert_eq!(second.observe_match_value(invalid), Err(StoreError::Identity));
+        assert_eq!(
+            second.observe_match_value(SealedMatchValue {
+                offset: usize::MAX,
+                ..local
+            }),
+            Err(StoreError::Arithmetic)
+        );
+    }
+    assert_eq!(budget.failure(), None);
+    budget.limits.work = budget.usage.work;
+    assert_eq!(second.match_value(&mut budget, capture), Err(StoreError::Work));
+    assert_eq!(second.observe_match_value(capture).unwrap(), b"hit");
+    assert_eq!(first.observe_match_value(foreign_name).unwrap(), b"ARGS:json.x");
+}
+
+#[test]
+fn arena_page_hint_avoids_tiny_growth_after_a_large_lease() {
+    let mut budget = InspectionBudget::empty_publication(ResultLimits::default()).unwrap();
+    let mut pool = BytePool::new(budget.owner);
+    let prefix = pool.copy(b"key", &mut budget).unwrap();
+    let value = pool.alloc(262_147, &mut budget).unwrap();
+    let len = pool.bytes.len();
+    let capacity = pool.bytes.capacity();
+    let pointer = pool.bytes.as_ptr();
+    assert_eq!(capacity % 4096, 0);
+    assert!(capacity > len);
+    let metadata = pool.copy(b"ARGS:json.key", &mut budget).unwrap();
+    assert_eq!(pool.bytes.capacity(), capacity);
+    assert_eq!(pool.bytes.as_ptr(), pointer);
+    assert_eq!(pool.read(prefix).unwrap(), b"key");
+    assert_eq!(pool.read(metadata).unwrap(), b"ARGS:json.key");
+    assert_eq!(value.len, 262_147);
+    assert_eq!(value.size, 266_240);
+    assert_eq!(
+        budget.usage.retained_bytes,
+        capacity + pool.large_heads.capacity() * size_of::<LargeClass>()
+    );
+}
+
+#[test]
+fn arena_page_hint_falls_back_without_work_or_failure_at_tight_caps() {
+    let required = 8 + 8192;
+    let rounded = 12288;
+    for allowance in [required - 1, required, rounded - 1, rounded] {
+        let mut budget = InspectionBudget::empty_publication(ResultLimits::default()).unwrap();
+        let mut pool = BytePool::new(budget.owner);
+        pool.alloc(1, &mut budget).unwrap();
+        // Register the class first, matching production admission order.
+        pool.class_index(8192, true, &mut budget).unwrap();
+        let start_work = budget.usage.work;
+        let before = budget.usage.retained_bytes;
+        budget.limits.retained_bytes = before + allowance;
+        let result = pool.alloc(4097, &mut budget);
+        assert_eq!(result.is_ok(), allowance >= required);
+        if allowance < required {
+            assert_eq!(budget.failure(), Some(StoreError::Capacity));
+        } else {
+            assert_eq!(budget.failure(), None);
+            assert_eq!(pool.bytes.len(), required);
+            assert_eq!(
+                pool.bytes.capacity(),
+                if allowance == rounded { rounded } else { required }
+            );
+            assert_eq!(budget.usage.retained_bytes, before - 8 + pool.bytes.capacity());
+            // Class lookup, old live bytes copied and the new lease initialized;
+            // optional unused capacity is neither copied nor zero-initialized.
+            assert_eq!(budget.usage.work - start_work, 1 + 8 + 8192);
+        }
+    }
+    assert_eq!(
+        BytePool::arena_reserve_amount(usize::MAX - 4095, 0, 8, usize::MAX).unwrap(),
+        8
+    );
+    assert_eq!(
+        BytePool::arena_reserve_amount(usize::MAX, 0, 1, usize::MAX),
+        Err(StoreError::Arithmetic)
+    );
 }

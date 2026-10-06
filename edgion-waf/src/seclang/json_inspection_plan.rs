@@ -37,12 +37,14 @@ pub(super) enum JsonMemberMode {
 pub(super) struct JsonMemberPlan {
     pub name: JsonMemberMode,
     pub value: JsonMemberMode,
+    pub summary_no_hit: bool,
 }
 impl Default for JsonMemberPlan {
     fn default() -> Self {
         Self {
             name: JsonMemberMode::None,
             value: JsonMemberMode::None,
+            summary_no_hit: false,
         }
     }
 }
@@ -386,6 +388,13 @@ impl CompiledJsonPlan {
                 let member = *generation.members.get(id).ok_or_else(invariant)?;
                 plan.macros_for_member(generation, member, memory, work)?;
                 let member_multi = multi_match(generation, member, work, memory.limits)?;
+                work.charge_records(member.action_count, memory.limits)?;
+                let member_capture = generation
+                    .actions
+                    .get(member.action_start..checked_add(member.action_start, member.action_count)?)
+                    .ok_or_else(invariant)?
+                    .iter()
+                    .any(|action| action.kind == ActionEnvelopeKind::Action(super::super::ActionKind::Capture));
                 let Some(target_id) = member.target_plan else {
                     continue;
                 };
@@ -484,6 +493,28 @@ impl CompiledJsonPlan {
                     };
                     if *slot != JsonMemberMode::Unsupported {
                         *slot = mode;
+                    }
+                    if matches!(mode, JsonMemberMode::StaticFact(_))
+                        && unit.member_count == 1
+                        && records.len() == 1
+                        && target.collection == CollectionKind::Args
+                        && target.modifier == TargetModifier::None
+                        && target.selector == CompiledTargetSelector::None
+                        && !member_multi
+                        && !member_capture
+                        && !matches!(
+                            operator.operand,
+                            CompiledOperatorOperand::DetectSqli { .. }
+                                | CompiledOperatorOperand::DetectXss
+                                | CompiledOperatorOperand::Regex(RegexPlanRef::Capture(_))
+                                | CompiledOperatorOperand::CapturePhrase(_)
+                        )
+                    {
+                        let recipe = transforms(generation, id)?;
+                        work.charge_records(recipe.len(), memory.limits)?;
+                        plan.members[id].summary_no_hit = recipe.iter().all(|transform| {
+                            matches!(transform, TransformationKind::None | TransformationKind::Lowercase)
+                        });
                     }
                 }
             }
@@ -609,6 +640,21 @@ impl CompiledJsonPlan {
         }
         memory.drop_working_records::<CanonicalSlot>(group_slots.capacity());
         Ok(plan)
+    }
+
+    /// A sole broad value profile is applicable to every surviving candidate.
+    pub(super) fn summary_profile(&self) -> Option<usize> {
+        (self.profiles.len() == 1
+            && self.profiles[0].view == JsonView::Value
+            && !self.profiles[0].multi_match
+            && !self.broad_values.is_empty()
+            && self.broad_names.is_empty()
+            && self.literals.is_empty()
+            && self.regexes.is_empty()
+            && self.candidate_literals.is_empty()
+            && self.candidate_regexes.is_empty()
+            && self.named_demands.is_empty())
+        .then_some(0)
     }
 
     #[allow(clippy::too_many_arguments)]

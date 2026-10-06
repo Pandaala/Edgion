@@ -31,6 +31,275 @@ fn head(uri: &[u8]) -> RequestHead<'_> {
         &[],
     )
 }
+
+fn no_hit_transaction<'g>(
+    generation: &'g CompiledGeneration,
+    json: &[u8],
+    uri: &[u8],
+    limits: RuntimeLimits,
+    result_limits: ResultLimits,
+    force_cursor: bool,
+) -> Transaction<'g> {
+    let mut tx = Transaction::new(generation, head(uri), limits).unwrap();
+    tx.force_json_cursor = force_cursor;
+    tx.execute_request_headers().unwrap();
+    tx.publish_request_body_with_json_limits(
+        RequestBody::new(Bytes::copy_from_slice(json), BodyProcessorSelection::Json),
+        JsonInspectionLimits {
+            results: result_limits,
+            ..JsonInspectionLimits::default()
+        },
+    )
+    .unwrap();
+    tx
+}
+
+fn assert_no_hit_cursor_parity(fast: &mut Transaction<'_>, cursor: &mut Transaction<'_>) {
+    assert_eq!(fast.execute_request_body(), cursor.execute_request_body());
+    assert_eq!(
+        fast.json_budget.as_ref().unwrap().usage().work,
+        cursor.json_budget.as_ref().unwrap().usage().work
+    );
+    assert_eq!(
+        fast.json_budget.as_ref().unwrap().failure(),
+        cursor.json_budget.as_ref().unwrap().failure()
+    );
+    assert_eq!(fast.detector_work_bytes, cursor.detector_work_bytes);
+    assert_eq!(fast.ctl_work_bytes, cursor.ctl_work_bytes);
+    assert_eq!(fast.tx_value(b"later"), cursor.tx_value(b"later"));
+}
+
+#[test]
+fn no_hit_summary_skips_candidate_storage_and_preserves_later_actions() {
+    for recipe in ["", ",t:none", ",t:none,t:lowercase", ",t:lowercase,t:lowercase"] {
+        let generation = compile(&format!(
+            "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass{recipe},setvar:tx.wrong=1\"\nSecAction \"id:2,phase:2,pass,setvar:tx.later=1\""
+        ));
+        for json in [
+            br#"{"a":"miss","b":""}"#.as_slice(),
+            br#"{}"#,
+            br#"[]"#,
+            br#"{"a":"old","a":"miss"}"#,
+        ] {
+            let mut fast = no_hit_transaction(
+                &generation,
+                json,
+                b"/",
+                RuntimeLimits::default(),
+                ResultLimits::default(),
+                false,
+            );
+            let mut cursor = no_hit_transaction(
+                &generation,
+                json,
+                b"/",
+                RuntimeLimits::default(),
+                ResultLimits::default(),
+                true,
+            );
+            let before = fast.json_budget.as_ref().unwrap().usage().work;
+            let count = fast.request.body.as_ref().unwrap().json().unwrap().argument_count();
+            assert_no_hit_cursor_parity(&mut fast, &mut cursor);
+            assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 7 * count);
+            assert_eq!(fast.selected_scratch.capacity(), 0);
+            assert_eq!(fast.tx_value(b"wrong"), None);
+            assert_eq!(fast.tx_value(b"later"), Some(b"1".as_slice()));
+            if count != 0 {
+                assert!(cursor.selected_scratch.capacity() >= count);
+            }
+        }
+    }
+}
+
+#[test]
+fn no_hit_summary_exact_and_failing_budgets_match_cursor_counters() {
+    let generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"");
+    let json = br#"{"a":"miss","b":""}"#;
+    let baseline = no_hit_transaction(
+        &generation,
+        json,
+        b"/",
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        true,
+    );
+    let publication_work = baseline.json_budget.as_ref().unwrap().usage().work;
+    for selected in [0, 1, 2, 3] {
+        for logical in [0, 7, 8, 9] {
+            for physical in [
+                publication_work,
+                publication_work + 3,
+                publication_work + 13,
+                publication_work + 14,
+            ] {
+                let limits = RuntimeLimits {
+                    max_selected_values: selected,
+                    max_operator_work_bytes: logical,
+                    ..RuntimeLimits::default()
+                };
+                let result_limits = ResultLimits {
+                    work: physical,
+                    ..ResultLimits::default()
+                };
+                let mut fast = no_hit_transaction(&generation, json, b"/", limits, result_limits, false);
+                let mut cursor = no_hit_transaction(&generation, json, b"/", limits, result_limits, true);
+                assert_no_hit_cursor_parity(&mut fast, &mut cursor);
+                assert_eq!(fast.match_scratch.capacity(), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn no_hit_summary_falls_back_for_queries_changed_profiles_and_discarded_hits() {
+    for (recipe, json, uri) in [
+        ("", br#"{"a":"miss"}"#.as_slice(), b"/?q=miss".as_slice()),
+        (",t:lowercase", br#"{"a":"MISS"}"#, b"/"),
+        ("", br#"{"a":"hit","a":"miss"}"#, b"/"),
+    ] {
+        let generation = compile(&format!("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass{recipe}\""));
+        let mut fast = no_hit_transaction(
+            &generation,
+            json,
+            uri,
+            RuntimeLimits::default(),
+            ResultLimits::default(),
+            false,
+        );
+        let mut cursor = no_hit_transaction(
+            &generation,
+            json,
+            uri,
+            RuntimeLimits::default(),
+            ResultLimits::default(),
+            true,
+        );
+        assert_no_hit_cursor_parity(&mut fast, &mut cursor);
+        assert!(fast.selected_scratch.capacity() > 0);
+    }
+}
+
+#[test]
+fn no_hit_summary_ineligible_targets_operators_and_controls_keep_cursor() {
+    for source in [
+        "SecRule ARGS:json.a \"@contains hit\" \"id:1,phase:2,pass\"",
+        "SecRule ARGS|!ARGS:json.b \"@contains hit\" \"id:1,phase:2,pass\"",
+        "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,multiMatch\"",
+        "SecRule ARGS \"@rx (hit)\" \"id:1,phase:2,pass,capture\"",
+        "SecRule ARGS \"@detectSQLi\" \"id:1,phase:2,pass\"",
+        "SecRule ARGS \"@detectXSS\" \"id:1,phase:2,pass\"",
+        "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,t:length\"",
+        "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,chain\"\nSecRule TX:a \"@contains hit\" \"\"",
+        "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\nSecRule ARGS_NAMES \"@contains hit\" \"id:2,phase:2,pass\"",
+        "SecAction \"id:1,phase:1,pass,ctl:ruleRemoveTargetByTag=check;ARGS:/^json[.]a$/\"\nSecRule ARGS \"@contains hit\" \"id:2,phase:2,pass,tag:check\"",
+    ] {
+        let generation = compile(source);
+        let mut fast = no_hit_transaction(&generation, br#"{"a":"miss","b":"miss"}"#, b"/", RuntimeLimits::default(), ResultLimits::default(), false);
+        let mut cursor = no_hit_transaction(&generation, br#"{"a":"miss","b":"miss"}"#, b"/", RuntimeLimits::default(), ResultLimits::default(), true);
+        assert_no_hit_cursor_parity(&mut fast, &mut cursor);
+        assert!(fast.selected_scratch.capacity() > 0, "{source}");
+    }
+}
+
+#[test]
+fn no_hit_summary_transform_errors_and_reference_mode_keep_cursor() {
+    let generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,t:lowercase\"");
+    let limits = RuntimeLimits {
+        max_transformation_output_bytes: 3,
+        ..RuntimeLimits::default()
+    };
+    let mut fast = no_hit_transaction(
+        &generation,
+        br#"{"a":"miss"}"#,
+        b"/",
+        limits,
+        ResultLimits::default(),
+        false,
+    );
+    let mut cursor = no_hit_transaction(
+        &generation,
+        br#"{"a":"miss"}"#,
+        b"/",
+        limits,
+        ResultLimits::default(),
+        true,
+    );
+    assert_no_hit_cursor_parity(&mut fast, &mut cursor);
+    assert!(fast.selected_scratch.capacity() > 0);
+    let mut reference = Transaction::new_with_evaluation(
+        &generation,
+        head(b"/"),
+        RuntimeLimits::default(),
+        EvaluationMode::Reference,
+    )
+    .unwrap();
+    reference.execute_request_headers().unwrap();
+    reference
+        .publish_request_body(RequestBody::new(
+            Bytes::from_static(br#"{"a":"miss"}"#),
+            BodyProcessorSelection::Json,
+        ))
+        .unwrap();
+    assert!(reference.execute_request_body().unwrap().findings().is_empty());
+    assert!(reference.selected_scratch.capacity() > 0);
+}
+
+#[test]
+fn no_hit_summary_retained_boundaries_and_growth_overlap_fall_back_safely() {
+    let generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"");
+    let json = br#"{"a":"miss","b":"miss","c":"miss","d":"miss","e":"miss"}"#;
+    let baseline = no_hit_transaction(
+        &generation,
+        json,
+        b"/",
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        true,
+    );
+    let fixed = baseline.retained_bytes();
+    let item = size_of::<SelectedValue>();
+    for extra in [0, item - 1, item, 4 * item, 5 * item - 1, 5 * item, 9 * item] {
+        let limits = RuntimeLimits {
+            max_retained_bytes: fixed + extra,
+            max_selected_values: 5,
+            ..RuntimeLimits::default()
+        };
+        let mut fast = no_hit_transaction(&generation, json, b"/", limits, ResultLimits::default(), false);
+        let mut cursor = no_hit_transaction(&generation, json, b"/", limits, ResultLimits::default(), true);
+        assert_no_hit_cursor_parity(&mut fast, &mut cursor);
+        if extra == 9 * item {
+            assert_eq!(fast.selected_scratch.capacity(), 0);
+            assert_eq!(cursor.selected_scratch.capacity(), 5);
+        } else {
+            assert_eq!(fast.selected_scratch.capacity(), cursor.selected_scratch.capacity());
+        }
+    }
+}
+
+#[test]
+fn no_hit_summary_reuses_existing_selected_capacity_without_changing_it() {
+    let generation = compile(concat!(
+        "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n",
+        "SecRule ARGS \"@contains absent\" \"id:2,phase:2,pass\"\n",
+    ));
+    let mut fast = no_hit_transaction(
+        &generation,
+        br#"{"a":"miss"}"#,
+        b"/",
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        true,
+    );
+    let staged = fast.tx.try_clone_for_unit().unwrap();
+    assert!(fast.evaluate_member_matches(0, 0, &staged, false).unwrap().is_empty());
+    let capacity = fast.selected_scratch.capacity();
+    assert!(capacity > 0);
+    fast.force_json_cursor = false;
+    let before = fast.json_budget.as_ref().unwrap().usage().work;
+    assert!(fast.evaluate_member_matches(1, 1, &staged, false).unwrap().is_empty());
+    assert_eq!(fast.selected_scratch.capacity(), capacity);
+    assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 7);
+}
 fn compare(source: &str, json: &[u8], form: &[u8], uri: &[u8], limits: RuntimeLimits) {
     let generation = compile(source);
     for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
@@ -67,19 +336,30 @@ fn compare(source: &str, json: &[u8], form: &[u8], uri: &[u8], limits: RuntimeLi
                 .as_ref()
                 .map(|value| value.bytes(&ordinary.request, ordinary.json_budget.as_mut()).unwrap()),
         );
-        assert_eq!(fused.tx.matched_var_name, ordinary.tx.matched_var_name);
+        assert_eq!(
+            fused
+                .tx
+                .matched_var_name
+                .as_ref()
+                .map(|name| name.bytes(&fused.request, fused.json_budget.as_mut()).unwrap()),
+            ordinary
+                .tx
+                .matched_var_name
+                .as_ref()
+                .map(|name| name.bytes(&ordinary.request, ordinary.json_budget.as_mut()).unwrap())
+        );
         assert_eq!(
             fused
                 .tx
                 .entries
                 .iter()
-                .map(|entry| (&entry.key, &entry.value))
+                .map(|entry| (&entry.key, entry.value.observed_bytes(&fused.request).unwrap()))
                 .collect::<Vec<_>>(),
             ordinary
                 .tx
                 .entries
                 .iter()
-                .map(|entry| (&entry.key, &entry.value))
+                .map(|entry| (&entry.key, entry.value.observed_bytes(&ordinary.request).unwrap()))
                 .collect::<Vec<_>>()
         );
         assert_eq!(fused.detector_work_bytes, ordinary.detector_work_bytes);
@@ -1313,4 +1593,148 @@ fn json_inspection_measurements() {
             .collect::<Vec<_>>()
             .join(",")
     );
+}
+
+#[test]
+fn sealed_names_and_capture_values_share_through_match_tx_and_branch_clones() {
+    let generation = compile(concat!(
+        "SecRule ARGS \"@rx ^(.*)$\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx ^(.*)$\" \"id:2,phase:2,pass,capture\"\n",
+    ));
+    for length in [0, 16_385] {
+        let mut input = b"{\"long_name\":\"".to_vec();
+        input.extend(std::iter::repeat_n(b'x', length));
+        input.extend_from_slice(b"\"}");
+        let mut tx = Transaction::new(&generation, head(b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        tx.publish_request_body(RequestBody::new(Bytes::from(input), BodyProcessorSelection::Json))
+            .unwrap();
+        let mut first = tx.evaluate_member_matches(0, 0, &TxState::default(), true).unwrap();
+        let second = tx.evaluate_member_matches(1, 1, &TxState::default(), true).unwrap();
+        assert_eq!(first[0].matched_var_name, second[0].matched_var_name);
+        assert!(matches!(first[0].matched_var_name, Some(MatchValue::Json(_))));
+        let name_pointer = first[0]
+            .matched_var_name
+            .as_ref()
+            .unwrap()
+            .bytes(&tx.request, tx.json_budget.as_mut())
+            .unwrap()
+            .as_ptr();
+        let captured = &first[0].captures[1].value;
+        assert!(matches!(captured, MatchValue::Json(_)));
+        let capture_pointer = captured.bytes(&tx.request, tx.json_budget.as_mut()).unwrap().as_ptr();
+        let mut staged = TxState::default();
+        let mut keys = Vec::new();
+        apply_member_match(&mut staged, &mut keys, first.pop().unwrap(), tx.limits).unwrap();
+        let branch = staged.try_clone().unwrap();
+        let unit = staged.try_clone_for_unit().unwrap();
+        for state in [&staged, &branch, &unit] {
+            let value = state.get(b"1").unwrap();
+            assert_eq!(value.len(), length);
+            assert_eq!(
+                value.bytes(&tx.request, tx.json_budget.as_mut()).unwrap().as_ptr(),
+                capture_pointer
+            );
+            assert!(state.retained_bytes >= 2 * length);
+            assert_eq!(
+                SelectedValue {
+                    collection: CollectionKind::Tx,
+                    name: Some(SelectedName::Tx(1)),
+                    value: SelectedBytes::Tx(1)
+                }
+                .bytes(&tx.request, state, None, tx.json_budget.as_mut())
+                .unwrap()
+                .as_ptr(),
+                capture_pointer
+            );
+        }
+        for state in [&staged, &branch] {
+            let name = state.matched_var_name.as_ref().unwrap();
+            assert_eq!(
+                name.bytes(&tx.request, tx.json_budget.as_mut()).unwrap(),
+                b"ARGS:json.long_name"
+            );
+            assert_eq!(
+                name.bytes(&tx.request, tx.json_budget.as_mut()).unwrap().as_ptr(),
+                name_pointer
+            );
+            assert_eq!(
+                state.matched_vars[0]
+                    .key
+                    .bytes(&tx.request, tx.json_budget.as_mut())
+                    .unwrap()
+                    .as_ptr(),
+                name_pointer
+            );
+        }
+        tx.tx = staged;
+        let work = tx.json_budget.as_ref().unwrap().usage().work;
+        assert_eq!(tx.tx_value(b"1").unwrap().as_ptr(), capture_pointer);
+        assert_eq!(tx.json_budget.as_ref().unwrap().usage().work, work);
+        tx.json_budget.as_mut().unwrap().work(usize::MAX).unwrap_err();
+        // Public inspection remains a checked immutable observation even after
+        // rule execution is terminal; execution cannot bypass the sticky error.
+        assert_eq!(tx.tx_value(b"1").unwrap().as_ptr(), capture_pointer);
+        assert!(tx
+            .tx
+            .get(b"1")
+            .unwrap()
+            .bytes(&tx.request, tx.json_budget.as_mut())
+            .is_err());
+    }
+}
+
+#[test]
+fn shared_capture_numeric_updates_overwrites_delete_and_recapture_match_owned_runtime() {
+    compare(
+        concat!(
+            "SecRule ARGS:json.a \"@rx ^(12)$\" \"id:1,phase:2,pass,capture,chain\"\n",
+            "SecRule TX:1 \"@streq 12\" \"chain,setvar:'tx.1=+3',setvar:'tx.old=%{MATCHED_VAR_NAME}'\"\n",
+            "SecRule TX:1 \"@eq 15\" \"setvar:'tx.numeric=%{TX.1}',setvar:'tx.1=owned',setvar:!tx.0\"\n",
+            "SecRule &TX:0 \"@eq 0\" \"id:2,phase:2,pass\"\n",
+            "SecRule TX:1 \"@streq owned\" \"id:3,phase:2,pass\"\n",
+            "SecRule ARGS:json.b \"@rx ^(34)$\" \"id:4,phase:2,pass,capture,setvar:'tx.new=%{TX.1}'\"\n",
+            "SecRule TX:1 \"@streq 34\" \"id:5,phase:3,pass\"\n",
+        ),
+        br#"{"a":"12","b":"34"}"#,
+        b"json.a=12&json.b=34",
+        b"/",
+        RuntimeLimits::default(),
+    );
+}
+
+#[test]
+fn shared_matched_vars_name_selection_and_macros_use_metered_reads() {
+    compare(concat!(
+        "SecRule ARGS_NAMES \"@contains long\" \"id:1,phase:2,pass,chain\"\n",
+        "SecRule MATCHED_VARS:ARGS_NAMES:json.long_name \"@contains long\" \"chain,setvar:'tx.first=%{MATCHED_VAR_NAME}'\"\n",
+        "SecRule MATCHED_VAR \"@contains long\" \"setvar:'tx.second=%{MATCHED_VAR_NAME}'\"\n",
+    ), br#"{"long_name":"value"}"#, b"json.long_name=value", b"/", RuntimeLimits::default());
+}
+
+#[test]
+fn shared_capture_payload_lengths_still_count_toward_tx_admission() {
+    let generation = compile("SecRule ARGS \"@rx ^(.*)$\" \"id:1,phase:2,pass,capture\"\n");
+    let length = 8192;
+    let mut input = b"{\"a\":\"".to_vec();
+    input.extend(std::iter::repeat_n(b'x', length));
+    input.extend_from_slice(b"\"}");
+    let mut tx = Transaction::new(
+        &generation,
+        head(b"/"),
+        RuntimeLimits {
+            max_tx_bytes: 4 * length - 1,
+            ..RuntimeLimits::default()
+        },
+    )
+    .unwrap();
+    tx.execute_request_headers().unwrap();
+    tx.publish_request_body(RequestBody::new(Bytes::from(input), BodyProcessorSelection::Json))
+        .unwrap();
+    assert!(matches!(
+        tx.execute_request_body(),
+        Err(RuntimeError::TxByteLimit { .. })
+    ));
+    assert_eq!(tx.tx_value(b"1"), None);
+    assert!(tx.tx.matched_var.is_none());
 }

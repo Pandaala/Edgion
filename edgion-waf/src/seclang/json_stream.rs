@@ -256,6 +256,8 @@ pub struct JsonStream {
     utf8_remaining: u8,
     utf8_value: u32,
     utf8_minimum: u32,
+    #[cfg(test)]
+    sequential_ascii: bool,
 }
 
 impl fmt::Debug for JsonStream {
@@ -285,6 +287,8 @@ impl JsonStream {
             utf8_remaining: 0,
             utf8_value: 0,
             utf8_minimum: 0,
+            #[cfg(test)]
+            sequential_ascii: false,
         }
     }
 
@@ -364,14 +368,43 @@ impl JsonStream {
         }
     }
 
-    // Consume once, with the same per-byte admission as the ordinary FSM.
-    // No lookahead reads past an uncharged byte. A complete unescaped token
+    // Batch admitted ordinary ASCII; preserve sequential admission at boundaries.
+    // No lookahead reads past the admitted prefix. A complete unescaped token
     // borrows this chunk; escape or chunk end retains only its consumed prefix.
     fn borrow_string_prefix<F>(&mut self, bytes: &[u8], key: bool, sink: &mut F) -> Result<usize, JsonStreamError>
     where
         F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
     {
-        for (offset, &byte) in bytes.iter().enumerate() {
+        #[cfg(test)]
+        if self.sequential_ascii {
+            return self.borrow_string_prefix_sequential(bytes, key, sink);
+        }
+        let mut offset = 0;
+        while offset < bytes.len() {
+            if self.utf8_remaining == 0 {
+                // Only inspect a prefix whose ordinary bytes can all be admitted.
+                // Boundary and special bytes retain sequential error precedence.
+                let admitted = (bytes.len() - offset)
+                    .min(self.limits.max_source_bytes.saturating_sub(self.usage.source_bytes))
+                    .min(self.limits.max_raw_token_bytes.saturating_sub(self.raw_token_bytes))
+                    .min(self.limits.max_decoded_bytes.saturating_sub(self.usage.decoded_bytes))
+                    .min(self.limits.max_work.saturating_sub(self.usage.work) / 2);
+                let run = bytes[offset..offset + admitted]
+                    .iter()
+                    .take_while(|&&byte| (0x20..=0x7f).contains(&byte) && !matches!(byte, b'"' | b'\\'))
+                    .count();
+                self.usage.source_bytes += run;
+                self.raw_token_bytes += run;
+                self.usage.decoded_bytes += run;
+                self.usage.work += run * 2;
+                #[cfg(test)]
+                measurements::record(Event::SourceBytes, run);
+                offset += run;
+                if offset == bytes.len() {
+                    break;
+                }
+            }
+            let byte = bytes[offset];
             charge(
                 &mut self.usage.source_bytes,
                 1,
@@ -385,6 +418,7 @@ impl JsonStream {
             if self.utf8_remaining != 0 {
                 self.utf8(byte)?;
                 self.decoded(1)?;
+                offset += 1;
                 continue;
             }
             match byte {
@@ -419,6 +453,7 @@ impl JsonStream {
                     self.decoded(1)?;
                 }
             }
+            offset += 1;
         }
         self.work(bytes.len())?;
         self.retain_token_bytes(bytes)?;

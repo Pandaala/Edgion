@@ -12,6 +12,7 @@ fn allocate_owner(counter: &AtomicU64) -> Result<u64> {
         .map_err(|_| StoreError::Generation)
 }
 
+use super::super::json_inspection_plan::JsonView;
 use super::*;
 use crate::seclang::{JsonScalarKind, JsonSemanticSummary};
 
@@ -202,6 +203,16 @@ impl InspectionBudget {
     pub(super) fn failure(&self) -> Option<StoreError> {
         self.failure
     }
+    /// Read-only admission: fallback must preserve cursor error timing/counters.
+    fn admits_work(&self, owner: u64, amount: usize) -> bool {
+        self.owner == owner
+            && self.failure.is_none()
+            && self
+                .usage
+                .work
+                .checked_add(amount)
+                .is_some_and(|work| work <= self.limits.work)
+    }
     /// Caller invokes this only after dropping all externally owned scratch.
     /// Cleanup does not clear or bypass the first physical failure.
     pub(super) fn release_scratch(&mut self) {
@@ -337,7 +348,7 @@ struct Lease {
     owner: u64,
     offset: usize,
     len: usize,
-    class: u8,
+    size: usize,
 }
 /// Minted only after sealing: the arena never frees or reuses this range again.
 /// Keeping a handle does not retain the original body or allocate another owner.
@@ -352,61 +363,134 @@ impl SealedMatchValue {
         self.len
     }
 }
+struct LargeClass {
+    size: usize,
+    head: Option<usize>,
+}
 struct BytePool {
     owner: u64,
     bytes: Vec<u8>,
-    heads: [Option<usize>; usize::BITS as usize],
+    heads: [Option<usize>; 13],
+    large_heads: Vec<LargeClass>,
 }
 impl BytePool {
     fn new(owner: u64) -> Self {
         Self {
             owner,
             bytes: Vec::new(),
-            heads: [None; usize::BITS as usize],
+            heads: [None; 13],
+            large_heads: Vec::new(),
         }
     }
 }
 impl BytePool {
-    fn alloc(&mut self, len: usize, budget: &mut InspectionBudget) -> Result<Lease> {
-        if budget.owner != self.owner {
+    fn allocation_size(len: usize) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
+        let len = len.max(size_of::<usize>());
+        if len <= 4096 {
+            len.checked_next_power_of_two().ok_or(StoreError::Arithmetic)
+        } else {
+            Ok(add(len, 4095)? & !4095)
+        }
+    }
+
+    // Preserve a small page remainder for seal-time metadata after a large lease.
+    // Optional hints must never turn otherwise-admitted exact growth into failure.
+    fn arena_reserve_amount(len: usize, capacity: usize, additional: usize, allowance: usize) -> Result<usize> {
+        let required = add(len, additional)?;
+        if required > 4096 && required > capacity {
+            if let Some(rounded) = required.checked_add(4095).map(|bytes| bytes & !4095) {
+                if rounded <= allowance {
+                    return sub(rounded, len);
+                }
+            }
+        }
+        Ok(additional)
+    }
+
+    // Large-bin insertion can move metadata, so leases retain size, never this index.
+    fn class_index(&mut self, size: usize, register: bool, budget: &mut InspectionBudget) -> Result<usize> {
+        if size <= 4096 {
+            budget.work(1)?;
+            return Ok(size.trailing_zeros() as usize);
+        }
+        let mut low = 0;
+        let mut high = self.large_heads.len();
+        while low < high {
+            let middle = low + (high - low) / 2;
+            budget.work(1)?;
+            match self.large_heads[middle].size.cmp(&size) {
+                std::cmp::Ordering::Less => low = middle + 1,
+                std::cmp::Ordering::Greater => high = middle,
+                std::cmp::Ordering::Equal => return add(13, middle),
+            }
+        }
+        if !register {
             return Err(StoreError::Identity);
         }
-        if len == 0 {
-            return Ok(Lease {
-                owner: self.owner,
-                offset: 0,
-                len: 0,
-                class: 0,
-            });
-        }
-        let size = len
-            .max(size_of::<usize>())
-            .checked_next_power_of_two()
-            .ok_or(StoreError::Arithmetic)?;
-        let class = size.trailing_zeros() as u8;
-        budget.work(1)?;
-        let offset = if let Some(offset) = self.heads[class as usize] {
-            let mut bytes = [0u8; size_of::<usize>()];
-            bytes.copy_from_slice(
-                self.bytes
-                    .get(offset..add(offset, size_of::<usize>())?)
-                    .ok_or(StoreError::Identity)?,
-            );
-            let next = usize::from_ne_bytes(bytes);
-            self.heads[class as usize] = if next == usize::MAX { None } else { Some(next) };
-            offset
+        // Admit both shifted metadata and the new entry before reserving/inserting.
+        budget.work(mul(add(self.large_heads.len() - low, 1)?, size_of::<LargeClass>())?)?;
+        budget.grow(&mut self.large_heads, 1, false, false)?;
+        self.large_heads.insert(low, LargeClass { size, head: None });
+        add(13, low)
+    }
+
+    fn head_mut(&mut self, index: usize) -> Result<&mut Option<usize>> {
+        if index < 13 {
+            self.heads.get_mut(index).ok_or(StoreError::Identity)
         } else {
-            budget.grow(&mut self.bytes, size, false, false)?;
-            budget.work(size)?;
-            let offset = self.bytes.len();
-            self.bytes.resize(add(offset, size)?, 0);
-            offset
-        };
-        Ok(Lease {
-            owner: self.owner,
-            offset,
-            len,
-            class,
+            self.large_heads
+                .get_mut(index - 13)
+                .map(|class| &mut class.head)
+                .ok_or(StoreError::Identity)
+        }
+    }
+
+    fn alloc(&mut self, len: usize, budget: &mut InspectionBudget) -> Result<Lease> {
+        budget.checked(self.owner, |budget| {
+            let size = Self::allocation_size(len)?;
+            if size == 0 {
+                return Ok(Lease {
+                    owner: self.owner,
+                    offset: 0,
+                    len: 0,
+                    size: 0,
+                });
+            }
+            let index = self.class_index(size, true, budget)?;
+            let offset = if let Some(offset) = *self.head_mut(index)? {
+                self.bytes.get(offset..add(offset, size)?).ok_or(StoreError::Identity)?;
+                budget.work(size_of::<usize>())?;
+                let mut bytes = [0u8; size_of::<usize>()];
+                bytes.copy_from_slice(
+                    self.bytes
+                        .get(offset..add(offset, size_of::<usize>())?)
+                        .ok_or(StoreError::Identity)?,
+                );
+                let next = usize::from_ne_bytes(bytes);
+                *self.head_mut(index)? = if next == usize::MAX { None } else { Some(next) };
+                offset
+            } else {
+                let additional = Self::arena_reserve_amount(
+                    self.bytes.len(),
+                    self.bytes.capacity(),
+                    size,
+                    budget.limits.retained_bytes.saturating_sub(budget.usage.retained_bytes),
+                )?;
+                budget.grow(&mut self.bytes, additional, false, false)?;
+                budget.work(size)?;
+                let offset = self.bytes.len();
+                self.bytes.resize(add(offset, size)?, 0);
+                offset
+            };
+            Ok(Lease {
+                owner: self.owner,
+                offset,
+                len,
+                size,
+            })
         })
     }
     fn copy(&mut self, input: &[u8], budget: &mut InspectionBudget) -> Result<Lease> {
@@ -422,7 +506,7 @@ impl BytePool {
         Ok(lease)
     }
     fn read(&self, lease: Lease) -> Result<&[u8]> {
-        if lease.owner != self.owner {
+        if lease.owner != self.owner || lease.size != Self::allocation_size(lease.len)? {
             return Err(StoreError::Identity);
         }
         self.bytes
@@ -430,25 +514,26 @@ impl BytePool {
             .ok_or(StoreError::Identity)
     }
     fn free(&mut self, lease: Lease, budget: &mut InspectionBudget) -> Result<()> {
-        if lease.owner != self.owner || budget.owner != self.owner {
-            return Err(StoreError::Identity);
-        }
-        if lease.len == 0 {
-            return Ok(());
-        }
-        budget.work(1)?;
-        let next = self
-            .heads
-            .get(lease.class as usize)
-            .ok_or(StoreError::Identity)?
-            .unwrap_or(usize::MAX)
-            .to_ne_bytes();
-        self.bytes
-            .get_mut(lease.offset..add(lease.offset, next.len())?)
-            .ok_or(StoreError::Identity)?
-            .copy_from_slice(&next);
-        self.heads[lease.class as usize] = Some(lease.offset);
-        Ok(())
+        budget.checked(self.owner, |budget| {
+            if lease.owner != self.owner || lease.size != Self::allocation_size(lease.len)? {
+                return Err(StoreError::Identity);
+            }
+            if lease.len == 0 {
+                return Ok(());
+            }
+            self.bytes
+                .get(lease.offset..add(lease.offset, lease.size)?)
+                .ok_or(StoreError::Identity)?;
+            let index = self.class_index(lease.size, false, budget)?;
+            budget.work(size_of::<usize>())?;
+            let next = self.head_mut(index)?.unwrap_or(usize::MAX).to_ne_bytes();
+            self.bytes
+                .get_mut(lease.offset..add(lease.offset, next.len())?)
+                .ok_or(StoreError::Identity)?
+                .copy_from_slice(&next);
+            *self.head_mut(index)? = Some(lease.offset);
+            Ok(())
+        })
     }
 }
 
@@ -529,10 +614,59 @@ pub(super) struct CompletionProof {
     candidate: CandidateId,
 }
 
+/// Sparse seal-time rows: no metadata is added to unmatched candidates.
+struct QualifiedName {
+    candidate: CandidateId,
+    collection: CollectionKind,
+    value: Lease,
+}
+impl QualifiedName {
+    fn key(&self) -> (u32, usize) {
+        (self.candidate.0.slot, collection_index(self.collection))
+    }
+}
+
+/// In-place heapsort charges every comparison and moved row and may stop on a
+/// sticky physical limit. No temporary sorting allocation is needed.
+fn sort_qualified_names(rows: &mut [QualifiedName], budget: &mut InspectionBudget) -> Result<()> {
+    fn sift(rows: &mut [QualifiedName], mut root: usize, end: usize, budget: &mut InspectionBudget) -> Result<()> {
+        loop {
+            let child = add(mul(root, 2)?, 1)?;
+            if child >= end {
+                return Ok(());
+            }
+            let mut largest = child;
+            if child + 1 < end {
+                budget.work(1)?;
+                if rows[child].key() < rows[child + 1].key() {
+                    largest = child + 1;
+                }
+            }
+            budget.work(1)?;
+            if rows[root].key() >= rows[largest].key() {
+                return Ok(());
+            }
+            budget.work(mul(2, size_of::<QualifiedName>())?)?;
+            rows.swap(root, largest);
+            root = largest;
+        }
+    }
+    for root in (0..rows.len() / 2).rev() {
+        sift(rows, root, rows.len(), budget)?;
+    }
+    for end in (1..rows.len()).rev() {
+        budget.work(mul(2, size_of::<QualifiedName>())?)?;
+        rows.swap(0, end);
+        sift(rows, 0, end, budget)?;
+    }
+    Ok(())
+}
+
 struct StoreRecords<'generation> {
     owner: u64,
     generation: GenerationHandle<'generation>,
     named_first: Vec<Option<CandidateId>>,
+    qualified_names: Vec<QualifiedName>,
     runtime: RuntimeLimits,
     mode: EvaluationMode,
     candidates: Pool<Candidate>,
@@ -549,12 +683,14 @@ pub(super) struct ResultStore<'generation> {
     terminal: Terminal,
     sealed: Option<Receipt>,
     summary: Option<JsonSemanticSummary>,
+    summary_no_hit: bool,
 }
 
 pub(super) struct SealedResults<'generation> {
     records: StoreRecords<'generation>,
     pub(super) receipt: Option<Receipt>,
     pub(super) summary: JsonSemanticSummary,
+    summary_no_hit: bool,
 }
 
 impl<'generation> ResultStore<'generation> {
@@ -570,6 +706,7 @@ impl<'generation> ResultStore<'generation> {
                 owner,
                 generation,
                 named_first: Vec::new(),
+                qualified_names: Vec::new(),
                 runtime,
                 mode,
                 candidates: Pool::new(owner),
@@ -589,6 +726,7 @@ impl<'generation> ResultStore<'generation> {
             terminal: Terminal::Active,
             sealed: None,
             summary: None,
+            summary_no_hit: false,
         })
     }
     fn active<T>(&mut self, operation: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
@@ -1152,6 +1290,11 @@ impl<'generation> ResultStore<'generation> {
     }
     pub(super) fn seal(&mut self, receipt: Option<Receipt>, summary: JsonSemanticSummary) -> Result<()> {
         self.active(|store| {
+            let sole_profile = store.records.generation.json_inspection.summary_profile();
+            let mut summary_no_hit = sole_profile.is_some()
+                && store.records.profiles.slots.capacity() == 0
+                && store.records.changes.slots.capacity() == 0
+                && store.records.outcomes.slots.capacity() == 0;
             let demands = store.records.generation.json_inspection.named_demands.len();
             store
                 .budget
@@ -1166,6 +1309,10 @@ impl<'generation> ResultStore<'generation> {
                 let candidate = store.records.candidates.get(id.0)?;
                 if !candidate.complete {
                     return Err(StoreError::State);
+                }
+                if summary_no_hit {
+                    summary_no_hit = store.profile_state(id, sole_profile.ok_or(StoreError::State)?)?
+                        == ProfileState::ImplicitUnchanged;
                 }
                 if candidate.deferred.is_some() {
                     let name = store.records.bytes.read(candidate.name)?;
@@ -1189,6 +1336,78 @@ impl<'generation> ResultStore<'generation> {
                     }
                 }
                 next = candidate.next;
+                let name = candidate.name;
+                let mut outcome_next = candidate.outcomes;
+                let mut required = [false; 2];
+                while let Some(outcome_id) = outcome_next {
+                    store.budget.work(1)?;
+                    let outcome = store.records.outcomes.get(outcome_id.0)?;
+                    if outcome.owner != id {
+                        return Err(StoreError::Identity);
+                    }
+                    if matches!(outcome.result, StoredOutcome::Match { .. }) {
+                        let group = store
+                            .records
+                            .generation
+                            .json_inspection
+                            .groups
+                            .get(outcome.group)
+                            .ok_or(StoreError::Identity)?;
+                        let view = match group.view {
+                            JsonView::Value => 0,
+                            JsonView::Name => 1,
+                        };
+                        required[view] = true;
+                    }
+                    outcome_next = outcome.next;
+                }
+                for (required, collection) in required
+                    .into_iter()
+                    .zip([CollectionKind::Args, CollectionKind::ArgsNames])
+                {
+                    if !required {
+                        continue;
+                    }
+                    let prefix = collection.as_str().as_bytes();
+                    store.records.bytes.read(name)?;
+                    let len = add(add(prefix.len(), 1)?, name.len)?;
+                    store.budget.grow(&mut store.records.qualified_names, 1, true, false)?;
+                    let value = store.records.bytes.alloc(len, &mut store.budget)?;
+                    store.budget.work(len)?;
+                    let start = value.offset;
+                    let name_start = add(start, add(prefix.len(), 1)?)?;
+                    store
+                        .records
+                        .bytes
+                        .bytes
+                        .get_mut(start..add(start, prefix.len())?)
+                        .ok_or(StoreError::Identity)?
+                        .copy_from_slice(prefix);
+                    *store
+                        .records
+                        .bytes
+                        .bytes
+                        .get_mut(add(start, prefix.len())?)
+                        .ok_or(StoreError::Identity)? = b':';
+                    store
+                        .records
+                        .bytes
+                        .bytes
+                        .get(name_start..add(name_start, name.len)?)
+                        .ok_or(StoreError::Identity)?;
+                    store
+                        .records
+                        .bytes
+                        .bytes
+                        .copy_within(name.offset..add(name.offset, name.len)?, name_start);
+                    store.budget.work(size_of::<QualifiedName>())?;
+                    store.records.qualified_names.push(QualifiedName {
+                        candidate: id,
+                        collection,
+                        value,
+                    });
+                    store.budget.usage.name_bytes = add(store.budget.usage.name_bytes, len)?;
+                }
                 last = Some(id);
                 count = add(count, 1)?;
                 if count > store.budget.usage.live_candidates {
@@ -1198,6 +1417,10 @@ impl<'generation> ResultStore<'generation> {
             if last != receipt.map(|r| r.tail) || count != store.budget.usage.live_candidates {
                 return Err(StoreError::Identity);
             }
+            sort_qualified_names(&mut store.records.qualified_names, &mut store.budget)?;
+            // Mint only after the ordinary seal invariants, including survivor
+            // identity/order and sorted name publication, have succeeded.
+            store.summary_no_hit = summary_no_hit && count == summary.argument_count;
             store.sealed = receipt;
             store.summary = Some(summary);
             store.terminal = Terminal::Sealed;
@@ -1230,6 +1453,7 @@ impl<'generation> ResultStore<'generation> {
                 records: self.records,
                 receipt: self.sealed,
                 summary: self.summary.ok_or(StoreError::State)?,
+                summary_no_hit: self.summary_no_hit,
             },
             self.budget,
         ))
@@ -1274,6 +1498,7 @@ impl<'generation> ResultStore<'generation> {
         self.records.captures = Pool::new(owner);
         self.records.bytes = BytePool::new(owner);
         self.records.named_first = Vec::new();
+        self.records.qualified_names = Vec::new();
         let previous = self.budget.usage;
         self.budget.usage = StoreUsage {
             retained_bytes: self.budget.scratch,
@@ -1311,7 +1536,7 @@ pub(super) struct ChangeView {
 }
 pub(super) struct CaptureView<'a> {
     pub key: &'a [u8],
-    pub value: &'a [u8],
+    pub value: SealedMatchValue,
     pub next: Option<CaptureId>,
 }
 pub(super) enum OutcomeValue {
@@ -1327,6 +1552,70 @@ pub(super) struct OutcomeView {
 }
 
 impl SealedResults<'_> {
+    pub(super) fn admits_summary_no_hit(
+        &self,
+        budget: &InspectionBudget,
+        generation: &CompiledGeneration,
+        runtime: RuntimeLimits,
+        mode: EvaluationMode,
+        work: usize,
+    ) -> bool {
+        self.summary_no_hit
+            && mode == EvaluationMode::Accelerated
+            && std::ptr::eq(&*self.records.generation, generation)
+            && self.records.runtime == runtime
+            && self.records.mode == mode
+            && budget.admits_work(self.records.owner, work)
+    }
+    fn sealed_handle(&self, value: Lease) -> Result<SealedMatchValue> {
+        self.records.bytes.read(value)?;
+        Ok(SealedMatchValue {
+            owner: value.owner,
+            offset: value.offset,
+            len: value.len,
+        })
+    }
+    /// Read-only public observation seam. Runtime execution uses match_value.
+    pub(super) fn observe_match_value(&self, value: SealedMatchValue) -> Result<&[u8]> {
+        if value.owner != self.records.owner {
+            return Err(StoreError::Identity);
+        }
+        self.records
+            .bytes
+            .bytes
+            .get(value.offset..add(value.offset, value.len)?)
+            .ok_or(StoreError::Identity)
+    }
+    pub(super) fn qualified_name(
+        &self,
+        budget: &mut InspectionBudget,
+        owner: CandidateId,
+        collection: CollectionKind,
+    ) -> Result<SealedMatchValue> {
+        budget.checked(self.records.owner, |budget| {
+            self.records.candidates.get(owner.0)?;
+            let key = (owner.0.slot, collection_index(collection));
+            let mut low = 0;
+            let mut high = self.records.qualified_names.len();
+            while low < high {
+                budget.work(1)?;
+                let middle = low + (high - low) / 2;
+                let row = &self.records.qualified_names[middle];
+                match row.key().cmp(&key) {
+                    std::cmp::Ordering::Less => low = middle + 1,
+                    std::cmp::Ordering::Greater => high = middle,
+                    std::cmp::Ordering::Equal => {
+                        if row.candidate != owner || row.collection != collection {
+                            return Err(StoreError::Identity);
+                        }
+                        return self.sealed_handle(row.value);
+                    }
+                }
+            }
+            Err(StoreError::Identity)
+        })
+    }
+
     pub(super) fn named_value(&self, budget: &mut InspectionBudget, demand: usize) -> Result<Option<&[u8]>> {
         budget.checked(self.records.owner, |budget| {
             budget.work(1)?;
@@ -1515,14 +1804,7 @@ impl SealedResults<'_> {
     pub(super) fn match_value(&self, budget: &mut InspectionBudget, value: SealedMatchValue) -> Result<&[u8]> {
         budget.checked(self.records.owner, |budget| {
             budget.work(1)?;
-            if value.owner != self.records.owner {
-                return Err(StoreError::Identity);
-            }
-            self.records
-                .bytes
-                .bytes
-                .get(value.offset..add(value.offset, value.len)?)
-                .ok_or(StoreError::Identity)
+            self.observe_match_value(value)
         })
     }
     pub(super) fn capture(
@@ -1544,7 +1826,7 @@ impl SealedResults<'_> {
             }
             Ok(CaptureView {
                 key: self.records.bytes.read(capture.key)?,
-                value: self.records.bytes.read(capture.value)?,
+                value: self.sealed_handle(capture.value)?,
                 next: capture.next,
             })
         })

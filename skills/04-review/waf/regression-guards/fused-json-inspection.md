@@ -131,3 +131,26 @@ Re-evaluate when result arenas become mutable after publication, request publica
 can be replaced while match observers survive, or matches can escape the transaction.
 Keep shared-pointer, cross-owner/range, macro/chain/rollback and logical TX budget
 tests. Fewer allocations do not imply lower cumulative bytes for very short values.
+
+
+The allocation/scan follow-up is recorded in
+[the approved plan](../../../../tasks/pending/waf-json-checker/19-allocation-and-scan-plan.md)
+and [the results](../../../../tasks/pending/waf-json-checker/20-allocation-and-scan-results.md).
+Member-match capacity now survives unit/chain evaluation and remains charged while
+loaned. Sparse qualified names are pooled only for surviving hits; match names,
+MATCHED_VARS keys, capture values and TX capture clones use sealed handles.
+All runtime reads remain metered; tx_value alone is immutable observation with
+owner/range validation. Semantic length admission remains independent of sharing.
+Large BytePool classes use checked page rounding and charged sorted metadata;
+small classes retain fixed heads. Batch ASCII scanning preserves sequential
+special-byte and near-limit errors, verified against a test-only lexical oracle.
+
+Query-empty accelerated no-hit replay requires a sealed completed sole-value-profile
+proof, never-allocated outcome/profile/change pools, static unmodified Args selection,
+identity checks and successful logical/physical/hypothetical-selection preflight.
+It charges the cursor's 2N selection and 5N replay work without materializing
+selected candidates. Queries, ambiguous shapes, changed/error profiles, discarded
+hits and uncertain limits fall back before counter mutation. Reference always
+uses the cursor. Re-evaluate when runtime counters, profile completion, selection
+growth or scratch lifetime changes; preserve forced-cursor differential tests and
+source-local test-oracle layout exceptions.

@@ -297,7 +297,10 @@ fn positive_captures_and_stored_payload_share_the_peak_capacity_budget() {
     };
     assert_eq!(sealed.match_value(&mut budget, value).unwrap(), b"secret123");
     let capture = sealed.capture(&mut budget, id, outcome, captures.unwrap()).unwrap();
-    assert_eq!((capture.key, capture.value), (b"0".as_slice(), b"secret123".as_slice()));
+    assert_eq!(
+        (capture.key, sealed.match_value(&mut budget, capture.value).unwrap()),
+        (b"0".as_slice(), b"secret123".as_slice())
+    );
     // Store growth clips geometric reservations to the available cap. Find the
     // actual minimum admission, rather than treating an unconstrained high-water
     // mark as the required minimum of a differently constrained allocation.

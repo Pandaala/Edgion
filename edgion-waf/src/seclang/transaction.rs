@@ -575,8 +575,9 @@ impl SelectedValue {
             SelectedBytes::Tx(index) => tx
                 .entries
                 .get(*index)
-                .map(|entry| entry.value.as_slice())
-                .ok_or(RuntimeError::GenerationInvariant),
+                .ok_or(RuntimeError::GenerationInvariant)?
+                .value
+                .bytes(request, json_budget),
             SelectedBytes::MatchedVar => tx
                 .matched_var
                 .as_ref()
@@ -644,8 +645,9 @@ fn selected_name_bytes<'value>(
         SelectedName::MatchedVars(index) => tx
             .matched_vars
             .get(index)
-            .map(|entry| entry.key.as_slice())
-            .ok_or(RuntimeError::GenerationInvariant),
+            .ok_or(RuntimeError::GenerationInvariant)?
+            .key
+            .bytes(request, json_budget),
     })
     .transpose()
 }
@@ -703,8 +705,8 @@ struct ResponseState {
     retained_bytes: usize,
 }
 
-struct TxEntry<V = Vec<u8>> {
-    key: Vec<u8>,
+struct TxEntry<V = MatchValue, K = Vec<u8>> {
+    key: K,
     value: V,
 }
 
@@ -725,6 +727,26 @@ impl MatchValue {
         match self {
             Self::Owned(value) => value.len(),
             Self::Json(value) => value.len(),
+        }
+    }
+    fn owned_capacity(&self) -> usize {
+        match self {
+            Self::Owned(value) => value.capacity(),
+            Self::Json(_) => 0,
+        }
+    }
+    /// Immutable observation only. Rule execution must use the metered seam.
+    fn observed_bytes<'value>(&'value self, request: &'value RequestState) -> Result<&'value [u8], RuntimeError> {
+        match self {
+            Self::Owned(value) => Ok(value),
+            Self::Json(value) => request
+                .body
+                .as_ref()
+                .and_then(RequestBodyPublication::json)
+                .ok_or(RuntimeError::JsonInspectionState)?
+                .results()?
+                .observe_match_value(*value)
+                .map_err(map_store_error),
         }
     }
     fn try_clone(&self) -> Result<Self, RuntimeError> {
@@ -756,8 +778,8 @@ impl MatchValue {
 struct TxState {
     entries: Vec<TxEntry>,
     matched_var: Option<MatchValue>,
-    matched_var_name: Option<Vec<u8>>,
-    matched_vars: Vec<TxEntry<MatchValue>>,
+    matched_var_name: Option<MatchValue>,
+    matched_vars: Vec<TxEntry<MatchValue, MatchValue>>,
     removed_units: Vec<usize>,
     target_exclusions: Vec<ActiveTargetExclusion>,
     request_body_processor: Option<super::super::BodyProcessorSelection>,
@@ -774,14 +796,78 @@ struct ActiveTargetExclusion {
 
 struct CaptureEntry {
     key: Vec<u8>,
-    value: Vec<u8>,
+    value: MatchValue,
 }
 
 #[derive(Default)]
 struct MemberMatch {
     captures: Vec<CaptureEntry>,
     matched_var: Option<MatchValue>,
-    matched_var_name: Option<Vec<u8>>,
+    matched_var_name: Option<MatchValue>,
+}
+
+#[derive(Clone, Copy)]
+struct MatchStorage {
+    fixed_bytes: usize,
+    retained_limit: usize,
+    limit: usize,
+}
+
+impl MatchStorage {
+    fn push(
+        self,
+        matches: &mut Vec<MemberMatch>,
+        matched: MemberMatch,
+        scratch_bytes: &mut usize,
+        match_bytes: &mut usize,
+    ) -> Result<(), RuntimeError> {
+        if matches.len() == matches.capacity() {
+            let target = matches
+                .capacity()
+                .checked_mul(2)
+                .ok_or(RuntimeError::Arithmetic)?
+                .max(1)
+                .min(self.limit);
+            let allocation = target
+                .checked_mul(size_of::<MemberMatch>())
+                .ok_or(RuntimeError::Arithmetic)?;
+            let current = self
+                .fixed_bytes
+                .checked_add(*match_bytes)
+                .ok_or(RuntimeError::Arithmetic)?;
+            // Reallocation may temporarily retain the complete old allocation.
+            if current.checked_add(allocation).ok_or(RuntimeError::Arithmetic)? > self.retained_limit {
+                return Err(RuntimeError::RetainedByteLimit {
+                    limit: self.retained_limit,
+                });
+            }
+            matches
+                .try_reserve_exact(target.checked_sub(matches.len()).ok_or(RuntimeError::Arithmetic)?)
+                .map_err(|_| RuntimeError::Allocation)?;
+            let actual = matches
+                .capacity()
+                .checked_mul(size_of::<MemberMatch>())
+                .ok_or(RuntimeError::Arithmetic)?;
+            if current.checked_add(actual).ok_or(RuntimeError::Arithmetic)? > self.retained_limit {
+                // Drop an allocator overshoot instead of retaining unadmitted space.
+                *matches = Vec::new();
+                *scratch_bytes = scratch_bytes
+                    .checked_sub(*match_bytes)
+                    .ok_or(RuntimeError::Arithmetic)?;
+                *match_bytes = 0;
+                return Err(RuntimeError::RetainedByteLimit {
+                    limit: self.retained_limit,
+                });
+            }
+            *scratch_bytes = scratch_bytes
+                .checked_sub(*match_bytes)
+                .and_then(|bytes| bytes.checked_add(actual))
+                .ok_or(RuntimeError::Arithmetic)?;
+            *match_bytes = actual;
+        }
+        matches.push(matched);
+        Ok(())
+    }
 }
 
 struct ChainBranch {
@@ -833,6 +919,8 @@ pub struct Transaction<'generation> {
     capture_scratch: Vec<RegexCaptureScratch>,
     scratch_bytes: usize,
     selected_scratch: Vec<SelectedValue>,
+    match_scratch: Vec<MemberMatch>,
+    match_scratch_bytes: usize,
     detector_work_bytes: usize,
     ctl_work_bytes: usize,
     tx: TxState,
@@ -840,6 +928,8 @@ pub struct Transaction<'generation> {
     response: Option<ResponseState>,
     request_body_error: Option<BodyError>,
     evaluation_mode: EvaluationMode,
+    #[cfg(test)]
+    force_json_cursor: bool,
     rule_engine_mode: RuleEngineMode,
     request_body_stream: Option<RequestBodyStreamState>,
     stream_member_matches: Option<Vec<Option<bool>>>,
@@ -996,6 +1086,8 @@ impl<'generation> Transaction<'generation> {
             capture_scratch,
             scratch_bytes,
             selected_scratch: Vec::new(),
+            match_scratch: Vec::new(),
+            match_scratch_bytes: 0,
             detector_work_bytes: 0,
             ctl_work_bytes: 0,
             tx: TxState::default(),
@@ -1003,6 +1095,8 @@ impl<'generation> Transaction<'generation> {
             response: None,
             request_body_error: None,
             evaluation_mode,
+            #[cfg(test)]
+            force_json_cursor: false,
             rule_engine_mode,
             request_body_stream: None,
             stream_member_matches: None,
@@ -1032,7 +1126,7 @@ impl<'generation> Transaction<'generation> {
     }
 
     pub fn tx_value(&self, key: &[u8]) -> Option<&[u8]> {
-        self.tx.get(key)
+        self.tx.get(key)?.observed_bytes(&self.request).ok()
     }
 
     pub const fn request_body_error(&self) -> Option<BodyError> {
@@ -1653,6 +1747,21 @@ impl<'generation> Transaction<'generation> {
     }
 
     fn evaluate_unit(&mut self, unit_id: usize, prefix_match: Option<bool>) -> Result<bool, RuntimeError> {
+        // Keep capacity charged while the buffer is loaned to the entire unit.
+        let mut matches = std::mem::take(&mut self.match_scratch);
+        matches.clear();
+        let result = self.evaluate_unit_into(unit_id, prefix_match, &mut matches);
+        matches.clear();
+        self.match_scratch = matches;
+        result
+    }
+
+    fn evaluate_unit_into(
+        &mut self,
+        unit_id: usize,
+        prefix_match: Option<bool>,
+        matches: &mut Vec<MemberMatch>,
+    ) -> Result<bool, RuntimeError> {
         let unit = *self
             .generation
             .units
@@ -1664,16 +1773,16 @@ impl<'generation> Transaction<'generation> {
             .ok_or(RuntimeError::Arithmetic)?;
         let mut initial = self.tx.try_clone_for_unit()?;
         if unit.member_count == 1 {
-            let matches = match prefix_match {
-                Some(matched) => Self::boolean_member_matches(matched)?,
-                None => self.evaluate_member_matches(unit_id, unit.member_start, &initial, false)?,
-            };
+            match prefix_match {
+                Some(matched) => self.boolean_member_matches_into(matched, &initial, matches)?,
+                None => self.evaluate_member_matches_into(unit_id, unit.member_start, &initial, false, matches)?,
+            }
             if matches.is_empty() {
                 return Ok(false);
             }
             let mut capture_keys = try_clone_byte_vectors(&self.capture_keys)?;
             let mut setvar_actions = 0_usize;
-            for matched in matches {
+            for matched in matches.drain(..) {
                 apply_member_match(&mut initial, &mut capture_keys, matched, self.limits)?;
                 self.apply_member_actions(unit.member_start, &mut initial, &mut setvar_actions)?;
             }
@@ -1692,7 +1801,8 @@ impl<'generation> Transaction<'generation> {
             let mut next = Vec::new();
             let mut next_bytes = 0_usize;
             for branch in &frontier {
-                for matched in self.evaluate_member_matches(unit_id, member_id, &branch.tx, final_member)? {
+                self.evaluate_member_matches_into(unit_id, member_id, &branch.tx, final_member, matches)?;
+                for matched in matches.drain(..) {
                     let mut candidate = ChainBranch {
                         tx: branch.tx.try_clone()?,
                         capture_keys: try_clone_byte_vectors(&branch.capture_keys)?,
@@ -1754,15 +1864,36 @@ impl<'generation> Transaction<'generation> {
         Ok(true)
     }
 
-    fn boolean_member_matches(matched: bool) -> Result<Vec<MemberMatch>, RuntimeError> {
-        let mut matches = Vec::new();
+    fn boolean_member_matches_into(
+        &mut self,
+        matched: bool,
+        tx: &TxState,
+        matches: &mut Vec<MemberMatch>,
+    ) -> Result<(), RuntimeError> {
         if matched {
-            matches.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
-            matches.push(MemberMatch::default());
+            self.match_storage(tx, 1)?.push(
+                matches,
+                MemberMatch::default(),
+                &mut self.scratch_bytes,
+                &mut self.match_scratch_bytes,
+            )?;
         }
-        Ok(matches)
+        Ok(())
     }
 
+    fn match_storage(&self, tx: &TxState, limit: usize) -> Result<MatchStorage, RuntimeError> {
+        Ok(MatchStorage {
+            fixed_bytes: self
+                .retained_bytes()
+                .checked_sub(self.match_scratch_bytes)
+                .and_then(|bytes| bytes.checked_add(tx.retained_bytes.saturating_sub(self.tx.retained_bytes)))
+                .ok_or(RuntimeError::Arithmetic)?,
+            retained_limit: self.limits.max_retained_bytes,
+            limit,
+        })
+    }
+
+    #[cfg(test)]
     fn evaluate_member_matches(
         &mut self,
         unit_id: usize,
@@ -1770,6 +1901,28 @@ impl<'generation> Transaction<'generation> {
         tx: &TxState,
         stop_after_first: bool,
     ) -> Result<Vec<MemberMatch>, RuntimeError> {
+        let mut matches = std::mem::take(&mut self.match_scratch);
+        matches.clear();
+        let result = self.evaluate_member_matches_into(unit_id, member_id, tx, stop_after_first, &mut matches);
+        // Private tests may inspect the returned matches. Production always
+        // drains and returns capacity through evaluate_unit's single loan.
+        self.scratch_bytes = self
+            .scratch_bytes
+            .checked_sub(self.match_scratch_bytes)
+            .ok_or(RuntimeError::Arithmetic)?;
+        self.match_scratch_bytes = 0;
+        result.map(|()| matches)
+    }
+
+    fn evaluate_member_matches_into(
+        &mut self,
+        unit_id: usize,
+        member_id: usize,
+        tx: &TxState,
+        stop_after_first: bool,
+        matches: &mut Vec<MemberMatch>,
+    ) -> Result<(), RuntimeError> {
+        matches.clear();
         if let Some(matched) = self
             .stream_member_matches
             .as_ref()
@@ -1777,7 +1930,7 @@ impl<'generation> Transaction<'generation> {
             .copied()
             .flatten()
         {
-            return Self::boolean_member_matches(matched);
+            return self.boolean_member_matches_into(matched, tx, matches);
         }
         let member = *self
             .generation
@@ -1785,10 +1938,7 @@ impl<'generation> Transaction<'generation> {
             .get(member_id)
             .ok_or(RuntimeError::GenerationInvariant)?;
         let Some(operator) = self.generation.operator_plans.get(member_id).copied().flatten() else {
-            let mut matches = Vec::new();
-            matches.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
-            matches.push(MemberMatch::default());
-            return Ok(matches);
+            return self.boolean_member_matches_into(true, tx, matches);
         };
         let target_plan = member.target_plan.ok_or(RuntimeError::GenerationInvariant)?;
         let old_capacity_bytes = self
@@ -1816,6 +1966,9 @@ impl<'generation> Transaction<'generation> {
             return Err(RuntimeError::RetainedByteLimit {
                 limit: self.limits.max_retained_bytes,
             });
+        }
+        if self.try_json_summary_no_hit(member_id, tx, capacity_bytes)? {
+            return Ok(());
         }
         let mut selected = std::mem::take(&mut self.selected_scratch);
         selected.clear();
@@ -1859,8 +2012,8 @@ impl<'generation> Transaction<'generation> {
                 .unwrap_or_default();
             let multi_match = member_has_action(&self.generation, member, super::super::ActionKind::MultiMatch)?;
             let mut work = 0_usize;
-            let mut matches = Vec::new();
             let match_limit = if stop_after_first { 1 } else { selected.len() };
+            let match_storage = self.match_storage(tx, match_limit)?;
             for selected in selected.iter().copied() {
                 let mut context = SingleInputContext {
                     generation: &self.generation,
@@ -1911,25 +2064,19 @@ impl<'generation> Transaction<'generation> {
                         &mut work,
                         &mut self.detector_work_bytes,
                         matches.len(),
-                        |transformed| {
-                            matched_variable(&self.request, tx, self.response.as_ref(), selected, transformed)
+                        |transformed, budget| {
+                            matched_variable(&self.request, tx, self.response.as_ref(), selected, transformed, budget)
                         },
                     )?
                 };
                 if let Some(matched) = matched {
-                    if matches.len() == matches.capacity() {
-                        let target = matches.capacity().saturating_mul(2).max(1).min(match_limit);
-                        matches
-                            .try_reserve_exact(target - matches.len())
-                            .map_err(|_| RuntimeError::Allocation)?;
-                    }
-                    matches.push(matched);
+                    match_storage.push(matches, matched, &mut self.scratch_bytes, &mut self.match_scratch_bytes)?;
                     if stop_after_first {
-                        return Ok(matches);
+                        return Ok(());
                     }
                 }
             }
-            Ok(matches)
+            Ok(())
         })();
         selected.clear();
         let actual_bytes = selected
@@ -1937,16 +2084,114 @@ impl<'generation> Transaction<'generation> {
             .checked_mul(size_of::<SelectedValue>())
             .ok_or(RuntimeError::Arithmetic)?;
         if actual_bytes > capacity_bytes {
-            self.scratch_bytes = other_scratch_bytes;
+            self.scratch_bytes = self
+                .scratch_bytes
+                .checked_sub(actual_bytes)
+                .ok_or(RuntimeError::Arithmetic)?;
             return Err(RuntimeError::RetainedByteLimit {
                 limit: self.limits.max_retained_bytes,
             });
         }
-        self.scratch_bytes = other_scratch_bytes
-            .checked_add(actual_bytes)
-            .ok_or(RuntimeError::Arithmetic)?;
+        // Selection was charged before matching; preserve any match-buffer
+        // growth recorded while selected_scratch was temporarily loaned.
         self.selected_scratch = selected;
         result
+    }
+
+    /// A conservative success-only shortcut. All uncertain or failing budgets
+    /// keep the cursor's selection-before-evaluation error priority and counters.
+    fn try_json_summary_no_hit(
+        &mut self,
+        member_id: usize,
+        tx: &TxState,
+        capacity_bytes: usize,
+    ) -> Result<bool, RuntimeError> {
+        #[cfg(test)]
+        if self.force_json_cursor {
+            return Ok(false);
+        }
+        if self.evaluation_mode != EvaluationMode::Accelerated
+            || !tx.target_exclusions.is_empty()
+            || !self.request.collection_records(CollectionKind::Args)?.is_empty()
+            || !self
+                .generation
+                .json_inspection
+                .members
+                .get(member_id)
+                .is_some_and(|member| member.summary_no_hit)
+        {
+            return Ok(false);
+        }
+        let Some(results) = self
+            .request
+            .body
+            .as_ref()
+            .and_then(RequestBodyPublication::json)
+            .and_then(|body| body.results.as_ref())
+        else {
+            return Ok(false);
+        };
+        let count = results.summary.argument_count;
+        let Some(selection_work) = count.checked_mul(2) else {
+            return Ok(false);
+        };
+        let Some(replay_work) = count.checked_mul(5) else {
+            return Ok(false);
+        };
+        let Some(physical_work) = selection_work.checked_add(replay_work) else {
+            return Ok(false);
+        };
+        let Some(logical_work) = results.summary.argument_value_bytes.checked_mul(2) else {
+            return Ok(false);
+        };
+        let Some(budget) = self.json_budget.as_mut() else {
+            return Ok(false);
+        };
+        if count > self.limits.max_selected_values
+            || logical_work > self.limits.max_operator_work_bytes
+            || !results.admits_summary_no_hit(
+                budget,
+                &self.generation,
+                self.limits,
+                self.evaluation_mode,
+                physical_work,
+            )
+        {
+            return Ok(false);
+        }
+        // Simulate the cursor's complete geometric growth, without allocating.
+        // Requiring old + replacement capacity is deliberately conservative:
+        // uncertain overlap/allocator boundaries fall back to real admission.
+        let maximum = self
+            .limits
+            .max_selected_values
+            .min(capacity_bytes / size_of::<SelectedValue>());
+        let mut capacity = self.selected_scratch.capacity();
+        while capacity < count {
+            if capacity >= maximum {
+                return Ok(false);
+            }
+            let Some(target) = capacity.checked_mul(2).map(|value| value.max(4).min(maximum)) else {
+                return Ok(false);
+            };
+            let Some(overlap) = capacity
+                .checked_add(target)
+                .and_then(|value| value.checked_mul(size_of::<SelectedValue>()))
+            else {
+                return Ok(false);
+            };
+            if target <= capacity || overlap > capacity_bytes {
+                return Ok(false);
+            }
+            capacity = target;
+        }
+        // The full preflight above proves both charges and logical accounting
+        // succeed. Never retry the cursor after the first charge.
+        budget.work(selection_work).map_err(map_store_error)?;
+        let mut work = 0;
+        charge_operator_work(&mut work, logical_work, self.limits)?;
+        budget.work(replay_work).map_err(map_store_error)?;
+        Ok(true)
     }
 
     fn validate_runtime_actions(&mut self, unit: super::CompiledRuleUnit, tx: &TxState) -> Result<(), RuntimeError> {
@@ -2152,7 +2397,11 @@ impl<'generation> Transaction<'generation> {
                     staged.set(key, value, self.limits)?;
                 }
                 super::SetVarOperation::Add | super::SetVarOperation::Subtract => {
-                    let current = staged.get(&key).map_or(Ok(0_i64), parse_i64)?;
+                    let current = staged
+                        .get(&key)
+                        .map(|value| value.bytes(&self.request, self.json_budget.as_mut()))
+                        .transpose()?
+                        .map_or(Ok(0_i64), parse_i64)?;
                     let value = setvar_value(
                         &self.generation,
                         &self.request,
@@ -2285,7 +2534,7 @@ fn evaluate_single_input(
     work: &mut usize,
     detector_work_bytes: &mut usize,
     matched_count: usize,
-    make_matched: impl Fn(&[u8]) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
+    make_matched: impl Fn(&[u8], Option<&mut InspectionBudget>) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
 ) -> Result<Option<MemberMatch>, RuntimeError> {
     let transform_limits = TransformLimits {
         max_output_bytes: plan.limits.max_transformation_output_bytes,
@@ -2325,7 +2574,7 @@ fn evaluate_transformed_input(
     work: &mut usize,
     detector_work_bytes: &mut usize,
     matched_count: usize,
-    make_matched: impl FnOnce(&[u8]) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
+    make_matched: impl FnOnce(&[u8], Option<&mut InspectionBudget>) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
 ) -> Result<Option<MemberMatch>, RuntimeError> {
     let mut accounting = OrderedStageAccounting {
         original_bytes,
@@ -2341,7 +2590,7 @@ fn evaluate_transformed_input(
         })?;
     captures
         .map(|captures| {
-            let (value, name) = make_matched(transformed)?;
+            let (value, name) = make_matched(transformed, context.json_budget.as_deref_mut())?;
             finish_member_match(captures, value, name, matched_count, work, plan.limits)
         })
         .transpose()
@@ -2349,7 +2598,7 @@ fn evaluate_transformed_input(
 fn finish_member_match(
     captures: Vec<CaptureEntry>,
     value: impl Into<MatchValue>,
-    name: Vec<u8>,
+    name: impl Into<MatchValue>,
     matched_count: usize,
     work: &mut usize,
     limits: RuntimeLimits,
@@ -2362,7 +2611,7 @@ fn finish_member_match(
     let matched = MemberMatch {
         captures,
         matched_var: Some(value.into()),
-        matched_var_name: Some(name),
+        matched_var_name: Some(name.into()),
     };
     charge_operator_work(work, member_match_bytes(&matched)?, limits)?;
     Ok(matched)
@@ -2548,17 +2797,28 @@ fn extract_captures<O: PredicateStageObserver>(
     ) {
         return Ok(Vec::new());
     }
+    let bound = match plan.operand {
+        super::CompiledOperatorOperand::Regex(super::RegexPlanRef::Capture(program)) => generation
+            .capture_regexes
+            .get(program)
+            .ok_or(RuntimeError::GenerationInvariant)?
+            .capture_len()
+            .checked_mul(2)
+            .ok_or(RuntimeError::Arithmetic)?,
+        // Each regex group may produce a numeric key and a named alias;
+        // phrase and SQLi fingerprints produce only capture 0.
+        _ => 1,
+    };
+    let slots = bound.min(limits.max_capture_entries).min(64);
     let mut captures = Vec::new();
-    let initial = limits
-        .max_capture_entries
-        .min(64)
+    let initial = slots
         .checked_mul(size_of::<CaptureEntry>())
         .ok_or(RuntimeError::Arithmetic)?;
     observer
         .admit_capture_allocation(0, initial)
         .map_err(PredicateStageFailure::Observer)?;
     captures
-        .try_reserve_exact(limits.max_capture_entries.min(64))
+        .try_reserve_exact(slots)
         .map_err(|_| RuntimeError::Allocation)?;
     observer
         .capture_capacity(capture_retained_bytes(&captures)?)
@@ -2694,7 +2954,10 @@ fn push_capture<O: PredicateStageObserver>(
     observer
         .capture_capacity(with_key.checked_add(value.capacity()).ok_or(RuntimeError::Arithmetic)?)
         .map_err(PredicateStageFailure::Observer)?;
-    captures.push(CaptureEntry { key, value });
+    captures.push(CaptureEntry {
+        key,
+        value: value.into(),
+    });
     Ok(())
 }
 
@@ -2707,7 +2970,7 @@ fn capture_retained_bytes(captures: &Vec<CaptureEntry>) -> Result<usize, Runtime
         |bytes, entry| {
             bytes
                 .checked_add(entry.key.capacity())
-                .and_then(|bytes| bytes.checked_add(entry.value.capacity()))
+                .and_then(|bytes| bytes.checked_add(entry.value.owned_capacity()))
                 .ok_or(RuntimeError::Arithmetic)
         },
     )
@@ -2719,9 +2982,10 @@ fn matched_variable(
     response: Option<&ResponseState>,
     selected: SelectedValue,
     transformed: &[u8],
+    budget: Option<&mut InspectionBudget>,
 ) -> Result<(Vec<u8>, Vec<u8>), RuntimeError> {
     let value = owned_copy(transformed)?;
-    let selected_name = selected.name_bytes(request, tx, response, None)?;
+    let selected_name = selected.name_bytes(request, tx, response, budget)?;
     let name = matched_variable_name(selected.collection, selected_name)?;
     Ok((value, name))
 }
@@ -2757,7 +3021,7 @@ fn apply_member_match(
             .try_reserve(1)
             .map_err(|_| RuntimeError::Allocation)?;
         staged.matched_vars.push(TxEntry {
-            key: owned_copy(name)?,
+            key: name.try_clone()?,
             value: value.try_clone()?,
         });
     }
@@ -2826,7 +3090,7 @@ fn member_match_bytes(matched: &MemberMatch) -> Result<usize, RuntimeError> {
     )?;
     capture_bytes
         .checked_add(matched.matched_var.as_ref().map_or(0, MatchValue::len))
-        .and_then(|value| value.checked_add(matched.matched_var_name.as_ref().map_or(0, Vec::len)))
+        .and_then(|value| value.checked_add(matched.matched_var_name.as_ref().map_or(0, MatchValue::len)))
         .and_then(|value| value.checked_add(size_of::<MemberMatch>()))
         .ok_or(RuntimeError::Arithmetic)
 }
@@ -2900,11 +3164,11 @@ impl TxState {
         Ok(())
     }
 
-    fn get(&self, key: &[u8]) -> Option<&[u8]> {
+    fn get(&self, key: &[u8]) -> Option<&MatchValue> {
         self.entries
             .iter()
             .find(|entry| entry.key.eq_ignore_ascii_case(key))
-            .map(|entry| entry.value.as_slice())
+            .map(|entry| &entry.value)
     }
 
     fn delete(&mut self, key: &[u8]) {
@@ -2918,7 +3182,8 @@ impl TxState {
         }
     }
 
-    fn set(&mut self, key: Vec<u8>, value: Vec<u8>, limits: RuntimeLimits) -> Result<(), RuntimeError> {
+    fn set(&mut self, key: Vec<u8>, value: impl Into<MatchValue>, limits: RuntimeLimits) -> Result<(), RuntimeError> {
+        let value = value.into();
         if let Some(entry) = self
             .entries
             .iter_mut()
@@ -2961,7 +3226,7 @@ impl TxState {
                 .map_err(|_| RuntimeError::Allocation)?;
             for entry in &self.matched_vars {
                 cloned.push(TxEntry {
-                    key: owned_copy(&entry.key)?,
+                    key: entry.key.try_clone()?,
                     value: entry.value.try_clone()?,
                 });
             }
@@ -2987,7 +3252,7 @@ impl TxState {
                 None
             },
             matched_var_name: if keep_matches {
-                self.matched_var_name.as_deref().map(owned_copy).transpose()?
+                self.matched_var_name.as_ref().map(MatchValue::try_clone).transpose()?
             } else {
                 None
             },
@@ -3014,8 +3279,12 @@ impl TxState {
                     .sum::<usize>(),
             )
             .saturating_add(self.matched_var.as_ref().map_or(0, MatchValue::len))
-            .saturating_add(self.matched_var_name.as_ref().map_or(0, Vec::len))
-            .saturating_add(self.matched_vars.len().saturating_mul(size_of::<TxEntry<MatchValue>>()))
+            .saturating_add(self.matched_var_name.as_ref().map_or(0, MatchValue::len))
+            .saturating_add(
+                self.matched_vars
+                    .len()
+                    .saturating_mul(size_of::<TxEntry<MatchValue, MatchValue>>()),
+            )
             .saturating_add(self.removed_units.len().saturating_mul(size_of::<usize>()))
             .saturating_add(
                 self.target_exclusions
@@ -3039,7 +3308,7 @@ fn try_clone_entries(entries: &[TxEntry]) -> Result<Vec<TxEntry>, RuntimeError> 
     for entry in entries {
         cloned.push(TxEntry {
             key: owned_copy(&entry.key)?,
-            value: owned_copy(&entry.value)?,
+            value: entry.value.try_clone()?,
         });
     }
     Ok(cloned)
@@ -4013,13 +4282,17 @@ fn macro_value<'request>(
         super::MacroSource::RequestHeaders => request.first_named(CollectionKind::RequestHeaders, key, true),
         super::MacroSource::RemoteAddr => request.first_value(CollectionKind::RemoteAddr),
         super::MacroSource::RequestLine => request.first_value(CollectionKind::RequestLine),
-        super::MacroSource::Tx => tx.get(key),
+        super::MacroSource::Tx => tx.get(key).map(|value| value.bytes(request, json_budget)).transpose()?,
         super::MacroSource::MatchedVar => tx
             .matched_var
             .as_ref()
             .map(|value| value.bytes(request, json_budget))
             .transpose()?,
-        super::MacroSource::MatchedVarName => tx.matched_var_name.as_deref(),
+        super::MacroSource::MatchedVarName => tx
+            .matched_var_name
+            .as_ref()
+            .map(|value| value.bytes(request, json_budget))
+            .transpose()?,
     })
 }
 
