@@ -19,7 +19,7 @@ use super::super::body::{
     RequestBody,
 };
 use super::super::transform::{
-    apply_transformations, apply_transformations_multimatch, TransformError, TransformLimits,
+    apply_transformations_borrowed, apply_transformations_multimatch, TransformError, TransformLimits,
 };
 use super::{CollectionKind, CompiledGeneration, Phase};
 
@@ -777,9 +777,11 @@ impl MatchValue {
 #[derive(Default)]
 struct TxState {
     entries: Vec<TxEntry>,
+    entry_payload_bytes: u128,
     matched_var: Option<MatchValue>,
     matched_var_name: Option<MatchValue>,
     matched_vars: Vec<TxEntry<MatchValue, MatchValue>>,
+    matched_vars_payload_bytes: u128,
     removed_units: Vec<usize>,
     target_exclusions: Vec<ActiveTargetExclusion>,
     request_body_processor: Option<super::super::BodyProcessorSelection>,
@@ -794,9 +796,116 @@ struct ActiveTargetExclusion {
     selector: super::CompiledTargetSelector,
 }
 
-struct CaptureEntry<V = MatchValue> {
-    key: Vec<u8>,
+struct CaptureEntry<V = MatchValue, K = Vec<u8>> {
+    key: K,
     value: V,
+}
+
+#[derive(Clone, Copy)]
+enum CaptureKeySource<'a> {
+    Numeric {
+        index: usize,
+        bytes: &'a [u8],
+    },
+    Named {
+        program: usize,
+        group: usize,
+        bytes: &'a [u8],
+    },
+}
+impl<'a> CaptureKeySource<'a> {
+    fn bytes(self) -> &'a [u8] {
+        match self {
+            Self::Numeric { bytes, .. } | Self::Named { bytes, .. } => bytes,
+        }
+    }
+}
+trait StageCaptureKey: Sized {
+    fn allocation_bytes(source: CaptureKeySource<'_>) -> usize;
+    fn from_source(source: CaptureKeySource<'_>) -> Result<Self, RuntimeError>;
+    fn heap_capacity(&self) -> usize;
+}
+impl StageCaptureKey for Vec<u8> {
+    fn allocation_bytes(source: CaptureKeySource<'_>) -> usize {
+        source.bytes().len()
+    }
+    fn from_source(source: CaptureKeySource<'_>) -> Result<Self, RuntimeError> {
+        owned_copy(source.bytes())
+    }
+    fn heap_capacity(&self) -> usize {
+        self.capacity()
+    }
+}
+
+/// Resolved only against the generation bound to the collector's capture scratch.
+enum JsonCaptureKey {
+    Numeric(usize),
+    Named { program: usize, group: usize },
+}
+impl StageCaptureKey for JsonCaptureKey {
+    fn allocation_bytes(_: CaptureKeySource<'_>) -> usize {
+        0
+    }
+    fn from_source(source: CaptureKeySource<'_>) -> Result<Self, RuntimeError> {
+        Ok(match source {
+            CaptureKeySource::Numeric { index, .. } => Self::Numeric(index),
+            CaptureKeySource::Named { program, group, .. } => Self::Named { program, group },
+        })
+    }
+    fn heap_capacity(&self) -> usize {
+        0
+    }
+}
+impl JsonCaptureKey {
+    fn with_bytes<T, E: From<RuntimeError>>(
+        &self,
+        generation: &CompiledGeneration,
+        operation: impl FnOnce(&[u8]) -> Result<T, E>,
+    ) -> Result<T, E> {
+        match *self {
+            Self::Numeric(index) => {
+                let (digits, start) = decimal_bytes(index);
+                operation(&digits[start..])
+            }
+            Self::Named { program, group } => {
+                let name = generation
+                    .capture_regexes
+                    .get(program)
+                    .and_then(|regex| regex.capture_name(group))
+                    .ok_or(RuntimeError::GenerationInvariant)?;
+                operation(name.as_bytes())
+            }
+        }
+    }
+}
+
+struct CaptureBuilder<V = MatchValue, K = Vec<u8>> {
+    entries: Vec<CaptureEntry<V, K>>,
+    semantic_bytes: usize,
+    heap_bytes: usize,
+}
+impl<V, K> Default for CaptureBuilder<V, K> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            semantic_bytes: 0,
+            heap_bytes: 0,
+        }
+    }
+}
+impl<V, K> CaptureBuilder<V, K> {
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.semantic_bytes = 0;
+        self.heap_bytes = 0;
+    }
+    fn retained_bytes(&self) -> Result<usize, RuntimeError> {
+        self.entries
+            .capacity()
+            .checked_mul(size_of::<CaptureEntry<V, K>>())
+            .and_then(|bytes| bytes.checked_add(self.heap_bytes))
+            .ok_or(RuntimeError::Arithmetic)
+    }
 }
 
 /// Capture sources never escape canonical extraction or borrow persisted storage.
@@ -818,7 +927,6 @@ impl CaptureSource<'_> {
 trait StageCapturePayload: Sized {
     fn allocation_bytes(source: CaptureSource<'_>) -> Result<usize, RuntimeError>;
     fn from_source(source: CaptureSource<'_>) -> Result<Self, RuntimeError>;
-    fn logical_len(&self) -> usize;
     fn heap_capacity(&self) -> usize;
 }
 impl StageCapturePayload for MatchValue {
@@ -827,9 +935,6 @@ impl StageCapturePayload for MatchValue {
     }
     fn from_source(source: CaptureSource<'_>) -> Result<Self, RuntimeError> {
         owned_copy(source.bytes()?).map(Self::Owned)
-    }
-    fn logical_len(&self) -> usize {
-        self.len()
     }
     fn heap_capacity(&self) -> usize {
         self.owned_capacity()
@@ -852,12 +957,6 @@ impl StageCapturePayload for StageCaptureValue {
             CaptureSource::InputRange { start, len, .. } => Self::InputRange { start, len },
             CaptureSource::Fingerprint(value) => Self::Fingerprint(value),
         })
-    }
-    fn logical_len(&self) -> usize {
-        match self {
-            Self::InputRange { len, .. } => *len,
-            Self::Fingerprint(value) => value.as_bytes().len(),
-        }
     }
     fn heap_capacity(&self) -> usize {
         0
@@ -1399,26 +1498,15 @@ impl<'generation> Transaction<'generation> {
                     [plan.transformation_start..plan.transformation_start + plan.transformation_count]
             })
             .unwrap_or_default();
-        let transformed = if transformations.is_empty() {
-            if prefix.len() > self.limits.max_transformation_output_bytes {
-                return Err(map_transform_error(TransformError::OutputLimit {
-                    limit: self.limits.max_transformation_output_bytes,
-                }));
-            }
-            Cow::Borrowed(prefix)
-        } else {
-            Cow::Owned(
-                apply_transformations(
-                    prefix,
-                    transformations,
-                    TransformLimits {
-                        max_output_bytes: self.limits.max_transformation_output_bytes,
-                        max_work_bytes: self.limits.max_transformation_work_bytes,
-                    },
-                )
-                .map_err(map_transform_error)?,
-            )
-        };
+        let transformed = apply_transformations_borrowed(
+            prefix,
+            transformations,
+            TransformLimits {
+                max_output_bytes: self.limits.max_transformation_output_bytes,
+                max_work_bytes: self.limits.max_transformation_work_bytes,
+            },
+        )
+        .map_err(map_transform_error)?;
         *work = work
             .checked_add(prefix.len())
             .and_then(|work| work.checked_add(transformed.len()))
@@ -1950,8 +2038,10 @@ impl<'generation> Transaction<'generation> {
             base.matched_var.take(),
             base.matched_var_name.take(),
             std::mem::take(&mut base.matched_vars),
+            base.matched_vars_payload_bytes,
         );
-        base.recount();
+        base.matched_vars_payload_bytes = 0;
+        base.refresh_retained_bytes();
         let result = match prefix_match {
             Some(matched) => self.boolean_member_matches_into(matched, &base, matches),
             None => self.evaluate_member_matches_into(unit_id, member_id, &base, false, matches),
@@ -1959,7 +2049,8 @@ impl<'generation> Transaction<'generation> {
         base.matched_var = previous.0;
         base.matched_var_name = previous.1;
         base.matched_vars = previous.2;
-        base.recount();
+        base.matched_vars_payload_bytes = previous.3;
+        base.refresh_retained_bytes();
         self.tx = base;
         result
     }
@@ -2561,7 +2652,7 @@ impl<'generation> Transaction<'generation> {
                 self.json_budget.as_mut(),
             )?;
             match setvar.operation {
-                super::SetVarOperation::Delete => staged.delete(&key),
+                super::SetVarOperation::Delete => staged.delete(&key)?,
                 super::SetVarOperation::Assign => {
                     let value = setvar_value(
                         &self.generation,
@@ -2717,14 +2808,22 @@ fn evaluate_single_input(
         max_output_bytes: plan.limits.max_transformation_output_bytes,
         max_work_bytes: plan.limits.max_transformation_work_bytes,
     };
-    let transformed_values = if plan.multi_match {
-        apply_transformations_multimatch(value, plan.transformations, transform_limits).map_err(map_transform_error)?
-    } else {
-        let mut values = Vec::new();
-        values.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
-        values.push(apply_transformations(value, plan.transformations, transform_limits).map_err(map_transform_error)?);
-        values
-    };
+    if !plan.multi_match {
+        let transformed = apply_transformations_borrowed(value, plan.transformations, transform_limits)
+            .map_err(map_transform_error)?;
+        return evaluate_transformed_input(
+            context,
+            &plan,
+            &transformed,
+            value.len(),
+            work,
+            detector_work_bytes,
+            matched_count,
+            &make_matched,
+        );
+    }
+    let transformed_values =
+        apply_transformations_multimatch(value, plan.transformations, transform_limits).map_err(map_transform_error)?;
     for transformed in transformed_values {
         if let Some(matched) = evaluate_transformed_input(
             context,
@@ -2831,6 +2930,7 @@ impl<E> From<RuntimeError> for PredicateStageFailure<E> {
 trait PredicateStageObserver {
     type Error;
     type CaptureValue: StageCapturePayload;
+    type CaptureKey: StageCaptureKey;
     fn observes_physical_work(&self) -> bool {
         false
     }
@@ -2839,12 +2939,12 @@ trait PredicateStageObserver {
     }
     fn charge_stage(&mut self, transformed_bytes: usize, detector_work: usize) -> Result<(), Self::Error>;
     fn before_captures(&mut self, transformed_bytes: usize) -> Result<(), Self::Error>;
-    fn captures(&mut self, captures: &[CaptureEntry<Self::CaptureValue>]) -> Result<(), Self::Error>;
+    fn captures(&mut self, captures: &[CaptureEntry<Self::CaptureValue, Self::CaptureKey>]) -> Result<(), Self::Error>;
     fn admit_capture_allocation(&mut self, current_bytes: usize, required_bytes: usize) -> Result<(), Self::Error>;
     fn capture_capacity(&mut self, actual_bytes: usize) -> Result<(), Self::Error>;
 }
 type PredicateStageResult<O> = Result<
-    Option<Vec<CaptureEntry<<O as PredicateStageObserver>::CaptureValue>>>,
+    Option<Vec<CaptureEntry<<O as PredicateStageObserver>::CaptureValue, <O as PredicateStageObserver>::CaptureKey>>>,
     PredicateStageFailure<<O as PredicateStageObserver>::Error>,
 >;
 
@@ -2858,6 +2958,7 @@ struct OrderedStageAccounting<'a> {
 impl PredicateStageObserver for OrderedStageAccounting<'_> {
     type Error = RuntimeError;
     type CaptureValue = MatchValue;
+    type CaptureKey = Vec<u8>;
     fn charge_stage(&mut self, transformed_bytes: usize, detector_work: usize) -> Result<(), RuntimeError> {
         if detector_work != 0 {
             *self.detector_work_bytes = self
@@ -2912,6 +3013,24 @@ fn inspect_predicate_stage<O: PredicateStageObserver>(
     transformed: &[u8],
     observer: &mut O,
 ) -> PredicateStageResult<O> {
+    let mut captures = CaptureBuilder::default();
+    if inspect_predicate_stage_into(context, plan, transformed, observer, &mut captures)? {
+        Ok(Some(captures.entries))
+    } else {
+        Ok(None)
+    }
+}
+
+fn inspect_predicate_stage_into<O: PredicateStageObserver>(
+    context: &mut SingleInputContext<'_>,
+    plan: &SingleInputPlan<'_>,
+    transformed: &[u8],
+    observer: &mut O,
+    captures: &mut CaptureBuilder<O::CaptureValue, O::CaptureKey>,
+) -> Result<bool, PredicateStageFailure<O::Error>> {
+    if !captures.entries.is_empty() || captures.semantic_bytes != 0 || captures.heap_bytes != 0 {
+        return Err(RuntimeError::GenerationInvariant.into());
+    }
     let detector_work = detector_work_for_stage(plan.operator, transformed.len())
         .map_err(|error| PredicateStageFailure::at(PredicateCheckpoint::DetectorInput, error))?;
     observer
@@ -2938,15 +3057,13 @@ fn inspect_predicate_stage<O: PredicateStageObserver>(
     )
     .map_err(|error| PredicateStageFailure::at(PredicateCheckpoint::Operator, error))?;
     if positive == plan.operator.negated {
-        return Ok(None);
+        return Ok(false);
     }
-    let captures = if plan.operator.negated {
-        Vec::new()
-    } else {
+    if !plan.operator.negated {
         observer
             .before_captures(transformed.len())
             .map_err(PredicateStageFailure::Observer)?;
-        extract_captures(
+        extract_captures_into(
             context.generation,
             context.capture_scratch,
             plan.operator,
@@ -2955,14 +3072,17 @@ fn inspect_predicate_stage<O: PredicateStageObserver>(
             plan.evaluation_mode,
             fingerprint,
             observer,
-        )?
-    };
-    observer.captures(&captures).map_err(PredicateStageFailure::Observer)?;
-    Ok(Some(captures))
+            captures,
+        )?;
+    }
+    observer
+        .captures(&captures.entries)
+        .map_err(PredicateStageFailure::Observer)?;
+    Ok(true)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn extract_captures<O: PredicateStageObserver>(
+fn extract_captures_into<O: PredicateStageObserver>(
     generation: &CompiledGeneration,
     scratch: &mut [RegexCaptureScratch],
     plan: super::CompiledOperatorPlan,
@@ -2971,14 +3091,15 @@ fn extract_captures<O: PredicateStageObserver>(
     evaluation_mode: EvaluationMode,
     fingerprint: Option<crate::injection::Fingerprint>,
     observer: &mut O,
-) -> Result<Vec<CaptureEntry<O::CaptureValue>>, PredicateStageFailure<O::Error>> {
+    captures: &mut CaptureBuilder<O::CaptureValue, O::CaptureKey>,
+) -> Result<(), PredicateStageFailure<O::Error>> {
     if !matches!(
         plan.operand,
         super::CompiledOperatorOperand::Regex(super::RegexPlanRef::Capture(_))
             | super::CompiledOperatorOperand::CapturePhrase(_)
             | super::CompiledOperatorOperand::DetectSqli { capture: true }
     ) {
-        return Ok(Vec::new());
+        return Ok(());
     }
     let bound = match plan.operand {
         super::CompiledOperatorOperand::Regex(super::RegexPlanRef::Capture(program)) => generation
@@ -2993,18 +3114,21 @@ fn extract_captures<O: PredicateStageObserver>(
         _ => 1,
     };
     let slots = bound.min(limits.max_capture_entries).min(64);
-    let mut captures = Vec::new();
     let initial = slots
-        .checked_mul(size_of::<CaptureEntry<O::CaptureValue>>())
+        .checked_mul(size_of::<CaptureEntry<O::CaptureValue, O::CaptureKey>>())
         .ok_or(RuntimeError::Arithmetic)?;
+    if slots > captures.entries.capacity() {
+        let current = captures.retained_bytes()?;
+        observer
+            .admit_capture_allocation(current, current.checked_add(initial).ok_or(RuntimeError::Arithmetic)?)
+            .map_err(PredicateStageFailure::Observer)?;
+        captures
+            .entries
+            .try_reserve_exact(slots)
+            .map_err(|_| RuntimeError::Allocation)?;
+    }
     observer
-        .admit_capture_allocation(0, initial)
-        .map_err(PredicateStageFailure::Observer)?;
-    captures
-        .try_reserve_exact(slots)
-        .map_err(|_| RuntimeError::Allocation)?;
-    observer
-        .capture_capacity(capture_retained_bytes(&captures)?)
+        .capture_capacity(captures.retained_bytes()?)
         .map_err(PredicateStageFailure::Observer)?;
     match plan.operand {
         super::CompiledOperatorOperand::Regex(super::RegexPlanRef::Capture(program)) => {
@@ -3027,9 +3151,28 @@ fn extract_captures<O: PredicateStageObserver>(
                         .ok_or(RuntimeError::GenerationInvariant)?,
                 };
                 let (digits, start) = decimal_bytes(index);
-                push_capture(&mut captures, &digits[start..], value, limits, observer)?;
+                push_capture(
+                    captures,
+                    CaptureKeySource::Numeric {
+                        index,
+                        bytes: &digits[start..],
+                    },
+                    value,
+                    limits,
+                    observer,
+                )?;
                 if let Some(name) = regex.capture_name(index) {
-                    push_capture(&mut captures, name.as_bytes(), value, limits, observer)?;
+                    push_capture(
+                        captures,
+                        CaptureKeySource::Named {
+                            program,
+                            group: index,
+                            bytes: name.as_bytes(),
+                        },
+                        value,
+                        limits,
+                        observer,
+                    )?;
                 }
             }
         }
@@ -3051,13 +3194,19 @@ fn extract_captures<O: PredicateStageObserver>(
                     .checked_sub(matched.start())
                     .ok_or(RuntimeError::GenerationInvariant)?,
             };
-            push_capture(&mut captures, b"0", value, limits, observer)?;
+            push_capture(
+                captures,
+                CaptureKeySource::Numeric { index: 0, bytes: b"0" },
+                value,
+                limits,
+                observer,
+            )?;
         }
         super::CompiledOperatorOperand::DetectSqli { capture: true } => {
             let fingerprint = fingerprint.ok_or(RuntimeError::GenerationInvariant)?;
             push_capture(
-                &mut captures,
-                b"0",
+                captures,
+                CaptureKeySource::Numeric { index: 0, bytes: b"0" },
                 CaptureSource::Fingerprint(fingerprint),
                 limits,
                 observer,
@@ -3065,32 +3214,29 @@ fn extract_captures<O: PredicateStageObserver>(
         }
         _ => {}
     }
-    Ok(captures)
+    Ok(())
 }
 
 fn push_capture<O: PredicateStageObserver>(
-    captures: &mut Vec<CaptureEntry<O::CaptureValue>>,
-    key: &[u8],
+    captures: &mut CaptureBuilder<O::CaptureValue, O::CaptureKey>,
+    key_source: CaptureKeySource<'_>,
     source: CaptureSource<'_>,
     limits: RuntimeLimits,
     observer: &mut O,
 ) -> Result<(), PredicateStageFailure<O::Error>> {
     let value_len = source.bytes()?.len();
+    let key_len = key_source.bytes().len();
+    let key_allocation = O::CaptureKey::allocation_bytes(key_source);
     let allocation_bytes = O::CaptureValue::allocation_bytes(source)?;
-    if captures.len() == limits.max_capture_entries {
+    if captures.entries.len() == limits.max_capture_entries {
         return Err(RuntimeError::CaptureEntryLimit {
             limit: limits.max_capture_entries,
         }
         .into());
     }
-    let current = captures.iter().try_fold(0_usize, |total, capture| {
-        total
-            .checked_add(capture.key.len())
-            .and_then(|value| value.checked_add(capture.value.logical_len()))
-            .ok_or(RuntimeError::Arithmetic)
-    })?;
-    let actual = current
-        .checked_add(key.len())
+    let actual = captures
+        .semantic_bytes
+        .checked_add(key_len)
         .and_then(|total| total.checked_add(value_len))
         .ok_or(RuntimeError::Arithmetic)?;
     if actual > limits.max_capture_bytes {
@@ -3099,23 +3245,24 @@ fn push_capture<O: PredicateStageObserver>(
         }
         .into());
     }
-    let retained = capture_retained_bytes(captures)?;
-    let extra_slot = if captures.len() == captures.capacity() {
-        size_of::<CaptureEntry<O::CaptureValue>>()
+    let retained = captures.retained_bytes()?;
+    let extra_slot = if captures.entries.len() == captures.entries.capacity() {
+        size_of::<CaptureEntry<O::CaptureValue, O::CaptureKey>>()
     } else {
         0
     };
     let required = retained
         .checked_add(extra_slot)
-        .and_then(|bytes| bytes.checked_add(key.len()))
+        .and_then(|bytes| bytes.checked_add(key_allocation))
         .and_then(|bytes| bytes.checked_add(allocation_bytes))
         .ok_or(RuntimeError::Arithmetic)?;
     let peak = if extra_slot != 0 {
         required
             .checked_add(
                 captures
+                    .entries
                     .capacity()
-                    .checked_mul(size_of::<CaptureEntry<O::CaptureValue>>())
+                    .checked_mul(size_of::<CaptureEntry<O::CaptureValue, O::CaptureKey>>())
                     .ok_or(RuntimeError::Arithmetic)?,
             )
             .ok_or(RuntimeError::Arithmetic)?
@@ -3125,22 +3272,27 @@ fn push_capture<O: PredicateStageObserver>(
     observer
         .admit_capture_allocation(retained, peak)
         .map_err(PredicateStageFailure::Observer)?;
-    captures.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
-    let descriptors = capture_retained_bytes(captures)?;
+    captures
+        .entries
+        .try_reserve_exact(1)
+        .map_err(|_| RuntimeError::Allocation)?;
+    let descriptors = captures.retained_bytes()?;
     observer
         .capture_capacity(descriptors)
         .map_err(PredicateStageFailure::Observer)?;
     observer
         .admit_capture_allocation(
             descriptors,
-            descriptors.checked_add(key.len()).ok_or(RuntimeError::Arithmetic)?,
+            descriptors
+                .checked_add(key_allocation)
+                .ok_or(RuntimeError::Arithmetic)?,
         )
         .map_err(PredicateStageFailure::Observer)?;
-    let key = owned_copy(key)?;
+    let key = O::CaptureKey::from_source(key_source)?;
     #[cfg(test)]
-    measurements::record(Event::TemporaryCaptureCopyBytes, key.len());
+    measurements::record(Event::TemporaryCaptureCopyBytes, key_allocation);
     let with_key = descriptors
-        .checked_add(key.capacity())
+        .checked_add(key.heap_capacity())
         .ok_or(RuntimeError::Arithmetic)?;
     observer
         .capture_capacity(with_key)
@@ -3161,23 +3313,15 @@ fn push_capture<O: PredicateStageObserver>(
                 .ok_or(RuntimeError::Arithmetic)?,
         )
         .map_err(PredicateStageFailure::Observer)?;
-    captures.push(CaptureEntry { key, value });
+    let heap_bytes = captures
+        .heap_bytes
+        .checked_add(key.heap_capacity())
+        .and_then(|bytes| bytes.checked_add(value.heap_capacity()))
+        .ok_or(RuntimeError::Arithmetic)?;
+    captures.entries.push(CaptureEntry { key, value });
+    captures.semantic_bytes = actual;
+    captures.heap_bytes = heap_bytes;
     Ok(())
-}
-
-fn capture_retained_bytes<V: StageCapturePayload>(captures: &Vec<CaptureEntry<V>>) -> Result<usize, RuntimeError> {
-    captures.iter().try_fold(
-        captures
-            .capacity()
-            .checked_mul(size_of::<CaptureEntry<V>>())
-            .ok_or(RuntimeError::Arithmetic)?,
-        |bytes, entry| {
-            bytes
-                .checked_add(entry.key.capacity())
-                .and_then(|bytes| bytes.checked_add(entry.value.heap_capacity()))
-                .ok_or(RuntimeError::Arithmetic)
-        },
-    )
 }
 
 fn matched_variable(
@@ -3224,14 +3368,18 @@ fn apply_member_match(
             .matched_vars
             .try_reserve(1)
             .map_err(|_| RuntimeError::Allocation)?;
-        staged.matched_vars.push(TxEntry {
+        let entry = TxEntry {
             key: name.try_clone()?,
             value: value.try_clone()?,
-        });
+        };
+        let payload = tx_payload_bytes(entry.key.len(), entry.value.len())?;
+        let total = tx_payload_delta(staged.matched_vars_payload_bytes, 0, payload)?;
+        staged.matched_vars.push(entry);
+        staged.matched_vars_payload_bytes = total;
     }
     staged.matched_var = matched.matched_var;
     staged.matched_var_name = matched.matched_var_name;
-    staged.recount();
+    staged.refresh_retained_bytes();
     if staged.retained_bytes > limits.max_tx_bytes {
         return Err(RuntimeError::TxByteLimit {
             limit: limits.max_tx_bytes,
@@ -3241,7 +3389,7 @@ fn apply_member_match(
         return Ok(());
     }
     for key in capture_keys.iter() {
-        staged.delete(key);
+        staged.delete(key)?;
     }
     capture_keys.clear();
     capture_keys
@@ -3327,7 +3475,7 @@ impl TxState {
             .try_reserve(1)
             .map_err(|_| RuntimeError::Allocation)?;
         self.removed_units.insert(index, unit);
-        self.recount();
+        self.refresh_retained_bytes();
         if self.retained_bytes > limits.max_tx_bytes {
             return Err(RuntimeError::TxByteLimit {
                 limit: limits.max_tx_bytes,
@@ -3359,7 +3507,7 @@ impl TxState {
             .try_reserve(1)
             .map_err(|_| RuntimeError::Allocation)?;
         self.target_exclusions.insert(end, entry);
-        self.recount();
+        self.refresh_retained_bytes();
         if self.retained_bytes > limits.max_tx_bytes {
             return Err(RuntimeError::TxByteLimit {
                 limit: limits.max_tx_bytes,
@@ -3375,15 +3523,20 @@ impl TxState {
             .map(|entry| &entry.value)
     }
 
-    fn delete(&mut self, key: &[u8]) {
+    fn delete(&mut self, key: &[u8]) -> Result<(), RuntimeError> {
         if let Some(index) = self
             .entries
             .iter()
             .position(|entry| entry.key.eq_ignore_ascii_case(key))
         {
+            let entry = &self.entries[index];
+            let removed = tx_payload_bytes(entry.key.len(), entry.value.len())?;
+            let total = tx_payload_delta(self.entry_payload_bytes, removed, 0)?;
             self.entries.remove(index);
-            self.recount();
+            self.entry_payload_bytes = total;
+            self.refresh_retained_bytes();
         }
+        Ok(())
     }
 
     fn set(&mut self, key: Vec<u8>, value: impl Into<MatchValue>, limits: RuntimeLimits) -> Result<(), RuntimeError> {
@@ -3393,8 +3546,10 @@ impl TxState {
             .iter_mut()
             .find(|entry| entry.key.eq_ignore_ascii_case(&key))
         {
+            let total = tx_payload_delta(self.entry_payload_bytes, entry.value.len() as u128, value.len() as u128)?;
             entry.value = value;
-            self.recount();
+            self.entry_payload_bytes = total;
+            self.refresh_retained_bytes();
         } else {
             if self.entries.len() == limits.max_tx_variables {
                 return Err(RuntimeError::TxVariableLimit {
@@ -3402,8 +3557,11 @@ impl TxState {
                 });
             }
             self.entries.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
+            let payload = tx_payload_bytes(key.len(), value.len())?;
+            let total = tx_payload_delta(self.entry_payload_bytes, 0, payload)?;
             self.entries.push(TxEntry { key, value });
-            self.recount();
+            self.entry_payload_bytes = total;
+            self.refresh_retained_bytes();
         }
         if self.retained_bytes > limits.max_tx_bytes {
             return Err(RuntimeError::TxByteLimit {
@@ -3452,6 +3610,7 @@ impl TxState {
         target_exclusions.extend_from_slice(&self.target_exclusions);
         let mut cloned = Self {
             entries,
+            entry_payload_bytes: self.entry_payload_bytes,
             matched_var: if keep_matches {
                 self.matched_var.as_ref().map(MatchValue::try_clone).transpose()?
             } else {
@@ -3463,27 +3622,28 @@ impl TxState {
                 None
             },
             matched_vars,
+            matched_vars_payload_bytes: if keep_matches {
+                self.matched_vars_payload_bytes
+            } else {
+                0
+            },
             removed_units,
             target_exclusions,
             request_body_processor: self.request_body_processor,
             force_request_body_variable: self.force_request_body_variable,
             retained_bytes: self.retained_bytes,
         };
-        cloned.recount();
+        cloned.refresh_retained_bytes();
         Ok(cloned)
     }
 
-    fn recount(&mut self) {
+    /// Payload totals stay exact; only the public semantic charge saturates.
+    fn refresh_retained_bytes(&mut self) {
         self.retained_bytes = self
             .entries
             .len()
             .saturating_mul(size_of::<TxEntry>())
-            .saturating_add(
-                self.entries
-                    .iter()
-                    .map(|entry| entry.key.len().saturating_add(entry.value.len()))
-                    .sum::<usize>(),
-            )
+            .saturating_add(usize::try_from(self.entry_payload_bytes).unwrap_or(usize::MAX))
             .saturating_add(self.matched_var.as_ref().map_or(0, MatchValue::len))
             .saturating_add(self.matched_var_name.as_ref().map_or(0, MatchValue::len))
             .saturating_add(
@@ -3497,13 +3657,19 @@ impl TxState {
                     .len()
                     .saturating_mul(size_of::<ActiveTargetExclusion>()),
             )
-            .saturating_add(
-                self.matched_vars
-                    .iter()
-                    .map(|entry| entry.key.len().saturating_add(entry.value.len()))
-                    .sum::<usize>(),
-            );
+            .saturating_add(usize::try_from(self.matched_vars_payload_bytes).unwrap_or(usize::MAX));
     }
+}
+
+fn tx_payload_bytes(key: usize, value: usize) -> Result<u128, RuntimeError> {
+    (key as u128).checked_add(value as u128).ok_or(RuntimeError::Arithmetic)
+}
+
+fn tx_payload_delta(current: u128, removed: u128, added: u128) -> Result<u128, RuntimeError> {
+    current
+        .checked_sub(removed)
+        .and_then(|bytes| bytes.checked_add(added))
+        .ok_or(RuntimeError::Arithmetic)
 }
 
 fn try_clone_entries(entries: &[TxEntry]) -> Result<Vec<TxEntry>, RuntimeError> {

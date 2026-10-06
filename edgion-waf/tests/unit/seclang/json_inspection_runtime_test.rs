@@ -978,6 +978,43 @@ fn compare(source: &str, json: &[u8], form: &[u8], uri: &[u8], limits: RuntimeLi
         assert_eq!(fused.detector_work_bytes, ordinary.detector_work_bytes);
     }
 }
+
+#[test]
+fn shared_capture_program_rules_replay_independent_actions_and_capture_limits() {
+    let source = concat!(
+        "SecAction \"id:10,phase:2,pass,setvar:'tx.count=0'\"\n",
+        "SecRule ARGS \"@rx ^(?P<word>a)(?P<empty>)$\" \"id:1,phase:2,pass,capture,t:none,setvar:'tx.count=+1',setvar:'tx.first=%{TX.word}'\"\n",
+        "SecRule ARGS \"@rx ^(?P<word>a)(?P<empty>)$\" \"id:2,phase:2,pass,capture,t:none,setvar:'tx.count=+1',setvar:'tx.second=%{TX.word}'\"\n",
+        "SecRule ARGS \"!@rx ^(?P<word>a)(?P<empty>)$\" \"id:3,phase:2,pass,capture,t:none,setvar:'tx.count=+1'\"\n",
+    );
+    for (entries, bytes) in [(0, 0), (4, 15), (5, 14), (5, 15), (16, 1024)] {
+        compare(
+            source,
+            br#"{"x":"a"}"#,
+            b"json.x=a",
+            b"/",
+            RuntimeLimits {
+                max_capture_entries: entries,
+                max_capture_bytes: bytes,
+                ..RuntimeLimits::default()
+            },
+        );
+    }
+    let generation = compile(source);
+    assert_eq!(generation.capture_regexes.len(), 1);
+    let mut tx = no_hit_transaction(
+        &generation,
+        br#"{"x":"a"}"#,
+        b"/",
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        false,
+    );
+    tx.execute_request_body().unwrap();
+    assert_eq!(tx.tx_value(b"count"), Some(b"2".as_slice()));
+    assert_eq!(tx.tx_value(b"first"), Some(b"a".as_slice()));
+    assert_eq!(tx.tx_value(b"second"), Some(b"a".as_slice()));
+}
 #[test]
 fn static_mixed_targets_captures_transforms_and_chains_match_form_runtime() {
     compare(concat!(
@@ -2155,7 +2192,7 @@ fn json_inspection_measurements() {
             "many_capture_hits" => {
                 assert_eq!(usage.matched_bytes, 128 * 3);
                 assert_eq!(usage.capture_bytes, 128 * 8);
-                assert_eq!(counts.get(E::TemporaryCaptureCopyBytes), 128 * 2);
+                assert_eq!(counts.get(E::TemporaryCaptureCopyBytes), 0);
                 assert_eq!(counts.get(E::CaptureCopyBytes), 128 * 2);
             }
             "deep_arrays" => assert_eq!(usage.live_candidates, 0),

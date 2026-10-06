@@ -120,7 +120,7 @@ The no-uppercase preflight proves identity; finding uppercase proves change and
 replaces the output equality comparison. Input/output work and checkpoints remain
 charged, and later transforms still validate. This does not borrow persisted match
 payloads from the body or extend source lifetime. Preserve both multiMatch modes,
-exact work/output bounds, repeated-transform storage and owned-wrapper behavior.
+exact work/output bounds, repeated-transform storage and final borrowed/owned behavior.
 
 Local key-tree links use private NodeId(NonZeroUsize), with checked index-plus-one
 encoding so optional links occupy one machine word. Bounds-checked node access
@@ -190,4 +190,37 @@ limits and unchanged-transform output precedence whenever these paths change.
 Positive capture execution deliberately retains boolean miss checking followed by
 capture extraction on hits. A measured single-search prototype was rejected because
 all-miss timing regressed across both run orders; semantic correctness alone does
-not justify replacing this path. Capture-program interning remains separate work.
+not justify replacing this path. Capture-program interning was implemented in the
+subsequent bounded compiler round below.
+
+The subsequent borrowing/scratch work is specified in
+[the plan](../../../../tasks/pending/waf-json-checker/23-borrowing-and-scratch-plan.md)
+and [the results](../../../../tasks/pending/waf-json-checker/24-borrowing-and-scratch-results.md).
+Single-match final transformation output borrows unchanged input or moves changed
+scratch; multiMatch keeps its intermediate stages. Temporary JSON capture keys
+use numeric/program-group descriptors in a reusable builder. Resolve named keys
+only against its bound generation and copy at result transfer. Charge actual
+high-water builder capacity dynamically during transformation/predicate admission;
+clear logical contents on every extraction/transfer error and drop before seal.
+Persistent owned TX capture keys remain separate from these temporary descriptors.
+
+TX cached payload totals are exact u128 with checked mutation deltas. Semantic
+lengths, actual metadata and observer-loan restoration still determine admission.
+Final usize saturation must not corrupt future subtraction. Preserve frozen
+representable-state recount and independent wide overflow oracles. Cached counters
+increase TxState/ChainBranch layout; use actual sizes and report peak tradeoffs.
+
+Buffered ASCII batching scans only budget-admitted current spare capacity after
+classifying the existing current byte. Empty-token borrowing and special-byte
+fallback retain their order; preserve sequential counters, spill trajectory and
+competing errors. Duplicate AVL unwind skips unchanged ancestor work, with no
+refund of spent search/discard work or change to logical replacement semantics.
+
+Capture programs are now interned by exact source under bounded canonical work
+and temporary capacities. Preserve occurrence gates, every reuse requirement and
+removed-rule validation; publication follows successful compilation. Carry aggregate
+work through grouping and JSON planning. Full group identity and independent member
+replay remain mandatory. JSON scan-cache demand counts unique Matcher IDs only.
+Re-evaluate compiler peaks, generation identity, high-water headroom and error
+cleanup when changing any of these mechanisms. Directed identical-regex benchmarks
+do not establish broad CRS speedups.

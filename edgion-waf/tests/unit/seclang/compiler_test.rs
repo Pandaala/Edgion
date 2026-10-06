@@ -24,6 +24,277 @@ fn with_validated<T>(text: &str, inspect: impl FnOnce(ValidatedSemanticDocument<
     inspect(validated)
 }
 
+#[test]
+fn capture_regex_sharing_preserves_occurrence_gates_and_requirement_discharge() {
+    let text = concat!(
+        "SecRule ARGS \"@rx (?P<word>a)\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"!@rx (?P<word>a)\" \"id:2,phase:2,pass,capture,t:lowercase\"\n",
+        "SecRule ARGS \"@rx (?P<word>a)\" \"id:3,phase:2,pass,capture\"\n",
+        "SecRuleRemoveById 3\n",
+    );
+    with_validated(text, |validated| {
+        let prepared = CompilerBuilder::new(validated, None, CompilerLimits::default())
+            .prepare()
+            .unwrap();
+        let state = MatcherState::compile(prepared, CompilerLimits::default()).unwrap();
+        assert_eq!(state.capture_regexes.len(), 1);
+        for plan in &state.operator_plans[..2] {
+            assert!(matches!(
+                plan.unwrap().operand,
+                CompiledOperatorOperand::Regex(RegexPlanRef::Capture(0))
+            ));
+        }
+        assert!(!state.operator_plans[0].unwrap().negated);
+        assert!(state.operator_plans[1].unwrap().negated);
+        assert!(state.operator_plans[2].is_none());
+        assert!(state
+            .asset_templates
+            .requirements
+            .iter()
+            .all(|requirement| requirement.discharged));
+    });
+    with_validated(text, |validated| {
+        let limits = CompilerLimits {
+            max_regex_programs: 1,
+            ..CompilerLimits::default()
+        };
+        let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+        assert!(matches!(
+            MatcherState::compile(prepared, limits),
+            Err(CompilerError::RegexProgramLimit { actual: 2, limit: 1 })
+        ));
+    });
+    with_validated(
+        "SecRule ARGS \"@rx [\" \"id:1,phase:2,pass,capture\"\nSecRuleRemoveById 1\n",
+        |validated| {
+            let prepared = CompilerBuilder::new(validated, None, CompilerLimits::default())
+                .prepare()
+                .unwrap();
+            assert!(matches!(
+                MatcherState::compile(prepared, CompilerLimits::default()),
+                Err(CompilerError::RegexProgram { .. })
+            ));
+        },
+    );
+}
+
+#[test]
+fn capture_regex_identity_includes_exact_flags_and_named_group_source() {
+    let text = concat!(
+        "SecRule ARGS \"@rx (?P<word>a)\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (?P<other>a)\" \"id:2,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (?i)(?P<word>a)\" \"id:3,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (?P<word>a)\" \"id:4,phase:2,pass,capture\"\n",
+    );
+    with_validated(text, |validated| {
+        let prepared = CompilerBuilder::new(validated, None, CompilerLimits::default())
+            .prepare()
+            .unwrap();
+        let state = MatcherState::compile(prepared, CompilerLimits::default()).unwrap();
+        assert_eq!(state.capture_regexes.len(), 3);
+        let ids = state
+            .operator_plans
+            .iter()
+            .map(|plan| match plan.unwrap().operand {
+                CompiledOperatorOperand::Regex(RegexPlanRef::Capture(id)) => id,
+                _ => panic!("expected capture regex"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [0, 1, 2, 0]);
+    });
+}
+
+#[test]
+fn capture_regex_interner_skips_compatibility_excluded_units() {
+    let text = concat!(
+        "SecRule ARGS \"@rx [\" \"id:1,phase:2,pass,capture,initcol:global=key\"\n",
+        "SecRule ARGS \"@rx (a)\" \"id:2,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (a)\" \"id:3,phase:2,pass,capture\"\n",
+    );
+    let source = scan_source("compiler-test", text.as_bytes(), SourceLimits::default()).unwrap();
+    let syntax = parse_syntax(&source, SyntaxLimits::default()).unwrap();
+    let draft = analyze_one_semantic_draft(syntax, SemanticLimits::default()).unwrap();
+    let validated = crate::seclang::validate_executable_profile(draft, context(), ValidationLimits::default()).unwrap();
+    assert!(validated.rule_units().next().unwrap().is_compatibility_excluded());
+    let limits = CompilerLimits {
+        max_regex_programs: 2,
+        ..CompilerLimits::default()
+    };
+    let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+    let state = MatcherState::compile(prepared, limits).unwrap();
+    assert_eq!(state.capture_regexes.len(), 1);
+    assert!(state.operator_plans[0].is_none());
+    assert!(state
+        .asset_templates
+        .requirements
+        .iter()
+        .all(|requirement| requirement.discharged));
+}
+
+#[test]
+fn capture_regex_interner_charges_all_work_and_carries_it_into_grouping() {
+    let text = concat!(
+        "SecRule ARGS \"@rx (a)\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (a)\" \"id:2,phase:2,pass,capture\"\n",
+    );
+    for (limits, error) in [
+        (
+            CompilerLimits {
+                max_group_key_hash_bytes: 0,
+                ..CompilerLimits::default()
+            },
+            CompilerError::GroupKeyHashByteLimit { limit: 0 },
+        ),
+        (
+            CompilerLimits {
+                max_group_table_probes: 0,
+                ..CompilerLimits::default()
+            },
+            CompilerError::GroupTableProbeLimit { limit: 0 },
+        ),
+        (
+            CompilerLimits {
+                max_group_key_record_comparisons: 0,
+                ..CompilerLimits::default()
+            },
+            CompilerError::GroupKeyRecordComparisonLimit { limit: 0 },
+        ),
+        (
+            CompilerLimits {
+                max_group_key_comparison_bytes: 0,
+                ..CompilerLimits::default()
+            },
+            CompilerError::GroupKeyComparisonByteLimit { limit: 0 },
+        ),
+    ] {
+        with_validated(text, |validated| {
+            let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+            assert_eq!(MatcherState::compile(prepared, limits).unwrap_err(), error);
+        });
+    }
+    with_validated(text, |validated| {
+        let limits = CompilerLimits::default();
+        let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+        let state = MatcherState::compile(prepared, limits).unwrap();
+        assert_eq!(state.canonical_work.hash_bytes, 6);
+        assert_eq!(state.canonical_work.comparison_bytes, 3);
+        let limits = CompilerLimits {
+            max_group_key_hash_bytes: state.canonical_work.hash_bytes,
+            ..limits
+        };
+        assert!(matches!(
+            GroupedMatcherState::compile(state, limits),
+            Err(CompilerError::GroupKeyHashByteLimit { .. })
+        ));
+    });
+    with_validated(text, |validated| {
+        let limits = CompilerLimits::default();
+        let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+        let state = MatcherState::compile(prepared, limits).unwrap();
+        let grouped = GroupedMatcherState::compile(state, limits).unwrap();
+        let limits = CompilerLimits {
+            max_group_key_hash_bytes: grouped.canonical_work.hash_bytes,
+            ..limits
+        };
+        assert!(matches!(
+            CompiledGeneration::publish(grouped, limits),
+            Err(CompilerError::GroupKeyHashByteLimit { .. })
+        ));
+    });
+}
+
+#[test]
+fn capture_regex_interner_collision_checks_bytes_and_keeps_actual_capacity_charged() {
+    with_validated("SecRule ARGS \"@rx a\" \"id:1,phase:2,pass,capture\"\n", |validated| {
+        let location = validated
+            .rule_units()
+            .next()
+            .unwrap()
+            .root()
+            .operator()
+            .unwrap()
+            .location();
+        let mut memory = MatcherCompileWork {
+            limits: CompilerLimits::default(),
+            validated_bytes: 0,
+            working_bytes: 0,
+            compiler_owned_bytes: 0,
+            matcher_charged_bytes: 0,
+            peak_bytes: 0,
+            requirement_cursors: [0; 8],
+        };
+        let mut interner = CaptureRegexInterner::new(2, &mut memory).unwrap();
+        let index_bytes =
+            interner.slots.capacity() * size_of::<CanonicalSlot>() + interner.sources.capacity() * size_of::<&str>();
+        assert_eq!(memory.working_bytes, index_bytes);
+        assert!(memory.regex_peak_budget().unwrap().0 >= index_bytes);
+        let mut programs = Vec::with_capacity(2);
+        let mut work = CanonicalWork::default();
+        assert_eq!(
+            interner
+                .compile("a", location, &mut programs, &mut memory, &mut work)
+                .unwrap(),
+            0
+        );
+        // Force a full hash collision to exercise the equality barrier independently of FNV.
+        let mut hash = FNV1A_OFFSET_BASIS;
+        CanonicalWork::default()
+            .hash_bytes(&mut hash, b"b", memory.limits)
+            .unwrap();
+        interner.slots.fill(CanonicalSlot::EMPTY);
+        let position = hash as usize & (interner.slots.len() - 1);
+        interner.slots[position] = CanonicalSlot { hash, id: 0 };
+        memory.limits.max_group_key_comparison_bytes = 0;
+        assert!(matches!(
+            interner.compile("b", location, &mut programs, &mut memory, &mut work),
+            Err(CompilerError::GroupKeyComparisonByteLimit { .. })
+        ));
+        assert_eq!(programs.len(), 1);
+        assert_eq!(interner.sources.len(), 1);
+        memory.limits = CompilerLimits::default();
+        assert_eq!(
+            interner
+                .compile("b", location, &mut programs, &mut memory, &mut work)
+                .unwrap(),
+            1
+        );
+        assert!(work.probes > 2);
+        assert_eq!(programs.len(), 2);
+        interner.release(&mut memory);
+        assert_eq!(memory.working_bytes, 0);
+    });
+}
+
+#[test]
+fn capture_regex_interner_peak_limit_is_exact_with_distinct_programs() {
+    let text = concat!(
+        "SecRule ARGS \"@rx (a)\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (b)\" \"id:2,phase:2,pass,capture\"\n",
+    );
+    let peak = with_validated(text, |validated| {
+        let prepared = CompilerBuilder::new(validated, None, CompilerLimits::default())
+            .prepare()
+            .unwrap();
+        MatcherState::compile(prepared, CompilerLimits::default())
+            .unwrap()
+            .peak_bytes
+    });
+    for (bound, succeeds) in [(peak, true), (peak - 1, false)] {
+        with_validated(text, |validated| {
+            let limits = CompilerLimits {
+                max_compilation_peak_bytes: bound,
+                ..CompilerLimits::default()
+            };
+            let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+            let result = MatcherState::compile(prepared, limits);
+            assert_eq!(result.is_ok(), succeeds, "{result:?}");
+            if !succeeds {
+                assert!(matches!(result, Err(CompilerError::PeakByteLimit { .. })));
+            }
+        });
+    }
+}
+
 struct AssetProvider {
     chunks: Vec<&'static [u8]>,
     failure: Option<PhraseAssetFailure>,

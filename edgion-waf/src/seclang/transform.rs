@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use sha1::{Digest, Sha1};
 use thiserror::Error;
 
@@ -279,11 +281,12 @@ impl TransformObserver for MaterializedStages {
     }
 }
 
-pub(super) fn apply_transformations(
-    input: &[u8],
+/// Complete validation before exposing a final result; unchanged input stays borrowed.
+pub(super) fn apply_transformations_borrowed<'input>(
+    input: &'input [u8],
     transformations: &[TransformationKind],
     limits: TransformLimits,
-) -> Result<Vec<u8>, TransformError> {
+) -> Result<Cow<'input, [u8]>, TransformError> {
     let mut observer = MaterializedStages {
         values: Vec::new(),
         retain_stages: false,
@@ -292,16 +295,9 @@ pub(super) fn apply_transformations(
     let location = walk_transformations(input, transformations, false, limits, &mut scratch, &mut observer)
         .map_err(materialized_walk_error)?;
     match location {
-        CurrentTransform::Input => {
-            let mut value = Vec::new();
-            value
-                .try_reserve_exact(input.len())
-                .map_err(|_| TransformError::Allocation)?;
-            value.extend_from_slice(input);
-            Ok(value)
-        }
-        CurrentTransform::First => Ok(scratch.first),
-        CurrentTransform::Second => Ok(scratch.second),
+        CurrentTransform::Input => Ok(Cow::Borrowed(input)),
+        CurrentTransform::First => Ok(Cow::Owned(scratch.first)),
+        CurrentTransform::Second => Ok(Cow::Owned(scratch.second)),
     }
 }
 

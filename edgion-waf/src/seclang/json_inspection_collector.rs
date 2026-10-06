@@ -65,6 +65,25 @@ struct DispatchScratch {
     epoch: usize,
     cache: StageScanCache,
 }
+
+struct JsonCaptureScratch<'generation> {
+    generation: &'generation CompiledGeneration,
+    builder: CaptureBuilder<StageCaptureValue, JsonCaptureKey>,
+}
+impl JsonCaptureScratch<'_> {
+    fn validate_generation(&self, generation: &CompiledGeneration) -> Collected<()> {
+        if !std::ptr::eq(self.generation, generation) {
+            return Err(CollectorError::State);
+        }
+        Ok(())
+    }
+    fn bytes(&self) -> Collected<usize> {
+        self.builder.retained_bytes().map_err(Into::into)
+    }
+    fn release(&mut self) {
+        self.builder = CaptureBuilder::default();
+    }
+}
 impl DispatchScratch {
     fn bytes(&self) -> Collected<usize> {
         self.groups
@@ -98,6 +117,7 @@ pub(super) struct JsonCollector<'call, 'generation> {
     mode: EvaluationMode,
     transform: TransformScratch,
     dispatch: DispatchScratch,
+    captures: JsonCaptureScratch<'call>,
     failure: Option<CollectorError>,
 }
 impl<'call, 'generation> JsonCollector<'call, 'generation> {
@@ -113,6 +133,7 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         }
         let group_count = generation.json_inspection.groups.len();
         let profile_count = generation.json_inspection.profiles.len();
+        let capture_generation = context.generation;
         let mut result = Self {
             store: ResultStore::new(generation, runtime, mode, limits)?,
             context,
@@ -120,6 +141,10 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
             mode,
             transform: TransformScratch::default(),
             dispatch: DispatchScratch::default(),
+            captures: JsonCaptureScratch {
+                generation: capture_generation,
+                builder: CaptureBuilder::default(),
+            },
             failure: None,
         };
         // Each allocation admits its old/new overlap and reports allocator capacity.
@@ -134,7 +159,7 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         reserve_scratch(&mut result.dispatch.stamps, group_count, &mut total, &mut result.store)?;
         reserve_scratch(
             &mut result.dispatch.cache.scanned,
-            group_count,
+            result.context.generation.json_inspection.matcher_scan_capacity,
             &mut total,
             &mut result.store,
         )?;
@@ -153,10 +178,12 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
             mut store,
             transform,
             dispatch,
+            captures,
             ..
         } = self;
         drop(transform);
         drop(dispatch);
+        drop(captures);
         store.release_scratch();
         store.into_abandoned_budget().map_err(Into::into)
     }
@@ -168,10 +195,12 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
             store,
             transform,
             dispatch,
+            captures,
             ..
         } = self;
         drop(transform);
         drop(dispatch);
+        drop(captures);
         let (sealed, mut budget) = store.into_sealed()?;
         budget.release_scratch();
         Ok((sealed, budget))
@@ -290,6 +319,7 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
                 context: &mut self.context,
                 groups: &mut self.dispatch.groups[start..end],
                 cache: &mut self.dispatch.cache,
+                captures: &mut self.captures,
                 candidate,
                 profile: profile_id,
                 runtime: self.runtime,
@@ -359,12 +389,22 @@ impl JsonCheckerSink for JsonCollector<'_, '_> {
         self.sink_result(result)
     }
     fn seal(&mut self, receipt: Option<Receipt>, summary: JsonSemanticSummary) -> Result<(), JsonCheckerSinkError> {
-        let result = self.store.seal(receipt, summary).map_err(Into::into);
+        self.captures.release();
+        let result = (|| {
+            let scratch = self
+                .dispatch
+                .bytes()?
+                .checked_add(self.transform.retained_bytes().map_err(map_transform_error)?)
+                .ok_or(StoreError::Arithmetic)?;
+            self.store.scratch_capacity(scratch)?;
+            self.store.seal(receipt, summary).map_err(Into::into)
+        })();
         self.sink_result(result)
     }
     fn abandon(&mut self) {
         self.transform = TransformScratch::default();
         self.dispatch = DispatchScratch::default();
+        self.captures.release();
         self.store.release_scratch();
         self.store.abandon();
     }
@@ -455,6 +495,7 @@ struct ProfileObserver<'a, 'call, 'generation> {
     context: &'a mut SingleInputContext<'call>,
     groups: &'a mut [GroupRun],
     cache: &'a mut StageScanCache,
+    captures: &'a mut JsonCaptureScratch<'call>,
     candidate: CandidateId,
     profile: usize,
     runtime: RuntimeLimits,
@@ -467,14 +508,22 @@ struct ProfileObserver<'a, 'call, 'generation> {
 impl TransformObserver for ProfileObserver<'_, '_, '_> {
     type Error = CollectorError;
     fn admit_scratch(&mut self, required: usize) -> Collected<()> {
-        self.store
-            .admit_scratch(self.fixed_scratch.checked_add(required).ok_or(StoreError::Arithmetic)?)?;
+        self.store.admit_scratch(
+            self.fixed_scratch
+                .checked_add(self.captures.bytes()?)
+                .and_then(|bytes| bytes.checked_add(required))
+                .ok_or(StoreError::Arithmetic)?,
+        )?;
         Ok(())
     }
     fn scratch_capacity(&mut self, actual: usize) -> Collected<()> {
         self.transform_bytes = actual;
-        self.store
-            .scratch_capacity(self.fixed_scratch.checked_add(actual).ok_or(StoreError::Arithmetic)?)?;
+        self.store.scratch_capacity(
+            self.fixed_scratch
+                .checked_add(self.captures.bytes()?)
+                .and_then(|bytes| bytes.checked_add(actual))
+                .ok_or(StoreError::Arithmetic)?,
+        )?;
         Ok(())
     }
     fn checkpoint(&mut self, point: TransformCheckpoint) -> Collected<()> {
@@ -568,57 +617,69 @@ impl TransformObserver for ProfileObserver<'_, '_, '_> {
             let mut observer = PredicateObserver {
                 store: self.store,
                 base,
-                capture_bytes: 0,
             };
             #[cfg(test)]
             measurements::record(Event::OperatorStages, 1);
-            let result = inspect_predicate_stage(&mut context, &plan, value, &mut observer);
-            match result {
-                Ok(Some(captures)) => {
-                    let outcome = if let Some(token) = stage_match {
-                        observer
-                            .store
-                            .record_shared_match(self.candidate, run.id, ordinal, token)?
-                    } else {
-                        let outcome = observer.store.record_match(self.candidate, run.id, ordinal, value)?;
-                        if share_stage {
-                            stage_match = Some(observer.store.stage_match_token(outcome)?);
-                        }
-                        outcome
-                    };
-                    for entry in &captures {
-                        match &entry.value {
-                            StageCaptureValue::InputRange { start, len } => {
-                                observer.store.add_capture_range(outcome, &entry.key, *start, *len)?
+            let result = (|| {
+                self.captures.validate_generation(generation)?;
+                let result =
+                    inspect_predicate_stage_into(&mut context, &plan, value, &mut observer, &mut self.captures.builder);
+                match result {
+                    Ok(true) => {
+                        let outcome = if let Some(token) = stage_match {
+                            observer
+                                .store
+                                .record_shared_match(self.candidate, run.id, ordinal, token)?
+                        } else {
+                            let outcome = observer.store.record_match(self.candidate, run.id, ordinal, value)?;
+                            if share_stage {
+                                stage_match = Some(observer.store.stage_match_token(outcome)?);
                             }
-                            StageCaptureValue::Fingerprint(value) => {
-                                observer.store.add_capture(outcome, &entry.key, value.as_bytes())?
-                            }
+                            outcome
+                        };
+                        for entry in &self.captures.builder.entries {
+                            entry
+                                .key
+                                .with_bytes(self.captures.generation, |key| match &entry.value {
+                                    StageCaptureValue::InputRange { start, len } => observer
+                                        .store
+                                        .add_capture_range(outcome, key, *start, *len)
+                                        .map_err(CollectorError::from),
+                                    StageCaptureValue::Fingerprint(value) => observer
+                                        .store
+                                        .add_capture(outcome, key, value.as_bytes())
+                                        .map_err(CollectorError::from),
+                                })?;
                         }
+                        run.terminal = true;
                     }
-                    drop(captures);
-                    run.terminal = true;
+                    Ok(false) => {}
+                    Err(PredicateStageFailure::Semantic { checkpoint, error }) => {
+                        self.captures.builder.clear();
+                        observer.store.record_semantic_error(
+                            self.candidate,
+                            run.id,
+                            ordinal,
+                            CheckpointError {
+                                step: ordinal,
+                                checkpoint: StoredCheckpoint::predicate(checkpoint) as usize,
+                                error,
+                            },
+                        )?;
+                        run.terminal = true;
+                    }
+                    Err(PredicateStageFailure::Physical(error)) => return Err(error.into()),
+                    Err(PredicateStageFailure::Observer(error)) => return Err(error),
                 }
-                Ok(None) => {}
-                Err(PredicateStageFailure::Semantic { checkpoint, error }) => {
-                    observer.store.record_semantic_error(
-                        self.candidate,
-                        run.id,
-                        ordinal,
-                        CheckpointError {
-                            step: ordinal,
-                            checkpoint: StoredCheckpoint::predicate(checkpoint) as usize,
-                            error,
-                        },
-                    )?;
-                    run.terminal = true;
-                }
-                Err(PredicateStageFailure::Physical(error)) => return Err(error.into()),
-                Err(PredicateStageFailure::Observer(error)) => return Err(error),
-            }
-            // The canonical helper's temporary capture vector is now dropped,
-            // including partial capture allocation on semantic error.
-            observer.store.scratch_capacity(base)?;
+                Ok(())
+            })();
+            // Clear partial extraction/transfer on every exit without resolving
+            // stale ranges. Retained descriptor capacity stays fully charged.
+            self.captures.builder.clear();
+            result?;
+            observer
+                .store
+                .scratch_capacity(base.checked_add(self.captures.bytes()?).ok_or(StoreError::Arithmetic)?)?;
         }
         Ok(())
     }
@@ -626,11 +687,11 @@ impl TransformObserver for ProfileObserver<'_, '_, '_> {
 struct PredicateObserver<'a, 'generation> {
     store: &'a mut ResultStore<'generation>,
     base: usize,
-    capture_bytes: usize,
 }
 impl PredicateStageObserver for PredicateObserver<'_, '_> {
     type Error = CollectorError;
     type CaptureValue = StageCaptureValue;
+    type CaptureKey = JsonCaptureKey;
     fn observes_physical_work(&self) -> bool {
         true
     }
@@ -650,7 +711,7 @@ impl PredicateStageObserver for PredicateObserver<'_, '_> {
         self.store.charge_work(bytes)?;
         Ok(())
     }
-    fn captures(&mut self, _: &[CaptureEntry<Self::CaptureValue>]) -> Collected<()> {
+    fn captures(&mut self, _: &[CaptureEntry<Self::CaptureValue, Self::CaptureKey>]) -> Collected<()> {
         Ok(())
     }
     fn admit_capture_allocation(&mut self, current: usize, required: usize) -> Collected<()> {
@@ -664,7 +725,6 @@ impl PredicateStageObserver for PredicateObserver<'_, '_> {
         Ok(())
     }
     fn capture_capacity(&mut self, actual: usize) -> Collected<()> {
-        self.capture_bytes = actual;
         self.store
             .scratch_capacity(self.base.checked_add(actual).ok_or(StoreError::Arithmetic)?)?;
         Ok(())

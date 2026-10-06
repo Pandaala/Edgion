@@ -323,17 +323,26 @@ impl JsonStream {
             JsonStreamInput::Data(bytes) => {
                 let mut offset = 0;
                 while offset < bytes.len() {
+                    let byte = bytes[offset];
                     if let Lexical::String {
                         key,
                         escape: EscapeState::Plain,
                     } = self.lexical
                     {
-                        if self.token.is_empty() && self.utf8_remaining == 0 {
-                            offset += self.borrow_string_prefix(&bytes[offset..], key, sink)?;
-                            continue;
+                        if self.utf8_remaining == 0 {
+                            if self.token.is_empty() {
+                                offset += self.borrow_string_prefix(&bytes[offset..], key, sink)?;
+                                continue;
+                            }
+                            if (0x20..=0x7f).contains(&byte) && !matches!(byte, b'"' | b'\\') {
+                                let run = self.buffer_string_prefix(&bytes[offset..]);
+                                if run != 0 {
+                                    offset += run;
+                                    continue;
+                                }
+                            }
                         }
                     }
-                    let byte = bytes[offset];
                     charge(
                         &mut self.usage.source_bytes,
                         1,
@@ -366,6 +375,36 @@ impl JsonStream {
             }
             JsonStreamInput::Abandoned => Err(JsonStreamError::Abandoned),
         }
+    }
+
+    // Only fill already allocated token space. Growth and special bytes retain
+    // the single-byte path's admission order and capacity trajectory.
+    fn buffer_string_prefix(&mut self, bytes: &[u8]) -> usize {
+        #[cfg(test)]
+        if self.sequential_ascii {
+            return 0;
+        }
+        let admitted = bytes
+            .len()
+            .min(self.limits.max_source_bytes.saturating_sub(self.usage.source_bytes))
+            .min(self.limits.max_raw_token_bytes.saturating_sub(self.raw_token_bytes))
+            .min(self.limits.max_decoded_bytes.saturating_sub(self.usage.decoded_bytes))
+            .min(self.limits.max_work.saturating_sub(self.usage.work) / 2)
+            .min(self.token.capacity() - self.token.len());
+        let run = bytes[..admitted]
+            .iter()
+            .take_while(|&&byte| (0x20..=0x7f).contains(&byte) && !matches!(byte, b'"' | b'\\'))
+            .count();
+        self.usage.source_bytes += run;
+        self.raw_token_bytes += run;
+        self.usage.decoded_bytes += run;
+        self.usage.work += run * 2;
+        self.token.extend_from_slice(&bytes[..run]);
+        #[cfg(test)]
+        measurements::record(Event::SourceBytes, run);
+        #[cfg(test)]
+        measurements::record(Event::TokenCopyBytes, run);
+        run
     }
 
     // Batch admitted ordinary ASCII; preserve sequential admission at boundaries.

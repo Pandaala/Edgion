@@ -1,5 +1,97 @@
 use super::*;
 
+fn apply_transformations(
+    input: &[u8],
+    transformations: &[TransformationKind],
+    limits: TransformLimits,
+) -> Result<Vec<u8>, TransformError> {
+    match apply_transformations_borrowed(input, transformations, limits)? {
+        Cow::Owned(value) => Ok(value),
+        Cow::Borrowed(value) => {
+            let mut copy = Vec::new();
+            copy.try_reserve_exact(value.len())
+                .map_err(|_| TransformError::Allocation)?;
+            copy.extend_from_slice(value);
+            Ok(copy)
+        }
+    }
+}
+
+#[test]
+fn borrowed_final_transform_preserves_identity_ownership_and_validation() {
+    let input = vec![b'a'; 8192];
+    let limits = TransformLimits {
+        max_output_bytes: input.len(),
+        max_work_bytes: input.len() * 8,
+    };
+    for transforms in [
+        vec![],
+        vec![TransformationKind::None],
+        vec![TransformationKind::Lowercase],
+        vec![TransformationKind::RemoveNulls],
+        vec![TransformationKind::HtmlEntityDecode],
+        vec![TransformationKind::UrlDecodeUni],
+        vec![TransformationKind::Lowercase, TransformationKind::RemoveNulls],
+    ] {
+        let borrowed = apply_transformations_borrowed(&input, &transforms, limits).unwrap();
+        assert!(matches!(borrowed, Cow::Borrowed(_)));
+        assert_eq!(borrowed.as_ptr(), input.as_ptr());
+        let owned = apply_transformations(&input, &transforms, limits).unwrap();
+        assert_eq!(owned, input);
+        assert_ne!(owned.as_ptr(), input.as_ptr());
+    }
+    for transforms in [
+        vec![TransformationKind::Lowercase],
+        vec![TransformationKind::Lowercase, TransformationKind::HexEncode],
+    ] {
+        let result = apply_transformations_borrowed(b"A", &transforms, limits).unwrap();
+        assert!(matches!(result, Cow::Owned(_)));
+        assert_eq!(
+            result.as_ref(),
+            apply_transformations(b"A", &transforms, limits).unwrap()
+        );
+    }
+    for work in [input.len() * 2 - 1, input.len() * 2] {
+        let result = apply_transformations_borrowed(
+            &input,
+            &[TransformationKind::Lowercase],
+            TransformLimits {
+                max_work_bytes: work,
+                ..limits
+            },
+        );
+        if work == input.len() * 2 {
+            assert!(matches!(result, Ok(Cow::Borrowed(_))));
+        } else {
+            assert_eq!(result.unwrap_err(), TransformError::WorkLimit { limit: work });
+        }
+    }
+    assert_eq!(
+        apply_transformations_borrowed(
+            &input,
+            &[],
+            TransformLimits {
+                max_output_bytes: input.len() - 1,
+                ..limits
+            },
+        )
+        .unwrap_err(),
+        TransformError::OutputLimit { limit: input.len() - 1 },
+    );
+    assert_eq!(
+        apply_transformations_borrowed(
+            b"a",
+            &[TransformationKind::None, TransformationKind::HexEncode],
+            TransformLimits {
+                max_output_bytes: 1,
+                max_work_bytes: 16
+            },
+        )
+        .unwrap_err(),
+        TransformError::OutputLimit { limit: 1 },
+    );
+}
+
 fn transform(kind: TransformationKind, input: &[u8]) -> Vec<u8> {
     apply_transformations(
         input,

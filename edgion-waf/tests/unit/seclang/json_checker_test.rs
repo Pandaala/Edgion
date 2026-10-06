@@ -920,3 +920,154 @@ fn node_links_use_one_word_and_reject_index_overflow() {
     }
     assert_eq!(NodeId::new(usize::MAX), Err(JsonCheckerError::Arithmetic));
 }
+
+#[test]
+fn wide_nonroot_duplicates_preserve_links_heights_scopes_and_sorted_results() {
+    let prefix = format!(
+        "{{{},",
+        (0..256)
+            .map(|i| format!("\"k{i:03}\":\"old\""))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let mut checker = checker("json", JsonStructureLimits::default());
+    let mut sink = Sink {
+        retain: true,
+        ..Sink::default()
+    };
+    checker
+        .feed(JsonStreamInput::Data(prefix.as_bytes()), &mut sink)
+        .unwrap();
+    let Container::Object { root: Some(root), .. } = checker.reducer.frames[0].container else {
+        panic!("expected open object");
+    };
+    let topology = |checker: &JsonChecker<Receipt>| {
+        checker
+            .reducer
+            .nodes
+            .iter()
+            .map(|node| (node.key.start, node.key.len, node.left, node.right, node.height))
+            .collect::<Vec<_>>()
+    };
+    let original = topology(&checker);
+    let original_keys = checker.reducer.keys.to_vec();
+    let original_retained = checker.usage().retained_bytes;
+    let root_key = checker.reducer.nodes[root.index()].key;
+    let root_name = original_keys[root_key.start..root_key.start + root_key.len].to_vec();
+    let mut source = prefix;
+    for i in 0..2048 {
+        let mut key = format!("k{:03}", (i * 17) % 256);
+        if key.as_bytes() == root_name {
+            key = "k000".into();
+            if key.as_bytes() == root_name {
+                key = "k255".into();
+            }
+        }
+        let replacement = format!("\"{key}\":\"final\"{}", if i == 2047 { "}" } else { "," });
+        checker
+            .feed(JsonStreamInput::Data(replacement.as_bytes()), &mut sink)
+            .unwrap();
+        source.push_str(&replacement);
+        if i != 2047 {
+            assert_eq!(topology(&checker), original);
+            assert_eq!(checker.reducer.keys.as_slice(), original_keys);
+            assert_eq!(checker.usage().members, 256);
+            assert_eq!(checker.usage().retained_bytes, original_retained);
+            assert_avl(&checker, Some(root));
+        }
+    }
+    assert_eq!(sink.discarded, 2048);
+    checker.feed(JsonStreamInput::Complete, &mut sink).unwrap();
+    let canonical = serde_json::from_str::<serde_json::Value>(&source).unwrap().to_string();
+    let (direct, expected) = run(canonical.as_bytes(), "json", true);
+    assert_eq!(sink.sealed, expected.sealed);
+    assert_eq!(checker.summary(), direct.summary());
+    assert_eq!(checker.usage().peak_members, 256);
+    assert_eq!(checker.usage().retained_bytes, 0);
+    let work = checker.usage().work;
+    for cap in [work - 1, work, work + 1] {
+        let mut checker = self::checker(
+            "json",
+            JsonStructureLimits {
+                max_work: cap,
+                ..JsonStructureLimits::default()
+            },
+        );
+        let mut sink = Sink {
+            retain: true,
+            ..Sink::default()
+        };
+        let result = checker
+            .feed(JsonStreamInput::Data(source.as_bytes()), &mut sink)
+            .and_then(|()| checker.feed(JsonStreamInput::Complete, &mut sink));
+        assert_eq!(result.is_ok(), cap >= work);
+        if cap < work {
+            assert_eq!(
+                result,
+                Err(JsonCheckerError::Limit {
+                    kind: JsonStructureLimit::Work,
+                    limit: cap,
+                })
+            );
+            assert_eq!(sink.abandoned, 1);
+            assert_eq!(checker.feed(JsonStreamInput::Complete, &mut sink), result);
+            assert_eq!(sink.abandoned, 1);
+            assert_eq!(checker.usage().retained_bytes, 0);
+        } else {
+            assert_eq!(sink.sealed, expected.sealed);
+            assert_eq!(checker.usage().work, work);
+        }
+    }
+}
+
+#[test]
+fn nonroot_decoded_duplicates_replace_nested_receipts_and_fail_stickily() {
+    let prefix = format!(
+        "{{{},\"k000\":{{\"old\":[1,2]}},",
+        (0..32).map(|i| format!("\"k{i:03}\":0")).collect::<Vec<_>>().join(",")
+    );
+    let replacement = br#""\u006b000":null,"k000":{"new":true}}"#;
+    let source = [prefix.as_bytes(), replacement].concat();
+    for split in [0, prefix.len(), prefix.len() + 4, source.len() - 1, source.len()] {
+        let mut checker = checker("json", JsonStructureLimits::default());
+        let mut sink = Sink {
+            retain: true,
+            ..Sink::default()
+        };
+        checker
+            .feed(JsonStreamInput::Data(&source[..split]), &mut sink)
+            .unwrap();
+        checker
+            .feed(JsonStreamInput::Data(&source[split..]), &mut sink)
+            .unwrap();
+        checker.feed(JsonStreamInput::Complete, &mut sink).unwrap();
+        assert_eq!(sink.sealed[0].0, b"json.k000.new");
+        assert_eq!(sink.sealed[0].1, b"true");
+        assert_eq!(sink.discarded, 5);
+    }
+    for (tail, failure, expected) in [
+        (
+            br#""\u006b000":"\q"}"#.as_slice(),
+            None,
+            JsonCheckerError::Lexical(JsonStreamError::Escape),
+        ),
+        (replacement.as_slice(), Some("discard"), JsonCheckerError::Sink),
+    ] {
+        let mut checker = checker("json", JsonStructureLimits::default());
+        let mut sink = Sink {
+            retain: true,
+            ..Sink::default()
+        };
+        checker
+            .feed(JsonStreamInput::Data(prefix.as_bytes()), &mut sink)
+            .unwrap();
+        sink.failure = failure;
+        assert_eq!(checker.feed(JsonStreamInput::Data(tail), &mut sink), Err(expected));
+        assert_eq!(checker.feed(JsonStreamInput::Complete, &mut sink), Err(expected));
+        assert_eq!(checker.feed(JsonStreamInput::Abandoned, &mut sink), Err(expected));
+        assert_eq!(sink.abandoned, 1);
+        assert!(sink.facts.is_empty());
+        assert_eq!(checker.usage().retained_bytes, 0);
+        assert_eq!(checker.lexical_usage().retained_bytes, 0);
+    }
+}

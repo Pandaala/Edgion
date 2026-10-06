@@ -107,6 +107,8 @@ pub(super) struct CompiledJsonPlan {
     pub candidate_literals: Vec<JsonNameRef>,
     pub candidate_regexes: Vec<CompiledTargetSelector>,
     pub unsupported: Vec<JsonInspectionUnsupported>,
+    /// Unique compiled Matcher IDs; bounds every profile's stage scan cache.
+    pub matcher_scan_capacity: usize,
     pub needs_candidate_names: bool,
     pub needs_all_candidate_names: bool,
     pub needs_argument_count: bool,
@@ -638,6 +640,43 @@ impl CompiledJsonPlan {
                 Ok((plan.groups[a].profile, a).cmp(&(plan.groups[b].profile, b)))
             })?;
         }
+        let mut matcher_count = 0;
+        for group in &plan.groups {
+            work.charge_records(1, memory.limits)?;
+            if matches!(
+                generation.operator_plans[group.member].ok_or_else(invariant)?.operand,
+                CompiledOperatorOperand::Matcher { .. }
+            ) {
+                matcher_count = checked_inc(matcher_count)?;
+            }
+        }
+        memory.retain_working_records::<usize>(matcher_count)?;
+        let mut matcher_ids = Vec::new();
+        reserve_exact(&mut matcher_ids, matcher_count, "JSON stage matcher identities")?;
+        memory.retain_working_records::<usize>(
+            matcher_ids
+                .capacity()
+                .checked_sub(matcher_count)
+                .ok_or_else(invariant)?,
+        )?;
+        for group in &plan.groups {
+            work.charge_records(1, memory.limits)?;
+            if let CompiledOperatorOperand::Matcher { group, .. } =
+                generation.operator_plans[group.member].ok_or_else(invariant)?.operand
+            {
+                matcher_ids.push(group);
+            }
+        }
+        sort(&mut matcher_ids, |a, b| {
+            work.charge_records(1, memory.limits)?;
+            Ok(a.cmp(&b))
+        })?;
+        work.charge_records(matcher_ids.len(), memory.limits)?;
+        matcher_ids.dedup();
+        plan.matcher_scan_capacity = matcher_ids.len();
+        let matcher_capacity = matcher_ids.capacity();
+        drop(matcher_ids);
+        memory.drop_working_records::<usize>(matcher_capacity);
         memory.drop_working_records::<CanonicalSlot>(group_slots.capacity());
         Ok(plan)
     }

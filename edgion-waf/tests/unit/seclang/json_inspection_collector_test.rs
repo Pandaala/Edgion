@@ -186,14 +186,170 @@ fn thirty_two_subscribers_share_one_scan_per_stage_in_both_modes() {
     let generation = compile(&source);
     assert_eq!(generation.groups.len(), 1);
     assert_eq!(generation.json_inspection.groups.len(), 32);
+    assert_eq!(generation.json_inspection.matcher_scan_capacity, 1);
     for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
         let runtime = RuntimeLimits::default();
         let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
         let mut sink = collector(&generation, &mut tx, runtime, mode, ResultLimits::default());
+        assert_eq!(sink.dispatch.cache.scanned.capacity(), 1);
         feed(&mut sink, br#"{"a":"SAFE","b":"safe"}"#, 9);
         assert_eq!(sink.dispatch.cache.scans, 3);
         assert_eq!(sink.usage().live_outcomes, 0);
         assert_eq!(sink.usage().live_changes, 1);
+    }
+}
+
+#[test]
+fn capture_only_and_mixed_profiles_use_compiled_matcher_cache_bound() {
+    for (source, expected) in [
+        (
+            concat!(
+                "SecRule ARGS \"@rx (?P<word>a)\" \"id:1,phase:2,pass,capture,t:none\"\n",
+                "SecRule ARGS \"@rx (?P<word>a)\" \"id:2,phase:2,pass,capture,t:none\"\n",
+                "SecRule ARGS \"@contains z\" \"id:3,phase:2,pass,t:none\"\n",
+            ),
+            0,
+        ),
+        (
+            concat!(
+                "SecRule ARGS \"@pm first\" \"id:1,phase:2,pass,t:none\"\n",
+                "SecRule ARGS \"@pm second\" \"id:2,phase:2,pass,t:none\"\n",
+                "SecRule ARGS \"@pm third\" \"id:3,phase:2,pass,t:none,t:lowercase,multiMatch\"\n",
+                "SecRule ARGS \"@rx (?P<word>a)\" \"id:4,phase:2,pass,capture,t:none\"\n",
+            ),
+            2,
+        ),
+    ] {
+        let generation = compile(source);
+        assert_eq!(generation.json_inspection.matcher_scan_capacity, expected);
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let runtime = RuntimeLimits::default();
+            let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+            let mut sink = collector(&generation, &mut tx, runtime, mode, ResultLimits::default());
+            let capacity = sink.dispatch.cache.scanned.capacity();
+            assert_eq!(capacity, expected);
+            feed(&mut sink, br#"{"x":"FIRST third a","y":"safe"}"#, 9);
+            assert_eq!(sink.dispatch.cache.scanned.capacity(), capacity);
+            assert!(sink.dispatch.cache.scanned.len() <= expected);
+            assert_eq!(sink.dispatch.cache.scans == 0, expected == 0);
+        }
+    }
+}
+
+#[test]
+fn shared_capture_program_aliases_resolve_identical_ordered_captures_in_both_modes() {
+    let generation = compile(concat!(
+        "SecRule ARGS \"@rx ^(?P<word>a)(?P<empty>)$\" \"id:1,phase:2,pass,capture,t:none\"\n",
+        "SecRule ARGS \"@rx ^(?P<word>a)(?P<empty>)$\" \"id:2,phase:2,pass,capture,t:none\"\n",
+        "SecRule ARGS \"!@rx ^(?P<word>a)(?P<empty>)$\" \"id:3,phase:2,pass,capture,t:none\"\n",
+    ));
+    assert_eq!(generation.capture_regexes.len(), 1);
+    assert_eq!(generation.json_inspection.groups.len(), 2);
+    for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+        let runtime = RuntimeLimits::default();
+        let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+        let mut sink = collector(&generation, &mut tx, runtime, mode, ResultLimits::default());
+        feed(&mut sink, br#"{"x":"a"}"#, 5);
+        assert_eq!(sink.usage().live_outcomes, 1);
+        assert_eq!(sink.usage().live_captures, 5);
+        let (sealed, mut budget) = sink.into_sealed().unwrap();
+        let id = sealed.receipt.unwrap().head;
+        let mut alias_outcome = None;
+        for member in [0, 1] {
+            let super::super::super::json_inspection_plan::JsonMemberMode::StaticFact(group) =
+                generation.json_inspection.members[member].value
+            else {
+                panic!("expected alias group");
+            };
+            let SelectedOutcome::MatchOrError(outcome) = sealed
+                .lookup_selected(&mut budget, id, group, &generation, runtime, mode)
+                .unwrap()
+            else {
+                panic!("expected alias match");
+            };
+            if let Some(previous) = alias_outcome {
+                assert_eq!(outcome, previous);
+            }
+            alias_outcome = Some(outcome);
+            let OutcomeValue::Match { first_capture, .. } = sealed.outcome(&mut budget, id, outcome).unwrap().result
+            else {
+                panic!("expected alias captures");
+            };
+            let mut next = first_capture;
+            for (key, value) in [
+                (b"0".as_slice(), b"a".as_slice()),
+                (b"1", b"a"),
+                (b"word", b"a"),
+                (b"2", b""),
+                (b"empty", b""),
+            ] {
+                let capture = sealed.capture(&mut budget, id, outcome, next.unwrap()).unwrap();
+                assert_eq!(capture.key, key);
+                assert_eq!(sealed.match_value(&mut budget, capture.value).unwrap(), value);
+                next = capture.next;
+            }
+            assert!(next.is_none());
+        }
+        let super::super::super::json_inspection_plan::JsonMemberMode::StaticFact(group) =
+            generation.json_inspection.members[2].value
+        else {
+            panic!("expected negated group");
+        };
+        assert!(matches!(
+            sealed
+                .lookup_selected(&mut budget, id, group, &generation, runtime, mode)
+                .unwrap(),
+            SelectedOutcome::NoMatch
+        ));
+    }
+}
+
+#[test]
+fn compiled_matcher_cache_constructor_has_exact_physical_admission() {
+    let generation = compile(concat!(
+        "SecRule ARGS \"@pm first\" \"id:1,phase:2,pass,t:none\"\n",
+        "SecRule ARGS \"@pm second\" \"id:2,phase:2,pass,t:none\"\n",
+        "SecRule ARGS \"@rx (a)\" \"id:3,phase:2,pass,capture,t:none\"\n",
+    ));
+    assert_eq!(generation.json_inspection.matcher_scan_capacity, 1);
+    let runtime = RuntimeLimits::default();
+    let required = {
+        let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+        let sink = collector(
+            &generation,
+            &mut tx,
+            runtime,
+            EvaluationMode::Accelerated,
+            ResultLimits::default(),
+        );
+        assert_eq!(sink.usage().retained_bytes, sink.usage().peak_retained_bytes);
+        sink.usage().peak_retained_bytes
+    };
+    for (bound, succeeds) in [(required, true), (required - 1, false)] {
+        let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+        let result = JsonCollector::new(
+            GenerationHandle::Borrowed(&generation),
+            SingleInputContext {
+                generation: &generation,
+                request: &tx.request,
+                tx: &tx.tx,
+                group_scratch: &mut tx.group_scratch,
+                boolean_scratch: &mut tx.boolean_scratch,
+                capture_scratch: &mut tx.capture_scratch,
+                scan_cache: None,
+                json_budget: None,
+            },
+            runtime,
+            EvaluationMode::Accelerated,
+            ResultLimits {
+                retained_bytes: bound,
+                ..ResultLimits::default()
+            },
+        );
+        assert_eq!(result.is_ok(), succeeds);
+        if !succeeds {
+            assert!(matches!(result, Err(CollectorError::Store(StoreError::Capacity))));
+        }
     }
 }
 
@@ -651,7 +807,7 @@ fn range_capture_collection_preserves_aliases_offsets_and_generated_fingerprints
                 .sum::<usize>();
             let keys = expected.iter().map(|(key, _, _)| key.len()).sum::<usize>();
             assert_eq!(sink.usage().capture_bytes, logical);
-            assert_eq!(scope.counts().get(Event::TemporaryCaptureCopyBytes), keys);
+            assert_eq!(scope.counts().get(Event::TemporaryCaptureCopyBytes), 0);
             assert_eq!(
                 scope.counts().get(Event::CaptureCopyBytes),
                 keys + if operator == "@detectSQLi" { 3 } else { 0 }
@@ -762,10 +918,185 @@ fn range_capture_cleanup_discards_replaced_and_late_invalidated_hits() {
         );
         feed(&mut sink, input, 5);
         assert!(scope.counts().get(Event::MatchedCopyBytes) > 0);
-        assert_eq!(scope.counts().get(Event::TemporaryCaptureCopyBytes), 2);
+        assert_eq!(scope.counts().get(Event::TemporaryCaptureCopyBytes), 0);
         assert_eq!(sink.usage().live_captures, 0);
         assert_eq!(sink.usage().capture_bytes, 0);
         assert_eq!(sink.usage().matched_bytes, 0);
         assert!(sink.into_sealed().is_ok());
     }
+}
+
+#[test]
+fn capture_builder_reuses_high_water_capacity_and_releases_on_abandon_and_eos() {
+    let generation = compile(concat!(
+        "SecRule ARGS \"@rx (?P<a>hit)(?P<b>hit)(?P<c>hit)\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx hit\" \"id:2,phase:2,pass,capture\"\n",
+    ));
+    let runtime = RuntimeLimits::default();
+    let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+    let mut sink = collector(
+        &generation,
+        &mut tx,
+        runtime,
+        EvaluationMode::Accelerated,
+        ResultLimits::default(),
+    );
+    assert_eq!(sink.captures.bytes().unwrap(), 0);
+    let scope = measurements::start();
+    for (name, value) in [(b"json.a".as_slice(), b"miss".as_slice()), (b"json.b", b"hithithit")] {
+        sink.collect_scalar(name, value, JsonScalarKind::String).unwrap();
+    }
+    let capacity = sink.captures.builder.entries.capacity();
+    let pointer = sink.captures.builder.entries.as_ptr();
+    assert!(capacity >= 7);
+    for (name, value) in [
+        (b"json.c".as_slice(), b"hit".as_slice()),
+        (b"json.d", b"miss"),
+        (b"json.e", b"hit"),
+    ] {
+        sink.collect_scalar(name, value, JsonScalarKind::String).unwrap();
+        assert_eq!(sink.captures.builder.entries.capacity(), capacity);
+        assert_eq!(sink.captures.builder.entries.as_ptr(), pointer);
+        assert!(sink.captures.builder.entries.is_empty());
+        assert_eq!(sink.captures.builder.semantic_bytes, 0);
+        assert_eq!(sink.captures.builder.heap_bytes, 0);
+    }
+    assert_eq!(scope.counts().get(Event::TemporaryCaptureCopyBytes), 0);
+    sink.abandon();
+    assert_eq!(sink.captures.bytes().unwrap(), 0);
+    assert_eq!(sink.usage().retained_bytes, 0);
+    assert_eq!(sink.into_abandoned_budget().unwrap().usage().retained_bytes, 0);
+
+    let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+    let mut sink = collector(
+        &generation,
+        &mut tx,
+        runtime,
+        EvaluationMode::Accelerated,
+        ResultLimits::default(),
+    );
+    feed(&mut sink, br#"{"a":"hithithit","b":"hit"}"#, 9);
+    assert_eq!(sink.captures.bytes().unwrap(), 0);
+    assert_eq!(sink.into_sealed().unwrap().0.summary.argument_count, 2);
+}
+
+#[test]
+fn capture_keys_reject_foreign_generation_and_invalid_named_references() {
+    let generation = compile("SecRule ARGS \"@rx (?P<word>hit)\" \"id:1,phase:2,pass,capture\"");
+    let other = compile("SecRule ARGS \"@rx (?P<foreign>hit)\" \"id:1,phase:2,pass,capture\"");
+    let mut tx = Transaction::new(&generation, request(), RuntimeLimits::default()).unwrap();
+    let mut sink = collector(
+        &generation,
+        &mut tx,
+        RuntimeLimits::default(),
+        EvaluationMode::Accelerated,
+        ResultLimits::default(),
+    );
+    sink.captures.generation = &other;
+    assert!(sink.scalar(b"json.a", b"hit", JsonScalarKind::String).is_err());
+    assert_eq!(sink.failure(), Some(CollectorError::State));
+    assert!(sink.captures.builder.entries.is_empty());
+    for key in [
+        JsonCaptureKey::Named { program: 1, group: 1 },
+        JsonCaptureKey::Named { program: 0, group: 0 },
+        JsonCaptureKey::Named { program: 0, group: 2 },
+    ] {
+        assert!(matches!(
+            key.with_bytes(&generation, |bytes| Ok::<_, RuntimeError>(bytes.len())),
+            Err(RuntimeError::GenerationInvariant)
+        ));
+    }
+    assert_eq!(
+        JsonCaptureKey::Named { program: 0, group: 1 }
+            .with_bytes(&generation, |bytes| Ok::<_, RuntimeError>(bytes.to_vec()))
+            .unwrap(),
+        b"word"
+    );
+    assert_eq!(
+        JsonCaptureKey::Numeric(123)
+            .with_bytes(&generation, |bytes| Ok::<_, RuntimeError>(bytes.to_vec()))
+            .unwrap(),
+        b"123"
+    );
+}
+
+#[test]
+fn capture_builder_clears_after_partial_store_transfer_failure() {
+    let generation = compile("SecRule ARGS \"@rx (?P<a>hit)(?P<b>hit)(?P<c>hit)\" \"id:1,phase:2,pass,capture\"");
+    let runtime = RuntimeLimits::default();
+    let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+    let mut sink = collector(
+        &generation,
+        &mut tx,
+        runtime,
+        EvaluationMode::Accelerated,
+        ResultLimits {
+            records: 12,
+            ..ResultLimits::default()
+        },
+    );
+    let scope = measurements::start();
+    assert!(sink.scalar(b"json.a", b"hithithit", JsonScalarKind::String).is_err());
+    assert_eq!(sink.failure(), Some(CollectorError::Store(StoreError::Records)));
+    assert!(scope.counts().get(Event::CaptureCopyBytes) >= 5);
+    assert!(sink.captures.builder.entries.is_empty());
+    assert_eq!(sink.captures.builder.semantic_bytes, 0);
+    assert_eq!(sink.captures.builder.heap_bytes, 0);
+    assert!(sink.captures.bytes().unwrap() > 0);
+    assert_eq!(sink.usage().live_captures, 0);
+    assert!(sink.scalar(b"json.b", b"hit", JsonScalarKind::String).is_err());
+    assert_eq!(sink.failure(), Some(CollectorError::Store(StoreError::Records)));
+    sink.abandon();
+    assert_eq!(sink.captures.bytes().unwrap(), 0);
+    assert_eq!(sink.usage().retained_bytes, 0);
+}
+
+#[test]
+fn transform_growth_reads_capture_capacity_created_after_profile_construction() {
+    let generation = compile("SecRule ARGS \"@rx (?P<word>hit)\" \"id:1,phase:2,pass,capture,multiMatch,t:hexEncode\"");
+    let runtime = RuntimeLimits::default();
+    let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+    let mut sink = collector(
+        &generation,
+        &mut tx,
+        runtime,
+        EvaluationMode::Accelerated,
+        ResultLimits::default(),
+    );
+    let candidate = sink
+        .store
+        .begin_candidate(b"json.a", 3, JsonScalarKind::String, None)
+        .unwrap();
+    let mut groups = [GroupRun { id: 0, terminal: false }];
+    let mut observer = ProfileObserver {
+        fixed_scratch: sink.dispatch.bytes().unwrap(),
+        store: &mut sink.store,
+        context: &mut sink.context,
+        groups: &mut groups,
+        cache: &mut sink.dispatch.cache,
+        captures: &mut sink.captures,
+        candidate,
+        profile: 0,
+        runtime,
+        mode: EvaluationMode::Accelerated,
+        transform_bytes: 0,
+        last: StoredCheckpoint::Initial,
+        step: 0,
+    };
+    assert_eq!(observer.captures.bytes().unwrap(), 0);
+    observer.stage(0, b"hit").unwrap();
+    assert!(observer.captures.bytes().unwrap() > 0);
+    let before = observer.store.usage().retained_bytes;
+    observer.admit_scratch(8192).unwrap();
+    let mut transformation = Vec::<u8>::new();
+    transformation.try_reserve_exact(8192).unwrap();
+    observer.scratch_capacity(transformation.capacity()).unwrap();
+    assert_eq!(
+        observer.store.usage().retained_bytes,
+        before + transformation.capacity()
+    );
+    // Drop actual external storage before terminal-safe scratch release.
+    drop(transformation);
+    sink.abandon();
+    assert_eq!(sink.usage().retained_bytes, 0);
 }

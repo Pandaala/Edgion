@@ -22,6 +22,62 @@ fn compile(text: &str, limits: CompilerLimits) -> Result<CompiledGeneration, Com
 }
 
 #[test]
+fn capture_program_sharing_keeps_complete_json_group_identity() {
+    let generation = compile(
+        concat!(
+            "SecRule ARGS \"@rx (?P<word>a)\" \"id:1,phase:2,pass,capture,t:none\"\n",
+            "SecRule ARGS \"@rx (?P<word>a)\" \"id:2,phase:2,pass,capture,t:none\"\n",
+            "SecRule ARGS \"!@rx (?P<word>a)\" \"id:3,phase:2,pass,capture,t:none\"\n",
+            "SecRule ARGS_NAMES \"@rx (?P<word>a)\" \"id:4,phase:2,pass,capture,t:none\"\n",
+            "SecRule ARGS \"@rx (?P<word>a)\" \"id:5,phase:2,pass,capture,t:none,t:lowercase\"\n",
+            "SecRule ARGS \"@rx (?P<word>a)\" \"id:6,phase:2,pass,capture,t:none,multiMatch\"\n",
+            "SecRule ARGS \"@rx (?P<other>a)\" \"id:7,phase:2,pass,capture,t:none\"\n",
+        ),
+        CompilerLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(generation.capture_regexes.len(), 2);
+    let plan = &generation.json_inspection;
+    assert_eq!(plan.groups.len(), 6);
+    assert_eq!(plan.members[0].value, plan.members[1].value);
+    let first = plan.members[0].value;
+    assert!(plan.members[2..].iter().all(|member| member.value != first));
+    assert_eq!(plan.matcher_scan_capacity, 0);
+}
+
+#[test]
+fn matcher_scan_capacity_counts_unique_matcher_ids_across_profiles_and_ranges() {
+    let generation = compile(
+        concat!(
+            "SecRule ARGS \"@pm first\" \"id:1,phase:2,pass,t:none\"\n",
+            "SecRule ARGS \"@pm second\" \"id:2,phase:2,pass,t:none\"\n",
+            "SecRule ARGS \"@pm third\" \"id:3,phase:2,pass,t:none,t:lowercase,multiMatch\"\n",
+            "SecRule ARGS \"@contains fourth\" \"id:4,phase:2,pass,t:none\"\n",
+            "SecRule ARGS \"@rx (a)\" \"id:5,phase:2,pass,capture,t:none\"\n",
+        ),
+        CompilerLimits::default(),
+    )
+    .unwrap();
+    let plan = &generation.json_inspection;
+    let mut ids = plan
+        .groups
+        .iter()
+        .filter_map(|group| match generation.operator_plans[group.member].unwrap().operand {
+            CompiledOperatorOperand::Matcher { group, .. } => Some(group),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let matcher_groups = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(plan.matcher_scan_capacity, ids.len());
+    assert_eq!(ids.len(), 2);
+    assert!(matcher_groups > ids.len());
+    assert!(plan.groups.len() > matcher_groups);
+    assert!(plan.profiles.len() > 1);
+}
+
+#[test]
 fn dispatch_reuses_compatible_programs_and_looks_up_literal_bytes() {
     let generation = compile(
         r#"

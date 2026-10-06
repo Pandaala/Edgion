@@ -1,10 +1,281 @@
 use super::*;
+
+// Independent retained-capacity oracle for the incremental capture builder.
+fn capture_retained_bytes<V: StageCapturePayload>(captures: &Vec<CaptureEntry<V>>) -> Result<usize, RuntimeError> {
+    captures.iter().try_fold(
+        captures
+            .capacity()
+            .checked_mul(size_of::<CaptureEntry<V>>())
+            .ok_or(RuntimeError::Arithmetic)?,
+        |bytes, entry| {
+            bytes
+                .checked_add(entry.key.capacity())
+                .and_then(|bytes| bytes.checked_add(entry.value.heap_capacity()))
+                .ok_or(RuntimeError::Arithmetic)
+        },
+    )
+}
+
+impl TxState {
+    // Repair private fixtures that deliberately write observer fields directly.
+    fn recount(&mut self) {
+        self.entry_payload_bytes = self
+            .entries
+            .iter()
+            .try_fold(0_u128, |total, entry| {
+                tx_payload_delta(total, 0, tx_payload_bytes(entry.key.len(), entry.value.len())?)
+            })
+            .expect("real entry lengths fit the exact payload counter");
+        self.matched_vars_payload_bytes = self
+            .matched_vars
+            .iter()
+            .try_fold(0_u128, |total, entry| {
+                tx_payload_delta(total, 0, tx_payload_bytes(entry.key.len(), entry.value.len())?)
+            })
+            .expect("real observer lengths fit the exact payload counter");
+        self.refresh_retained_bytes();
+    }
+}
 use crate::seclang::{
     compile_with_includes, FrontendLimits, IncludeFailure, IncludeRequest, IncludeSink, IncludeSource, PhaseDefaults,
     SemanticValidationContext,
 };
 
 struct NoIncludes;
+
+#[test]
+fn tx_cached_totals_cover_sealed_captures_controls_and_later_phases() {
+    let g = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,ctl:requestBodyProcessor=JSON,ctl:ruleRemoveByTag=gone,ctl:ruleRemoveTargetByTag=kept;ARGS:ignored\"\n",
+        "SecRule ARGS:json.a \"@rx ^(?P<word>12)$\" \"id:2,phase:2,pass,capture,tag:kept,chain\"\n",
+        "SecRule TX:1 \"@streq 12\" \"setvar:tx.1=+3,setvar:tx.saved=%{TX.word},setvar:!tx.0\"\n",
+        "SecRule ARGS \"@contains 12\" \"id:3,phase:2,deny,tag:gone\"\n",
+        "SecAction \"id:4,phase:3,pass,setvar:tx.later=%{TX.saved}\"\n",
+    ));
+    let mut tx = Transaction::new(&g, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    assert!(!tx.tx.removed_units.is_empty());
+    assert!(!tx.tx.target_exclusions.is_empty());
+    assert_tx_accounting(&tx.tx);
+    tx.publish_request_body(RequestBody::new(
+        bytes::Bytes::from_static(br#"{"a":"12"}"#),
+        crate::seclang::BodyProcessorSelection::Auto,
+    ))
+    .unwrap();
+    let outcome = tx.execute_request_body().unwrap();
+    assert!(outcome.intervention().is_none());
+    assert_eq!(tx.tx_value(b"1"), Some(b"15".as_slice()));
+    assert_eq!(tx.tx_value(b"0"), None);
+    assert!(matches!(tx.tx.get(b"word"), Some(MatchValue::Json(_))));
+    assert_tx_accounting(&tx.tx);
+    assert_tx_accounting(&tx.tx.try_clone().unwrap());
+    assert_tx_accounting(&tx.tx.try_clone_for_unit().unwrap());
+    tx.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+    tx.execute_response_headers().unwrap();
+    assert_eq!(tx.tx_value(b"later"), Some(b"12".as_slice()));
+    assert_tx_accounting(&tx.tx);
+}
+
+// Frozen pre-cache expression. Only call for representable payload sums.
+fn old_tx_retained_bytes(state: &TxState) -> usize {
+    state
+        .entries
+        .len()
+        .saturating_mul(size_of::<TxEntry>())
+        .saturating_add(
+            state
+                .entries
+                .iter()
+                .map(|entry| entry.key.len().saturating_add(entry.value.len()))
+                .sum::<usize>(),
+        )
+        .saturating_add(state.matched_var.as_ref().map_or(0, MatchValue::len))
+        .saturating_add(state.matched_var_name.as_ref().map_or(0, MatchValue::len))
+        .saturating_add(
+            state
+                .matched_vars
+                .len()
+                .saturating_mul(size_of::<TxEntry<MatchValue, MatchValue>>()),
+        )
+        .saturating_add(state.removed_units.len().saturating_mul(size_of::<usize>()))
+        .saturating_add(
+            state
+                .target_exclusions
+                .len()
+                .saturating_mul(size_of::<ActiveTargetExclusion>()),
+        )
+        .saturating_add(
+            state
+                .matched_vars
+                .iter()
+                .map(|entry| entry.key.len().saturating_add(entry.value.len()))
+                .sum::<usize>(),
+        )
+}
+
+fn assert_tx_accounting(state: &TxState) {
+    assert_eq!(state.retained_bytes, old_tx_retained_bytes(state));
+    assert_eq!(
+        state.entry_payload_bytes,
+        state
+            .entries
+            .iter()
+            .map(|entry| entry.key.len() as u128 + entry.value.len() as u128)
+            .sum::<u128>()
+    );
+    assert_eq!(
+        state.matched_vars_payload_bytes,
+        state
+            .matched_vars
+            .iter()
+            .map(|entry| entry.key.len() as u128 + entry.value.len() as u128)
+            .sum::<u128>()
+    );
+}
+
+#[test]
+fn tx_cached_totals_match_frozen_recount_after_mutations_and_failures() {
+    let limits = RuntimeLimits::default();
+    let mut state = TxState::default();
+    let mut capture_keys = Vec::new();
+    for index in 0..64 {
+        let key = format!("key{index}").into_bytes();
+        state.set(key.clone(), vec![b'a'; index], limits).unwrap();
+        assert_tx_accounting(&state);
+        state
+            .set(format!("KEY{index}").into_bytes(), vec![b'b'; 64 - index], limits)
+            .unwrap();
+        assert_eq!(state.entries[index].key, key);
+        assert_tx_accounting(&state);
+        apply_member_match(
+            &mut state,
+            &mut capture_keys,
+            MemberMatch {
+                matched_var: Some(vec![b'x'; index].into()),
+                matched_var_name: Some(key.into()),
+                captures: Vec::new(),
+            },
+            limits,
+        )
+        .unwrap();
+        assert_tx_accounting(&state);
+    }
+    for index in (0..64).rev() {
+        state.delete(format!("KEY{index}").as_bytes()).unwrap();
+        assert_tx_accounting(&state);
+        state.delete(b"absent").unwrap();
+        assert_tx_accounting(&state);
+    }
+    apply_member_match(&mut state, &mut capture_keys, MemberMatch::default(), limits).unwrap();
+    assert_tx_accounting(&state);
+    state.add_removed_unit(7, limits).unwrap();
+    state.add_removed_unit(7, limits).unwrap();
+    assert_tx_accounting(&state);
+    assert_tx_accounting(&state.try_clone().unwrap());
+    let unit = state.try_clone_for_unit().unwrap();
+    assert_tx_accounting(&unit);
+    assert_eq!(unit.matched_vars_payload_bytes, 0);
+    assert!(unit.matched_vars.is_empty());
+    let limited = RuntimeLimits {
+        max_tx_bytes: state.retained_bytes,
+        ..limits
+    };
+    assert!(matches!(
+        state.set(b"failed".to_vec(), vec![b'a'; 128], limited),
+        Err(RuntimeError::TxByteLimit { .. })
+    ));
+    assert_eq!(state.get(b"failed").unwrap().len(), 128);
+    assert_tx_accounting(&state);
+    let before = state.retained_bytes;
+    assert!(matches!(
+        state.set(
+            b"over-count".to_vec(),
+            Vec::new(),
+            RuntimeLimits {
+                max_tx_variables: state.entries.len(),
+                ..limits
+            }
+        ),
+        Err(RuntimeError::TxVariableLimit { .. })
+    ));
+    assert_eq!(state.retained_bytes, before);
+    assert_tx_accounting(&state);
+}
+
+#[test]
+fn tx_wide_payload_totals_saturate_only_the_final_charge() {
+    let mut state = TxState::default();
+    let wide = usize::MAX as u128 + 17;
+    state.entry_payload_bytes = wide;
+    state.refresh_retained_bytes();
+    assert_eq!(state.retained_bytes, usize::MAX);
+    state.entry_payload_bytes = tx_payload_delta(state.entry_payload_bytes, 18, 0).unwrap();
+    state.refresh_retained_bytes();
+    assert_eq!(state.retained_bytes, usize::MAX - 1);
+    assert_eq!(tx_payload_delta(0, 1, 0), Err(RuntimeError::Arithmetic));
+    assert_eq!(tx_payload_delta(u128::MAX, 0, 1), Err(RuntimeError::Arithmetic));
+    state = TxState::default();
+    state
+        .set(b"key".to_vec(), b"value".to_vec(), RuntimeLimits::default())
+        .unwrap();
+    state.entry_payload_bytes = 0;
+    assert_eq!(state.delete(b"KEY"), Err(RuntimeError::Arithmetic));
+    assert_eq!(state.get(b"key").unwrap().len(), 5);
+    state.recount();
+    assert_tx_accounting(&state);
+}
+
+#[test]
+fn tx_accounting_layout_reports_actual_branch_sizes() {
+    println!(
+        "TX_ACCOUNTING_LAYOUT,tx_state={},chain_branch={}",
+        size_of::<TxState>(),
+        size_of::<ChainBranch>()
+    );
+    let state = TxState::default();
+    assert_eq!(state.retained_bytes, 0);
+    let branches = vec![ChainBranch {
+        tx: state,
+        capture_keys: Vec::new(),
+        setvar_actions: 0,
+    }];
+    assert_eq!(chain_branches_bytes(&branches).unwrap(), size_of::<ChainBranch>());
+}
+
+#[test]
+fn borrowed_single_match_query_dynamic_json_and_tx_keep_owned_observers() {
+    let g = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.expected=hit\"\n",
+        "SecRule ARGS_GET:q \"@streq hit\" \"id:2,phase:1,pass,t:lowercase,setvar:tx.query=%{MATCHED_VAR}\"\n",
+        "SecRule ARGS:json.a \"@streq %{TX.expected}\" \"id:3,phase:2,pass,t:lowercase,t:removeNulls,t:htmlEntityDecode,t:urlDecodeUni,setvar:tx.json=%{MATCHED_VAR}\"\n",
+        "SecRule TX:json \"@streq hit\" \"id:4,phase:2,pass,t:lowercase,setvar:tx.from_tx=%{MATCHED_VAR}\"\n",
+    ));
+    for value in ["hit".to_string(), "HIT".to_string(), "x".repeat(8192)] {
+        let mut tx = Transaction::new(&g, request(&[], b"/?q=hit"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        assert_eq!(tx.tx_value(b"query"), Some(b"hit".as_slice()));
+        assert_tx_accounting(&tx.tx);
+        let body = format!("{{\"a\":\"{value}\"}}");
+        tx.publish_request_body(RequestBody::new(
+            body.into_bytes().into(),
+            crate::seclang::BodyProcessorSelection::Json,
+        ))
+        .unwrap();
+        let result = tx.execute_request_body().unwrap();
+        let expected = if value.len() == 3 {
+            Some(b"hit".as_slice())
+        } else {
+            None
+        };
+        assert_eq!(tx.tx_value(b"json"), expected);
+        assert_eq!(tx.tx_value(b"from_tx"), expected);
+        assert_eq!(result.findings().len(), if expected.is_some() { 2 } else { 0 });
+        assert_tx_accounting(&tx.tx);
+        if expected.is_some() {
+            assert!(matches!(tx.tx.matched_var, Some(MatchValue::Owned(_))));
+        }
+    }
+}
 
 impl IncludeSource for NoIncludes {
     fn load(&mut self, _request: IncludeRequest<'_>, _sink: &mut IncludeSink<'_>) -> Result<(), IncludeFailure> {
@@ -93,6 +364,7 @@ fn no_hit_first_members_borrow_tx_and_restore_prior_observers() {
         assert_eq!(scope.counts().get(Event::UnitTxClones), 0);
         assert_eq!(tx.tx_value(b"saved").unwrap().as_ptr(), pointer);
         assert_eq!(tx.tx.retained_bytes, retained);
+        assert_tx_accounting(&tx.tx);
         assert_eq!(tx.tx.matched_var, Some(b"previous".to_vec().into()));
         assert_eq!(tx.tx.matched_vars.len(), 1);
         assert_eq!(tx.tx.request_body_processor, Some(super::super::super::BodyProcessorSelection::Json));
@@ -122,6 +394,7 @@ fn first_member_errors_restore_tx_before_propagation() {
         assert_eq!(scope.counts().get(Event::UnitTxClones), 0);
         assert_eq!(tx.tx_value(b"saved").unwrap().as_ptr(), pointer);
         assert_eq!(tx.tx.retained_bytes, retained);
+        assert_tx_accounting(&tx.tx);
         assert_eq!(tx.tx.matched_var, Some(b"previous".to_vec().into()));
     }
 }
@@ -150,6 +423,7 @@ fn matched_units_clone_after_first_member_and_failed_chains_roll_back() {
             })
         );
         assert_eq!(tx.tx_value(b"1"), if succeeds { Some(b"hit".as_slice()) } else { None });
+        assert_tx_accounting(&tx.tx);
         if !succeeds {
             assert_eq!(tx.tx.matched_var, Some(b"previous".to_vec().into()));
         }
@@ -2440,6 +2714,7 @@ struct CaptureProbe {
 impl PredicateStageObserver for CaptureProbe {
     type Error = ();
     type CaptureValue = MatchValue;
+    type CaptureKey = Vec<u8>;
     fn charge_stage(&mut self, _: usize, _: usize) -> Result<(), ()> {
         Ok(())
     }
@@ -2465,7 +2740,7 @@ impl PredicateStageObserver for CaptureProbe {
 
 #[test]
 fn predicate_capture_admission_precedes_allocation_and_preserves_semantic_limits() {
-    let mut captures = Vec::new();
+    let mut captures = CaptureBuilder::default();
     let mut observer = CaptureProbe {
         reject_admission: true,
         admissions: 0,
@@ -2474,7 +2749,7 @@ fn predicate_capture_admission_precedes_allocation_and_preserves_semantic_limits
     assert!(matches!(
         push_capture(
             &mut captures,
-            b"0",
+            CaptureKeySource::Numeric { index: 0, bytes: b"0" },
             CaptureSource::InputRange {
                 input: b"secret",
                 start: 0,
@@ -2485,7 +2760,7 @@ fn predicate_capture_admission_precedes_allocation_and_preserves_semantic_limits
         ),
         Err(PredicateStageFailure::Observer(()))
     ));
-    assert_eq!(captures.capacity(), 0);
+    assert_eq!(captures.entries.capacity(), 0);
     assert_eq!(observer.actual, 0);
     observer.admissions = 0;
     let limits = RuntimeLimits {
@@ -2495,7 +2770,7 @@ fn predicate_capture_admission_precedes_allocation_and_preserves_semantic_limits
     assert!(matches!(
         push_capture(
             &mut captures,
-            b"0",
+            CaptureKeySource::Numeric { index: 0, bytes: b"0" },
             CaptureSource::InputRange {
                 input: b"secret",
                 start: 0,
@@ -2513,7 +2788,7 @@ fn predicate_capture_admission_precedes_allocation_and_preserves_semantic_limits
     observer.reject_admission = false;
     assert!(push_capture(
         &mut captures,
-        b"0",
+        CaptureKeySource::Numeric { index: 0, bytes: b"0" },
         CaptureSource::InputRange {
             input: b"value",
             start: 0,
@@ -2524,7 +2799,7 @@ fn predicate_capture_admission_precedes_allocation_and_preserves_semantic_limits
     )
     .is_ok());
     assert_eq!(observer.admissions, 3);
-    assert_eq!(observer.actual, capture_retained_bytes(&captures).unwrap());
+    assert_eq!(observer.actual, captures.retained_bytes().unwrap());
     assert!(matches!(
         PredicateStageFailure::<()>::from(RuntimeError::Allocation),
         PredicateStageFailure::Physical(RuntimeError::Allocation)
@@ -2864,6 +3139,7 @@ struct RangeCaptureProbe;
 impl PredicateStageObserver for RangeCaptureProbe {
     type Error = ();
     type CaptureValue = StageCaptureValue;
+    type CaptureKey = Vec<u8>;
     fn charge_stage(&mut self, _: usize, _: usize) -> Result<(), ()> {
         Ok(())
     }
@@ -2879,6 +3155,84 @@ impl PredicateStageObserver for RangeCaptureProbe {
     fn capture_capacity(&mut self, _: usize) -> Result<(), ()> {
         Ok(())
     }
+}
+
+#[test]
+fn capture_builder_totals_match_owned_entries_and_survive_failed_appends() {
+    let mut builder = CaptureBuilder::default();
+    let mut observer = CaptureProbe {
+        reject_admission: false,
+        admissions: 0,
+        actual: 0,
+    };
+    for index in 0..40 {
+        let (digits, start) = decimal_bytes(index);
+        push_capture(
+            &mut builder,
+            CaptureKeySource::Numeric {
+                index,
+                bytes: &digits[start..],
+            },
+            CaptureSource::InputRange {
+                input: b"prefix-value",
+                start: 7,
+                len: index % 6,
+            },
+            RuntimeLimits::default(),
+            &mut observer,
+        )
+        .unwrap_or_else(|_| panic!("capture append failed"));
+        assert_eq!(
+            builder.semantic_bytes,
+            builder
+                .entries
+                .iter()
+                .map(|entry| entry.key.len() + entry.value.len())
+                .sum::<usize>()
+        );
+        assert_eq!(
+            builder.retained_bytes().unwrap(),
+            capture_retained_bytes(&builder.entries).unwrap()
+        );
+        assert_eq!(observer.actual, builder.retained_bytes().unwrap());
+    }
+    let previous = (
+        builder.entries.len(),
+        builder.semantic_bytes,
+        builder.heap_bytes,
+        builder.entries.capacity(),
+    );
+    observer.reject_admission = true;
+    assert!(matches!(
+        push_capture(
+            &mut builder,
+            CaptureKeySource::Numeric { index: 0, bytes: b"0" },
+            CaptureSource::InputRange {
+                input: b"hit",
+                start: 0,
+                len: 3
+            },
+            RuntimeLimits::default(),
+            &mut observer,
+        ),
+        Err(PredicateStageFailure::Observer(()))
+    ));
+    assert_eq!(
+        (
+            builder.entries.len(),
+            builder.semantic_bytes,
+            builder.heap_bytes,
+            builder.entries.capacity()
+        ),
+        previous
+    );
+    builder.clear();
+    assert_eq!(builder.semantic_bytes, 0);
+    assert_eq!(builder.heap_bytes, 0);
+    assert_eq!(
+        builder.retained_bytes().unwrap(),
+        previous.3 * size_of::<CaptureEntry>()
+    );
 }
 
 #[test]
@@ -2928,7 +3282,8 @@ fn smaller_capture_reservation_preserves_named_entry_limits_and_large_growth() {
             assert_eq!(matches[0].captures.len(), 69);
             assert!(matches[0].captures.capacity() >= 69);
             assert_eq!(matches[0].captures.last().unwrap().key, b"g33");
-            let ranged = extract_captures(
+            let mut ranged_builder = CaptureBuilder::default();
+            extract_captures_into(
                 &compiled,
                 &mut transaction.capture_scratch,
                 compiled.operator_plans[0].unwrap(),
@@ -2937,8 +3292,10 @@ fn smaller_capture_reservation_preserves_named_entry_limits_and_large_growth() {
                 EvaluationMode::Accelerated,
                 None,
                 &mut RangeCaptureProbe,
+                &mut ranged_builder,
             )
             .unwrap_or_else(|_| panic!("range extraction failed"));
+            let ranged = ranged_builder.entries;
             assert_eq!(ranged.len(), 69);
             assert!(ranged.capacity() >= 69);
             assert_eq!(ranged.last().unwrap().key, b"g33");

@@ -514,6 +514,10 @@ impl<R: Copy> Reducer<R> {
                 (selected, fresh)
             }
         };
+        // Duplicate lookup leaves every ancestor link and height unchanged.
+        if !fresh {
+            return Ok((id, selected, false));
+        }
         self.store(id, node)?;
         Ok((self.balance(id)?, selected, fresh))
     }

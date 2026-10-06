@@ -1086,3 +1086,161 @@ fn ascii_batch_preserves_spill_and_delimiter_validation_work() {
         }
     }
 }
+
+fn assert_buffered_ascii_trace(chunks: &[&[u8]], limits: JsonStreamLimits, reject_string: bool) {
+    use crate::seclang::measurements::{self, Event};
+    let mut batched = JsonStream::new(limits);
+    let mut sequential = JsonStream::new(limits);
+    sequential.sequential_ascii = true;
+    let mut tokens = [Vec::<OwnedToken>::new(), Vec::<OwnedToken>::new()];
+    for input in chunks.iter().copied().map(JsonStreamInput::Data).chain([
+        JsonStreamInput::Complete,
+        JsonStreamInput::Abandoned,
+        JsonStreamInput::Complete,
+    ]) {
+        let mut snapshots = Vec::new();
+        for (index, stream) in [&mut batched, &mut sequential].into_iter().enumerate() {
+            let scope = measurements::start();
+            let result = stream.feed(input, |token| {
+                tokens[index].push(token.into());
+                if reject_string && matches!(token, JsonStreamToken::Key(_) | JsonStreamToken::String(_)) {
+                    Err(JsonStreamSinkError)
+                } else {
+                    Ok(())
+                }
+            });
+            snapshots.push((
+                result,
+                stream.usage(),
+                stream.raw_token_bytes,
+                stream.token.capacity(),
+                stream.token.to_vec(),
+                stream.stack.capacity(),
+                (stream.utf8_remaining, stream.utf8_value, stream.utf8_minimum),
+                scope.counts().get(Event::SourceBytes),
+                scope.counts().get(Event::TokenCopyBytes),
+            ));
+        }
+        assert_eq!(snapshots[0], snapshots[1]);
+        assert_eq!(tokens[0], tokens[1]);
+    }
+}
+
+#[test]
+fn buffered_ascii_preserves_special_byte_errors_and_competing_admission() {
+    let mut sources = vec![
+        br#""\nordinary\u20ac-tail""#.to_vec(),
+        br#"{"\u0061-key":"prefix\nordinary suffix"}"#.to_vec(),
+        br#""\nordinary incomplete"#.to_vec(),
+        br#""prefix\nordinary\q""#.to_vec(),
+        "\"\\né-suffix\"".as_bytes().to_vec(),
+        "\"\\n€-suffix\"".as_bytes().to_vec(),
+    ];
+    for byte in 0..=u8::MAX {
+        for prefix in [br#""\n"#.as_slice(), br#""\nabc"#.as_slice()] {
+            let mut source = prefix.to_vec();
+            source.extend_from_slice(&[byte, b'd', b'"']);
+            sources.push(source);
+        }
+    }
+    for source in sources {
+        for cap in 0..=source.len() * 3 + 3 {
+            for kind in 0..7 {
+                let mut limits = JsonStreamLimits::default();
+                match kind {
+                    0 => limits.max_source_bytes = cap,
+                    1 => limits.max_raw_token_bytes = cap,
+                    2 => limits.max_decoded_bytes = cap,
+                    3 => limits.max_work = cap,
+                    4 => {
+                        limits.max_source_bytes = cap;
+                        limits.max_raw_token_bytes = cap;
+                        limits.max_decoded_bytes = cap;
+                        limits.max_work = cap;
+                    }
+                    5 => limits.max_events = cap,
+                    _ => limits.max_retained_bytes = cap,
+                }
+                for split in [0, 2, 3, source.len() / 2, source.len()] {
+                    let chunks = [&source[..split], &source[split..]];
+                    assert_eq!(
+                        tokenize_ascii_mode(&chunks, limits, false),
+                        tokenize_ascii_mode(&chunks, limits, true),
+                        "buffered cap {cap}, kind {kind}, split {split}"
+                    );
+                }
+            }
+        }
+        for split in 0..=source.len() {
+            assert_buffered_ascii_trace(&[&source[..split], &source[split..]], JsonStreamLimits::default(), true);
+        }
+    }
+}
+
+#[test]
+fn buffered_ascii_preserves_growth_work_and_exact_limits_at_every_spill() {
+    for decoded in [1023, 1024, 1025, 2047, 2048, 2049, 4097] {
+        for prefix in [0, decoded / 2, decoded - 1] {
+            let source = format!("\"{}\\n{}\"", "a".repeat(prefix), "b".repeat(decoded - prefix - 1));
+            for split in [0, 1, prefix + 2, prefix + 3, source.len() / 2, source.len()] {
+                let chunks = [&source.as_bytes()[..split], &source.as_bytes()[split..]];
+                let baseline = tokenize_ascii_mode(&chunks, JsonStreamLimits::default(), true);
+                baseline.0.unwrap();
+                for kind in 0..6 {
+                    let required = match kind {
+                        0 => baseline.2.source_bytes,
+                        1 => source.len(),
+                        2 => baseline.2.decoded_bytes,
+                        3 => baseline.2.work,
+                        4 => baseline.2.events,
+                        _ => baseline.2.peak_retained_bytes,
+                    };
+                    for cap in [required.saturating_sub(1), required, required + 1] {
+                        let mut limits = JsonStreamLimits::default();
+                        match kind {
+                            0 => limits.max_source_bytes = cap,
+                            1 => limits.max_raw_token_bytes = cap,
+                            2 => limits.max_decoded_bytes = cap,
+                            3 => limits.max_work = cap,
+                            4 => limits.max_events = cap,
+                            _ => limits.max_retained_bytes = cap,
+                        }
+                        assert_buffered_ascii_trace(&chunks, limits, false);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn buffered_ascii_reuses_long_token_capacity_for_short_tokens_and_chunks() {
+    let parts = [
+        format!("[\"\\n{}\"", "a".repeat(4096)),
+        ",\"\\nshort\"".into(),
+        ",\"plain\"".into(),
+        ",\"prefix".into(),
+        "-suffix\"".into(),
+        ",\"\\u20".into(),
+        "ac-tail\"".into(),
+        format!(",\"late{}\\n{}\"]", "b".repeat(2048), "c".repeat(4096)),
+    ];
+    let chunks: Vec<_> = parts.iter().map(|part| part.as_bytes()).collect();
+    assert_buffered_ascii_trace(&chunks, JsonStreamLimits::default(), false);
+    let joined = parts.concat();
+    let baseline = tokenize_ascii_mode(&chunks, JsonStreamLimits::default(), true);
+    for work in [baseline.2.work - 1, baseline.2.work] {
+        assert_buffered_ascii_trace(
+            &chunks,
+            JsonStreamLimits {
+                max_work: work,
+                ..JsonStreamLimits::default()
+            },
+            false,
+        );
+    }
+    for width in [1, 2, 7, 1024, 1025] {
+        let chunks: Vec<_> = joined.as_bytes().chunks(width).collect();
+        assert_buffered_ascii_trace(&chunks, JsonStreamLimits::default(), false);
+    }
+}
