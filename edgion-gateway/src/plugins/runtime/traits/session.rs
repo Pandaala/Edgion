@@ -95,6 +95,13 @@ impl std::error::Error for BodyReadError {}
 /// cloning is a refcount bump, not a copy), or the reason it is unavailable.
 pub type BodyReadResult = Result<Bytes, BodyReadError>;
 
+/// A synchronous borrowed consumer driven only after canonical byte admission.
+/// Inspection failures are latched by the consumer; capture still proves EOF and
+/// preserves transport/storage error priority. Chunks cannot escape this call.
+pub trait RequestBodyChunkConsumer: Send {
+    fn consume(&mut self, chunk: &[u8]);
+}
+
 /// An owned reader over one immutable logical request-body snapshot.
 ///
 /// Each returned chunk is bounded by the body backend. The reader owns every
@@ -827,6 +834,18 @@ pub trait PluginSession: Send + Sync {
     async fn ensure_request_body(&mut self, max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
         let body = self.read_request_body(max_bytes).await?;
         u64::try_from(body.len()).map_err(|_| BodyReadError::Incomplete)
+    }
+
+    /// Capture before upstream dispatch and deliver admitted transport chunks,
+    /// or bounded chunks from the current immutable cached snapshot. Success
+    /// proves real EOF and exact byte parity. Defaults do not materialize input.
+    #[cfg_attr(test, allow(unused_parens))]
+    async fn capture_request_body_with_consumer<'consumer>(
+        &mut self,
+        _max_bytes: Option<u64>,
+        _consumer: &'consumer mut (dyn RequestBodyChunkConsumer + 'consumer),
+    ) -> Result<u64, BodyReadError> {
+        Err(BodyReadError::Unimplemented)
     }
 
     /// Defensive compatibility seam for attempting to read a complete upstream

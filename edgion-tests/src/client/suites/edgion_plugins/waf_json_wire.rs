@@ -149,6 +149,55 @@ impl PausedJsonUpload {
     }
 }
 
+async fn duplicate_replacement_across_chunks(ctx: &TestContext) -> Result<(), String> {
+    let recorder = env_host_or("EDGION_TEST_TRANSPORT_RECORDER_HOST", &ctx.target_host);
+    let probe = TransportProbe::start(&recorder, RECORDER_PORT, "waf-json-duplicate-chunks").await?;
+    let traceparent = crate::access_log_client::traceparent_for_marker(probe.trace_id());
+    let mut connection = RawH1Conn::connect(&ctx.target_host, ctx.http_port).await?;
+    connection
+        .write_head(
+            "POST",
+            "/waf-wire",
+            "waf-transport-h1.example.com",
+            &[
+                ("transfer-encoding", "chunked"),
+                ("content-type", "application/json"),
+                ("x-waf-version", "json-v1"),
+                ("traceparent", &traceparent),
+            ],
+        )
+        .await?;
+    let first = br#"{"a":"blocked","#;
+    let last = br#""a":"safe"}"#;
+    connection.write_chunk(first).await?;
+    no_forward(&probe).await?;
+    connection.write_chunk(last).await?;
+    no_forward(&probe).await?;
+    connection.finish_chunked().await?;
+    let response = connection.read_response_head(Duration::from_secs(10)).await?;
+    let body = [first.as_slice(), last.as_slice()].concat();
+    let length = body.len().to_string();
+    let digest = format!("{:x}", Sha256::digest(&body));
+    if response.status != 200
+        || response.header("x-up-req-body-len") != Some(length.as_str())
+        || response.header("x-up-req-body-sha256") != Some(digest.as_str())
+    {
+        return Err(format!(
+            "JSON cross-chunk replacement did not preserve allowed wire bytes: {response}"
+        ));
+    }
+    let snapshot = probe.snapshot().await?;
+    if snapshot.dropped != 0
+        || snapshot.count_matching(|event| event.is(KIND_REQ_HEADERS)) != 1
+        || snapshot.req_body_total(probe.trace_id()) != body.len()
+    {
+        return Err(format!(
+            "JSON cross-chunk replacement expected one unchanged request: {snapshot}"
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn matrix(version: &'static str, detection: bool, zero_source: bool) -> TestCase {
     TestCase::new(
         match (version, detection, zero_source) {
@@ -283,6 +332,7 @@ pub(super) fn matrix(version: &'static str, detection: bool, zero_source: bool) 
                         }
                     }
                     if version == "json-v1" && !detection && !zero_source {
+                        duplicate_replacement_across_chunks(&ctx).await?;
                         PausedJsonUpload::start(&ctx).await?.finish().await?;
                         PausedJsonUpload::start(&ctx).await?.abort().await?;
                         // A cancelled capture must not poison an independent request.

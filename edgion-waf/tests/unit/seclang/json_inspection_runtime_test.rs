@@ -1,7 +1,8 @@
 use super::*;
 use crate::seclang::{
     analyze_one_semantic_draft, compile_validated, parse_syntax, scan_source, validate_semantic_draft, CompilerLimits,
-    PhaseDefaults, SemanticLimits, SemanticValidationContext, SourceLimits, SyntaxLimits, ValidationLimits,
+    JsonStreamLimit, PhaseDefaults, SemanticLimits, SemanticValidationContext, SourceLimits, SyntaxLimits,
+    ValidationLimits,
 };
 fn compile(text: &str) -> CompiledGeneration {
     let source = scan_source("json-runtime", text.as_bytes(), SourceLimits::default()).unwrap();
@@ -1405,6 +1406,211 @@ fn replay_work_failure_blocks_later_body_independent_entry_points() {
 }
 
 #[test]
+fn scoped_chunk_physical_boundaries_are_cumulative_and_terminal() {
+    let generation = compile("SecRule ARGS \"@rx (?P<word>hit)\" \"id:1,phase:2,pass,capture,t:lowercase\"\n");
+    let long_value = format!("{}\\u0048IT", "x".repeat(256));
+    let input = format!("{{\"a\":\"{long_value}\",\"b\":\"hit\"}}");
+    let run = |limits: JsonInspectionLimits| {
+        let mut tx = Transaction::new(&generation, head(b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        let mut inspection = tx.start_json_inspection(limits, None).unwrap();
+        let mut previous = JsonInspectionUsage::default();
+        let mut failure = None;
+        for chunk in input.as_bytes().chunks(7) {
+            if let Err(error) = inspection.feed(chunk) {
+                failure = Some(error);
+                break;
+            }
+            let usage = inspection.usage();
+            assert!(usage.inspected_source_bytes > previous.inspected_source_bytes);
+            assert!(usage.lexical_work >= previous.lexical_work);
+            assert!(usage.result_work >= previous.result_work);
+            previous = usage;
+        }
+        if let Some(error) = failure {
+            let stopped = inspection.usage();
+            assert_eq!(inspection.feed(b"later"), Err(error));
+            assert_eq!(inspection.usage(), stopped);
+        }
+        let completion = inspection.complete(input.len());
+        let usage = inspection.usage();
+        if let Err(error) = completion {
+            assert_eq!(inspection.feed(b"later"), Err(error));
+            assert_eq!(inspection.complete(0), Err(error));
+            assert_eq!(inspection.finish(None), Err(error));
+            assert!(tx.request.body.is_none());
+            assert_eq!(tx.execute_request_body(), Err(error));
+            return (Err(error), usage, 0, 0);
+        }
+        let result = inspection.finish(None);
+        if let Err(error) = result {
+            assert!(tx.request.body.is_none());
+            assert_eq!(tx.execute_request_body(), Err(error));
+            assert_eq!(tx.preflight_request_body(BodyProcessorSelection::Json), Err(error));
+            return (Err(error), usage, 0, 0);
+        }
+        let budget = tx.json_budget.as_ref().unwrap().usage();
+        (Ok(()), usage, budget.peak_retained_bytes, budget.work)
+    };
+    let (_, baseline, result_peak, result_work) = run(JsonInspectionLimits::default());
+    assert!(baseline.lexical_peak_heap_bytes > 0 && result_peak > 0 && result_work > baseline.result_work);
+    for (kind, exact) in [
+        (JsonStreamLimit::SourceBytes, input.len()),
+        (JsonStreamLimit::Work, baseline.lexical_work),
+        (JsonStreamLimit::RawTokenBytes, long_value.len() + 2),
+    ] {
+        for (limit, succeeds) in [(exact, true), (exact - 1, false)] {
+            let mut limits = JsonInspectionLimits::default();
+            match kind {
+                JsonStreamLimit::SourceBytes => limits.lexical.max_source_bytes = limit,
+                JsonStreamLimit::Work => limits.lexical.max_work = limit,
+                JsonStreamLimit::RawTokenBytes => limits.lexical.max_raw_token_bytes = limit,
+                _ => unreachable!(),
+            }
+            let result = run(limits).0;
+            if succeeds {
+                assert_eq!(result, Ok(()));
+            } else {
+                assert_eq!(
+                    result,
+                    Err(RuntimeError::JsonChecker {
+                        kind: JsonCheckerError::Lexical(JsonStreamError::Limit { kind, limit })
+                    })
+                );
+            }
+        }
+    }
+    for (limit, succeeds) in [(result_work, true), (result_work - 1, false)] {
+        let mut limits = JsonInspectionLimits::default();
+        limits.results.work = limit;
+        let result = run(limits).0;
+        if succeeds {
+            assert_eq!(result, Ok(()));
+        } else {
+            assert_eq!(
+                result,
+                Err(RuntimeError::JsonResultLimit {
+                    kind: JsonResultLimit::Work
+                })
+            );
+        }
+    }
+    // Heap growth can clip geometric capacity to the configured limit. Find an
+    // adjacent failed/successful admission pair instead of treating the default
+    // allocator peak as a minimum required capacity.
+    for lexical in [true, false] {
+        let mut failed = 0;
+        let mut passed = if lexical {
+            baseline.lexical_peak_heap_bytes
+        } else {
+            result_peak
+        };
+        let limits_for = |limit| {
+            let mut limits = JsonInspectionLimits::default();
+            if lexical {
+                limits.lexical.max_retained_bytes = limit;
+            } else {
+                limits.results.retained_bytes = limit;
+            }
+            limits
+        };
+        assert!(run(limits_for(failed)).0.is_err());
+        assert_eq!(run(limits_for(passed)).0, Ok(()));
+        while passed - failed > 1 {
+            let middle = failed + (passed - failed) / 2;
+            if run(limits_for(middle)).0.is_ok() {
+                passed = middle;
+            } else {
+                failed = middle;
+            }
+        }
+        let (result, usage, peak, _) = run(limits_for(passed));
+        assert_eq!(result, Ok(()));
+        assert!(if lexical {
+            usage.lexical_peak_heap_bytes <= passed
+        } else {
+            peak <= passed
+        });
+        let expected = if lexical {
+            RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
+                    kind: JsonStreamLimit::RetainedBytes,
+                    limit: failed,
+                }),
+            }
+        } else {
+            RuntimeError::JsonResultLimit {
+                kind: JsonResultLimit::RetainedBytes,
+            }
+        };
+        assert_eq!(run(limits_for(failed)).0, Err(expected));
+    }
+}
+
+#[test]
+fn scoped_malformed_forced_raw_prelude_matches_owned_priority() {
+    let generation =
+        compile("SecAction \"id:1,phase:1,pass,ctl:forceRequestBodyVariable=On\"\nSecAction \"id:2,phase:2,pass\"\n");
+    let input = Bytes::from_static(b"{] trailing");
+    for (body, expected) in [
+        (
+            BodyLimits {
+                max_entries: 2,
+                max_decoded_bytes: input.len() + input.len().to_string().len(),
+                ..BodyLimits::default()
+            },
+            BodyError::EntryLimit { limit: 2 },
+        ),
+        (
+            BodyLimits {
+                max_decoded_bytes: input.len() - 1,
+                ..BodyLimits::default()
+            },
+            BodyError::DecodedByteLimit { limit: input.len() - 1 },
+        ),
+        (
+            BodyLimits {
+                max_work_bytes: input.len() - 1,
+                max_entries: 0,
+                max_decoded_bytes: 0,
+                ..BodyLimits::default()
+            },
+            BodyError::WorkLimit { limit: input.len() - 1 },
+        ),
+    ] {
+        for chunked in [false, true] {
+            let mut tx = Transaction::new(
+                &generation,
+                head(b"/"),
+                RuntimeLimits {
+                    body,
+                    ..RuntimeLimits::default()
+                },
+            )
+            .unwrap();
+            tx.execute_request_headers().unwrap();
+            let result = if chunked {
+                let mut inspection = tx.start_json_inspection(JsonInspectionLimits::default(), None).unwrap();
+                for chunk in input.chunks(2) {
+                    let _ = inspection.feed(chunk);
+                }
+                let error = inspection.complete(input.len()).unwrap_err();
+                assert_eq!(inspection.complete(0), Err(error));
+                assert_eq!(inspection.feed(b"later"), Err(error));
+                inspection.finish(Some(input.clone()))
+            } else {
+                tx.publish_request_body_with_json_limits(
+                    RequestBody::new(input.clone(), BodyProcessorSelection::Json),
+                    JsonInspectionLimits::default(),
+                )
+            };
+            assert_eq!(result, Err(RuntimeError::Body { kind: expected }));
+            assert!(tx.request.body.is_none());
+        }
+    }
+}
+
+#[test]
 fn fixed_summary_limit_priority_preserves_prelude_and_syntax_boundaries() {
     let generation = compile("SecAction \"id:1,phase:2,pass\"\n");
     let input = br#"{"a":[1]}"#;
@@ -1451,23 +1657,37 @@ fn fixed_summary_limit_priority_preserves_prelude_and_syntax_boundaries() {
         ),
     ];
     for (body, expected) in cases {
-        let mut tx = Transaction::new(
-            &generation,
-            head(b"/"),
-            RuntimeLimits {
-                body,
-                ..RuntimeLimits::default()
-            },
-        )
-        .unwrap();
-        tx.execute_request_headers().unwrap();
-        assert_eq!(
-            tx.publish_request_body_with_json_limits(
-                RequestBody::new(Bytes::copy_from_slice(input), BodyProcessorSelection::Json),
-                JsonInspectionLimits::default()
-            ),
-            Err(RuntimeError::Body { kind: expected })
-        );
+        for chunked in [false, true] {
+            let mut tx = Transaction::new(
+                &generation,
+                head(b"/"),
+                RuntimeLimits {
+                    body,
+                    ..RuntimeLimits::default()
+                },
+            )
+            .unwrap();
+            tx.execute_request_headers().unwrap();
+            let result = if chunked {
+                let mut inspection = tx.start_json_inspection(JsonInspectionLimits::default(), None).unwrap();
+                for chunk in input.chunks(2) {
+                    let _ = inspection.feed(chunk);
+                }
+                match inspection.complete(input.len()) {
+                    Ok(()) => inspection.finish(None),
+                    Err(error) => {
+                        drop(inspection);
+                        Err(error)
+                    }
+                }
+            } else {
+                tx.publish_request_body_with_json_limits(
+                    RequestBody::new(Bytes::copy_from_slice(input), BodyProcessorSelection::Json),
+                    JsonInspectionLimits::default(),
+                )
+            };
+            assert_eq!(result, Err(RuntimeError::Body { kind: expected }));
+        }
     }
     for (entries, detection, expected) in [
         (0, false, BodyError::EntryLimit { limit: 0 }),
@@ -1480,34 +1700,48 @@ fn fixed_summary_limit_priority_preserves_prelude_and_syntax_boundaries() {
         ),
         (2, true, BodyError::EntryLimit { limit: 2 }),
     ] {
-        let mut tx = Transaction::new(
-            &generation,
-            head(b"/"),
-            RuntimeLimits {
-                body: BodyLimits {
-                    max_entries: entries,
-                    max_name_bytes: 0,
-                    max_depth: 0,
-                    ..BodyLimits::default()
+        for chunked in [false, true] {
+            let mut tx = Transaction::new(
+                &generation,
+                head(b"/"),
+                RuntimeLimits {
+                    body: BodyLimits {
+                        max_entries: entries,
+                        max_name_bytes: 0,
+                        max_depth: 0,
+                        ..BodyLimits::default()
+                    },
+                    ..RuntimeLimits::default()
                 },
-                ..RuntimeLimits::default()
-            },
-        )
-        .unwrap();
-        if detection {
-            tx.rule_engine_mode = RuleEngineMode::DetectionOnly;
+            )
+            .unwrap();
+            if detection {
+                tx.rule_engine_mode = RuleEngineMode::DetectionOnly;
+            }
+            tx.execute_request_headers().unwrap();
+            let input = Bytes::from_static(br#"{"long":0} trailing"#);
+            let result = if chunked {
+                let mut inspection = tx.start_json_inspection(JsonInspectionLimits::default(), None).unwrap();
+                for chunk in input.chunks(2) {
+                    let _ = inspection.feed(chunk);
+                }
+                let result = inspection.complete(input.len());
+                let source = inspection.requires_raw_source().then(|| input.clone());
+                match result {
+                    Ok(()) => inspection.finish(source),
+                    Err(error) => {
+                        drop(inspection);
+                        Err(error)
+                    }
+                }
+            } else {
+                tx.publish_request_body_with_json_limits(
+                    RequestBody::new(input, BodyProcessorSelection::Json),
+                    JsonInspectionLimits::default(),
+                )
+            };
+            assert_eq!(result, Err(RuntimeError::Body { kind: expected }));
         }
-        tx.execute_request_headers().unwrap();
-        assert_eq!(
-            tx.publish_request_body_with_json_limits(
-                RequestBody::new(
-                    Bytes::from_static(br#"{"long":0} trailing"#),
-                    BodyProcessorSelection::Json
-                ),
-                JsonInspectionLimits::default()
-            ),
-            Err(RuntimeError::Body { kind: expected })
-        );
     }
 }
 

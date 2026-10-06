@@ -368,14 +368,18 @@ async fn malformed_structured_body_fails_closed_without_payload_logging() {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_body_config.max_body_size_bytes = 1024;
     session.expect_ctx().return_const(ctx);
-    session.expect_ensure_request_body().times(1).return_once(|_| Ok(20));
+    session
+        .expect_capture_request_body_with_consumer()
+        .times(1)
+        .return_once(|_, consumer| {
+            consumer.consume(b"private-invalid-json");
+            Ok(20)
+        });
     session
         .expect_request_body_available_len()
         .times(1)
         .return_once(|_| Ok(20));
-    session
-        .expect_read_request_body()
-        .return_once(|_| Ok(Bytes::from_static(b"private-invalid-json")));
+    session.expect_read_request_body().times(0);
     let mut log = PluginLog::new(NAME);
 
     assert_eq!(
@@ -530,7 +534,7 @@ fn explicit_json_config() -> WafJsonConfig {
 }
 
 #[tokio::test]
-async fn full_json_default_and_explicit_limits_use_one_proven_shared_read() {
+async fn full_json_default_and_explicit_limits_use_chunk_capture_without_materialization() {
     for explicit in [false, true] {
         let mut config = super::fixture::config("SecRule ARGS:json.a \"@streq hit\" \"id:1,phase:2,pass\"\n");
         config.request_body.inspection = WafRequestBodyInspection::Full;
@@ -547,21 +551,22 @@ async fn full_json_default_and_explicit_limits_use_one_proven_shared_read() {
         let len = body.len() as u64;
         let mut sequence = mockall::Sequence::new();
         session
-            .expect_ensure_request_body()
+            .expect_capture_request_body_with_consumer()
             .times(1)
             .in_sequence(&mut sequence)
-            .return_once(move |_| Ok(len));
+            .return_once(move |_, consumer| {
+                for chunk in body.chunks(5) {
+                    consumer.consume(chunk);
+                }
+                Ok(len)
+            });
         session
             .expect_request_body_available_len()
             .with(mockall::predicate::eq(false))
             .times(1)
             .in_sequence(&mut sequence)
             .return_once(move |_| Ok(len));
-        session
-            .expect_read_request_body()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .return_once(move |_| Ok(body));
+        session.expect_read_request_body().times(0);
         session
             .expect_install_waf_transaction()
             .times(1)
@@ -574,6 +579,40 @@ async fn full_json_default_and_explicit_limits_use_one_proven_shared_read() {
             PluginRunningResult::GoodNext
         );
     }
+}
+
+#[tokio::test]
+async fn body_independent_json_forced_raw_publishes_empty_without_capture() {
+    let mut config = super::fixture::config(
+        "SecAction \"id:1,phase:1,pass,ctl:forceRequestBodyVariable=On\"\nSecAction \"id:2,phase:2,pass\"\n",
+    );
+    config.request_body.inspection = WafRequestBodyInspection::Full;
+    let plugin = WafPlugin::try_new(&config).unwrap();
+    let mut session = MockPluginSession::new();
+    expect_request_head_with_headers(
+        &mut session,
+        "/json",
+        vec![(b"content-type".to_vec(), b"application/json".to_vec())],
+    );
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_info.body_declared = Some(true);
+    session.expect_ctx().return_const(ctx);
+    session.expect_capture_request_body_with_consumer().times(0);
+    session.expect_ensure_request_body().times(0);
+    session.expect_read_request_body().times(0);
+    session.expect_request_body_available_len().times(0);
+    session
+        .expect_install_waf_transaction()
+        .times(1)
+        .return_once(|_, transaction| {
+            assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
+            assert_eq!(transaction.request_body_error(), None);
+            true
+        });
+    assert_eq!(
+        plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+        PluginRunningResult::GoodNext
+    );
 }
 
 #[tokio::test]
@@ -599,9 +638,9 @@ async fn full_capture_proof_and_all_caps_precede_materialization() {
             _ => (1 << 20) + 1,
         };
         session
-            .expect_ensure_request_body()
+            .expect_capture_request_body_with_consumer()
             .times(1)
-            .return_once(move |_| Ok(len));
+            .return_once(move |_, _| Ok(len));
         session
             .expect_request_body_available_len()
             .times(1)
@@ -720,10 +759,14 @@ async fn canonical_resident_spilled_and_edited_bodies_keep_the_inspected_source(
         );
         session.expect_ctx().return_const(EdgionHttpContext::new());
         let len = body.len() as u64;
+        let inspected = body.clone();
         session
-            .expect_ensure_request_body()
+            .expect_capture_request_body_with_consumer()
             .times(1)
-            .return_once(move |_| Ok(len));
+            .return_once(move |_, consumer| {
+                consumer.consume(&inspected);
+                Ok(len)
+            });
         session
             .expect_request_body_available_len()
             .times(1)
@@ -849,15 +892,18 @@ async fn json_physical_failure_still_rejects_detection_only() {
         vec![(b"content-type".to_vec(), b"application/json".to_vec())],
     );
     session.expect_ctx().return_const(EdgionHttpContext::new());
-    session.expect_ensure_request_body().times(1).return_once(|_| Ok(11));
+    session
+        .expect_capture_request_body_with_consumer()
+        .times(1)
+        .return_once(|_, consumer| {
+            consumer.consume(br#"{"a":"hit"}"#);
+            Ok(11)
+        });
     session
         .expect_request_body_available_len()
         .times(1)
         .return_once(|_| Ok(11));
-    session
-        .expect_read_request_body()
-        .times(1)
-        .return_once(|_| Ok(Bytes::from_static(br#"{"a":"hit"}"#)));
+    session.expect_read_request_body().times(0);
     session.expect_install_waf_transaction().times(0);
     assert_eq!(
         plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,

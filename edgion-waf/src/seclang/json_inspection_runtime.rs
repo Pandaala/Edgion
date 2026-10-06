@@ -1,6 +1,6 @@
 //! Canonical JSON publication and ordered consumption of provisional results.
 use super::json_inspection::{ResultLimits, SealedResults, StoreError};
-use super::json_inspection_collector::{CollectorError, JsonCollector};
+use super::json_inspection_collector::{CollectorError, JsonCollector, JsonCollectorState};
 use super::*;
 use crate::seclang::body::BodyAccounting;
 #[cfg(test)]
@@ -175,7 +175,7 @@ impl<'generation> Transaction<'generation> {
         let mut accounting = BodyAccounting::json_prelude(source.len(), self.limits.body, raw.unwrap_or(false))
             .map_err(|kind| RuntimeError::Body { kind })?;
         let mut results = None;
-        let mut budget;
+        let budget;
         let mut body_error = None;
         let mut retain_raw = raw.unwrap_or(false);
         if !source.is_empty() {
@@ -245,10 +245,31 @@ impl<'generation> Transaction<'generation> {
                 .apply_json_summary(JsonSemanticSummary::default())
                 .map_err(|kind| RuntimeError::Body { kind })?;
         }
+        self.publish_json_inspection(
+            source.len(),
+            retain_raw.then_some(source),
+            accounting,
+            head_combined,
+            results,
+            budget,
+            body_error,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn publish_json_inspection(
+        &mut self,
+        source_len: usize,
+        source: Option<Bytes>,
+        accounting: BodyAccounting,
+        head_combined: usize,
+        results: Option<SealedResults<'generation>>,
+        mut budget: InspectionBudget,
+        body_error: Option<BodyError>,
+    ) -> Result<(), RuntimeError> {
         let summary = accounting
             .finish_json(head_combined)
             .map_err(|kind| RuntimeError::Body { kind })?;
-        let (length, length_start) = decimal_bytes(source.len());
+        let (length, length_start) = decimal_bytes(source_len);
         let (combined, combined_start) = decimal_bytes(summary.args_combined_size);
         // Inline arrays are included in the owner's initialization charge; each
         // used decimal digit is written once in addition to that initialization.
@@ -265,7 +286,7 @@ impl<'generation> Transaction<'generation> {
             .map_err(map_store_error)?;
         publication.push(JsonPublication {
             results,
-            source: retain_raw.then_some(source),
+            source,
             length: (
                 length,
                 u8::try_from(length_start).map_err(|_| RuntimeError::Arithmetic)?,
@@ -279,6 +300,311 @@ impl<'generation> Transaction<'generation> {
         self.publish_body_state(RequestBodyPublication::Json(publication), body_error)?;
         self.json_budget = Some(budget);
         Ok(())
+    }
+}
+
+/// Allocation-capacity observations. Component peaks are independent, not RSS
+/// or a simultaneous process high-water mark. Fixed inline storage is separate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JsonInspectionUsage {
+    pub inspected_source_bytes: usize,
+    pub lexical_heap_bytes: usize,
+    pub structure_heap_bytes: usize,
+    pub result_heap_bytes: usize,
+    pub lexical_peak_heap_bytes: usize,
+    pub structure_peak_heap_bytes: usize,
+    pub result_peak_heap_bytes: usize,
+    pub lexical_work: usize,
+    pub structure_work: usize,
+    pub result_work: usize,
+}
+impl JsonInspectionUsage {
+    pub fn current_heap_bytes(self) -> Option<usize> {
+        self.lexical_heap_bytes
+            .checked_add(self.structure_heap_bytes)?
+            .checked_add(self.result_heap_bytes)
+    }
+}
+
+/// Scoped provisional JSON inspection. The mutable transaction borrow prevents
+/// execution or publication until true completion; dropping this guard abandons it.
+pub struct JsonInspectionSession<'call, 'generation> {
+    transaction: &'call mut Transaction<'generation>,
+    limits: JsonInspectionLimits,
+    source_hint: Option<usize>,
+    observed_bytes: usize,
+    complete_len: Option<usize>,
+    completion_attempted: bool,
+    checker: Option<JsonChecker<super::json_inspection::Receipt>>,
+    collector: Option<JsonCollectorState<'generation>>,
+    parse_error: Option<JsonCheckerError>,
+    failure: Option<RuntimeError>,
+    accounting: Option<BodyAccounting>,
+    finished: bool,
+}
+impl<'generation> Transaction<'generation> {
+    /// Begin JSON inspection after request-header controls. No parser storage is
+    /// allocated until the first nonempty chunk. Complete-source callers may hint
+    /// their exact size; transport callers leave it unknown.
+    pub fn start_json_inspection(
+        &mut self,
+        limits: JsonInspectionLimits,
+        source_len_hint: Option<usize>,
+    ) -> Result<JsonInspectionSession<'_, 'generation>, RuntimeError> {
+        if self.preflight_request_body(BodyProcessorSelection::Json)? != BodyProcessorSelection::Json {
+            return Err(RuntimeError::JsonInspectionState);
+        }
+        if self.request_body_stream.is_some() || self.request_prefix_completion.is_some() {
+            return Err(RuntimeError::RequestBodyAlreadyPublished);
+        }
+        if let Some(unsupported) = self.generation.json_inspection.unsupported.first() {
+            return Err(RuntimeError::JsonUnsupported {
+                rule_id: unsupported.rule_id,
+            });
+        }
+        Ok(JsonInspectionSession {
+            transaction: self,
+            limits,
+            source_hint: source_len_hint,
+            observed_bytes: 0,
+            complete_len: None,
+            completion_attempted: false,
+            checker: None,
+            collector: None,
+            parse_error: None,
+            failure: None,
+            accounting: None,
+            finished: false,
+        })
+    }
+}
+impl JsonInspectionSession<'_, '_> {
+    pub fn usage(&self) -> JsonInspectionUsage {
+        let lexical = self
+            .checker
+            .as_ref()
+            .map(|checker| checker.lexical_usage())
+            .unwrap_or_default();
+        let structure = self.checker.as_ref().map(|checker| checker.usage()).unwrap_or_default();
+        let result = self
+            .collector
+            .as_ref()
+            .map(|collector| collector.usage())
+            .unwrap_or_default();
+        JsonInspectionUsage {
+            inspected_source_bytes: lexical.source_bytes,
+            lexical_heap_bytes: lexical.retained_bytes,
+            structure_heap_bytes: structure.retained_bytes,
+            result_heap_bytes: result.retained_bytes,
+            lexical_peak_heap_bytes: lexical.peak_retained_bytes,
+            structure_peak_heap_bytes: structure.peak_retained_bytes,
+            result_peak_heap_bytes: result.peak_retained_bytes,
+            lexical_work: lexical.work,
+            structure_work: structure.work,
+            result_work: result.work,
+        }
+    }
+    /// Existing installed accounting is logical; provisional parser/store usage
+    /// is additional admitted capacity, not another copy of the request source.
+    pub fn runtime_bytes(&self) -> Option<usize> {
+        self.transaction
+            .retained_bytes()
+            .checked_add(self.usage().current_heap_bytes()?)
+    }
+    pub fn feed(&mut self, data: &[u8]) -> Result<(), RuntimeError> {
+        if let Some(error) = self.failure {
+            return Err(error);
+        }
+        if self.completion_attempted {
+            return Err(RuntimeError::JsonInspectionState);
+        }
+        let Some(observed) = self.observed_bytes.checked_add(data.len()) else {
+            self.failure = Some(RuntimeError::Arithmetic);
+            return Err(RuntimeError::Arithmetic);
+        };
+        self.observed_bytes = observed;
+        if data.is_empty() || self.parse_error.is_some() {
+            return Ok(());
+        }
+        let result = self.feed_checker(JsonStreamInput::Data(data));
+        if let Err(error) = result {
+            self.failure.get_or_insert(error);
+        }
+        result
+    }
+    fn feed_checker(&mut self, input: JsonStreamInput<'_>) -> Result<(), RuntimeError> {
+        let tx = &mut self.transaction;
+        let context = SingleInputContext {
+            generation: &tx.generation,
+            request: &tx.request,
+            tx: &tx.tx,
+            group_scratch: &mut tx.group_scratch,
+            boolean_scratch: &mut tx.boolean_scratch,
+            capture_scratch: &mut tx.capture_scratch,
+            scan_cache: None,
+            json_budget: None,
+        };
+        let mut collector = match self.collector.take() {
+            Some(state) => JsonCollector::resume(state, context),
+            None => JsonCollector::new(
+                tx.generation.clone(),
+                context,
+                tx.limits,
+                tx.evaluation_mode,
+                self.limits.results,
+            ),
+        }
+        .map_err(map_collector_error)?;
+        if self.checker.is_none() {
+            self.checker = Some(
+                match self.source_hint {
+                    Some(len) => JsonChecker::with_source_len("json", self.limits.lexical, self.limits.structure, len),
+                    None => JsonChecker::new("json", self.limits.lexical, self.limits.structure),
+                }
+                .map_err(|kind| RuntimeError::JsonChecker { kind })?,
+            );
+        }
+        let parsed = self
+            .checker
+            .as_mut()
+            .ok_or(RuntimeError::JsonInspectionState)?
+            .feed(input, &mut collector);
+        let collector_failure = collector.failure();
+        self.collector = Some(collector.into_state());
+        if let Some(error) = collector_failure {
+            return Err(map_collector_error(error));
+        }
+        if let Err(kind) = parsed {
+            if malformed(kind) {
+                self.parse_error = Some(kind);
+                if tx.rule_engine_mode == RuleEngineMode::DetectionOnly {
+                    return Ok(());
+                }
+                return Err(RuntimeError::Body {
+                    kind: BodyError::Malformed {
+                        processor: BodyProcessorSelection::Json,
+                    },
+                });
+            }
+            return Err(RuntimeError::JsonChecker { kind });
+        }
+        Ok(())
+    }
+    /// Called only after transport/snapshot EOF. The complete source prelude
+    /// retains priority over any latched parser failure. Captured length is
+    /// independent of the lexer's admitted bytes after a failure.
+    pub fn complete(&mut self, captured_len: usize) -> Result<(), RuntimeError> {
+        if self.completion_attempted {
+            return Err(self.failure.unwrap_or(RuntimeError::JsonInspectionState));
+        }
+        self.completion_attempted = true;
+        let raw = self
+            .transaction
+            .tx
+            .force_request_body_variable
+            .map(|value| value == super::super::OnOff::On);
+        let result = (|| {
+            let accounting =
+                BodyAccounting::json_prelude(captured_len, self.transaction.limits.body, raw.unwrap_or(false))
+                    .map_err(|kind| RuntimeError::Body { kind })?;
+            if let Some(error) = self.failure {
+                return Err(error);
+            }
+            if captured_len != self.observed_bytes || self.source_hint.is_some_and(|hint| hint != captured_len) {
+                return Err(RuntimeError::JsonInspectionState);
+            }
+            if self.checker.is_some() && self.parse_error.is_none() {
+                self.feed_checker(JsonStreamInput::Complete)?;
+            }
+            self.accounting = Some(if self.parse_error.is_some() {
+                BodyAccounting::json_prelude(captured_len, self.transaction.limits.body, raw.unwrap_or(true))
+                    .map_err(|kind| RuntimeError::Body { kind })?
+            } else {
+                accounting
+            });
+            self.complete_len = Some(captured_len);
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.failure = Some(error);
+            self.transaction.json_failure.get_or_insert(error);
+        }
+        result
+    }
+    /// Raw targets do not override JSON visibility. Query after complete so only
+    /// actual detection-only syntax fallback requires its default raw source.
+    pub fn requires_raw_source(&self) -> bool {
+        self.transaction.tx.force_request_body_variable.map_or(
+            self.parse_error.is_some() && self.transaction.rule_engine_mode == RuleEngineMode::DetectionOnly,
+            |value| value == super::super::OnOff::On,
+        )
+    }
+    /// Publish once after completion, borrowing no bytes from supplied chunks.
+    pub fn finish(mut self, source: Option<Bytes>) -> Result<(), RuntimeError> {
+        let result = self.finish_inner(source);
+        if let Err(error) = result {
+            self.transaction.json_failure.get_or_insert(error);
+        }
+        self.finished = true;
+        result
+    }
+    fn finish_inner(&mut self, source: Option<Bytes>) -> Result<(), RuntimeError> {
+        if let Some(error) = self.failure {
+            return Err(error);
+        }
+        let len = self.complete_len.ok_or(RuntimeError::JsonInspectionState)?;
+        if source.as_ref().is_some_and(|source| source.len() != len) || (self.requires_raw_source() && source.is_none())
+        {
+            return Err(RuntimeError::JsonInspectionState);
+        }
+        let (results, budget, body_error) = match self.collector.take() {
+            Some(state) if self.parse_error.is_some() => (
+                None,
+                state.into_abandoned_budget().map_err(map_collector_error)?,
+                Some(BodyError::Malformed {
+                    processor: BodyProcessorSelection::Json,
+                }),
+            ),
+            Some(state) => {
+                let (sealed, budget) = state.into_sealed().map_err(map_collector_error)?;
+                (Some(sealed), budget, None)
+            }
+            None => (
+                None,
+                InspectionBudget::empty_publication(self.limits.results).map_err(map_store_error)?,
+                None,
+            ),
+        };
+        let mut accounting = self.accounting.take().ok_or(RuntimeError::JsonInspectionState)?;
+        if let Some(results) = &results {
+            accounting
+                .apply_json_summary(results.summary)
+                .map_err(|kind| RuntimeError::Body { kind })?;
+        } else if body_error.is_none() {
+            accounting
+                .apply_json_summary(JsonSemanticSummary::default())
+                .map_err(|kind| RuntimeError::Body { kind })?;
+        }
+        let head = parse_usize(
+            self.transaction
+                .request
+                .first_value(CollectionKind::ArgsCombinedSize)
+                .ok_or(RuntimeError::GenerationInvariant)?,
+        )?;
+        let source = if self.requires_raw_source() { source } else { None };
+        self.transaction
+            .publish_json_inspection(len, source, accounting, head, results, budget, body_error)
+    }
+}
+impl Drop for JsonInspectionSession<'_, '_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.transaction
+                .json_failure
+                .get_or_insert(self.failure.unwrap_or(RuntimeError::JsonChecker {
+                    kind: JsonCheckerError::Lexical(JsonStreamError::Abandoned),
+                }));
+        }
     }
 }
 

@@ -44,7 +44,7 @@ Implementation ownership is split deliberately:
   outcome deletion requires a new ownership design, not reusing current aliases.
   Broad-only dispatch is preordered at compilation; mixed selectors retain their
   per-candidate selection and deduplication.
-- json_inspection_runtime.rs publishes owned Bytes, reconstructs selected
+- json_inspection_runtime.rs publishes sealed selected facts and optional raw Bytes, reconstructs selected
   outcomes and preserves ordered chain, capture, TX and control semantics.
   Transaction selection uses a candidate cursor and bounded reusable reference
   scratch, charged to aggregate retained bytes even while taken for evaluation.
@@ -59,7 +59,9 @@ Implementation ownership is split deliberately:
   Match vectors grow only for actual hits. Cursor traversal may change competing
   physical-limit versus selector-error timing compared with eager enumeration.
 
-Physical source/work/retention failures are immediate and sticky. Speculative
+Physical source/work/retention failures are immediate and sticky in the engine.
+The Gateway latches them and continues only bounded canonical capture so transport
+and original complete-source prelude failures retain their priority at EOF. Speculative
 operator errors surface only when canonical selection and scheduling reach them.
 Later transformation validation may override an earlier provisional predicate
 hit. Duplicate replacement never erases syntax failure or spent physical work.
@@ -68,9 +70,13 @@ event tape preserving the deleted DOM's competing-error order.
 
 Resource Full admission rejects unsupported JSON dependencies for both inline
 and resolved bundles, including omitted JSON overrides. There is no DOM fallback.
-Gateway preflights after phase-one controls, captures under the physical cap,
-proves completeness, checks caps, reads once and verifies the resulting length.
-Raw-body visibility retains the same immutable Bytes owner when needed.
+Gateway preflights after phase-one controls and feeds borrowed actual chunks under
+the independent physical cap. A scoped JsonInspectionSession owns persistent
+collector state and a mutable transaction borrow; each feed constructs only a
+short-lived borrowed sink/context. True EOF, exact captured/available parity and
+the complete BodyAccounting prelude precede sealing and Phase 2. Failed completion
+is terminal; unfinished Drop poisons publication. Raw visibility obtains the same
+canonical immutable Bytes owner only when required by the existing policy.
 
 ## Alternatives and limits
 
@@ -81,16 +87,27 @@ are rejected. Dynamic names, narrow length recipes and finite named dependencies
 have separate execution paths. Raw whole-source operators may scan the original
 bytes later without another JSON grammar pass.
 
-The initial Gateway adapter still uses complete canonical BodyStorage capture.
-Spilled and edited bodies can require one canonical materialization. This is not
-transport-streaming inspection or a second request-body cache. Future header or
-nested-JSON adapters require explicit source ownership and aggregate limits.
+Gateway inspection now consumes real capture chunks before transport EOF. Cached
+bodies use bounded immutable snapshot chunks with pre-IO size admission and actual
+reader EOF/parity. JSON-only spill requires no complete materialization; forced raw
+visibility and DetectionOnly syntax fallback may require one. BodyStorage remains
+the sole forwarding/retry cache; no cache-free forwarding is claimed. Future header
+or nested-JSON adapters require explicit source ownership and aggregate limits.
+
+The existing inspected-byte counter uses exact lexer-admitted source deltas;
+continued capture after failure is excluded. Provisional RAII charging includes
+known current parser/collector capacities plus canonical logical TX accounting and
+hands off once to installed transaction charging. Errors and cancellation release
+the charge. Inline storage, BodyStorage, allocator overhead and RSS are excluded;
+independent component peaks are not a simultaneous aggregate peak.
 
 ## Verification and re-evaluation
 
-The historical `tasks/pending/waf-json-checker/` task tree has been removed.
-The filenames below identify its original records, which are no longer available
-in the working tree. Remaining WAF work is tracked in the
+The historical `tasks/pending/waf-json-checker/` records are retained in the
+working tree. Current capture wiring and fresh closure gates are tracked in
+[plan 16](../../../../tasks/waf-todo/16-json-capture-wiring-and-closure.md).
+Prior test and measurement results below are historical evidence, not proof of
+the new entry. Remaining WAF work is tracked in the
 [current execution queue](../../../../tasks/waf-todo/README.md).
 
 C1 independent review approved the replacement and legacy assertion mapping;

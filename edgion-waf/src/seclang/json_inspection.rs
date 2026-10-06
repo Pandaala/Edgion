@@ -697,6 +697,9 @@ pub(super) struct SealedResults<'generation> {
 }
 
 impl<'generation> ResultStore<'generation> {
+    pub(super) fn usage_snapshot(&self) -> StoreUsage {
+        self.budget.usage
+    }
     pub(super) fn new(
         generation: GenerationHandle<'generation>,
         runtime: RuntimeLimits,

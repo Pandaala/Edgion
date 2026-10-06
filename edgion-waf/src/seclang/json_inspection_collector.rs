@@ -67,12 +67,12 @@ struct DispatchScratch {
 }
 
 struct JsonCaptureScratch<'generation> {
-    generation: &'generation CompiledGeneration,
+    generation: GenerationHandle<'generation>,
     builder: CaptureBuilder<StageCaptureValue, JsonCaptureKey>,
 }
 impl JsonCaptureScratch<'_> {
     fn validate_generation(&self, generation: &CompiledGeneration) -> Collected<()> {
-        if !std::ptr::eq(self.generation, generation) {
+        if !std::ptr::eq(&*self.generation, generation) {
             return Err(CollectorError::State);
         }
         Ok(())
@@ -110,15 +110,20 @@ impl DispatchScratch {
     }
 }
 
-pub(super) struct JsonCollector<'call, 'generation> {
+pub(super) struct JsonCollectorState<'generation> {
     store: ResultStore<'generation>,
-    context: SingleInputContext<'call>,
     runtime: RuntimeLimits,
     mode: EvaluationMode,
     transform: TransformScratch,
     dispatch: DispatchScratch,
-    captures: JsonCaptureScratch<'call>,
+    captures: JsonCaptureScratch<'generation>,
     failure: Option<CollectorError>,
+}
+
+/// The context is borrowed only while one checker feed invokes its sink.
+pub(super) struct JsonCollector<'call, 'generation> {
+    state: JsonCollectorState<'generation>,
+    context: SingleInputContext<'call>,
 }
 impl<'call, 'generation> JsonCollector<'call, 'generation> {
     pub(super) fn new(
@@ -133,10 +138,10 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         }
         let group_count = generation.json_inspection.groups.len();
         let profile_count = generation.json_inspection.profiles.len();
-        let capture_generation = context.generation;
-        let mut result = Self {
+        let scan_capacity = generation.json_inspection.matcher_scan_capacity;
+        let capture_generation = generation.clone();
+        let mut state = JsonCollectorState {
             store: ResultStore::new(generation, runtime, mode, limits)?,
-            context,
             runtime,
             mode,
             transform: TransformScratch::default(),
@@ -149,26 +154,222 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         };
         // Each allocation admits its old/new overlap and reports allocator capacity.
         let mut total = 0;
-        reserve_scratch(&mut result.dispatch.groups, group_count, &mut total, &mut result.store)?;
+        reserve_scratch(&mut state.dispatch.groups, group_count, &mut total, &mut state.store)?;
         reserve_scratch(
-            &mut result.dispatch.profiles,
+            &mut state.dispatch.profiles,
             profile_count,
             &mut total,
-            &mut result.store,
+            &mut state.store,
         )?;
-        reserve_scratch(&mut result.dispatch.stamps, group_count, &mut total, &mut result.store)?;
+        reserve_scratch(&mut state.dispatch.stamps, group_count, &mut total, &mut state.store)?;
         reserve_scratch(
-            &mut result.dispatch.cache.scanned,
-            result.context.generation.json_inspection.matcher_scan_capacity,
+            &mut state.dispatch.cache.scanned,
+            scan_capacity,
             &mut total,
-            &mut result.store,
+            &mut state.store,
         )?;
-        result.store.charge_work(group_count)?;
-        result.dispatch.stamps.resize(group_count, 0);
-        Ok(result)
+        state.store.charge_work(group_count)?;
+        state.dispatch.stamps.resize(group_count, 0);
+        Ok(Self { state, context })
+    }
+    pub(super) fn resume(
+        state: JsonCollectorState<'generation>,
+        context: SingleInputContext<'call>,
+    ) -> Collected<Self> {
+        state.captures.validate_generation(context.generation)?;
+        Ok(Self { state, context })
+    }
+    pub(super) fn into_state(self) -> JsonCollectorState<'generation> {
+        self.state
     }
     pub(super) fn failure(&self) -> Option<CollectorError> {
-        self.failure
+        self.state.failure
+    }
+    pub(super) fn into_abandoned_budget(self) -> Collected<InspectionBudget> {
+        self.state.into_abandoned_budget()
+    }
+    pub(super) fn into_sealed(self) -> Collected<(SealedResults<'generation>, InspectionBudget)> {
+        self.state.into_sealed()
+    }
+    fn sink_result<T>(&mut self, result: Collected<T>) -> Result<T, JsonCheckerSinkError> {
+        result.map_err(|error| {
+            self.state.failure.get_or_insert(error);
+            JsonCheckerSinkError
+        })
+    }
+    fn collect_scalar(&mut self, name: &[u8], value: &[u8], kind: JsonScalarKind) -> Collected<Option<Receipt>> {
+        if let Some(error) = self.state.failure {
+            return Err(error);
+        }
+        #[cfg(test)]
+        let dispatch_work_before = self.store.usage().work;
+        let generation = self.context.generation;
+        let plan = &generation.json_inspection;
+        let deferred = exact_name_match(generation, &plan.named_demands, name, &mut self.state.store)?;
+        let mut retain = deferred || plan.needs_all_candidate_names;
+        if !retain {
+            retain = exact_name_match(generation, &plan.candidate_literals, name, &mut self.state.store)?;
+        }
+        if !retain {
+            for &selector in &plan.candidate_regexes {
+                if match_name(
+                    generation,
+                    self.context.boolean_scratch,
+                    selector,
+                    name,
+                    &mut self.state.store,
+                )? {
+                    retain = true;
+                    break;
+                }
+            }
+        }
+        if !retain {
+            #[cfg(test)]
+            measurements::record(Event::DispatchWork, self.store.usage().work - dispatch_work_before);
+            return Ok(None);
+        }
+        self.state.dispatch.epoch = self.state.dispatch.epoch.checked_add(1).ok_or(StoreError::Arithmetic)?;
+        self.state.store.charge_work(
+            self.state
+                .dispatch
+                .groups
+                .len()
+                .checked_add(self.state.dispatch.profiles.len())
+                .ok_or(StoreError::Arithmetic)?,
+        )?;
+        self.state.dispatch.groups.clear();
+        self.state.dispatch.profiles.clear();
+        let broad_only = plan.literals.is_empty() && plan.regexes.is_empty();
+        if broad_only {
+            for &id in &plan.broad_only_order {
+                self.state.dispatch.add(id, &mut self.state.store)?;
+            }
+        } else {
+            for &id in plan.broad_names.iter().chain(&plan.broad_values) {
+                self.state.dispatch.add(id, &mut self.state.store)?;
+            }
+            self.state.store.charge_work(
+                plan.literal_lookup_work(name.len())
+                    .map_err(|_| CollectorError::State)?,
+            )?;
+            for row in plan
+                .literal_matches(generation, name)
+                .map_err(|_| CollectorError::State)?
+            {
+                self.state.dispatch.add(row.group, &mut self.state.store)?;
+            }
+            for row in &plan.regexes {
+                if match_name(
+                    generation,
+                    self.context.boolean_scratch,
+                    row.selector,
+                    name,
+                    &mut self.state.store,
+                )? {
+                    self.state.dispatch.add(row.group, &mut self.state.store)?;
+                }
+            }
+            let n = self.state.dispatch.groups.len();
+            let sort_work = n
+                .checked_mul((usize::BITS - n.leading_zeros()) as usize)
+                .and_then(|v| v.checked_mul(3))
+                .ok_or(StoreError::Arithmetic)?;
+            self.state.store.charge_work(sort_work)?;
+            self.state
+                .dispatch
+                .groups
+                .sort_unstable_by_key(|entry| plan.groups[entry.id].profile);
+        }
+        let n = self.state.dispatch.groups.len();
+        #[cfg(test)]
+        measurements::record(Event::DispatchWork, self.store.usage().work - dispatch_work_before);
+        let candidate = self
+            .store
+            .begin_candidate(name, value.len(), kind, deferred.then_some(value))?;
+        let mut start = 0;
+        while start < n {
+            let profile_id = plan.groups[self.state.dispatch.groups[start].id].profile;
+            let mut end = start + 1;
+            while end < n && plan.groups[self.state.dispatch.groups[end].id].profile == profile_id {
+                end += 1;
+            }
+            self.state.store.charge_work(end - start)?;
+            let profile = plan.profiles.get(profile_id).ok_or(CollectorError::State)?;
+            let transformations = transformations(generation, profile.transformation_plan)?;
+            let source = match profile.view {
+                JsonView::Name => name,
+                JsonView::Value => value,
+            };
+            let fixed_scratch = self.state.dispatch.bytes()?;
+            let mut observer = ProfileObserver {
+                store: &mut self.state.store,
+                context: &mut self.context,
+                groups: &mut self.state.dispatch.groups[start..end],
+                cache: &mut self.state.dispatch.cache,
+                captures: &mut self.state.captures,
+                candidate,
+                profile: profile_id,
+                runtime: self.state.runtime,
+                mode: self.state.mode,
+                fixed_scratch,
+                transform_bytes: self.state.transform.retained_bytes().map_err(map_transform_error)?,
+                last: StoredCheckpoint::Initial,
+                step: 0,
+            };
+            #[cfg(test)]
+            measurements::record(Event::ProfileWalks, 1);
+            let walked = walk_transformations(
+                source,
+                transformations,
+                profile.multi_match,
+                TransformLimits {
+                    max_output_bytes: self.state.runtime.max_transformation_output_bytes,
+                    max_work_bytes: self.state.runtime.max_transformation_work_bytes,
+                },
+                &mut self.state.transform,
+                &mut observer,
+            );
+            match walked {
+                Ok(_) => observer.store.complete_profile(candidate, profile_id)?,
+                Err(TransformWalkError::Observer(error)) => return Err(error),
+                Err(TransformWalkError::Transformation(
+                    error @ (TransformError::Allocation | TransformError::Arithmetic),
+                )) => return Err(CollectorError::Runtime(map_transform_error(error))),
+                Err(TransformWalkError::Transformation(error)) => observer.store.record_transform_error(
+                    candidate,
+                    profile_id,
+                    CheckpointError {
+                        step: observer.step,
+                        checkpoint: observer.last as usize,
+                        error: map_transform_error(error),
+                    },
+                )?,
+            }
+            self.state.dispatch.profiles.push(profile_id);
+            start = end;
+        }
+        let proof = self
+            .state
+            .store
+            .completion_proof(candidate, &self.state.dispatch.profiles)?;
+        self.state.store.complete_candidate(proof).map(Some).map_err(Into::into)
+    }
+}
+impl<'generation> std::ops::Deref for JsonCollector<'_, 'generation> {
+    type Target = JsonCollectorState<'generation>;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+impl std::ops::DerefMut for JsonCollector<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+impl<'generation> JsonCollectorState<'generation> {
+    pub(super) fn usage(&self) -> super::json_inspection::StoreUsage {
+        self.store.usage_snapshot()
     }
     pub(super) fn into_abandoned_budget(self) -> Collected<InspectionBudget> {
         if let Some(error) = self.failure {
@@ -205,165 +406,6 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         budget.release_scratch();
         Ok((sealed, budget))
     }
-    fn sink_result<T>(&mut self, result: Collected<T>) -> Result<T, JsonCheckerSinkError> {
-        result.map_err(|error| {
-            self.failure.get_or_insert(error);
-            JsonCheckerSinkError
-        })
-    }
-    fn collect_scalar(&mut self, name: &[u8], value: &[u8], kind: JsonScalarKind) -> Collected<Option<Receipt>> {
-        if let Some(error) = self.failure {
-            return Err(error);
-        }
-        #[cfg(test)]
-        let dispatch_work_before = self.store.usage().work;
-        let generation = self.context.generation;
-        let plan = &generation.json_inspection;
-        let deferred = exact_name_match(generation, &plan.named_demands, name, &mut self.store)?;
-        let mut retain = deferred || plan.needs_all_candidate_names;
-        if !retain {
-            retain = exact_name_match(generation, &plan.candidate_literals, name, &mut self.store)?;
-        }
-        if !retain {
-            for &selector in &plan.candidate_regexes {
-                if match_name(
-                    generation,
-                    self.context.boolean_scratch,
-                    selector,
-                    name,
-                    &mut self.store,
-                )? {
-                    retain = true;
-                    break;
-                }
-            }
-        }
-        if !retain {
-            #[cfg(test)]
-            measurements::record(Event::DispatchWork, self.store.usage().work - dispatch_work_before);
-            return Ok(None);
-        }
-        self.dispatch.epoch = self.dispatch.epoch.checked_add(1).ok_or(StoreError::Arithmetic)?;
-        self.store.charge_work(
-            self.dispatch
-                .groups
-                .len()
-                .checked_add(self.dispatch.profiles.len())
-                .ok_or(StoreError::Arithmetic)?,
-        )?;
-        self.dispatch.groups.clear();
-        self.dispatch.profiles.clear();
-        let broad_only = plan.literals.is_empty() && plan.regexes.is_empty();
-        if broad_only {
-            for &id in &plan.broad_only_order {
-                self.dispatch.add(id, &mut self.store)?;
-            }
-        } else {
-            for &id in plan.broad_names.iter().chain(&plan.broad_values) {
-                self.dispatch.add(id, &mut self.store)?;
-            }
-            self.store.charge_work(
-                plan.literal_lookup_work(name.len())
-                    .map_err(|_| CollectorError::State)?,
-            )?;
-            for row in plan
-                .literal_matches(generation, name)
-                .map_err(|_| CollectorError::State)?
-            {
-                self.dispatch.add(row.group, &mut self.store)?;
-            }
-            for row in &plan.regexes {
-                if match_name(
-                    generation,
-                    self.context.boolean_scratch,
-                    row.selector,
-                    name,
-                    &mut self.store,
-                )? {
-                    self.dispatch.add(row.group, &mut self.store)?;
-                }
-            }
-            let n = self.dispatch.groups.len();
-            let sort_work = n
-                .checked_mul((usize::BITS - n.leading_zeros()) as usize)
-                .and_then(|v| v.checked_mul(3))
-                .ok_or(StoreError::Arithmetic)?;
-            self.store.charge_work(sort_work)?;
-            self.dispatch
-                .groups
-                .sort_unstable_by_key(|entry| plan.groups[entry.id].profile);
-        }
-        let n = self.dispatch.groups.len();
-        #[cfg(test)]
-        measurements::record(Event::DispatchWork, self.store.usage().work - dispatch_work_before);
-        let candidate = self
-            .store
-            .begin_candidate(name, value.len(), kind, deferred.then_some(value))?;
-        let mut start = 0;
-        while start < n {
-            let profile_id = plan.groups[self.dispatch.groups[start].id].profile;
-            let mut end = start + 1;
-            while end < n && plan.groups[self.dispatch.groups[end].id].profile == profile_id {
-                end += 1;
-            }
-            self.store.charge_work(end - start)?;
-            let profile = plan.profiles.get(profile_id).ok_or(CollectorError::State)?;
-            let transformations = transformations(generation, profile.transformation_plan)?;
-            let source = match profile.view {
-                JsonView::Name => name,
-                JsonView::Value => value,
-            };
-            let fixed_scratch = self.dispatch.bytes()?;
-            let mut observer = ProfileObserver {
-                store: &mut self.store,
-                context: &mut self.context,
-                groups: &mut self.dispatch.groups[start..end],
-                cache: &mut self.dispatch.cache,
-                captures: &mut self.captures,
-                candidate,
-                profile: profile_id,
-                runtime: self.runtime,
-                mode: self.mode,
-                fixed_scratch,
-                transform_bytes: self.transform.retained_bytes().map_err(map_transform_error)?,
-                last: StoredCheckpoint::Initial,
-                step: 0,
-            };
-            #[cfg(test)]
-            measurements::record(Event::ProfileWalks, 1);
-            let walked = walk_transformations(
-                source,
-                transformations,
-                profile.multi_match,
-                TransformLimits {
-                    max_output_bytes: self.runtime.max_transformation_output_bytes,
-                    max_work_bytes: self.runtime.max_transformation_work_bytes,
-                },
-                &mut self.transform,
-                &mut observer,
-            );
-            match walked {
-                Ok(_) => observer.store.complete_profile(candidate, profile_id)?,
-                Err(TransformWalkError::Observer(error)) => return Err(error),
-                Err(TransformWalkError::Transformation(
-                    error @ (TransformError::Allocation | TransformError::Arithmetic),
-                )) => return Err(CollectorError::Runtime(map_transform_error(error))),
-                Err(TransformWalkError::Transformation(error)) => observer.store.record_transform_error(
-                    candidate,
-                    profile_id,
-                    CheckpointError {
-                        step: observer.step,
-                        checkpoint: observer.last as usize,
-                        error: map_transform_error(error),
-                    },
-                )?,
-            }
-            self.dispatch.profiles.push(profile_id);
-            start = end;
-        }
-        let proof = self.store.completion_proof(candidate, &self.dispatch.profiles)?;
-        self.store.complete_candidate(proof).map(Some).map_err(Into::into)
-    }
 }
 impl JsonCheckerSink for JsonCollector<'_, '_> {
     type Receipt = Receipt;
@@ -381,32 +423,32 @@ impl JsonCheckerSink for JsonCollector<'_, '_> {
         left: Option<Receipt>,
         right: Option<Receipt>,
     ) -> Result<Option<Receipt>, JsonCheckerSinkError> {
-        let result = self.store.concat(left, right).map_err(Into::into);
+        let result = self.state.store.concat(left, right).map_err(Into::into);
         self.sink_result(result)
     }
     fn discard(&mut self, receipt: Receipt) -> Result<(), JsonCheckerSinkError> {
-        let result = self.store.discard(receipt).map_err(Into::into);
+        let result = self.state.store.discard(receipt).map_err(Into::into);
         self.sink_result(result)
     }
     fn seal(&mut self, receipt: Option<Receipt>, summary: JsonSemanticSummary) -> Result<(), JsonCheckerSinkError> {
-        self.captures.release();
+        self.state.captures.release();
         let result = (|| {
             let scratch = self
                 .dispatch
                 .bytes()?
-                .checked_add(self.transform.retained_bytes().map_err(map_transform_error)?)
+                .checked_add(self.state.transform.retained_bytes().map_err(map_transform_error)?)
                 .ok_or(StoreError::Arithmetic)?;
-            self.store.scratch_capacity(scratch)?;
-            self.store.seal(receipt, summary).map_err(Into::into)
+            self.state.store.scratch_capacity(scratch)?;
+            self.state.store.seal(receipt, summary).map_err(Into::into)
         })();
         self.sink_result(result)
     }
     fn abandon(&mut self) {
-        self.transform = TransformScratch::default();
-        self.dispatch = DispatchScratch::default();
-        self.captures.release();
-        self.store.release_scratch();
-        self.store.abandon();
+        self.state.transform = TransformScratch::default();
+        self.state.dispatch = DispatchScratch::default();
+        self.state.captures.release();
+        self.state.store.release_scratch();
+        self.state.store.abandon();
     }
 }
 
@@ -495,7 +537,7 @@ struct ProfileObserver<'a, 'call, 'generation> {
     context: &'a mut SingleInputContext<'call>,
     groups: &'a mut [GroupRun],
     cache: &'a mut StageScanCache,
-    captures: &'a mut JsonCaptureScratch<'call>,
+    captures: &'a mut JsonCaptureScratch<'generation>,
     candidate: CandidateId,
     profile: usize,
     runtime: RuntimeLimits,
@@ -640,7 +682,7 @@ impl TransformObserver for ProfileObserver<'_, '_, '_> {
                         for entry in &self.captures.builder.entries {
                             entry
                                 .key
-                                .with_bytes(self.captures.generation, |key| match &entry.value {
+                                .with_bytes(&self.captures.generation, |key| match &entry.value {
                                     StageCaptureValue::InputRange { start, len } => observer
                                         .store
                                         .add_capture_range(outcome, key, *start, *len)

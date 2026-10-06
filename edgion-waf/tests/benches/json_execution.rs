@@ -148,7 +148,165 @@ fn percentile(samples: &[Duration], percent: usize) -> u128 {
     samples[(samples.len() * percent).div_ceil(100) - 1].as_nanos()
 }
 
+fn execute_chunked(
+    generation: &CompiledGeneration,
+    body: &bytes::Bytes,
+    mode: RuleEngineMode,
+    chunk_size: usize,
+) -> (ResultSnapshot, JsonInspectionUsage) {
+    let headers = [RequestHeader::new(b"content-type", b"application/json")];
+    let head = RequestHead::new(
+        b"POST /?q=miss HTTP/1.1",
+        b"POST",
+        b"/?q=miss",
+        b"/?q=miss",
+        b"HTTP/1.1",
+        b"192.0.2.1",
+        b"benchmark",
+        &headers,
+    );
+    let mut tx = Transaction::new_with_modes(
+        generation,
+        head,
+        RuntimeLimits::default(),
+        EvaluationMode::Accelerated,
+        mode,
+    )
+    .unwrap();
+    tx.execute_request_headers().unwrap();
+    let mut inspection = tx.start_json_inspection(JsonInspectionLimits::default(), None).unwrap();
+    for chunk in body.chunks(chunk_size) {
+        // Capture continues after a latched failure; the lexer no longer admits bytes.
+        let _ = inspection.feed(chunk);
+    }
+    let completion = inspection.complete(body.len());
+    let usage = inspection.usage();
+    let source = inspection.requires_raw_source().then(|| body.clone());
+    let publication = match completion {
+        Ok(()) => inspection.finish(source),
+        Err(error) => {
+            drop(inspection);
+            Err(error)
+        }
+    };
+    let outcome = publication.and_then(|()| tx.execute_request_body());
+    (
+        ResultSnapshot {
+            outcome,
+            next_phase: tx.next_phase(),
+            body_error: tx.request_body_error(),
+            logical_retained_bytes: tx.retained_bytes(),
+        },
+        usage,
+    )
+}
+
+fn directed_chunks() {
+    let samples_count = std::env::var("EDGION_WAF_BENCH_SAMPLES")
+        .ok()
+        .map(|value| value.parse::<usize>().expect("positive sample count"))
+        .unwrap_or(31);
+    assert!(samples_count > 0);
+    let selected = [
+        "small_plain",
+        "wide_no_hits",
+        "escaped_hits",
+        "duplicates_last_miss",
+        "malformed_tail",
+        "large_scalar",
+    ];
+    println!("schema_version,case,arch,os,source_bytes,subscribers,mode,implementation,chunk_bytes,samples,p50_ns,p95_ns,p99_ns,logical_retained_bytes,inspected_source_bytes,lexical_current,structure_current,result_current,lexical_peak,structure_peak,result_peak,lexical_work,structure_work,result_work");
+    let reverse = std::env::var_os("EDGION_WAF_BENCH_REVERSE").is_some();
+    let mut rule_counts = [1, 32];
+    let mut chunk_sizes = [0, 512, 16 * 1024, 64 * 1024];
+    let mut fixtures = cases();
+    if reverse {
+        rule_counts.reverse();
+        chunk_sizes.reverse();
+        fixtures.reverse();
+    }
+    for subscribers in rule_counts {
+        let generation = generation(subscribers);
+        for (name, body) in fixtures.iter().filter(|(name, _)| selected.contains(name)) {
+            let body = bytes::Bytes::copy_from_slice(body);
+            for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+                let expected = execute(&generation, &body, EvaluationMode::Accelerated, mode);
+                for chunk_size in chunk_sizes {
+                    let (actual, usage) = if chunk_size == 0 {
+                        (execute(&generation, &body, EvaluationMode::Accelerated, mode), None)
+                    } else {
+                        let (result, usage) = execute_chunked(&generation, &body, mode, chunk_size);
+                        (result, Some(usage))
+                    };
+                    assert_eq!(
+                        actual.outcome, expected.outcome,
+                        "outcome: {name}/{mode:?}/{chunk_size}"
+                    );
+                    assert_eq!(actual.next_phase, expected.next_phase);
+                    assert_eq!(actual.body_error, expected.body_error);
+                    // Capacity hints affect retained charges; semantic parity does not require their equality.
+                    let run = || {
+                        if chunk_size == 0 {
+                            black_box(execute(
+                                &generation,
+                                black_box(&body),
+                                EvaluationMode::Accelerated,
+                                mode,
+                            ));
+                        } else {
+                            black_box(execute_chunked(&generation, black_box(&body), mode, chunk_size));
+                        }
+                    };
+                    for _ in 0..3 {
+                        run();
+                    }
+                    let mut samples = Vec::with_capacity(samples_count);
+                    for _ in 0..samples_count {
+                        let started = Instant::now();
+                        run();
+                        samples.push(started.elapsed());
+                    }
+                    samples.sort_unstable();
+                    let usage_columns = usage
+                        .map(|u| {
+                            format!(
+                                "{},{},{},{},{},{},{},{},{},{}",
+                                u.inspected_source_bytes,
+                                u.lexical_heap_bytes,
+                                u.structure_heap_bytes,
+                                u.result_heap_bytes,
+                                u.lexical_peak_heap_bytes,
+                                u.structure_peak_heap_bytes,
+                                u.result_peak_heap_bytes,
+                                u.lexical_work,
+                                u.structure_work,
+                                u.result_work
+                            )
+                        })
+                        .unwrap_or_else(|| ",,,,,,,,,".to_owned());
+                    println!(
+                        "2,{name},{},{},{},{subscribers},{mode:?},{},{chunk_size},{samples_count},{},{},{},{},{}",
+                        std::env::consts::ARCH,
+                        std::env::consts::OS,
+                        body.len(),
+                        if chunk_size == 0 { "owned" } else { "chunked" },
+                        percentile(&samples, 50),
+                        percentile(&samples, 95),
+                        percentile(&samples, 99),
+                        actual.logical_retained_bytes,
+                        usage_columns
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn main() {
+    if std::env::var_os("EDGION_WAF_BENCH_CHUNKS").is_some() {
+        directed_chunks();
+        return;
+    }
     let samples_count = if std::env::var_os("EDGION_WAF_BENCH_SMOKE").is_some() {
         3
     } else {
@@ -189,8 +347,16 @@ fn main() {
                         .outcome
                     );
                 }
-                assert_eq!(execute(&generation, &body, EvaluationMode::Reference, mode), expected);
+                let reference = execute(&generation, &body, EvaluationMode::Reference, mode);
+                // Executors can retain different reusable capacities while preserving semantics.
+                assert_eq!(reference.outcome, expected.outcome);
+                assert_eq!(reference.next_phase, expected.next_phase);
+                assert_eq!(reference.body_error, expected.body_error);
                 for evaluation in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+                    let retained = match evaluation {
+                        EvaluationMode::Accelerated => expected.logical_retained_bytes,
+                        EvaluationMode::Reference => reference.logical_retained_bytes,
+                    };
                     for _ in 0..3 {
                         black_box(execute(&generation, black_box(&body), evaluation, mode));
                     }
@@ -209,7 +375,7 @@ fn main() {
                         percentile(&samples, 50),
                         percentile(&samples, 95),
                         percentile(&samples, 99),
-                        expected.logical_retained_bytes
+                        retained
                     );
                 }
             }

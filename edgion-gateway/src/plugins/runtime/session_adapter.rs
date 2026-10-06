@@ -12,7 +12,8 @@ use super::conditions::EvaluationResult;
 use super::dye_plan::{CompiledDyePlan, CompiledDyeRule};
 use super::log::{EdgionPluginsLogToken, PluginLog};
 use super::traits::session::{
-    empty_response_header_map, BodyReadError, BodyReadResult, RequestBodySnapshotReader, RouteProto,
+    empty_response_header_map, BodyReadError, BodyReadResult, RequestBodyChunkConsumer, RequestBodySnapshotReader,
+    RouteProto,
 };
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
 use crate::ai::{AiAttemptPlan, AiRequestContext};
@@ -56,6 +57,15 @@ async fn capture_request_body_core(
     downstream: &mut pingora_core::protocols::http::server::Session,
     ctx: &mut EdgionHttpContext,
     max_bytes: Option<u64>,
+) -> Result<u64, BodyReadError> {
+    capture_request_body_core_with_consumer(downstream, ctx, max_bytes, None).await
+}
+
+async fn capture_request_body_core_with_consumer(
+    downstream: &mut pingora_core::protocols::http::server::Session,
+    ctx: &mut EdgionHttpContext,
+    max_bytes: Option<u64>,
+    mut consumer: Option<&mut dyn RequestBodyChunkConsumer>,
 ) -> Result<u64, BodyReadError> {
     if let Some(len) = ctx.request_body.cached_len()? {
         return Ok(len);
@@ -125,11 +135,45 @@ async fn capture_request_body_core(
         if captured > cap {
             return Err(reject_over_limit_request_body(downstream, cap));
         }
+        if let Some(consumer) = consumer.as_deref_mut() {
+            consumer.consume(&chunk);
+        }
     }
 
     let len = view.len()?;
+    if len != captured {
+        return Err(BodyReadError::Incomplete);
+    }
     ctx.request_body.install(view);
     Ok(len)
+}
+
+async fn consume_request_body_snapshot(
+    mut reader: Box<dyn RequestBodySnapshotReader>,
+    cap: u64,
+    consumer: &mut dyn RequestBodyChunkConsumer,
+) -> Result<u64, BodyReadError> {
+    let expected = reader.len();
+    if expected > cap {
+        return Err(BodyReadError::BufferLimitExceeded { limit: cap });
+    }
+    let mut total = 0_u64;
+    while let Some(chunk) = reader.next_chunk().await? {
+        total = total
+            .checked_add(u64::try_from(chunk.len()).map_err(|_| BodyReadError::Incomplete)?)
+            .ok_or(BodyReadError::Incomplete)?;
+        if total > cap {
+            return Err(BodyReadError::BufferLimitExceeded { limit: cap });
+        }
+        if total > expected {
+            return Err(BodyReadError::Incomplete);
+        }
+        consumer.consume(&chunk);
+    }
+    if total != expected {
+        return Err(BodyReadError::Incomplete);
+    }
+    Ok(total)
 }
 
 /// Resolve a `${matchedHttpRoute:<selector>}` / `${matchedGrpcRoute:<selector>}`
@@ -1669,6 +1713,36 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 Err(BodyReadError::NotBuffered)
             }
             RequestAdmission::Buffer => self.capture_request_body(max_bytes).await,
+        }
+    }
+
+    async fn capture_request_body_with_consumer<'consumer>(
+        &mut self,
+        max_bytes: Option<u64>,
+        consumer: &'consumer mut (dyn RequestBodyChunkConsumer + 'consumer),
+    ) -> Result<u64, BodyReadError> {
+        if !self.ctx.request_info.in_request_body_stage || self.inner.request_body_prefix_active() {
+            return Err(BodyReadError::NotBuffered);
+        }
+        let cap = resolve_cap(max_bytes, self.ctx.request_body_config.max_body_size_bytes);
+        if self.ctx.request_body.cached_len()?.is_some() {
+            self.ctx.request_body.freeze_mutation();
+            let reader = self.ctx.request_body.snapshot_reader(false)?;
+            return consume_request_body_snapshot(reader, cap, consumer).await;
+        }
+        match request_admission(self.ctx, false) {
+            RequestAdmission::PassThrough => Ok(0),
+            RequestAdmission::Refuse(status) => {
+                self.ctx.record_error(status);
+                Err(BodyReadError::NotBuffered)
+            }
+            RequestAdmission::Buffer => {
+                let len =
+                    capture_request_body_core_with_consumer(self.inner.as_mut(), self.ctx, max_bytes, Some(consumer))
+                        .await?;
+                self.ctx.request_body.freeze_mutation();
+                Ok(len)
+            }
         }
     }
 

@@ -191,9 +191,9 @@ fn thirty_two_subscribers_share_one_scan_per_stage_in_both_modes() {
         let runtime = RuntimeLimits::default();
         let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
         let mut sink = collector(&generation, &mut tx, runtime, mode, ResultLimits::default());
-        assert_eq!(sink.dispatch.cache.scanned.capacity(), 1);
+        assert_eq!(sink.state.dispatch.cache.scanned.capacity(), 1);
         feed(&mut sink, br#"{"a":"SAFE","b":"safe"}"#, 9);
-        assert_eq!(sink.dispatch.cache.scans, 3);
+        assert_eq!(sink.state.dispatch.cache.scans, 3);
         assert_eq!(sink.usage().live_outcomes, 0);
         assert_eq!(sink.usage().live_changes, 1);
     }
@@ -226,12 +226,12 @@ fn capture_only_and_mixed_profiles_use_compiled_matcher_cache_bound() {
             let runtime = RuntimeLimits::default();
             let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
             let mut sink = collector(&generation, &mut tx, runtime, mode, ResultLimits::default());
-            let capacity = sink.dispatch.cache.scanned.capacity();
+            let capacity = sink.state.dispatch.cache.scanned.capacity();
             assert_eq!(capacity, expected);
             feed(&mut sink, br#"{"x":"FIRST third a","y":"safe"}"#, 9);
-            assert_eq!(sink.dispatch.cache.scanned.capacity(), capacity);
-            assert!(sink.dispatch.cache.scanned.len() <= expected);
-            assert_eq!(sink.dispatch.cache.scans == 0, expected == 0);
+            assert_eq!(sink.state.dispatch.cache.scanned.capacity(), capacity);
+            assert!(sink.state.dispatch.cache.scanned.len() <= expected);
+            assert_eq!(sink.state.dispatch.cache.scans == 0, expected == 0);
         }
     }
 }
@@ -705,7 +705,7 @@ fn invalid_matcher_range_never_publishes_scan_completion() {
 
 impl JsonCollector<'_, '_> {
     fn usage(&self) -> json_inspection::StoreUsage {
-        self.store.usage()
+        self.state.store.usage()
     }
 }
 
@@ -944,13 +944,13 @@ fn capture_builder_reuses_high_water_capacity_and_releases_on_abandon_and_eos() 
         EvaluationMode::Accelerated,
         ResultLimits::default(),
     );
-    assert_eq!(sink.captures.bytes().unwrap(), 0);
+    assert_eq!(sink.state.captures.bytes().unwrap(), 0);
     let scope = measurements::start();
     for (name, value) in [(b"json.a".as_slice(), b"miss".as_slice()), (b"json.b", b"hithithit")] {
         sink.collect_scalar(name, value, JsonScalarKind::String).unwrap();
     }
-    let capacity = sink.captures.builder.entries.capacity();
-    let pointer = sink.captures.builder.entries.as_ptr();
+    let capacity = sink.state.captures.builder.entries.capacity();
+    let pointer = sink.state.captures.builder.entries.as_ptr();
     assert!(capacity >= 7);
     for (name, value) in [
         (b"json.c".as_slice(), b"hit".as_slice()),
@@ -958,15 +958,15 @@ fn capture_builder_reuses_high_water_capacity_and_releases_on_abandon_and_eos() 
         (b"json.e", b"hit"),
     ] {
         sink.collect_scalar(name, value, JsonScalarKind::String).unwrap();
-        assert_eq!(sink.captures.builder.entries.capacity(), capacity);
-        assert_eq!(sink.captures.builder.entries.as_ptr(), pointer);
-        assert!(sink.captures.builder.entries.is_empty());
-        assert_eq!(sink.captures.builder.semantic_bytes, 0);
-        assert_eq!(sink.captures.builder.heap_bytes, 0);
+        assert_eq!(sink.state.captures.builder.entries.capacity(), capacity);
+        assert_eq!(sink.state.captures.builder.entries.as_ptr(), pointer);
+        assert!(sink.state.captures.builder.entries.is_empty());
+        assert_eq!(sink.state.captures.builder.semantic_bytes, 0);
+        assert_eq!(sink.state.captures.builder.heap_bytes, 0);
     }
     assert_eq!(scope.counts().get(Event::TemporaryCaptureCopyBytes), 0);
     sink.abandon();
-    assert_eq!(sink.captures.bytes().unwrap(), 0);
+    assert_eq!(sink.state.captures.bytes().unwrap(), 0);
     assert_eq!(sink.usage().retained_bytes, 0);
     assert_eq!(sink.into_abandoned_budget().unwrap().usage().retained_bytes, 0);
 
@@ -979,7 +979,7 @@ fn capture_builder_reuses_high_water_capacity_and_releases_on_abandon_and_eos() 
         ResultLimits::default(),
     );
     feed(&mut sink, br#"{"a":"hithithit","b":"hit"}"#, 9);
-    assert_eq!(sink.captures.bytes().unwrap(), 0);
+    assert_eq!(sink.state.captures.bytes().unwrap(), 0);
     assert_eq!(sink.into_sealed().unwrap().0.summary.argument_count, 2);
 }
 
@@ -995,10 +995,10 @@ fn capture_keys_reject_foreign_generation_and_invalid_named_references() {
         EvaluationMode::Accelerated,
         ResultLimits::default(),
     );
-    sink.captures.generation = &other;
+    sink.state.captures.generation = GenerationHandle::Borrowed(&other);
     assert!(sink.scalar(b"json.a", b"hit", JsonScalarKind::String).is_err());
     assert_eq!(sink.failure(), Some(CollectorError::State));
-    assert!(sink.captures.builder.entries.is_empty());
+    assert!(sink.state.captures.builder.entries.is_empty());
     for key in [
         JsonCaptureKey::Named { program: 1, group: 1 },
         JsonCaptureKey::Named { program: 0, group: 0 },
@@ -1042,15 +1042,15 @@ fn capture_builder_clears_after_partial_store_transfer_failure() {
     assert!(sink.scalar(b"json.a", b"hithithit", JsonScalarKind::String).is_err());
     assert_eq!(sink.failure(), Some(CollectorError::Store(StoreError::Records)));
     assert!(scope.counts().get(Event::CaptureCopyBytes) >= 5);
-    assert!(sink.captures.builder.entries.is_empty());
-    assert_eq!(sink.captures.builder.semantic_bytes, 0);
-    assert_eq!(sink.captures.builder.heap_bytes, 0);
-    assert!(sink.captures.bytes().unwrap() > 0);
+    assert!(sink.state.captures.builder.entries.is_empty());
+    assert_eq!(sink.state.captures.builder.semantic_bytes, 0);
+    assert_eq!(sink.state.captures.builder.heap_bytes, 0);
+    assert!(sink.state.captures.bytes().unwrap() > 0);
     assert_eq!(sink.usage().live_captures, 0);
     assert!(sink.scalar(b"json.b", b"hit", JsonScalarKind::String).is_err());
     assert_eq!(sink.failure(), Some(CollectorError::Store(StoreError::Records)));
     sink.abandon();
-    assert_eq!(sink.captures.bytes().unwrap(), 0);
+    assert_eq!(sink.state.captures.bytes().unwrap(), 0);
     assert_eq!(sink.usage().retained_bytes, 0);
 }
 
@@ -1072,12 +1072,12 @@ fn transform_growth_reads_capture_capacity_created_after_profile_construction() 
         .unwrap();
     let mut groups = [GroupRun { id: 0, terminal: false }];
     let mut observer = ProfileObserver {
-        fixed_scratch: sink.dispatch.bytes().unwrap(),
-        store: &mut sink.store,
+        fixed_scratch: sink.state.dispatch.bytes().unwrap(),
+        store: &mut sink.state.store,
         context: &mut sink.context,
         groups: &mut groups,
-        cache: &mut sink.dispatch.cache,
-        captures: &mut sink.captures,
+        cache: &mut sink.state.dispatch.cache,
+        captures: &mut sink.state.captures,
         candidate,
         profile: 0,
         runtime,

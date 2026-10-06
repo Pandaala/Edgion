@@ -24,7 +24,7 @@ use super::super::transform::{
 use super::{CollectionKind, CompiledGeneration, Phase};
 
 pub use json_inspection::ResultLimits as JsonResultLimits;
-pub use json_inspection_runtime::{JsonInspectionLimits, JsonResultLimit};
+pub use json_inspection_runtime::{JsonInspectionLimits, JsonInspectionSession, JsonInspectionUsage, JsonResultLimit};
 
 pub const DEFAULT_MAX_RUNTIME_INPUT_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_MAX_RUNTIME_HEADERS: usize = 1_024;

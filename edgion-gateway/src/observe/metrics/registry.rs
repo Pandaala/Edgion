@@ -619,8 +619,8 @@ pub fn adjust_waf_generation_bytes(delta: i64) {
     }
 }
 
-/// Adjust request-owned WAF runtime memory. The request context owns the
-/// symmetric lifetime and refreshes the charge when scratch grows.
+/// Adjust logical WAF transaction/scratch charge and known provisional JSON
+/// capacities with symmetric ownership. Excludes body storage and RSS.
 pub fn adjust_waf_runtime_bytes_active(delta: i64) {
     let metric = gauge!(names::WAF_RUNTIME_BYTES_ACTIVE);
     if delta >= 0 {
@@ -630,7 +630,7 @@ pub fn adjust_waf_runtime_bytes_active(delta: i64) {
     }
 }
 
-/// Record bytes inspected by the streamed WAF body path.
+/// Record request source admitted once by prefix, Full, or JSON lexer inspection.
 pub fn record_waf_body_bytes_inspected(direction: &'static str, bytes: usize) {
     counter!(names::WAF_BODY_BYTES_INSPECTED_TOTAL, "direction" => direction)
         .increment(u64::try_from(bytes).unwrap_or(u64::MAX));

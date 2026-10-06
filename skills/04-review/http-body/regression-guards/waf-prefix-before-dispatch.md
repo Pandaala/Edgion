@@ -73,28 +73,37 @@ registered request-body buffer and request relay contracts.
 
 ## Verification and re-evaluation
 
-### Explicit full JSON snapshot adapter
+### Full JSON capture-chunk inspection
 
-Optional `requestBody.json` is accepted only with full inspection and requires
-explicit independent lexical/document/plan/fact limits. It attempts engine JSON
-admission after Phase 1; only initial `Unsupported` can choose ordinary complete
-publication. Resource errors or any post-admission error never choose fallback.
-Canonical capture still uses the EGC physical cap. Recheck cached length, immutable
-reader length and accumulated input, because `ensure_request_body`'s cached branch
-does not enforce its optional cap. Source and canonical WAF caps remain independent.
+The effective JSON processor after Phase 1 selects the native fused checker;
+configuration defaults provide independent lexical/structure/result budgets.
+Unsupported demands fail admission without a DOM fallback. The conservative
+reserved StreamingStructured classifier is not promoted by this entry.
 
-Transport bodyless knowledge comes only from the immutable request snapshot, not
-live headers or zero length. `Complete` follows actual reader `None` with exact
-length parity, never a reached byte count. All snapshot reads and final decisions
-are awaited before `GoodNext`. Reader errors abandon provisional state; cancellation
-drops the local transaction and reader. The existing full-mode replay, retry and
-later mutation policy remains unchanged. The installed-transaction runtime gauge
-still reports canonical logical accounting and excludes provisional JSON capacity.
-The inspected-body byte counter's existing emit site remains prefix-only; full
-and JSON snapshot observations remain an explicit task 06 gate.
+Fresh capture feeds borrowed chunks from the canonical downstream loop. Cached
+sources feed bounded immutable snapshot chunks after pre-IO size admission.
+Transport bodyless knowledge comes from the immutable request snapshot. Completion
+requires real transport/reader None and exact length parity, followed by the
+original complete-source BodyAccounting prelude. Reached length alone is not EOF.
+Inspection failures latch and stop grammar work while bounded capture continues;
+transport/storage/capture and complete-source admission retain their priority.
 
-Fresh continuation verification is tracked in `tasks/waf-todo/05-gateway-hybrid-request-body-path.md`;
-historical prefix test results below do not prove JSON wire or performance acceptance.
+The scoped guard seals selected facts and then the canonical Phase 2 schedule
+runs before GoodNext. Canonical BodyStorage preserves forwarding/retry; JSON-only
+spill uses no complete materialization. Forced raw visibility or DetectionOnly
+syntax fallback can require one canonical read. Body version freezes for inspection;
+reader errors and cancellation drop provisional state and its symmetric charge.
+
+The existing runtime gauge temporarily includes known current parser/result
+capacities plus logical TX charge; it hands off once to installed transaction
+accounting. It is not RSS or total physical memory. JSON inspected-byte deltas
+come from lexer-admitted source; Full non-JSON records submitted bytes once and
+prefix retains its current accounting. No replay/per-rule byte multiplication.
+The phase execution timer still excludes body capture and parser publication.
+
+Current validation is tracked in
+[plan 16](../../../../tasks/waf-todo/16-json-capture-wiring-and-closure.md).
+Historical prefix evidence below does not prove current JSON timing or wire gates.
 
 Prefix rules execute lazily in the canonical phase schedule. An enforced deny
 ends evaluation immediately; unreachable rules cannot replace that decision

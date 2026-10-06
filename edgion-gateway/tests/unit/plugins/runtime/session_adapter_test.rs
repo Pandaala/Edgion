@@ -1,5 +1,87 @@
 use super::*;
 
+struct ConsumerSnapshot {
+    len: u64,
+    chunks: std::collections::VecDeque<Result<Bytes, BodyReadError>>,
+    reads: Arc<std::sync::atomic::AtomicUsize>,
+}
+#[async_trait]
+impl RequestBodySnapshotReader for ConsumerSnapshot {
+    fn len(&self) -> u64 {
+        self.len
+    }
+    async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.chunks.pop_front().transpose()
+    }
+}
+struct CollectChunks(Vec<u8>);
+impl RequestBodyChunkConsumer for CollectChunks {
+    fn consume(&mut self, chunk: &[u8]) {
+        self.0.extend_from_slice(chunk);
+    }
+}
+
+#[tokio::test]
+async fn captured_snapshot_consumer_requires_real_eof_exact_parity_and_admission() {
+    for (len, cap, chunks, expected, delivered, expected_reads) in [
+        (
+            3,
+            3,
+            vec![Ok(Bytes::from_static(b"a")), Ok(Bytes::from_static(b"bc"))],
+            Ok(3),
+            b"abc".as_slice(),
+            3,
+        ),
+        (
+            3,
+            2,
+            vec![Ok(Bytes::from_static(b"abc"))],
+            Err(BodyReadError::BufferLimitExceeded { limit: 2 }),
+            b"".as_slice(),
+            0,
+        ),
+        (
+            3,
+            3,
+            vec![Ok(Bytes::from_static(b"ab"))],
+            Err(BodyReadError::Incomplete),
+            b"ab".as_slice(),
+            2,
+        ),
+        (
+            2,
+            4,
+            vec![Ok(Bytes::from_static(b"abc"))],
+            Err(BodyReadError::Incomplete),
+            b"".as_slice(),
+            1,
+        ),
+        (
+            3,
+            3,
+            vec![Ok(Bytes::from_static(b"abc")), Err(BodyReadError::Timeout)],
+            Err(BodyReadError::Timeout),
+            b"abc".as_slice(),
+            2,
+        ),
+    ] {
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reader = ConsumerSnapshot {
+            len,
+            chunks: chunks.into(),
+            reads: Arc::clone(&reads),
+        };
+        let mut consumer = CollectChunks(Vec::new());
+        assert_eq!(
+            consume_request_body_snapshot(Box::new(reader), cap, &mut consumer).await,
+            expected
+        );
+        assert_eq!(consumer.0, delivered);
+        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), expected_reads);
+    }
+}
+
 #[tokio::test]
 async fn stripping_query_credential_preserves_absolute_request_target() {
     use tokio::io::AsyncWriteExt;
