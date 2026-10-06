@@ -22,6 +22,7 @@ The `tasks/` layout has two independent axes:
 **Lifecycle axis** — tracks active work:
 - `tasks/todo/` — ideas / not yet started
 - `tasks/pending/` — work in progress or pending start
+- `tasks/block/` — work blocked on an external prerequisite; record the blocker and resume conditions near the front of the main task file
 - `tasks/long-term-todo/` — deferred product bets outside the current API Gateway / AI Gateway scope. Keep them here so they stay visible without looking like near-term work. Do not pick one up through `/fix-issue-cn` or ordinary feature implementation until the user explicitly authorizes it.
 - Acceptance happens via a GitHub PR. There is no separate `done/` directory; completed work is archived by git history once the branch is merged.
 

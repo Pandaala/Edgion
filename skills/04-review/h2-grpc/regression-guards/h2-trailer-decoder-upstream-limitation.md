@@ -76,8 +76,7 @@ minimum supported and current dependency resolutions.
 
 ## Reference Cases
 
-- `tasks/todo/pingora-h2-end-stream-watch-simplification/04-h2-decoder-remedy.md`
-- `tasks/todo/pingora-h2-end-stream-watch-simplification/06-decisions.md`
+- `tasks/block/pingora-h2-end-stream-watch-simplification.md`
 - `../pingora/edgion-changes/review/upstream-limitations.md`
 - `../pingora/edgion-changes/pending-issues/h2-trailer-validation.md`
 
