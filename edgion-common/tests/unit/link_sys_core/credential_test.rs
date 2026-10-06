@@ -248,9 +248,8 @@ fn resolved_state_no_auth_is_not_required() {
 // ------------------------------------------------------------
 
 fn mk_webhook_linksys() -> LinkSys {
-    use edgion_resources::resources::link_sys::webhook::{
-        ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
-    };
+    use edgion_resources::resources::common::{ExternalHttpConnection, WebhookServiceRef, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
     LinkSys {
         metadata: ObjectMeta {
             name: Some("wh".into()),

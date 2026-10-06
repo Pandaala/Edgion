@@ -6,30 +6,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::common::SecretSlot;
-
-// Re-export types moved to common::external_http so that existing callers using
-// `link_sys::webhook::{WebhookTarget, WebhookRetry, ExternalHttpConnection, …}` continue to compile.
-pub use crate::resources::common::external_http::{
-    validate_connection_target, validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff,
-    PassiveHealthCheck, TargetKind, WebhookHealthCheck, WebhookRateLimit, WebhookRetry, WebhookServiceRef,
-    WebhookTarget,
-};
-
-// Re-export the shared outbound-request types so that existing callers using
-// `link_sys::webhook::{ListFields, CustomField, ...}` continue to compile.
-pub use crate::resources::common::outbound_request::{
-    BodySpec, CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec,
-    PresencePolicy,
-};
-
-// Re-export ResolvedSecrets so existing callers using
-// `link_sys::webhook::ResolvedSecrets` continue to compile.
-pub use crate::resources::common::external_http::ResolvedSecrets;
-
-/// Backward-compatibility alias: webhook code historically used `WebhookOutboundRequest`;
-/// downstream crates importing from `link_sys::webhook` still compile unchanged.
-pub type WebhookOutboundRequest = OutboundRequestSpec;
+use crate::resources::common::{ExternalHttpConnection, ListFields, OutboundRequestSpec, ResolvedSecrets, SecretSlot};
 
 // ============================================================
 // WebhookAuth — authentication configuration

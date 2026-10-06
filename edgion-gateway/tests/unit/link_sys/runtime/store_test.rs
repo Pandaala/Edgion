@@ -14,9 +14,8 @@ fn create_test_webhook_linksys(namespace: &str, name: &str) -> LinkSys {
 }
 
 fn create_test_webhook_linksys_with_port(namespace: &str, name: &str, port: i32) -> LinkSys {
-    use edgion_resources::resources::link_sys::webhook::{
-        ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
-    };
+    use edgion_resources::resources::common::{ExternalHttpConnection, WebhookServiceRef, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
     use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
     LinkSys {
@@ -349,13 +348,12 @@ fn create_otlp_linksys(namespace: &str, name: &str, auth: InjectedSecret) -> Lin
 
 #[test]
 fn webhook_with_unresolved_secret_ref_is_not_ready() {
-    use edgion_resources::resources::link_sys::webhook::{
-        CustomField, CustomSource, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
-    };
+    use edgion_resources::resources::common::{CustomField, CustomSource, ListFields, OutboundRequestSpec};
+    use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
     let mut config = WebhookServiceConfig::default();
     config.conn.target.service.name = Some("svc".to_string());
     config.conn.target.service.port = Some(8080);
-    config.request = WebhookOutboundRequest {
+    config.request = OutboundRequestSpec {
         headers: ListFields {
             origin: vec![],
             custom: vec![CustomField {

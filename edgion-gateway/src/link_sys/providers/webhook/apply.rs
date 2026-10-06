@@ -1,6 +1,6 @@
 //! Webhook fingerprint so equal-runtime relists skip prepare/commit.
 
-use edgion_resources::resources::link_sys::webhook::ResolvedSecrets;
+use edgion_resources::resources::common::ResolvedSecrets;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
 use crate::link_sys::runtime::apply::{hash_tls_material, FingerprintHasher, RuntimeFingerprint};

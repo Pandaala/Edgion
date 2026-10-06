@@ -1172,9 +1172,8 @@ async fn test_spec_serde_round_trip_preserves_secret() {
 /// no longer embeds them or registers wakeup dependencies.
 #[tokio::test]
 async fn webhook_service_target_registers_no_service_ref() {
-    use edgion_resources::resources::link_sys::webhook::{
-        ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
-    };
+    use edgion_resources::resources::common::{ExternalHttpConnection, WebhookServiceRef, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 
     let (ctx, _runtime) = make_ctx(HashMap::new());
     let owner = ResourceRef::new(ResourceKind::LinkSys, Some("ns".to_string()), "websvc".to_string());
@@ -1212,10 +1211,11 @@ async fn webhook_service_target_registers_no_service_ref() {
 /// populates `resolved_secrets` with the decoded value.
 #[tokio::test]
 async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
-    use edgion_resources::resources::link_sys::webhook::{
-        CustomField, CustomSource, ExternalHttpConnection, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
-        WebhookServiceRef, WebhookTarget,
+    use edgion_resources::resources::common::{
+        CustomField, CustomSource, ExternalHttpConnection, ListFields, OutboundRequestSpec, WebhookServiceRef,
+        WebhookTarget,
     };
+    use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 
     // Secret: namespace="edgion-default", name="wh-tok", key="token" -> "my-secret-token"
     let (secret_key, secret) = make_secret("edgion-default", "wh-tok", &[("token", b"my-secret-token")]);
@@ -1246,7 +1246,7 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
                     },
                     ..Default::default()
                 },
-                request: WebhookOutboundRequest {
+                request: OutboundRequestSpec {
                     headers: ListFields {
                         custom: vec![CustomField {
                             name: "Authorization".to_string(),
@@ -1295,10 +1295,11 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
 /// resolved_secrets as None (fail-closed).
 #[tokio::test]
 async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
-    use edgion_resources::resources::link_sys::webhook::{
-        CustomField, CustomSource, ExternalHttpConnection, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
-        WebhookServiceRef, WebhookTarget,
+    use edgion_resources::resources::common::{
+        CustomField, CustomSource, ExternalHttpConnection, ListFields, OutboundRequestSpec, WebhookServiceRef,
+        WebhookTarget,
     };
+    use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 
     // No secrets in the store — the referenced secret does not exist.
     let (ctx, _runtime) = make_ctx(HashMap::new());
@@ -1328,7 +1329,7 @@ async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
                     },
                     ..Default::default()
                 },
-                request: WebhookOutboundRequest {
+                request: OutboundRequestSpec {
                     headers: ListFields {
                         custom: vec![CustomField {
                             name: "Authorization".to_string(),

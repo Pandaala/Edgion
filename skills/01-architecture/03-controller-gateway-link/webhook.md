@@ -175,11 +175,11 @@ Migration map:
 ## Module map
 
 ```
-edgion-resources/src/resources/link_sys/webhook.rs   # WebhookServiceConfig, WebhookTarget,
-                                                      #   WebhookOutboundRequest, PathSpec, MethodSpec,
-                                                      #   ListFields, OriginField, PresencePolicy,
-                                                      #   CustomField, CustomSource, ResolvedSecrets,
-                                                      #   validate_config / validate_request_fields
+edgion-resources/src/resources/link_sys/webhook.rs   # WebhookServiceConfig, request validation
+edgion-resources/src/resources/common/
+├── external_http.rs    # ExternalHttpConnection, WebhookTarget, ResolvedSecrets
+└── outbound_request.rs # OutboundRequestSpec, PathSpec, MethodSpec, ListFields,
+                        #   OriginField, PresencePolicy, CustomField, CustomSource
 edgion-resources/src/resources/edgion_plugins/
     plugin_configs/webhook_key_get.rs                # WebhookKeyGetConfig / WebhookVar / WebhookExtract
 edgion-gateway/src/link_sys/providers/webhook/

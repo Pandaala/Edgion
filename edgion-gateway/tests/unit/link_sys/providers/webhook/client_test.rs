@@ -3,8 +3,8 @@ use std::sync::atomic::Ordering;
 
 use crate::plugins::http::common::outbound::target::ResolvedTarget;
 use edgion_resources::resources::common::WebhookTarget;
-use edgion_resources::resources::link_sys::webhook::{
-    ExternalHttpConnection, MethodSpec, PathSpec, WebhookOutboundRequest, WebhookServiceRef,
+use edgion_resources::resources::common::{
+    ExternalHttpConnection, MethodSpec, OutboundRequestSpec, PathSpec, WebhookServiceRef,
 };
 
 fn config() -> WebhookServiceConfig {
@@ -105,7 +105,7 @@ fn replacement_has_fresh_health_and_carries_resolved_secrets() {
     first.client.health.healthy.store(false, Ordering::Relaxed);
     first.client.health.passive_failures.store(5, Ordering::Relaxed);
     let mut cfg = config();
-    cfg.request = WebhookOutboundRequest {
+    cfg.request = OutboundRequestSpec {
         method: Some(MethodSpec {
             template: "POST".into(),
         }),

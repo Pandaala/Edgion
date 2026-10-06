@@ -1,5 +1,6 @@
 //! Unit tests for `webhook.rs` (see `super`).
 use super::*;
+use crate::resources::common::{validate_webhook_target, CustomField, CustomSource, PassiveHealthCheck, WebhookTarget};
 
 #[test]
 fn test_default_config() {

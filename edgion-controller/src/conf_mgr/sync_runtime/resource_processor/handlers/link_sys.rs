@@ -23,8 +23,8 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::credentials::{ResolveError, SecretMaterialResolver};
 use edgion_resources::prelude_resources::LinkSys;
+use edgion_resources::resources::common::ResolvedSecrets;
 use edgion_resources::resources::common::SecretObjectReference;
-use edgion_resources::resources::link_sys::webhook::ResolvedSecrets;
 use edgion_resources::resources::link_sys::{
     CredentialSourceConfig, CredentialSourceProvider, LinkSysStatus, SystemConfig,
 };

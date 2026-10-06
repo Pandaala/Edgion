@@ -1,4 +1,5 @@
 use super::*;
+use crate::resources::common::{CustomField, CustomSource, MethodSpec, OriginField, PathSpec, PresencePolicy};
 
 #[test]
 fn test_webhook_outbound_request_all_origin() {
@@ -15,7 +16,7 @@ cookies:
   origin:
     - name: session_id
 "#;
-    let request: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+    let request: OutboundRequestSpec = serde_yaml::from_str(yaml_str).expect("deserialize");
     assert_eq!(request.args.origin.len(), 2);
     assert_eq!(request.headers.origin.len(), 1);
     assert_eq!(request.cookies.origin.len(), 1);
@@ -33,7 +34,7 @@ method:
 args: {}
 headers: {}
 "#;
-    let request: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+    let request: OutboundRequestSpec = serde_yaml::from_str(yaml_str).expect("deserialize");
     assert!(request.path.is_some());
     assert_eq!(request.path.as_ref().unwrap().template, "/webhook/${ctx:action}");
     assert!(request.path.as_ref().unwrap().allow_override);
@@ -125,7 +126,7 @@ headers:
     - name: Authorization
       template: "Bearer ${secretRef:edgion-default/webhook-token:token}"
 "#;
-    let request: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+    let request: OutboundRequestSpec = serde_yaml::from_str(yaml_str).expect("deserialize");
     assert!(request.path.is_some());
     assert!(request.method.is_some());
     assert!(request.path.as_ref().unwrap().allow_override);
@@ -168,7 +169,7 @@ path:
   template: "/webhook"
 unknownField: value
 "#;
-    let result: Result<WebhookOutboundRequest, _> = serde_yaml::from_str(yaml_str);
+    let result: Result<OutboundRequestSpec, _> = serde_yaml::from_str(yaml_str);
     assert!(result.is_err());
 }
 
@@ -285,7 +286,7 @@ headers:
     - name: Authorization
       template: "Bearer ${secretRef:edgion-system/tok:token}"
 "#;
-    let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+    let req: OutboundRequestSpec = serde_yaml::from_str(yaml_str).expect("deserialize");
     let cfg = WebhookServiceConfig {
         request: req,
         ..valid_base_config()
@@ -303,7 +304,7 @@ headers:
     - name: Authorization
       template: "Bearer ${secretRef:edgion-system/tok:token}"
 "#;
-    let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+    let req: OutboundRequestSpec = serde_yaml::from_str(yaml_str).expect("deserialize");
     let cfg = WebhookServiceConfig {
         request: req,
         ..valid_base_config()
@@ -323,7 +324,7 @@ headers:
     - name: Authorization
       template: "Bearer ${secretRef:tok:token}"
 "#;
-    let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+    let req: OutboundRequestSpec = serde_yaml::from_str(yaml_str).expect("deserialize");
     let cfg = WebhookServiceConfig {
         request: req,
         ..valid_base_config()
@@ -383,7 +384,7 @@ body:
   type: json
   template: '{"token": "${secretRef:prod/webhook:token}"}'
 "#;
-    let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+    let req: OutboundRequestSpec = serde_yaml::from_str(yaml_str).expect("deserialize");
     let cfg = WebhookServiceConfig {
         request: req,
         ..valid_base_config()
@@ -400,7 +401,7 @@ body:
     - name: token
       template: "${secretRef:prod/webhook:token}"
 "#;
-    let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+    let req: OutboundRequestSpec = serde_yaml::from_str(yaml_str).expect("deserialize");
     let cfg = WebhookServiceConfig {
         request: req,
         ..valid_base_config()
@@ -416,7 +417,7 @@ body:
   type: json
   template: '{"token": "${secretRef:tok:token}"}'
 "#;
-    let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+    let req: OutboundRequestSpec = serde_yaml::from_str(yaml_str).expect("deserialize");
     let cfg = WebhookServiceConfig {
         request: req,
         ..valid_base_config()
@@ -434,7 +435,7 @@ body:
   type: json
   template: '{"token": "${secretRef:prod/webhook:token}"}'
 "#;
-    let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+    let req: OutboundRequestSpec = serde_yaml::from_str(yaml_str).expect("deserialize");
     let cfg = WebhookServiceConfig {
         request: req,
         ..valid_base_config()

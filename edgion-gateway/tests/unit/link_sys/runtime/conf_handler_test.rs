@@ -1,7 +1,6 @@
 use super::*;
-use edgion_resources::resources::link_sys::webhook::{
-    ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
-};
+use edgion_resources::resources::common::{ExternalHttpConnection, WebhookServiceRef, WebhookTarget};
+use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
 fn create_test_linksys(namespace: &str, name: &str) -> LinkSys {

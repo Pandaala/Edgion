@@ -1,7 +1,7 @@
 use crate::conf_sync::{ConfigSyncServer, ServerCache};
 use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use edgion_resources::redact::AdminRedactGuard;
-use edgion_resources::resources::link_sys::webhook::ResolvedSecrets;
+use edgion_resources::resources::common::ResolvedSecrets;
 use edgion_resources::resources::link_sys::{LinkSys, LinkSysSpec, SystemConfig, WebhookServiceConfig};
 use kube::api::ObjectMeta;
 use std::collections::BTreeMap;
