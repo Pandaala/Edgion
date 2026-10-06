@@ -88,6 +88,11 @@ nested-JSON adapters require explicit source ownership and aggregate limits.
 
 ## Verification and re-evaluation
 
+The historical `tasks/pending/waf-json-checker/` task tree has been removed.
+The filenames below identify its original records, which are no longer available
+in the working tree. Remaining WAF work is tracked in the
+[current execution queue](../../../../tasks/waf-todo/README.md).
+
 C1 independent review approved the replacement and legacy assertion mapping;
 508 WAF library tests passed with two existing ignored cases, and API 4/4 passed.
 C2 independent reruns passed resource WAF 25/25, CRD 1/1 and Gateway WAF 24/24;
@@ -97,7 +102,7 @@ The configured native CRS profile passed 4,741 admitted stages, including 896
 negative stages, after matching the upstream FTW XML-attribute test opt-in.
 This is not full-CRS compatibility or production throughput evidence. Scoped
 release measurements and their substantial remaining allocation costs were
-recorded in [the initial results](../../../../tasks/pending/waf-json-checker/13-results.md).
+recorded in the historical initial results (`13-results.md`).
 That historical measurement is not fresh evidence.
 
 Re-evaluate when selector admissibility, duplicate ordering, transformation
@@ -106,10 +111,10 @@ materialization changes. Preserve the mirrored checker/collector/runtime tests
 and Gateway completeness, one-read, source-lifetime and error-classification
 regressions.
 
-The unified follow-up design and review gates are recorded in
-[the optimization specification](../../../../tasks/pending/waf-json-checker/15-optimization-spec.md).
-Current allocation follow-up is tracked in
-[the capture/query plan](../../../../tasks/pending/waf-json-checker/21-capture-query-and-transaction-plan.md).
+The unified follow-up design and review gates were recorded in the historical
+optimization specification (`15-optimization-spec.md`).
+The allocation follow-up was recorded in the historical capture/query plan
+(`21-capture-query-and-transaction-plan.md`).
 Re-evaluate physical capacity/work thresholds when inline sizes, retained scratch,
 shared outcome destruction or broad dispatch ordering changes. Preserve successful
 semantic results, strict charged limits and terminal failure behavior; do not infer
@@ -128,17 +133,16 @@ and scoped arena lifetime remain mandatory; these IDs are not persistent sink
 receipts. Key offsets/public limits remain usize. Growth admission uses actual
 Member/Frame size, including when layout changes reduce physical work or heap use.
 
-The sealed-value follow-up and scoped verification are recorded in
-[the shared replay results](../../../../tasks/pending/waf-json-checker/18-shared-replay-results.md).
+The sealed-value follow-up and scoped verification were recorded in the historical
+shared replay results (`18-shared-replay-results.md`).
 Re-evaluate when result arenas become mutable after publication, request publication
 can be replaced while match observers survive, or matches can escape the transaction.
 Keep shared-pointer, cross-owner/range, macro/chain/rollback and logical TX budget
 tests. Fewer allocations do not imply lower cumulative bytes for very short values.
 
 
-The allocation/scan follow-up is recorded in
-[the approved plan](../../../../tasks/pending/waf-json-checker/19-allocation-and-scan-plan.md)
-and [the results](../../../../tasks/pending/waf-json-checker/20-allocation-and-scan-results.md).
+The allocation/scan follow-up was recorded in the historical approved plan
+(`19-allocation-and-scan-plan.md`) and results (`20-allocation-and-scan-results.md`).
 Member-match capacity now survives unit/chain evaluation and remains charged while
 loaned. Sparse qualified names are pooled only for surviving hits; match names,
 MATCHED_VARS keys, capture values and TX capture clones use sealed handles.
@@ -164,9 +168,9 @@ growth or scratch lifetime changes; preserve forced-cursor differential tests an
 source-local test-oracle layout exceptions.
 
 
-The capture/query follow-up is tracked in
-[the approved plan](../../../../tasks/pending/waf-json-checker/21-capture-query-and-transaction-plan.md)
-and [the results](../../../../tasks/pending/waf-json-checker/22-capture-query-and-transaction-results.md).
+The capture/query follow-up was recorded in the historical approved plan
+(`21-capture-query-and-transaction-plan.md`) and results
+(`22-capture-query-and-transaction-results.md`).
 Capture extraction uses a shared admission/enumeration helper with an owned
 ordinary policy and a JSON relative-range/fingerprint policy. Stored ranges
 resolve against the owning stored stage match, never a fabricated subrange Lease.
@@ -193,9 +197,8 @@ all-miss timing regressed across both run orders; semantic correctness alone doe
 not justify replacing this path. Capture-program interning was implemented in the
 subsequent bounded compiler round below.
 
-The subsequent borrowing/scratch work is specified in
-[the plan](../../../../tasks/pending/waf-json-checker/23-borrowing-and-scratch-plan.md)
-and [the results](../../../../tasks/pending/waf-json-checker/24-borrowing-and-scratch-results.md).
+The subsequent borrowing/scratch work was recorded in the historical plan
+(`23-borrowing-and-scratch-plan.md`) and results (`24-borrowing-and-scratch-results.md`).
 Single-match final transformation output borrows unchanged input or moves changed
 scratch; multiMatch keeps its intermediate stages. Temporary JSON capture keys
 use numeric/program-group descriptors in a reusable builder. Resolve named keys
