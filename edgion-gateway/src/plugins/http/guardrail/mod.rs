@@ -1,9 +1,3 @@
-//! Bounded unary HTTP decisions for canonical semantic AI SSE windows.
+//! Registration facade for the canonical AI semantic guard implementation.
 
-mod attached;
-mod plugin;
-mod protocol;
-mod response;
-
-pub use attached::{AttachedGuardrail, GuardrailSummary};
-pub use plugin::Guardrail;
+pub use crate::ai::guards::semantic::{AttachedGuardrail, Guardrail, GuardrailSummary};

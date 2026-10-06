@@ -45,7 +45,7 @@ Without it the signal is merely neutral rather than counted backwards, and for a
 - The `Ewma` policy records the attempt's elapsed time with no status input, so a fast 429
   also lowers the latency score.
 
-The AI path is the precedent, not the model: `edgion-gateway/src/ai/credential_outlier.rs`
+The AI path is the precedent, not the model: `edgion-gateway/src/ai/runtime/credential_outlier.rs`
 applies a bounded `Retry-After` cooldown, but its identity is `(backend key, credential alias)`
 and its mechanism is `PassiveEjectionState::open_for` — a real open/closed state, not a score.
 Endpoint-scoped scoring is a different problem and must not reuse that type.
@@ -406,7 +406,7 @@ not the algorithm. Record which, and re-run against a per-replica limit before r
   HTTP-date, returns `Some(Duration::ZERO)` for a past date, and **clamps nothing**. Every
   bound above is the caller's responsibility.
 - Credential-scoped precedent (different identity, different mechanism):
-  `edgion-gateway/src/ai/credential_outlier.rs`
+  `edgion-gateway/src/ai/runtime/credential_outlier.rs`
 - Linkerd Load Biaser: <https://github.com/linkerd/linkerd2-proxy/blob/a66af811/linkerd/load-biaser/src/lib.rs>
 - Linkerd EWMA: <https://github.com/linkerd/linkerd2-proxy/blob/a66af811/linkerd/ewma/src/lib.rs>
 - Linkerd docs (annotations and defaults): <https://linkerd.io/docs/reference/load-balancing/>

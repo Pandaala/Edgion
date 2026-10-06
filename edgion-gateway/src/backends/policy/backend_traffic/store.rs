@@ -63,7 +63,7 @@ pub struct EffectiveBackendTrafficPolicy {
     /// Exact AI credential-outlier policy generation for request capture.
     /// `None` for core Service targets.
     pub ai_credential_outlier: Option<Arc<AiCredentialOutlierBackendHandle>>,
-    pub logical_circuit_breaker: Option<Arc<crate::ai::circuit_breaker::LogicalBackendCircuitBreaker>>,
+    pub logical_circuit_breaker: Option<Arc<crate::ai::runtime::circuit_breaker::LogicalBackendCircuitBreaker>>,
 }
 
 impl std::fmt::Debug for EffectiveBackendTrafficPolicy {
@@ -442,7 +442,9 @@ impl BackendTrafficPolicyStore {
             match circuit_breaker_limit {
                 Some(limit) => match old {
                     Some(old) if old.circuit_breaker_limit == Some(limit) => old.logical_circuit_breaker.clone(),
-                    _ => Some(crate::ai::circuit_breaker::LogicalBackendCircuitBreaker::new(limit)),
+                    _ => Some(crate::ai::runtime::circuit_breaker::LogicalBackendCircuitBreaker::new(
+                        limit,
+                    )),
                 },
                 None => None,
             }

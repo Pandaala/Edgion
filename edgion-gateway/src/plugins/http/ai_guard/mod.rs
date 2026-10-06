@@ -1,8 +1,3 @@
-//! Request-side AI prompt guard.
+//! Registration facade for the canonical AI request guard implementation.
 
-mod evaluator;
-mod plugin;
-mod rules;
-mod spans;
-
-pub use plugin::AiGuard;
+pub use crate::ai::guards::request::AiGuard;

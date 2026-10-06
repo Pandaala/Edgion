@@ -14,7 +14,7 @@ former `count_all()` / `keys_all()` and `len()` methods returned the same data.
 
 ## Rationale and evidence
 
-The duplicate methods in `ai/backend_store.rs` and `ai/adaptive.rs` had no
+The duplicate methods in `ai/runtime/backend_store.rs` and `ai/routing/adaptive.rs` had no
 different scope. The Admin backend-list path and adaptive tests now use the
 remaining names; snapshot filtering and lifecycle are unchanged.
 

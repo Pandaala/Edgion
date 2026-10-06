@@ -35,8 +35,8 @@ fn ai_failure_wants_retry(
 }
 
 #[inline]
-fn ai_dispatch_should_retry<E>(decision: &Result<crate::ai::dispatch::AiRetryDecision, E>) -> bool {
-    matches!(decision, Ok(crate::ai::dispatch::AiRetryDecision::Retry))
+fn ai_dispatch_should_retry<E>(decision: &Result<crate::ai::runtime::dispatch::AiRetryDecision, E>) -> bool {
+    matches!(decision, Ok(crate::ai::runtime::dispatch::AiRetryDecision::Retry))
 }
 
 #[inline]
@@ -218,7 +218,7 @@ fn decide_retry(
         let wants_retry = ai_failure_wants_retry(failure_class, ctx.retry_configured(), retry_allow_non_idempotent);
         let gates_allow_retry = common_retry_gates
             && (failure_class == AiProxyFailureClass::BackendRequestTimeout || retry_allow_non_idempotent);
-        let decision = crate::ai::dispatch::handle_ai_transport_failure(
+        let decision = crate::ai::runtime::dispatch::handle_ai_transport_failure(
             ctx,
             wants_retry,
             gates_allow_retry,
@@ -228,15 +228,17 @@ fn decide_retry(
         if let Some(state) = ctx.ai_state_mut() {
             state.attempt_runtime.finish_failure(match failure_class {
                 AiProxyFailureClass::BackendRequestTimeout => {
-                    crate::ai::attempt_runtime::AiAttemptFailure::BackendRequestTimeout
+                    crate::ai::runtime::attempt_runtime::AiAttemptFailure::BackendRequestTimeout
                 }
                 AiProxyFailureClass::AmbiguousUpstream => {
-                    crate::ai::attempt_runtime::AiAttemptFailure::Ambiguous(crate::backends::FailureClass::LocalOrigin)
+                    crate::ai::runtime::attempt_runtime::AiAttemptFailure::Ambiguous(
+                        crate::backends::FailureClass::LocalOrigin,
+                    )
                 }
             });
         }
         match decision {
-            Ok(crate::ai::dispatch::AiRetryDecision::Retry) => {
+            Ok(crate::ai::runtime::dispatch::AiRetryDecision::Retry) => {
                 if let Some(upstream) = ctx.get_current_upstream_mut() {
                     match failure_class {
                         AiProxyFailureClass::BackendRequestTimeout => {
@@ -252,12 +254,12 @@ fn decide_retry(
                     ctx.record_error(EdgionErrorCode::BackendRequestTimeoutRetry);
                 }
             }
-            Ok(crate::ai::dispatch::AiRetryDecision::BudgetDenied) => {
+            Ok(crate::ai::runtime::dispatch::AiRetryDecision::BudgetDenied) => {
                 crate::observe::metrics::record_retry_budget_denied();
                 ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
                 return Error::explain(ErrorType::HTTPStatus(503), "AI retry budget exhausted");
             }
-            Ok(crate::ai::dispatch::AiRetryDecision::Final) | Err(_) => {}
+            Ok(crate::ai::runtime::dispatch::AiRetryDecision::Final) | Err(_) => {}
         }
         return e;
     }

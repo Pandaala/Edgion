@@ -7,6 +7,47 @@ description: edgion-gateway overall architecture — dual runtime model, configu
 
 edgion-gateway is Edgion's data plane, a high-performance reverse proxy built on Cloudflare Pingora. It receives Kubernetes-style resource configuration from the Controller via gRPC and translates it into runtime proxy behavior.
 
+## AI implementation boundary
+
+The AI data plane remains inside `edgion-gateway/src/ai/`. `ai/mod.rs` exports
+named domain types and functions; internal consumers use the canonical modules:
+
+| Module | Ownership |
+|--------|-----------|
+| `ai/context.rs` | Lazily allocated AI request state and its context methods |
+| `ai/runtime/` | Backend snapshots, proof-carrying AI selections, attempt scheduling, credential health and dispatch |
+| `ai/routing/` | Model routing, candidate eligibility and adaptive selection |
+| `ai/accounting/` | Usage observation and terminal attempt/usage/quota settlement |
+| `ai/quota/` | AI quota compilation, admission and runtime accounting |
+| `ai/protocols/` | Shared AI JSON spans and existing OpenAI wire/event/error helpers |
+| `ai/conversion/chat_to_anthropic/` | Existing OpenAI Chat Completions to/from Anthropic Messages conversion, not native Messages ingress |
+| `ai/connectors/` | Existing provider URI, host and credential/version header preparation |
+| `ai/http/` | AI proxy implementation, provider cooldown handling and HTTP lifecycle integration |
+| `ai/guards/` | Request guard and semantic response Guardrail implementations |
+
+`plugins/http/{ai_proxy,ai_guard,guardrail}/mod.rs` are registration facades for
+these implementations. `ctx.rs` retains `Option<Box<AiHttpState>>`, initialized
+to `None`; ordinary HTTP requests do not construct AI state. Shared response
+processors use `response/driver.rs` and `response/terminal.rs`, including ExtProc.
+The single driver preserves AI, semantic and ordinary processor order, execution
+leases, cancellation cleanup and trailer ownership. OpenAI terminal event rendering
+stays in `ai/protocols/openai/terminal.rs`.
+
+Generic proxy callbacks retain transport and retry control flow. The universal
+logging callback invokes AI settlement at its existing position: active attempt
+finalization, immutable usage summary/token metrics, then business quota settlement.
+Guardrail summary cleanup remains at its later original position before access-log
+assembly. Provider response cooldown and endpoint/auth preparation execute at their
+original callback positions through AI helpers; this boundary adds no second client,
+body cache, response aggregation or request-path wrapper.
+
+Logical backend identities, shared backend policy/retry budgets, BodyStorage, the
+SSE decoder/RawWindow, clients/TLS/egress/DNS, Redis limiter, key extraction,
+conditions and observability retain their canonical shared owners. The refactor
+introduces no provider support or new wire behavior. Native Responses, Messages,
+Gemini and Bedrock support and the separately tracked response-retention fixes
+remain pending product tasks.
+
 ## Canonical SSE substrate
 
 `edgion-gateway/src/sse/` is the only production SSE framing and semantic

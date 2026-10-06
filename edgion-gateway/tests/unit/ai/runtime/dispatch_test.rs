@@ -1,0 +1,876 @@
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+use super::*;
+use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials};
+use crate::ai::{
+    AiBackendStore, AiCandidateModel, AiPlanCandidate, ReadyAiAttemptPlan, RuntimeAiBackend, RuntimeAiCredential,
+    RuntimeAiCredentialPool, RuntimeAiEndpoint,
+};
+use crate::backends::policy::backend_traffic::{EffectiveBackendTrafficPolicy, RetryBudget};
+use crate::plugins::PluginRuntime;
+use crate::routes::http::match_unit::{CompiledBackend, HttpRouteRuleUnit, MatchSpecificity};
+use crate::{MatchInfo, Rsc};
+use edgion_resources::resources::common::RefDenied;
+use edgion_resources::resources::edgion_backend::AiCredentialLimits;
+use edgion_resources::resources::edgion_backend_traffic_policy::{BudgetDetails, RetryConstraintConfig};
+use edgion_resources::resources::edgion_plugins::{AiBackendSelection, OnRedisFailure};
+use edgion_resources::{HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule, ParsedRouteTimeouts, RouteTimeout};
+use std::time::{Duration, Instant};
+use tokio::io::AsyncWriteExt;
+
+fn candidate_scheduler() -> AttemptScheduler {
+    let mut scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &[1] }], 0).unwrap();
+    scheduler.select_backend(0).unwrap();
+    scheduler.select_credential(1, 0).unwrap();
+    scheduler
+}
+
+fn candidate_plan() -> ReadyAiAttemptPlan {
+    ReadyAiAttemptPlan {
+        canonical_openai_body: Bytes::from_static(br#"{"model":"logical"}"#),
+        canonical_path: "/v1/chat/completions".to_string(),
+        canonical_query: Some("trace=1".to_string()),
+        logical_model: "logical".to_string(),
+        requested_streaming: false,
+        inject_usage_tracking: true,
+        input_chars: 19,
+        selection: AiBackendSelection::Weighted,
+        selection_sequence: 0,
+        candidates: Vec::new(),
+        scheduler: candidate_scheduler(),
+        retry_cap_initialized: true,
+        backend_snapshot: AiBackendStore::new().snapshot(),
+        quota: None,
+        quota_status: None,
+        terminate_on_over_limit: false,
+    }
+}
+
+fn candidate_plan_with_retries(retries: u8) -> ReadyAiAttemptPlan {
+    let mut plan = candidate_plan();
+    plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &[1, 1] }], retries).unwrap();
+    plan.scheduler.select_backend(0).unwrap();
+    plan.scheduler.select_credential(u16::MAX, 0).unwrap();
+    plan
+}
+
+fn retry_policy(percent: u8) -> (Arc<EffectiveBackendTrafficPolicy>, Arc<RetryBudget>) {
+    let budget = Arc::new(RetryBudget::from_config(&RetryConstraintConfig {
+        budget: BudgetDetails {
+            percent,
+            interval: "1h".to_string(),
+        },
+        min_retry_rate: None,
+    }));
+    let policy = Arc::new(EffectiveBackendTrafficPolicy {
+        resolved_target_class:
+            edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Ai,
+        winning_policy_key: "default/policy".to_string(),
+        load_balancer: None,
+        degrade_threshold_override: None,
+        upstream_authority: None,
+        upstream_authority_config: None,
+        retry_budget: Some(Arc::clone(&budget)),
+        retry_constraint: None,
+        circuit_breaker_limit: None,
+        connect_timeout: None,
+        outlier_detection: None,
+        ai_credential_outlier: None,
+        logical_circuit_breaker: None,
+    });
+    (policy, budget)
+}
+
+fn selectable_plan(credentials: Vec<RuntimeAiCredential>) -> ReadyAiAttemptPlan {
+    let weights: Vec<u32> = credentials.iter().map(|credential| credential.weight).collect();
+    let aliases: Vec<String> = credentials.iter().map(|credential| credential.name.clone()).collect();
+    let outlier_store = crate::ai::AiCredentialOutlierStore::new();
+    let target = edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey {
+        target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::EdgionBackend,
+        namespace: "default".to_string(),
+        name: "provider".to_string(),
+    };
+    outlier_store.configure_backend(target.clone(), None, aliases.clone());
+    let outlier_service = outlier_store.current_handle(&target).unwrap();
+    let credential_outliers = aliases.iter().map(|alias| outlier_service.capture(alias)).collect();
+    let backend = Arc::new(RuntimeAiBackend {
+        uid: "backend-uid".to_string(),
+        provider: AiProvider::OpenAICompatible,
+        endpoint: RuntimeAiEndpoint {
+            domain: "provider.example".to_string(),
+            port: 443,
+            use_tls: true,
+            sni: "provider.example".to_string(),
+            host: "provider.example".to_string(),
+            path_prefix: String::new(),
+        },
+        streaming: true,
+        max_output_tokens: Some(256),
+        credential_pool: RuntimeAiCredentialPool {
+            redis_ref: None,
+            on_redis_failure: OnRedisFailure::Deny,
+            credentials,
+            limiter_core: Arc::new(crate::plugins::common::redis_rate_limiter::RedisRateLimiter::new()),
+        },
+        models: HashMap::new(),
+        wildcard_models: Vec::new(),
+        canonical_models: HashSet::new(),
+        public_model_ids: BTreeSet::new(),
+    });
+    let mut plan = candidate_plan();
+    plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &weights }], 0).unwrap();
+    plan.candidates = vec![AiPlanCandidate {
+        logical: compiled_ai_logical(None),
+        slot: 0,
+        order: 0,
+        weight: 1,
+        backend_key: "default/provider".to_string(),
+        backend: Some(backend),
+        model: Some(AiCandidateModel {
+            provider_model: "provider-model".to_string(),
+            pricing: None,
+        }),
+        effective_policy: None,
+        backend_tls_policy: crate::backends::policy::BackendTlsPolicyLookup::Absent,
+        adaptive: None,
+        credential_outliers,
+    }];
+    plan
+}
+
+fn compiled_ai_logical(ref_denied: Option<RefDenied>) -> crate::backends::LogicalBackendHandle {
+    let compiled = CompiledBackend::compile(
+        HTTPBackendRef {
+            name: "provider".to_string(),
+            namespace: Some("default".to_string()),
+            port: None,
+            weight: Some(1),
+            group: Some("edgion.io".to_string()),
+            kind: Some("EdgionBackend".to_string()),
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied,
+        },
+        "default",
+        0,
+        Arc::new(PluginRuntime::new()),
+    );
+    crate::backends::LogicalBackendHandle::new(Arc::from(vec![compiled]), 0).unwrap()
+}
+
+fn denied_route_unit() -> Arc<HttpRouteRuleUnit> {
+    let schema = HTTPBackendRef {
+        name: "provider".to_string(),
+        namespace: Some("tenant-b".to_string()),
+        port: None,
+        weight: Some(1),
+        group: Some("edgion.io".to_string()),
+        kind: Some("EdgionBackend".to_string()),
+        filters: None,
+        backend_tls_policy: None,
+        ref_denied: Some(RefDenied {
+            target_namespace: "tenant-b".to_string(),
+            target_name: "provider".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        }),
+    };
+    let backend = CompiledBackend::compile(schema.clone(), "tenant-a", 0, Arc::new(PluginRuntime::new()));
+    Arc::new(HttpRouteRuleUnit {
+        resource_key: "tenant-a/route".to_string(),
+        matched_info: MatchInfo {
+            rsc: Rsc::new("HTTPRoute", "tenant-a", "route"),
+            rule_id: 0,
+            match_id: 0,
+            sv: 0,
+            m: HTTPRouteMatch {
+                path: None,
+                headers: None,
+                query_params: None,
+                method: None,
+            },
+            labels_meta: None,
+            annotations_meta: None,
+        },
+        rule: Arc::new(HTTPRouteRule {
+            name: None,
+            resolved_terminal_route_uid: None,
+            resolved_ai_admission: None,
+            resolved_terminal_rule_identity: None,
+            matches: None,
+            filters: None,
+            backend_refs: Some(vec![schema]),
+            timeouts: None,
+            retry: None,
+            session_persistence: None,
+            parsed_timeouts: None,
+            parsed_retry: None,
+            parsed_forward_raw_path: None,
+            parsed_allow_non_idempotent_retry: None,
+            parsed_mirror_tuning: None,
+        }),
+        route: None,
+        path_regex: None,
+        parent_refs: None,
+        compiled_header_regexes: Vec::new(),
+        compiled_query_regexes: Vec::new(),
+        has_query_matchers: false,
+        specificity: MatchSpecificity {
+            has_method: false,
+            header_count: 0,
+            query_count: 0,
+            creation_ts_ms: 0,
+            route_key: "tenant-a/route".to_string(),
+            rule_index: 0,
+            match_index: 0,
+        },
+        metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
+        plugin_runtime: Arc::new(PluginRuntime::new()),
+        backends: Arc::from(vec![backend]),
+        backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+    })
+}
+
+fn request_deadline_route_unit(timeout: Duration) -> Arc<HttpRouteRuleUnit> {
+    let mut unit = (*denied_route_unit()).clone();
+    let mut rule = (*unit.rule).clone();
+    rule.parsed_timeouts = Some(ParsedRouteTimeouts {
+        request_timeout: RouteTimeout::Duration(timeout),
+        backend_request_timeout: RouteTimeout::Unset,
+    });
+    unit.rule = Arc::new(rule);
+    Arc::new(unit)
+}
+
+async fn test_session() -> Session {
+    let (mut client, server) = tokio::io::duplex(4096);
+    let stream: pingora_core::protocols::Stream = Box::new(server);
+    let mut session = Session::new_h1(stream);
+    client
+        .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\n\r\n")
+        .await
+        .expect("write request");
+    drop(client);
+    session
+        .read_request()
+        .await
+        .expect("read_request should succeed")
+        .then_some(())
+        .expect("request must be present");
+    session
+}
+
+#[tokio::test]
+async fn header_modifier_ai_backend_matches_native_first_equivalent_operations() {
+    for (first, duplicate) in [("first", "ignored"), ("updated", "first")] {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "backendRefs": [{
+                "group": "edgion.io", "kind": "EdgionBackend", "name": "provider",
+                "filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                    "set": [
+                        {"name": "X-Set", "value": first},
+                        {"name": "x-set", "value": duplicate},
+                        {"name": "X-Set", "value": "exact-duplicate"}
+                    ],
+                    "add": [
+                        {"name": "X-Add", "value": first},
+                        {"name": "x-add", "value": duplicate},
+                        {"name": "X-Add", "value": "exact-duplicate"}
+                    ],
+                    "remove": ["X-Remove", "x-remove"]
+                }}]
+            }]
+        }))
+        .unwrap();
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "default").unwrap();
+        let backend = &runtime.backends[0];
+        let mut results = Vec::new();
+        for ai in [false, true] {
+            let mut session = test_session().await;
+            for name in ["x-set", "x-add", "x-remove"] {
+                session.req_header_mut().append_header(name, "client-a").unwrap();
+                session.req_header_mut().append_header(name, "client-b").unwrap();
+            }
+            let mut ctx = EdgionHttpContext::new();
+            if ai {
+                apply_backend_request_headers(&mut session, &mut ctx, backend).unwrap();
+            } else {
+                backend
+                    .plugin_runtime
+                    .run_backend_request_plugins(&mut session, &mut ctx)
+                    .await;
+            }
+            let headers = &session.req_header().headers;
+            let values = |name| {
+                headers
+                    .get_all(name)
+                    .iter()
+                    .map(|value| value.to_str().unwrap())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(values("x-set"), [first]);
+            assert_eq!(values("x-add"), ["client-a", "client-b", first]);
+            assert!(!headers.contains_key("x-remove"));
+            results.push(headers.clone());
+        }
+        assert_eq!(results[0], results[1]);
+    }
+}
+
+#[tokio::test]
+async fn header_modifier_ai_backend_rejects_invalid_duplicate_and_recovers() {
+    let rule_for = |duplicate: &str| {
+        serde_json::from_value::<HTTPRouteRule>(serde_json::json!({
+            "backendRefs": [{
+                "group": "edgion.io", "kind": "EdgionBackend", "name": "provider",
+                "filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                    "set": [
+                        {"name": "X-Generation", "value": "first"},
+                        {"name": "x-generation", "value": duplicate}
+                    ]
+                }}]
+            }]
+        }))
+        .unwrap()
+    };
+    let captured = HttpRouteRuleUnit::compile_http_rule(&rule_for("ignored"), "default").unwrap();
+    for duplicate in ["ignored", "invalid\r\nvalue", "recovered"] {
+        let current = HttpRouteRuleUnit::compile_http_rule(&rule_for(duplicate), "default").unwrap();
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        let result = apply_backend_request_headers(&mut session, &mut ctx, &current.backends[0]);
+        if duplicate.contains('\r') {
+            assert_eq!(result, Err(AiDispatchError::InvalidConfiguration));
+            assert!(!session.req_header().headers.contains_key("x-generation"));
+        } else {
+            assert_eq!(result, Ok(()));
+            assert_eq!(session.req_header().headers["x-generation"], "first");
+        }
+        // Previously captured requests keep their original valid generation.
+        apply_backend_request_headers(&mut session, &mut ctx, &captured.backends[0]).unwrap();
+        assert_eq!(session.req_header().headers["x-generation"], "first");
+    }
+}
+
+#[tokio::test]
+async fn header_modifier_invalid_ai_backend_is_rejected_before_header_mutation() {
+    let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+        "backendRefs": [{
+            "group": "edgion.io",
+            "kind": "EdgionBackend",
+            "name": "provider",
+            "filters": [
+                {"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                    "set": [{"name": "x-first", "value": "must-not-install"}]
+                }},
+                {"type": "ResponseHeaderModifier", "responseHeaderModifier": {
+                    "set": [{"name": "bad name", "value": "private-value"}]
+                }}
+            ]
+        }]
+    }))
+    .unwrap();
+    let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "default").unwrap();
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::new();
+    assert!(matches!(
+        apply_backend_request_headers(&mut session, &mut ctx, &runtime.backends[0]),
+        Err(AiDispatchError::InvalidConfiguration)
+    ));
+    assert!(session.req_header().headers.get("x-first").is_none());
+}
+
+#[tokio::test]
+async fn dispatch_rejects_denied_backend_before_request_mutation() {
+    let credential = RuntimeAiCredential {
+        name: "primary".to_string(),
+        weight: 1,
+        credential: "must-not-install".to_string(),
+        limits: None,
+    };
+    let mut ctx = EdgionHttpContext::new();
+    ctx.route_unit = Some(denied_route_unit());
+    let mut plan = selectable_plan(vec![credential]);
+    plan.candidates[0].logical = compiled_ai_logical(Some(RefDenied {
+        target_namespace: "default".to_string(),
+        target_name: "provider".to_string(),
+        reason: Some("NoMatchingReferenceGrant".to_string()),
+    }));
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
+    let mut session = test_session().await;
+
+    assert!(matches!(
+        prepare_first_attempt(&mut session, &mut ctx, 0, None, 0),
+        Err(AiDispatchError::InvalidConfiguration)
+    ));
+    assert!(ctx.selected_backend.is_none());
+    assert!(ctx.ai_state().unwrap().request_baseline.is_none());
+    assert!(ctx.request_body.read_all().await.unwrap().is_none());
+    assert!(session.req_header().headers.get("authorization").is_none());
+}
+
+#[tokio::test]
+async fn dispatch_uses_candidate_handle_after_route_snapshot_changes() {
+    let credential = RuntimeAiCredential {
+        name: "primary".to_string(),
+        weight: 1,
+        credential: "secret".to_string(),
+        limits: None,
+    };
+    let mut ctx = EdgionHttpContext::new();
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let (mut storage, view) = crate::request_body::BodyStorage::new(64 * 1024, 1024 * 1024);
+    storage.finish().await.unwrap();
+    ctx.request_body.install(view);
+    // This route generation contains a denied slot. The captured plan owns
+    // an earlier permitted logical handle and must not re-read this route.
+    ctx.route_unit = Some(denied_route_unit());
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+    let mut session = test_session().await;
+
+    let prepared = prepare_first_attempt(&mut session, &mut ctx, 0, None, 0).unwrap();
+
+    assert_eq!(prepared.selected.logical().identity().namespace, "default");
+    assert_eq!(prepared.selected.logical().identity().name, "provider");
+    assert!(matches!(
+        ctx.selected_backend.as_ref().and_then(SelectedHttpBackend::routed),
+        Some(SelectedLogicalBackend::Ai(_))
+    ));
+}
+
+#[tokio::test]
+async fn prepare_first_attempt_rechecks_request_deadline_before_plan_mutation() {
+    let credential = RuntimeAiCredential {
+        name: "primary".to_string(),
+        weight: 1,
+        credential: "secret".to_string(),
+        limits: None,
+    };
+    let mut ctx = EdgionHttpContext::new();
+    ctx.route_unit = Some(request_deadline_route_unit(Duration::from_millis(1)));
+    ctx.start_time = Instant::now() - Duration::from_secs(1);
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+    let mut session = test_session().await;
+
+    assert!(matches!(
+        prepare_first_attempt(&mut session, &mut ctx, 0, None, 0),
+        Err(AiDispatchError::RequestDeadlineExceeded)
+    ));
+    let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_state().unwrap().attempt_plan.as_ref() else {
+        panic!("deadline gate must preserve the ready plan");
+    };
+    assert_eq!(plan.scheduler.dispatch_count(), 0);
+    assert!(matches!(plan.scheduler.next_step(), NextStep::PickBackend(_)));
+}
+
+#[tokio::test]
+async fn prepare_first_attempt_rechecks_grpc_deadline_before_plan_mutation() {
+    let credential = RuntimeAiCredential {
+        name: "primary".to_string(),
+        weight: 1,
+        credential: "secret".to_string(),
+        limits: None,
+    };
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_info
+        .set_grpc_client_deadline(Instant::now() - Duration::from_secs(1));
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+    let mut session = test_session().await;
+
+    assert!(matches!(
+        prepare_first_attempt(&mut session, &mut ctx, 0, None, 0),
+        Err(AiDispatchError::GrpcDeadlineExceeded)
+    ));
+    let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_state().unwrap().attempt_plan.as_ref() else {
+        panic!("deadline gate must preserve the ready plan");
+    };
+    assert_eq!(plan.scheduler.dispatch_count(), 0);
+    assert!(matches!(plan.scheduler.next_step(), NextStep::PickBackend(_)));
+}
+
+#[test]
+fn openai_attempt_rewrites_only_provider_model() {
+    let body = openai_provider_body(br#"{"model":"logical","messages":[]}"#, "provider-a").unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["model"], "provider-a");
+    assert_eq!(value["messages"], serde_json::json!([]));
+}
+
+#[test]
+fn anthropic_attempt_translation_is_bounded_and_native() {
+    let value = serde_json::json!({
+        "model": "logical",
+        "messages": [{"role": "user", "content": "Hello"}]
+    });
+    let translated = prepare_anthropic_request(value, "claude-provider", Some(256), true, 64 * 1024).unwrap();
+    let body: Value = serde_json::from_slice(&translated.body).unwrap();
+    assert_eq!(body["model"], "claude-provider");
+    assert_eq!(body["max_tokens"], 256);
+}
+
+#[test]
+fn request_max_tokens_prefers_max_completion_tokens() {
+    assert_eq!(request_max_tokens(br#"{"max_completion_tokens":128}"#), Some(128));
+    assert_eq!(request_max_tokens(br#"{"max_tokens":64}"#), Some(64));
+    // The deprecated spelling never wins over the current one.
+    assert_eq!(
+        request_max_tokens(br#"{"max_tokens":64,"max_completion_tokens":128}"#),
+        Some(128)
+    );
+    assert_eq!(request_max_tokens(br#"{"model":"logical"}"#), None);
+    assert_eq!(request_max_tokens(b"not json"), None);
+}
+
+#[test]
+fn conflicting_request_output_bounds_are_client_errors() {
+    assert_eq!(
+        effective_max_output_tokens(br#"{"max_tokens":64,"max_completion_tokens":128}"#, None),
+        Err(AiDispatchError::Client(AiProxyError::MalformedBody))
+    );
+    assert_eq!(
+        effective_max_output_tokens(br#"{"max_tokens":64,"max_completion_tokens":64}"#, None),
+        Ok(64)
+    );
+}
+
+#[test]
+fn cost_weighted_accepts_max_completion_tokens_only_body_without_service_max() {
+    let priced = |slot: u8, output_price: u64| RouteCandidate {
+        slot,
+        order: slot,
+        weight: 1,
+        eligibility: CandidateEligibility {
+            valid_ref: true,
+            model_compatible: true,
+            runtime_available: true,
+            untried: true,
+        },
+        adaptive: crate::ai::routing::candidate::AdaptiveSnapshot::default(),
+        cost: Some(CostSnapshot {
+            input_price_micro_usd_per_million: 1_000_000,
+            output_price_micro_usd_per_million: output_price,
+            // No `defaults.maxOutputTokens`: the request bound is the only input.
+            service_max_output_tokens: None,
+        }),
+    };
+    let candidates = [priced(0, 8_000_000), priced(1, 1_000_000)];
+    let picker = |body: &[u8]| {
+        pick(
+            PickerInput {
+                candidates: &candidates,
+                entropy: 0,
+                selection_sequence: 0,
+                input_tokens: 16,
+                request_max_output_tokens: request_max_tokens(body),
+            },
+            AiBackendSelection::CostWeighted,
+        )
+    };
+    // Before the shared parser this body produced MissingCostInput -> HTML 500.
+    assert!(picker(br#"{"model":"logical","max_completion_tokens":1024}"#).is_ok());
+    assert_eq!(
+        picker(br#"{"model":"logical"}"#),
+        Err(crate::ai::routing::candidate::PickerError::MissingCostInput)
+    );
+}
+
+#[test]
+fn dispatch_mark_is_idempotent() {
+    let mut ctx = EdgionHttpContext::new();
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan()));
+    mark_ai_dispatch_started(&mut ctx).unwrap();
+    mark_ai_dispatch_started(&mut ctx).unwrap();
+    let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_state().unwrap().attempt_plan.as_ref() else {
+        panic!("ready plan must remain installed");
+    };
+    assert_eq!(plan.scheduler.dispatch_count(), 1);
+}
+
+#[test]
+fn dispatch_retry_budget_denies_and_counts_each_dispatch_once() {
+    let mut denied = EdgionHttpContext::new();
+    denied.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
+    denied.ensure_ai_state().effective_policy = Some(retry_policy(0).0);
+    mark_ai_dispatch_started(&mut denied).unwrap();
+    assert_eq!(
+        handle_ai_transport_failure(&mut denied, true, true, false),
+        Ok(AiRetryDecision::BudgetDenied)
+    );
+    let Some(AiAttemptPlan::Ready(plan)) = denied.ai_state().unwrap().attempt_plan.as_ref() else {
+        panic!("ready plan must remain installed");
+    };
+    assert_eq!(
+        plan.scheduler.next_step(),
+        NextStep::Stop(crate::ai::runtime::attempt::StopReason::RetryDenied)
+    );
+
+    let mut sampled_once = EdgionHttpContext::new();
+    sampled_once.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan()));
+    let (policy, budget) = retry_policy(51);
+    sampled_once.ensure_ai_state().effective_policy = Some(policy);
+    mark_ai_dispatch_started(&mut sampled_once).unwrap();
+    mark_ai_dispatch_started(&mut sampled_once).unwrap();
+    assert!(budget.try_retry(), "one sampled dispatch permits the first retry");
+    assert!(
+        !budget.try_retry(),
+        "an idempotent dispatch mark must not enlarge the denominator"
+    );
+}
+
+#[test]
+fn rejected_plan_never_crosses_dispatch_boundary() {
+    let mut ctx = EdgionHttpContext::new();
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Rejected(crate::ai::AiPlanError::InvalidBackend));
+    assert_eq!(mark_ai_dispatch_started(&mut ctx), Err(AiDispatchError::Rejected));
+}
+
+#[test]
+fn anthropic_request_errors_map_to_client_facing_proxy_errors() {
+    assert_eq!(
+        anthropic_request_error(AnthropicRequestError::UnsupportedParameter),
+        AiDispatchError::Client(AiProxyError::UnsupportedParameter)
+    );
+    assert_eq!(
+        anthropic_request_error(AnthropicRequestError::InvalidRequestBody),
+        AiDispatchError::Client(AiProxyError::MalformedBody)
+    );
+    assert_eq!(
+        anthropic_request_error(AnthropicRequestError::MissingRequiredParameter),
+        AiDispatchError::Client(AiProxyError::MissingRequiredParameter)
+    );
+    assert_eq!(
+        anthropic_request_error(AnthropicRequestError::OutputTooLarge),
+        AiDispatchError::Client(AiProxyError::RequestTooLarge)
+    );
+    assert_eq!(
+        anthropic_request_error(AnthropicRequestError::SerializationFailed),
+        AiDispatchError::Client(AiProxyError::MalformedBody)
+    );
+}
+
+#[test]
+fn limited_credentials_participate_in_weighted_selection() {
+    let unlimited = RuntimeAiCredential {
+        name: "unlimited".to_string(),
+        weight: 1,
+        credential: "secret-unlimited".to_string(),
+        limits: None,
+    };
+    let limited = RuntimeAiCredential {
+        name: "limited".to_string(),
+        weight: 100,
+        credential: "secret-limited".to_string(),
+        limits: Some(AiCredentialLimits {
+            requests_per_minute: Some(1),
+            tokens_per_minute: None,
+        }),
+    };
+    let mut plan = selectable_plan(vec![unlimited, limited]);
+    let selected = select_target(&mut plan, 2).unwrap();
+    assert_eq!(selected.credential, 1);
+}
+
+#[test]
+fn limited_only_pool_is_dispatch_candidate() {
+    let limited = RuntimeAiCredential {
+        name: "limited".to_string(),
+        weight: 1,
+        credential: "secret-limited".to_string(),
+        limits: Some(AiCredentialLimits {
+            requests_per_minute: Some(1),
+            tokens_per_minute: None,
+        }),
+    };
+    let mut plan = selectable_plan(vec![limited]);
+    assert_eq!(select_target(&mut plan, 0).unwrap().credential, 0);
+}
+
+#[test]
+fn target_selection_reports_unavailable_when_every_candidate_is_exhausted() {
+    let credential = || RuntimeAiCredential {
+        name: "primary".to_string(),
+        weight: 1,
+        credential: "secret-primary".to_string(),
+        limits: None,
+    };
+    let mut no_credentials = selectable_plan(vec![credential()]);
+    no_credentials.candidates[0].credential_outliers = vec![None];
+    assert!(matches!(
+        select_target(&mut no_credentials, 0),
+        Err(AiDispatchError::Unavailable)
+    ));
+    assert_eq!(
+        no_credentials.scheduler.next_step(),
+        NextStep::Stop(crate::ai::runtime::attempt::StopReason::Unavailable)
+    );
+    assert_eq!(no_credentials.scheduler.dispatch_count(), 0);
+
+    let mut incompatible_model = selectable_plan(vec![credential()]);
+    incompatible_model.candidates[0].model = None;
+    assert!(matches!(
+        select_target(&mut incompatible_model, 0),
+        Err(AiDispatchError::Unavailable)
+    ));
+}
+
+#[test]
+fn explicit_retry_cap_is_strict_but_global_fallback_is_bounded() {
+    assert_eq!(resolve_ai_retry_cap(Some(7), 99), Ok(7));
+    assert_eq!(
+        resolve_ai_retry_cap(Some(8), 0),
+        Err(AiDispatchError::InvalidConfiguration)
+    );
+    assert_eq!(resolve_ai_retry_cap(None, 99), Ok(7));
+    assert_eq!(resolve_ai_retry_cap(None, 3), Ok(3));
+}
+
+#[test]
+fn retry_cap_initialization_is_once_only_and_preserves_progress() {
+    let credential = RuntimeAiCredential {
+        name: "primary".to_string(),
+        weight: 1,
+        credential: "secret-primary".to_string(),
+        limits: None,
+    };
+    let mut plan = selectable_plan(vec![credential]);
+    plan.retry_cap_initialized = false;
+    initialize_retry_cap(&mut plan, 3).unwrap();
+    assert_eq!(plan.scheduler.max_dispatches(), 4);
+    plan.scheduler.select_backend(0).unwrap();
+    plan.scheduler.select_credential(1, 0).unwrap();
+    plan.scheduler.start_dispatch().unwrap();
+
+    initialize_retry_cap(&mut plan, 0).unwrap();
+    assert_eq!(plan.scheduler.max_dispatches(), 4);
+    assert_eq!(plan.scheduler.dispatch_count(), 1);
+}
+
+#[test]
+fn endpoint_predispatch_failure_releases_and_skips_the_whole_service() {
+    let first_weights = [1, 1];
+    let second_weights = [1];
+    let mut plan = candidate_plan();
+    plan.scheduler = AttemptScheduler::new(
+        &[
+            BackendCredentials {
+                weights: &first_weights,
+            },
+            BackendCredentials {
+                weights: &second_weights,
+            },
+        ],
+        0,
+    )
+    .unwrap();
+    plan.scheduler.select_backend(0).unwrap();
+    plan.scheduler.select_credential(u16::MAX, 0).unwrap();
+    let mut ctx = EdgionHttpContext::new();
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
+
+    assert!(AiPeerPredispatchFailure::Endpoint.finish(&mut ctx));
+    let Some(AiAttemptPlan::Ready(ready)) = ctx.ensure_ai_state().attempt_plan.as_mut() else {
+        panic!("ready plan must remain installed");
+    };
+    assert!(matches!(ready.scheduler.next_step(), NextStep::PickBackend(_)));
+    assert_eq!(
+        ready.scheduler.select_backend(0),
+        Err(crate::ai::runtime::attempt::SchedulerError::BackendAlreadyExcluded)
+    );
+    assert!(ready.scheduler.select_backend(1).is_ok());
+    assert_eq!(ready.scheduler.dispatch_count(), 0);
+}
+
+#[test]
+fn ambiguous_failure_replays_only_when_explicitly_requested() {
+    let mut denied_ctx = EdgionHttpContext::new();
+    denied_ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
+    mark_ai_dispatch_started(&mut denied_ctx).unwrap();
+    assert_eq!(
+        handle_ai_transport_failure(&mut denied_ctx, false, true, true),
+        Ok(AiRetryDecision::Final)
+    );
+    let Some(AiAttemptPlan::Ready(denied)) = denied_ctx.ai_state().unwrap().attempt_plan.as_ref() else {
+        panic!("ready plan must remain installed");
+    };
+    assert_eq!(
+        denied.scheduler.next_step(),
+        NextStep::Stop(crate::ai::runtime::attempt::StopReason::AmbiguousFailure)
+    );
+    assert_eq!(denied.scheduler.failures()[0].kind, DispatchFailureKind::Ambiguous);
+
+    let mut allowed_ctx = EdgionHttpContext::new();
+    allowed_ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
+    mark_ai_dispatch_started(&mut allowed_ctx).unwrap();
+    assert_eq!(
+        handle_ai_transport_failure(&mut allowed_ctx, true, true, true),
+        Ok(AiRetryDecision::Retry)
+    );
+    let Some(AiAttemptPlan::Ready(allowed)) = allowed_ctx.ai_state().unwrap().attempt_plan.as_ref() else {
+        panic!("ready plan must remain installed");
+    };
+    assert!(matches!(allowed.scheduler.next_step(), NextStep::PickCredential(_)));
+    assert_eq!(allowed.scheduler.failures()[0].kind, DispatchFailureKind::Ambiguous);
+}
+
+#[tokio::test]
+async fn composite_ai_processor_stops_its_inner_chain_on_terminate() {
+    // AiAttemptResponseProcessor wraps its own Vec of sub-processors and
+    // is itself a chain: an inner terminate must stop it exactly like the
+    // outer driver stops the top-level chain, or a sub-processor after
+    // the terminating one would silently keep running.
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use parking_lot::Mutex;
+
+    struct Terminator;
+    #[async_trait]
+    impl StreamingResponseProcessor for Terminator {
+        async fn on_chunk(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: crate::ctx::ResponseStreamKind,
+            sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            sink.terminate();
+        }
+    }
+
+    struct MarkRan {
+        ran: Arc<Mutex<bool>>,
+    }
+    #[async_trait]
+    impl StreamingResponseProcessor for MarkRan {
+        async fn on_chunk(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: crate::ctx::ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            *self.ran.lock() = true;
+        }
+    }
+
+    let ran = Arc::new(Mutex::new(false));
+    let mut composite = AiAttemptResponseProcessor {
+        processors: vec![Box::new(Terminator), Box::new(MarkRan { ran: ran.clone() })],
+        eos: Arc::new(AtomicBool::new(false)),
+    };
+    let mut chunk = Some(Bytes::from_static(b"x"));
+    let mut sink = ResponseBodySink::new();
+    let mut session = MockPluginSession::new();
+
+    composite
+        .on_chunk(
+            &mut chunk,
+            false,
+            crate::ctx::ResponseStreamKind::None,
+            &mut sink,
+            &mut session,
+        )
+        .await;
+
+    assert!(sink.is_terminated());
+    assert!(!*ran.lock(), "the sub-processor after an inner terminate must not run");
+}

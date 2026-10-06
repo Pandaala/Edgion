@@ -66,7 +66,7 @@ async fn active_final_sse_claim_selects_hold_and_ineligible_final_fails_closed()
         limits: limits(),
         active: true,
     });
-    state.final_response_eligibility = Some(crate::ai::terminal::FinalResponseEligibility {
+    state.final_response_eligibility = Some(crate::response::terminal::FinalResponseEligibility {
         method_allows_body: true,
         status_allows_body: true,
         stream_kind: crate::ctx::ResponseStreamKind::Sse,

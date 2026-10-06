@@ -1,12 +1,10 @@
 use super::EdgionHttpProxy;
-use crate::ai::terminal::{ResponseClose, ResponseTerminalState};
-use crate::ai::{estimated_cost_usd, GenAiAttemptUsageSource, GenAiSummary, ReportedAiUsage};
-use crate::cli::config::{get_backend_requests_config, get_genai_tokens_config, get_request_duration_config};
-use crate::ctx::ResponseStreamKind;
+use crate::response::terminal::{ResponseClose, ResponseTerminalState};
+
+use crate::cli::config::{get_backend_requests_config, get_request_duration_config};
 use crate::link_sys::LogMeta;
 use crate::observe::metrics::{
-    global_metrics, record_backend_request, record_genai_tokens, record_request_duration, status_group,
-    GenAiUsageSource, TestData, TestType,
+    global_metrics, record_backend_request, record_request_duration, status_group, TestData, TestType,
 };
 use crate::observe::AccessLogEntry;
 use crate::runtime::GatewayInfo;
@@ -44,12 +42,7 @@ pub async fn logging(
     let session_status = session.response_written().map(|header| header.status.as_u16());
     ctx.finalize_downstream_status(session_status);
 
-    let ai_ttft_ms = ctx.get_current_upstream().and_then(|upstream| upstream.bt);
-    if let Some(state) = ctx.ai_state_mut() {
-        state.attempt_runtime.finalize(ai_ttft_ms).await;
-    }
-    finalize_ai_usage(ctx);
-    finalize_ai_quota(ctx).await;
+    crate::ai::http::finalize(ctx).await;
     record_request_metrics(ctx, _e);
 
     finalize_response_terminal_for_logging(ctx, _e.map(PingoraError::esource).cloned());
@@ -72,7 +65,7 @@ pub async fn logging(
         processor.finalize_incomplete(outcome, reason);
     }
     finalize_attached_ext_proc_logs(ctx).await;
-    finalize_attached_guardrail_log(ctx);
+    crate::ai::http::finalize_guardrail_log(ctx);
 
     ctx.finalize_waf_for_logging();
     let mut entry = AccessLogEntry::from_context(ctx);
@@ -165,158 +158,6 @@ async fn finalize_attached_ext_proc_logs(ctx: &mut EdgionHttpContext) {
             }
         }
     }
-}
-
-fn finalize_attached_guardrail_log(ctx: &mut EdgionHttpContext) {
-    let Some((identity, owner)) = ctx.ai_state_mut().and_then(|state| state.attached_guardrail.take()) else {
-        return;
-    };
-    let Some(line) = owner.take_summary_line() else {
-        return;
-    };
-    let stages = ctx.stage_logs_mut();
-    if stages.is_empty() {
-        return;
-    }
-    'stages: for stage in stages.iter_mut() {
-        for log in &mut stage.filters {
-            if log.internal_token.as_deref() == Some(identity.as_str()) {
-                log.push(&line);
-                break 'stages;
-            }
-        }
-        for resource in &mut stage.edgion_plugins {
-            for log in &mut resource.logs {
-                if log.internal_token.as_deref() == Some(identity.as_str()) {
-                    log.push(&line);
-                    break 'stages;
-                }
-            }
-        }
-    }
-}
-
-/// Finalize AI usage once at the request's universal logging boundary.
-#[inline]
-fn finalize_ai_usage(ctx: &mut EdgionHttpContext) {
-    finalize_ai_usage_with_metrics_enabled(ctx, get_genai_tokens_config().enabled);
-}
-
-/// Testable finalizer with the restart-bound metric switch passed explicitly,
-/// avoiding process-global `OnceLock` mutation in parallel unit tests.
-#[inline]
-fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_enabled: bool) {
-    let streaming = ctx.response_stream_kind == ResponseStreamKind::Sse;
-    let ttft_ms = ctx.get_current_upstream().and_then(|upstream| upstream.bt);
-    let Some(state) = ctx.ai_state_mut() else {
-        return;
-    };
-    if state.summary.is_some() {
-        return;
-    }
-    if state.attempt_plan.is_some() && !state.attempt_runtime.ever_dispatched() {
-        return;
-    }
-    let Some(ai) = state.request.as_ref() else {
-        return;
-    };
-
-    let provider = ai.provider;
-    let model = ai.model.clone();
-    let (usage, usage_source) = match ai.usage.reported_usage() {
-        Some(usage) => (usage, GenAiUsageSource::Reported),
-        None => (
-            ReportedAiUsage {
-                input_tokens: ceil_chars_div_four(ai.usage.input_chars()),
-                output_tokens: ceil_chars_div_four(ai.usage.output_chars()),
-                cache_read_input_tokens: 0,
-                cache_write_input_tokens: 0,
-            },
-            GenAiUsageSource::Estimated,
-        ),
-    };
-    // Store the immutable summary before metric emission. Its presence is the
-    // commit sentinel, so re-entry can never increment the counters twice.
-    let summary = GenAiSummary {
-        provider: provider.as_str(),
-        model,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        cache_read_input_tokens: usage.cache_read_input_tokens,
-        cache_write_input_tokens: usage.cache_write_input_tokens,
-        streaming,
-        usage_estimated: usage_source == GenAiUsageSource::Estimated,
-        estimated_cost_usd: ai.pricing.map(|pricing| estimated_cost_usd(pricing, usage)),
-        quota_status: ai.quota_status,
-        ttft_ms,
-        attempts: state.attempt_runtime.attempts().to_vec(),
-        attempts_truncated: state.attempt_runtime.attempts_truncated(),
-    };
-    state.summary = Some(summary);
-    if state.attempt_runtime.ever_dispatched() {
-        if let Ok(totals) = state.attempt_runtime.metric_totals() {
-            for total in totals {
-                let source = match total.usage_source {
-                    GenAiAttemptUsageSource::Reported => GenAiUsageSource::Reported,
-                    GenAiAttemptUsageSource::Estimated => GenAiUsageSource::Estimated,
-                };
-                record_genai_tokens(
-                    metrics_enabled,
-                    total.provider,
-                    source,
-                    total.input_tokens,
-                    total.output_tokens,
-                );
-            }
-        }
-    } else {
-        record_genai_tokens(
-            metrics_enabled,
-            provider,
-            usage_source,
-            usage.input_tokens,
-            usage.output_tokens,
-        );
-    }
-}
-
-async fn finalize_ai_quota(ctx: &mut EdgionHttpContext) {
-    let Some(state) = ctx.ai_state_mut() else {
-        return;
-    };
-    let Some(summary) = state.summary.as_ref() else {
-        return;
-    };
-    let authoritative_total = if state.attempt_runtime.ever_dispatched() {
-        state.attempt_runtime.charged_request_tokens().ok()
-    } else {
-        summary.input_tokens.checked_add(summary.output_tokens)
-    };
-    let Some(authoritative_total) = authoritative_total else {
-        if let Some(summary) = state.summary.as_mut() {
-            summary.quota_status = Some("accounting_overflow");
-        }
-        ctx.record_error(edgion_resources::EdgionErrorCode::AiQuotaReconciliationFailed);
-        return;
-    };
-    let Some(quota) = state.request.as_mut().and_then(|ai| ai.quota.as_mut()) else {
-        return;
-    };
-    let status = quota.finalize(authoritative_total).await;
-    if let Some(summary) = state.summary.as_mut() {
-        summary.quota_status = Some(status.as_str());
-    }
-    if matches!(
-        status,
-        crate::ai::quota::QuotaFinalStatus::Failed | crate::ai::quota::QuotaFinalStatus::TimedOut
-    ) {
-        ctx.record_error(edgion_resources::EdgionErrorCode::AiQuotaReconciliationFailed);
-    }
-}
-
-#[inline]
-const fn ceil_chars_div_four(chars: u64) -> u64 {
-    chars / 4 + if chars.is_multiple_of(4) { 0 } else { 1 }
 }
 
 #[inline]
@@ -517,9 +358,6 @@ fn build_test_data(ctx: &EdgionHttpContext, error: Option<&PingoraError>) -> Str
 #[path = "../../../../tests/unit/routes/http/proxy_http/pg_logging_test.rs"]
 mod tests;
 
-#[cfg(test)]
-#[path = "../../../../tests/unit/routes/http/proxy_http/pg_logging_test/genai_tests.rs"]
-mod genai_tests;
 pub(super) fn finalize_response_terminal_for_logging(ctx: &mut EdgionHttpContext, error_source: Option<ErrorSource>) {
     if matches!(ctx.response_terminal_state, ResponseTerminalState::Claimed { .. }) {
         ctx.response_terminal_state.settle_pending_without_event();

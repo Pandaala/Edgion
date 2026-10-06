@@ -44,8 +44,8 @@ in `gateway-terminated-stream-settles-its-reservation.md`.
 
 ## Regression Coverage
 
-- `ai::dispatch::tests::anthropic_uses_estimation_only_after_provider_translation`
-- `ai::usage::tests::estimation_only_counts_without_buffering_or_parsing`
+- `ai::runtime::dispatch::tests::anthropic_uses_estimation_only_after_provider_translation`
+- `ai::accounting::usage::tests::estimation_only_counts_without_buffering_or_parsing`
 - Existing Anthropic usage/quota and gateway-terminated settlement tests
 
 

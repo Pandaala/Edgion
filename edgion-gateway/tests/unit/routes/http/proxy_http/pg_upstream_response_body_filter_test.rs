@@ -1,5 +1,5 @@
 use super::*;
-use crate::ai::anthropic::AnthropicResponseProcessor;
+use crate::ai::conversion::chat_to_anthropic::AnthropicResponseProcessor;
 use crate::ai::quota::{QuotaAccumulator, QuotaFinalStatus};
 use crate::ai::{AiUsageShared, UsageExtractionProcessor};
 use crate::ctx::ResponseStreamKind;
@@ -341,7 +341,7 @@ async fn pre_trailer_event_stays_typed_and_does_not_close_response_terminal() {
     assert_eq!(*observed.lock(), [StreamingResponseEvent::TerminalBeforeTrailers]);
     assert_eq!(
         ctx.response_terminal_state,
-        crate::ai::terminal::ResponseTerminalState::Open
+        crate::response::terminal::ResponseTerminalState::Open
     );
 }
 
@@ -818,7 +818,7 @@ async fn terminal_cleans_every_non_winner_once_including_earlier_processors() {
     drop(later_counts);
     assert!(matches!(
         ctx.response_terminal_state,
-        crate::ai::terminal::ResponseTerminalState::Closed {
+        crate::response::terminal::ResponseTerminalState::Closed {
             winner: Some(ResponseProcessorSlot::Ordinary(1)),
             close: ResponseClose::GatewayTerminate,
             ..
@@ -877,7 +877,7 @@ async fn real_quota_terminal_preempts_guardrail_and_ext_proc_slots() {
     assert!(shared.gateway_terminated());
     assert!(matches!(
         ctx.response_terminal_state,
-        crate::ai::terminal::ResponseTerminalState::Closed {
+        crate::response::terminal::ResponseTerminalState::Closed {
             winner: Some(ResponseProcessorSlot::Ai),
             cause: Some(ResponseTerminalCause::QuotaExceeded),
             close: ResponseClose::GatewayTerminate,
@@ -989,7 +989,7 @@ async fn first_real_ext_proc_terminal_preempts_second_attached_owner() {
     assert_eq!(second_owner.test_state(), ("superseded", "processor-failure", true));
     assert!(matches!(
         ctx.response_terminal_state,
-        crate::ai::terminal::ResponseTerminalState::Closed {
+        crate::response::terminal::ResponseTerminalState::Closed {
             winner: Some(ResponseProcessorSlot::Ordinary(0)),
             cause: Some(ResponseTerminalCause::ProcessorFailure),
             ..
@@ -1009,7 +1009,7 @@ async fn driver_natural_eos_and_logging_are_idempotent_for_bodyless_output() {
 
     run_stream_processors(&mut session, &mut ctx, &mut body, true, &mut sink).await;
 
-    let expected = crate::ai::terminal::ResponseTerminalState::Closed {
+    let expected = crate::response::terminal::ResponseTerminalState::Closed {
         winner: None,
         cause: None,
         emission: None,
@@ -1040,9 +1040,9 @@ async fn claimed_terminal_is_force_terminated_when_winner_returns_early() {
     assert!(sink.is_terminated());
     assert!(matches!(
         ctx.response_terminal_state,
-        crate::ai::terminal::ResponseTerminalState::Closed {
+        crate::response::terminal::ResponseTerminalState::Closed {
             winner: Some(ResponseProcessorSlot::Semantic),
-            emission: Some(crate::ai::terminal::TerminalEmission::NoEvent),
+            emission: Some(crate::response::terminal::TerminalEmission::NoEvent),
             close: ResponseClose::GatewayTerminate,
             ..
         }
@@ -1122,7 +1122,7 @@ async fn guarded_physical_callback_limit_is_inclusive_and_stale_handoff_fails_cl
     let mut stale_ctx = crate::EdgionHttpContext::default();
     let state = stale_ctx.ensure_ai_state();
     state.semantic_guard_claimed = true;
-    state.canonical_record_batch = Some(crate::ai::canonical_sse::CanonicalRecordBatch::new());
+    state.canonical_record_batch = Some(crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch::new());
     let mut body = None;
     let mut sink = ResponseBodySink::new();
     run_stream_processors(&mut session, &mut stale_ctx, &mut body, true, &mut sink).await;

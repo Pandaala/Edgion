@@ -34,6 +34,7 @@ use super::session_adapter::PingoraSessionAdapter;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
+use crate::ai::guards::semantic::Guardrail;
 use crate::plugins::http::ai_proxy::AiProxy;
 use crate::plugins::http::all_endpoint_status::AllEndpointStatus;
 use crate::plugins::http::bandwidth_limit::BandwidthLimit;
@@ -52,7 +53,6 @@ use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::form_json_transform::FormJsonTransform;
 use crate::plugins::http::forward_auth::ForwardAuth;
 use crate::plugins::http::geoip_location::GeoIpLocation;
-use crate::plugins::http::guardrail::Guardrail;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
 use crate::plugins::http::hmac_auth::HmacAuth;
 use crate::plugins::http::ip_restriction::IpRestriction;

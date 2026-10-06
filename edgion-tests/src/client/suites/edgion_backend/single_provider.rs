@@ -58,10 +58,10 @@ fn primary_backend_name() -> &'static str {
 
 /// The SSE event a terminated stream must carry immediately before the
 /// gateway ends the response. Mirrors
-/// `edgion_gateway::ai::usage::QUOTA_EXCEEDED_SSE_EVENT`, which is
+/// `edgion_gateway::ai::accounting::usage::QUOTA_EXCEEDED_SSE_EVENT`, which is
 /// `pub(crate)` inside the gateway crate and therefore not importable here.
 /// Reuses the same message/type/code the 429 admission-time rejection
-/// renders (`edgion_gateway::ai::error::AiProxyError::QuotaExceeded`).
+/// renders (`edgion_gateway::ai::protocols::openai::error::AiProxyError::QuotaExceeded`).
 ///
 /// Leads with a blank line, like its `QUOTA_UNENFORCEABLE_SSE_EVENT` sibling
 /// below and for the same reason: the injection is appended after whatever
@@ -71,10 +71,10 @@ const QUOTA_EXCEEDED_SSE_EVENT: &[u8] = b"\n\nevent: error\ndata: {\"error\":{\"
 
 /// The SSE event carried by a stream cut short because quota could no longer
 /// be evaluated (SSE decoding degraded or repeated malformed events). Mirrors
-/// `edgion_gateway::ai::usage::QUOTA_UNENFORCEABLE_SSE_EVENT`, which is
+/// `edgion_gateway::ai::accounting::usage::QUOTA_UNENFORCEABLE_SSE_EVENT`, which is
 /// `pub(crate)` and therefore not importable here. Reuses the same
 /// message/type/code the admission path renders when enforcement cannot be
-/// performed (`edgion_gateway::ai::error::AiProxyError::QuotaUnavailable`).
+/// performed (`edgion_gateway::ai::protocols::openai::error::AiProxyError::QuotaUnavailable`).
 const QUOTA_UNENFORCEABLE_SSE_EVENT: &[u8] = b"\n\nevent: error\ndata: {\"error\":{\"message\":\"Token quota enforcement is temporarily unavailable.\",\"type\":\"api_error\",\"code\":\"token_quota_unavailable\"}}\n\n";
 
 fn client(ctx: &TestContext, host: &str, h2: bool, raw_gzip: bool) -> Result<reqwest::Client, String> {
@@ -1724,7 +1724,7 @@ fn oversized_passthrough(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future:
 // tiny limit (2 tokens) so the real `RedisQuotaSink` worker genuinely flips
 // `over_limit()` mid-stream through the same Redis round trip production
 // uses; see `edgion_gateway::ai::quota::runtime::RedisQuotaSink` and
-// `edgion_gateway::ai::usage::UsageExtractionProcessor::on_chunk`.
+// `edgion_gateway::ai::accounting::usage::UsageExtractionProcessor::on_chunk`.
 //
 // The `quota_terminate` fixture (`test_server.rs::ai_stream_plan`) sends 5
 // one-quota-unit content deltas 150ms apart — generous headroom over the
@@ -1735,7 +1735,7 @@ fn oversized_passthrough(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future:
 // Chunks a/b/c are overwhelmingly likely, but not structurally guaranteed,
 // to never trip termination themselves. Within one `on_chunk` call there is
 // no `.await` between `observe_chunk` and the `over_limit()` check
-// (`ai/usage.rs`), so that check can only reflect a worker flush that
+// (`ai/accounting/usage.rs`), so that check can only reflect a worker flush that
 // completed *before* the call began. But the worker always flushes whatever
 // `observed_output` currently holds, not a value pinned to the notify that
 // woke it — so, in principle, a first flush delayed past two whole 150ms
@@ -2495,7 +2495,7 @@ fn quota_termination_h2_framing(
 /// by the quota-termination path, even when the upstream answers with an
 /// SSE body that genuinely goes over the same tiny limit. This drives the
 /// real `requested_streaming` gate on `UsageExtractionProcessor::on_chunk`
-/// (`edgion-gateway/src/ai/usage.rs`) — `requested_streaming` comes from the
+/// (`edgion-gateway/src/ai/accounting/usage.rs`) — `requested_streaming` comes from the
 /// client's own request, and `stream_kind` (SSE vs. not) comes from the
 /// actual upstream response, so the only way to exercise the gate for real
 /// is a provider that answers with SSE despite the client's non-streaming

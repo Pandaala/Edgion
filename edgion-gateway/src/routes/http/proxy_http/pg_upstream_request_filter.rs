@@ -63,7 +63,7 @@ pub async fn upstream_request_filter(
 
     // All fallible local header/framing preparation has succeeded. Crossing
     // the boundary here keeps a local preparation failure pre-dispatch.
-    crate::ai::dispatch::mark_ai_dispatch_started(ctx).map_err(|_| local_pre_dispatch_failure())?;
+    crate::ai::runtime::dispatch::mark_ai_dispatch_started(ctx).map_err(|_| local_pre_dispatch_failure())?;
 
     Ok(())
 }

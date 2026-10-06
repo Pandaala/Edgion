@@ -98,7 +98,7 @@ fn ambiguous_decided_h2_retry_requires_every_safety_gate() {
 
 #[test]
 fn ai_final_and_dispatch_error_clear_incoming_retry_decision() {
-    use crate::ai::dispatch::AiRetryDecision;
+    use crate::ai::runtime::dispatch::AiRetryDecision;
     let retry: Result<_, ()> = Ok(AiRetryDecision::Retry);
     let final_decision: Result<_, ()> = Ok(AiRetryDecision::Final);
     let budget_denied: Result<_, ()> = Ok(AiRetryDecision::BudgetDenied);

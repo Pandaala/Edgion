@@ -253,7 +253,7 @@ pub struct PingoraSessionAdapter<'a> {
     ctx: &'a mut EdgionHttpContext,
     response_header: Option<&'a mut ResponseHeader>,
     /// Callback-local identity used for first-wins terminal arbitration.
-    response_processor_slot: Option<crate::ai::terminal::ResponseProcessorSlot>,
+    response_processor_slot: Option<crate::response::terminal::ResponseProcessorSlot>,
     /// Set to true after a gRPC trailers-only error response has been sent.
     /// Subsequent write_response_body and shutdown calls become no-ops.
     grpc_response_terminated: bool,
@@ -309,11 +309,11 @@ pub(crate) fn build_response_local_reply(
 }
 
 impl<'a> PingoraSessionAdapter<'a> {
-    pub(crate) fn set_response_processor_slot(&mut self, slot: crate::ai::terminal::ResponseProcessorSlot) {
+    pub(crate) fn set_response_processor_slot(&mut self, slot: crate::response::terminal::ResponseProcessorSlot) {
         self.response_processor_slot = Some(slot);
     }
 
-    pub(crate) fn response_terminal_winner(&self) -> Option<crate::ai::terminal::ResponseProcessorSlot> {
+    pub(crate) fn response_terminal_winner(&self) -> Option<crate::response::terminal::ResponseProcessorSlot> {
         self.ctx.response_terminal_state.winner()
     }
 
@@ -1455,8 +1455,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn publish_canonical_records(
         &mut self,
-        batch: crate::ai::canonical_sse::CanonicalRecordBatch,
-    ) -> Result<(), crate::ai::canonical_sse::CanonicalRecordBatch> {
+        batch: crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch,
+    ) -> Result<(), crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
         let state = self.ctx.ensure_ai_state();
         if !state.semantic_guard_claimed || state.canonical_record_batch.is_some() {
             return Err(batch);
@@ -1465,26 +1465,26 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(())
     }
 
-    fn take_canonical_records(&mut self) -> Option<crate::ai::canonical_sse::CanonicalRecordBatch> {
+    fn take_canonical_records(&mut self) -> Option<crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
         self.ctx
             .ai_state_mut()
             .and_then(|state| state.canonical_record_batch.take())
     }
 
-    fn try_claim_response_terminal(&mut self, cause: crate::ai::terminal::ResponseTerminalCause) -> bool {
+    fn try_claim_response_terminal(&mut self, cause: crate::response::terminal::ResponseTerminalCause) -> bool {
         self.response_processor_slot
             .is_some_and(|slot| self.ctx.response_terminal_state.try_claim(slot, cause))
     }
 
-    fn mark_response_terminal_emission(&mut self, emission: crate::ai::terminal::TerminalEmission) {
+    fn mark_response_terminal_emission(&mut self, emission: crate::response::terminal::TerminalEmission) {
         self.ctx.response_terminal_state.mark_emission(emission);
     }
 
     fn ai_terminal_render_context(
         &self,
     ) -> Option<(
-        crate::ai::terminal::AiClientStreamDialect,
-        crate::ai::terminal::FinalResponseEligibility,
+        crate::ai::protocols::openai::terminal::AiClientStreamDialect,
+        crate::response::terminal::FinalResponseEligibility,
     )> {
         let state = self.ctx.ai_state()?;
         Some((state.client_stream_dialect?, state.final_response_eligibility?))
@@ -1540,7 +1540,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn install_attached_guardrail(
         &mut self,
         identity: String,
-        owner: std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
+        owner: std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>,
         head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
     ) -> bool {
         if self
@@ -1562,7 +1562,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn attached_guardrail(
         &self,
         identity: &str,
-    ) -> Option<std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>> {
+    ) -> Option<std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>> {
         self.ctx
             .ai_state()?
             .attached_guardrail

@@ -91,7 +91,7 @@ pub trait StreamingResponseProcessor: Send + Sync {
 
     /// Promptly settle a request-scoped owner after another processor instance
     /// wins the response terminal. The winning instance is never called.
-    fn on_terminal_preempted(&mut self, _winner: crate::ai::terminal::ResponseTerminalCause) {}
+    fn on_terminal_preempted(&mut self, _winner: crate::response::terminal::ResponseTerminalCause) {}
 
     /// Release resources held across an async callback when its future is
     /// cancelled before its driver execution lease completes.

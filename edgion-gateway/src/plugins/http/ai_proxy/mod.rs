@@ -1,5 +1,3 @@
-//! Request-only AI provider proxy plugin.
+//! Registration facade for the canonical AI proxy implementation.
 
-mod plugin;
-
-pub use plugin::AiProxy;
+pub use crate::ai::http::proxy::AiProxy;

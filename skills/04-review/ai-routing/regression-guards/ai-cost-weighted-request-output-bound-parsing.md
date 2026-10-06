@@ -13,7 +13,7 @@ knowledge_type: regression-guards
 
 Every consumer of the *client-declared* output-token bound in a canonical OpenAI
 request body must resolve it through `request_output_bound`
-(`edgion-gateway/src/ai/dispatch.rs`), which prefers `max_completion_tokens` and
+(`edgion-gateway/src/ai/runtime/dispatch.rs`), which prefers `max_completion_tokens` and
 falls back to the deprecated `max_tokens`. `request_max_tokens` previously read
 only `max_tokens`, so a body from a current OpenAI SDK looked bound-less to
 `CostWeighted` selection while the sibling TPM helper saw the real value.
@@ -29,7 +29,7 @@ are **not accepted**.
 `request_max_tokens` (feeds `PickerInput::request_max_output_tokens` before
 backend selection) read `max_tokens` only. `effective_max_output_tokens` (feeds
 TPM reservation after selection) and Anthropic's `resolve_request_max_tokens`
-(`ai/anthropic/request.rs`) both read `max_completion_tokens` first. Current
+(`ai/conversion/chat_to_anthropic/request.rs`) both read `max_completion_tokens` first. Current
 OpenAI clients send `max_completion_tokens`; `max_tokens` is deprecated for chat
 completions. A split parser means cost ranking and quota accounting disagree
 about what the client asked for — that divergence, not the field name, is the
@@ -37,7 +37,7 @@ defect.
 
 **2. The failure was a fail-closed 500 with a non-JSON body**
 
-`pick_cost_weighted` (`ai/routing.rs`) takes
+`pick_cost_weighted` (`ai/routing/candidate.rs`) takes
 `request_max_output_tokens.or(service_max_output_tokens)` and returns
 `PickerError::MissingCostInput` when both are absent.
 `defaults.maxOutputTokens` is optional — `EdgionBackend::validate` only forces
@@ -73,8 +73,8 @@ Re-open this decision only if:
 ## Reference Cases
 
 - `tasks/review-ai-work/gw-01-costweighted-ignores-max-completion-tokens.md` (AI dispatch review, 2026-08-04)
-- `edgion-gateway/src/ai/dispatch.rs` — `request_output_bound`, `request_max_tokens`, `effective_max_output_tokens`; regression tests `request_max_tokens_prefers_max_completion_tokens` and `cost_weighted_accepts_max_completion_tokens_only_body_without_service_max`
-- `edgion-gateway/src/ai/routing.rs` — `pick_cost_weighted` output-bound resolution
+- `edgion-gateway/src/ai/runtime/dispatch.rs` — `request_output_bound`, `request_max_tokens`, `effective_max_output_tokens`; regression tests `request_max_tokens_prefers_max_completion_tokens` and `cost_weighted_accepts_max_completion_tokens_only_body_without_service_max`
+- `edgion-gateway/src/ai/routing/candidate.rs` — `pick_cost_weighted` output-bound resolution
 - `docs/en/ai-gateway/routing.md` / `docs/zh-CN/ai-gateway/routing.md` — operator-facing statement of where the bound comes from
 
 ## Resolution references

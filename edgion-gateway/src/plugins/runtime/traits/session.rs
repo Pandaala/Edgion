@@ -593,32 +593,32 @@ pub trait PluginSession: Send + Sync {
     /// callback. Failure returns ownership to the source so bytes cannot vanish.
     fn publish_canonical_records(
         &mut self,
-        batch: crate::ai::canonical_sse::CanonicalRecordBatch,
-    ) -> Result<(), crate::ai::canonical_sse::CanonicalRecordBatch> {
+        batch: crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch,
+    ) -> Result<(), crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
         Err(batch)
     }
 
     /// Consume the current canonical batch exactly once.
-    fn take_canonical_records(&mut self) -> Option<crate::ai::canonical_sse::CanonicalRecordBatch> {
+    fn take_canonical_records(&mut self) -> Option<crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
         None
     }
 
     /// Claim the request's first irreversible response terminal for the active
     /// processor instance. Alternate adapters cannot claim by default.
-    fn try_claim_response_terminal(&mut self, _cause: crate::ai::terminal::ResponseTerminalCause) -> bool {
+    fn try_claim_response_terminal(&mut self, _cause: crate::response::terminal::ResponseTerminalCause) -> bool {
         false
     }
 
     /// Record whether the claimed terminal produced a client-visible event.
-    fn mark_response_terminal_emission(&mut self, _emission: crate::ai::terminal::TerminalEmission) {}
+    fn mark_response_terminal_emission(&mut self, _emission: crate::response::terminal::TerminalEmission) {}
 
     /// Return the client dialect and final response eligibility used by the
     /// bounded terminal renderer.
     fn ai_terminal_render_context(
         &self,
     ) -> Option<(
-        crate::ai::terminal::AiClientStreamDialect,
-        crate::ai::terminal::FinalResponseEligibility,
+        crate::ai::protocols::openai::terminal::AiClientStreamDialect,
+        crate::response::terminal::FinalResponseEligibility,
     )> {
         None
     }
@@ -659,7 +659,7 @@ pub trait PluginSession: Send + Sync {
     fn install_attached_guardrail(
         &mut self,
         _identity: String,
-        _owner: std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
+        _owner: std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>,
         _head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
     ) -> bool {
         false
@@ -668,7 +668,7 @@ pub trait PluginSession: Send + Sync {
     fn attached_guardrail(
         &self,
         _identity: &str,
-    ) -> Option<std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>> {
+    ) -> Option<std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>> {
         None
     }
 

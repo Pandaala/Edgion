@@ -29,7 +29,7 @@ cause:
   log line.
 
 Fixed on 2026-08-05: `AiUsageShared` carries a `gateway_terminated` latch set in
-`terminate_ai_stream` (`ai/usage.rs`) — the single place that decides a
+`terminate_ai_stream` (`ai/accounting/usage.rs`) — the single place that decides a
 deliberate cut — and settlement treats `eos || gateway_terminated` as "the
 exchange is over and its consumption is knowable".
 
@@ -120,14 +120,14 @@ Re-open this decision only if:
 
 - D2 / D4, 2026-08-05 — the original finding, from the response-body pipeline
   correctness audit (task file closed and removed with this fix)
-- `edgion-gateway/src/ai/usage.rs` — `terminate_ai_stream`, the
+- `edgion-gateway/src/ai/accounting/usage.rs` — `terminate_ai_stream`, the
   `gateway_terminated` latch on `AiUsageShared`
-- `edgion-gateway/src/ai/attempt_runtime.rs` — `AiAttemptRuntimeState::finalize`
+- `edgion-gateway/src/ai/runtime/attempt_runtime.rs` — `AiAttemptRuntimeState::finalize`
   and `settlement_for`
 - Regression tests:
-  `ai::attempt_runtime::tests::a_gateway_terminated_stream_reconciles_its_reservation_and_is_not_an_incomplete_response`
+  `ai::runtime::attempt_runtime::tests::a_gateway_terminated_stream_reconciles_its_reservation_and_is_not_an_incomplete_response`
   (drives the real `on_chunk` coupling instead of constructing the latches),
-  `ai::usage::tests::quota_over_limit_appends_an_error_event_and_terminates_without_dropping_the_current_chunk`,
+  `ai::accounting::usage::tests::quota_over_limit_appends_an_error_event_and_terminates_without_dropping_the_current_chunk`,
   and the integration case
   `quota_terminated_stream_records_its_status_and_settles_its_bucket` in
   `edgion-tests/src/client/suites/edgion_backend/single_provider.rs`

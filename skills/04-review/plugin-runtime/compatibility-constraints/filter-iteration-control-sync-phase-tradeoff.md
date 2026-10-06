@@ -33,7 +33,7 @@ and the lock-resolved fork revision above:
 - [Body adapter](../../../../edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs):
   maps `Data`, `TerminalBeforeTrailers`, and `TerminalWithoutTrailers` to
   processor callbacks without collapsing the trailer lifecycle.
-- [Processor driver](../../../../edgion-gateway/src/response_processor_driver.rs):
+- [Processor driver](../../../../edgion-gateway/src/response/driver.rs):
   body and trailer groups retain separate cancellation latches; dropping an
   incomplete execution lease releases the active group's inflight ownership.
 - [Trailer adapter](../../../../edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_trailer_filter.rs):

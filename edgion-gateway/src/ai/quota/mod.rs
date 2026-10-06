@@ -80,7 +80,7 @@ pub struct QuotaAccumulator {
 }
 
 impl QuotaAccumulator {
-    // `pub(crate)`, not private: `ai::usage`'s tests construct a
+    // `pub(crate)`, not private: `ai::accounting::usage`'s tests construct a
     // `QuotaAccumulator` directly to exercise `over_limit()` without spinning
     // up the full quota worker.
     pub(crate) fn new(flush_tokens: u64) -> Self {
@@ -139,7 +139,7 @@ impl QuotaAccumulator {
         self.notify_worker.notify_one();
     }
 
-    // `pub(crate)` for the same reason as `new`: `ai::usage`'s test drives a
+    // `pub(crate)` for the same reason as `new`: `ai::accounting::usage`'s test drives a
     // `QuotaAccumulator` straight to a final status without the worker.
     pub(crate) fn finish(&self, status: QuotaFinalStatus) {
         if status == QuotaFinalStatus::OverLimit {

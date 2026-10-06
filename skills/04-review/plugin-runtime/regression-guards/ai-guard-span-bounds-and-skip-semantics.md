@@ -8,7 +8,7 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-`edgion_gateway::plugins::http::ai_guard` distinguishes two outcomes while
+`edgion_gateway::ai::guards::request` distinguishes two outcomes while
 selecting guarded spans, and the paired `ai-guard.md` user guides must state both
 in each language:
 
@@ -28,7 +28,7 @@ a 64 KiB maximum) is wrong and inverts the intended behavior.
 
 ## Rationale and evidence
 
-- `edgion-gateway/src/plugins/http/ai_guard/spans.rs` — `select_spans`: `role`
+- `edgion-gateway/src/ai/guards/request/spans.rs` — `select_spans`: `role`
   uses `string_token().ok_or(SpanError::Unparseable)` and returns `Unparseable`
   on `Field::Missing | Field::Ambiguous`; `content` returns `Unparseable` only on
   `Field::Ambiguous` and `continue`s on `Field::Missing`; the trailing
@@ -39,7 +39,7 @@ a 64 KiB maximum) is wrong and inverts the intended behavior.
   the `max_span_bytes` doc comment records the deliberate absence of a small
   default, because a guard bound below what `AiProxy` accepts would turn ordinary
   long-context traffic into a content-policy refusal.
-- `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` — both caps resolve via
+- `edgion-gateway/src/ai/guards/request/plugin.rs` — both caps resolve via
   `unwrap_or(body_cap)` from `request_body_config.max_body_size_bytes`.
 - `edgion-resources/src/resources/edgion_gateway_config.rs` —
   `RequestBodyConfig::default_max_body_size` is `"32MiB"`; the parse-failure

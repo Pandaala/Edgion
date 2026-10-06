@@ -93,7 +93,7 @@ fn dye_producer_inventory_matches_declared_capability_union() {
         (
             "AiProxy",
             &[r#"{}"#],
-            &[include_str!("../../../../src/plugins/http/ai_proxy/plugin.rs")],
+            &[include_str!("../../../../src/ai/http/proxy.rs")],
         ),
     ];
     let producer = regex::Regex::new(r"\.record_outcome\(\s*DyeOutcome::(\w+)").unwrap();

@@ -2,7 +2,7 @@ use super::{
     connect_retry_continuation, finish_ai_connect_failure, finish_expired_connect_deadline,
     select_expired_connect_deadline, ConnectRetryContinuation::*, ExpiredConnectDeadline,
 };
-use crate::ai::attempt::{AttemptScheduler, BackendCredentials, NextStep, SchedulerError};
+use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials, NextStep, SchedulerError};
 use crate::ai::{AiAttemptPlan, AiBackendStore, ReadyAiAttemptPlan};
 use crate::observe::RequestDiagnostic;
 use crate::{BackendContext, EdgionHttpContext, UpstreamInfo};
@@ -131,7 +131,7 @@ fn disabled_relay_settles_ai_without_selecting_a_successor() {
     };
     assert_eq!(
         ready.scheduler.next_step(),
-        NextStep::Dispatch(crate::ai::attempt::AttemptTarget {
+        NextStep::Dispatch(crate::ai::runtime::attempt::AttemptTarget {
             backend: 0,
             credential: 0,
         })
@@ -153,7 +153,7 @@ fn retryable_ai_connect_failure_skips_the_failed_service() {
     };
     assert_eq!(
         ready.scheduler.next_step(),
-        NextStep::PickBackend(crate::ai::attempt::PickBackend {
+        NextStep::PickBackend(crate::ai::runtime::attempt::PickBackend {
             round: 0,
             excluded_backends: 1,
         }),

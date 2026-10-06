@@ -24,8 +24,8 @@ fn pingora_loop_capacity_includes_initial_attempt() {
     let conf = create_server_conf(&EdgionGatewayConfig::default()).unwrap();
 
     assert_eq!(conf.max_retries, MAX_RETRY_ATTEMPTS as usize + 1);
-    assert!(conf.max_retries > crate::ai::attempt::MAX_AI_BACKENDS);
-    assert!(conf.max_retries > usize::from(crate::ai::attempt::MAX_AI_DISPATCH_ATTEMPTS));
+    assert!(conf.max_retries > crate::ai::runtime::attempt::MAX_AI_BACKENDS);
+    assert!(conf.max_retries > usize::from(crate::ai::runtime::attempt::MAX_AI_DISPATCH_ATTEMPTS));
 }
 
 #[test]

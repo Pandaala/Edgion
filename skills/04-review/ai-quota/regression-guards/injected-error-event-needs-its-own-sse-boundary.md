@@ -21,7 +21,7 @@ the client parses one event whose data is truncated JSON glued to the error
 JSON, which every conforming SSE client drops.
 
 Fixed on 2026-08-05: both injected constants are now built by one helper,
-`injected_sse_error_event` (`edgion-gateway/src/ai/usage.rs`), which emits an
+`injected_sse_error_event` (`edgion-gateway/src/ai/accounting/usage.rs`), which emits an
 unconditional leading `\n\n`. `QUOTA_UNENFORCEABLE_SSE_EVENT` already carried
 the prefix from the D1 fix; `QUOTA_EXCEEDED_SSE_EVENT` did not, and that
 asymmetry was the whole remaining surface.
@@ -114,7 +114,7 @@ Re-open this decision only if:
 
 - `tasks/todo/d3-injected-sse-event-swallowed-by-partial-event.md` (adversarial
   security audit of the response-body pipeline work, 2026-08-05)
-- `edgion-gateway/src/ai/usage.rs` — `injected_sse_error_event`,
+- `edgion-gateway/src/ai/accounting/usage.rs` — `injected_sse_error_event`,
   `terminate_ai_stream`, and the
   `every_injected_event_stays_parseable_after_an_unterminated_event` /
   `an_injected_event_dispatches_nothing_extra_at_a_clean_boundary` unit tests

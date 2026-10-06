@@ -85,13 +85,14 @@ impl ExtProcResponseProcessor {
     ) {
         self.done = true;
         if !self.failure_mode_allow {
-            if !session.try_claim_response_terminal(crate::ai::terminal::ResponseTerminalCause::ProcessorFailure) {
+            if !session.try_claim_response_terminal(crate::response::terminal::ResponseTerminalCause::ProcessorFailure)
+            {
                 self.owner.terminal("superseded", "terminal-lost");
                 return;
             }
             self.owner.terminal("fail-close", reason);
             *chunk = None;
-            session.mark_response_terminal_emission(crate::ai::terminal::TerminalEmission::NoEvent);
+            session.mark_response_terminal_emission(crate::response::terminal::TerminalEmission::NoEvent);
             sink.terminate();
         } else {
             self.owner.terminal("fail-open", reason);
@@ -105,7 +106,7 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
         true
     }
 
-    fn on_terminal_preempted(&mut self, winner: crate::ai::terminal::ResponseTerminalCause) {
+    fn on_terminal_preempted(&mut self, winner: crate::response::terminal::ResponseTerminalCause) {
         self.done = true;
         self.owner.terminal("superseded", winner.as_str());
     }

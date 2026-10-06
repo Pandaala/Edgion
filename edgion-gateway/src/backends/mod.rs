@@ -30,9 +30,7 @@ pub use policy::{
     query_backend_tls_policy_for_logical_backend, BackendTLSPolicyStore, BackendTlsPolicyLookup,
     EffectiveBackendTlsPolicy,
 };
-pub use runtime::{
-    LogicalBackendHandle, SelectedAiBackend, SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend,
-};
+pub use runtime::{LogicalBackendHandle, SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend};
 pub use selector::{
     backends_for_service_section, select_service_endpoint, service_section_key_from_port, ServiceDegradePolicy,
 };

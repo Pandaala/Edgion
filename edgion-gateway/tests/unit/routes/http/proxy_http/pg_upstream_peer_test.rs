@@ -5,7 +5,7 @@ use super::{
     init_backend_context_if_needed, pick_backend_ref, replay_write_floor, sp_should_refresh_on_cross_attempt_retry,
     sp_should_repin_on_strict_retry, stop_ai_predispatch_if_expired, AuthorityDecision, BackoffAction,
 };
-use crate::ai::dispatch::AiDispatchError;
+use crate::ai::runtime::dispatch::AiDispatchError;
 use crate::ai::{render_openai_error, AiProxyError};
 use crate::backends::policy::backend_traffic::authority::AuthorityError;
 use crate::backends::policy::backend_traffic::RetryBudget;

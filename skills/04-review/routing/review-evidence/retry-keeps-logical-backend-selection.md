@@ -61,7 +61,7 @@ boundary.
 - CI-R1 security review, 2026-08-27
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs`
 - `edgion-gateway/src/routes/grpc/integration.rs`
-- `edgion-gateway/src/ai/dispatch.rs`
+- `edgion-gateway/src/ai/runtime/dispatch.rs`
 
 ## Resolution references
 

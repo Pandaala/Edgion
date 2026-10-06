@@ -351,8 +351,8 @@ fn final_response_eligibility(
     method: &http::Method,
     status: http::StatusCode,
     stream_kind: crate::ctx::ResponseStreamKind,
-) -> crate::ai::terminal::FinalResponseEligibility {
-    crate::ai::terminal::FinalResponseEligibility {
+) -> crate::response::terminal::FinalResponseEligibility {
+    crate::response::terminal::FinalResponseEligibility {
         method_allows_body: method != http::Method::HEAD,
         status_allows_body: !status.is_informational() && !matches!(status.as_u16(), 204 | 304),
         stream_kind,

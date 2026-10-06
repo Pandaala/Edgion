@@ -10,7 +10,7 @@
 use crate::framework::TestContext;
 use serde_json::Value;
 
-/// Mirrors the gateway's private `ai::attempt_runtime::KEY_PREFIX`.
+/// Mirrors the gateway's private `ai::runtime::attempt_runtime::KEY_PREFIX`.
 pub const CREDENTIAL_RESERVATION_KEY_PREFIX: &str = "edgion:aic:";
 
 pub fn admin_base(ctx: &TestContext) -> String {
@@ -35,7 +35,7 @@ pub fn authed(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
 /// The fallback is load-bearing, not defensive: `metadata.uid` is empty in the
 /// file-system config center the integration harness runs, and the gateway
 /// itself falls back to the typed resource key there (`try_compile_backend` in
-/// `edgion-gateway/src/ai/backend_store.rs`). A lookup that only accepted a
+/// `edgion-gateway/src/ai/runtime/backend_store.rs`). A lookup that only accepted a
 /// real UID would derive a bucket key that never exists.
 pub async fn backend_uid(ctx: &TestContext, namespace: &str, name: &str) -> Result<String, String> {
     let response = authed(

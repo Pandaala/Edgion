@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::EdgionHttpProxy;
-use crate::ai::canonical_sse::MAX_CANONICAL_SOURCE_CHUNK_BYTES;
-use crate::ai::terminal::{ResponseClose, ResponseProcessorSlot, ResponseTerminalCause};
+use crate::ai::protocols::openai::canonical_sse::MAX_CANONICAL_SOURCE_CHUNK_BYTES;
+use crate::response::terminal::{ResponseClose, ResponseProcessorSlot, ResponseTerminalCause};
+
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::plugins::runtime::traits::StreamingResponseEvent;
 use crate::plugins::runtime::PluginSession;
@@ -12,7 +13,7 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::{ResponseBodySink, Session, UpstreamResponseBodyEvent};
 
 fn preempt_processors(
-    processors: &mut crate::response_processor_driver::BodyProcessorSet,
+    processors: &mut crate::response::driver::BodyProcessorSet,
     winner: ResponseProcessorSlot,
     cause: ResponseTerminalCause,
 ) {

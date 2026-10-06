@@ -1,5 +1,5 @@
 use super::EdgionHttpProxy;
-use crate::ai::dispatch::{
+use crate::ai::runtime::dispatch::{
     ai_predispatch_deadline, commit_ai_attempt_context, prepare_first_attempt, AiDispatchError,
     AiPeerPredispatchFailure, PreparedAiAttempt,
 };
@@ -556,7 +556,7 @@ pub async fn upstream_peer_http(
             let admission = ctx
                 .ensure_ai_state()
                 .attempt_runtime
-                .admit(crate::ai::attempt_runtime::AiAttemptAdmissionInput {
+                .admit(crate::ai::runtime::attempt_runtime::AiAttemptAdmissionInput {
                     namespace: selected_identity.namespace.clone(),
                     backend_uid: target.selected.backend.uid.clone(),
                     credential_alias: target.selected.credential_alias.clone(),
@@ -581,7 +581,7 @@ pub async fn upstream_peer_http(
                 })
                 .await;
             match admission {
-                crate::ai::attempt_runtime::AiAttemptAdmission::Ready(runtime) => {
+                crate::ai::runtime::attempt_runtime::AiAttemptAdmission::Ready(runtime) => {
                     ctx.ensure_ai_state().attempt_runtime.install(runtime);
                     if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
                         return Err(response);
@@ -607,29 +607,29 @@ pub async fn upstream_peer_http(
                         }
                     }
                 }
-                crate::ai::attempt_runtime::AiAttemptAdmission::Skip => {
+                crate::ai::runtime::attempt_runtime::AiAttemptAdmission::Skip => {
                     if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
                         return Err(response);
                     }
-                    if !crate::ai::dispatch::handle_ai_predispatch_failure(ctx, true) {
+                    if !crate::ai::runtime::dispatch::handle_ai_predispatch_failure(ctx, true) {
                         end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
                         return Err(PingoraError::new(ErrorType::InternalError));
                     }
                 }
-                crate::ai::attempt_runtime::AiAttemptAdmission::SkipBackend => {
+                crate::ai::runtime::attempt_runtime::AiAttemptAdmission::SkipBackend => {
                     if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
                         return Err(response);
                     }
-                    if !crate::ai::dispatch::handle_ai_predispatch_service_failure(ctx) {
+                    if !crate::ai::runtime::dispatch::handle_ai_predispatch_service_failure(ctx) {
                         end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
                         return Err(PingoraError::new(ErrorType::InternalError));
                     }
                 }
-                crate::ai::attempt_runtime::AiAttemptAdmission::DependencyDenied => {
+                crate::ai::runtime::attempt_runtime::AiAttemptAdmission::DependencyDenied => {
                     if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
                         return Err(response);
                     }
-                    if !crate::ai::dispatch::handle_ai_predispatch_failure(ctx, true) {
+                    if !crate::ai::runtime::dispatch::handle_ai_predispatch_failure(ctx, true) {
                         end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
                         return Err(PingoraError::new(ErrorType::InternalError));
                     }

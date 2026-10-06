@@ -1,5 +1,5 @@
 use super::EdgionHttpProxy;
-use crate::ai::dispatch::AiPeerPredispatchFailure;
+use crate::ai::runtime::dispatch::AiPeerPredispatchFailure;
 use crate::EdgionHttpContext;
 use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;

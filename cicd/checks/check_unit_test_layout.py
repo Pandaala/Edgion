@@ -36,13 +36,13 @@ ASSOCIATED_ITEM = re.compile(
 # Associated test helpers stay attached to their production impls because Rust
 # does not accept include! in impl item position. Each owner/name is explicit.
 GATEWAY_ASSOCIATED_TEST_HELPERS = {
-    Path('ai/adaptive.rs'): ('get_or_create',),
-    Path('ai/anthropic/response.rs'): ('new',),
-    Path('ai/attempt_runtime.rs'): ('record_test_attempt', 'settlement_decisions_for_test'),
-    Path('ai/circuit_breaker.rs'): ('in_flight',),
-    Path('ai/credential_outlier.rs'): ('admit', 'apply_retry_after', 'configure_backend', 'current_handle', 'effective_handle_for_test', 'fallback_handle_for_test', 'force_expired_cooldown_for_test', 'record_failure', 'record_success', 'state'),
+    Path('ai/routing/adaptive.rs'): ('get_or_create',),
+    Path('ai/conversion/chat_to_anthropic/response.rs'): ('new',),
+    Path('ai/runtime/attempt_runtime.rs'): ('record_test_attempt', 'settlement_decisions_for_test'),
+    Path('ai/runtime/circuit_breaker.rs'): ('in_flight',),
+    Path('ai/runtime/credential_outlier.rs'): ('admit', 'apply_retry_after', 'configure_backend', 'current_handle', 'effective_handle_for_test', 'fallback_handle_for_test', 'force_expired_cooldown_for_test', 'record_failure', 'record_success', 'state'),
     Path('ai/quota/mod.rs'): ('new_for_test', 'observed_output_for_test'),
-    Path('ai/usage.rs'): ('add_output_units_for_test',),
+    Path('ai/accounting/usage.rs'): ('add_output_units_for_test',),
     Path('backends/discovery/coordinator.rs'): ('set_completion_barrier_for_test', 'set_degrade_threshold', 'set_next_epoch_for_test'),
     Path('backends/discovery/dns_cache.rs'): ('len',),
     Path('backends/discovery/endpoint_slice/ep_slice_store.rs'): ('update_data_only',),
@@ -86,7 +86,7 @@ GATEWAY_ASSOCIATED_TEST_HELPERS = {
     Path('request_body/state/enabled.rs'): ('cached_body_is_materialized',),
     Path('request_body/storage.rs'): ('is_materialized', 'with_limits', 'with_memory_limit'),
     Path('request_trace_id/w3c.rs'): ('trace_id', 'traceparent'),
-    Path('response_processor_driver.rs'): ('ordinary_count',),
+    Path('response/driver.rs'): ('ordinary_count',),
     Path('routes/grpc/match_engine.rs'): ('new', 'shares_hosts'),
     Path('routes/http/routes_mgr.rs'): ('get_global_routes',),
     Path('routes/tls/gateway_tls_routes.rs'): ('from_units', 'match_route'),
@@ -101,7 +101,7 @@ GATEWAY_ASSOCIATED_TEST_HELPERS = {
 # Source-local test instrumentation, fields, initializers, and branches cannot
 # be moved without changing the production item they instrument.
 GATEWAY_SOURCE_LOCAL = {
-    Path('ai/attempt_runtime.rs'): (
+    Path('ai/runtime/attempt_runtime.rs'): (
         'self.settlement_decisions.push(operation);',
         'settlement_decisions: Vec<SettlementOperation>,',
     ),
@@ -187,7 +187,7 @@ GATEWAY_SOURCE_LOCAL = {
         'if let Some(hook) = test_hook {',
         'let test_hook = STORAGE_IO_TEST_HOOK.try_with(Arc::clone).ok();',
     ),
-    Path('response_processor_driver.rs'): (
+    Path('response/driver.rs'): (
         'let ordinary_count = body.ordinary.len();',
         'ordinary_count,',
         'ordinary_count: usize,',
