@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn crd_scalar_defaults_resolve_to_builtin_runtime_policy() {
+    let crd: serde_json::Value = serde_yaml::from_str(include_str!(
+        "../../../../config/crd/edgion-crd/edgion_gateway_config_crd.yaml"
+    ))
+    .expect("committed Gateway config CRD must parse");
+    let versions = crd["spec"]["versions"].as_array().expect("CRD versions exist");
+    let mut checked = 0;
+    for version in versions.iter().filter(|version| version["served"] == true) {
+        let properties = version["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["requestBody"]
+            ["properties"]
+            .as_object()
+            .expect("request-body schema properties exist");
+        // An explicit specimen, not an admission/defaulting simulator.
+        let defaults: serde_json::Map<String, serde_json::Value> = properties
+            .iter()
+            .filter_map(|(name, field)| field.get("default").map(|value| (name.clone(), value.clone())))
+            .collect();
+        let config: RequestBodyConfig =
+            serde_json::from_value(serde_json::Value::Object(defaults)).expect("CRD scalar defaults must deserialize");
+        assert!(config.validate().is_empty());
+        assert_eq!(
+            ResolvedRequestBodyConfig::resolve(&config),
+            ResolvedRequestBodyConfig::default(),
+            "{}: CRD defaults must agree with the Gateway runtime fallback",
+            version["name"]
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "at least one served version must be checked");
+}
+
+#[test]
 fn defaults_preserve_existing_limits() {
     let resolved = ResolvedRequestBodyConfig::resolve(&RequestBodyConfig::default());
     assert_eq!(resolved.memory_buffer_bytes, 128 * 1024);

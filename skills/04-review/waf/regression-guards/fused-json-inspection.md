@@ -246,12 +246,13 @@ Re-evaluate compiler peaks, generation identity, high-water headroom and error
 cleanup when changing any of these mechanisms. Directed identical-regex benchmarks
 do not establish broad CRS speedups.
 
-The current capture-key and candidate follow-up is documented in
-[plan25](../../../../tasks/pending/waf-json-checker/25-capture-key-and-candidate-plan.md)
-and [results26](../../../../tasks/pending/waf-json-checker/26-capture-key-and-candidate-results.md).
-Final independent Astra code/artifact review approved the disclosed allocation,
-CPU and descriptor tradeoffs. Fresh WAF tests (639 passed, two ignored), API4,
-workspace checks/guards and all 1,240 paired/three-version rows passed.
+The capture-key and candidate follow-up was recorded in the historical plan
+(`25-capture-key-and-candidate-plan.md`) and results
+(`26-capture-key-and-candidate-results.md`), removed with the old task tree.
+The recorded final independent Astra code/artifact review approved the disclosed
+allocation, CPU and descriptor tradeoffs. Recorded verification passed WAF tests
+(639 passed, two ignored), API4, workspace checks/guards and all 1,240
+paired/three-version rows. These are historical results, not a fresh rerun.
 Static JSON capture keys share opaque sealed handles through replay, TX entries,
 capture cleanup lists and both clone policies. Ordinary captures remain fallibly
 owned and move their existing builder vector. TX key lookup, mutation, selection

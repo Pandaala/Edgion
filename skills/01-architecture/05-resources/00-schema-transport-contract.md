@@ -38,6 +38,21 @@ for four fully structural specs:
 It also contains narrow regression pins for EdgionAcme status and the stream-plugin TLS-route
 field. The property walker does not validate field types/patterns/defaults.
 
+`edgion-resources/tests/crd_field_contract_parity.rs` separately checks 16 selected
+scalar fields across every served EdgionGatewayConfig and EdgionBackendTrafficPolicy
+CRD version: retry budget, LinkSys limits, request-body policy, outlier detection,
+and active health-check port. It compares types, serde defaults, inherited defaults,
+selected numeric bounds, and existing semantic validation. Explicit CRD-default
+specimens are not a Kubernetes admission simulator; runtime-only constraints and
+direct-input health-check port-zero validation remain distinct coverage boundaries.
+
+Verification on 2026-10-06 passed 97 targeted tests, workspace check/clippy,
+formatting, and project guards. Temporary type/default/maximum CRD mutations
+triggered the intended assertions and were restored byte-for-byte. This is scoped
+historical verification, not full ingestion-mode or live API-server equivalence.
+The [health-check zero-port validation task](../../../tasks/pending/health-check-zero-port-validation.md)
+remains open.
+
 `edgion-resources/tests/plugin_crd_type_coverage.rs` and `stream_plugin_crd_type_coverage.rs`
 guard open string plugin discriminators and config preservation. Unsupported names are rejected
 through typed sentinel validation and fail-closed runtimes, not CRD whitelists. These guards do
