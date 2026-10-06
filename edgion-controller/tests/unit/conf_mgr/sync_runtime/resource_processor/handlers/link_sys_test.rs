@@ -369,41 +369,6 @@ async fn persist_off_is_rejected_when_not_single_publisher() {
     );
 }
 
-#[tokio::test]
-async fn invalid_publication_cap_never_registers_a_credential_source() {
-    for (persist, memory_max_keys) in [(false, 0), (false, 10_001), (true, 0)] {
-        let (key, mut secret) = make_secret(
-            "ops",
-            "bootstrap",
-            &[("clientId", b"client"), ("clientSecret", b"secret")],
-        );
-        secret.metadata.uid = Some("bootstrap-uid".to_string());
-        secret.metadata.resource_version = Some("22".to_string());
-        let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
-        let handler = LinkSysHandler::new();
-        let mut link_sys = make_credential_source("ops", "src", "bootstrap");
-        let SystemConfig::CredentialSource(source) = &mut link_sys.spec.config else {
-            panic!("credentialSource expected");
-        };
-        source.publication.persist = persist;
-        source.publication.memory_max_keys = memory_max_keys;
-
-        let errors = handler.preparse(&mut link_sys, &ctx);
-        assert!(
-            errors.iter().any(|error| error.contains("memoryMaxKeys")),
-            "invalid cap must fail admission: {errors:?}"
-        );
-        let result = handler.parse(link_sys, &ctx).await;
-        let ProcessResult::Continue(_) = result else {
-            panic!("lenient admission must continue");
-        };
-        assert!(
-            runtime.credential_source_registry.source("ops/src").is_none(),
-            "Accepted=False source must not register: persist={persist}, memoryMaxKeys={memory_max_keys}"
-        );
-    }
-}
-
 #[test]
 fn persist_off_is_allowed_on_non_kubernetes_single_publisher() {
     let (ctx, runtime) = make_ctx(HashMap::new());
@@ -467,20 +432,16 @@ async fn persist_off_link_sys_conf_sync_projection_has_no_generated_map() {
     secret.metadata.resource_version = Some("22".to_string());
     let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
 
-    runtime
-        .credential_memory
-        .insert_oauth_publication(
-            "ops/provider/source-uid",
-            crate::services::credential_manager::memory::GeneratedSecretEntry {
-                key: "pub-1".to_string(),
-                value: zeroize::Zeroizing::new(TOKEN.as_bytes().to_vec()),
-                issued_at: "2026-08-27T00:00:00Z".to_string(),
-                valid_until: "2099-08-27T12:00:00Z".to_string(),
-                valid_until_mono: std::time::Instant::now() + std::time::Duration::from_secs(3_600),
-            },
-            10_000,
-        )
-        .expect("memory insert");
+    runtime.credential_memory.insert_oauth_publication(
+        "ops/provider/source-uid",
+        crate::services::credential_manager::memory::GeneratedSecretEntry {
+            key: "pub-1".to_string(),
+            value: zeroize::Zeroizing::new(TOKEN.as_bytes().to_vec()),
+            issued_at: "2026-08-27T00:00:00Z".to_string(),
+            valid_until: "2099-08-27T12:00:00Z".to_string(),
+            valid_until_mono: std::time::Instant::now() + std::time::Duration::from_secs(3_600),
+        },
+    );
 
     let handler = LinkSysHandler::new();
     let mut link_sys = make_credential_source("ops", "provider", "oauth-bootstrap");

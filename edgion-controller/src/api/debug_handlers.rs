@@ -44,7 +44,7 @@ pub struct ControllerStoreStats {
     pub credential_source_registry: CredentialSourceRegistryStats,
     /// LinkSys identities with an in-memory generated-secret slot. Counts only.
     pub credential_memory_sources: usize,
-    /// Sum of generated-secret entries across those slots. Counts only.
+    /// Active generated-secret entries, one per stored source identity. Counts only.
     pub credential_memory_keys: usize,
     pub event_store: EventStoreStats,
     pub watch_objects: WatchObjectsStats,

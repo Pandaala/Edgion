@@ -125,10 +125,8 @@ Controller-local memory map instead of a Secret:
 - allowed on a single-publisher Controller (leader-only Kubernetes, or FS/etcd)
 - Kubernetes `ha_mode: all-serve` is rejected (`Accepted=False`, reason
   `UnsupportedHaMode`); the Controller does not call the issuer
-- `publication.memoryMaxKeys` defaults to `10000` (range `1..=10000`); OAuth2
-  uses at most two map entries (active + previous)
-- `memoryMaxKeys` is validated even when `persist: true`; values above `10000`
-  cannot be used to preconfigure a later mode switch
+- each LinkSys identity (`namespace/name/uid`) has one active token; successful
+  publication replaces it without retaining a previous token for fallback
 - the map is Controller-only: it is never a LinkSys spec, status, conf_sync, or
   Admin field. The Gateway still receives the active token through this
   plugin's `resolvedCredential`
@@ -150,10 +148,21 @@ spec:
           name: oauth-client
     publication:
       persist: false
-      # memoryMaxKeys: 10000   # default; range 1..=10000
 ```
 
 ## Credential lifecycle
+
+The Controller proactively acquires the next token at the earlier of
+`rotation.interval` (default `15m`) and half the issuer-provided lifetime,
+with a small earlier-only jitter. Consumer validity reserves a 30-second safety
+margin before issuer expiry. If acquisition fails, the current token remains
+usable until its validity deadline while acquisition is retried. If Secret
+publication fails after acquisition, the acquired token is retained for
+publication retries without another issuer call.
+
+`clientAuthentication.previousSecretRef` is a separate fallback for bootstrap
+client credentials, used only when the issuer rejects the active client with
+`invalid_client`. It does not select a previous generated access token.
 
 Changing publication mode preserves credential material until replacement
 publication completes:

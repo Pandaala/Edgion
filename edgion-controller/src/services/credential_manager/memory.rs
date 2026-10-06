@@ -8,9 +8,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use indexmap::IndexMap;
 use parking_lot::RwLock;
-use thiserror::Error;
 use zeroize::Zeroizing;
 
 /// One generated credential. `Debug` never prints `value`.
@@ -35,26 +33,9 @@ impl fmt::Debug for GeneratedSecretEntry {
     }
 }
 
-/// Fail-closed insert when the operator cap cannot be met without dropping
-/// the live active key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum MemoryInsertError {
-    #[error(
-        "credential memory cap reached for this LinkSys source; the active key cannot be evicted. Increase publication.memoryMaxKeys or wait for rotation"
-    )]
-    CapReached,
-}
-
-#[derive(Clone)]
-struct SourceMemorySlot {
-    entries: IndexMap<String, Arc<GeneratedSecretEntry>>,
-    active_key: String,
-    max_keys: u32,
-}
-
-/// Per-LinkSys generated-secret map owned by the controller process.
+/// One active generated credential per LinkSys identity, owned by the controller.
 pub struct CredentialMemoryStore {
-    sources: RwLock<HashMap<String, SourceMemorySlot>>,
+    sources: RwLock<HashMap<String, Arc<GeneratedSecretEntry>>>,
 }
 
 impl CredentialMemoryStore {
@@ -64,55 +45,16 @@ impl CredentialMemoryStore {
         }
     }
 
-    /// Insert an OAuth publication: the new key becomes active, at most the
-    /// previous active is retained, older OAuth ids are dropped, then the
-    /// operator `max_keys` cap is applied without evicting the new active.
-    pub fn insert_oauth_publication(
-        &self,
-        source_identity: &str,
-        entry: GeneratedSecretEntry,
-        max_keys: u32,
-    ) -> Result<(), MemoryInsertError> {
-        let mut sources = self.sources.write();
-        let previous = sources.get(source_identity).cloned();
-        let mut next = previous.unwrap_or_else(|| SourceMemorySlot {
-            entries: IndexMap::new(),
-            active_key: String::new(),
-            max_keys,
-        });
-
-        let new_key = entry.key.clone();
-        let previous_active = next.active_key.clone();
-
-        let mut entries = IndexMap::new();
-        if !previous_active.is_empty() && previous_active != new_key {
-            if let Some(retained) = next.entries.get(&previous_active) {
-                entries.insert(previous_active, Arc::clone(retained));
-            }
-        }
-        entries.insert(new_key.clone(), Arc::new(entry));
-
-        while entries.len() > max_keys as usize {
-            let victim = entries.keys().find(|key| *key != &new_key).cloned();
-            match victim {
-                Some(key) => {
-                    entries.shift_remove(&key);
-                }
-                None => return Err(MemoryInsertError::CapReached),
-            }
-        }
-
-        next.entries = entries;
-        next.active_key = new_key;
-        next.max_keys = max_keys;
-        sources.insert(source_identity.to_string(), next);
-        Ok(())
+    /// Atomically replace the active publication. Existing Arc holders remain
+    /// valid; the store itself retains no previous generation.
+    pub fn insert_oauth_publication(&self, source_identity: &str, entry: GeneratedSecretEntry) {
+        self.sources
+            .write()
+            .insert(source_identity.to_string(), Arc::new(entry));
     }
 
     pub fn active(&self, source_identity: &str) -> Option<Arc<GeneratedSecretEntry>> {
-        let sources = self.sources.read();
-        let slot = sources.get(source_identity)?;
-        slot.entries.get(&slot.active_key).cloned()
+        self.sources.read().get(source_identity).cloned()
     }
 
     pub fn clear_source(&self, source_identity: &str) {
@@ -127,8 +69,10 @@ impl CredentialMemoryStore {
         self.sources.read().len()
     }
 
+    /// Active entries only, one per stored source identity. External Arc holders
+    /// are not counted.
     pub fn key_count(&self) -> usize {
-        self.sources.read().values().map(|slot| slot.entries.len()).sum()
+        self.sources.read().len()
     }
 
     /// LinkSys identities only — never secret keys or values.

@@ -23,7 +23,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::
 };
 use crate::conf_mgr::{ControllerRuntime, LeaderHandle};
 
-use super::memory::{GeneratedSecretEntry, MemoryInsertError};
+use super::memory::GeneratedSecretEntry;
 use super::providers::oauth2::{BootstrapCredentials, OAuth2FailureKind, OAuth2Provider, OAuth2ProviderError};
 use super::scheduler::{refresh_delay, retry_delay, usable_lifetime, EXPIRY_MARGIN, MIN_USABILITY};
 use super::secret_io::{
@@ -783,7 +783,8 @@ fn try_publish_persist_off(
     if !memory_publish_allowed(runtime, source) {
         return Err(ReconcileFailure::transient(None));
     }
-    publish_to_memory(runtime, source, retained).map_err(|_| ReconcileFailure::rotation())
+    publish_to_memory(runtime, source, retained);
+    Ok(())
 }
 
 /// Leftover-delete failures stay in this map even when persist-off. Persist-off
@@ -836,9 +837,9 @@ pub(crate) fn publish_to_memory(
     runtime: &ControllerRuntime,
     source: &DesiredCredentialSource,
     retained: &RetainedPublication,
-) -> Result<(), MemoryInsertError> {
+) {
     if !memory_publish_allowed(runtime, source) {
-        return Ok(());
+        return;
     }
     runtime.credential_memory.insert_oauth_publication(
         &source.identity_key(),
@@ -849,8 +850,7 @@ pub(crate) fn publish_to_memory(
             valid_until: format_rfc3339(retained.valid_until),
             valid_until_mono: retained.expires_at,
         },
-        source.memory_max_keys,
-    )
+    );
 }
 
 fn clear_source_memory(runtime: &ControllerRuntime, source: &DesiredCredentialSource) {

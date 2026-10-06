@@ -103,9 +103,11 @@ are maintained in the
   final HeaderValue do not. Canonical BearerResolver validation still creates its
   own validated token. `RetainedPublication` keeps and clones the issued token for
   publication retries without reissuing; removing it would change correctness.
-- `GeneratedSecretEntry` owns Zeroizing bytes behind Arc. Rotation/expiry/removal
-  drops store references; the final external Arc drop wipes that entry. Expiry
-  scanning and cancellation polling are release events, not an exact destruction
+- `GeneratedSecretEntry` owns Zeroizing bytes behind Arc. The Controller memory
+  store holds one active entry per source identity; replacement/expiry/removal
+  drops its reference, and the final strong Arc drop wipes that entry. See the
+  [single-active memory boundary](../../link-sys/regression-guards/credential-source-single-active-memory.md).
+  Expiry scanning and cancellation polling are release events, not an exact destruction
   deadline. Persistent Kubernetes publication creates independent durable copies.
 - LinkSys Redis/etcd/Kafka client configs and health/reconnect tasks retain owned
   authentication state for reconnect. Runtime store replacement drops one owner;

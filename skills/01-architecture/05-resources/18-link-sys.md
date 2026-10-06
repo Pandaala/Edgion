@@ -89,7 +89,7 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
   Common resolver handle published in the Gateway's unified typed LinkSys runtime
   table; it has no persistent runner.
 - `credentialSource` is Controller-only acquisition metadata. Persist-on writes a generated
-  Secret; `publication.persist: false` stores a capped map on
+  Secret; `publication.persist: false` stores one active entry per source identity on
   `ControllerRuntime.credential_memory` (never on the LinkSys object). Kubernetes
   `all-serve` + persist-off is `Accepted=False` / `UnsupportedHaMode`. The Gateway
   `LinkSysStore` is a no-op for this variant. The active token still rides EdgionPlugins

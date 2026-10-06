@@ -262,7 +262,6 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
                             uid,
                             generation: ls.metadata.generation.unwrap_or_default(),
                             persist: config.publication.persist,
-                            memory_max_keys: config.publication.memory_max_keys,
                             config: ControllerCredentialSourceConfig::new(config),
                             secret_inputs: credential_inputs,
                         });

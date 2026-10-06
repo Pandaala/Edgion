@@ -102,8 +102,7 @@ spec:
 - 不会创建或接管生成的 Secret。
 - 允许在单发布者 Controller 上使用（leader-only Kubernetes 或 FS/etcd）。
 - Kubernetes `ha_mode: all-serve` 会被拒绝（`Accepted=False`，reason 为 `UnsupportedHaMode`）；Controller 不会调用 issuer。
-- `publication.memoryMaxKeys` 默认为 `10000`，范围为 `1..=10000`；OAuth2 最多使用两个 map 条目（活动 + 上一代）。
-- 即使 `persist: true`，`memoryMaxKeys` 也会被校验；不能使用大于 `10000` 的值预先配置后续模式切换。
+- 每个 LinkSys 身份（`namespace/name/uid`）仅保存一个活动 token；发布成功时替换该 token，不额外保留上一代用于回退。
 - 该 map 仅存在于 Controller：它不会出现在 LinkSys spec、status、conf_sync 或 Admin 字段中。Gateway 仍会通过该插件的 `resolvedCredential` 收到活动 token。
 
 ```yaml
@@ -123,10 +122,13 @@ spec:
           name: oauth-client
     publication:
       persist: false
-      # memoryMaxKeys: 10000   # 默认值；范围 1..=10000
 ```
 
 ## 凭据生命周期
+
+Controller 在 `rotation.interval`（默认 `15m`）与 issuer 返回的 token 半寿命中取较早时间，再加少量仅提前的抖动，主动获取下一代 token。消费方的有效期在 issuer 到期时间前预留 30 秒安全余量。获取失败时，当前 token 在其有效期内仍可使用，同时重试获取；如果获取成功但 Secret 发布失败，则保留刚获取的 token 重试发布，避免再次调用 issuer。
+
+`clientAuthentication.previousSecretRef` 是独立的 bootstrap 客户端凭据回退，仅当 issuer 以 `invalid_client` 拒绝活动客户端凭据时使用，不会选择上一代生成的 access token。
 
 切换发布模式时，Edgion 会保留凭据材料，直到替代发布完成：
 

@@ -24,6 +24,11 @@ TLS material projection, and ACME EAB account construction. The completed KeyAut
 parser reduction remains a separate correction. DNS-01 has been removed and is not
 authorized by this decision.
 
+The later [CredentialSource memory simplification](../../link-sys/regression-guards/credential-source-single-active-memory.md)
+removes the unread previous generated-token entry from that store. It preserves
+the independent publication, transport, and request owners accepted here; this
+historical acceptance does not require storing an unused previous token.
+
 ## Rationale and evidence
 
 The source-backed owner and release-event inventory is maintained in

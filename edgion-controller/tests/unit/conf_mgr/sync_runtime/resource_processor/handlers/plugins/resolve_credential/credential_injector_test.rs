@@ -310,7 +310,6 @@ fn link_sys_desired_source(persist: bool) -> DesiredCredentialSource {
             uid: "source-uid".to_string(),
             generation: 7,
             persist,
-            memory_max_keys: 10_000,
             config: crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::ControllerCredentialSourceConfig::new(
                 credential_source_config(),
             ),
@@ -344,20 +343,16 @@ fn insert_memory_token_until(
     token: &[u8],
     valid_until_mono: std::time::Instant,
 ) {
-    runtime
-        .credential_memory
-        .insert_oauth_publication(
-            &source.identity_key(),
-            crate::services::credential_manager::memory::GeneratedSecretEntry {
-                key: "pub-1".to_string(),
-                value: zeroize::Zeroizing::new(token.to_vec()),
-                issued_at: "2026-08-27T00:00:00Z".to_string(),
-                valid_until: "2099-08-27T12:00:00Z".to_string(),
-                valid_until_mono,
-            },
-            source.memory_max_keys,
-        )
-        .expect("memory insert");
+    runtime.credential_memory.insert_oauth_publication(
+        &source.identity_key(),
+        crate::services::credential_manager::memory::GeneratedSecretEntry {
+            key: "pub-1".to_string(),
+            value: zeroize::Zeroizing::new(token.to_vec()),
+            issued_at: "2026-08-27T00:00:00Z".to_string(),
+            valid_until: "2099-08-27T12:00:00Z".to_string(),
+            valid_until_mono,
+        },
+    );
 }
 
 fn insert_memory_token(runtime: &ControllerRuntime, source: &DesiredCredentialSource, token: &[u8]) {
@@ -421,6 +416,14 @@ async fn persist_off_memory_hit_embeds_token_without_same_name_secret_dep() {
         !runtime.link_sys_ref_mgr.get_refs("default/source").is_empty(),
         "memory-mode resolve must still register link_sys_ref_mgr"
     );
+
+    let previous_generation = ep.clone();
+    insert_memory_token(&runtime, &source, b"rotated-token");
+    resolve(&mut ep, &owner, &context).await;
+    assert_eq!(resolved_value(&ep), Some("rotated-token"));
+    assert_eq!(resolved_value(&previous_generation), Some("access-token"));
+    assert_eq!(runtime.credential_memory.key_count(), 1);
+    assert!(same_name_secret_deps(&context, &owner).is_empty());
 }
 
 #[tokio::test]

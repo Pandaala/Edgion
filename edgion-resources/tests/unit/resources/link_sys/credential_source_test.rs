@@ -70,30 +70,39 @@ fn rejects_unknown_fields() {
 }
 
 #[test]
-fn omitted_publication_defaults_to_persist_on_with_ten_thousand_key_cap() {
+fn omitted_publication_defaults_to_persist_on() {
     let config: CredentialSourceConfig = serde_yaml::from_str(valid_yaml()).unwrap();
     assert!(config.publication.persist);
-    assert_eq!(config.publication.memory_max_keys, 10_000);
     assert!(config.validation_errors().is_empty());
 }
 
 #[test]
-fn persist_false_is_accepted_and_cap_bounds_are_enforced() {
+fn persist_false_is_accepted() {
     let ok: CredentialSourceConfig =
-        serde_yaml::from_str(&(valid_yaml().to_string() + "publication:\n  persist: false\n  memoryMaxKeys: 1\n"))
-            .unwrap();
+        serde_yaml::from_str(&(valid_yaml().to_string() + "publication:\n  persist: false\n")).unwrap();
     assert!(!ok.publication.persist);
-    assert_eq!(ok.publication.memory_max_keys, 1);
+    assert!(ok.validation_errors().is_empty());
+}
 
-    let high: CredentialSourceConfig =
-        serde_yaml::from_str(&(valid_yaml().to_string() + "publication:\n  persist: false\n  memoryMaxKeys: 10001\n"))
-            .unwrap();
-    assert!(high.validation_errors().join(";").contains("memoryMaxKeys"));
+#[test]
+fn removed_memory_cap_is_rejected_in_both_publication_modes() {
+    for persist in [false, true] {
+        let yaml = format!(
+            "{}publication:\n  persist: {persist}\n  memoryMaxKeys: 1\n",
+            valid_yaml()
+        );
+        let error = serde_yaml::from_str::<CredentialSourceConfig>(&yaml).unwrap_err();
+        assert!(error.to_string().contains("unknown field `memoryMaxKeys`"));
+    }
 
-    let zero: CredentialSourceConfig =
-        serde_yaml::from_str(&(valid_yaml().to_string() + "publication:\n  persist: true\n  memoryMaxKeys: 0\n"))
-            .unwrap();
-    assert!(zero.validation_errors().join(";").contains("memoryMaxKeys"));
+    let publication = super::CredentialPublicationConfig::default();
+    assert_eq!(
+        serde_json::to_value(publication).unwrap(),
+        serde_json::json!({ "persist": true })
+    );
+    let schema = serde_json::to_value(schemars::schema_for!(super::CredentialPublicationConfig)).unwrap();
+    assert!(schema["properties"].get("persist").is_some());
+    assert!(schema["properties"].get("memoryMaxKeys").is_none());
 }
 
 #[test]

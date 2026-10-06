@@ -130,14 +130,16 @@ async fn empty_credential_memory_store_stats_reports_zero() {
 }
 
 #[tokio::test]
-async fn store_stats_counts_one_credential_memory_insert_then_reset_returns_zero() {
+async fn store_stats_counts_one_active_credential_after_rotation_then_reset_returns_zero() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let state = make_test_state(tmp.path()).await;
     let runtime = state.conf_mgr.runtime();
     runtime
         .credential_memory
-        .insert_oauth_publication("ops/src/uid", memory_entry("pub-1", b"token-bytes"), 10_000)
-        .expect("insert");
+        .insert_oauth_publication("ops/src/uid", memory_entry("pub-1", b"token-bytes"));
+    runtime
+        .credential_memory
+        .insert_oauth_publication("ops/src/uid", memory_entry("pub-2", b"rotated-token"));
 
     let Json(after_insert) = store_stats(State(state.clone())).await;
     let stats = after_insert.data.expect("ok body");
@@ -145,7 +147,11 @@ async fn store_stats_counts_one_credential_memory_insert_then_reset_returns_zero
     assert_eq!(stats.credential_memory_keys, 1);
     let dump = serde_json::to_string(&stats).expect("serialize stats");
     assert!(
-        !dump.contains("ops/src/uid") && !dump.contains("pub-1") && !dump.contains("token-bytes"),
+        !dump.contains("ops/src/uid")
+            && !dump.contains("pub-1")
+            && !dump.contains("pub-2")
+            && !dump.contains("token-bytes")
+            && !dump.contains("rotated-token"),
         "store-stats must expose counts only, never source identities, secret keys, or values: {dump}"
     );
 

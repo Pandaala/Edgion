@@ -457,20 +457,26 @@ spec:
       blockPrivate: true                # default true
     publication:
       persist: true                     # default true (generated Kubernetes Secret)
-      memoryMaxKeys: 10000              # default 10000; range 1..=10000
 ```
 
 **`publication`:**
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `persist` | boolean | `true` | `true` writes a generated Secret named after the consuming `EdgionPlugins` (Kubernetes-only); outside Kubernetes it is `Accepted=False` / `UnsupportedConfigurationCenter`. `false` keeps generations in a Controller-local memory map: no generated Secret, allowed on leader-only Kubernetes and FS/etcd. Kubernetes `ha_mode: all-serve` + `persist: false` is `Accepted=False` / `UnsupportedHaMode`. |
-| `memoryMaxKeys` | integer | `10000` | Cap on that per-LinkSys map, range `1..=10000`, validated even when `persist: true`; the cap cannot be raised above `10000`. OAuth2 uses at most two entries (active + previous). |
+| `persist` | boolean | `true` | `true` writes a generated Secret named after the consuming `EdgionPlugins` (Kubernetes-only); outside Kubernetes it is `Accepted=False` / `UnsupportedConfigurationCenter`. `false` keeps one active token per LinkSys identity (`namespace/name/uid`) in Controller-local memory: no generated Secret, allowed on leader-only Kubernetes and FS/etcd. Kubernetes `ha_mode: all-serve` + `persist: false` is `Accepted=False` / `UnsupportedHaMode`. |
 
-The key map is **Controller-only**. It is never a LinkSys spec field, never on
+The active-entry map is **Controller-only**. It is never a LinkSys spec field, never on
 LinkSys conf_sync, never on LinkSys status, and never on Admin LinkSys
 `/configclient`. The active token is still copied onto the consuming
 EdgionPlugins `resolvedCredential` (Admin redacts that value).
+
+Rotation replaces the active entry atomically; this map provides no previous-token
+fallback. Existing Arc holders and Gateway generations keep their own lifetimes.
+The testing-mode store statistics count one `credential_memory_keys` entry per
+stored source identity; retired entries held by other owners are not counted.
+Proactive acquisition, publication retries, and bootstrap `previousSecretRef`
+fallback remain separate mechanisms; see the
+[credential lifecycle](../../../docs/en/user-guide/http-route/filters/edgion-plugins/credential-injector.md#credential-lifecycle).
 
 ## Status Schema
 

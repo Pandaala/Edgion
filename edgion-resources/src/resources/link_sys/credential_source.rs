@@ -21,16 +21,8 @@ const RETRY_INITIAL_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RETRY_MAX_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const RETRY_MAX_BACKOFF_MAX: Duration = Duration::from_secs(15 * 60);
 
-pub const MEMORY_MAX_KEYS_DEFAULT: u32 = 10_000;
-pub const MEMORY_MAX_KEYS_MIN: u32 = 1;
-pub const MEMORY_MAX_KEYS_MAX: u32 = 10_000;
-
 fn default_persist() -> bool {
     true
-}
-
-fn default_memory_max_keys() -> u32 {
-    MEMORY_MAX_KEYS_DEFAULT
 }
 
 fn default_rotation_interval() -> String {
@@ -74,7 +66,6 @@ impl CredentialSourceConfig {
     pub fn validation_errors(&self) -> Vec<String> {
         let mut errors = self.provider.validation_errors();
         errors.extend(self.rotation.validation_errors());
-        errors.extend(self.publication.validation_errors());
         errors
     }
 }
@@ -251,26 +242,13 @@ impl Default for CredentialSourceEgressConfig {
 pub struct CredentialPublicationConfig {
     #[serde(default = "default_persist")]
     pub persist: bool,
-    #[serde(default = "default_memory_max_keys")]
-    pub memory_max_keys: u32,
 }
 
 impl Default for CredentialPublicationConfig {
     fn default() -> Self {
         Self {
             persist: default_persist(),
-            memory_max_keys: default_memory_max_keys(),
         }
-    }
-}
-
-impl CredentialPublicationConfig {
-    fn validation_errors(&self) -> Vec<String> {
-        let mut errors = Vec::new();
-        if self.memory_max_keys < MEMORY_MAX_KEYS_MIN || self.memory_max_keys > MEMORY_MAX_KEYS_MAX {
-            errors.push("credentialSource.publication.memoryMaxKeys must be between 1 and 10000".to_string());
-        }
-        errors
     }
 }
 

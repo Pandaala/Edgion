@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [CredentialSource memory publication retains one active token](regression-guards/credential-source-single-active-memory.md)
+
 - [HTTPDNS clients are prepared and owned by configuration generations](regression-guards/httpdns-prepared-runtime.md)
 
 - [Etcd supported configuration and upstream SDK boundary](regression-guards/etcd-configuration-and-message-boundaries.md)

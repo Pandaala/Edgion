@@ -34,7 +34,6 @@ fn persist_source(persist: bool) -> DesiredCredentialSource {
         uid: "source-uid".to_string(),
         generation: 2,
         persist,
-        memory_max_keys: 10_000,
         config: ControllerCredentialSourceConfig::new(credential_source_config()),
         secret_inputs: Vec::new(),
     }
@@ -155,7 +154,7 @@ fn publish_to_memory_stores_token_without_touching_secret_store() {
 
     let source = persist_source(false);
     let retained = retained_publication();
-    publish_to_memory(&runtime, &source, &retained).expect("persist-off publish");
+    publish_to_memory(&runtime, &source, &retained);
 
     assert_eq!(runtime.secret_store.count(), secret_count_before);
     assert_eq!(
@@ -171,13 +170,34 @@ fn publish_to_memory_stores_token_without_touching_secret_store() {
     assert_eq!(&*active.value, retained.access_token.as_bytes());
     assert_eq!(active.issued_at, format_rfc3339(retained.issued_at));
     assert_eq!(active.valid_until, format_rfc3339(retained.valid_until));
+    assert_eq!(active.valid_until_mono, retained.expires_at);
+
+    let previous = Arc::downgrade(&active);
+    drop(active);
+    let mut rotated = retained.clone();
+    rotated.publication_generation = "pub-2".to_string();
+    rotated.access_token = "rotated-token".to_string();
+    publish_to_memory(&runtime, &source, &rotated);
+    let active = runtime.credential_memory.active(&source.identity_key()).unwrap();
+    assert_eq!(active.key, "pub-2");
+    assert_eq!(&*active.value, b"rotated-token");
+    assert_eq!(runtime.credential_memory.key_count(), 1);
+    assert!(
+        previous.upgrade().is_none(),
+        "the store must release the previous publication"
+    );
+    assert_eq!(
+        retained.access_token, "access-token",
+        "publication retry state remains independent"
+    );
+    assert_eq!(runtime.secret_store.get(Some("ops"), "oauth-client"), bootstrap_before);
 }
 
 #[test]
 fn publish_to_memory_skips_insert_when_persist_is_on() {
     let runtime = ControllerRuntime::new();
     let source = persist_source(true);
-    publish_to_memory(&runtime, &source, &retained_publication()).expect("persist-on skip");
+    publish_to_memory(&runtime, &source, &retained_publication());
     assert!(
         runtime.credential_memory.active(&source.identity_key()).is_none(),
         "persist-on must not insert into credential memory"
@@ -189,7 +209,7 @@ fn publish_to_memory_skips_insert_when_not_single_publisher() {
     let runtime = ControllerRuntime::new();
     runtime.set_single_publisher(false);
     let source = persist_source(false);
-    publish_to_memory(&runtime, &source, &retained_publication()).expect("all-serve skip");
+    publish_to_memory(&runtime, &source, &retained_publication());
     assert!(
         runtime.credential_memory.active(&source.identity_key()).is_none(),
         "persist-off under all-serve must not insert into credential memory"
@@ -201,7 +221,7 @@ fn publish_to_memory_skips_insert_when_live_source_flipped_to_persist_on() {
     let runtime = ControllerRuntime::new();
     let snapshot = persist_source(false);
     runtime.credential_source_registry.replace_source(persist_source(true));
-    publish_to_memory(&runtime, &snapshot, &retained_publication()).expect("live persist-on skip");
+    publish_to_memory(&runtime, &snapshot, &retained_publication());
     assert!(
         runtime.credential_memory.active(&snapshot.identity_key()).is_none(),
         "a live persist-on source must not receive a memory insert"
@@ -275,7 +295,7 @@ async fn expired_persist_off_state_clears_memory_reports_expired_and_notifies_co
     runtime.credential_source_registry.replace_source(source.clone());
     runtime.credential_source_registry.replace_consumer(consumer.clone());
     let retained = retained_publication();
-    publish_to_memory(&runtime, &source, &retained).expect("seed memory");
+    publish_to_memory(&runtime, &source, &retained);
     let mut state = SourceState {
         identity: source.identity_key(),
         expires_at: Some(Instant::now() - Duration::from_secs(1)),
@@ -313,7 +333,7 @@ async fn expired_persist_off_state_clears_memory_reports_expired_and_notifies_co
 fn last_consumer_clear_drops_the_memory_slot() {
     let runtime = ControllerRuntime::new();
     let source = persist_source(false);
-    publish_to_memory(&runtime, &source, &retained_publication()).expect("seed memory");
+    publish_to_memory(&runtime, &source, &retained_publication());
     assert!(runtime.credential_memory.active(&source.identity_key()).is_some());
     clear_source_memory(&runtime, &source);
     assert!(
@@ -327,7 +347,7 @@ fn unregister_drops_memory_without_consuming_leftover_cleanup_state() {
     for with_leftover_publication in [false, true] {
         let runtime = ControllerRuntime::new();
         let source = persist_source(false);
-        publish_to_memory(&runtime, &source, &retained_publication()).expect("seed memory");
+        publish_to_memory(&runtime, &source, &retained_publication());
         let publications = if with_leftover_publication {
             HashMap::from([("apps/plugin".to_string(), leftover_delete_expectation())])
         } else {
@@ -357,7 +377,7 @@ fn unregister_drops_memory_without_consuming_leftover_cleanup_state() {
 fn identity_replacement_drops_previous_uid_slot() {
     let runtime = ControllerRuntime::new();
     let previous = persist_source(false);
-    publish_to_memory(&runtime, &previous, &retained_publication()).expect("seed previous uid");
+    publish_to_memory(&runtime, &previous, &retained_publication());
     let mut next = persist_source(false);
     next.uid = "source-uid-replaced".to_string();
     forget_replaced_identity_memory(&runtime, &previous.identity_key(), &next.identity_key());
@@ -375,7 +395,7 @@ fn identity_replacement_drops_previous_uid_slot() {
 fn persist_off_to_on_keeps_memory_until_published_equals_desired() {
     let runtime = ControllerRuntime::new();
     let persist_off = persist_source(false);
-    publish_to_memory(&runtime, &persist_off, &retained_publication()).expect("seed memory");
+    publish_to_memory(&runtime, &persist_off, &retained_publication());
     let persist_on = persist_source(true);
     runtime.credential_source_registry.replace_source(persist_on.clone());
 
@@ -396,7 +416,7 @@ fn persist_off_to_on_keeps_memory_until_published_equals_desired() {
 fn persist_off_does_not_clear_memory_when_counts_already_match() {
     let runtime = ControllerRuntime::new();
     let source = persist_source(false);
-    publish_to_memory(&runtime, &source, &retained_publication()).expect("seed memory");
+    publish_to_memory(&runtime, &source, &retained_publication());
     maybe_clear_memory_after_fan_out(&runtime, &source, 2, 2);
     assert!(
         runtime.credential_memory.active(&source.identity_key()).is_some(),
@@ -424,7 +444,7 @@ fn persist_on_to_off_reuses_retained_token_for_memory_insert() {
     assert_eq!(reused.as_ref().unwrap().access_token, retained.access_token);
 
     let runtime = ControllerRuntime::new();
-    publish_to_memory(&runtime, &next, reused.as_ref().unwrap()).expect("insert retained into memory");
+    publish_to_memory(&runtime, &next, reused.as_ref().unwrap());
     let active = runtime
         .credential_memory
         .active(&next.identity_key())
@@ -553,7 +573,7 @@ fn persist_off_publish_rejects_stale_generation() {
 fn reconciled_continue_on_missing_source_clears_memory_slot() {
     let runtime = ControllerRuntime::new();
     let source = persist_source(false);
-    publish_to_memory(&runtime, &source, &retained_publication()).expect("seed memory");
+    publish_to_memory(&runtime, &source, &retained_publication());
     assert!(runtime.credential_memory.active(&source.identity_key()).is_some());
     let current = take_current_for_reconciled(
         &runtime,
@@ -572,7 +592,7 @@ fn reconciled_continue_on_missing_source_clears_memory_slot() {
 fn reconciled_continue_on_identity_mismatch_clears_job_identity() {
     let runtime = ControllerRuntime::new();
     let source = persist_source(false);
-    publish_to_memory(&runtime, &source, &retained_publication()).expect("seed memory");
+    publish_to_memory(&runtime, &source, &retained_publication());
     let mut current = source.clone();
     current.uid = "source-uid-replaced".to_string();
     runtime.credential_source_registry.replace_source(current);
