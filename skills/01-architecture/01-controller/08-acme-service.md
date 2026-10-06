@@ -110,6 +110,14 @@ terminal state schedules a control-plane retry without another CA request.
 
 ### Secret Management Integration
 
+Account and EAB references follow Gateway API SecretObjectReference defaults:
+group absent/empty means the core API group, kind absent means `Secret`, and
+namespace absent means the EdgionAcme namespace. Other groups/kinds are unsupported.
+One ACME target validator runs in handler validation/resolution, source eligibility,
+account restoration/registration, and EAB retrieval. Invalid targets report
+`ResolvedRefs=False/InvalidKind` and cannot reach a credential Secret API call.
+See the [target identity guard](../../04-review/acme/regression-guards/secret-reference-target-identity.md).
+
 After issuance, the ACME service writes the certificate into a Secret resource. Changes to the Secret trigger reprocessing of dependent resources (such as a Gateway Listener) via the requeue mechanism, enabling automatic hot reload of certificates.
 
 An existing account Secret is updated with its original UID/resourceVersion.

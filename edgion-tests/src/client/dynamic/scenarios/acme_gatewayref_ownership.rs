@@ -18,6 +18,24 @@ fn selected_b() -> Box<dyn TestSuite> {
     ))
 }
 
+fn invalid_account() -> Box<dyn TestSuite> {
+    Box::new(AcmeGatewayRefOwnershipTestSuite::new(
+        AcmeGatewayRefOwnershipPhase::InvalidAccount,
+    ))
+}
+
+fn invalid_eab() -> Box<dyn TestSuite> {
+    Box::new(AcmeGatewayRefOwnershipTestSuite::new(
+        AcmeGatewayRefOwnershipPhase::InvalidEab,
+    ))
+}
+
+fn restored_references() -> Box<dyn TestSuite> {
+    Box::new(AcmeGatewayRefOwnershipTestSuite::new(
+        AcmeGatewayRefOwnershipPhase::RestoredReferences,
+    ))
+}
+
 fn removed() -> Box<dyn TestSuite> {
     Box::new(AcmeGatewayRefOwnershipTestSuite::new(
         AcmeGatewayRefOwnershipPhase::Removed,
@@ -31,6 +49,18 @@ fn expired() -> Box<dyn TestSuite> {
 }
 
 static PHASES: &[PhaseSuite] = &[
+    PhaseSuite {
+        name: "invalid-account",
+        factory: invalid_account,
+    },
+    PhaseSuite {
+        name: "invalid-eab",
+        factory: invalid_eab,
+    },
+    PhaseSuite {
+        name: "restored-references",
+        factory: restored_references,
+    },
     PhaseSuite {
         name: "selected-a",
         factory: selected_a,
@@ -53,6 +83,17 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
     Box::pin(async move {
         let scenario = SCENARIO;
         ctx.wait_phase(scenario, "selected-a", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/invalid-account").await?;
+        ctx.wait_phase(scenario, "invalid-account", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("initial").await?;
+        ctx.wait_phase(scenario, "restored-references", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/invalid-eab").await?;
+        ctx.wait_phase(scenario, "invalid-eab", Duration::from_secs(15)).await?;
+        ctx.apply_dir("initial").await?;
+        ctx.wait_phase(scenario, "restored-references", Duration::from_secs(15))
+            .await?;
         ctx.apply_dir("updates/retarget").await?;
         ctx.wait_phase(scenario, "selected-b", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/remove").await?;

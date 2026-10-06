@@ -91,8 +91,11 @@ spec:
 > `privateKeySecretRef`（ACME **账号**密钥）和 `storage.secretName`（签发的**证书**）是两个不同的 Secret。账号 Secret 在续期中复用；证书 Secret 每次签发时覆盖。
 
 `privateKeySecretRef` 和 `externalAccountBinding.keySecretRef` 接受 `name`，以及可选的
-`namespace`、`group` 和 `kind`。后两个字段是预留元数据，不会选择其他凭据资源类型；
-当前解析仍按 `namespace`/`name` 读取 Kubernetes 核心 API 的 Secret。
+`namespace`、`group` 和 `kind`。仅支持 Kubernetes 核心 API 的 Secret：
+`group` 应省略或设为 `""`，`kind` 应省略或设为 `Secret`；省略 `namespace`
+时使用 EdgionAcme 所在命名空间。其他组或类型会产生 `Accepted=False`，以及原因
+为 `InvalidKind` 的 `ResolvedRefs=False`，并阻止账号恢复、注册及凭据 Secret
+读写。系统不会用同名 Secret 替代不支持的目标类型。
 
 ### 校验配置
 

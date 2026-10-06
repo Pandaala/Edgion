@@ -15,6 +15,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [ACME credential reference target identity](regression-guards/secret-reference-target-identity.md)
 - [ACME account restoration uses one Secret key](regression-guards/account-secret-canonical-key.md)
 - [ACME HTTP-01 GatewayRef serving ownership](regression-guards/acme-http01-gatewayref-serving-ownership.md)
 - [ACME scheduler fencing and recovery](regression-guards/acme-scheduler-fencing-recovery.md)

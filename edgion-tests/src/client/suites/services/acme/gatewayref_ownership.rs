@@ -19,7 +19,7 @@ fn gateway_admin_url(ctx: &TestContext) -> String {
         .to_owned()
 }
 
-async fn gateway_has_expired_challenge(ctx: &TestContext, client: &reqwest::Client) -> Result<(), String> {
+async fn gateway_acme_snapshot(ctx: &TestContext, client: &reqwest::Client) -> Result<serde_json::Value, String> {
     let url = format!(
         "{}/configclient/EdgionAcme?namespace={ACME_NS}&name={ACME_NAME}",
         gateway_admin_url(ctx)
@@ -34,7 +34,12 @@ async fn gateway_has_expired_challenge(ctx: &TestContext, client: &reqwest::Clie
     if body["success"] != true {
         return Err(format!("gateway EdgionAcme snapshot missing: {body}"));
     }
-    let expire_at = body["data"]["status"]["activeChallenges"]
+    Ok(body["data"].clone())
+}
+
+async fn gateway_has_expired_challenge(ctx: &TestContext, client: &reqwest::Client) -> Result<(), String> {
+    let body = gateway_acme_snapshot(ctx, client).await?;
+    let expire_at = body["status"]["activeChallenges"]
         .as_array()
         .and_then(|challenges| challenges.first())
         .and_then(|challenge| challenge["expireAt"].as_u64());
@@ -44,10 +49,49 @@ async fn gateway_has_expired_challenge(ctx: &TestContext, client: &reqwest::Clie
     Ok(())
 }
 
+async fn gateway_has_secret_reference_status(
+    ctx: &TestContext,
+    client: &reqwest::Client,
+    invalid_field: Option<&str>,
+) -> Result<(), String> {
+    let body = gateway_acme_snapshot(ctx, client).await?;
+    let conditions = body["spec"]["currentStatus"]["conditions"]
+        .as_array()
+        .ok_or("missing current conditions")?;
+    let resolved = conditions
+        .iter()
+        .find(|condition| condition["type"] == "ResolvedRefs")
+        .ok_or("missing ResolvedRefs")?;
+    let accepted = conditions
+        .iter()
+        .find(|condition| condition["type"] == "Accepted")
+        .ok_or("missing Accepted")?;
+    let matches = match invalid_field {
+        Some(field) => {
+            resolved["status"] == "False"
+                && resolved["reason"] == "InvalidKind"
+                && resolved["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with(field))
+                && accepted["status"] == "False"
+        }
+        None => {
+            resolved["status"] == "Unknown" && resolved["reason"] == "NeedsRegistration" && accepted["status"] == "True"
+        }
+    };
+    if !matches || resolved["observedGeneration"] != body["metadata"]["generation"] {
+        return Err(format!("unexpected Secret reference status: {body}"));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 pub enum AcmeGatewayRefOwnershipPhase {
     SelectedA,
     SelectedB,
+    InvalidAccount,
+    InvalidEab,
+    RestoredReferences,
     Removed,
     Expired,
 }
@@ -97,7 +141,10 @@ impl TestSuite for AcmeGatewayRefOwnershipTestSuite {
                     let a_serves = status_a.is_success() && body_a == KEY_AUTHORIZATION;
                     let b_serves = status_b.is_success() && body_b == KEY_AUTHORIZATION;
                     let http_ok = match phase {
-                        AcmeGatewayRefOwnershipPhase::SelectedA => a_serves && status_b == 404,
+                        AcmeGatewayRefOwnershipPhase::SelectedA
+                        | AcmeGatewayRefOwnershipPhase::InvalidAccount
+                        | AcmeGatewayRefOwnershipPhase::InvalidEab
+                        | AcmeGatewayRefOwnershipPhase::RestoredReferences => a_serves && status_b == 404,
                         AcmeGatewayRefOwnershipPhase::SelectedB => status_a == 404 && b_serves,
                         AcmeGatewayRefOwnershipPhase::Removed | AcmeGatewayRefOwnershipPhase::Expired => {
                             status_a == 404 && status_b == 404
@@ -105,6 +152,17 @@ impl TestSuite for AcmeGatewayRefOwnershipTestSuite {
                     };
                     if let AcmeGatewayRefOwnershipPhase::Expired = phase {
                         if let Err(error) = gateway_has_expired_challenge(&ctx, &client).await {
+                            return TestResult::failed(started.elapsed(), error);
+                        }
+                    }
+                    let reference_status = match phase {
+                        AcmeGatewayRefOwnershipPhase::InvalidAccount => Some(Some("privateKeySecretRef")),
+                        AcmeGatewayRefOwnershipPhase::InvalidEab => Some(Some("externalAccountBinding.keySecretRef")),
+                        AcmeGatewayRefOwnershipPhase::RestoredReferences => Some(None),
+                        _ => None,
+                    };
+                    if let Some(invalid_field) = reference_status {
+                        if let Err(error) = gateway_has_secret_reference_status(&ctx, &client, invalid_field).await {
                             return TestResult::failed(started.elapsed(), error);
                         }
                     }

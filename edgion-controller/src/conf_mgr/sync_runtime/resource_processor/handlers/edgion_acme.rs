@@ -22,7 +22,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, condition_unknown, update_condition,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler, ResourceRef};
-use crate::services::acme::notify_resource_changed;
+use crate::services::acme::{notify_resource_changed, validate_secret_references};
 use edgion_resources::credentials::resolvers::AcmeAccountResolver;
 use edgion_resources::duration::parse_duration;
 use edgion_resources::prelude_resources::EdgionAcme;
@@ -75,6 +75,10 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
 
     fn validate(&self, acme: &EdgionAcme, _ctx: &HandlerContext) -> Vec<String> {
         let mut errors = Vec::new();
+
+        if let Err(message) = validate_secret_references(acme) {
+            errors.push(message.to_string());
+        }
 
         // Validate email
         if acme.spec.email.is_empty() {
@@ -176,40 +180,46 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             .and_then(|processor| processor.get_cached_any(&resource_ref.resource_key()))
             .and_then(|value| value.downcast::<EdgionAcme>().ok());
 
-        // ── Resolve ACME account credential via pipeline ────────────────────
-        let outcome = resolve_secret(
-            ctx,
-            &resource_ref,
-            "edgion.io",
-            "EdgionAcme",
-            &acme.spec.private_key_secret_ref,
-            &AcmeAccountResolver,
-        )
-        .await;
-
         let generation = acme.metadata.generation;
+        // Validate both targets before the pipeline can interpret an unsupported
+        // object type as a same-name core Secret or register its dependencies.
+        let target_error = validate_secret_references(&acme).err();
+        let account_action = match target_error {
+            Some(message) => AcmeResolveAction::Abort(condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::INVALID_KIND,
+                message,
+                generation,
+            )),
+            None => {
+                let outcome = resolve_secret(
+                    ctx,
+                    &resource_ref,
+                    "edgion.io",
+                    "EdgionAcme",
+                    &acme.spec.private_key_secret_ref,
+                    &AcmeAccountResolver,
+                )
+                .await;
+                outcome_to_resolved_refs_action(&outcome, &resource_ref.key(), generation)
+            }
+        };
         let status = acme.status.get_or_insert_with(EdgionAcmeStatus::default);
-
-        // Map outcome → ResolvedRefs Action
-        let resource_key = resource_ref.key();
-        let account_action = outcome_to_resolved_refs_action(&outcome, &resource_key, generation);
-        // `account_corrupted` means the Secret exists but carries unusable
-        // `accountCredentials` (decode failure / unsupported Secret.type).
+        // Invalid target metadata and unusable account data deny issuance.
         // We still return Continue so `update_status` persists the condition,
         // and notify AcmeService so its authority gate retires any active work;
         // the published denial prevents registration against a broken account.
-        let (account_condition, account_corrupted) = match account_action {
+        let (account_condition, credentials_invalid) = match account_action {
             AcmeResolveAction::Continue(cond) => (cond, false),
             AcmeResolveAction::Abort(cond) => (cond, true),
         };
-        let resolved_refs_condition = match &gateway_outcome {
-            Ok(_) => account_condition,
-            Err(error) => gateway_ref_error_condition(error, generation),
+        let resolved_refs_condition = match (&gateway_outcome, target_error.is_some()) {
+            (_, true) | (Ok(_), false) => account_condition,
+            (Err(error), false) => gateway_ref_error_condition(error, generation),
         };
         update_condition(&mut status.conditions, resolved_refs_condition);
 
-        // `outcome` was already mapped to a condition above; the resolved
-        // Secret bytes are intentionally NOT attached to the in-memory
+        // Resolved Secret bytes are intentionally NOT attached to the in-memory
         // resource — AcmeService re-fetches via the Kubernetes API.
 
         // Scheduling observes identity, eligibility, and the exact serving
@@ -223,7 +233,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                 || previous.spec.resolved_listener_attachments != acme.spec.resolved_listener_attachments
         });
 
-        if account_corrupted || !gateway_resolved {
+        if credentials_invalid || !gateway_resolved {
             // Return Continue so `update_status` persists `ResolvedRefs=False`
             // and Gateway/operators can see the failure. The publication hook
             // still notifies the scheduler so an active attempt can observe
@@ -361,7 +371,7 @@ enum AcmeResolveAction {
     /// Write the condition, continue.
     Continue(Condition),
     /// Write the condition, then short-circuit `parse`.
-    /// Only `Account + DecodeError/InvalidSecretType`.
+    /// Unsupported credential target or unusable account data.
     Abort(Condition),
 }
 

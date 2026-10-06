@@ -58,10 +58,9 @@ Do not make variant config bodies structural or reintroduce plugin type
 whitelists to simplify comparison. Do not exempt actual structural drift just
 because the new guard discovers it.
 
-ACME consumers currently use namespace/name to read core Secrets; a group/kind
-property declaration does not add resource-type selection. The independent
-[target metadata investigation](../../../../tasks/todo/acme-secret-reference-target-validation.md)
-tracks the required treatment of explicit unsupported metadata separately.
+ACME group/kind property declarations do not add support for other credential
+resources. The separate [target identity guard](../../acme/regression-guards/secret-reference-target-identity.md)
+records runtime rejection of explicit unsupported metadata before Secret lookup.
 
 ## Verification and re-evaluation
 
@@ -88,4 +87,4 @@ new fixed fields inside an opaque boundary, or changed preservation semantics.
 
 - `crd-fixed-envelope-field-coverage` — fixed-field coverage gap and the structural
   drifts it exposed corrected and verified; runtime target validation remains
-  separately tracked in the investigation above.
+  covered separately by the target identity guard above.

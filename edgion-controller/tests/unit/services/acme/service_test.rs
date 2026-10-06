@@ -4,6 +4,8 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor};
 use edgion_resources::prelude_resources::Gateway;
+use edgion_resources::resources::common::SecretObjectReference;
+use edgion_resources::resources::edgion_acme::AcmeExternalAccountBinding;
 use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
 use edgion_resources::resources::gateway::{GatewaySpec, Listener};
 use http::{Response, StatusCode};
@@ -965,6 +967,125 @@ fn issuance_eligibility_missing_owner_does_not_start_transient_retry() {
         evaluate_issuance_eligibility(&raw, "default/test-acme", &runtime),
         EligibilityDecision::AuthoritativelyIneligible
     );
+}
+
+#[tokio::test]
+async fn unsupported_secret_targets_block_eligibility_and_all_secret_api_calls() {
+    let _guard = ACME_TEST_MUTEX.lock().await;
+    for eab_target in [false, true] {
+        for (group, kind) in [
+            (Some("example.io"), None),
+            (Some("core"), Some("Secret")),
+            (None, Some("ConfigMap")),
+            (None, Some("secret")),
+            (None, Some("")),
+        ] {
+            let mut processed = test_acme();
+            let runtime = eligibility_runtime(&mut processed);
+            let mut raw = processed.clone();
+            raw.spec.external_account_binding = Some(AcmeExternalAccountBinding {
+                key_id: "public-id".to_string(),
+                key_secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "eab".to_string(),
+                    namespace: None,
+                },
+            });
+            let reference = if eab_target {
+                &mut raw.spec.external_account_binding.as_mut().unwrap().key_secret_ref
+            } else {
+                &mut raw.spec.private_key_secret_ref
+            };
+            reference.group = group.map(str::to_string);
+            reference.kind = kind.map(str::to_string);
+            // Even apparently eligible processed conditions cannot authorize
+            // unsupported metadata on the current source object.
+            assert_eq!(
+                evaluate_issuance_eligibility(&raw, "default/test", &runtime),
+                EligibilityDecision::AuthoritativelyIneligible
+            );
+            let calls = Arc::new(AtomicU64::new(0));
+            let captured = calls.clone();
+            let client = Client::new(
+                service_fn(move |_: http::Request<Body>| {
+                    captured.fetch_add(1, Ordering::Relaxed);
+                    async { Ok::<_, Infallible>(test_api_response(500, json!({}))) }
+                }),
+                "default",
+            );
+            let attempt = test_attempt(client.clone(), raw.clone(), runtime, 0);
+            let expected_field = if eab_target {
+                "externalAccountBinding.keySecretRef"
+            } else {
+                "privateKeySecretRef"
+            };
+            let error = get_or_create_acme_account(&attempt, &raw).await.err().unwrap();
+            assert!(error.to_string().starts_with(expected_field));
+            let error = fetch_eab_hmac(&client, &raw, "default").await.unwrap_err();
+            assert!(error.to_string().starts_with(expected_field));
+            assert_eq!(
+                calls.load(Ordering::Relaxed),
+                0,
+                "invalid targets must fail before reads, writes, or registration"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn eab_secret_defaults_and_explicit_core_targets_keep_the_secret_lookup() {
+    for (group, kind) in [
+        (None, None),
+        (Some(""), None),
+        (None, Some("Secret")),
+        (Some(""), Some("Secret")),
+    ] {
+        let mut raw = test_acme();
+        raw.spec.external_account_binding = Some(AcmeExternalAccountBinding {
+            key_id: "public-id".to_string(),
+            key_secret_ref: SecretObjectReference {
+                group: group.map(str::to_string),
+                kind: kind.map(str::to_string),
+                name: "eab".to_string(),
+                namespace: None,
+            },
+        });
+        raw.spec.private_key_secret_ref.group = group.map(str::to_string);
+        raw.spec.private_key_secret_ref.kind = kind.map(str::to_string);
+        let mut processed = raw.clone();
+        let runtime = eligibility_runtime(&mut processed);
+        assert_eq!(
+            evaluate_issuance_eligibility(&raw, "default/test", &runtime),
+            EligibilityDecision::Eligible
+        );
+        let calls = Arc::new(AtomicU64::new(0));
+        let captured = calls.clone();
+        let client = Client::new(
+            service_fn(move |request: http::Request<Body>| {
+                assert_eq!(request.uri().path(), "/api/v1/namespaces/default/secrets/eab");
+                captured.fetch_add(1, Ordering::Relaxed);
+                async {
+                    Ok::<_, Infallible>(test_api_response(
+                        200,
+                        json!({
+                            "apiVersion": "v1", "kind": "Secret", "metadata": {"name": "eab"},
+                            "data": {"hmacKey": "dGVzdC1rZXk="}
+                        }),
+                    ))
+                }
+            }),
+            "default",
+        );
+        assert_eq!(
+            fetch_eab_hmac(&client, &raw, "default").await.unwrap().as_deref(),
+            Some("test-key")
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        raw.spec.external_account_binding = None;
+        assert_eq!(fetch_eab_hmac(&client, &raw, "default").await.unwrap(), None);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
 }
 
 #[tokio::test]

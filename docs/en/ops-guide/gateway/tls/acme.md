@@ -91,9 +91,13 @@ After creation the Controller registers the ACME account (storing its key in `pr
 > `privateKeySecretRef` (the ACME **account** key) and `storage.secretName` (the issued **certificate**) are two different Secrets. The account Secret is reused across renewals; the certificate Secret is overwritten on each issuance.
 
 `privateKeySecretRef` and `externalAccountBinding.keySecretRef` accept `name` and
-optional `namespace`, `group` and `kind`. The last two are reserved metadata;
-they do not select another credential resource type. Resolution currently uses
-`namespace`/`name` to read core Kubernetes Secrets.
+optional `namespace`, `group` and `kind`. Only core Kubernetes Secrets are
+supported: omit `group` or set it to `""`, and
+omit `kind` or set it to `Secret`. Omitted `namespace` uses the EdgionAcme
+namespace. Other groups or kinds produce `Accepted=False` and
+`ResolvedRefs=False` with reason `InvalidKind`, and block account restoration,
+registration, and credential Secret reads/writes. A same-name Secret is never
+used as a substitute for an unsupported target type.
 
 ### Challenge configuration
 

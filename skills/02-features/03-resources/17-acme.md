@@ -77,8 +77,13 @@ spec:
 
 Both `privateKeySecretRef` and `externalAccountBinding.keySecretRef` use
 `SecretObjectReference`: required `name`, optional `namespace`, `group` and `kind`.
-The group/kind fields are reserved metadata, not a resource-type selector;
-current credential resolution reads core Secrets by namespace/name.
+Only core Secrets are supported. Omitted or empty `group` selects the core API
+group; omitted `kind` defaults to `Secret`. An explicit non-empty group
+(including `"core"`) or a kind other than `Secret` is invalid. Omitted
+`namespace` selects the EdgionAcme namespace. Unsupported targets report
+`Accepted=False` and `ResolvedRefs=False/InvalidKind`; they never select a
+same-name Secret or permit account registration/restoration. The handler and
+background service share this target check across all ingest modes.
 
 `challenge` accepts only `type: http-01` and a required `gatewayRef`. Unknown fields and other challenge types are rejected.
 

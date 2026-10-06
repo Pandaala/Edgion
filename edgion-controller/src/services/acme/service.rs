@@ -44,6 +44,7 @@ use super::secret_io::{
     account_credentials_from_json, create_account_secret, extract_account_json_string,
     patch_account_key_into_existing_secret,
 };
+use super::validate_secret_references;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::route_utils::{
     resolve_acme_listener_attachments, AcmeGatewayRefError,
 };
@@ -970,6 +971,9 @@ fn evaluate_issuance_eligibility(raw: &EdgionAcme, key: &str, runtime: &Controll
     if !acme_is_owned(raw, runtime) {
         return EligibilityDecision::AuthoritativelyIneligible;
     }
+    if validate_secret_references(raw).is_err() {
+        return EligibilityDecision::AuthoritativelyIneligible;
+    }
     let Some(uid) = raw.metadata.uid.as_deref() else {
         return EligibilityDecision::Transient;
     };
@@ -1497,6 +1501,7 @@ async fn execute_http01_flow(
 /// and `Err` when configured but the Secret / `hmacKey` entry is missing or
 /// malformed (which blocks registration — EAB is a CA-side precondition).
 async fn fetch_eab_hmac(client: &Client, acme: &EdgionAcme, owner_ns: &str) -> Result<Option<String>> {
+    validate_secret_references(acme).map_err(anyhow::Error::msg)?;
     let Some(eab) = acme.spec.external_account_binding.as_ref() else {
         return Ok(None);
     };
@@ -1527,6 +1532,7 @@ async fn fetch_eab_hmac(client: &Client, acme: &EdgionAcme, owner_ns: &str) -> R
 ///   (self-managed empty Secret).
 /// - Key present but JSON invalid: **error** (operator must fix; we do not re-register over it).
 async fn get_or_create_acme_account(attempt: &AcmeAttempt, acme: &EdgionAcme) -> Result<AcmeClient> {
+    validate_secret_references(acme).map_err(anyhow::Error::msg)?;
     let client = attempt.client_ref();
     let owner_ns = acme.metadata.namespace.as_deref().unwrap_or("default");
     let acme_name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;

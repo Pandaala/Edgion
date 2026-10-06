@@ -9,7 +9,7 @@ use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::common::ParentReference;
 use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::edgion_acme::{
-    AcmeCertPhase, AcmeChallenge, AcmeStorageConfig, ActiveHttpChallenge, EdgionAcmeStatus,
+    AcmeCertPhase, AcmeChallenge, AcmeExternalAccountBinding, AcmeStorageConfig, ActiveHttpChallenge, EdgionAcmeStatus,
 };
 use edgion_resources::resources::edgion_tls::{GatewayAttachmentProof, ResolvedListenerAttachment};
 use edgion_resources::resources::gateway::{GatewaySpec, GatewayStatus, Listener, ListenerStatus};
@@ -491,6 +491,147 @@ async fn test_acme_account_resolve_scenarios() {
     for scenario in scenarios {
         run_acme_parse_scenario(scenario).await;
     }
+}
+
+// ========================================================================
+// Test: Secret reference target metadata
+// ========================================================================
+
+#[tokio::test]
+async fn secret_reference_targets_use_gateway_api_defaults_and_reject_other_types() {
+    let _guard = ACME_TEST_MUTEX.lock().await;
+    let handler = EdgionAcmeHandler::new();
+    for field in ["privateKeySecretRef", "externalAccountBinding.keySecretRef"] {
+        for (group, kind, valid) in [
+            (None, None, true),
+            (Some(""), None, true),
+            (None, Some("Secret"), true),
+            (Some(""), Some("Secret"), true),
+            (Some("core"), Some("Secret"), false),
+            (Some("example.io"), Some("Secret"), false),
+            (None, Some("ConfigMap"), false),
+            (None, Some("secret"), false),
+            (None, Some(""), false),
+        ] {
+            for secret_present in [false, true] {
+                let secrets = if secret_present {
+                    HashMap::from([make_secret(
+                        "default",
+                        "account",
+                        &[("accountCredentials", br#"{"ok":true}"#)],
+                    )])
+                } else {
+                    HashMap::new()
+                };
+                let (ctx, _) = make_ctx(secrets);
+                let mut input = make_acme("default", "target", "account");
+                input.spec.external_account_binding = Some(AcmeExternalAccountBinding {
+                    key_id: "public-id".to_string(),
+                    key_secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "eab".to_string(),
+                        namespace: None,
+                    },
+                });
+                let reference = if field == "privateKeySecretRef" {
+                    &mut input.spec.private_key_secret_ref
+                } else {
+                    &mut input.spec.external_account_binding.as_mut().unwrap().key_secret_ref
+                };
+                reference.group = group.map(str::to_string);
+                reference.kind = kind.map(str::to_string);
+                // Exercise the same typed input after YAML and JSON decode (FS/etcd
+                // and Kubernetes inputs converge on this shared handler).
+                let input: EdgionAcme = serde_yaml::from_str(&serde_yaml::to_string(&input).unwrap()).unwrap();
+                let input: EdgionAcme = serde_json::from_value(serde_json::to_value(input).unwrap()).unwrap();
+                let errors = handler.validate(&input, &ctx);
+                assert_eq!(errors.is_empty(), valid, "{field}: {group:?}/{kind:?}");
+                let ProcessResult::Continue(mut parsed) = handler.parse(input, &ctx).await else {
+                    panic!("invalid references must retain status publication");
+                };
+                handler.update_status(&mut parsed, &ctx, &errors);
+                let conditions = &parsed.status.as_ref().unwrap().conditions;
+                let resolved = conditions
+                    .iter()
+                    .find(|condition| condition.type_ == "ResolvedRefs")
+                    .unwrap();
+                let accepted = conditions
+                    .iter()
+                    .find(|condition| condition.type_ == "Accepted")
+                    .unwrap();
+                assert_eq!(accepted.status, if valid { "True" } else { "False" });
+                if valid {
+                    assert_eq!(resolved.status, if secret_present { "True" } else { "Unknown" });
+                    assert!(!ctx.secret_ref_manager().get_refs("default/account").is_empty());
+                } else {
+                    assert_eq!(resolved.status, "False");
+                    assert_eq!(resolved.reason, "InvalidKind");
+                    assert_eq!(resolved.observed_generation, Some(1));
+                    assert!(resolved.message.starts_with(field));
+                    assert!(ctx.secret_ref_manager().get_refs("default/account").is_empty());
+                    assert!(ctx.secret_ref_manager().get_refs("default/eab").is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn invalid_target_clears_old_secret_edges_and_recovers_on_spec_update() {
+    let _guard = ACME_TEST_MUTEX.lock().await;
+    let mut notifications = NotificationCapture::install();
+    let (_, runtime) = make_ctx(HashMap::new());
+    let processor = Arc::new(ResourceProcessor::<EdgionAcme>::new(
+        "EdgionAcme",
+        16,
+        Arc::new(EdgionAcmeHandler::new()),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let mut raw = make_acme("default", "target-recovery", "account");
+    let owner = ResourceRef::new(
+        ResourceKind::EdgionAcme,
+        Some("default".to_string()),
+        "target-recovery".to_string(),
+    );
+    processor.on_init_apply(raw.clone(), None).await;
+    assert!(runtime.secret_ref_manager.get_refs("default/account").contains(&owner));
+    assert_eq!(notifications.drain(), ["default/target-recovery"]);
+    runtime.cross_ns_ref_mgr.add_ref("other".to_string(), owner.clone());
+    raw.metadata.generation = Some(2);
+    raw.spec.private_key_secret_ref.group = Some("example.io".to_string());
+    raw.spec.private_key_secret_ref.namespace = Some("other".to_string());
+    processor
+        .process_work_item(
+            "default/target-recovery",
+            Some(raw.clone()),
+            None,
+            TriggerChain::default(),
+        )
+        .await;
+    let denied = processor.get("default/target-recovery").unwrap();
+    assert_eq!(
+        resolved_refs_identity(denied.spec.current_status.as_ref()),
+        Some(("False", "InvalidKind"))
+    );
+    assert!(!runtime.secret_ref_manager.get_refs("default/account").contains(&owner));
+    assert!(!runtime.secret_ref_manager.get_refs("other/account").contains(&owner));
+    assert!(!runtime.cross_ns_ref_mgr.get_refs("other").contains(&owner));
+    assert_eq!(notifications.drain(), ["default/target-recovery"]);
+    raw.metadata.generation = Some(3);
+    raw.spec.private_key_secret_ref.group = Some("".to_string());
+    raw.spec.private_key_secret_ref.namespace = None;
+    processor
+        .process_work_item("default/target-recovery", Some(raw), None, TriggerChain::default())
+        .await;
+    let recovered = processor.get("default/target-recovery").unwrap();
+    assert_eq!(
+        resolved_refs_identity(recovered.spec.current_status.as_ref()),
+        Some(("Unknown", "NeedsRegistration"))
+    );
+    assert!(runtime.secret_ref_manager.get_refs("default/account").contains(&owner));
+    assert_eq!(notifications.drain(), ["default/target-recovery"]);
 }
 
 // ========================================================================

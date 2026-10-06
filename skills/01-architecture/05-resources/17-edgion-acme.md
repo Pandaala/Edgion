@@ -34,6 +34,9 @@ serialized only so the Gateway can enforce serving ownership.
 1. **email**: required, used for ACME account registration
 2. **domains**: at least one domain
 3. **Wildcard domain check**: wildcard domains are rejected because built-in ACME supports HTTP-01 only.
+4. **Credential targets**: both account and EAB references require an omitted/empty
+   group and an omitted/`Secret` kind. The shared ACME target validator is also
+   called before handler resolution and background Secret consumption.
 
 ### parse
 
@@ -41,11 +44,18 @@ Resolved Secret bytes are **not** written back to the in-memory `EdgionAcme` —
 
 1. **Clear stale state**: clear the derived attachment plus previous Secret, cross-namespace, and Gateway dependency edges
 2. **Resolve `challenge.gatewayRef`**: require a Controller-published Gateway, any required `ReferenceGrant`, and one or more selected `HTTP` listeners; `sectionName` and `port` must both match when both are present
-3. **Resolve ACME account Secret** (`spec.privateKeySecretRef`, required):
+3. **Validate credential targets before resolution**: unsupported account or EAB
+   group/kind sets `ResolvedRefs=False/InvalidKind`, skips account lookup and
+   Secret dependency registration, and still publishes denial/notification.
+   Previous Secret/cross-namespace dependencies were already cleared.
+4. **Resolve ACME account Secret** (`spec.privateKeySecretRef`, required):
    - Goes through the credential pipeline (`resource_processor::credential::pipeline::resolve_secret` + `AcmeAccountResolver`)
    - The Secret is allowed to be `Opaque` type, with the required key `accountCredentials` (JSON, i.e., `instant_acme::AccountCredentials`)
    - If the Secret does not yet exist (first-time install / waiting for `AcmeService` write-back), `ResolvedRefs=Unknown/NeedsRegistration` is recorded; once `AcmeService` generates the account it writes the Secret and triggers requeue
-4. **Prepare notification**: when the attachment is resolved and the account result is not a hard error, compare UID/generation and ResolvedRefs status/reason with the previous processed cache. Reset and recompute the internal `notify_after_publish` flag each parse; it is excluded from serde and schemars.
+5. **Prepare notification**: compare UID/generation, ResolvedRefs status/reason,
+   and resolved attachments with the previous processed cache, including denial
+   transitions so active work can retire. Reset and recompute the internal
+   `notify_after_publish` flag each parse; it is excluded from serde and schemars.
 
 ### after_publish
 

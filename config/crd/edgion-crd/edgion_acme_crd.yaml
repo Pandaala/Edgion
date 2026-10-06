@@ -40,10 +40,10 @@ spec:
                   properties:
                     group:
                       type: string
-                      description: "Reserved group metadata; credential sources remain core Secrets"
+                      description: "API group of the Secret; omit or use an empty string for the core group. Other groups are unsupported."
                     kind:
                       type: string
-                      description: "Reserved kind metadata; only Secret credential sources are supported"
+                      description: "Kind of the credential target; omit or use Secret. Other kinds are unsupported."
                     name:
                       type: string
                       description: "Name of the Secret"
@@ -112,10 +112,10 @@ spec:
                       properties:
                         group:
                           type: string
-                          description: "Reserved group metadata; credential sources remain core Secrets"
+                          description: "API group of the Secret; omit or use an empty string for the core group. Other groups are unsupported."
                         kind:
                           type: string
-                          description: "Reserved kind metadata; only Secret credential sources are supported"
+                          description: "Kind of the credential target; omit or use Secret. Other kinds are unsupported."
                         name:
                           type: string
                         namespace:
