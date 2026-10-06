@@ -47,8 +47,22 @@ Watch/Lease/election handles. See the monitor cancellation knowledge page.
 
 ## Verification and re-evaluation
 
-Source: B0084 / `tasks/todo/define-etcd-linksys-unused-config-fields.md` and the
-2026-10-06 user instruction. Current checks are recorded in that task; earlier
-local-SDK verification is historical only. Re-evaluate dependency changes,
+Source: B0084 / `define-etcd-linksys-unused-config-fields` and the 2026-10-06
+user instruction. The user authorized task closure and deletion after verification.
+The upstream-SDK removal passed workspace check, Clippy, format and product-binary
+builds with `--locked --offline`; metadata and Cargo.lock resolve one registry
+`etcd-client` 0.18.0. Focused Etcd tests passed in Common (29), Controller (34),
+Gateway (8) and Resources (16), with ten existing real-service tests left ignored.
+The real LinkSys suite passed 89/89; standalone Controller election/demotion and
+Gateway leader failover/reload suites passed. SSA-force, metrics inventory,
+Pingora-source policy, Gateway API transform, unit-test layout and Gateway tracing
+guards passed. Original logs are `/tmp/edgion-etcd-removal-{check,clippy-final,tests,build,linksys,election,ha}.log`.
+
+The unrelated WAF task-link blocker was resolved, and agent-doc validation passed
+again at closure on 2026-10-06. The user's shared-topology report
+(`tmp/integration_testing/testing_20261006_121044/report.log`) records 257 passed,
+seven skipped, zero failed and zero timed out; this report does not replace the
+separate Etcd real-service evidence above. Earlier local-SDK verification remains
+historical only. Re-evaluate dependency changes,
 supported fields, unknown-field diagnostics, TLS/timeout mapping and retirement.
 Do not restore a local SDK or the withdrawn features without explicit scope.

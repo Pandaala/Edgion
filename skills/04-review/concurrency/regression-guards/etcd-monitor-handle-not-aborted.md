@@ -36,8 +36,10 @@ publication fencing remains, while SDK-specific cancellation claims are inactive
 ## Verification and re-evaluation
 
 Current focused tests include retirement before initialization and monitor
-installation. Current verification is recorded in the B0084 task; historical
-SDK election/cancellation tests do not prove upstream transport behavior.
+installation. Upstream-SDK verification is preserved in
+[the Etcd configuration boundary](../../link-sys/regression-guards/etcd-configuration-and-message-boundaries.md)
+after closure of the B0084 task; historical SDK election/cancellation tests do
+not prove upstream transport behavior.
 Re-evaluate lock ordering, concurrent init/shutdown, monitor installation or
 caller-held handles. A requirement for joined termination needs explicit evidence.
 

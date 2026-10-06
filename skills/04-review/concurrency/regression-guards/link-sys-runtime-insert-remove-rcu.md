@@ -59,9 +59,12 @@ The unit results cover ordered publication and runner fences; the transport
 results add SDK lifecycle evidence, not a global lossless delivery guarantee.
 The startup-drain test and both Webhook manager tests also passed. Workspace
 format/check/Clippy and the SSA, metrics, Pingora source, Gateway API transform,
-unit-test layout, gateway tracing, and English-only guards passed. Agent-doc
-validation remains blocked by unrelated missing WAF task links; these
-results do not claim that every closure gate passed.
+unit-test layout, gateway tracing, and English-only guards passed. The unrelated
+WAF task-link blocker was resolved, and agent-doc validation passed again at
+closure on 2026-10-06. The user's shared-topology integration report
+(`tmp/integration_testing/testing_20261006_121044/report.log`) records 257 passed,
+seven skipped, zero failed and zero timed out, including LinkSys replacement
+and disabled-TLS dynamic scenarios. The user authorized task closure and deletion.
 
 ## Historical RCU implementation (inactive)
 

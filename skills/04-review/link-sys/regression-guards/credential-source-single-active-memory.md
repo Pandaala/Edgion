@@ -81,11 +81,12 @@ An independent read-only Astra review approved the implementation, scope, and
 knowledge classification. The CRD/condition coverage script passed 27 tests.
 `cargo fmt --all`, workspace all-target check and Clippy, SSA-force, metrics
 inventory, Pingora-source policy, Gateway API transform contract, unit-test layout,
-and `git diff --check` passed. The full agent-document check remains blocked by
-pre-existing missing WAF task-record links in
-`skills/04-review/waf/regression-guards/fused-json-inspection.md`; this credential
-task is retained until that required gate passes. No full workspace test run or
-live integration topology has been run for this refactor.
+and `git diff --check` passed. The unrelated WAF task-link blocker was resolved,
+and agent-document validation passed again at closure on 2026-10-06. The user's
+shared-topology integration report
+(`tmp/integration_testing/testing_20261006_121044/report.log`) records 257 passed,
+seven skipped, zero failed and zero timed out, including CredentialInjector and
+its dynamic scenario. No full workspace unit-test run is claimed.
 
 Re-evaluate if a concrete consumer requires an authorized previous-generation
 lookup or recovery policy. Design that policy and its expiry, publication, and
@@ -95,4 +96,5 @@ issuer-validity semantics explicitly rather than restoring unused retention.
 
 - `simplify-credential-source-memory-retention`: optional P3 refactor; the user
   authorized single-active storage and removal of the capacity field on 2026-10-06.
+  The user authorized closure and deletion of the task after verification.
 - [Credential lifecycle](../../../../docs/en/user-guide/http-route/filters/edgion-plugins/credential-injector.md#credential-lifecycle).
