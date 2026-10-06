@@ -500,7 +500,7 @@ fn replay_static(
                                 .map_err(map_store_error)?;
                             captures.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
                             captures.push(CaptureEntry {
-                                key: owned_copy(capture.key)?,
+                                key: MatchValue::Json(capture.key),
                                 value: MatchValue::Json(capture.value),
                             });
                             next = capture.next;

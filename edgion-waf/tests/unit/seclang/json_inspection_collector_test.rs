@@ -284,7 +284,7 @@ fn shared_capture_program_aliases_resolve_identical_ordered_captures_in_both_mod
                 (b"empty", b""),
             ] {
                 let capture = sealed.capture(&mut budget, id, outcome, next.unwrap()).unwrap();
-                assert_eq!(capture.key, key);
+                assert_eq!(sealed.match_value(&mut budget, capture.key).unwrap(), key);
                 assert_eq!(sealed.match_value(&mut budget, capture.value).unwrap(), value);
                 next = capture.next;
             }
@@ -454,7 +454,10 @@ fn positive_captures_and_stored_payload_share_the_peak_capacity_budget() {
     assert_eq!(sealed.match_value(&mut budget, value).unwrap(), b"secret123");
     let capture = sealed.capture(&mut budget, id, outcome, captures.unwrap()).unwrap();
     assert_eq!(
-        (capture.key, sealed.match_value(&mut budget, capture.value).unwrap()),
+        (
+            sealed.match_value(&mut budget, capture.key).unwrap(),
+            sealed.match_value(&mut budget, capture.value).unwrap()
+        ),
         (b"0".as_slice(), b"secret123".as_slice())
     );
     // Store growth clips geometric reservations to the available cap. Find the
@@ -829,7 +832,7 @@ fn range_capture_collection_preserves_aliases_offsets_and_generated_fingerprints
             for (key, expected, offset) in &expected {
                 let capture = sealed.capture(&mut budget, id, outcome, next.unwrap()).unwrap();
                 let bytes = sealed.match_value(&mut budget, capture.value).unwrap();
-                assert_eq!(capture.key, *key);
+                assert_eq!(sealed.match_value(&mut budget, capture.key).unwrap(), *key);
                 assert_eq!(bytes, *expected);
                 if let Some(offset) = offset {
                     assert_eq!(bytes.as_ptr(), parent[*offset..].as_ptr());

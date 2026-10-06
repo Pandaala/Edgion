@@ -640,8 +640,9 @@ fn selected_name_bytes<'value>(
         SelectedName::Tx(index) => tx
             .entries
             .get(index)
-            .map(|entry| entry.key.as_slice())
-            .ok_or(RuntimeError::GenerationInvariant),
+            .ok_or(RuntimeError::GenerationInvariant)?
+            .key
+            .bytes(request, json_budget),
         SelectedName::MatchedVars(index) => tx
             .matched_vars
             .get(index)
@@ -705,7 +706,7 @@ struct ResponseState {
     retained_bytes: usize,
 }
 
-struct TxEntry<V = MatchValue, K = Vec<u8>> {
+struct TxEntry<V = MatchValue, K = MatchValue> {
     key: K,
     value: V,
 }
@@ -796,7 +797,7 @@ struct ActiveTargetExclusion {
     selector: super::CompiledTargetSelector,
 }
 
-struct CaptureEntry<V = MatchValue, K = Vec<u8>> {
+struct CaptureEntry<V = MatchValue, K = MatchValue> {
     key: K,
     value: V,
 }
@@ -834,6 +835,18 @@ impl StageCaptureKey for Vec<u8> {
     }
     fn heap_capacity(&self) -> usize {
         self.capacity()
+    }
+}
+
+impl StageCaptureKey for MatchValue {
+    fn allocation_bytes(source: CaptureKeySource<'_>) -> usize {
+        source.bytes().len()
+    }
+    fn from_source(source: CaptureKeySource<'_>) -> Result<Self, RuntimeError> {
+        owned_copy(source.bytes()).map(Self::Owned)
+    }
+    fn heap_capacity(&self) -> usize {
+        self.owned_capacity()
     }
 }
 
@@ -879,7 +892,7 @@ impl JsonCaptureKey {
     }
 }
 
-struct CaptureBuilder<V = MatchValue, K = Vec<u8>> {
+struct CaptureBuilder<V = MatchValue, K = MatchValue> {
     entries: Vec<CaptureEntry<V, K>>,
     semantic_bytes: usize,
     heap_bytes: usize,
@@ -1061,7 +1074,7 @@ impl MatchStorage {
 
 struct ChainBranch {
     tx: TxState,
-    capture_keys: Vec<Vec<u8>>,
+    capture_keys: Vec<MatchValue>,
     setvar_actions: usize,
 }
 
@@ -1113,7 +1126,7 @@ pub struct Transaction<'generation> {
     detector_work_bytes: usize,
     ctl_work_bytes: usize,
     tx: TxState,
-    capture_keys: Vec<Vec<u8>>,
+    capture_keys: Vec<MatchValue>,
     response: Option<ResponseState>,
     request_body_error: Option<BodyError>,
     evaluation_mode: EvaluationMode,
@@ -1315,7 +1328,12 @@ impl<'generation> Transaction<'generation> {
     }
 
     pub fn tx_value(&self, key: &[u8]) -> Option<&[u8]> {
-        self.tx.get(key)?.observed_bytes(&self.request).ok()
+        self.tx
+            .observed_get(key, &self.request)
+            .ok()
+            .flatten()?
+            .observed_bytes(&self.request)
+            .ok()
     }
 
     pub const fn request_body_error(&self) -> Option<BodyError> {
@@ -1960,10 +1978,17 @@ impl<'generation> Transaction<'generation> {
         }
         let mut initial = self.tx.try_clone_for_unit()?;
         if unit.member_count == 1 {
-            let mut capture_keys = try_clone_byte_vectors(&self.capture_keys)?;
+            let mut capture_keys = try_clone_keys(&self.capture_keys)?;
             let mut setvar_actions = 0_usize;
             for matched in matches.drain(..) {
-                apply_member_match(&mut initial, &mut capture_keys, matched, self.limits)?;
+                apply_member_match(
+                    &mut initial,
+                    &mut capture_keys,
+                    matched,
+                    self.limits,
+                    &self.request,
+                    self.json_budget.as_mut(),
+                )?;
                 self.apply_member_actions(unit.member_start, &mut initial, &mut setvar_actions)?;
             }
             return self.commit_unit_match(unit, initial, capture_keys);
@@ -1972,12 +1997,33 @@ impl<'generation> Transaction<'generation> {
         frontier.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
         frontier.push(ChainBranch {
             tx: initial,
-            capture_keys: try_clone_byte_vectors(&self.capture_keys)?,
+            capture_keys: try_clone_keys(&self.capture_keys)?,
             setvar_actions: 0,
         });
         for member_id in unit.member_start..end {
             let final_member = member_id + 1 == end;
+            let current_count = frontier.len();
             let current_bytes = chain_branches_bytes(&frontier)?;
+            if final_member {
+                // Only staged branches are consumed. Preserve the original
+                // frontier checkpoint before selecting children in winner order.
+                for mut branch in frontier {
+                    self.evaluate_member_matches_into(unit_id, member_id, &branch.tx, true, matches)?;
+                    if let Some(matched) = matches.drain(..).next() {
+                        apply_member_match(
+                            &mut branch.tx,
+                            &mut branch.capture_keys,
+                            matched,
+                            self.limits,
+                            &self.request,
+                            self.json_budget.as_mut(),
+                        )?;
+                        self.apply_member_actions(member_id, &mut branch.tx, &mut branch.setvar_actions)?;
+                        return self.commit_unit_match(unit, branch.tx, branch.capture_keys);
+                    }
+                }
+                return Ok(false);
+            }
             let mut next = Vec::new();
             let mut next_bytes = 0_usize;
             for branch in &frontier {
@@ -1987,15 +2033,19 @@ impl<'generation> Transaction<'generation> {
                 for matched in matches.drain(..) {
                     let mut candidate = ChainBranch {
                         tx: branch.tx.try_clone()?,
-                        capture_keys: try_clone_byte_vectors(&branch.capture_keys)?,
+                        capture_keys: try_clone_keys(&branch.capture_keys)?,
                         setvar_actions: branch.setvar_actions,
                     };
-                    apply_member_match(&mut candidate.tx, &mut candidate.capture_keys, matched, self.limits)?;
+                    apply_member_match(
+                        &mut candidate.tx,
+                        &mut candidate.capture_keys,
+                        matched,
+                        self.limits,
+                        &self.request,
+                        self.json_budget.as_mut(),
+                    )?;
                     self.apply_member_actions(member_id, &mut candidate.tx, &mut candidate.setvar_actions)?;
-                    if final_member {
-                        return self.commit_unit_match(unit, candidate.tx, candidate.capture_keys);
-                    }
-                    if frontier.len().saturating_add(next.len()) >= self.limits.max_operator_evaluations {
+                    if current_count.saturating_add(next.len()) >= self.limits.max_operator_evaluations {
                         return Err(RuntimeError::OperatorEvaluationLimit {
                             limit: self.limits.max_operator_evaluations,
                         });
@@ -2059,7 +2109,7 @@ impl<'generation> Transaction<'generation> {
         &mut self,
         unit: super::CompiledRuleUnit,
         staged: TxState,
-        capture_keys: Vec<Vec<u8>>,
+        capture_keys: Vec<MatchValue>,
     ) -> Result<bool, RuntimeError> {
         self.validate_runtime_actions(unit, &staged)?;
         let total_retained = self
@@ -2652,7 +2702,7 @@ impl<'generation> Transaction<'generation> {
                 self.json_budget.as_mut(),
             )?;
             match setvar.operation {
-                super::SetVarOperation::Delete => staged.delete(&key)?,
+                super::SetVarOperation::Delete => staged.delete(&key, &self.request, self.json_budget.as_mut())?,
                 super::SetVarOperation::Assign => {
                     let value = setvar_value(
                         &self.generation,
@@ -2662,11 +2712,11 @@ impl<'generation> Transaction<'generation> {
                         member.runtime_expansion_byte_limit,
                         self.json_budget.as_mut(),
                     )?;
-                    staged.set(key, value, self.limits)?;
+                    staged.set(key, value, self.limits, &self.request, self.json_budget.as_mut())?;
                 }
                 super::SetVarOperation::Add | super::SetVarOperation::Subtract => {
                     let current = staged
-                        .get(&key)
+                        .get(&key, &self.request, self.json_budget.as_mut())?
                         .map(|value| value.bytes(&self.request, self.json_budget.as_mut()))
                         .transpose()?
                         .map_or(Ok(0_i64), parse_i64)?;
@@ -2686,7 +2736,13 @@ impl<'generation> Transaction<'generation> {
                     }
                     .ok_or(RuntimeError::IntegerConversion)?;
                     let (digits, start) = signed_decimal_bytes(result);
-                    staged.set(key, owned_copy(&digits[start..])?, self.limits)?;
+                    staged.set(
+                        key,
+                        owned_copy(&digits[start..])?,
+                        self.limits,
+                        &self.request,
+                        self.json_budget.as_mut(),
+                    )?;
                 }
             }
         }
@@ -2958,7 +3014,7 @@ struct OrderedStageAccounting<'a> {
 impl PredicateStageObserver for OrderedStageAccounting<'_> {
     type Error = RuntimeError;
     type CaptureValue = MatchValue;
-    type CaptureKey = Vec<u8>;
+    type CaptureKey = MatchValue;
     fn charge_stage(&mut self, transformed_bytes: usize, detector_work: usize) -> Result<(), RuntimeError> {
         if detector_work != 0 {
             *self.detector_work_bytes = self
@@ -3354,9 +3410,11 @@ fn matched_variable_name(collection: CollectionKind, selected_name: Option<&[u8]
 
 fn apply_member_match(
     staged: &mut TxState,
-    capture_keys: &mut Vec<Vec<u8>>,
+    capture_keys: &mut Vec<MatchValue>,
     matched: MemberMatch,
     limits: RuntimeLimits,
+    request: &RequestState,
+    mut json_budget: Option<&mut InspectionBudget>,
 ) -> Result<(), RuntimeError> {
     if let (Some(value), Some(name)) = (&matched.matched_var, &matched.matched_var_name) {
         if staged.matched_vars.len() == limits.max_tx_variables {
@@ -3389,27 +3447,31 @@ fn apply_member_match(
         return Ok(());
     }
     for key in capture_keys.iter() {
-        staged.delete(key)?;
+        staged.delete(
+            key.bytes(request, json_budget.as_deref_mut())?,
+            request,
+            json_budget.as_deref_mut(),
+        )?;
     }
     capture_keys.clear();
     capture_keys
         .try_reserve_exact(matched.captures.len())
         .map_err(|_| RuntimeError::Allocation)?;
     for capture in matched.captures {
-        let stored_key = owned_copy(&capture.key)?;
-        staged.set(capture.key, capture.value, limits)?;
+        let stored_key = capture.key.try_clone()?;
+        staged.set(capture.key, capture.value, limits, request, json_budget.as_deref_mut())?;
         capture_keys.push(stored_key);
     }
     Ok(())
 }
 
-fn try_clone_byte_vectors(values: &[Vec<u8>]) -> Result<Vec<Vec<u8>>, RuntimeError> {
+fn try_clone_keys(values: &[MatchValue]) -> Result<Vec<MatchValue>, RuntimeError> {
     let mut cloned = Vec::new();
     cloned
         .try_reserve_exact(values.len())
         .map_err(|_| RuntimeError::Allocation)?;
     for value in values {
-        cloned.push(owned_copy(value)?);
+        cloned.push(value.try_clone()?);
     }
     Ok(cloned)
 }
@@ -3419,7 +3481,7 @@ fn chain_branch_bytes(branch: &ChainBranch) -> Result<usize, RuntimeError> {
         branch
             .capture_keys
             .len()
-            .checked_mul(size_of::<Vec<u8>>())
+            .checked_mul(size_of::<MatchValue>())
             .and_then(|value| value.checked_add(branch.tx.retained_bytes))
             .ok_or(RuntimeError::Arithmetic)?,
         |total, key| total.checked_add(key.len()).ok_or(RuntimeError::Arithmetic),
@@ -3516,19 +3578,52 @@ impl TxState {
         Ok(())
     }
 
-    fn get(&self, key: &[u8]) -> Option<&MatchValue> {
-        self.entries
-            .iter()
-            .find(|entry| entry.key.eq_ignore_ascii_case(key))
-            .map(|entry| &entry.value)
+    fn find_entry(
+        &self,
+        key: &[u8],
+        request: &RequestState,
+        mut json_budget: Option<&mut InspectionBudget>,
+    ) -> Result<Option<usize>, RuntimeError> {
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry
+                .key
+                .bytes(request, json_budget.as_deref_mut())?
+                .eq_ignore_ascii_case(key)
+            {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
     }
 
-    fn delete(&mut self, key: &[u8]) -> Result<(), RuntimeError> {
-        if let Some(index) = self
-            .entries
-            .iter()
-            .position(|entry| entry.key.eq_ignore_ascii_case(key))
-        {
+    fn get(
+        &self,
+        key: &[u8],
+        request: &RequestState,
+        json_budget: Option<&mut InspectionBudget>,
+    ) -> Result<Option<&MatchValue>, RuntimeError> {
+        Ok(self
+            .find_entry(key, request, json_budget)?
+            .map(|index| &self.entries[index].value))
+    }
+
+    /// Public observation validates shared keys without consuming runtime work.
+    fn observed_get(&self, key: &[u8], request: &RequestState) -> Result<Option<&MatchValue>, RuntimeError> {
+        for entry in &self.entries {
+            if entry.key.observed_bytes(request)?.eq_ignore_ascii_case(key) {
+                return Ok(Some(&entry.value));
+            }
+        }
+        Ok(None)
+    }
+
+    fn delete(
+        &mut self,
+        key: &[u8],
+        request: &RequestState,
+        json_budget: Option<&mut InspectionBudget>,
+    ) -> Result<(), RuntimeError> {
+        if let Some(index) = self.find_entry(key, request, json_budget)? {
             let entry = &self.entries[index];
             let removed = tx_payload_bytes(entry.key.len(), entry.value.len())?;
             let total = tx_payload_delta(self.entry_payload_bytes, removed, 0)?;
@@ -3539,13 +3634,18 @@ impl TxState {
         Ok(())
     }
 
-    fn set(&mut self, key: Vec<u8>, value: impl Into<MatchValue>, limits: RuntimeLimits) -> Result<(), RuntimeError> {
+    fn set(
+        &mut self,
+        key: impl Into<MatchValue>,
+        value: impl Into<MatchValue>,
+        limits: RuntimeLimits,
+        request: &RequestState,
+        mut json_budget: Option<&mut InspectionBudget>,
+    ) -> Result<(), RuntimeError> {
+        let key = key.into();
         let value = value.into();
-        if let Some(entry) = self
-            .entries
-            .iter_mut()
-            .find(|entry| entry.key.eq_ignore_ascii_case(&key))
-        {
+        if let Some(index) = self.find_entry(key.bytes(request, json_budget.as_deref_mut())?, request, json_budget)? {
+            let entry = &mut self.entries[index];
             let total = tx_payload_delta(self.entry_payload_bytes, entry.value.len() as u128, value.len() as u128)?;
             entry.value = value;
             self.entry_payload_bytes = total;
@@ -3679,7 +3779,7 @@ fn try_clone_entries(entries: &[TxEntry]) -> Result<Vec<TxEntry>, RuntimeError> 
         .map_err(|_| RuntimeError::Allocation)?;
     for entry in entries {
         cloned.push(TxEntry {
-            key: owned_copy(&entry.key)?,
+            key: entry.key.try_clone()?,
             value: entry.value.try_clone()?,
         });
     }
@@ -4655,7 +4755,7 @@ fn macro_value<'request>(
     tx: &'request TxState,
     source: super::MacroSource,
     key: &[u8],
-    json_budget: Option<&mut InspectionBudget>,
+    mut json_budget: Option<&mut InspectionBudget>,
 ) -> Result<Option<&'request [u8]>, RuntimeError> {
     Ok(match source {
         super::MacroSource::Args => {
@@ -4684,7 +4784,10 @@ fn macro_value<'request>(
         super::MacroSource::RequestHeaders => request.first_named(CollectionKind::RequestHeaders, key, true),
         super::MacroSource::RemoteAddr => request.first_value(CollectionKind::RemoteAddr),
         super::MacroSource::RequestLine => request.first_value(CollectionKind::RequestLine),
-        super::MacroSource::Tx => tx.get(key).map(|value| value.bytes(request, json_budget)).transpose()?,
+        super::MacroSource::Tx => tx
+            .get(key, request, json_budget.as_deref_mut())?
+            .map(|value| value.bytes(request, json_budget))
+            .transpose()?,
         super::MacroSource::MatchedVar => tx
             .matched_var
             .as_ref()

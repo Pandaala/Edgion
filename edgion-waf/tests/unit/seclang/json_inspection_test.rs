@@ -211,7 +211,7 @@ fn sealed_captures_and_changes_preserve_order() {
     let mut next = first_capture;
     for key in [b"0", b"1", b"2"] {
         let capture = sealed.capture(&mut budget, id, outcome, next.unwrap()).unwrap();
-        assert_eq!(capture.key, key);
+        assert_eq!(sealed.match_value(&mut budget, capture.key).unwrap(), key);
         assert_eq!(sealed.match_value(&mut budget, capture.value).unwrap(), b"hit");
         next = capture.next;
     }
@@ -471,7 +471,8 @@ fn shared_stage_payload_bulk_cleanup_is_order_independent() {
             assert_eq!(s.usage().matched_bytes, 7);
             assert_eq!(s.usage().live_outcomes, 2);
             if owner_first {
-                s.records.candidates.get_mut(id.0).unwrap().outcomes = Some(first);
+                let local = LocalOutcomeId::from_full(first, s.records.outcomes.owner).unwrap();
+                s.records.candidates.get_mut(id.0).unwrap().outcomes = Some(local);
                 s.records.outcomes.get_mut(first.0).unwrap().next = Some(alias);
                 s.records.outcomes.get_mut(alias.0).unwrap().next = None;
             }
@@ -920,7 +921,7 @@ fn qualified_name_direct_lookup_checks_bounds_and_exact_work() {
             size_of::<Slot<Candidate>>(),
             size_of::<QualifiedNamePair>()
         ),
-        (192, 208, 32)
+        (160, 176, 32)
     );
     for allowance in [0, 1] {
         let (sealed, mut budget, id) = make();
@@ -975,18 +976,18 @@ fn sealed_capture_and_name_handles_reject_foreign_or_out_of_bounds_observation()
         let OutcomeValue::Match { first_capture, .. } = sealed.outcome(&mut budget, id, outcome).unwrap().result else {
             panic!("expected match");
         };
-        let value = sealed
+        let capture = sealed
             .capture(&mut budget, id, outcome, first_capture.unwrap())
-            .unwrap()
-            .value;
-        (sealed, budget, name, value)
+            .unwrap();
+        (sealed, budget, name, capture.value, capture.key)
     };
-    let (first, _, foreign_name, foreign_capture) = make();
-    let (second, mut budget, name, capture) = make();
-    for foreign in [foreign_name, foreign_capture] {
+    let (first, _, foreign_name, foreign_capture, foreign_key) = make();
+    let (second, mut budget, name, capture, key) = make();
+    assert_eq!(second.observe_match_value(key).unwrap(), b"1");
+    for foreign in [foreign_name, foreign_capture, foreign_key] {
         assert_eq!(second.observe_match_value(foreign), Err(StoreError::Identity));
     }
-    for local in [name, capture] {
+    for local in [name, capture, key] {
         let invalid = SealedMatchValue {
             offset: second.records.bytes.bytes.len(),
             ..local
@@ -1005,6 +1006,41 @@ fn sealed_capture_and_name_handles_reject_foreign_or_out_of_bounds_observation()
     assert_eq!(second.match_value(&mut budget, capture), Err(StoreError::Work));
     assert_eq!(second.observe_match_value(capture).unwrap(), b"hit");
     assert_eq!(first.observe_match_value(foreign_name).unwrap(), b"ARGS:json.x");
+}
+
+#[test]
+fn sealed_capture_key_mint_rejects_invalid_identity_and_lease_before_publication() {
+    let g = generation();
+    for fault in 0..4 {
+        let mut s = store(&g);
+        let id = s.begin_candidate(b"json.x", 1, JsonScalarKind::String, None).unwrap();
+        let outcome = s.record_match(id, 0, 0, b"a").unwrap();
+        s.add_capture_range(outcome, b"Name", 0, 1).unwrap();
+        s.complete_profile(id, 0).unwrap();
+        let receipt = finish(&mut s, id, &[0]);
+        s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+        let (mut sealed, mut budget) = s.into_sealed().unwrap();
+        let OutcomeValue::Match {
+            first_capture: Some(capture),
+            ..
+        } = sealed.outcome(&mut budget, id, outcome).unwrap().result
+        else {
+            panic!("capture");
+        };
+        let mut attempted = capture;
+        match fault {
+            0 => attempted.0.owner += 1,
+            1 => attempted.0.generation += 1,
+            2 => sealed.records.captures.get_mut(capture.0).unwrap().key.owner += 1,
+            3 => sealed.records.captures.get_mut(capture.0).unwrap().key.offset = usize::MAX,
+            _ => unreachable!(),
+        }
+        assert!(matches!(
+            sealed.capture(&mut budget, id, outcome, attempted),
+            Err(StoreError::Identity | StoreError::Arithmetic)
+        ));
+        assert!(budget.failure().is_some());
+    }
 }
 
 #[test]
@@ -1177,4 +1213,281 @@ fn sealed_capture_ranges_validate_parent_bounds_at_read_time() {
         Err(StoreError::Identity)
     ));
     assert_eq!(budget.failure(), Some(StoreError::Identity));
+}
+
+#[test]
+fn candidate_local_links_preserve_full_identity_domain_and_actual_layout() {
+    let owner = 77;
+    for slot in [0, u32::MAX] {
+        for generation in [0, u32::MAX] {
+            let raw = RawId {
+                owner,
+                slot,
+                generation,
+            };
+            let candidate = CandidateId(raw);
+            let profile = ProfileId(raw);
+            let outcome = OutcomeId(raw);
+            assert_eq!(
+                LocalCandidateId::from_full(candidate, owner).unwrap().full(owner),
+                candidate
+            );
+            assert_eq!(LocalProfileId::from_full(profile, owner).unwrap().full(owner), profile);
+            assert_eq!(LocalOutcomeId::from_full(outcome, owner).unwrap().full(owner), outcome);
+            assert_eq!(
+                LocalCandidateId::from_full(candidate, owner + 1),
+                Err(StoreError::Identity)
+            );
+            assert_eq!(LocalProfileId::from_full(profile, owner + 1), Err(StoreError::Identity));
+            assert_eq!(LocalOutcomeId::from_full(outcome, owner + 1), Err(StoreError::Identity));
+        }
+    }
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(size_of::<RawId>(), 16);
+        for full in [
+            size_of::<Option<CandidateId>>(),
+            size_of::<Option<ProfileId>>(),
+            size_of::<Option<OutcomeId>>(),
+        ] {
+            assert_eq!(full, 24);
+        }
+        for local in [
+            size_of::<LocalCandidateId>(),
+            size_of::<LocalProfileId>(),
+            size_of::<LocalOutcomeId>(),
+        ] {
+            assert_eq!(local, 8);
+        }
+        for optional in [
+            size_of::<Option<LocalCandidateId>>(),
+            size_of::<Option<LocalProfileId>>(),
+            size_of::<Option<LocalOutcomeId>>(),
+        ] {
+            assert_eq!(optional, 12);
+        }
+        assert_eq!((size_of::<Candidate>(), size_of::<Slot<Candidate>>()), (160, 176));
+    }
+}
+
+#[test]
+fn candidate_local_links_retain_stale_generations_after_pool_reuse() {
+    let g = generation();
+    let mut s = store(&g);
+    let old = s.begin_candidate(b"json.old", 3, JsonScalarKind::String, None).unwrap();
+    s.record_changed_step(old, 0, 0, 3).unwrap();
+    s.record_match(old, 0, 0, b"old").unwrap();
+    let old_candidate = LocalCandidateId::from_full(old, s.records.candidates.owner).unwrap();
+    let candidate = s.records.candidates.get(old.0).unwrap();
+    let old_profile = candidate.profiles.unwrap();
+    let old_outcome = candidate.outcomes.unwrap();
+    s.complete_profile(old, 0).unwrap();
+    let receipt = finish(&mut s, old, &[0]);
+    s.discard(receipt).unwrap();
+
+    let new = s.begin_candidate(b"json.new", 3, JsonScalarKind::String, None).unwrap();
+    s.record_changed_step(new, 0, 0, 3).unwrap();
+    s.record_match(new, 0, 0, b"new").unwrap();
+    let candidate = s.records.candidates.get(new.0).unwrap();
+    let new_profile = candidate.profiles.unwrap();
+    let new_outcome = candidate.outcomes.unwrap();
+    assert_eq!(old.0.slot, new.0.slot);
+    assert_ne!(old.0.generation, new.0.generation);
+    assert_eq!(old_profile.slot, new_profile.slot);
+    assert_ne!(old_profile.generation, new_profile.generation);
+    assert_eq!(old_outcome.slot, new_outcome.slot);
+    assert_ne!(old_outcome.generation, new_outcome.generation);
+    assert_eq!(old_candidate.full(s.records.candidates.owner), old);
+    assert!(matches!(
+        s.records
+            .candidates
+            .get(old_candidate.full(s.records.candidates.owner).0),
+        Err(StoreError::Identity)
+    ));
+    assert!(matches!(
+        s.records.profiles.get(old_profile.full(s.records.profiles.owner).0),
+        Err(StoreError::Identity)
+    ));
+    assert!(matches!(
+        s.records.outcomes.get(old_outcome.full(s.records.outcomes.owner).0),
+        Err(StoreError::Identity)
+    ));
+    s.complete_profile(new, 0).unwrap();
+    let receipt = finish(&mut s, new, &[0]);
+    s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+    let (sealed, mut budget) = s.into_sealed().unwrap();
+    assert_eq!(sealed.candidate(&mut budget, new).unwrap().name, b"json.new");
+    assert!(matches!(sealed.candidate(&mut budget, old), Err(StoreError::Identity)));
+    assert_eq!(budget.failure(), Some(StoreError::Identity));
+    assert!(matches!(sealed.candidate(&mut budget, new), Err(StoreError::Identity)));
+}
+
+#[test]
+fn candidate_local_heads_keep_profile_and_outcome_parent_checks_sticky() {
+    let g = generation();
+    for corrupt_profile in [true, false] {
+        let mut s = store(&g);
+        let mut receipts = None;
+        let mut ids = Vec::new();
+        for name in [b"json.a".as_slice(), b"json.b".as_slice()] {
+            let id = s.begin_candidate(name, 3, JsonScalarKind::String, None).unwrap();
+            s.record_changed_step(id, 0, 0, 3).unwrap();
+            s.record_match(id, 0, 0, b"hit").unwrap();
+            s.complete_profile(id, 0).unwrap();
+            let receipt = finish(&mut s, id, &[0]);
+            receipts = s.concat(receipts, Some(receipt)).unwrap();
+            ids.push(id);
+        }
+        s.seal(receipts, JsonSemanticSummary::default()).unwrap();
+        let (mut sealed, mut budget) = s.into_sealed().unwrap();
+        if corrupt_profile {
+            let foreign = sealed.records.candidates.get(ids[1].0).unwrap().profiles;
+            sealed.records.candidates.get_mut(ids[0].0).unwrap().profiles = foreign;
+            assert!(matches!(
+                sealed.profile(&mut budget, ids[0], 0),
+                Err(StoreError::Identity)
+            ));
+        } else {
+            let foreign = sealed.records.candidates.get(ids[1].0).unwrap().outcomes;
+            sealed.records.candidates.get_mut(ids[0].0).unwrap().outcomes = foreign;
+            assert!(matches!(
+                sealed.lookup_selected(
+                    &mut budget,
+                    ids[0],
+                    0,
+                    &g,
+                    RuntimeLimits::default(),
+                    EvaluationMode::Accelerated
+                ),
+                Err(StoreError::Identity)
+            ));
+        }
+        assert_eq!(budget.failure(), Some(StoreError::Identity));
+        assert!(matches!(
+            sealed.candidate(&mut budget, ids[1]),
+            Err(StoreError::Identity)
+        ));
+    }
+}
+
+#[test]
+fn candidate_local_chain_concat_discard_and_multi_object_reuse_preserve_order() {
+    let g = generation();
+    let mut s = store(&g);
+    let mut discarded = None;
+    let mut old = Vec::new();
+    for name in [b"json.old.a".as_slice(), b"json.old.b", b"json.old.c"] {
+        let id = s.begin_candidate(name, 3, JsonScalarKind::String, None).unwrap();
+        s.record_changed_step(id, 0, 0, 3).unwrap();
+        s.record_match(id, 0, 0, b"old").unwrap();
+        s.complete_profile(id, 0).unwrap();
+        let receipt = finish(&mut s, id, &[0]);
+        discarded = s.concat(discarded, Some(receipt)).unwrap();
+        old.push(id);
+    }
+    s.discard(discarded.unwrap()).unwrap();
+    assert_eq!(
+        (
+            s.usage().live_candidates,
+            s.usage().live_profiles,
+            s.usage().live_outcomes
+        ),
+        (0, 0, 0)
+    );
+    let retained = s.usage().retained_bytes;
+    let names = [b"json.new.a".as_slice(), b"json.new.b", b"json.new.c"];
+    let mut survivors = None;
+    let mut new = Vec::new();
+    for name in names {
+        let id = s.begin_candidate(name, 3, JsonScalarKind::String, None).unwrap();
+        s.record_changed_step(id, 0, 0, 3).unwrap();
+        s.record_match(id, 0, 0, b"new").unwrap();
+        s.complete_profile(id, 0).unwrap();
+        let receipt = finish(&mut s, id, &[0]);
+        survivors = s.concat(survivors, Some(receipt)).unwrap();
+        new.push(id);
+    }
+    assert_eq!(s.usage().retained_bytes, retained);
+    for id in &new {
+        assert!(old
+            .iter()
+            .any(|old| old.0.slot == id.0.slot && old.0.generation != id.0.generation));
+    }
+    s.seal(survivors, JsonSemanticSummary::default()).unwrap();
+    let (sealed, mut budget) = s.into_sealed().unwrap();
+    let mut next = sealed.receipt.map(|receipt| receipt.head);
+    for (index, name) in names.into_iter().enumerate() {
+        assert_eq!(next, Some(new[index]));
+        let candidate = sealed.candidate(&mut budget, next.unwrap()).unwrap();
+        assert_eq!(candidate.name, name);
+        next = candidate.next;
+        assert!(sealed.profile(&mut budget, new[index], 0).unwrap().record.is_some());
+        assert!(matches!(
+            sealed
+                .lookup_selected(
+                    &mut budget,
+                    new[index],
+                    0,
+                    &g,
+                    RuntimeLimits::default(),
+                    EvaluationMode::Accelerated
+                )
+                .unwrap(),
+            SelectedOutcome::MatchOrError(_)
+        ));
+    }
+    assert_eq!(next, None);
+}
+
+#[test]
+fn candidate_local_slot_growth_uses_actual_size_at_physical_and_work_boundaries() {
+    let unit = size_of::<Slot<Candidate>>();
+    for limit in [
+        StoreError::Capacity,
+        StoreError::Work,
+        StoreError::Records,
+        StoreError::Candidates,
+    ] {
+        for allowance in [0, 1, 2] {
+            let mut budget = InspectionBudget::empty_publication(ResultLimits {
+                retained_bytes: 4 * unit,
+                ..ResultLimits::default()
+            })
+            .unwrap();
+            let mut slots: Vec<Slot<Candidate>> = Vec::new();
+            let owner = budget.owner;
+            budget
+                .checked(owner, |budget| budget.grow(&mut slots, 4, true, true))
+                .unwrap();
+            assert_eq!(slots.capacity(), 4);
+            assert_eq!(budget.usage.retained_bytes, slots.capacity() * unit);
+            slots.resize_with(4, || Slot {
+                generation: 0,
+                free_next: None,
+                value: None,
+            });
+            budget.limits.retained_bytes = 9 * unit;
+            match limit {
+                StoreError::Capacity => budget.limits.retained_bytes = 9 * unit - 1 + allowance,
+                StoreError::Work => budget.limits.work = 4 * unit - 1 + allowance,
+                StoreError::Records => budget.limits.records = 4 + allowance,
+                StoreError::Candidates => budget.limits.candidates = 4 + allowance,
+                _ => unreachable!(),
+            }
+            let result = budget.checked(owner, |budget| budget.grow(&mut slots, 1, true, true));
+            if allowance == 0 {
+                assert_eq!(result, Err(limit));
+                assert_eq!(slots.capacity(), 4);
+                assert_eq!(budget.failure(), Some(limit));
+                assert_eq!(budget.checked(owner, |_| Ok(())), Err(limit));
+            } else {
+                result.unwrap();
+                assert_eq!(slots.capacity(), 5);
+                assert_eq!(budget.usage.retained_bytes, 5 * unit);
+                assert_eq!(budget.usage.peak_retained_bytes, 9 * unit);
+                assert_eq!(budget.usage.work, 4 * unit);
+                assert_eq!(budget.usage.allocated_records, slots.capacity());
+            }
+        }
+    }
 }

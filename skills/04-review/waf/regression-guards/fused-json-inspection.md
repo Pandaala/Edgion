@@ -205,7 +205,8 @@ use numeric/program-group descriptors in a reusable builder. Resolve named keys
 only against its bound generation and copy at result transfer. Charge actual
 high-water builder capacity dynamically during transformation/predicate admission;
 clear logical contents on every extraction/transfer error and drop before seal.
-Persistent owned TX capture keys remain separate from these temporary descriptors.
+Persistent TX capture keys remain separate from these temporary descriptors and
+now use the sealed-handle policy described below for static JSON results.
 
 TX cached payload totals are exact u128 with checked mutation deltas. Semantic
 lengths, actual metadata and observer-loan restoration still determine admission.
@@ -227,3 +228,32 @@ replay remain mandatory. JSON scan-cache demand counts unique Matcher IDs only.
 Re-evaluate compiler peaks, generation identity, high-water headroom and error
 cleanup when changing any of these mechanisms. Directed identical-regex benchmarks
 do not establish broad CRS speedups.
+
+The current capture-key and candidate follow-up is documented in
+[plan25](../../../../tasks/pending/waf-json-checker/25-capture-key-and-candidate-plan.md)
+and [results26](../../../../tasks/pending/waf-json-checker/26-capture-key-and-candidate-results.md).
+Final independent Astra code/artifact review approved the disclosed allocation,
+CPU and descriptor tradeoffs. Fresh WAF tests (639 passed, two ignored), API4,
+workspace checks/guards and all 1,240 paired/three-version rows passed.
+Static JSON capture keys share opaque sealed handles through replay, TX entries,
+capture cleanup lists and both clone policies. Ordinary captures remain fallibly
+owned and move their existing builder vector. TX key lookup, mutation, selection
+and macros validate shared keys with canonical metered reads; public tx_value alone
+uses immutable observation. Overwrite preserves original key spelling. Logical
+payload lengths remain charged, while actual entry and cleanup-element sizes grow.
+Keep case-alias cleanup, numeric spelling, later-phase, ownership, sticky-work and
+rollback tests. Shared bytes do not imply free descriptor storage or key reads.
+
+Only the final member consumes an already staged chain frontier in its original
+winner order. The original frontier accounting checkpoint remains before selection.
+Nonfinal breadth-first cloning and first-member observer loans retain their contract;
+live TX is replaced only after successful commit. Preserve the frozen clone-frontier
+differential tests and exact/one-less admission, action and rollback boundaries.
+
+Candidate's three private head/next links omit their fixed pool owner and retain
+the complete u32 slot and generation. Reattaching owner never refreshes generation.
+External IDs, views, receipts and other records retain full identities. Validate
+external owner/slot/generation/occupied state before following local links, and
+retain profile/outcome parent checks. Physical growth uses actual production types;
+the measured 64-bit Candidate and Slot<Candidate> are 160 and 176 bytes. Re-evaluate
+packing, lifecycle and physical failure thresholds when any link or pool changes.

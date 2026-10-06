@@ -94,6 +94,29 @@ macro_rules! ids {
     ($($name:ident),*) => { $(#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub(super) struct $name(RawId);)* };
 }
 ids!(CandidateId, ProfileId, OutcomeId, ChangeId, CaptureId);
+// Candidate-local links omit the pool owner but preserve the complete slot and
+// generation domain. External handles always retain their owner checks.
+macro_rules! local_ids {
+    ($($local:ident => $full:ident),*) => { $(
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        struct $local {
+            slot: u32,
+            generation: u32,
+        }
+        impl $local {
+            fn from_full(id: $full, owner: u64) -> Result<Self> {
+                if id.0.owner != owner {
+                    return Err(StoreError::Identity);
+                }
+                Ok(Self { slot: id.0.slot, generation: id.0.generation })
+            }
+            fn full(self, owner: u64) -> $full {
+                $full(RawId { owner, slot: self.slot, generation: self.generation })
+            }
+        }
+    )* };
+}
+local_ids!(LocalCandidateId => CandidateId, LocalProfileId => ProfileId, LocalOutcomeId => OutcomeId);
 /// Only the first outcome of one candidate/profile/stage can mint this token.
 #[derive(Clone, Copy)]
 pub(super) struct StageMatchToken(OutcomeId);
@@ -550,9 +573,9 @@ struct Candidate {
     semantic_len: usize,
     states: Lease,
     deferred: Option<Lease>,
-    profiles: Option<ProfileId>,
-    outcomes: Option<OutcomeId>,
-    next: Option<CandidateId>,
+    profiles: Option<LocalProfileId>,
+    outcomes: Option<LocalOutcomeId>,
+    next: Option<LocalCandidateId>,
     qualified_name_pair: Option<NonZeroU32>,
     complete: bool,
 }
@@ -808,7 +831,12 @@ impl<'generation> ResultStore<'generation> {
         Ok(())
     }
     fn find_profile(&mut self, owner: CandidateId, compiled: usize) -> Result<Option<ProfileId>> {
-        let mut next = self.records.candidates.get(owner.0)?.profiles;
+        let mut next = self
+            .records
+            .candidates
+            .get(owner.0)?
+            .profiles
+            .map(|id| id.full(self.records.profiles.owner));
         while let Some(id) = next {
             self.budget.work(1)?;
             let profile = self.records.profiles.get(id.0)?;
@@ -831,7 +859,12 @@ impl<'generation> ResultStore<'generation> {
         if let Some(id) = self.find_profile(owner, compiled)? {
             return Ok(id);
         }
-        let next = self.records.candidates.get(owner.0)?.profiles;
+        let next = self
+            .records
+            .candidates
+            .get(owner.0)?
+            .profiles
+            .map(|id| id.full(self.records.profiles.owner));
         let id = ProfileId(self.records.profiles.insert(
             Profile {
                 owner,
@@ -844,7 +877,8 @@ impl<'generation> ResultStore<'generation> {
             &mut self.budget,
             false,
         )?);
-        self.records.candidates.get_mut(owner.0)?.profiles = Some(id);
+        let local = LocalProfileId::from_full(id, self.records.profiles.owner)?;
+        self.records.candidates.get_mut(owner.0)?.profiles = Some(local);
         self.budget.usage.live_profiles += 1;
         Ok(id)
     }
@@ -927,7 +961,12 @@ impl<'generation> ResultStore<'generation> {
         {
             return Err(StoreError::State);
         }
-        let next = self.records.candidates.get(owner.0)?.outcomes;
+        let next = self
+            .records
+            .candidates
+            .get(owner.0)?
+            .outcomes
+            .map(|id| id.full(self.records.outcomes.owner));
         let id = OutcomeId(self.records.outcomes.insert(
             Outcome {
                 owner,
@@ -939,7 +978,8 @@ impl<'generation> ResultStore<'generation> {
             &mut self.budget,
             false,
         )?);
-        self.records.candidates.get_mut(owner.0)?.outcomes = Some(id);
+        let local = LocalOutcomeId::from_full(id, self.records.outcomes.owner)?;
+        self.records.candidates.get_mut(owner.0)?.outcomes = Some(local);
         self.budget.usage.live_outcomes += 1;
         Ok(id)
     }
@@ -1151,7 +1191,12 @@ impl<'generation> ResultStore<'generation> {
         Ok(())
     }
     fn discard_profile_outcomes(&mut self, owner: CandidateId, profile: usize) -> Result<()> {
-        let mut next = self.records.candidates.get(owner.0)?.outcomes;
+        let mut next = self
+            .records
+            .candidates
+            .get(owner.0)?
+            .outcomes
+            .map(|id| id.full(self.records.outcomes.owner));
         let mut previous: Option<OutcomeId> = None;
         while let Some(id) = next {
             self.budget.work(1)?;
@@ -1173,7 +1218,10 @@ impl<'generation> ResultStore<'generation> {
                 if let Some(previous) = previous {
                     self.records.outcomes.get_mut(previous.0)?.next = next;
                 } else {
-                    self.records.candidates.get_mut(owner.0)?.outcomes = next;
+                    let local = next
+                        .map(|id| LocalOutcomeId::from_full(id, self.records.outcomes.owner))
+                        .transpose()?;
+                    self.records.candidates.get_mut(owner.0)?.outcomes = local;
                 }
                 self.free_outcome(id, owner)?;
             } else {
@@ -1235,7 +1283,8 @@ impl<'generation> ResultStore<'generation> {
                 }
                 store.records.candidates.get(right.tail.0)?;
                 store.records.candidates.get(left.head.0)?;
-                store.records.candidates.get_mut(left.tail.0)?.next = Some(right.head);
+                let local = LocalCandidateId::from_full(right.head, store.records.candidates.owner)?;
+                store.records.candidates.get_mut(left.tail.0)?.next = Some(local);
                 Ok(Some(Receipt {
                     head: left.head,
                     tail: right.tail,
@@ -1258,13 +1307,13 @@ impl<'generation> ResultStore<'generation> {
             let mut next = Some(receipt.head);
             while let Some(id) = next {
                 let candidate = store.records.candidates.remove(id.0, &mut store.budget)?;
-                next = candidate.next;
-                let mut outcomes = candidate.outcomes;
+                next = candidate.next.map(|id| id.full(store.records.candidates.owner));
+                let mut outcomes = candidate.outcomes.map(|id| id.full(store.records.outcomes.owner));
                 while let Some(outcome) = outcomes {
                     outcomes = store.records.outcomes.get(outcome.0)?.next;
                     store.free_outcome(outcome, id)?;
                 }
-                let mut profiles = candidate.profiles;
+                let mut profiles = candidate.profiles.map(|id| id.full(store.records.profiles.owner));
                 while let Some(profile) = profiles {
                     if store.records.profiles.get(profile.0)?.owner != id {
                         return Err(StoreError::Identity);
@@ -1352,9 +1401,9 @@ impl<'generation> ResultStore<'generation> {
                         }
                     }
                 }
-                next = candidate.next;
+                next = candidate.next.map(|id| id.full(store.records.candidates.owner));
                 let name = candidate.name;
-                let mut outcome_next = candidate.outcomes;
+                let mut outcome_next = candidate.outcomes.map(|id| id.full(store.records.outcomes.owner));
                 let mut required = [false; 2];
                 while let Some(outcome_id) = outcome_next {
                     store.budget.work(1)?;
@@ -1561,8 +1610,8 @@ pub(super) struct ChangeView {
     pub output_len: usize,
     pub next: Option<ChangeId>,
 }
-pub(super) struct CaptureView<'a> {
-    pub key: &'a [u8],
+pub(super) struct CaptureView {
+    pub key: SealedMatchValue,
     pub value: SealedMatchValue,
     pub next: Option<CaptureId>,
 }
@@ -1677,7 +1726,7 @@ impl SealedResults<'_> {
                     .deferred
                     .map(|lease| self.records.bytes.read(lease))
                     .transpose()?,
-                next: candidate.next,
+                next: candidate.next.map(|id| id.full(self.records.candidates.owner)),
             })
         })
     }
@@ -1710,7 +1759,7 @@ impl SealedResults<'_> {
                     error: None,
                 });
             }
-            let mut next = candidate.profiles;
+            let mut next = candidate.profiles.map(|id| id.full(self.records.profiles.owner));
             while let Some(id) = next {
                 budget.work(1)?;
                 let profile = self.records.profiles.get(id.0)?;
@@ -1785,7 +1834,12 @@ impl SealedResults<'_> {
             if let Some(error) = self.profile(budget, owner, compiled)?.error {
                 return Ok(SelectedOutcome::TransformError(error));
             }
-            let mut next = self.records.candidates.get(owner.0)?.outcomes;
+            let mut next = self
+                .records
+                .candidates
+                .get(owner.0)?
+                .outcomes
+                .map(|id| id.full(self.records.outcomes.owner));
             while let Some(id) = next {
                 budget.work(1)?;
                 let outcome = self.records.outcomes.get(id.0)?;
@@ -1845,7 +1899,7 @@ impl SealedResults<'_> {
         owner: CandidateId,
         outcome: OutcomeId,
         id: CaptureId,
-    ) -> Result<CaptureView<'_>> {
+    ) -> Result<CaptureView> {
         budget.checked(self.records.owner, |budget| {
             budget.work(1)?;
             self.records.candidates.get(owner.0)?;
@@ -1857,7 +1911,7 @@ impl SealedResults<'_> {
                 return Err(StoreError::Identity);
             }
             Ok(CaptureView {
-                key: self.records.bytes.read(capture.key)?,
+                key: self.sealed_handle(capture.key)?,
                 value: match capture.value {
                     StoredCaptureValue::Owned(value) => self.sealed_handle(value)?,
                     StoredCaptureValue::MatchRange { start, len } => {

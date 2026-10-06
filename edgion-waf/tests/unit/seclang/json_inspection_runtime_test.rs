@@ -68,19 +68,32 @@ fn assert_no_hit_cursor_parity(fast: &mut Transaction<'_>, cursor: &mut Transact
     assert_eq!(fast.ctl_work_bytes, cursor.ctl_work_bytes);
     assert_eq!(fast.next_phase(), cursor.next_phase());
     assert_eq!(fast.request_body_error(), cursor.request_body_error());
-    assert_eq!(fast.capture_keys, cursor.capture_keys);
+    assert_eq!(
+        fast.capture_keys
+            .iter()
+            .map(|key| key.observed_bytes(&fast.request).unwrap())
+            .collect::<Vec<_>>(),
+        cursor
+            .capture_keys
+            .iter()
+            .map(|key| key.observed_bytes(&cursor.request).unwrap())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         fast.tx
             .entries
             .iter()
-            .map(|entry| (entry.key.as_slice(), entry.value.observed_bytes(&fast.request).unwrap()))
+            .map(|entry| (
+                entry.key.observed_bytes(&fast.request).unwrap(),
+                entry.value.observed_bytes(&fast.request).unwrap()
+            ))
             .collect::<Vec<_>>(),
         cursor
             .tx
             .entries
             .iter()
             .map(|entry| (
-                entry.key.as_slice(),
+                entry.key.observed_bytes(&cursor.request).unwrap(),
                 entry.value.observed_bytes(&cursor.request).unwrap()
             ))
             .collect::<Vec<_>>()
@@ -966,13 +979,19 @@ fn compare(source: &str, json: &[u8], form: &[u8], uri: &[u8], limits: RuntimeLi
                 .tx
                 .entries
                 .iter()
-                .map(|entry| (&entry.key, entry.value.observed_bytes(&fused.request).unwrap()))
+                .map(|entry| (
+                    entry.key.observed_bytes(&fused.request).unwrap(),
+                    entry.value.observed_bytes(&fused.request).unwrap()
+                ))
                 .collect::<Vec<_>>(),
             ordinary
                 .tx
                 .entries
                 .iter()
-                .map(|entry| (&entry.key, entry.value.observed_bytes(&ordinary.request).unwrap()))
+                .map(|entry| (
+                    entry.key.observed_bytes(&ordinary.request).unwrap(),
+                    entry.value.observed_bytes(&ordinary.request).unwrap()
+                ))
                 .collect::<Vec<_>>()
         );
         assert_eq!(fused.detector_work_bytes, ordinary.detector_work_bytes);
@@ -1053,7 +1072,15 @@ fn sealed_replay_and_chain_clones_reference_one_payload() {
         let pointer = bytes.as_ptr();
 
         let mut staged = TxState::default();
-        apply_member_match(&mut staged, &mut Vec::new(), first.pop().unwrap(), tx.limits).unwrap();
+        apply_member_match(
+            &mut staged,
+            &mut Vec::new(),
+            first.pop().unwrap(),
+            tx.limits,
+            &tx.request,
+            tx.json_budget.as_mut(),
+        )
+        .unwrap();
         let branch = staged.try_clone().unwrap();
         assert_eq!(staged.retained_bytes, branch.retained_bytes);
         assert!(staged.retained_bytes >= 2 * (padding + 3));
@@ -2302,11 +2329,19 @@ fn sealed_names_and_capture_values_share_through_match_tx_and_branch_clones() {
         );
         let mut staged = TxState::default();
         let mut keys = Vec::new();
-        apply_member_match(&mut staged, &mut keys, first.pop().unwrap(), tx.limits).unwrap();
+        apply_member_match(
+            &mut staged,
+            &mut keys,
+            first.pop().unwrap(),
+            tx.limits,
+            &tx.request,
+            tx.json_budget.as_mut(),
+        )
+        .unwrap();
         let branch = staged.try_clone().unwrap();
         let unit = staged.try_clone_for_unit().unwrap();
         for state in [&staged, &branch, &unit] {
-            let value = state.get(b"1").unwrap();
+            let value = state.get(b"1", &tx.request, tx.json_budget.as_mut()).unwrap().unwrap();
             assert_eq!(value.len(), length);
             assert_eq!(
                 value.bytes(&tx.request, tx.json_budget.as_mut()).unwrap().as_ptr(),
@@ -2352,12 +2387,7 @@ fn sealed_names_and_capture_values_share_through_match_tx_and_branch_clones() {
         // Public inspection remains a checked immutable observation even after
         // rule execution is terminal; execution cannot bypass the sticky error.
         assert_eq!(tx.tx_value(b"1").unwrap().as_ptr(), capture_pointer);
-        assert!(tx
-            .tx
-            .get(b"1")
-            .unwrap()
-            .bytes(&tx.request, tx.json_budget.as_mut())
-            .is_err());
+        assert!(tx.tx.get(b"1", &tx.request, tx.json_budget.as_mut()).is_err());
     }
 }
 
@@ -2373,6 +2403,203 @@ fn shared_capture_numeric_updates_overwrites_delete_and_recapture_match_owned_ru
             "SecRule ARGS:json.b \"@rx ^(34)$\" \"id:4,phase:2,pass,capture,setvar:'tx.new=%{TX.1}'\"\n",
             "SecRule TX:1 \"@streq 34\" \"id:5,phase:3,pass\"\n",
         ),
+        br#"{"a":"12","b":"34"}"#,
+        b"json.a=12&json.b=34",
+        b"/",
+        RuntimeLimits::default(),
+    );
+}
+
+#[test]
+fn sealed_capture_keys_share_through_tx_cleanup_and_clones_with_checked_reads() {
+    let generation = compile("SecRule ARGS \"@rx ^(?P<Name>a)$\" \"id:1,phase:2,pass,capture,t:none\"\n");
+    let mut tx = no_hit_transaction(
+        &generation,
+        br#"{"x":"a"}"#,
+        b"/",
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        false,
+    );
+    let mut matches = tx.evaluate_member_matches(0, 0, &TxState::default(), true).unwrap();
+    let pointers = matches[0]
+        .captures
+        .iter()
+        .map(|capture| {
+            assert!(matches!(capture.key, MatchValue::Json(_)));
+            capture.key.observed_bytes(&tx.request).unwrap().as_ptr()
+        })
+        .collect::<Vec<_>>();
+    let mut staged = TxState::default();
+    let mut keys = Vec::new();
+    apply_member_match(
+        &mut staged,
+        &mut keys,
+        matches.pop().unwrap(),
+        tx.limits,
+        &tx.request,
+        tx.json_budget.as_mut(),
+    )
+    .unwrap();
+    let full = staged.try_clone().unwrap();
+    let unit = staged.try_clone_for_unit().unwrap();
+    let cloned_keys = try_clone_keys(&keys).unwrap();
+    for state in [&staged, &full, &unit] {
+        for (index, entry) in state.entries.iter().enumerate() {
+            assert!(matches!(entry.key, MatchValue::Json(_)));
+            assert_eq!(
+                entry.key.bytes(&tx.request, tx.json_budget.as_mut()).unwrap().as_ptr(),
+                pointers[index]
+            );
+        }
+    }
+    for list in [&keys, &cloned_keys] {
+        for (index, key) in list.iter().enumerate() {
+            assert_eq!(
+                key.bytes(&tx.request, tx.json_budget.as_mut()).unwrap().as_ptr(),
+                pointers[index]
+            );
+        }
+    }
+    assert!(staged.get(b"name", &tx.request, None).is_err());
+    let other = Transaction::new(&generation, head(b"/"), tx.limits).unwrap();
+    assert!(staged.observed_get(b"Name", &other.request).is_err());
+    assert!(staged.delete(b"Name", &other.request, None).is_err());
+    assert_eq!(staged.entries.len(), 3);
+    staged
+        .set(
+            b"NAME".to_vec(),
+            b"owned".to_vec(),
+            tx.limits,
+            &tx.request,
+            tx.json_budget.as_mut(),
+        )
+        .unwrap();
+    assert_eq!(staged.entries[2].key.observed_bytes(&tx.request).unwrap(), b"Name");
+    assert_eq!(
+        staged.entries[2].key.observed_bytes(&tx.request).unwrap().as_ptr(),
+        pointers[2]
+    );
+    staged
+        .set(
+            b"01".to_vec(),
+            b"distinct".to_vec(),
+            tx.limits,
+            &tx.request,
+            tx.json_budget.as_mut(),
+        )
+        .unwrap();
+    assert_eq!(
+        staged
+            .get(b"1", &tx.request, tx.json_budget.as_mut())
+            .unwrap()
+            .unwrap()
+            .observed_bytes(&tx.request)
+            .unwrap(),
+        b"a"
+    );
+    assert_eq!(
+        staged
+            .get(b"01", &tx.request, tx.json_budget.as_mut())
+            .unwrap()
+            .unwrap()
+            .observed_bytes(&tx.request)
+            .unwrap(),
+        b"distinct"
+    );
+    staged.delete(b"nAmE", &tx.request, tx.json_budget.as_mut()).unwrap();
+    assert!(staged.observed_get(b"Name", &tx.request).unwrap().is_none());
+    tx.tx = full;
+    tx.capture_keys = keys;
+    let work = tx.json_budget.as_ref().unwrap().usage().work;
+    assert_eq!(tx.tx_value(b"name"), Some(b"a".as_slice()));
+    assert_eq!(tx.json_budget.as_ref().unwrap().usage().work, work);
+    tx.json_budget.as_mut().unwrap().work(usize::MAX).unwrap_err();
+    assert_eq!(tx.tx_value(b"NAME"), Some(b"a".as_slice()));
+    let retained = tx.tx.retained_bytes;
+    assert!(tx
+        .tx
+        .set(
+            b"Name".to_vec(),
+            b"lost".to_vec(),
+            tx.limits,
+            &tx.request,
+            tx.json_budget.as_mut()
+        )
+        .is_err());
+    assert!(tx.tx.delete(b"Name", &tx.request, tx.json_budget.as_mut()).is_err());
+    assert_eq!(tx.tx.retained_bytes, retained);
+    assert_eq!(tx.tx_value(b"Name"), Some(b"a".as_slice()));
+}
+
+#[test]
+fn shared_capture_key_reads_enforce_exact_and_one_less_physical_work() {
+    let generation = compile("SecRule ARGS \"@rx ^(?P<Name>a)$\" \"id:1,phase:2,pass,capture,t:none\"\n");
+    for operation in ["get", "delete", "set"] {
+        for remaining in [3, 2] {
+            let result_limits = ResultLimits::default();
+            let mut tx = no_hit_transaction(
+                &generation,
+                br#"{"x":"a"}"#,
+                b"/",
+                RuntimeLimits::default(),
+                result_limits,
+                false,
+            );
+            tx.execute_request_body().unwrap();
+            assert_eq!(tx.tx.entries.len(), 3);
+            let before = tx.json_budget.as_ref().unwrap().usage().work;
+            tx.json_budget
+                .as_mut()
+                .unwrap()
+                .work(result_limits.work - before - remaining)
+                .unwrap();
+            let result = match operation {
+                "get" => tx
+                    .tx
+                    .get(b"name", &tx.request, tx.json_budget.as_mut())
+                    .map(|value| assert!(value.is_some())),
+                "delete" => tx.tx.delete(b"NAME", &tx.request, tx.json_budget.as_mut()),
+                "set" => tx.tx.set(
+                    b"nAmE".to_vec(),
+                    b"new".to_vec(),
+                    tx.limits,
+                    &tx.request,
+                    tx.json_budget.as_mut(),
+                ),
+                _ => unreachable!(),
+            };
+            assert_eq!(result.is_ok(), remaining == 3, "{operation}/{remaining}");
+            if remaining == 3 {
+                assert_eq!(tx.json_budget.as_ref().unwrap().usage().work, result_limits.work);
+                assert!(tx.json_budget.as_ref().unwrap().failure().is_none());
+            } else {
+                assert!(tx.json_budget.as_ref().unwrap().failure().is_some());
+                assert_eq!(tx.tx_value(b"Name"), Some(b"a".as_slice()));
+                assert_eq!(tx.tx.entries.len(), 3);
+                assert!(tx.tx.get(b"Name", &tx.request, tx.json_budget.as_mut()).is_err());
+            }
+            for key in &tx.capture_keys {
+                assert!(key.observed_bytes(&tx.request).is_ok());
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_named_key_selectors_actions_recapture_and_rollback_match_owned_runtime() {
+    compare(
+        concat!(
+        "SecRule ARGS:json.a \"@rx ^(?P<Name>12)$\" \"id:1,phase:2,pass,capture,t:none,chain\"\n",
+        "SecRule &TX:name \"@eq 1\" \"chain,setvar:tx.NAME=+3,setvar:tx.01=distinct\"\n",
+        "SecRule TX:/^NAME$/ \"@eq 15\" \"setvar:tx.saved=%{TX.name}\"\n",
+        "SecRule &TX:01 \"@eq 1\" \"id:2,phase:2,pass\"\n",
+        "SecRule ARGS:json.b \"@rx ^(?P<Other>34)$\" \"id:3,phase:2,pass,capture,t:none,chain,setvar:!tx.NaMe\"\n",
+        "SecRule TX:other \"@streq absent\" \"setvar:tx.lost=yes\"\n",
+        "SecRule TX:name \"@eq 15\" \"id:4,phase:2,pass\"\n",
+        "SecRule ARGS:json.b \"@rx ^(?P<Other>34)$\" \"id:5,phase:2,pass,capture,t:none,setvar:tx.last=%{TX.other}\"\n",
+        "SecRule &TX:Name \"@eq 0\" \"id:6,phase:3,pass,setvar:tx.later=%{TX.Other}\"\n",
+    ),
         br#"{"a":"12","b":"34"}"#,
         b"json.a=12&json.b=34",
         b"/",
