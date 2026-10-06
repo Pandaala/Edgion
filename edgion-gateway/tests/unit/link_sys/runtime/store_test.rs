@@ -1,6 +1,7 @@
 use super::*;
 use crate::link_sys::runtime::runner::ApplyOwner;
 use crate::plugins::http::common::outbound::target::ResolvedTarget;
+use std::sync::atomic::AtomicU64;
 
 #[derive(Clone, Copy)]
 enum InjectedSecret {
@@ -384,11 +385,11 @@ async fn redis_relist_and_pending_update_preserve_published_generation() {
     );
     let old = registry.get("test/link").unwrap();
     let data = one(resource);
-    registry.apply(1, &data, &HashSet::new(), &data, true, false);
+    registry.apply(&data, &HashSet::new(), &data, true, false);
     assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
     assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
     let pending = one(create_redis_linksys("test", "link", InjectedSecret::Missing));
-    registry.apply(2, &pending, &HashSet::new(), &pending, false, false);
+    registry.apply(&pending, &HashSet::new(), &pending, false, false);
     assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
     drop(registry);
     assert!(runner.current().is_none());
@@ -407,11 +408,11 @@ async fn etcd_relist_and_pending_update_preserve_published_generation() {
     );
     let old = registry.get("test/link").unwrap();
     let data = one(resource);
-    registry.apply(1, &data, &HashSet::new(), &data, true, false);
+    registry.apply(&data, &HashSet::new(), &data, true, false);
     assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
     assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
     let pending = one(create_etcd_linksys("test", "link", InjectedSecret::Missing));
-    registry.apply(2, &pending, &HashSet::new(), &pending, false, false);
+    registry.apply(&pending, &HashSet::new(), &pending, false, false);
     assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
     drop(registry);
     assert!(runner.current().is_none());
@@ -430,11 +431,11 @@ async fn es_relist_and_pending_update_preserve_published_generation() {
     );
     let old = registry.get("test/link").unwrap();
     let data = one(resource);
-    registry.apply(1, &data, &HashSet::new(), &data, true, false);
+    registry.apply(&data, &HashSet::new(), &data, true, false);
     assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
     assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
     let pending = one(create_es_linksys("test", "link", InjectedSecret::Missing));
-    registry.apply(2, &pending, &HashSet::new(), &pending, false, false);
+    registry.apply(&pending, &HashSet::new(), &pending, false, false);
     assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
     drop(registry);
     assert!(runner.current().is_none());
@@ -453,11 +454,11 @@ async fn kafka_relist_and_pending_update_preserve_published_generation() {
     );
     let old = registry.get("test/link").unwrap();
     let data = one(resource);
-    registry.apply(1, &data, &HashSet::new(), &data, true, false);
+    registry.apply(&data, &HashSet::new(), &data, true, false);
     assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
     assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
     let pending = one(create_kafka_linksys_sasl("test", "link", InjectedSecret::Missing));
-    registry.apply(2, &pending, &HashSet::new(), &pending, false, false);
+    registry.apply(&pending, &HashSet::new(), &pending, false, false);
     assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
     drop(registry);
     assert!(runner.current().is_none());
@@ -476,11 +477,11 @@ async fn otlp_relist_and_pending_update_preserve_published_generation() {
     );
     let old = registry.get("test/link").unwrap();
     let data = one(resource);
-    registry.apply(1, &data, &HashSet::new(), &data, true, false);
+    registry.apply(&data, &HashSet::new(), &data, true, false);
     assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
     assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
     let pending = one(create_otlp_linksys("test", "link", InjectedSecret::Missing));
-    registry.apply(2, &pending, &HashSet::new(), &pending, false, false);
+    registry.apply(&pending, &HashSet::new(), &pending, false, false);
     assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
     drop(registry);
     assert!(runner.current().is_none());
@@ -677,7 +678,6 @@ fn test_get() {
 fn dependency_rebuild_dispatches_current_snapshot_without_republishing_it() {
     let store = LinkSysStore::new();
     let source_lock = Mutex::new(());
-    let counter = AtomicU64::new(0);
     let key = "default/rebuild".to_string();
     let source = Arc::new(HashMap::from([(
         key.clone(),
@@ -686,67 +686,17 @@ fn dependency_rebuild_dispatches_current_snapshot_without_republishing_it() {
     store.resources.store(Arc::clone(&source));
 
     let dispatched = Mutex::new(None);
-    let sequence = store
-        .rebuild_clients_with_dispatch(&counter, &source_lock, |sequence, snapshot| {
-            *dispatched.lock() = Some((sequence, snapshot));
-        })
-        .expect("dependency rebuild reserves a dispatch sequence");
+    store.rebuild_clients_with_dispatch(&source_lock, |snapshot| {
+        assert!(source_lock.try_lock().is_none());
+        *dispatched.lock() = Some(snapshot);
+    });
 
-    let (dispatched_sequence, dispatched_snapshot) = dispatched
+    let dispatched_snapshot = dispatched
         .into_inner()
-        .expect("dependency rebuild creates one dispatch task");
-    assert_eq!(sequence, 1);
-    assert_eq!(dispatched_sequence, 1);
+        .expect("dependency rebuild dispatches the current snapshot");
     assert!(Arc::ptr_eq(&source, &dispatched_snapshot));
     assert!(Arc::ptr_eq(&source, &store.resources.load_full()));
     assert_eq!(source_webhook_port(&store, &key), 8181);
-}
-
-#[test]
-fn source_entry_sequence_overflow_preserves_snapshot_and_skips_task_creation() {
-    let store = LinkSysStore::new();
-    let source_lock = Mutex::new(());
-    let counter = AtomicU64::new(u64::MAX - 1);
-    let task_creations = AtomicUsize::new(0);
-    let stable_key = "ordered/stable".to_string();
-
-    let sequence = store
-        .replace_all_with_dispatch(
-            HashMap::from([(
-                stable_key.clone(),
-                create_test_webhook_linksys_with_port("ordered", "stable", 8080),
-            )]),
-            &counter,
-            &source_lock,
-            |sequence, _| {
-                assert_eq!(sequence, u64::MAX);
-                task_creations.fetch_add(1, Ordering::Relaxed);
-            },
-        )
-        .expect("u64::MAX is the final accepted sequence");
-    assert_eq!(sequence, u64::MAX);
-    let before = store.resources.load_full();
-
-    let result = store.update_with_dispatch(
-        HashMap::from([(
-            "ordered/rejected".to_string(),
-            create_test_webhook_linksys_with_port("ordered", "rejected", 9090),
-        )]),
-        &HashSet::new(),
-        &counter,
-        &source_lock,
-        |_, _, _, _| {
-            task_creations.fetch_add(1, Ordering::Relaxed);
-        },
-    );
-
-    assert_eq!(result, Err(DispatchSequenceExhausted));
-    let after = store.resources.load_full();
-    assert!(Arc::ptr_eq(&before, &after));
-    assert_eq!(task_creations.load(Ordering::Relaxed), 1);
-    assert_eq!(counter.load(Ordering::Acquire), u64::MAX);
-    assert_eq!(source_webhook_port(&store, &stable_key), 8080);
-    assert!(!store.contains("ordered/rejected"));
 }
 
 fn resources(auth: InjectedSecret) -> Vec<LinkSys> {
@@ -811,13 +761,13 @@ fn httpdns_handle(registry: &RuntimeRegistry) -> Arc<edgion_common::dns::Prepare
 async fn httpdns_relist_reuses_but_changes_even_with_same_rv_publish_latest_fallback() {
     let registry = RuntimeRegistry::new();
     let original = one(httpdns_resource(100));
-    registry.apply(1, &original, &HashSet::new(), &original, true, false);
+    registry.apply(&original, &HashSet::new(), &original, true, false);
     let first = httpdns_handle(&registry);
     assert!(first.is_ready());
-    registry.apply(2, &original, &HashSet::new(), &original, false, false);
+    registry.apply(&original, &HashSet::new(), &original, false, false);
     assert!(Arc::ptr_eq(&first, &httpdns_handle(&registry)));
     let invalid = one(httpdns_resource(0));
-    registry.apply(3, &invalid, &HashSet::new(), &invalid, false, false);
+    registry.apply(&invalid, &HashSet::new(), &invalid, false, false);
     let failed = httpdns_handle(&registry);
     assert!(!failed.is_ready());
     assert!(!Arc::ptr_eq(&first, &failed));
@@ -826,20 +776,20 @@ async fn httpdns_relist_reuses_but_changes_even_with_same_rv_publish_latest_fall
             .await
             .is_err()
     );
-    registry.apply(4, &invalid, &HashSet::new(), &invalid, true, false);
+    registry.apply(&invalid, &HashSet::new(), &invalid, true, false);
     assert!(
         Arc::ptr_eq(&failed, &httpdns_handle(&registry)),
         "failed preparation is reused across relists"
     );
-    registry.apply(5, &invalid, &HashSet::new(), &invalid, true, true);
+    registry.apply(&invalid, &HashSet::new(), &invalid, true, true);
     assert!(
         !Arc::ptr_eq(&failed, &httpdns_handle(&registry)),
         "forced inherited-policy rebuild replaces failed state too"
     );
-    registry.apply(6, &original, &HashSet::new(), &original, false, false);
+    registry.apply(&original, &HashSet::new(), &original, false, false);
     let recovered = httpdns_handle(&registry);
     assert!(recovered.is_ready());
-    registry.apply(7, &original, &HashSet::new(), &original, true, true);
+    registry.apply(&original, &HashSet::new(), &original, true, true);
     assert!(!Arc::ptr_eq(&recovered, &httpdns_handle(&registry)));
 }
 
@@ -847,25 +797,24 @@ async fn httpdns_relist_reuses_but_changes_even_with_same_rv_publish_latest_fall
 async fn httpdns_delete_kind_change_and_full_omission_have_one_current_owner() {
     let registry = RuntimeRegistry::new();
     let original = one(httpdns_resource(100));
-    registry.apply(1, &original, &HashSet::new(), &original, true, false);
+    registry.apply(&original, &HashSet::new(), &original, true, false);
     let old = registry.get("test/link").unwrap();
     let webhook = one(create_test_webhook_linksys("test", "link"));
-    registry.apply(2, &webhook, &HashSet::new(), &webhook, false, false);
+    registry.apply(&webhook, &HashSet::new(), &webhook, false, false);
     assert!(old.stopped.load(Ordering::Acquire));
     assert_eq!(registry.count(ProviderKind::HttpDns), 0);
     assert_eq!(registry.count(ProviderKind::Webhook), 1);
-    registry.apply(3, &original, &HashSet::new(), &original, false, false);
+    registry.apply(&original, &HashSet::new(), &original, false, false);
     assert_eq!(registry.entries.load().len(), 1);
-    registry.apply(4, &LinkSysMap::new(), &HashSet::new(), &LinkSysMap::new(), true, false);
+    registry.apply(&LinkSysMap::new(), &HashSet::new(), &LinkSysMap::new(), true, false);
     assert!(registry.entries.load().is_empty());
-    registry.apply(3, &original, &HashSet::new(), &original, false, false);
+    old.stop();
     assert!(
         registry.entries.load().is_empty(),
-        "stale publication cannot recreate omission"
+        "retired owners cannot recreate omission"
     );
-    registry.apply(5, &original, &HashSet::new(), &original, false, false);
+    registry.apply(&original, &HashSet::new(), &original, false, false);
     registry.apply(
-        6,
         &LinkSysMap::new(),
         &HashSet::from(["test/link".into()]),
         &LinkSysMap::new(),
@@ -895,7 +844,7 @@ async fn httpdns_secret_material_rotation_replaces_client_and_preserves_address_
         ..Default::default()
     });
     let data = one(resource.clone());
-    registry.apply(1, &data, &HashSet::new(), &data, true, false);
+    registry.apply(&data, &HashSet::new(), &data, true, false);
     let first = httpdns_handle(&registry);
     let fingerprint = edgion_common::dns::ResolverSpec::HttpDns(first.clone()).fingerprint();
     let SystemConfig::HttpDns(config) = &mut resource.spec.config else {
@@ -916,7 +865,7 @@ async fn httpdns_secret_material_rotation_replaces_client_and_preserves_address_
         .unwrap()
         .insert("tls.ca.crt".into(), ByteString(b"new-material".to_vec()));
     let data = one(resource);
-    registry.apply(2, &data, &HashSet::new(), &data, false, false);
+    registry.apply(&data, &HashSet::new(), &data, false, false);
     let second = httpdns_handle(&registry);
     assert!(!Arc::ptr_eq(&first, &second));
     assert_eq!(
@@ -931,10 +880,10 @@ async fn every_provider_type_change_has_one_current_owner() {
         for new_resource in resources(InjectedSecret::Valid) {
             let registry = RuntimeRegistry::new();
             let old_data = one(old_resource.clone());
-            registry.apply(1, &old_data, &HashSet::new(), &old_data, true, false);
+            registry.apply(&old_data, &HashSet::new(), &old_data, true, false);
             let old = registry.get("test/link").unwrap();
             let new_data = one(new_resource);
-            registry.apply(2, &new_data, &HashSet::new(), &new_data, false, false);
+            registry.apply(&new_data, &HashSet::new(), &new_data, false, false);
             let current = registry.get("test/link").unwrap();
             assert_eq!(registry.entries.load().len(), 1);
             assert!(Some(current.kind()) == ProviderKind::of(&new_data["test/link"].spec.config));
@@ -956,18 +905,17 @@ async fn full_set_omission_and_delete_recreate_cannot_resurrect_old_owner() {
     for resource in resources(InjectedSecret::Valid) {
         let registry = RuntimeRegistry::new();
         let data = one(resource);
-        registry.apply(1, &data, &HashSet::new(), &data, true, false);
+        registry.apply(&data, &HashSet::new(), &data, true, false);
         let old = registry.get("test/link").unwrap();
-        registry.apply(2, &HashMap::new(), &HashSet::new(), &HashMap::new(), true, false);
+        registry.apply(&HashMap::new(), &HashSet::new(), &HashMap::new(), true, false);
         assert!(registry.entries.load().is_empty());
         assert!(old.stopped.load(Ordering::Acquire));
-        registry.apply(3, &data, &HashSet::new(), &data, false, false);
+        registry.apply(&data, &HashSet::new(), &data, false, false);
         let new = registry.get("test/link").unwrap();
         assert!(!Arc::ptr_eq(&old, &new), "recreation is immediate and independent");
         old.stop();
         assert!(Arc::ptr_eq(&new, &registry.get("test/link").unwrap()));
         registry.apply(
-            4,
             &HashMap::new(),
             &HashSet::from(["test/link".to_string()]),
             &HashMap::new(),
@@ -1001,12 +949,12 @@ async fn metadata_only_kind_change_removes_previous_runtime() {
     for config in configurations {
         let registry = RuntimeRegistry::new();
         let old_data = one(create_test_webhook_linksys("test", "link"));
-        registry.apply(1, &old_data, &HashSet::new(), &old_data, true, false);
+        registry.apply(&old_data, &HashSet::new(), &old_data, true, false);
         let mut resource = old_data["test/link"].clone();
         let expects_httpdns = matches!(&config, SystemConfig::HttpDns(_));
         resource.spec.config = config;
         let data = one(resource);
-        registry.apply(2, &data, &HashSet::new(), &data, false, false);
+        registry.apply(&data, &HashSet::new(), &data, false, false);
         if expects_httpdns {
             assert!(matches!(
                 registry.get("test/link").as_deref().map(|entry| &entry.provider),
@@ -1026,7 +974,7 @@ async fn pending_and_invalid_credentials_never_admit_any_persistent_provider() {
             for full in [true, false] {
                 let registry = RuntimeRegistry::new();
                 let data = one(resource.clone());
-                registry.apply(1, &data, &HashSet::new(), &data, full, false);
+                registry.apply(&data, &HashSet::new(), &data, full, false);
                 assert!(registry.entries.load().is_empty());
             }
         }
@@ -1040,13 +988,13 @@ async fn pending_same_kind_retains_owner_but_changed_kind_removes_it() {
     for (index, resource) in ready.iter().take(5).enumerate() {
         let registry = RuntimeRegistry::new();
         let data = one(resource.clone());
-        registry.apply(1, &data, &HashSet::new(), &data, true, false);
+        registry.apply(&data, &HashSet::new(), &data, true, false);
         let old = registry.get("test/link").unwrap();
         let pending_same = one(pending[index].clone());
-        registry.apply(2, &pending_same, &HashSet::new(), &pending_same, false, false);
+        registry.apply(&pending_same, &HashSet::new(), &pending_same, false, false);
         assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
         let changed = one(pending[(index + 1) % 5].clone());
-        registry.apply(3, &changed, &HashSet::new(), &changed, false, false);
+        registry.apply(&changed, &HashSet::new(), &changed, false, false);
         assert!(registry.get("test/link").is_none());
         assert!(old.stopped.load(Ordering::Acquire));
     }
@@ -1063,7 +1011,7 @@ async fn mixed_provider_admission_counts_are_independent_and_recomputed_after_re
         snapshot.insert(format!("test/first-{index}"), resource.clone());
         snapshot.insert(format!("test/second-{index}"), resource.clone());
     }
-    registry.apply(1, &snapshot, &HashSet::new(), &snapshot, true, false);
+    registry.apply(&snapshot, &HashSet::new(), &snapshot, true, false);
     let mut remove = HashSet::new();
     for resource in &resources {
         let kind = ProviderKind::of(&resource.spec.config).unwrap();
@@ -1075,7 +1023,7 @@ async fn mixed_provider_admission_counts_are_independent_and_recomputed_after_re
     for key in &remove {
         snapshot.remove(key);
     }
-    registry.apply(2, &HashMap::new(), &remove, &snapshot, false, false);
+    registry.apply(&HashMap::new(), &remove, &snapshot, false, false);
     assert_eq!(registry.entries.load().len(), 7);
     for key in &remove {
         assert!(registry.get(key).is_none());
@@ -1094,11 +1042,11 @@ async fn capacity_release_retries_latest_unadmitted_configuration() {
     for resource in resources(InjectedSecret::Valid).into_iter().take(5) {
         let registry = RuntimeRegistry::new();
         let first = HashMap::from([("test/first".to_string(), resource.clone())]);
-        registry.apply(1, &first, &HashSet::new(), &first, true, false);
+        registry.apply(&first, &HashSet::new(), &first, true, false);
         let changed = HashMap::from([("test/second".to_string(), resource.clone())]);
         let mut snapshot = first;
         snapshot.extend(changed.clone());
-        registry.apply(2, &changed, &HashSet::new(), &snapshot, false, false);
+        registry.apply(&changed, &HashSet::new(), &snapshot, false, false);
         assert!(registry.get("test/first").is_some());
         assert!(registry.get("test/second").is_none());
         let mut latest = resource;
@@ -1113,11 +1061,10 @@ async fn capacity_release_retries_latest_unadmitted_configuration() {
         }
         let latest_delta = HashMap::from([("test/second".to_string(), latest.clone())]);
         snapshot.extend(latest_delta.clone());
-        registry.apply(3, &latest_delta, &HashSet::new(), &snapshot, false, false);
+        registry.apply(&latest_delta, &HashSet::new(), &snapshot, false, false);
         assert!(registry.get("test/second").is_none());
         snapshot.remove("test/first");
         registry.apply(
-            4,
             &HashMap::new(),
             &HashSet::from(["test/first".to_string()]),
             &snapshot,
@@ -1157,14 +1104,14 @@ async fn capacity_increase_retries_without_reposting_existing_runner() {
     let registry = RuntimeRegistry::new();
     let resource = create_redis_linksys("test", "link", InjectedSecret::Valid);
     let first = HashMap::from([("test/first".to_string(), resource.clone())]);
-    registry.apply(1, &first, &HashSet::new(), &first, true, false);
+    registry.apply(&first, &HashSet::new(), &first, true, false);
     let old = registry.get("test/first").unwrap();
     let mut snapshot = first;
     snapshot.insert("test/second".to_string(), resource);
-    registry.retry_admission(2, &snapshot);
+    registry.retry_admission(&snapshot);
     assert!(registry.get("test/second").is_none());
     LINK_SYS_MAX_INSTANCES_PER_KIND.store(2, Ordering::Relaxed);
-    registry.retry_admission(3, &snapshot);
+    registry.retry_admission(&snapshot);
     assert!(registry.get("test/second").is_some());
     assert!(Arc::ptr_eq(&old, &registry.get("test/first").unwrap()));
     LINK_SYS_MAX_INSTANCES_PER_KIND.store(previous, Ordering::Relaxed);
@@ -1177,12 +1124,12 @@ async fn omitted_capacity_waiter_is_not_recreated_after_release() {
     let registry = RuntimeRegistry::new();
     let resource = create_redis_linksys("test", "link", InjectedSecret::Valid);
     let first = HashMap::from([("test/first".to_string(), resource.clone())]);
-    registry.apply(1, &first, &HashSet::new(), &first, true, false);
+    registry.apply(&first, &HashSet::new(), &first, true, false);
     let mut snapshot = first;
     snapshot.insert("test/second".to_string(), resource);
-    registry.retry_admission(2, &snapshot);
-    registry.apply(3, &HashMap::new(), &HashSet::new(), &HashMap::new(), true, false);
-    registry.retry_admission(4, &HashMap::new());
+    registry.retry_admission(&snapshot);
+    registry.apply(&HashMap::new(), &HashSet::new(), &HashMap::new(), true, false);
+    registry.retry_admission(&HashMap::new());
     assert!(registry.entries.load().is_empty());
     LINK_SYS_MAX_INSTANCES_PER_KIND.store(previous, Ordering::Relaxed);
 }
@@ -1191,16 +1138,16 @@ async fn omitted_capacity_waiter_is_not_recreated_after_release() {
 async fn webhook_relist_reuses_and_material_update_replaces_current_client() {
     let registry = RuntimeRegistry::new();
     let data = one(create_test_webhook_linksys("test", "link"));
-    registry.apply(1, &data, &HashSet::new(), &data, true, false);
+    registry.apply(&data, &HashSet::new(), &data, true, false);
     let old = registry.get("test/link").unwrap();
-    registry.apply(2, &data, &HashSet::new(), &data, true, false);
+    registry.apply(&data, &HashSet::new(), &data, true, false);
     assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
     let changed = one(create_test_webhook_linksys_with_port("test", "link", 9090));
-    registry.apply(3, &changed, &HashSet::new(), &changed, false, false);
+    registry.apply(&changed, &HashSet::new(), &changed, false, false);
     assert!(old.stopped.load(Ordering::Acquire));
     assert_eq!(webhook_port(&registry, "test/link"), 9090);
     let current = registry.get("test/link").unwrap();
-    registry.apply(4, &changed, &HashSet::new(), &changed, true, true);
+    registry.apply(&changed, &HashSet::new(), &changed, true, true);
     assert!(!Arc::ptr_eq(&current, &registry.get("test/link").unwrap()));
 }
 
@@ -1208,7 +1155,7 @@ async fn webhook_relist_reuses_and_material_update_replaces_current_client() {
 async fn webhook_prepare_failure_preserves_same_kind_but_not_foreign_kind() {
     let registry = RuntimeRegistry::new();
     let data = one(create_test_webhook_linksys("test", "link"));
-    registry.apply(1, &data, &HashSet::new(), &data, true, false);
+    registry.apply(&data, &HashSet::new(), &data, true, false);
     let old = registry.get("test/link").unwrap();
     let mut invalid = data["test/link"].clone();
     let SystemConfig::Webhook(config) = &mut invalid.spec.config else {
@@ -1216,61 +1163,216 @@ async fn webhook_prepare_failure_preserves_same_kind_but_not_foreign_kind() {
     };
     config.conn.target.service.port = None;
     let invalid = one(invalid);
-    registry.apply(2, &invalid, &HashSet::new(), &invalid, false, false);
+    registry.apply(&invalid, &HashSet::new(), &invalid, false, false);
     assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
     let redis = one(create_redis_linksys("test", "link", InjectedSecret::Valid));
-    registry.apply(3, &redis, &HashSet::new(), &redis, false, false);
-    registry.apply(4, &invalid, &HashSet::new(), &invalid, false, false);
+    registry.apply(&redis, &HashSet::new(), &redis, false, false);
+    registry.apply(&invalid, &HashSet::new(), &invalid, false, false);
     assert!(registry.get("test/link").is_none());
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn stale_full_or_partial_dispatch_cannot_replace_newer_current() {
-    for full in [true, false] {
-        let registry = RuntimeRegistry::new();
-        let latest = one(create_test_webhook_linksys_with_port("test", "link", 9090));
-        registry.apply(2, &latest, &HashSet::new(), &latest, full, false);
-        let stale = one(create_test_webhook_linksys("test", "link"));
-        registry.apply(1, &stale, &HashSet::new(), &stale, !full, false);
-        assert_eq!(webhook_port(&registry, "test/link"), 9090);
+async fn source_events_serialize_full_sets_deltas_rebuilds_and_admission() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    // The executor stays on this thread while scoped threads prepare owners,
+    // so persistent provider tasks cannot perform network IO in this test.
+    for first_full in [true, false] {
+        for operation in ["delta", "full", "rebuild", "admission"] {
+            let source = LinkSysStore::new();
+            let registry = RuntimeRegistry::new();
+            let source_lock = Mutex::new(());
+            let (prepared_tx, prepared_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let (attempt_tx, attempt_rx) = mpsc::channel();
+            let source = &source;
+            let registry = &registry;
+            let source_lock = &source_lock;
+            let handle = tokio::runtime::Handle::current();
+            std::thread::scope(|scope| {
+                let first_handle = handle.clone();
+                let first = scope.spawn(move || {
+                    let _runtime = first_handle.enter();
+                    let data =
+                        HashMap::from([("test/first".to_string(), create_test_webhook_linksys("test", "first"))]);
+                    let dispatch = |snapshot: Arc<LinkSysMap>| {
+                        assert!(source_lock.try_lock().is_none());
+                        registry.apply(&snapshot, &HashSet::new(), &snapshot, first_full, false);
+                        prepared_tx.send(()).unwrap();
+                        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    };
+                    if first_full {
+                        source.replace_all_with_dispatch(data, source_lock, dispatch);
+                    } else {
+                        source.update_with_dispatch(data, &HashSet::new(), source_lock, |_, _, snapshot| {
+                            dispatch(snapshot);
+                        });
+                    }
+                });
+                prepared_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                let successor = scope.spawn(move || {
+                    let _runtime = handle.enter();
+                    attempt_tx.send(()).unwrap();
+                    if operation == "rebuild" || operation == "admission" {
+                        source.rebuild_clients_with_dispatch(source_lock, |snapshot| {
+                            assert!(source_lock.try_lock().is_none());
+                            assert!(Arc::ptr_eq(&snapshot, &source.resources.load_full()));
+                            assert!(snapshot.contains_key("test/first"));
+                            let old = registry.get("test/first").unwrap();
+                            if operation == "rebuild" {
+                                registry.apply(&snapshot, &HashSet::new(), &snapshot, true, true);
+                                assert!(!Arc::ptr_eq(&old, &registry.get("test/first").unwrap()));
+                            } else {
+                                registry.retry_admission(&snapshot);
+                                assert!(Arc::ptr_eq(&old, &registry.get("test/first").unwrap()));
+                            }
+                        });
+                    } else {
+                        let mut data =
+                            HashMap::from([("test/second".to_string(), create_test_webhook_linksys("test", "second"))]);
+                        let dispatch = |changed: Arc<LinkSysMap>, remove, snapshot: Arc<LinkSysMap>| {
+                            assert!(source_lock.try_lock().is_none());
+                            assert!(source.contains("test/first"));
+                            assert!(snapshot.contains_key("test/first"));
+                            assert!(!source.contains("test/second"));
+                            registry.apply(&changed, &remove, &snapshot, operation == "full", false);
+                            assert!(registry.get("test/second").is_some());
+                        };
+                        if operation == "full" {
+                            data.insert("test/first".into(), create_test_webhook_linksys("test", "first"));
+                            source.replace_all_with_dispatch(data, source_lock, |snapshot| {
+                                dispatch(snapshot.clone(), HashSet::new(), snapshot);
+                            });
+                        } else {
+                            source.update_with_dispatch(data, &HashSet::new(), source_lock, dispatch);
+                        }
+                    }
+                });
+                attempt_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert_eq!(source.count(), 0, "raw publication must wait for preparation");
+                assert!(registry.get("test/first").is_some());
+                assert!(registry.get("test/second").is_none());
+                release_tx.send(()).unwrap();
+                first.join().unwrap();
+                successor.join().unwrap();
+            });
+            let expected = if operation == "delta" || operation == "full" {
+                2
+            } else {
+                1
+            };
+            assert_eq!(source.count(), expected);
+            assert_eq!(registry.entries.load().len(), expected);
+        }
     }
+}
+
+#[test]
+fn otlp_shutdown_serializes_with_source_updates() {
+    const CHILD: &str = "EDGION_OTLP_SOURCE_ORDER_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "link_sys::runtime::store::tests::otlp_shutdown_serializes_with_source_updates",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "shutdown child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    // Shutdown is terminal process state. No runner can poll before cancellation:
+    // this current-thread executor remains blocked until both writers finish.
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let store = get_global_link_sys_store();
+            let resource = create_otlp_linksys("test", "link", InjectedSecret::Valid);
+            store.replace_all(one(resource.clone()));
+            assert_eq!(otlp_client_count(), 1);
+            let source_guard = LINK_SYS_SOURCE_EVENT_LOCK.lock();
+            let handle = tokio::runtime::Handle::current();
+            std::thread::scope(|scope| {
+                let shutdown_handle = handle.clone();
+                let shutdown = scope.spawn(move || {
+                    let _runtime = shutdown_handle.enter();
+                    assert!(shutdown_otlp_clients().now_or_never().is_none());
+                });
+                let started = std::time::Instant::now();
+                while OTLP_SHUTDOWN.try_lock().is_some() && !OTLP_STOPPING.load(Ordering::Acquire) {
+                    assert!(
+                        std::time::Instant::now().saturating_duration_since(started)
+                            < std::time::Duration::from_secs(5)
+                    );
+                    std::thread::yield_now();
+                }
+                assert!(!OTLP_STOPPING.load(Ordering::Acquire));
+                assert_eq!(otlp_client_count(), 1, "shutdown must wait for the source lock");
+                let update = scope.spawn(move || {
+                    let _runtime = handle.enter();
+                    store.update(
+                        HashMap::from([
+                            ("test/link".into(), resource),
+                            (
+                                "test/unrelated".into(),
+                                create_test_webhook_linksys("test", "unrelated"),
+                            ),
+                        ]),
+                        &HashSet::new(),
+                    );
+                });
+                drop(source_guard);
+                shutdown.join().unwrap();
+                update.join().unwrap();
+            });
+            shutdown_otlp_clients().await;
+            assert_eq!(otlp_client_count(), 0);
+            assert_eq!(otlp_retiring_client_count(), 0);
+            assert!(get_webhook_client("test/unrelated").is_some());
+            get_global_link_sys_store().update(
+                one(create_otlp_linksys("test", "link", InjectedSecret::Valid)),
+                &HashSet::new(),
+            );
+            assert_eq!(otlp_client_count(), 0);
+            shutdown_otlp_clients().await;
+            assert!(get_webhook_client("test/unrelated").is_some());
+        });
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn synchronous_dispatch_publishes_before_source_and_preserves_unrelated_deltas() {
     let source = LinkSysStore::new();
     let registry = RuntimeRegistry::new();
-    let counter = AtomicU64::new(0);
     let source_lock = Mutex::new(());
     for name in ["first", "second"] {
         let key = format!("test/{name}");
         let changed = HashMap::from([(key.clone(), create_test_webhook_linksys("test", name))]);
-        source
-            .update_with_dispatch(
-                changed,
-                &HashSet::new(),
-                &counter,
-                &source_lock,
-                |sequence, changed, remove, snapshot| {
-                    assert!(!source.contains(&key), "raw source must not outrun preparation");
-                    registry.apply(sequence, &changed, &remove, &snapshot, false, false);
-                    assert!(
-                        registry.get(&key).is_some(),
-                        "dispatch is complete before source publication"
-                    );
-                },
-            )
-            .unwrap();
+        source.update_with_dispatch(changed, &HashSet::new(), &source_lock, |changed, remove, snapshot| {
+            assert!(!source.contains(&key), "raw source must not outrun preparation");
+            registry.apply(&changed, &remove, &snapshot, false, false);
+            assert!(
+                registry.get(&key).is_some(),
+                "dispatch is complete before source publication"
+            );
+        });
         assert!(source.contains(&key));
     }
     assert_eq!(registry.entries.load().len(), 2);
-    source
-        .replace_all_with_dispatch(HashMap::new(), &counter, &source_lock, |sequence, snapshot| {
-            registry.apply(sequence, &snapshot, &HashSet::new(), &snapshot, true, false);
-            assert!(registry.entries.load().is_empty());
-            assert_eq!(source.count(), 2);
-        })
-        .unwrap();
+    source.replace_all_with_dispatch(HashMap::new(), &source_lock, |snapshot| {
+        registry.apply(&snapshot, &HashSet::new(), &snapshot, true, false);
+        assert!(registry.entries.load().is_empty());
+        assert_eq!(source.count(), 2);
+    });
     assert_eq!(source.count(), 0);
 }
 
@@ -1318,16 +1420,16 @@ async fn unsupported_extension_retires_every_provider_and_recovers_full_and_part
         for resource in resources(InjectedSecret::Valid) {
             let registry = RuntimeRegistry::new();
             let original = one(resource.clone());
-            registry.apply(1, &original, &HashSet::new(), &original, full, false);
+            registry.apply(&original, &HashSet::new(), &original, full, false);
             let old = registry.get("test/link").unwrap();
             let mut unsupported = resource;
             unsupported.spec.config = SystemConfig::Unsupported;
             let unknown = one(unsupported);
-            registry.apply(2, &unknown, &HashSet::new(), &unknown, full, false);
+            registry.apply(&unknown, &HashSet::new(), &unknown, full, false);
             assert!(registry.get("test/link").is_none());
             assert!(registry.entries.load().is_empty());
             assert!(old.stopped.load(Ordering::Acquire));
-            registry.apply(3, &original, &HashSet::new(), &original, full, false);
+            registry.apply(&original, &HashSet::new(), &original, full, false);
             let current = registry.get("test/link").unwrap();
             assert!(!Arc::ptr_eq(&old, &current));
             assert!(current.kind() == old.kind());
@@ -1344,7 +1446,7 @@ async fn webhook_forced_tls_rebuild_revokes_unusable_generation_and_recovers() {
     for unresolved_identity in [false, true] {
         let registry = RuntimeRegistry::new();
         let data = one(create_test_webhook_linksys("test", "link"));
-        registry.apply(1, &data, &HashSet::new(), &data, true, false);
+        registry.apply(&data, &HashSet::new(), &data, true, false);
         let old = registry.get("test/link").unwrap();
         let mut invalid = data["test/link"].clone();
         let SystemConfig::Webhook(config) = &mut invalid.spec.config else {
@@ -1361,15 +1463,15 @@ async fn webhook_forced_tls_rebuild_revokes_unusable_generation_and_recovers() {
             config.conn.target.service.port = None;
         }
         let invalid = one(invalid);
-        registry.apply(2, &invalid, &HashSet::new(), &invalid, false, false);
+        registry.apply(&invalid, &HashSet::new(), &invalid, false, false);
         assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
-        registry.apply(3, &invalid, &HashSet::new(), &invalid, true, true);
+        registry.apply(&invalid, &HashSet::new(), &invalid, true, true);
         assert!(registry.get("test/link").is_none());
         assert!(old.stopped.load(Ordering::Acquire));
         assert_eq!(registry.count(ProviderKind::Webhook), 0);
-        registry.apply(4, &invalid, &HashSet::new(), &invalid, true, false);
+        registry.apply(&invalid, &HashSet::new(), &invalid, true, false);
         assert!(registry.get("test/link").is_none());
-        registry.apply(5, &data, &HashSet::new(), &data, true, true);
+        registry.apply(&data, &HashSet::new(), &data, true, true);
         let recovered = registry.get("test/link").unwrap();
         assert!(!Arc::ptr_eq(&old, &recovered));
         assert!(!recovered.stopped.load(Ordering::Acquire));

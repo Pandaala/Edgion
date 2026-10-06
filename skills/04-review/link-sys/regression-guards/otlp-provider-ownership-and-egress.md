@@ -54,7 +54,7 @@ URI secrets observable. A key-only sender cannot recreate a transport or probe.
 OTLP-REVIEW-001 exposed a gap outside the former OTLP owner: a resource changed from a
 foreign provider to OTLP could keep its old typed client if an unrelated later
 delta reached the global Webhook sequence fence first. All three production
-source callbacks now reserve synchronous admission under the source-event lock
+source callbacks execute synchronous admission under the source-event lock
 and finish unified registry preparation before publishing the source snapshot.
 This orders full/partial publications, type-change cleanup, and subsequent
 recreation without dropping unrelated deltas. Registry preparation has no
@@ -80,8 +80,15 @@ generic full/partial OTLP dispatch, check all foreign typed maps and the callabl
 Webhook registry, and verified later same-key recreation and predecessor panic.
 The async dispatch-tail tests were replaced when source publication became
 synchronous. Current store tests verify runtime publication before source
-publication, unrelated delta preservation, stale sequence rejection, and provider
+publication, unrelated delta preservation, serialized source operations, and provider
 ownership; see [prepared HTTPDNS runtime](httpdns-prepared-runtime.md).
+The `simplify-linksys-runtime-ordering` maintenance refactor brings synchronous
+OTLP shutdown under that same lock and removes the redundant dispatch sequence
+and registry mutex. The source-order tests cover full/partial updates, rebuilds,
+and admission; the isolated shutdown test gates the actual process-global lock.
+The real transport lifecycle case also interleaves desired updates with shutdown,
+checks zero current/retiring OTLP owners, and preserves an unrelated HTTPDNS key.
+Runner generations and shared retained shutdown completion remain unchanged.
 Controller handler tests cover invalid group/kind for auth, CA, and mTLS with
 same-name Secrets and permissive grants, stale-material cleanup, valid sibling
 dependencies, transport serialization, and recovery after correction. The isolated

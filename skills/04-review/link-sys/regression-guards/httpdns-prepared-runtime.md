@@ -15,9 +15,10 @@ ExternalName and AI external backend lookups consume the same prepared core.
 No client construction, TLS policy resolution, or tracing belongs to a query.
 
 Gateway publishes HTTPDNS in the existing typed LinkSys runtime table. All
-provider dispatch is synchronous configuration work in source-event order before
-source publication, with sequence guards against obsolete replay. Actual provider
-connection workers remain asynchronous. There is no new global client cache,
+provider dispatch is synchronous configuration work under the source-event lock
+before source publication. Rebuilds, admission retries, and synchronous OTLP
+shutdown mutation share that lock; no dispatch sequence guard is needed.
+Actual provider connection workers remain asynchronous. There is no new global client cache,
 HTTPDNS background worker, or second runtime lookup authority.
 
 Unlike Webhook's ordinary last-good replacement, HTTPDNS publishes the latest

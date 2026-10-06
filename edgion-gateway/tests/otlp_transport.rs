@@ -730,7 +730,7 @@ async fn stalled_preflight_is_unpublished_and_shutdown_cancels_it() {
 
 async fn same_key_lifecycle_case() {
     use edgion_gateway::link_sys::runtime::store::{
-        get_global_link_sys_store, get_otlp_client, otlp_client_count, otlp_retiring_client_count,
+        get_global_link_sys_store, get_httpdns_client, get_otlp_client, otlp_client_count, otlp_retiring_client_count,
         shutdown_otlp_clients,
     };
     use edgion_resources::resources::link_sys::LinkSys;
@@ -805,9 +805,31 @@ async fn same_key_lifecycle_case() {
         &HashSet::new(),
     );
     wait_until(|| get_otlp_client(&key).is_some_and(|client| client.healthy())).await;
-    shutdown_otlp_clients().await;
+    let unrelated_key = String::from("transport/shutdown-unrelated");
+    let unrelated: LinkSys = serde_json::from_value(serde_json::json!({
+        "apiVersion":"edgion.io/v1","kind":"LinkSys",
+        "metadata":{"namespace":"transport","name":"shutdown-unrelated"},
+        "spec":{"type":"httpdns","config":{"urlTemplate":"https://dns.example.test/{domain}"}}
+    }))
+    .unwrap();
+    tokio::join!(
+        async {
+            for _ in 0..32 {
+                store.update(
+                    HashMap::from([
+                        (key.clone(), resource(latest.address.port())),
+                        (unrelated_key.clone(), unrelated.clone()),
+                    ]),
+                    &HashSet::new(),
+                );
+                tokio::task::yield_now().await;
+            }
+        },
+        shutdown_otlp_clients()
+    );
     assert_eq!(otlp_client_count(), 0);
     assert_eq!(otlp_retiring_client_count(), 0);
+    assert!(get_httpdns_client(&unrelated_key).is_some());
     let before = latest.observations.accepts.load(Ordering::SeqCst);
     store.update(
         HashMap::from([(key.clone(), resource(latest.address.port()))]),

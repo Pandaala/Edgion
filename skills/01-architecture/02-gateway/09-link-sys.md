@@ -137,7 +137,12 @@ inspection, and request lookup derive from the unified runtime table.
 ### Client lifecycle
 
 Ordered full-set, partial-update, and rebuild dispatch share the same mutation
-path. Same-type updates delegate to the provider object. Persistent runners
+path. The source-event lock spans synchronous runtime preparation/publication
+and subsequent raw source publication. Admission retries and the synchronous
+OTLP shutdown mutation use that same lock; there is no global dispatch counter
+or second registry mutation lock. Cleanup waits happen after releasing it.
+Reads remain lock-free. Same-type updates delegate to the provider object.
+Persistent runners
 retain fingerprint reuse, connection retry/backoff, forced rebuild intent,
 generation fencing, and live-connection handover. Webhook prepares a complete
 managed outbound client before replacing a same-type entry; equal fingerprints

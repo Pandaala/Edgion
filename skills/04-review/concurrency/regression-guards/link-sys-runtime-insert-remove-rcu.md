@@ -8,25 +8,60 @@ knowledge_type: regression-guards
 
 ## Current conclusion
 
-The unified `RuntimeRegistry` in `runtime/store.rs` holds its mutation mutex
-across sequence validation, map cloning, side-effect replacement, and publication.
-Source events reserve and execute synchronous dispatch while holding the
-source-event lock, before publishing their source snapshot. Preparation performs
-no network IO; persistent provider connection workers remain asynchronous.
-Reads load the ArcSwap without taking the mutation mutex. Both full and
-partial updates obey this order; an older full set cannot overtake a later delta.
+The unified `RuntimeRegistry` in `runtime/store.rs` has one authoritative write
+boundary: `LINK_SYS_SOURCE_EVENT_LOCK` spans source snapshot construction, map
+cloning, side-effect replacement, runtime publication, and subsequent raw source
+publication. Rebuilds and admission retries use the same lock. OTLP process
+shutdown also takes it before setting `OTLP_STOPPING`, removing current OTLP
+owners, and transferring retained cleanup tasks; cleanup waits occur afterward.
+Preparation performs no network IO; persistent provider connection workers
+remain asynchronous. Reads load the ArcSwap without taking the source-event lock.
+Both full and partial updates obey this order; an older full set cannot overtake
+a later delta.
 The source snapshot also retains capacity-denied intent for ordered retry.
 
 This preserves the original no-lost-update invariant without the deleted
 `ProviderRuntimeStore` or its RCU helpers. See
 [provider-owned runtime](../../link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md).
 Relevant current tests include
-`synchronous_dispatch_publishes_before_source_and_preserves_unrelated_deltas` and
-`stale_full_or_partial_dispatch_cannot_replace_newer_current`. These are
-deterministic ownership/ordering tests, not live SDK integration evidence.
+`synchronous_dispatch_publishes_before_source_and_preserves_unrelated_deltas`,
+`source_events_serialize_full_sets_deltas_rebuilds_and_admission`, and
+`otlp_shutdown_serializes_with_source_updates`. Scoped threads gate actual source
+operations; the shutdown test runs in a child process because stopping is terminal
+global state. These are ownership/ordering tests, not live SDK integration evidence.
 The former async dispatch tail was removed by
 [prepared HTTPDNS publication](../../link-sys/regression-guards/httpdns-prepared-runtime.md);
 its task-chain tests do not establish a current implementation requirement.
+
+The user-authorized P3 maintenance task `simplify-linksys-runtime-ordering`
+removes the redundant global dispatch counter, overflow rejection, stale-sequence
+comparison, and registry mutex. Production dispatch is synchronous under the
+source-event lock, so obsolete out-of-order calls to the private registry are not
+a production input. Test-only global installations take the same source-event
+lock. Provider-local `Desired.gen`, `force_gen`, and publication/delete fences
+remain necessary for asynchronous connection work and are unchanged.
+Controller's one worker per kind and Gateway's per-kind cache write lock order
+normal configuration callbacks; neither alone orders other-kind dependency
+rebuilds or process shutdown. Do not remove the source-event lock on that basis.
+
+Re-evaluate this boundary if dispatch becomes asynchronous, a registry writer
+bypasses the source-event lock, or shutdown/cleanup acquires locks in reverse
+order. Keep unrelated deltas, latest-snapshot admission, and no OTLP creation
+after stopping as the behavioral guards, rather than preserving a particular
+dispatch counter implementation.
+
+Fresh verification for `simplify-linksys-runtime-ordering` on 2026-10-06:
+`cargo test -p edgion-gateway --lib link_sys::runtime -- --test-threads=1`
+passed all 82 tests, and independent Astra source/knowledge review returned LGTM.
+`cargo test -p edgion-gateway --features test-util --test otlp_transport`
+passed all nine real transport tests, including shutdown/update interleaving.
+The unit results cover ordered publication and runner fences; the transport
+results add SDK lifecycle evidence, not a global lossless delivery guarantee.
+The startup-drain test and both Webhook manager tests also passed. Workspace
+format/check/Clippy and the SSA, metrics, Pingora source, Gateway API transform,
+unit-test layout, gateway tracing, and English-only guards passed. Agent-doc
+validation remains blocked by unrelated missing WAF task links; these
+results do not claim that every closure gate passed.
 
 ## Historical RCU implementation (inactive)
 

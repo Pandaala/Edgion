@@ -8,7 +8,7 @@ use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
@@ -31,17 +31,9 @@ use crate::observe::metrics::registry::record_link_sys_health;
 
 type LinkSysMap = HashMap<String, LinkSys>;
 
+// Orders source publication, runtime preparation, rebuilds, admission retries,
+// and the synchronous part of OTLP shutdown. Readers never acquire this lock.
 static LINK_SYS_SOURCE_EVENT_LOCK: Mutex<()> = Mutex::new(());
-static NEXT_LINK_SYS_DISPATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-fn reserve_dispatch_sequence(counter: &AtomicU64) -> Option<u64> {
-    counter
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
-        .ok()
-        .and_then(|previous| previous.checked_add(1))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DispatchSequenceExhausted;
 
 // ============================================================
 // LinkSysStore
@@ -86,55 +78,39 @@ impl LinkSysStore {
     ///
     /// Reconciles typed owners in the unified runtime registry.
     pub fn replace_all(&self, data: HashMap<String, LinkSys>) {
-        if self
-            .replace_all_with_dispatch(
-                data,
-                &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
-                &LINK_SYS_SOURCE_EVENT_LOCK,
-                |sequence, dispatch_data| {
-                    if tokio::runtime::Handle::try_current().is_ok() {
-                        dispatch_full_set(sequence, &dispatch_data, false);
-                    } else {
-                        // Reachable only outside a tokio runtime (currently: the four sync
-                        // unit tests that exercise the resource map only). Production
-                        // callers all run inside tokio; if this fires there, provider
-                        // clients were never built and `get_*_client` will look like
-                        // "config not synced yet" — surface it instead of failing silently.
-                        tracing::error!("LinkSysStore::replace_all called outside a tokio runtime — dispatch skipped");
-                    }
-                },
-            )
-            .is_err()
-        {
-            tracing::error!("LinkSys dispatch sequence exhausted; full set rejected");
-        }
+        self.replace_all_with_dispatch(data, &LINK_SYS_SOURCE_EVENT_LOCK, |dispatch_data| {
+            if tokio::runtime::Handle::try_current().is_ok() {
+                dispatch_full_set(&dispatch_data, false);
+            } else {
+                // Reachable only outside a tokio runtime (currently: the four sync
+                // unit tests that exercise the resource map only). Production
+                // callers all run inside tokio; if this fires there, provider
+                // clients were never built and `get_*_client` will look like
+                // "config not synced yet" — surface it instead of failing silently.
+                tracing::error!("LinkSysStore::replace_all called outside a tokio runtime — dispatch skipped");
+            }
+        });
     }
 
     /// Update LinkSys resources atomically (incremental sync).
     ///
     /// Dispatches only changed keys, plus unadmitted keys when capacity is freed.
     pub fn update(&self, add_or_update: HashMap<String, LinkSys>, remove: &HashSet<String>) {
-        if self
-            .update_with_dispatch(
-                add_or_update,
-                remove,
-                &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
-                &LINK_SYS_SOURCE_EVENT_LOCK,
-                |sequence, dispatch_data, remove_set, snapshot| {
-                    if tokio::runtime::Handle::try_current().is_ok() {
-                        dispatch_partial_update(sequence, &dispatch_data, &remove_set, &snapshot);
-                    } else {
-                        // See `replace_all` for the rationale — this branch is only hit by
-                        // sync unit tests today; logging makes any future outside-runtime
-                        // regression visible rather than presenting as "config not synced".
-                        tracing::error!("LinkSysStore::update called outside a tokio runtime — dispatch skipped");
-                    }
-                },
-            )
-            .is_err()
-        {
-            tracing::error!("LinkSys dispatch sequence exhausted; partial update rejected");
-        }
+        self.update_with_dispatch(
+            add_or_update,
+            remove,
+            &LINK_SYS_SOURCE_EVENT_LOCK,
+            |dispatch_data, remove_set, snapshot| {
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    dispatch_partial_update(&dispatch_data, &remove_set, &snapshot);
+                } else {
+                    // See `replace_all` for the rationale — this branch is only hit by
+                    // sync unit tests today; logging makes any future outside-runtime
+                    // regression visible rather than presenting as "config not synced".
+                    tracing::error!("LinkSysStore::update called outside a tokio runtime — dispatch skipped");
+                }
+            },
+        );
     }
 
     /// Rebuild every runtime client from the current authoritative snapshot.
@@ -143,24 +119,13 @@ impl LinkSysStore {
     /// constructed. A change to one of those settings therefore needs a fresh
     /// dispatch even though the LinkSys resources themselves did not change.
     pub fn rebuild_clients(&self) {
-        if self
-            .rebuild_clients_with_dispatch(
-                &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
-                &LINK_SYS_SOURCE_EVENT_LOCK,
-                |sequence, dispatch_data| {
-                    if tokio::runtime::Handle::try_current().is_ok() {
-                        dispatch_full_set(sequence, &dispatch_data, true);
-                    } else {
-                        tracing::error!(
-                            "LinkSysStore::rebuild_clients called outside a tokio runtime — dispatch skipped"
-                        );
-                    }
-                },
-            )
-            .is_err()
-        {
-            tracing::error!("LinkSys dispatch sequence exhausted; client rebuild rejected");
-        }
+        self.rebuild_clients_with_dispatch(&LINK_SYS_SOURCE_EVENT_LOCK, |dispatch_data| {
+            if tokio::runtime::Handle::try_current().is_ok() {
+                dispatch_full_set(&dispatch_data, true);
+            } else {
+                tracing::error!("LinkSysStore::rebuild_clients called outside a tokio runtime — dispatch skipped");
+            }
+        });
     }
 
     /// Reconsider unadmitted keys after a cap increase without rebuilding live clients.
@@ -168,73 +133,53 @@ impl LinkSysStore {
         if tokio::runtime::Handle::try_current().is_err() {
             return;
         }
-        if self
-            .rebuild_clients_with_dispatch(
-                &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
-                &LINK_SYS_SOURCE_EVENT_LOCK,
-                |sequence, snapshot| {
-                    RUNTIMES.retry_admission(sequence, &snapshot);
-                },
-            )
-            .is_err()
-        {
-            tracing::error!("LinkSys dispatch sequence exhausted; admission retry rejected");
-        }
+        self.rebuild_clients_with_dispatch(&LINK_SYS_SOURCE_EVENT_LOCK, |snapshot| {
+            RUNTIMES.retry_admission(&snapshot);
+        });
     }
 
     fn publish_source_event(
         &self,
-        counter: &AtomicU64,
         source_lock: &Mutex<()>,
         build_snapshot: impl FnOnce(&LinkSysMap) -> Arc<LinkSysMap>,
-        dispatch: impl FnOnce(u64, Arc<LinkSysMap>),
-    ) -> Result<u64, DispatchSequenceExhausted> {
+        dispatch: impl FnOnce(Arc<LinkSysMap>),
+    ) {
         let _source_guard = source_lock.lock();
-        let sequence = reserve_dispatch_sequence(counter).ok_or(DispatchSequenceExhausted)?;
         let current = self.resources.load_full();
         let next = build_snapshot(current.as_ref());
 
         // Prepare and publish runtime handles within the source-event order.
         // Readers cannot observe the new raw generation before its preparation.
-        dispatch(sequence, Arc::clone(&next));
+        dispatch(Arc::clone(&next));
         self.resources.store(next);
-        Ok(sequence)
     }
 
     fn replace_all_with_dispatch(
         &self,
         data: HashMap<String, LinkSys>,
-        counter: &AtomicU64,
         source_lock: &Mutex<()>,
-        dispatch: impl FnOnce(u64, Arc<LinkSysMap>),
-    ) -> Result<u64, DispatchSequenceExhausted> {
+        dispatch: impl FnOnce(Arc<LinkSysMap>),
+    ) {
         // Wrap once and share the exact authoritative snapshot with both the
         // ArcSwap publication and the synchronous dispatch.
         let data = Arc::new(data);
         let dispatch_data = Arc::clone(&data);
-        self.publish_source_event(
-            counter,
-            source_lock,
-            |_| Arc::clone(&data),
-            |sequence, _| dispatch(sequence, dispatch_data),
-        )
+        self.publish_source_event(source_lock, |_| Arc::clone(&data), |_| dispatch(dispatch_data))
     }
 
     fn update_with_dispatch(
         &self,
         add_or_update: HashMap<String, LinkSys>,
         remove: &HashSet<String>,
-        counter: &AtomicU64,
         source_lock: &Mutex<()>,
-        dispatch: impl FnOnce(u64, Arc<LinkSysMap>, HashSet<String>, Arc<LinkSysMap>),
-    ) -> Result<u64, DispatchSequenceExhausted> {
+        dispatch: impl FnOnce(Arc<LinkSysMap>, HashSet<String>, Arc<LinkSysMap>),
+    ) {
         // Wrap once and share with the synchronous dispatch to avoid a second deep clone
         // of the delta (each LinkSys carries nested credential structs).
         let add_or_update = Arc::new(add_or_update);
         let dispatch_data = Arc::clone(&add_or_update);
         let remove_set = remove.clone();
         self.publish_source_event(
-            counter,
             source_lock,
             |current| {
                 let mut new_map = current.clone();
@@ -246,25 +191,18 @@ impl LinkSysStore {
                 }
                 Arc::new(new_map)
             },
-            |sequence, snapshot| dispatch(sequence, dispatch_data, remove_set, snapshot),
+            |snapshot| dispatch(dispatch_data, remove_set, snapshot),
         )
     }
 
-    fn rebuild_clients_with_dispatch(
-        &self,
-        counter: &AtomicU64,
-        source_lock: &Mutex<()>,
-        dispatch: impl FnOnce(u64, Arc<LinkSysMap>),
-    ) -> Result<u64, DispatchSequenceExhausted> {
+    fn rebuild_clients_with_dispatch(&self, source_lock: &Mutex<()>, dispatch: impl FnOnce(Arc<LinkSysMap>)) {
         let _source_guard = source_lock.lock();
-        let sequence = reserve_dispatch_sequence(counter).ok_or(DispatchSequenceExhausted)?;
         let snapshot = self.resources.load_full();
 
-        // Reserve and dispatch under the same lock used by LinkSys source
+        // Dispatch under the same lock used by LinkSys source
         // events. This makes the dependency-triggered rebuild part of their
         // total order without republishing or cloning the source snapshot.
-        dispatch(sequence, snapshot);
-        Ok(sequence)
+        dispatch(snapshot);
     }
 }
 
@@ -376,17 +314,15 @@ fn count_providers(entries: &RuntimeMap) -> ProviderCounts {
 }
 
 /// One client authority for every provider. Writers perform no network IO here.
-/// The mutation lock also makes cap admission and source sequence checks atomic.
+/// Callers hold LINK_SYS_SOURCE_EVENT_LOCK through each read-modify-publish.
 struct RuntimeRegistry {
     entries: ArcSwap<RuntimeMap>,
-    sequence: Mutex<u64>,
 }
 
 impl RuntimeRegistry {
     fn new() -> Self {
         Self {
             entries: ArcSwap::from_pointee(HashMap::new()),
-            sequence: Mutex::new(0),
         }
     }
 
@@ -411,20 +347,7 @@ impl RuntimeRegistry {
             .count()
     }
 
-    fn apply(
-        &self,
-        sequence: u64,
-        changed: &LinkSysMap,
-        remove: &HashSet<String>,
-        snapshot: &LinkSysMap,
-        full: bool,
-        forced: bool,
-    ) {
-        let mut accepted = self.sequence.lock();
-        if sequence <= *accepted {
-            return;
-        }
-        *accepted = sequence;
+    fn apply(&self, changed: &LinkSysMap, remove: &HashSet<String>, snapshot: &LinkSysMap, full: bool, forced: bool) {
         let mut entries = (**self.entries.load()).clone();
         let mut released = false;
         entries.retain(|key, entry| {
@@ -454,12 +377,7 @@ impl RuntimeRegistry {
         self.entries.store(Arc::new(entries));
     }
 
-    fn retry_admission(&self, sequence: u64, snapshot: &LinkSysMap) {
-        let mut accepted = self.sequence.lock();
-        if sequence <= *accepted {
-            return;
-        }
-        *accepted = sequence;
+    fn retry_admission(&self, snapshot: &LinkSysMap) {
         let mut entries = (**self.entries.load()).clone();
         let mut counts = count_providers(&entries);
         admit_missing(&mut entries, &mut counts, snapshot);
@@ -468,7 +386,7 @@ impl RuntimeRegistry {
 
     #[cfg(test)]
     fn install(&self, key: &str, entry: Option<Arc<RuntimeEntry>>) {
-        let _guard = self.sequence.lock();
+        let _guard = LINK_SYS_SOURCE_EVENT_LOCK.lock();
         let mut entries = (**self.entries.load()).clone();
         if let Some(old) = entries.remove(key) {
             old.stop();
@@ -941,7 +859,7 @@ pub async fn shutdown_otlp_clients() {
         shutdown
             .get_or_insert_with(|| {
                 let mut cleanup = {
-                    let _guard = RUNTIMES.sequence.lock();
+                    let _guard = LINK_SYS_SOURCE_EVENT_LOCK.lock();
                     OTLP_STOPPING.store(true, Ordering::Release);
                     let mut entries = (**RUNTIMES.entries.load()).clone();
                     entries.retain(|_, entry| {
@@ -1001,12 +919,12 @@ fn webhook_can_reuse(existing: &WebhookLinkClient, resource: &LinkSys, forced: b
     live.equal_runtime(&incoming) || live.rv_skip_allows_reuse(&incoming)
 }
 
-fn dispatch_full_set(sequence: u64, data: &LinkSysMap, forced: bool) {
-    RUNTIMES.apply(sequence, data, &HashSet::new(), data, true, forced);
+fn dispatch_full_set(data: &LinkSysMap, forced: bool) {
+    RUNTIMES.apply(data, &HashSet::new(), data, true, forced);
 }
 
-fn dispatch_partial_update(sequence: u64, changed: &LinkSysMap, remove: &HashSet<String>, snapshot: &LinkSysMap) {
-    RUNTIMES.apply(sequence, changed, remove, snapshot, false, false);
+fn dispatch_partial_update(changed: &LinkSysMap, remove: &HashSet<String>, snapshot: &LinkSysMap) {
+    RUNTIMES.apply(changed, remove, snapshot, false, false);
 }
 
 static GLOBAL_LINK_SYS_STORE: LazyLock<Arc<LinkSysStore>> = LazyLock::new(|| Arc::new(LinkSysStore::new()));
