@@ -3,18 +3,12 @@
 # ports are bound only inside each scenario's private Docker network. Keep the
 # assignments here so parallel scenarios cannot silently choose the same host
 # port, and so the preflight probes the address each service actually binds.
-ISOLATED_FIXED_SCENARIOS="controller_auth gateway_admin_auth fips_policy geoip_db_states unknown_config_fields proxy_protocol_policy_lifecycle proxy_protocol_inbound proxy_protocol_chain etcd_policy"
+ISOLATED_FIXED_SCENARIOS="controller_auth gateway_admin_auth fips_policy geoip_db_states unknown_config_fields proxy_protocol_policy_lifecycle proxy_protocol_inbound proxy_protocol_chain"
 
 isolated_load_ports() {
     local scenario="$1" name value bind policy spec entry
     local ports=()
     case "$scenario" in
-        etcd_policy)
-            ports=(
-            ETCD_POLICY_A_PORT=58960@127.0.0.1 ETCD_POLICY_B_PORT=58961@127.0.0.1
-            ETCD_POLICY_C_PORT=58962@127.0.0.1
-            )
-            ;;
         controller_auth)
             ports=(
             NOAUTH_ADMIN_PORT=58200@127.0.0.1 NOAUTH_GRPC_PORT=58201@127.0.0.1

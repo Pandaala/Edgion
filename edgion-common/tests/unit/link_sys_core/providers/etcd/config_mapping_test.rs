@@ -31,13 +31,6 @@ fn minimal_config(endpoints: Vec<String>) -> EtcdClientConfig {
         timeout: None,
         keep_alive: None,
         namespace: None,
-        auto_sync_interval: None,
-        max_call_send_size: None,
-        max_call_recv_size: None,
-        user_agent: None,
-        reject_old_cluster: None,
-        min_cluster_version: None,
-        observability: None,
     }
 }
 
@@ -167,7 +160,7 @@ fn test_with_keepalive() {
 }
 
 #[test]
-fn test_keepalive_partial_returns_none() {
+fn test_keepalive_partial_returns_error() {
     let crd = EtcdClientConfig {
         keep_alive: Some(EtcdKeepAlive {
             time: Some(30),
@@ -176,8 +169,8 @@ fn test_keepalive_partial_returns_none() {
         }),
         ..minimal_config(vec!["http://localhost:2379".to_string()])
     };
-    let options = build_connect_options(&crd, &no_auth()).unwrap();
-    assert!(options.is_none());
+    let error = build_connect_options(&crd, &no_auth()).unwrap_err();
+    assert!(error.to_string().contains("keepAlive requires time and timeout"));
 }
 
 #[test]

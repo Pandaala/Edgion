@@ -25,7 +25,6 @@ fn ai_runtime_store_collector_reports_populated_stores() {
 #[test]
 fn store_stats_response_serializes() {
     let resp = StoreStatsResponse {
-        etcd_operation_metrics: Default::default(),
         wasm_shared_data_metrics: Default::default(),
         plugin_publication: Default::default(),
         plugin_publication_inventory: Default::default(),
@@ -125,9 +124,6 @@ fn store_stats_response_serializes() {
     };
     let json = serde_json::to_value(&resp).unwrap();
     assert!(json.is_object());
-    assert_eq!(json["etcd_operation_metrics"]["count"], 0);
-    assert_eq!(json["etcd_operation_metrics"]["keys"], serde_json::json!([]));
-    assert_eq!(json["etcd_operation_metrics"]["keys_truncated"], false);
     assert_eq!(json["wasm_oci_cache"]["entries"], 0);
     assert_eq!(json["wasm_oci_cache"]["retained_bytes"], 0);
     assert_eq!(json["wasm_oci_cache"]["keys"], serde_json::json!([]));

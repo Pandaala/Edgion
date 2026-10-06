@@ -12,13 +12,6 @@ fn minimal_config() -> EtcdClientConfig {
         timeout: None,
         keep_alive: None,
         namespace: None,
-        auto_sync_interval: None,
-        max_call_send_size: None,
-        max_call_recv_size: None,
-        user_agent: None,
-        reject_old_cluster: None,
-        min_cluster_version: None,
-        observability: None,
     }
 }
 

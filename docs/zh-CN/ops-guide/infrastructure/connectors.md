@@ -349,6 +349,9 @@ spec:
 
 ## Etcd 连接器
 
+Etcd 使用上游客户端 SDK，配置静态端点。不支持自定义消息大小限制、成员自动发现、
+User-Agent 覆盖、集群版本检查或提供者专属观测配置；健康状态和普通连接恢复仍然保留。
+
 ```yaml
 apiVersion: edgion.io/v1
 kind: LinkSys
@@ -380,10 +383,6 @@ spec:
 | `auth` | Object | none | 认证配置。Secret 通常同时提供 `username` 和 `password`。 |
 | `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。Etcd（与 Redis 一样）在任何环境下均拒绝启用 TLS 块中的 `verify: false`。 |
 | `namespace` | String | none | Etcd v3 键前缀。 |
-| `userAgent` | String | none | 发送给 etcd 的 HTTP User-Agent。示例：`"edgion-gateway/v1"`。 |
-| `rejectOldCluster` | Boolean | false | 强制执行同主版本下限。 |
-| `minClusterVersion` | String | none | 开启 `rejectOldCluster` 时必填，格式为稳定的 `major.minor.patch`。 |
-| `observability` | Object | none | 日志和指标；详见[可观测性](#可观测性)。 |
 
 ### 超时与 keepalive
 
@@ -393,55 +392,7 @@ spec:
 | `timeout.request` | Integer | none | 请求超时（毫秒）。 |
 | `keepAlive.time` | Integer | none | HTTP/2 keepalive 时间（秒）。 |
 | `keepAlive.timeout` | Integer | none | HTTP/2 keepalive 超时（秒）。 |
-| `keepAlive.permitWithoutStream` | Boolean | false | 无活跃流时允许 keepalive ping。 |
-| `autoSyncInterval` | Integer | 0 | 端点自动同步间隔（秒），`0` 表示禁用。 |
-| `maxCallSendSize` | Integer | 4294967295 | 最大发送消息大小（字节）。 |
-| `maxCallRecvSize` | Integer | 4194304 | 最大接收消息大小（字节）。 |
-
-### Etcd 策略的实际执行
-
-端点必须是 1–64 个显式 HTTP(S) URL，每项最多 2,048 字节，不允许凭据、查询、
-片段或非根路径；等价端点会去重。每条物理连接先完成认证和 Status 检查，再承载
-业务请求（未配置认证时不发送认证请求）；重连重复检查，并保持集群身份一致。
-
-`rejectOldCluster: true` 必须同时设置稳定版本格式的 `minClusterVersion`，
-例如 `3.5.0`；服务端必须具有相同主版本并达到下限。
-未开启该开关却配置版本下限会被拒绝。
-`userAgent` 限制为 1–256 个可打印 ASCII 字节，不能全为空格；传输层追加
-` tonic/0.14.6`，未配置时为 `tonic/0.14.6`。
-
-显式 `maxCallSendSize`、`maxCallRecvSize` 范围为 1–67,108,864 字节；
-默认发送上限为 4,294,967,295 字节，默认接收上限为 4,194,304 字节。
-按每条 protobuf 消息计算，不含 5 字节 gRPC 消息头，覆盖全部八类服务、
-认证、维护、watch、lease 和选主。发送端在编码前检查精确编码长度，
-借用的键和值还会在复制前预检；接收端在累积负载前检查消息头声明的长度。
-拒绝压缩消息。超限直接失败，不截断。HTTP/2 预读和并发合法消息仍占用内存，
-这些限制不代表进程 RSS 上限。
-
-`autoSyncInterval` 范围为 0–86,400 秒，零或省略表示关闭发现。
-发现数据非法或候选全部无法准入时，保留最近有效端点集。候选数量、
-并发准入和截止时间均受限。每次发现端点连接及重连都执行共享 DNS、出口和 TLS
-策略。发现不能将 HTTPS 降级为 HTTP，也不能发布混合协议端点集。
-显式初始回环地址可用；不在初始完整 URI 允许列表中的新发现回环地址，
-仅在集成测试模式允许。
-
-keepalive 的 time 与 timeout 必须成对设置，各为 1–86,400 秒；
-`permitWithoutStream` 依赖这两个字段，空对象不启用 keepalive。
-重复的 `timeout.keepAlive` 已移除。dial/request 必须为正值，继续按原有
-30 秒和 60 秒上限钳制。
-
-Etcd 的 `observability.metrics.enabled` 启用
-`edgion_link_sys_etcd_operations_total`，标签仅含经过验证的 LinkSys 身份和
-固定的操作、结果枚举；拒绝非空 `metrics.labels`。流式操作只记录一次终态。
-计数器遵循 Gateway 的统一基数和空闲淘汰策略。
-`logging.enabled: true` 启用限频的生命周期及失败摘要，
-`level` 默认 `info`，`slowLogThreshold` 为正整数毫秒，仅适用于维护操作，
-不适用于逐条业务 RPC。
-未启用日志却设置级别或慢日志阈值会被拒绝。不会启用 Gateway 逐请求 tracing；
-必要的健康状态变化日志独立于这些可选开关。
-
-有效策略变化会创建新代。旧代退役时取消其连接并停止观测；
-新大小限制不会追溯修改已经接收的消息。
+| `keepAlive.permitWithoutStream` | Boolean | none | 无活跃流时允许 keepalive ping。 |
 
 ## Elasticsearch 连接器
 

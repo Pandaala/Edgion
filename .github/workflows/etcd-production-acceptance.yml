@@ -1,0 +1,66 @@
+name: Etcd production acceptance
+
+# Each standalone script owns its topology and EXIT cleanup. Run the scripts
+# serially on one hosted VM; their fixed ports cannot be shared concurrently.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: etcd-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    name: Etcd cluster and Controller HA
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.96.1"
+          install-deps: "true"
+          cache-enabled: "true"
+          cache-key-prefix: "cargo-etcd-acceptance"
+
+      - name: Check integration dependencies
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y jq
+          docker compose version
+
+      - name: Build production binaries once
+        run: cargo build --locked -p edgion-controller -p edgion-gateway -p edgion-cli
+
+      - name: Verify LinkSys policy, election and HA serially
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/etcd-acceptance
+          bash edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh --no-build 2>&1 | tee target/etcd-acceptance/link-sys.log
+          bash edgion-tests/integration/scripts/integration/etcd_leader/run_etcd_leader_test.sh 2>&1 | tee target/etcd-acceptance/election.log
+          bash edgion-tests/integration/scripts/integration/etcd_leader/run_etcd_leader_failover.sh 2>&1 | tee target/etcd-acceptance/ha.log
+
+      # Working directories also contain generated Secrets, certificates and
+      # config files. Upload log files only, including successful tee reports.
+      - name: Upload acceptance logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etcd-production-acceptance
+          path: |
+            target/etcd-acceptance/*.log
+            tmp/integration_testing/etcd_testing_*/**/*.log
+            tmp/integration_testing/etcd_leader_*/**/*.log
+            tmp/integration_testing/etcd_failover_*/**/*.log
+          retention-days: 7
+          if-no-files-found: warn

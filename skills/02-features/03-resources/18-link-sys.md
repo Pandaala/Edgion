@@ -156,6 +156,11 @@ spec:
 
 ### `type: etcd`
 
+
+Uses the upstream Etcd SDK with static endpoints. Custom message limits,
+member discovery, User-Agent, version admission and observability options
+are outside the supported configuration.
+
 ```yaml
 spec:
   type: etcd
@@ -178,15 +183,6 @@ spec:
       timeout: 10
       permitWithoutStream: true
     namespace: "/my-app/"         # etcd v3 key prefix
-    autoSyncInterval: 300         # seconds; 0 disables it
-    maxCallSendSize: 2097152
-    maxCallRecvSize: 4194304
-    userAgent: "edgion-gateway/v1"
-    rejectOldCluster: true
-    minClusterVersion: "3.5.0"
-    observability:
-      logging: { enabled: true, level: info }
-      metrics: { enabled: true }
 ```
 
 - `auth` likewise uses `BasicAuthResolver` (username + password, both typically required for etcd).

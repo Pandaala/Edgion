@@ -69,8 +69,7 @@ impl EtcdCenter {
         // whether the YAML file supplied `conf_center.auth` — `Resolved` if
         // so, `NotRequired` otherwise.
         let (client_config, auth_state) = config.to_client_config()?;
-        let client = EtcdLinkClient::from_config("conf-center", &client_config, &auth_state)?
-            .with_observation(Arc::new(super::observation::ControllerEtcdObserver::new()), false);
+        let client = EtcdLinkClient::from_config("conf-center", &client_config, &auth_state)?;
         client.init().await?;
         let client = Arc::new(client);
 

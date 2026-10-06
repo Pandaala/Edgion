@@ -17,7 +17,8 @@ The repo currently has the following workflows under `.github/workflows/`:
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `ci.yml` | `push` / `pull_request` to `main` / `master` | Rust check / fmt / clippy / test + agent-docs gate |
+| `ci.yml` | `push` / `pull_request` to `main` / `master` | Rust check / fmt / clippy / test, agent-docs, independent Etcd SDK and ExtProc Go fixture gates |
+| `etcd-production-acceptance.yml` | `push` / `pull_request` to `main` / `master`, manual | Serial real-Etcd LinkSys policy, Controller election and Gateway HA acceptance on one hosted VM |
 | `waf-production-acceptance.yml` | `push` / `pull_request` to `main` / `master`, manual | Strict selected WAF profile report and Gateway wire/hot-reload acceptance |
 | `check-english-only.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_english_only.sh` — the English-only gate the project relies on |
 | `check-gateway-no-tracing.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_gateway_no_tracing.py` — forbids unapproved `tracing::*` macros on data-plane hot paths (function-level) |
@@ -37,6 +38,7 @@ The repo currently has the following workflows under `.github/workflows/`:
 ## Read these real entry points first
 
 - [../../../.github/workflows/ci.yml](../../../.github/workflows/ci.yml)
+- [../../../.github/workflows/etcd-production-acceptance.yml](../../../.github/workflows/etcd-production-acceptance.yml)
 - [../../../.github/workflows/build-image.yml](../../../.github/workflows/build-image.yml)
 - [../../../.github/workflows/check-english-only.yml](../../../.github/workflows/check-english-only.yml)
 - [../../../.github/workflows/check-ssa-force.yml](../../../.github/workflows/check-ssa-force.yml)
@@ -59,7 +61,10 @@ The repo currently has the following workflows under `.github/workflows/`:
 4. `agent-docs` -> `python3 cicd/checks/validate_agent_docs.py`
 5. `clippy` -> `cargo clippy --locked --workspace --all-targets`
 6. `test` -> `cargo test --locked --all`
-7. `ci-success` -> aggregates the results of the previous six jobs to provide a stable check for branch protection
+7. `ext_proc_fixture` -> verifies, tests and builds the pinned Go fixture with
+   read-only dependency resolution
+8. `ci-success` -> aggregates all seven jobs above to provide a stable check for
+   branch protection
 
 Key facts:
 
@@ -77,6 +82,19 @@ Key facts:
   seven direct fork dependencies share that branch and the complete lockfile
   family resolves to one commit.
 - `check` and `clippy` pass `--workspace` on purpose: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip the harness. `--workspace` gives it the same fast type-check + clippy signal that `cargo test --all` already exercises at compile time
+
+### Etcd real-cluster gates
+
+Etcd uses the upstream crates.io client without a local SDK or SDK-specific CI job.
+
+`etcd-production-acceptance.yml` builds the three product binaries once and runs
+the existing LinkSys, Controller election and Gateway HA standalone scripts
+serially on one hosted VM, with a 90-minute job limit. The scripts retain their
+EXIT cleanup; pipefail propagates failures through tee. Artifacts contain only
+reports/log files, never the generated Secret/certificate/config directories,
+and are retained for seven days. This workflow reports a separate status from
+`ci-success`; repository branch protection determines whether it is required.
+Local equivalent commands do not establish a successful GitHub Actions run.
 
 ## What the local `setup-rust` action does
 

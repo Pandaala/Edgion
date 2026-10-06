@@ -111,18 +111,6 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
     Ok(Some(client_config))
 }
 
-/// Resolve a concrete Rustls configuration, including default public roots.
-/// Direct TLS transports cannot delegate the no-custom-material case to an SDK.
-pub fn build_required_rustls_client_config(tls: &TlsConfig) -> Result<ClientConfig> {
-    if let Some(config) = build_rustls_client_config(tls)? {
-        return Ok(config);
-    }
-    let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    Ok(ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth())
-}
-
 /// Apply custom CA PEM bundles to a reqwest `ClientBuilder` with REPLACE
 /// semantics: disables the built-in root certificates, then adds each supplied
 /// PEM bundle as a trust anchor.

@@ -6,7 +6,6 @@
 //! Key operations automatically apply the namespace prefix (if configured in CRD).
 //! For advanced use cases, callers can access the inner client via `get_client()`.
 
-use super::observation::Operation;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -16,6 +15,7 @@ use etcd_client::{
 };
 
 use super::client::EtcdLinkClient;
+use super::config_mapping::health_probe_timeout;
 use crate::link_sys_core::LinkSysHealth;
 
 /// Raw view of an etcd KeyValue exposing the fields leader election needs.
@@ -46,7 +46,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_key = self.checked_full_key(&client, Operation::Kv, key, 0, 1)?;
+        let full_key = self.full_key(key);
 
         let resp = client
             .get(full_key, None)
@@ -65,12 +65,12 @@ impl EtcdLinkClient {
     }
 
     /// PUT key value [with optional lease]
-    pub async fn put(&self, key: &str, value: impl Into<Vec<u8>> + AsRef<[u8]>, lease_id: Option<i64>) -> Result<()> {
+    pub async fn put(&self, key: &str, value: impl Into<Vec<u8>>, lease_id: Option<i64>) -> Result<()> {
         let mut client = self
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_key = self.checked_full_key(&client, Operation::Kv, key, value.as_ref().len(), 1)?;
+        let full_key = self.full_key(key);
 
         let options = lease_id.map(|id| PutOptions::new().with_lease(id));
         client
@@ -82,7 +82,7 @@ impl EtcdLinkClient {
 
     /// PUT key string_value (convenience)
     pub async fn put_string(&self, key: &str, value: &str) -> Result<()> {
-        self.put(key, value.as_bytes(), None).await
+        self.put(key, value.as_bytes().to_vec(), None).await
     }
 
     /// DELETE key → number of deleted keys
@@ -91,7 +91,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_key = self.checked_full_key(&client, Operation::Kv, key, 0, 1)?;
+        let full_key = self.full_key(key);
 
         let resp = client
             .delete(full_key, None)
@@ -108,7 +108,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_prefix = self.checked_full_key(&client, Operation::Kv, prefix, 0, 1)?;
+        let full_prefix = self.full_key(prefix);
 
         let options = GetOptions::new().with_prefix();
         let resp = client
@@ -136,7 +136,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_prefix = self.checked_full_key(&client, Operation::Kv, prefix, 0, 1)?;
+        let full_prefix = self.full_key(prefix);
 
         let options = GetOptions::new().with_prefix();
         let resp = client
@@ -160,12 +160,12 @@ impl EtcdLinkClient {
 
     /// PUT key value only if the key does not yet exist (version == 0).
     /// Returns `true` if the key was created, `false` if it already existed.
-    pub async fn txn_put_if_absent(&self, key: &str, value: impl Into<Vec<u8>> + AsRef<[u8]>) -> Result<bool> {
+    pub async fn txn_put_if_absent(&self, key: &str, value: impl Into<Vec<u8>>) -> Result<bool> {
         let mut client = self
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_key = self.checked_full_key(&client, Operation::Kv, key, value.as_ref().len(), 2)?;
+        let full_key = self.full_key(key);
         let value = value.into();
 
         let txn = Txn::new()
@@ -181,12 +181,12 @@ impl EtcdLinkClient {
 
     /// PUT key value only if the key already exists (version > 0).
     /// Returns `true` if the key was updated, `false` if it did not exist.
-    pub async fn txn_put_if_exists(&self, key: &str, value: impl Into<Vec<u8>> + AsRef<[u8]>) -> Result<bool> {
+    pub async fn txn_put_if_exists(&self, key: &str, value: impl Into<Vec<u8>>) -> Result<bool> {
         let mut client = self
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_key = self.checked_full_key(&client, Operation::Kv, key, value.as_ref().len(), 2)?;
+        let full_key = self.full_key(key);
         let value = value.into();
 
         let txn = Txn::new()
@@ -209,13 +209,13 @@ impl EtcdLinkClient {
         &self,
         key: &str,
         expected_revision: i64,
-        value: impl Into<Vec<u8>> + AsRef<[u8]>,
+        value: impl Into<Vec<u8>>,
     ) -> Result<bool> {
         let mut client = self
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_key = self.checked_full_key(&client, Operation::Kv, key, value.as_ref().len(), 2)?;
+        let full_key = self.full_key(key);
         let value = value.into();
 
         let txn = Txn::new()
@@ -242,7 +242,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_key = self.checked_full_key(&client, Operation::Kv, key, 0, 2)?;
+        let full_key = self.full_key(key);
         let txn = Txn::new()
             .when(vec![Compare::mod_revision(
                 full_key.clone(),
@@ -263,7 +263,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_prefix = self.checked_full_key(&client, Operation::Kv, prefix, 0, 1)?;
+        let full_prefix = self.full_key(prefix);
 
         let options = DeleteOptions::new().with_prefix();
         let resp = client
@@ -282,7 +282,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full = self.checked_full_key(&client, Operation::Kv, key, 0, 1)?;
+        let full = self.full_key(key);
         let resp = client
             .get(full, None)
             .await
@@ -310,7 +310,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full = self.checked_full_key(&client, Operation::Kv, key, expected_value.len(), 3)?;
+        let full = self.full_key(key);
         let txn = Txn::new().when(vec![
             Compare::create_revision(full.clone(), CompareOp::Equal, create_revision),
             Compare::lease(full.clone(), CompareOp::Equal, lease_id),
@@ -409,7 +409,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_prefix = self.checked_full_key(&client, Operation::Watch, prefix, 0, 1)?;
+        let full_prefix = self.full_key(prefix);
 
         let options = WatchOptions::new().with_prefix().with_start_revision(start_revision);
         let stream = client
@@ -427,7 +427,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full = self.checked_full_key(&client, Operation::Watch, key, 0, 1)?;
+        let full = self.full_key(key);
         let options = WatchOptions::new().with_start_revision(start_revision);
         let stream = client
             .watch(full, Some(options))
@@ -491,7 +491,7 @@ impl EtcdLinkClient {
             .get_client()
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_name = self.checked_full_key(&client, Operation::Lock, lock_name, 0, 1)?;
+        let full_name = self.full_key(lock_name);
 
         // Grant a lease for the lock
         let lease_resp = client
@@ -538,7 +538,7 @@ impl EtcdLinkClient {
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
 
-        let d = self.probe_timeout();
+        let d = health_probe_timeout(self.config());
         match tokio::time::timeout(d, client.status()).await {
             Ok(Ok(_)) => Ok(start.elapsed().as_millis() as u64),
             Ok(Err(e)) => Err(anyhow::anyhow!("Etcd STATUS: {:?}", e)),

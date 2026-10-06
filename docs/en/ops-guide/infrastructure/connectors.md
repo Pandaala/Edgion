@@ -376,6 +376,11 @@ spec:
 
 ## Etcd connector
 
+Etcd uses the upstream client SDK. Configure static endpoints; custom message
+limits, automatic member discovery, User-Agent overrides, cluster version checks
+and provider-specific observability options are not supported. Health reporting
+and ordinary connection recovery remain available.
+
 ```yaml
 apiVersion: edgion.io/v1
 kind: LinkSys
@@ -407,10 +412,6 @@ spec:
 | `auth` | Object | none | Authentication. The Secret typically provides both `username` and `password`. |
 | `tls` | Object | none | TLS configuration; see [TLS](#tls). Etcd (like Redis) rejects `verify: false` in enabled TLS blocks in any environment. |
 | `namespace` | String | none | Etcd v3 key prefix. |
-| `userAgent` | String | none | HTTP User-Agent sent to etcd. Example: `"edgion-gateway/v1"`. |
-| `rejectOldCluster` | Boolean | false | Enforce the same-major version floor below. |
-| `minClusterVersion` | String | none | Required when `rejectOldCluster` is true; stable `major.minor.patch`. |
-| `observability` | Object | none | Logging and metrics; see [Observability](#observability). |
 
 ### Timeouts and keepalive
 
@@ -420,63 +421,7 @@ spec:
 | `timeout.request` | Integer | none | Request timeout in milliseconds. |
 | `keepAlive.time` | Integer | none | HTTP/2 keepalive time in seconds. |
 | `keepAlive.timeout` | Integer | none | HTTP/2 keepalive timeout in seconds. |
-| `keepAlive.permitWithoutStream` | Boolean | false | Allow keepalive pings without active streams. |
-| `autoSyncInterval` | Integer | 0 | Endpoint auto-sync interval in seconds; `0` disables it. |
-| `maxCallSendSize` | Integer | 4294967295 | Maximum send message size in bytes. |
-| `maxCallRecvSize` | Integer | 4194304 | Maximum receive message size in bytes. |
-
-### Enforced Etcd policy
-
-Endpoints contain 1–64 explicit HTTP(S) URLs (up to 2,048 bytes each), without
-credentials, query, fragment or a non-root path. Equivalent endpoints are
-deduplicated. Every physical connection performs configured authentication and checks Status before
-business traffic; reconnects repeat admission and remain bound to the same cluster.
-
-`rejectOldCluster: true` requires `minClusterVersion` as stable
-`major.minor.patch` (for example `3.5.0`). A version floor without that switch
-is rejected. Peers must have the same major version and meet the floor.
-`userAgent` accepts 1–256 printable ASCII bytes and cannot be blank; the transport
-appends ` tonic/0.14.6` (the default is `tonic/0.14.6`).
-
-Explicit `maxCallSendSize` and `maxCallRecvSize` values must be 1–67,108,864
-bytes. Defaults are 4,294,967,295 send bytes and 4,194,304 receive bytes.
-Limits count protobuf payload bytes, excluding the five-byte gRPC envelope,
-and apply per message across all eight services, authentication, maintenance,
-watch, lease and election. Sending checks exact encoded size before encoding;
-borrowed keys/values are also checked before copying. Receiving checks the
-declared length before payload accumulation. Compressed messages are rejected.
-An oversized call fails without truncation. HTTP/2 read-ahead and concurrent
-accepted messages still consume memory; these limits are not a process RSS cap.
-
-`autoSyncInterval` accepts 0–86,400 seconds; zero or omission disables discovery.
-Enabled discovery retains the last valid endpoint set if member data is invalid
-or no candidate can be admitted. Candidate count, concurrent admission and
-deadlines are bounded. Each discovered or reconnected destination passes the
-shared DNS/egress/TLS policy. Discovery cannot downgrade an HTTPS generation to
-HTTP or publish mixed HTTP/HTTPS endpoints. Explicit bootstrap loopback endpoints
-are supported. Newly discovered loopback destinations outside that exact
-bootstrap URI allow-list require integration-test mode.
-
-Keepalive time and timeout must be configured together, each in 1–86,400 seconds.
-`permitWithoutStream` requires this pair; an empty keepalive object does nothing.
-The duplicate `timeout.keepAlive` field is removed. Positive dial/request
-timeouts retain the existing 30-second/60-second clamps.
-
-Etcd `observability.metrics.enabled` enables the bounded
-`edgion_link_sys_etcd_operations_total` counter with fixed operation/outcome
-labels and the validated LinkSys identity. Arbitrary nonempty `metrics.labels`
-are rejected. Stream operations report one terminal outcome. Counters follow the
-Gateway's canonical cardinality and idle-eviction policy.
-`logging.enabled: true` enables rate-limited lifecycle/failure summaries;
-`level` defaults to `info` and `slowLogThreshold` is a positive millisecond
-threshold for maintenance operations, not individual business RPCs.
-Level/threshold without enabled logging is rejected. Gateway
-per-request tracing is not enabled; mandatory health transitions remain visible
-independently of these optional settings.
-
-Changed effective policy creates a new generation. Retirement cancels the old
-generation's connections and stops its observations; it does not retroactively
-apply a new byte limit to an already accepted message.
+| `keepAlive.permitWithoutStream` | Boolean | none | Allow keepalive pings without active streams. |
 
 ## Elasticsearch connector
 

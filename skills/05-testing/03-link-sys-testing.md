@@ -80,6 +80,22 @@ bash ./edgion-tests/integration/scripts/integration/link_sys/redis_assertions.sh
 ./edgion-tests/integration/scripts/integration/link_sys/run_otlp_test.sh
 ```
 
+### Etcd continuous acceptance
+
+The independent [Etcd acceptance workflow](../../.github/workflows/etcd-production-acceptance.yml)
+builds Controller, Gateway and CLI once, then serially runs `run_etcd_test.sh
+--no-build`, `etcd_leader/run_etcd_leader_test.sh` and
+`etcd_leader/run_etcd_leader_failover.sh` on one hosted VM. Each script owns its
+topology and cleanup; do not run these scripts concurrently against shared fixed
+ports or insert their topologies into the aggregate runner. The LinkSys suite covers ordinary KV, lease, watch, lock, TLS/auth, namespace,
+recovery and resource lifecycle behavior. Election and HA preserve their own
+scenarios.
+
+The workflow has a 90-minute job limit and uploads only report/process log files
+for seven days. Keep generated Secrets, certificates and config files outside
+artifact globs. Shell pipefail must preserve script failures through tee, and
+EXIT cleanup must remain enabled. A local passing run is not a GitHub CI result.
+
 ## Directory Structure
 
 ```

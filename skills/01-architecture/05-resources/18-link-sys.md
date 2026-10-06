@@ -80,10 +80,10 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
 - Calls `LinkSys::validate_config()`:
   - Redis validates its complete endpoint contract before publication: standalone has exactly one top-level endpoint, cluster has at least one, and sentinel has no top-level endpoints plus a non-empty `topology.sentinel.sentinels` list and `masterName`. Every active endpoint must parse, inactive topology blocks are rejected, and mixed TLS/plaintext schemes require `tls.enabled=true`. Validation errors identify only the field/index and never echo endpoint input.
   - Elasticsearch with empty `endpoints` → error
-  - Etcd uses canonical endpoint, message-size, version-floor, keepalive and
-    observability validation; Admin `/validate/LinkSys` calls the same pure rules.
-    Gateway fingerprint/build and Common construction independently reject invalid
-    policy, regardless of advisory Controller status.
+  - Etcd validates endpoints, timeouts and keepalive through shared pure rules.
+    Connection options use the upstream SDK;
+    custom message limits, version admission, discovery and operation observations
+    are outside the supported configuration.
   - Webhook (redesigned): a Service target (`target.name`/`target.port`) missing `name`/`port` or with an unsupported `kind`, OR a `url` target that is not origin-only, is set together with any Service field (mutually exclusive), or combines `http://` with `tls.enabled: true`; `request` template parse error; a field name in both `origin` and `custom`, duplicate names within a block, or a `headers.origin: [{name: Cookie}]` / non-empty `cookies` conflict; `statusOnError` out of range; `maxResponseBytes` over the cap → error. See [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
 - Kafka has a live Gateway runtime client/store. HttpDns prepares an immutable
   Common resolver handle published in the Gateway's unified typed LinkSys runtime

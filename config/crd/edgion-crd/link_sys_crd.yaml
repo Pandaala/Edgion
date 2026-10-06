@@ -200,34 +200,6 @@ spec:
                     namespace:
                       type: string
                       description: "Etcd namespace prefix"
-                    autoSyncInterval:
-                      type: integer
-                      description: "Auto-sync cluster members interval (seconds)"
-                      format: int64
-                      minimum: 0
-                      maximum: 86400
-                    maxCallSendSize:
-                      type: integer
-                      minimum: 1
-                      maximum: 67108864
-                      description: "Etcd protobuf bytes per outgoing message, checked before encoding"
-                    maxCallRecvSize:
-                      type: integer
-                      minimum: 1
-                      maximum: 67108864
-                      description: "Etcd protobuf bytes per incoming message, checked from the gRPC envelope before payload accumulation"
-                    userAgent:
-                      type: string
-                      minLength: 1
-                      maxLength: 256
-                      pattern: '^[ -~]+$'
-                    rejectOldCluster:
-                      type: boolean
-                      description: "When true, requires minClusterVersion and checks every physical connection"
-                    minClusterVersion:
-                      type: string
-                      pattern: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-                      description: "Stable major.minor.patch floor; only valid with rejectOldCluster true"
                     keepAlive:
                       type: object
                       description: "HTTP/2 keep-alive configuration"
@@ -252,29 +224,6 @@ spec:
                       type: integer
                       format: int64
                       description: "Request timeout in milliseconds"
-                    observability:
-                      type: object
-                      description: "Observability configuration"
-                      properties:
-                        metrics:
-                          type: object
-                          properties:
-                            enabled:
-                              type: boolean
-                            labels:
-                              type: object
-                              additionalProperties:
-                                type: string
-                        logging:
-                          type: object
-                          properties:
-                            enabled:
-                              type: boolean
-                            level:
-                              type: string
-                            slowLogThreshold:
-                              type: integer
-                              format: int64
             status:
               type: object
               description: "Status of LinkSys"

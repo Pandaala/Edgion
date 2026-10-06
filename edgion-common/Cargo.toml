@@ -43,7 +43,6 @@ prost.workspace = true
 bytes.workspace = true
 zstd.workspace = true
 rustls.workspace = true
-tokio-rustls.workspace = true
 rustls-pemfile.workspace = true
 webpki-roots.workspace = true
 x509-parser.workspace = true

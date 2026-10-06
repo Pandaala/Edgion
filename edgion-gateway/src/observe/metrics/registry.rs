@@ -81,7 +81,6 @@ pub mod names {
     // mpsc channel is full at submit time (signal to raise `bulk.channelSize`).
     pub const LINK_SYS_ES_BULK_CHANNEL_FULL_TOTAL: &str = "edgion_link_sys_es_bulk_channel_full_total";
     // Link-sys provider health gauge: 1=healthy, 0=unhealthy, per provider.
-    pub const LINK_SYS_ETCD_OPERATIONS_TOTAL: &str = "edgion_link_sys_etcd_operations_total";
     pub const LINK_SYS_HEALTH: &str = "edgion_link_sys_health";
     // Link-sys health flip counter (monotonic): exposes sub-scrape flapping the gauge cannot.
     pub const LINK_SYS_HEALTH_FLIPS_TOTAL: &str = "edgion_link_sys_health_flips_total";
@@ -349,107 +348,6 @@ impl Drop for DegradeSelectionCounter {
             .is_some_and(|entry| std::ptr::eq(entry.as_ptr(), self))
         {
             counters.remove(self.service_key.as_ref());
-        }
-    }
-}
-
-// One weak inventory covers preparing, published and retired generations. Only
-// active owners are touched at scrape; retired owners remain visible to residue
-// diagnostics until all in-flight RPC/stream owners have released them.
-use edgion_common::link_sys_core::providers::etcd::observation::{Operation as EtcdOperation, Outcome as EtcdOutcome};
-type EtcdMetricOwners = HashMap<Arc<str>, Vec<Weak<EtcdOperationMetrics>>>;
-static ETCD_OPERATION_METRICS: LazyLock<Mutex<EtcdMetricOwners>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-
-pub(crate) struct EtcdOperationMetrics {
-    link: Arc<str>,
-    active: AtomicBool,
-    counters: [[OnceLock<Counter>; 8]; 8],
-}
-impl EtcdOperationMetrics {
-    fn register(&self, operation: EtcdOperation, outcome: EtcdOutcome) -> Counter {
-        counter!(names::LINK_SYS_ETCD_OPERATIONS_TOTAL,
-            "link" => self.link.to_string(), "operation" => operation.as_str(), "outcome" => outcome.as_str())
-    }
-    pub(crate) fn record(&self, operation: EtcdOperation, outcome: EtcdOutcome) {
-        let slot = &self.counters[operation.index()][outcome.index()];
-        if let Some(counter) = slot.get() {
-            counter.increment(1);
-        } else {
-            // Take the cold registry lock before OnceLock initialization, never
-            // inside get_or_init: scrape holds this same lock while rendering.
-            let _owners = ETCD_OPERATION_METRICS.lock();
-            slot.get_or_init(|| self.register(operation, outcome)).increment(1);
-        }
-    }
-    pub(crate) fn deactivate(&self) {
-        self.active.store(false, Ordering::Release);
-    }
-}
-fn prune_etcd_metric_owners(owners: &mut EtcdMetricOwners) {
-    owners.retain(|_, generations| {
-        generations.retain(|owner| owner.strong_count() > 0);
-        !generations.is_empty()
-    });
-}
-#[derive(Default, serde::Serialize)]
-pub(crate) struct EtcdOperationMetricStats {
-    pub count: usize,
-    pub keys: Vec<String>,
-    pub keys_truncated: bool,
-}
-impl GatewayMetrics {
-    /// Called only for validated LinkSys keys with optional metrics enabled.
-    /// The shared recorder cardinality guard owns the process-lifetime budget.
-    pub(crate) fn etcd_operations(link: &str) -> Arc<EtcdOperationMetrics> {
-        let mut owners = ETCD_OPERATION_METRICS.lock();
-        prune_etcd_metric_owners(&mut owners);
-        let metrics = Arc::new(EtcdOperationMetrics {
-            link: Arc::from(link),
-            active: AtomicBool::new(true),
-            counters: std::array::from_fn(|_| std::array::from_fn(|_| OnceLock::new())),
-        });
-        for operation in EtcdOperation::ALL {
-            metrics.counters[operation.index()][EtcdOutcome::Ok.index()]
-                .get_or_init(|| metrics.register(operation, EtcdOutcome::Ok));
-        }
-        owners
-            .entry(metrics.link.clone())
-            .or_default()
-            .push(Arc::downgrade(&metrics));
-        metrics
-    }
-    pub(crate) fn with_live_etcd_metrics<R>(render: impl FnOnce() -> R) -> R {
-        let live;
-        let result;
-        {
-            let mut owners = ETCD_OPERATION_METRICS.lock();
-            prune_etcd_metric_owners(&mut owners);
-            live = owners.values().flatten().filter_map(Weak::upgrade).collect::<Vec<_>>();
-            for owner in &live {
-                if owner.active.load(Ordering::Acquire) {
-                    for counter in owner.counters.iter().flatten().filter_map(OnceLock::get) {
-                        counter.increment(0);
-                    }
-                }
-            }
-            result = render();
-        }
-        // Final-owner release stays outside the cold lock, matching the other
-        // cached-handle registries even though Etcd owners currently have no Drop.
-        result
-    }
-    pub(crate) fn etcd_operation_metric_stats(key_limit: usize) -> EtcdOperationMetricStats {
-        let mut owners = ETCD_OPERATION_METRICS.lock();
-        prune_etcd_metric_owners(&mut owners);
-        let count = owners.values().map(Vec::len).sum();
-        let mut keys: Vec<_> = owners.keys().map(ToString::to_string).collect();
-        keys.sort_unstable();
-        let keys_truncated = keys.len() > key_limit;
-        keys.truncate(key_limit);
-        EtcdOperationMetricStats {
-            count,
-            keys,
-            keys_truncated,
         }
     }
 }
@@ -1358,7 +1256,3 @@ mod lb_degrade_counter_tests;
 #[cfg(test)]
 #[path = "../../../tests/unit/observe/metrics/registry_test/link_sys_health_metric_tests.rs"]
 mod link_sys_health_metric_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/observe/metrics/registry_test/etcd_operation_metric_tests.rs"]
-mod etcd_operation_metric_tests;

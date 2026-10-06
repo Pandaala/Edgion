@@ -4,7 +4,7 @@
 //! through the persistent runner; Controller conf-center still calls
 //! `from_config` + `init` directly.
 //! Wraps `etcd_client::Client` with:
-//! - Connection-bound admission and recovery through the patched SDK endpoint set
+//! - Upstream SDK connection recovery plus background health monitoring
 //! - Health tracking via AtomicBool
 //! - Namespace prefix support for key isolation
 //!
@@ -13,41 +13,32 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use rand::Rng;
 use tokio::sync::RwLock;
-use tokio::task::AbortHandle;
+use tokio::task::JoinHandle;
 
 use crate::link_sys_core::credential::CredentialState;
 use crate::link_sys_core::{HealthTransitionReporter, PublishedHealth};
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 
-use super::observation::{
-    CompletionBridge, EtcdObservation, MaintenanceEvent, MaintenanceKind, MaintenanceOutcome, Operation,
-};
-use super::{dialer::EtcdDialer, policy::EtcdRuntimePolicy};
-use crate::egress::EgressPolicy;
-use etcd_client::transport::{AdmissionControl, AdmittedEndpointSet};
+use super::config_mapping::{build_connect_options, default_connect_options, health_probe_timeout};
 
 /// Runtime Etcd client wrapper.
 ///
 /// One published generation for Gateway LinkSys, or the Controller conf-center
 /// client when constructed without apply metadata.
 pub struct EtcdLinkClient {
-    /// Published facade, cleared on shutdown; endpoint recovery stays inside the SDK set.
+    /// etcd client (wrapped in RwLock for reconnect swaps)
     client: Arc<RwLock<Option<etcd_client::Client>>>,
-    /// Immutable connection policy for this generation.
-    policy: Arc<EtcdRuntimePolicy>,
-    generation: AdmissionControl,
-    observation: Option<Arc<dyn EtcdObservation>>,
-    observe_completions: bool,
-    endpoint_set: parking_lot::Mutex<Option<AdmittedEndpointSet>>,
-    egress_policy: EgressPolicy,
-    dns_cache_ttl: Duration,
-    /// Bootstrap endpoint labels retained for debug inspection.
+    /// Original config (kept for reconnection)
+    config: EtcdClientConfig,
+    /// Basic auth from LinkSys runtime (reconnect)
+    auth_basic: Option<BasicAuthMaterial>,
+    /// Parsed endpoints (kept for reconnection)
     endpoints: Vec<String>,
     /// Human-readable name ("namespace/name")
     name: String,
@@ -59,13 +50,13 @@ pub struct EtcdLinkClient {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     /// Handle to the spawned health-monitor task (populated by `init()`),
     /// aborted in `shutdown()` to request cancellation without joining it.
-    monitor_handle: parking_lot::Mutex<Option<AbortHandle>>,
+    monitor_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
     /// Apply fingerprint hashes captured by the Gateway runner (D19).
     fp_rebuild: [u8; 32],
     fp_secret: [u8; 32],
     fp_rv: Option<String>,
     /// Set before handover retire so the monitor stops mutating shared health.
-    retired: Arc<AtomicBool>,
+    retired: Arc<parking_lot::Mutex<bool>>,
     shutdown_started: AtomicBool,
     /// How many configured endpoints recently accepted a bounded probe.
     endpoint_live: Arc<AtomicUsize>,
@@ -97,31 +88,30 @@ impl EtcdLinkClient {
         config: &EtcdClientConfig,
         auth: &CredentialState<BasicAuthMaterial>,
     ) -> Result<Self> {
-        let validation_errors = config.validation_errors();
-        if !validation_errors.is_empty() {
-            anyhow::bail!("Invalid Etcd configuration: {}", validation_errors.join("; "));
-        }
+        let errors = config.validation_errors();
+        anyhow::ensure!(errors.is_empty(), "Invalid Etcd configuration: {}", errors.join("; "));
 
-        // Validate the credential state before resolving owned policy. `NotRequired` /
+        // Extract the owned material for the reconnect path. `NotRequired` /
         // `Resolved` are the only states we expect here; anything else would
         // have been filtered out by the dispatcher.
-        match auth {
-            CredentialState::NotRequired | CredentialState::Resolved(_) => {}
-            _ => anyhow::bail!("Etcd from_config called with non-buildable credential state"),
-        }
-        let policy = Arc::new(EtcdRuntimePolicy::resolve(config, auth)?);
+        let auth_basic = match auth {
+            CredentialState::NotRequired => None,
+            CredentialState::Resolved(m) => Some(m.clone()),
+            CredentialState::Pending | CredentialState::Invalid(_) => {
+                anyhow::bail!(
+                    "Etcd [{}] from_config called with non-buildable credential state: {:?}",
+                    name,
+                    auth
+                );
+            }
+        };
 
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);
 
         Ok(Self {
             client: Arc::new(RwLock::new(None)),
-            policy,
-            generation: AdmissionControl::new(None),
-            observation: None,
-            observe_completions: false,
-            endpoint_set: parking_lot::Mutex::new(None),
-            egress_policy: EgressPolicy::default(),
-            dns_cache_ttl: Duration::from_secs(30),
+            config: config.clone(),
+            auth_basic,
             endpoints: config.endpoints.clone(),
             name: name.to_string(),
             healthy: Arc::new(PublishedHealth::new(false)),
@@ -131,7 +121,7 @@ impl EtcdLinkClient {
             fp_rebuild: [0; 32],
             fp_secret: [0; 32],
             fp_rv: None,
-            retired: Arc::new(AtomicBool::new(false)),
+            retired: Arc::new(parking_lot::Mutex::new(false)),
             shutdown_started: AtomicBool::new(false),
             endpoint_live: Arc::new(AtomicUsize::new(0)),
             sample_endpoint_coverage: false,
@@ -165,207 +155,186 @@ impl EtcdLinkClient {
     }
 
     pub fn endpoint_coverage(&self) -> (usize, usize) {
-        let total = self
-            .endpoint_set
-            .lock()
-            .as_ref()
-            .map_or(self.policy.endpoints.len(), |set| set.coverage().1);
-        (self.endpoint_live.load(Ordering::Relaxed), total)
+        (self.endpoint_live.load(Ordering::Relaxed), self.endpoints.len())
     }
 
     pub fn mark_retired(&self) {
-        if let Some(observer) = &self.observation {
-            observer.deactivate();
-        }
+        let mut retired = self.retired.lock();
+        *retired = true;
         self.healthy.deactivate();
-        self.generation.cancel();
-        self.retired.store(true, Ordering::Relaxed);
         let _ = self.shutdown_tx.send(true);
         if let Some(handle) = self.monitor_handle.lock().take() {
             handle.abort();
         }
     }
 
-    /// Inject the owning binary's canonical egress policy before initialization.
-    pub fn with_egress_policy(mut self, policy: EgressPolicy, dns_cache_ttl: Duration) -> Self {
-        self.egress_policy = policy;
-        self.dns_cache_ttl = dns_cache_ttl;
-        self
-    }
-
-    /// Install binary-owned maintenance and optional RPC completion observations.
-    pub fn with_observation(mut self, observer: Arc<dyn EtcdObservation>, completions: bool) -> Self {
-        self.observation = Some(observer);
-        self.observe_completions = completions;
-        self
-    }
-
-    fn new_endpoint_set(&self, election: bool) -> Result<AdmittedEndpointSet> {
-        let dialer = Arc::new(EtcdDialer::new(&self.policy, self.egress_policy, self.dns_cache_ttl));
-        let mut options = if election {
-            self.policy.options.clone().without_timeout()
-        } else {
-            self.policy.options.clone()
-        };
-        if self.observe_completions {
-            if let Some(observer) = &self.observation {
-                options = options.with_observer(Arc::new(CompletionBridge(observer.clone())));
-            }
+    /// Rebuild a `CredentialState` from the stored material.
+    ///
+    /// Used by `init()` / reconnect to feed `build_connect_options` which now
+    /// takes `&CredentialState<_>`. Since we only ever store the result of a
+    /// `NotRequired` or `Resolved` state, the reconstruction round-trips.
+    fn auth_state(&self) -> CredentialState<BasicAuthMaterial> {
+        match &self.auth_basic {
+            Some(m) => CredentialState::Resolved(m.clone()),
+            None => CredentialState::NotRequired,
         }
-        Ok(AdmittedEndpointSet::new(
-            options,
-            self.policy.admission.clone(),
-            dialer,
-            self.generation.clone(),
-        )?)
     }
 
-    /// Establish admitted connections, then publish only while this generation lives.
+    /// Initialize connection and start background health monitor.
+    ///
+    /// Sets up the etcd connection and spawns a background task that monitors
+    /// connection health and reconnects with exponential backoff on failure.
     pub async fn init(&self) -> Result<()> {
-        let started = Instant::now();
-        let result = self.init_inner().await;
-        self.observe_maintenance(MaintenanceKind::Init, started, result.is_ok(), None);
-        result
-    }
+        anyhow::ensure!(!*self.retired.lock(), "Etcd client is retired");
+        let client = connect_with_config(&self.endpoints, &self.config, &self.auth_state())
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd [{}] connect failed: {:?}", self.name, e))?;
 
-    fn observe_maintenance(&self, kind: MaintenanceKind, started: Instant, ok: bool, health_changed: Option<bool>) {
-        report_maintenance(
-            self.observation.as_ref(),
-            &self.generation,
-            kind,
-            started,
-            ok,
-            health_changed,
-        );
-    }
-
-    async fn init_inner(&self) -> Result<()> {
-        let set = self.new_endpoint_set(false)?;
-        set.replace_endpoints(self.policy.endpoints.clone()).await?;
-        if self.policy.sync_interval.is_some() {
-            let started = Instant::now();
-            let result = super::discovery::refresh(&set, &self.policy).await;
-            self.observe_maintenance(MaintenanceKind::Discovery, started, result.is_ok(), None);
+        {
+            let mut guard = self.client.write().await;
+            let retired = self.retired.lock();
+            anyhow::ensure!(!*retired, "Etcd client is retired");
+            *guard = Some(client);
+            self.healthy.update(true, false);
         }
-        let client = set.client()?;
-        let live = if self.sample_endpoint_coverage {
-            set.probe().await
-        } else {
-            set.coverage().0
-        };
-        let mut slot = self.client.write().await;
-        anyhow::ensure!(
-            self.generation
-                .while_active(|| {
-                    *slot = Some(client);
-                    *self.endpoint_set.lock() = Some(set.clone());
-                    self.endpoint_live.store(live, Ordering::Relaxed);
-                    self.healthy.update(live > 0, false);
-                })
-                .is_some(),
-            "Etcd provider retired during initialization"
-        );
-        drop(slot);
-        self.start_health_monitor(set);
+        if self.sample_endpoint_coverage {
+            let live = sample_endpoint_live(
+                &self.endpoints,
+                &self.config,
+                &self.auth_state(),
+                health_probe_timeout(&self.config),
+            )
+            .await;
+            self.endpoint_live.store(live, Ordering::Relaxed);
+        }
+        tracing::info!(etcd = %self.name, "Etcd client initialized successfully");
+
+        // Start background health monitor + reconnect task
+        self.start_health_monitor();
+
         Ok(())
     }
 
-    /// One provider-owned loop schedules both health and discovery by their
-    /// nearest deadline. Discovery never overlaps, and one-second intervals are
-    /// not rounded up to the ten-second health cadence.
-    fn start_health_monitor(&self, set: AdmittedEndpointSet) {
-        let policy = self.policy.clone();
-        let observation = self.observation.clone();
+    /// Start background task that monitors health and reconnects on failure.
+    fn start_health_monitor(&self) {
+        let client = self.client.clone();
+        let config = self.config.clone();
+        let auth_state = self.auth_state();
+        let endpoints = self.endpoints.clone();
+        let name = self.name.clone();
         let healthy = self.healthy.clone();
-        let generation = self.generation.clone();
+        let retired = self.retired.clone();
         let endpoint_live = self.endpoint_live.clone();
+        let sample_endpoint_coverage = self.sample_endpoint_coverage;
         let mut shutdown_rx = self.shutdown_tx.subscribe();
+
         let handle = tokio::spawn(async move {
-            let mut health_due = tokio::time::Instant::now() + Duration::from_secs(10);
-            let mut discovery_due = policy
-                .sync_interval
-                .map(|interval| tokio::time::Instant::now() + interval);
+            let base_interval = Duration::from_secs(10);
+            let mut check_interval = base_interval;
             let mut backoff = Duration::from_millis(500);
+            let max_backoff = Duration::from_secs(30);
+            // Resolved once: `config` is immutable for the life of the task.
+            let probe_timeout = health_probe_timeout(&config);
+
             loop {
-                if generation.is_cancelled() {
+                if *retired.lock() {
                     return;
                 }
-                let next = discovery_due.map_or(health_due, |due| due.min(health_due));
-                tokio::select! { _ = tokio::time::sleep_until(next) => {}, _ = shutdown_rx.changed() => return }
-                if generation.is_cancelled() {
-                    return;
-                }
-                if discovery_due.is_some_and(|due| due <= tokio::time::Instant::now()) {
-                    let started = Instant::now();
-                    let result = super::discovery::refresh(&set, &policy).await;
-                    report_maintenance(
-                        observation.as_ref(),
-                        &generation,
-                        MaintenanceKind::Discovery,
-                        started,
-                        result.is_ok(),
-                        None,
-                    );
-                    discovery_due = policy.sync_interval.map(|interval| {
-                        let jitter = rand::rng().random_range(0.9_f64..=1.1);
-                        tokio::time::Instant::now() + interval.mul_f64(jitter)
-                    });
-                }
-                if health_due <= tokio::time::Instant::now() {
-                    let started = Instant::now();
-                    let live = set.probe().await;
-                    let mut changed = false;
-                    if generation
-                        .while_active(|| {
-                            endpoint_live.store(live, Ordering::Relaxed);
-                            changed = healthy.update(live > 0, false);
-                        })
-                        .is_none()
-                    {
+                tokio::select! {
+                    _ = tokio::time::sleep(check_interval) => {}
+                    _ = shutdown_rx.changed() => {
+                        tracing::info!(etcd = %name, "Etcd health monitor shutting down");
                         return;
                     }
-                    report_maintenance(
-                        observation.as_ref(),
-                        &generation,
-                        MaintenanceKind::Probe,
-                        started,
-                        live > 0,
-                        changed.then_some(live > 0),
-                    );
-                    let interval = if live > 0 {
-                        backoff = Duration::from_millis(500);
-                        Duration::from_secs(10)
-                    } else {
-                        let started = Instant::now();
-                        let result = set.reconnect().await;
-                        report_maintenance(
-                            observation.as_ref(),
-                            &generation,
-                            MaintenanceKind::Reconnect,
-                            started,
-                            result.is_ok(),
-                            None,
-                        );
-                        let jitter = rand::rng().random_range(0.8_f64..=1.2);
-                        let interval = backoff.mul_f64(jitter).min(Duration::from_secs(30));
-                        backoff = (backoff * 2).min(Duration::from_secs(30));
-                        interval
+                }
+                if *retired.lock() {
+                    return;
+                }
+
+                // Try a simple status call as health check. Clone the client
+                // INSIDE the read lock, then drop the guard BEFORE awaiting so a
+                // stuck etcd never holds the lock across `status()`. The call is
+                // bounded by `probe_timeout`; a timeout counts as unhealthy.
+                let is_healthy = {
+                    let maybe_client = {
+                        let guard = client.read().await;
+                        guard.as_ref().cloned()
                     };
-                    health_due = tokio::time::Instant::now() + interval;
+                    match maybe_client {
+                        Some(mut mc) => matches!(tokio::time::timeout(probe_timeout, mc.status()).await, Ok(Ok(_))),
+                        None => false,
+                    }
+                };
+
+                if *retired.lock() {
+                    return;
+                }
+
+                if sample_endpoint_coverage {
+                    let live = sample_endpoint_live(&endpoints, &config, &auth_state, probe_timeout).await;
+                    endpoint_live.store(live, Ordering::Relaxed);
+                }
+
+                if *retired.lock() {
+                    return;
+                }
+
+                if is_healthy {
+                    if healthy.update(true, false) {
+                        tracing::info!(etcd = %name, "Etcd connection recovered");
+                    }
+                    check_interval = base_interval;
+                    backoff = Duration::from_millis(500);
+                } else {
+                    healthy.update(false, false);
+                    tracing::warn!(
+                        etcd = %name,
+                        backoff_ms = backoff.as_millis(),
+                        "Etcd unhealthy, attempting reconnect"
+                    );
+
+                    // Attempt reconnect
+                    match connect_with_config(&endpoints, &config, &auth_state).await {
+                        Ok(new_client) => {
+                            if *retired.lock() {
+                                return;
+                            }
+                            let mut guard = client.write().await;
+                            let retired = retired.lock();
+                            if *retired {
+                                return;
+                            }
+                            *guard = Some(new_client);
+                            healthy.update(true, false);
+                            tracing::info!(etcd = %name, "Etcd reconnected successfully");
+                            check_interval = base_interval;
+                            backoff = Duration::from_millis(500);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                etcd = %name,
+                                error = %e,
+                                "Etcd reconnect failed"
+                            );
+                            // Apply +/-20% jitter to the wait so that N gateway pods
+                            // sharing this etcd cluster do not wake and reconnect in
+                            // lockstep on a shared outage (thundering herd). Only the
+                            // sleep is jittered; `backoff` keeps doubling deterministically.
+                            let jitter = rand::rng().random_range(0.8_f64..=1.2);
+                            check_interval = backoff.mul_f64(jitter).min(max_backoff);
+                            backoff = (backoff * 2).min(max_backoff);
+                        }
+                    }
                 }
             }
         });
-        // The handle installation shares the retirement publication barrier.
-        if self
-            .generation
-            .while_active(|| {
-                if let Some(previous) = self.monitor_handle.lock().replace(handle.abort_handle()) {
-                    previous.abort();
-                }
-            })
-            .is_none()
-        {
+
+        // Serialize monitor ownership with retirement, including init/shutdown races.
+        let retired = self.retired.lock();
+        if *retired {
             handle.abort();
+        } else {
+            *self.monitor_handle.lock() = Some(handle);
         }
     }
 
@@ -385,9 +354,11 @@ impl EtcdLinkClient {
         &self.name
     }
 
-    /// Resolved health deadline; no request-path configuration interpretation.
-    pub(crate) fn probe_timeout(&self) -> Duration {
-        self.policy.probe_timeout
+    /// Borrow the original CRD config (used by the ops module for
+    /// health-probe timeout resolution; the field itself is module-private).
+    #[inline]
+    pub(crate) fn config(&self) -> &EtcdClientConfig {
+        &self.config
     }
 
     /// Get namespace prefix (if configured).
@@ -396,24 +367,12 @@ impl EtcdLinkClient {
         self.namespace.as_deref()
     }
 
-    /// Check namespace and borrowed fields before allocating a prefixed key.
-    pub(crate) fn checked_full_key(
-        &self,
-        client: &etcd_client::Client,
-        operation: Operation,
-        key: &str,
-        value_bytes: usize,
-        key_copies: usize,
-    ) -> Result<String> {
-        let key_bytes = self.namespace.as_ref().map_or(0, String::len).saturating_add(key.len());
-        client.check_send_size_lower_bound_for(
-            operation,
-            key_bytes.saturating_mul(key_copies).saturating_add(value_bytes),
-        )?;
-        Ok(match &self.namespace {
-            Some(namespace) => format!("{namespace}{key}"),
-            None => key.to_owned(),
-        })
+    /// Build the full key with namespace prefix.
+    pub(crate) fn full_key(&self, key: &str) -> String {
+        match &self.namespace {
+            Some(ns) => format!("{}{}", ns, key),
+            None => key.to_string(),
+        }
     }
 
     /// Get a clone of the inner client for operations.
@@ -422,20 +381,22 @@ impl EtcdLinkClient {
         self.client.read().await.clone()
     }
 
-    /// Build an election session on dedicated, admitted connections.
+    /// Build an `ElectionSession` on a DEDICATED etcd connection (spec §3.2/§4.2).
     ///
-    /// Election RPCs omit the unary request timeout because campaign waits until
-    /// leadership is won. Keepalive, authentication, TLS, message limits and
-    /// generation cancellation remain shared policy. New calls reconcile the
-    /// latest discovered topology; an issued campaign is never replayed.
+    /// The election must NOT ride the shared conf_center client, because if the
+    /// operator configured `EtcdConfig.timeout.request` that client carries a
+    /// channel-wide request timeout, and v3election `campaign()` blocks
+    /// server-side until won — a request timeout would abort the blocking
+    /// campaign every cycle and break active-passive HA. `election_connect_options`
+    /// strips the request timeout while keeping h2 keepalive on (so a blackholed
+    /// campaign connection still dies) and the same endpoints/auth/TLS. Using a
+    /// separate connection also sidesteps the shared client's health-monitor
+    /// swap (§4.6) for the campaign/resign path.
     pub async fn election_session(&self) -> Result<crate::link_sys_core::providers::etcd::election::ElectionSession> {
-        let main = self
-            .endpoint_set
-            .lock()
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Etcd client is not initialized"))?;
-        let set = main.fork_without_timeout().await?;
-        let client = set.client()?;
+        let opts = super::config_mapping::election_connect_options(&self.config, &self.auth_state())?;
+        let client = etcd_client::Client::connect(&self.endpoints, Some(opts))
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd [{}] election connect: {:?}", self.name, e))?;
         Ok(crate::link_sys_core::providers::etcd::election::ElectionSession::new(
             client,
         ))
@@ -446,15 +407,14 @@ impl EtcdLinkClient {
         if self.shutdown_started.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        let started = Instant::now();
+        tracing::info!(etcd = %self.name, "Etcd client shutting down");
         self.mark_retired();
         // Cooperative exit for the common case: a task parked at the select
-        // sleep wakes on the watch change.
+        // sleep wakes on the watch change and logs its own shutdown line.
         let _ = self.shutdown_tx.send(true);
         // Request cancellation without joining. An already-running poll may
         // continue until it yields; abort is not a no-write-after-retirement
-        // barrier by itself. The generation gate fences publication; network
-        // calls hold no client lock, and health reporting was
+        // barrier. Network calls hold no client lock, and health reporting was
         // deactivated by mark_retired before cleanup began.
         if let Some(handle) = self.monitor_handle.lock().take() {
             handle.abort();
@@ -463,9 +423,42 @@ impl EtcdLinkClient {
         *guard = None;
         self.healthy.update(false, false);
         self.endpoint_live.store(0, Ordering::Relaxed);
-        self.observe_maintenance(MaintenanceKind::Shutdown, started, true, None);
         Ok(())
     }
+}
+
+/// Initial, recovery and probe connections share the same fail-closed options.
+async fn connect_with_config(
+    endpoints: &[String],
+    config: &EtcdClientConfig,
+    auth_state: &CredentialState<BasicAuthMaterial>,
+) -> Result<etcd_client::Client> {
+    let options = build_connect_options(config, auth_state)?.unwrap_or_else(default_connect_options);
+    Ok(etcd_client::Client::connect(endpoints, Some(options)).await?)
+}
+
+async fn sample_endpoint_live(
+    endpoints: &[String],
+    config: &EtcdClientConfig,
+    auth_state: &CredentialState<BasicAuthMaterial>,
+    probe_timeout: Duration,
+) -> usize {
+    let mut live = 0;
+    for endpoint in endpoints {
+        let reachable = match tokio::time::timeout(
+            probe_timeout,
+            connect_with_config(std::slice::from_ref(endpoint), config, auth_state),
+        )
+        .await
+        {
+            Ok(Ok(mut client)) => matches!(tokio::time::timeout(probe_timeout, client.status()).await, Ok(Ok(_))),
+            _ => false,
+        };
+        if reachable {
+            live += 1;
+        }
+    }
+    live
 }
 
 // ============================================================================
@@ -475,27 +468,3 @@ impl EtcdLinkClient {
 #[cfg(test)]
 #[path = "../../../../tests/unit/link_sys_core/providers/etcd/client_test.rs"]
 mod tests;
-
-fn report_maintenance(
-    observer: Option<&Arc<dyn EtcdObservation>>,
-    generation: &AdmissionControl,
-    kind: MaintenanceKind,
-    started: Instant,
-    ok: bool,
-    health_changed: Option<bool>,
-) {
-    if let Some(observer) = observer {
-        observer.maintenance(MaintenanceEvent {
-            kind,
-            outcome: if generation.is_cancelled() {
-                MaintenanceOutcome::Canceled
-            } else if ok {
-                MaintenanceOutcome::Ok
-            } else {
-                MaintenanceOutcome::Failed
-            },
-            elapsed: started.elapsed(),
-            health_changed,
-        });
-    }
-}

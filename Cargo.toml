@@ -15,7 +15,6 @@ default-members = ["edgion-algo", "edgion-waf", "edgion-wasm", "edgion-dsl", "ed
 # mutually-exclusive TLS/allocator features now live on the leaf crates
 # (`edgion-gateway`/`edgion-controller`/`edgion-cli`), never at a root package.
 resolver = "2"
-exclude = ["third_party/etcd-client"]
 
 # Shared package metadata. Members inherit via `<key>.workspace = true`.
 # `license` is intentionally omitted for now (no member declared one before this
@@ -142,7 +141,7 @@ percent-encoding = "2.3"
 cookie = "0.18.1"
 
 # Storage / datastores
-etcd-client = { path = "third_party/etcd-client", version = "0.18", features = ["tls"] }
+etcd-client = { version = "0.18", features = ["tls"] }
 fred = { version = "10", default-features = false, features = [
     "enable-rustls",       # TLS via rustls (consistent with Edgion)
     "dns",                 # Expose the resolver hook; Edgion still owns DNS resolution

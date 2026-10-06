@@ -70,9 +70,7 @@ async fn metrics_handler(State(state): State<Arc<MetricsState>>) -> Response {
     state.record_cert_expiry();
     crate::link_sys::runtime::store::record_published_link_sys_health();
     crate::observe::metrics::GatewayMetrics::with_live_lb_degrade_counters(|| {
-        super::registry::GatewayMetrics::with_live_etcd_metrics(|| {
-            super::registry::with_live_wasm_metrics(render_metrics)
-        })
+        super::registry::with_live_wasm_metrics(render_metrics)
     })
 }
 

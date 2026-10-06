@@ -27,7 +27,7 @@ before applying a decision to current code.
 
 - [HTTPDNS clients are prepared and owned by configuration generations](regression-guards/httpdns-prepared-runtime.md)
 
-- [Etcd configuration and early message boundaries](regression-guards/etcd-configuration-and-message-boundaries.md)
+- [Etcd supported configuration and upstream SDK boundary](regression-guards/etcd-configuration-and-message-boundaries.md)
 
 - [Removed Webhook fields produce unknown-field feedback](regression-guards/webhook-removed-fields-unknown-feedback.md)
 - [LinkSys providers share TLS fingerprint encoding](regression-guards/shared-tls-fingerprint-encoding.md)

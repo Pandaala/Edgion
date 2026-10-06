@@ -1677,7 +1677,6 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
- "tokio-rustls",
  "tonic 0.12.3",
  "tonic-build 0.12.3",
  "tracing",
@@ -2126,14 +2125,10 @@ dependencies = [
 [[package]]
 name = "etcd-client"
 version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ed900ba953ca6bf1fadb75e0c6b73d8463b9e2bb6bdb7b4573e8e7295852fbe"
 dependencies = [
- "bytes",
  "http",
- "http-body",
- "hyper",
- "hyper-util",
- "parking_lot",
- "pin-project-lite",
  "prost 0.14.4",
  "tokio",
  "tokio-stream",

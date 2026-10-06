@@ -4,6 +4,3 @@ pub(crate) mod apply;
 
 pub(crate) use apply::EtcdApply;
 pub use edgion_common::link_sys_core::providers::etcd::*;
-
-#[path = "observation.rs"]
-mod gateway_observation;

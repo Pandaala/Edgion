@@ -3,19 +3,16 @@
 //! Provides an Etcd client wrapper built from LinkSys CRD config (`EtcdClientConfig`),
 //! using [etcd-client](https://crates.io/crates/etcd-client) v0.18 as the underlying library.
 //!
-//! The patched SDK owns admitted HTTP/2 connection recovery. This module adds:
-//! - One background health/discovery monitor with bounded reconnect backoff
+//! The upstream SDK owns multiplexed gRPC connections and transport recovery.
+//! This module adds:
+//! - Background health monitor with exponential backoff reconnect
 //! - Namespace prefix support for key isolation
 //! - High-level operations: KV, Lease, Watch, Lock
 
 pub mod client;
 pub mod config_mapping;
-mod dialer;
-mod discovery;
 pub mod election;
-pub mod observation;
 pub mod ops;
-mod policy;
 
 pub use client::EtcdLinkClient;
 pub use election::{ElectionSession, LeaderKey};

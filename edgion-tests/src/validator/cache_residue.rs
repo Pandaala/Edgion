@@ -807,48 +807,6 @@ mod e2e_tests {
         ));
     }
 
-    #[tokio::test]
-    async fn collect_preserves_retired_etcd_metric_owner_residue() {
-        let gw = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/api/v1/debug/store-stats"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "success": true,
-                "data": {
-                    "etcd_operation_metrics": {
-                        "count": 2,
-                        "keys": ["etcd-test/shared-generation"]
-                    }
-                }
-            })))
-            .mount(&gw)
-            .await;
-
-        let args = Args {
-            controller_addr: String::new(),
-            gateway_addr: gw.uri(),
-            controller_token: None,
-            gateway_token: None,
-            no_wipe: true,
-            timeout_secs: 1,
-            poll_interval_ms: 100,
-            mode: "fail".to_string(),
-            skip: Some("controller".to_string()),
-            ignore_controller_configmap: Vec::new(),
-            ignore_controller_conf_sync_secret: Vec::new(),
-        };
-        let snap = collect(&Client::new(), &args, &BTreeSet::new(), &BTreeSet::new())
-            .await
-            .unwrap();
-
-        assert_eq!(snap.residue.get("gateway.etcd_operation_metrics.count"), Some(&2));
-        assert!(matches!(
-            decide_exit(snap.is_empty(), &args.mode).unwrap(),
-            ExitDecision::Residue
-        ));
-    }
-
     #[test]
     fn store_stats_envelope_must_be_successful_and_contain_object_data() {
         for (body, expected) in [

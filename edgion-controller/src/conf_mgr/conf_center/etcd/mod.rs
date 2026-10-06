@@ -29,5 +29,3 @@ pub mod watcher;
 
 pub use center::EtcdCenter;
 pub use config::EtcdConfig;
-
-mod observation;

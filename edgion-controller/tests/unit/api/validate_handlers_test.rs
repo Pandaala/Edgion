@@ -4,20 +4,9 @@ use super::*;
 async fn etcd_policy_validation_is_read_only_and_uses_shared_rules() {
     let (state, tmp) = make_state().await;
     for (policy, expected) in [
-        (serde_json::json!({"rejectOldCluster": true}), Some("minClusterVersion")),
+        (serde_json::json!({"timeout": {"request": 0}}), Some("timeout.request")),
         (serde_json::json!({"keepAlive": {"time": 1}}), Some("keepAlive")),
-        (
-            serde_json::json!({"observability": {"metrics": {"labels": {"extra": "value"}}}}),
-            Some("labels"),
-        ),
-        (
-            serde_json::json!({"observability": {"logging": {"level": "info"}}}),
-            Some("logging"),
-        ),
-        (
-            serde_json::json!({"rejectOldCluster": true, "minClusterVersion": "3.5.0", "maxCallRecvSize": 1024}),
-            None,
-        ),
+        (serde_json::json!({"keepAlive": {"time": 1, "timeout": 1}}), None),
     ] {
         let mut config = policy;
         config["endpoints"] = serde_json::json!(["http://etcd.example:2379"]);
