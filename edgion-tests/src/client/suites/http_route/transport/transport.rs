@@ -78,6 +78,12 @@ mod downstream_timeout;
 #[path = "retry_policy.rs"]
 mod retry_policy;
 
+#[path = "h2_lifecycle.rs"]
+mod h2_lifecycle;
+
+#[path = "h2_lifecycle_connector.rs"]
+mod h2_lifecycle_connector;
+
 // ===========================================================================
 // The combination matrix
 // ===========================================================================
@@ -490,7 +496,7 @@ static SHAPES: &[ShapeDef] = &[
 ///
 /// The runner rejects a completely empty selection, while this exact count also
 /// detects a non-empty matrix that silently loses only some combinations.
-const EXPECTED_TRANSPORT_CASES: usize = 145;
+const EXPECTED_TRANSPORT_CASES: usize = 165;
 
 // ===========================================================================
 // The case wrapper
@@ -500,6 +506,8 @@ fn expected_case_count() -> usize {
     SHAPES.iter().map(|s| s.combos.len() + s.skips.len()).sum::<usize>()
         + downstream_timeout::CASE_COUNT
         + retry_policy::CASE_COUNT
+        + h2_lifecycle::CASE_COUNT
+        + h2_lifecycle_connector::CASE_COUNT
 }
 
 pub struct TransportTestSuite;
@@ -518,6 +526,8 @@ impl TestSuite for TransportTestSuite {
         // Fresh-connection retry controls run before the existing shapes warm
         // either upstream pool. Their faults close every exercised connection.
         let mut cases = retry_policy::test_cases();
+        cases.extend(h2_lifecycle::test_cases());
+        cases.extend(h2_lifecycle_connector::test_cases());
         for shape in SHAPES {
             for combo in shape.combos {
                 let combo = *combo;

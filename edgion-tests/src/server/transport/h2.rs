@@ -24,7 +24,11 @@ use tracing::{debug, error, info};
 use super::recorder::{self, TransportEvent, LISTENER_H2};
 use super::script::{AfterResponse, Behavior, RetryFailure, UpScript};
 
+mod lifecycle;
 mod retry_wire;
+
+#[cfg(test)]
+mod lifecycle_wire_proof;
 
 fn parse_grpc_timeout(raw: &http::HeaderValue) -> Option<(u64, char)> {
     let bytes = raw.as_bytes();
@@ -376,8 +380,35 @@ async fn handle_stream(
     }
     recorder::record(headers_event);
 
+    let lifecycle = req
+        .headers()
+        .get("x-up-lifecycle")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let release_trace = req
+        .headers()
+        .get("x-up-release-trace")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+
     let mut body = req.into_body();
     let mut state = BodyState::default();
+
+    if let Some(mode) = lifecycle {
+        lifecycle::run(
+            &mode,
+            release_trace.as_deref(),
+            &mut respond,
+            &mut body,
+            &ctx,
+            &script,
+            &mut state,
+            headers_eos,
+            &handles,
+        )
+        .await;
+        return;
+    }
 
     match script.behavior {
         Behavior::RetryProbe(failure) => {

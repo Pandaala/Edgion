@@ -22,3 +22,38 @@ External reference: [h2-grpc/h2-shutdown-connection-not-allocatable.md](https://
 ## Resolution references
 
 - `H2-008` — 2026-08-27 (fixed in pingora fork `edgion_v3`).
+
+## Gateway regression boundary
+
+`edgion-h2-upstream-lifecycle-e2e-validation` adds a real-Gateway `shutdown`
+scenario in `edgion-tests/src/client/suites/http_route/transport/h2_lifecycle.rs`.
+The upstream request hangs behind the existing two-second `/timeout` rule.
+Its downstream 504, upstream CANCEL, and successful follow-up on exactly one
+new connection establish the product's timeout and retirement outcome.
+The Gateway retains `PeerOptions::default().max_h2_streams = 1`; it cannot
+establish a concurrent upstream sibling contract.
+
+The actual locked fork (`edgion_0.9.0_v1@0b0d8bba`, `h2 0.4.19`) marks the
+connection in the upstream read-timeout failure arm, then checks shutdown at
+both connector selection and stream allocation. The supplemental
+`h2_lifecycle_connector.rs` uses this exact dependency's public Connector
+with two slots. After an actual ReadTimedout, it explicitly calls
+`mark_shutdown()`, drops only the fault session, and checks that a live,
+non-idle marked connection returns `Ok(None)` from `spawn_stream()`.
+Connector selection must also open a new connection while the accepted
+sibling remains pending; a recorded release request then permits that sibling
+to return all 64 bytes. The explicit mark is an allocation/pool contract probe,
+not evidence that the Gateway automatically marked that particular connection.
+Together with the serial Gateway case and source inspection it covers the
+reported boundaries without enabling product multiplexing. This does not
+close the separate failure-case disposition policy task or prove all races.
+
+On 2026-10-06, `cargo test -p edgion-tests --bin test_server transport::h2
+-- --nocapture` passed 14 tests, including the held-stream wire proof.
+The final fresh-Gateway Transport run passed all 165 registered entries,
+including both serial Gateway shutdown scenarios and the supplemental public
+Connector shutdown-allocation scenario. See
+[Gateway reuse verification scope](h2-proxy-cache-reuse-harness-consumers.md#gateway-reuse-verification-scope)
+for exact production/fork revisions, launch commands, executed/skip counts,
+and the outer-wrapper environment limitation. No private fork allocation-race
+tests were freshly run; interrupted runs are not passing results.

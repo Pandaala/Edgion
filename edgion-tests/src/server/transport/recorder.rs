@@ -420,6 +420,7 @@ impl TransportLog {
 }
 
 static TRANSPORT_LOG: LazyLock<Mutex<TransportLog>> = LazyLock::new(|| Mutex::new(TransportLog::default()));
+static TRANSPORT_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 pub fn claim_conn(listener: &str) -> u32 {
     TRANSPORT_LOG.lock().claim_conn(listener)
@@ -443,6 +444,25 @@ pub fn mark_closed(listener: &str, conn: u32) {
 
 pub fn record(ev: TransportEvent) {
     TRANSPORT_LOG.lock().record(ev);
+    TRANSPORT_CHANGED.notify_waiters();
+}
+
+/// Wait on the existing recorder, without introducing a second trace store.
+pub async fn wait_for_request_headers(trace_id: &str) {
+    loop {
+        let changed = TRANSPORT_CHANGED.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        let found = TRANSPORT_LOG
+            .lock()
+            .events
+            .iter()
+            .any(|event| event.kind == KIND_REQ_HEADERS && event.trace_id.as_deref() == Some(trace_id));
+        if found {
+            return;
+        }
+        changed.await;
+    }
 }
 
 /// The same correlated view `/transport/query/{trace_id}` serves, read in

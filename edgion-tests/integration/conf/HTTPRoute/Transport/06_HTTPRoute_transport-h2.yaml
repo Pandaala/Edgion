@@ -15,6 +15,18 @@ spec:
   hostnames:
     - "transport-h2.example.com"
   rules:
+    # Lifecycle uploads exercise the fork's own 10s EOS stall probe rather
+    # than a route-level backend write timeout.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /lifecycle
+      timeouts:
+        backendRequest: "0s"
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031
     - matches:
         - path:
             type: PathPrefix

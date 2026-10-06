@@ -22,3 +22,46 @@ External reference: [h2-grpc/h2-proxy-cache-reuse-harness-consumers.md](https://
 ## Resolution references
 
 - `H2-012` — 2026-08-28 (fixed in pingora fork `edgion_v3`).
+
+## Gateway reuse verification scope
+
+`edgion-h2-upstream-lifecycle-e2e-validation` checks the product's connection
+reuse independently of the fork's cache harness. The existing
+`upstream_reset_no_error_after_complete_response` transport case requires a
+full response while uploading, an actual backend NO_ERROR reset record, a
+follow-up on the same upstream connection, and an unchanged accept counter.
+The lifecycle `stall_reuse` case additionally requires two window-exhausted
+uploads to complete on that same connection after upload cancellation.
+
+These cases use the existing bounded recorder and H1-to-H2/H2-to-H2 paths.
+Neither case adds response caching, proves cache admission, or establishes the
+absence of every leaked task. Raw backend wire proofs establish the scripted
+events; Gateway results establish their product consequences.
+
+Transport's fresh-connection retry controls remain first in registration
+order, before lifecycle probes or other shapes warm the Gateway upstream pool.
+Changing that order invalidates the fresh-versus-reused retry premise even
+when each new lifecycle scenario passes independently.
+
+Fresh verification on 2026-10-06 used the unchanged Gateway production source
+at `e5eadddb43b8d9588a5b8698446dc96f365cae19` and the actual locked fork
+`edgion_0.9.0_v1@0b0d8bba9609655bfd7db0fe0add6818bc0ee937`, `h2 0.4.19`.
+`start_all_with_conf.sh --suites base,HTTPRoute/Basic,HTTPRoute/Transport`
+started a fresh shared stack, followed by `test_client -g -r HTTPRoute
+-i Transport` with its work-directory/access-log environment. All 165
+registered entries passed in 244.65s: 153 executed scenarios and 12 existing
+explicit skip entries, with no failures or infrastructure errors. All 20
+new lifecycle scenarios executed, including the two supplemental Connector
+contracts, and both existing NO_ERROR-reset/reuse protocol combinations passed.
+The work directory was `tmp/integration_testing/testing_20261006_181040`.
+
+The outer `run_integration.sh --no-prepare -r HTTPRoute -i Transport` entrypoint
+stopped at its macOS loopback-alias preflight, before running tests. Those
+aliases serve other LB/GeoIP suites; Transport uses only 127.0.0.1. The passing
+result above is the complete standard client suite on the standard shared
+stack, not a passing outer-wrapper result. The H2 backend check passed 14 tests,
+and the matrix-count unit guard passed. Format, workspace check/Clippy, and all
+required project guards passed; independent read-only review returned LGTM.
+This resolves the selected coverage task with test-only changes. Production
+behavior, dependencies, private watcher races, and response-cache admission
+remain outside this verification's changed or freshly tested scope.

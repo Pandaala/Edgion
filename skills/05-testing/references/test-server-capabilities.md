@@ -175,6 +175,38 @@ Set on the original request by the test client; they survive the proxy and are r
 
 `x-up-after-response` defaults to `linger` (HTTP/1 keep-alive, HTTP/2 connection untouched) so that connection reuse is observable at all. `goaway` on HTTP/1 degrades to `close` and records the degradation.
 
+#### Bounded H2 lifecycle controls
+
+The shared H2 transport listener additionally accepts `x-up-lifecycle` for
+the real-Gateway lifecycle suite. These controls use the existing recorder;
+they do not add another topology or response cache.
+
+| Control value | Trigger and observation |
+|---|---|
+| `stall` | Consume the default 65,535-byte request stream window without returning credit, emit a complete 64-byte response, then retain the upload until the Gateway resets it |
+| `held` | Drain the request and keep its response pending until the recorder observes request headers carrying the trace named by `x-up-release-trace` |
+| `goaway-descending` | Flush GOAWAY with the maximum ceiling followed by the current stream id, then respond |
+| `goaway-excluding` | Flush GOAWAY with the maximum ceiling followed by the preceding stream id, then attempt a response on the excluded stream |
+| `goaway-raising` | Flush GOAWAY excluding the current stream, then attempt to raise its ceiling and respond on that stream |
+| `goaway-malformed` / `goaway-nonzero` / `goaway-truncated` | Emit a short payload, an illegal nonzero frame stream id, or an EOF-truncated payload respectively |
+
+`x-up-release-trace` is the trace id seen by the backend, rather than the
+client's marker string. Lifecycle scripts have a 25-second execution bound and
+respond with a stream reset for invalid controls or deadline expiry. The
+recorder records injection only after the raw bridge acknowledges its flush.
+Focused raw-wire proofs complement Gateway assertions; externally observed
+connection selection does not isolate the watcher's private poison state from
+the h2 decoder's rejection.
+
+GOAWAY controls fault only the first request of a trace. Later requests drain
+their body and return 201 with the same complete 64-byte body; the recorder
+marks the request ordinal and status. This distinguishes an eligible retry
+from accepting the excluded stream's attempted 200 response. The Gateway
+defaults to one upstream stream per connection; held concurrent sibling
+scenarios use the locked fork's public Connector with two slots, separately
+from product tests. Its shutdown allocation probe explicitly marks a live
+connection after ReadTimedout and does not claim an automatic Gateway mark.
+
 #### `after-response: reset` on HTTP/2 — the two `h2` facts that decide the shape
 
 "A complete response, **then** `RST_STREAM`" is only expressible on HTTP/2 under one premise, and combining it with `echo` produces a case that asserts something the wire never carries:

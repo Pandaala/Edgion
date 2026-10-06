@@ -8,7 +8,15 @@ use tokio::sync::{mpsc, oneshot};
 
 pub(super) enum Fault {
     Flush,
-    Goaway { last_stream: u32 },
+    Goaway {
+        last_stream: u32,
+    },
+    /// Write a bounded lifecycle probe and retain the connection unless the
+    /// probe deliberately models EOF during a frame.
+    Frames {
+        bytes: Vec<u8>,
+        close: bool,
+    },
     TcpReset,
 }
 
@@ -70,6 +78,16 @@ pub(super) fn bridge(tcp: TcpStream) -> (DuplexStream, mpsc::Sender<Command>, Br
                                 frame.extend_from_slice(&last_stream.to_be_bytes());
                                 frame.extend_from_slice(&0u32.to_be_bytes());
                                 socket_write.write_all(&frame).await
+                            }
+                            Fault::Frames { bytes, close } => {
+                                let result = async {
+                                    socket_write.write_all(&bytes).await?;
+                                    socket_write.flush().await
+                                }.await;
+                                let failed = result.is_err();
+                                let _ = command.completed.send(result.map_err(|error| error.to_string()));
+                                if close || failed { return; }
+                                continue;
                             }
                             Fault::TcpReset => {
                                 // Zero linger is an abortive close, never a blocking linger.

@@ -25,6 +25,52 @@ External reference: [h2-grpc/h2-goaway-persistent-ceiling-fail-closed.md](https:
 - `H2-002` — read-terminal evidence poisoning, fixed in fork commit `a0ada7a`;
   revalidated as already fixed on 2026-09-09.
 
+## Gateway GOAWAY regression boundary
+
+`edgion-h2-upstream-lifecycle-e2e-validation` adds controlled GOAWAY cases in
+`edgion-tests/src/client/suites/http_route/transport/h2_lifecycle.rs`:
+maximum-to-current descending ceilings, maximum-to-preceding ceilings that
+exclude a later accepted stream, an attempted raise that re-includes that
+stream, a short payload, a nonzero frame stream id, and EOF inside the payload.
+Raw backend proofs check the exact frames and ensure a complete response
+attempt follows the complete GOAWAY sequences, including excluded streams.
+
+Through the Gateway, an excluded stream may qualify for a protocol-directed
+retry: GOAWAY promises that streams above its ceiling were not processed.
+The origin's first attempted response is 200; its second attempt returns 201.
+The test requires exactly two attempts on different connections and the full
+201 response, so accepting the excluded stream's attempted 200 cannot pass.
+The raising sequence retains the earlier exclusion and follows this same
+retry outcome. Legal descending sequences deliver the full accepted response.
+Malformed, nonzero-stream, and truncated sequences must fail without accepting
+a successful response, harness deadline, or body-cap error. Each faulted
+connection becomes ineligible for the follow-up; after an eligible retry the
+follow-up must reuse that healthy replacement without another accept.
+
+The Gateway's upstream stream limit defaults to one. Accepted concurrent
+sibling behavior is tested separately in `h2_lifecycle_connector.rs`, using
+the exact locked dependency's public Connector with two slots. A legal
+descending GOAWAY preserves the earlier held response, while a new connection
+carries the release request before that response completes. This supplemental
+contract does not claim product-level upstream multiplexing.
+
+These external outcomes do not isolate the private watcher poison state from
+the h2 decoder's GOAWAY handling. Inspection of the actual Cargo.lock fork
+`edgion_0.9.0_v1@0b0d8bba9609655bfd7db0fe0add6818bc0ee937`, `h2 0.4.19`,
+confirms persistent ceiling and permanent poison checks at registration and
+publication. Product tests supplement that evidence rather than replacing
+the fork's internal registration/race tests or the retained watcher.
+
+On 2026-10-06, `cargo test -p edgion-tests --bin test_server transport::h2
+-- --nocapture` passed 14 tests, including all five lifecycle wire proofs.
+The final fresh-Gateway Transport run passed all 165 registered entries,
+including the twelve H1-to-H2/H2-to-H2 GOAWAY scenarios and the supplemental
+public Connector descending-GOAWAY sibling scenario. See
+[Gateway reuse verification scope](h2-proxy-cache-reuse-harness-consumers.md#gateway-reuse-verification-scope)
+for exact production/fork revisions, launch commands, executed/skip counts,
+and the outer-wrapper environment limitation. Private watcher/race tests were
+not freshly run; interrupted runs are not passing results.
+
 ## Read errors and incomplete EOF
 
 `EndStreamWatchStream::poll_read` does not scan bytes delivered together with
