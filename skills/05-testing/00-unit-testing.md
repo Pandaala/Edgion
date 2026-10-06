@@ -47,8 +47,10 @@ For each migrated file, use `<crate>/tests/unit/<source directories>/<source ste
 test module name, feature and platform gates, and test identities. Multiple
 separately gated modules may use files under `<stem>_test/`. Calculate `#[path]`
 from the source file's directory and verify it with the compiler. Do not widen
-production visibility to move tests. Benchmarks retain Cargo's `benches/`
-location; `edgion-algo` and `edgion-waf` each have two benchmark targets there.
+production visibility to move tests. Benchmarks live under `tests/benches/`,
+separate from unit-test bodies and top-level integration-test targets. Register
+each benchmark with an explicit `[[bench]]` path and `harness = false` in its
+owning crate's `Cargo.toml`. Run it with `cargo bench -p <crate> --bench <name>`.
 
 ### Distribution of test files
 

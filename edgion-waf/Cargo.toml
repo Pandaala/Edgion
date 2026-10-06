@@ -30,18 +30,22 @@ serde_yaml.workspace = true
 
 [[bench]]
 name = "matcher_regression"
+path = "tests/benches/matcher_regression.rs"
 harness = false
 
 [[bench]]
 name = "injection_regression"
+path = "tests/benches/injection_regression.rs"
 harness = false
 
 [[bench]]
 name = "multipart_boundary"
+path = "tests/benches/multipart_boundary.rs"
 harness = false
 
 [[bench]]
 name = "json_execution"
+path = "tests/benches/json_execution.rs"
 harness = false
 
 [lints]

@@ -31,7 +31,8 @@ walked the entire LRU list from `tail` testing `is_expired` on every node. With 
 the steady state of a warm cache — the walk produced nothing and still cost O(capacity) while
 holding the shard mutex.
 
-Measured on the `live` workload with `edgion-gateway/benches/lru_expiration.rs`, per-insert p50:
+Measured on the `live` workload with the benchmark now at
+`edgion-algo/tests/benches/lru_expiration.rs`, per-insert p50:
 
 | capacity | before | after |
 |---|---|---|
@@ -184,7 +185,7 @@ Re-open this decision only if:
 
 - `tasks/todo/bound-lru-expiration-maintenance.md` (P1 task, closed 2026-09-03).
 - `edgion-algo/src/cache/lru.rs`, `edgion-algo/src/cache/sharded_lru.rs`.
-- `edgion-gateway/benches/lru_expiration.rs` — capacity-scaled insertion benchmark
+- `edgion-algo/tests/benches/lru_expiration.rs` — capacity-scaled insertion benchmark
   (1K / 16K / 256K x live / mixed-expiration / update-heavy), CSV on stdout. Percentiles are over
   individual inserts; `expiration_index_payload_bytes` is payload, not resident size.
 - `AGENTS.md` / `CLAUDE.md`, section "In-process cache selection" — the rule assigning explicit

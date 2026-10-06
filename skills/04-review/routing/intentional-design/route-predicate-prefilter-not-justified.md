@@ -89,7 +89,7 @@ that candidate fan-out still dominates; no throughput improvement is inferred he
 
 The originating task made retention conditional on "a benchmark corpus demonstrat[ing] a
 material candidate fan-out after host/path matching". No such corpus exists: `edgion-gateway`
-has no `benches/` directory and no `[[bench]]` target, and the harness task that would create
+has no route-matching benchmark target, and the harness task that would create
 one (`tasks/todo/radix-route-matching-benchmarks.md`) is still pending. Landing the index now
 would violate the acceptance criterion the task set for itself.
 

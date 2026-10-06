@@ -210,8 +210,10 @@ required-features = ["test-util"]
 
 [[bench]]
 name = "waf_header_ingestion"
+path = "tests/benches/waf_header_ingestion.rs"
 harness = false
 
 [[bench]]
 name = "waf_body_snapshot"
+path = "tests/benches/waf_body_snapshot.rs"
 harness = false

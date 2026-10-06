@@ -131,7 +131,7 @@ Listener/key distributions without weakening immutable ownership or moving
 allocation to the request path. Preserve exact/suffix continuation and final
 occupancy semantics, not just first-hit throughput.
 
-`edgion-algo/benches/radix_hostname.rs` is a dependency-free, `harness=false`
+`edgion-algo/tests/benches/radix_hostname.rs` is a dependency-free, `harness=false`
 benchmark with 10/1,000/100,000 keys, exact/wildcard/miss/continuation lookups,
 200/253-byte continuous edges, shared-suffix and high-fanout shapes, full
 builds, content patches, topology changes, maximum-depth queries, multi-Listener

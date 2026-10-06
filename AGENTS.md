@@ -17,7 +17,8 @@ declaration in the source module so tests retain private access and the existing
 `cargo test --all` command and test names. Preserve other gates, ignored cases,
 fixtures, and source-relative paths; compare test identities before and after a
 move. Do not widen production visibility for tests. Top-level `tests/*.rs`
-remain integration targets, and benchmarks remain under `benches/`. See
+remain integration targets. Benchmarks live under `tests/benches/` with explicit
+`[[bench]]` paths and `harness = false` in the owning crate's `Cargo.toml`. See
 [`skills/05-testing/00-unit-testing.md`](skills/05-testing/00-unit-testing.md)
 for naming exceptions and migration details. `edgion-tests` remains the
 dedicated integration-test harness.

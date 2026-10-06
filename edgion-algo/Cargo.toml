@@ -11,10 +11,12 @@ path = "src/lib.rs"
 
 [[bench]]
 name = "lru_expiration"
+path = "tests/benches/lru_expiration.rs"
 harness = false
 
 [[bench]]
 name = "radix_hostname"
+path = "tests/benches/radix_hostname.rs"
 harness = false
 
 [lints]

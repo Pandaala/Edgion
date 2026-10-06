@@ -22,9 +22,9 @@
 //! `SEED_TTL`). Output is CSV on stdout. Run with:
 //!
 //! ```text
-//! cargo bench -p edgion-gateway --bench lru_expiration
-//! EDGION_LRU_BENCH_SMOKE=1 cargo bench -p edgion-gateway --bench lru_expiration
-//! cargo bench -p edgion-gateway --bench lru_expiration --profile dev
+//! cargo bench -p edgion-algo --bench lru_expiration
+//! EDGION_LRU_BENCH_SMOKE=1 cargo bench -p edgion-algo --bench lru_expiration
+//! cargo bench -p edgion-algo --bench lru_expiration --profile dev
 //! ```
 //!
 //! The figures recorded in
