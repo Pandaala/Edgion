@@ -55,7 +55,7 @@ The [HTTP body rules](../../../AGENTS.md#http-body-handling-invariants) allow a
 narrow, design-reviewed full-document exception for explicit non-streaming
 Chat-to-Anthropic conversion. Its bytes, parsing complexity, per-exchange and
 process-wide memory, lifetime and precommit failure behavior must be bounded.
-The implemented [Task 03 converter](../../../tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md)
+The implemented Task 03 converter
 uses capped input, selective preflight before DOM construction, borrowed output
 serialization, one process-wide reservation pool and owner-tagged Pingora Hold.
 Selected unary conversion finishes before final head/body commitment; invalid
@@ -70,8 +70,12 @@ paths. Header deferral remains opt-in at the transport seam; vendor parsing and
 aggregation stay inside the AI conversion owner. No general response storage, disk
 spool or whole-response RawWindow is introduced. Fresh unit and real-wire evidence
 is recorded in Task 03; workspace/shared-topology checks passed and final Astra
-code/evidence review returned APPROVE. The task records the unrelated global WAF
-documentation exception. The upstream-H2 wire wrapper is test-only; production AI peers use H1.
+code/evidence review returned APPROVE. The historical task attribution includes
+the unrelated global WAF documentation exception. Its path was
+`tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md`;
+the task file is absent from the current tree, so that historical evidence is
+not available here for independent inspection. The upstream-H2 wire wrapper is
+test-only; production AI peers use H1.
 
 ## Canonical SSE substrate
 

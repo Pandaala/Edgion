@@ -1,0 +1,110 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-rules-original-crs
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: 4.25.1
+      profile: original-wire
+      provenance: OWASP CRS v4.25.1 unchanged units; Edgion wire test context
+      roots:
+      - original.conf
+      rules:
+      - name: original.conf
+        content: |
+          # Test context and guards; the original CRS units follow unchanged.
+          SecAction "id:9900201,phase:1,pass,nolog,noauditlog,setvar:tx.critical_anomaly_score=5,setvar:tx.blocking_paranoia_level=2,setvar:tx.arg_length=400,setvar:tx.inbound_anomaly_score_threshold=5,setvar:tx.inbound_anomaly_score_pl1=0,setvar:tx.inbound_anomaly_score_pl2=0,setvar:tx.blocking_inbound_anomaly_score=0,setvar:tx.crs_xml_attr_inspect=1"
+          SecRule REQUEST_HEADERS:X-Waf-Version "!@streq original-crs" "id:9900202,phase:1,deny,status:451,log"
+          SecRule &REQUEST_BODY "@gt 0" "id:9900203,phase:2,deny,status:418,log"
+          SecRule REQUEST_COOKIES|REQUEST_COOKIES_NAMES|ARGS_NAMES|ARGS|XML:/*|XML://@* "@rx (?:bzip2|expect|glob|ogg|(?:ph|r)ar|ssh2(?:.(?:s(?:hell|(?:ft|c)p)|exec|tunnel))?|z(?:ip|lib))://" \
+              "id:933200,\
+              phase:2,\
+              block,\
+              t:none,t:utf8toUnicode,t:urlDecodeUni,t:removeNulls,t:cmdLine,\
+              msg:'PHP Injection Attack: Wrapper scheme detected',\
+              logdata:'Matched Data: %{MATCHED_VAR} found within %{MATCHED_VAR_NAME}',\
+              tag:'application-multi',\
+              tag:'language-php',\
+              tag:'platform-multi',\
+              tag:'attack-injection-php',\
+              tag:'paranoia-level/1',\
+              tag:'OWASP_CRS',\
+              tag:'OWASP_CRS/ATTACK-PHP',\
+              tag:'capec/1000/152/242',\
+              ver:'OWASP_CRS/4.25.1',\
+              severity:'CRITICAL',\
+              setvar:'tx.php_injection_score=+%{tx.critical_anomaly_score}',\
+              setvar:'tx.inbound_anomaly_score_pl1=+%{tx.critical_anomaly_score}'"
+          SecRule ARGS|ARGS_NAMES|REQUEST_COOKIES|REQUEST_COOKIES_NAMES|REQUEST_BODY|REQUEST_HEADERS|!REQUEST_HEADERS:Cookie|XML:/*|XML://@* \
+              "@rx class\.module\.classLoader\.resources\.context\.parent\.pipeline|springframework\.context\.support\.FileSystemXmlApplicationContext" \
+              "id:944260,\
+              phase:2,\
+              block,\
+              t:urlDecodeUni,\
+              msg:'Remote Command Execution: Malicious class-loading payload',\
+              logdata:'Matched Data: %{MATCHED_VAR} found within %{MATCHED_VAR_NAME}',\
+              tag:'application-multi',\
+              tag:'language-java',\
+              tag:'platform-multi',\
+              tag:'attack-rce',\
+              tag:'paranoia-level/2',\
+              tag:'OWASP_CRS',\
+              tag:'OWASP_CRS/ATTACK-JAVA',\
+              tag:'capec/1000/152/248',\
+              ver:'OWASP_CRS/4.25.1',\
+              severity:'CRITICAL',\
+              setvar:'tx.rce_score=+%{tx.critical_anomaly_score}',\
+              setvar:'tx.inbound_anomaly_score_pl2=+%{tx.critical_anomaly_score}'"
+          SecRule &TX:ARG_LENGTH "@eq 1" \
+              "id:920370,\
+              phase:2,\
+              block,\
+              t:none,\
+              msg:'Argument value too long',\
+              logdata:'%{MATCHED_VAR_NAME}=%{MATCHED_VAR}',\
+              tag:'application-multi',\
+              tag:'language-multi',\
+              tag:'platform-multi',\
+              tag:'attack-protocol',\
+              tag:'paranoia-level/1',\
+              tag:'OWASP_CRS',\
+              tag:'OWASP_CRS/PROTOCOL-ENFORCEMENT',\
+              tag:'capec/1000/210/272',\
+              ver:'OWASP_CRS/4.25.1',\
+              severity:'CRITICAL',\
+              chain"
+              SecRule ARGS "@gt %{tx.arg_length}" \
+                  "t:none,t:length,\
+                  setvar:'tx.inbound_anomaly_score_pl1=+%{tx.critical_anomaly_score}'"
+          SecRule TX:BLOCKING_PARANOIA_LEVEL "@ge 1" \
+              "id:949060,\
+              phase:2,\
+              pass,\
+              t:none,\
+              nolog,\
+              tag:'OWASP_CRS',\
+              ver:'OWASP_CRS/4.25.1',\
+              setvar:'tx.blocking_inbound_anomaly_score=+%{tx.inbound_anomaly_score_pl1}'"
+          SecRule TX:BLOCKING_PARANOIA_LEVEL "@ge 2" \
+              "id:949061,\
+              phase:2,\
+              pass,\
+              t:none,\
+              nolog,\
+              tag:'OWASP_CRS',\
+              ver:'OWASP_CRS/4.25.1',\
+              setvar:'tx.blocking_inbound_anomaly_score=+%{tx.inbound_anomaly_score_pl2}'"
+          SecRule TX:BLOCKING_INBOUND_ANOMALY_SCORE "@ge %{tx.inbound_anomaly_score_threshold}" \
+              "id:949110,\
+              phase:2,\
+              deny,\
+              t:none,\
+              msg:'Inbound Anomaly Score Exceeded (Total Score: %{TX.BLOCKING_INBOUND_ANOMALY_SCORE})',\
+              tag:'anomaly-evaluation',\
+              tag:'OWASP_CRS',\
+              ver:'OWASP_CRS/4.25.1'"
+      phraseAssets: []
+      digest: 1eddcdfa0cbaa2299e1e2ddbdb44d2eb6a1c0c6f388226ecd4b6c078167923af

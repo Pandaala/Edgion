@@ -1,5 +1,28 @@
 # WAF Current State and Baseline
 
+## Authoritative checkpoint (2026-10-06)
+
+Status: Current fused JSON baseline verified and independently approved.
+
+The canonical Full JSON entry is now `JsonInspectionSession`: actual capture chunks feed the existing native checker, EOF seals selected facts, and Phase 2 replays transaction effects in source order. JSON-only inspection avoids complete BodyStorage materialization. Prior optimization rounds and FTW records remain valid historical evidence, not fresh proof of this new entry.
+
+Current implementation, verification and independent review are tracked in
+[plan 16](16-json-capture-wiring-and-closure.md) and
+[validation task 06](06-json-validation-and-benchmark.md).
+These checkpoints supersede the historical interfaces and acceptance statuses
+below. Historical measurements retain their original scope and revisions.
+
+## Historical checkpoints (superseded design)
+
+> JSON design supersession (2026-10-05): the active replacement and validation
+> record is [the fused JSON checker task](../pending/waf-json-checker/waf-json-checker.md).
+> Its single grammar pass, selected retention, canonical Bytes publication and
+> Full-mode JSON execution replace the earlier narrow subscriber/snapshot
+> APIs described below. Earlier measurements and acceptance reports remain
+> historical evidence. Broader transport-streaming, XML and response work
+> are not completed by this replacement.
+
+
 ## Purpose
 
 This file is the compact handoff baseline for the remaining WAF work. It
@@ -79,3 +102,98 @@ These Apple M4 results are same-host smoke evidence, not portable thresholds.
 The numbered tasks in `README.md` are authoritative. The mainline exit blockers
 are incremental JSON/XML Phase 2, their Gateway hybrid lane and metrics, and
 canonical `RawWindow` Phase 4 response scanning.
+
+## S2 lexical foundation checkpoint (2026-09-29)
+
+Task 02's transport-neutral tokenizer is complete as an isolated leaf API. It
+supports bounded incremental JSON syntax and provisional tokens only; no
+structured execution lane or Gateway integration is enabled. Task 01 remains
+open for exact publication/eligibility and metadata-budget proofs.
+
+Fresh commands: `cargo test -p edgion-waf --lib json_stream` (15 passed),
+`cargo test -p edgion-waf --lib --quiet` (415 passed, 2 ignored),
+`cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets`,
+formatting and project static guards passed. The explicit pinned CRS target/
+operator inventory passed: 289 Phase 2 units, 215 snapshot and 74 raw classes;
+modified-corpus rejection passed. Full reproduction, corpus/projection hashes,
+code hashes, independent two-round review evidence and limits are in tasks 01
+and 02. No FTW verdict or Gateway wire acceptance is claimed by these results.
+
+Dependency audit has identical baseline/working findings, including the
+Wasmtime advisory now tracked in `tasks/todo/wasmtime-rustsec-2026-0316-triage.md`.
+No dependency-policy exemption or production package-version change was made.
+
+## S19 withdrawal and continuation (2026-10-05)
+
+Starting HEAD `6c89d137`. Independent review and coordinator revalidation confirmed
+that restoring only json_rules.rs and its mounted tests to `da048aef` removes
+only the S19 experiment. S15 scalar reuse and S18 metadata reductions remain;
+S18 CPU calibration is unresolved. Historical measurements are retained in task
+01, without treating their process IDs as live work.
+
+Fresh `cargo test -p edgion-waf --lib --quiet` passed 519 tests, with 2 ignored.
+Fresh `cargo test -p edgion-waf --test json_execution_api --quiet` passed 5 tests.
+Logs: `/tmp/waf-continue-s19-tests.log`, `/tmp/waf-continue-api-tests.log`.
+No full workspace test was run. Current adapter plan and exact remaining gates
+are in task 05; the index now distinguishes implemented leaf APIs from acceptance.
+
+## Gateway JSON snapshot delivery (2026-10-05)
+
+An explicit full-body JSON snapshot adapter is implemented and independently
+reviewed, including structural CRD coverage, mounted tests and mirrored WafDynamic
+fixtures. Gateway WAF tests passed 29 cases; resource WAF tests passed 22; the
+focused CRD parity test passed, with 19 structural and 8 condition coverage tests.
+Workspace format/check/clippy and all nine quick-check gates passed, as did the
+data-plane tracing guard.
+
+Coherent integration preparation passed. Shared `Gateway/WafDynamic` then passed
+in 81 seconds, with H1/H2 exact forwarding, spill, invalid-retention, cancellation,
+deletion/recreation and in-flight rule/budget/mode pinning. Final metrics/config,
+requeue and cache-residue guards passed. Report:
+`tmp/integration_testing/testing_20261005_103649/report.log`.
+The narrowly selected scenario's macOS loopback preflight was corrected after
+independent fixture verification; no system network settings were changed.
+
+Task 05 records the exact delivery and commands. This closes the adapter checkpoint,
+not simultaneous three-lane execution, compiler promotion or Stage 8. Task 06
+still owns differential/performance and provisional-memory/inspected-byte gates.
+No default activation, performance gain, commit or push is claimed.
+
+## Bounded native XML delivery (2026-10-06)
+
+Task 07 is complete. XmlStream and the Json/Xml inspection domain validate and
+match incrementally without a DOM or complete extracted value map. Contiguous
+values borrow; cross-chunk/decoded values and scoped names reuse bounded scratch.
+Canonical request BodyStorage remains the only forwarding/retry cache. Four
+measured optimizations and all required independent-review corrections are closed.
+
+Final commands and results (current frozen source):
+
+- `cargo test -p edgion-waf --lib --quiet`: 679 passed, 2 existing ignored.
+- `cargo test -p edgion-waf --test xml_execution_api --quiet`: 3 passed.
+- `cargo test -p edgion-waf --test json_execution_api --quiet`: 9 passed.
+- `cargo test -p edgion-gateway --lib json_capture --quiet`: 10 passed.
+- `cargo test -p edgion-resources --lib xml_ --quiet`: 2 passed.
+- `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets`
+  and `cargo fmt --all -- --check`: passed, no compiler/lint warnings.
+- Agent docs, SSA force, metrics, Pingora source, transform contract, unit layout
+  and Gateway no-tracing guards: passed. Baseline 643 to final 681 unit identities,
+  removed 0 and added 38. No full workspace test was requested.
+- `./edgion-tests/integration/scripts/integration/run_integration.sh -r Gateway -i WafDynamic`:
+  passed against rebuilt final artifacts, 101-second scenario; 17 checks passed,
+  one intended skip, zero failures; canonical service cleanup completed.
+- `cargo bench --offline -p edgion-waf --bench xml_execution --bench xml_chunks --bench json_execution --no-run`
+  then the frozen standalone `run_benchmarks.py`: all 12 serial runs exited 0.
+  Common-valid XML 352 digests match old/final; each XML/JSON chunk direction
+  contains 2080/96 passing rows. Final JSON owned controls show no consistent
+  over-10% change in both directions; their semantics use unchanged harness
+  assertions, not a cross-version digest.
+
+Independent Astra final verdict: APPROVE, no unresolved Must Fix. Exact source,
+locks, binaries, live report, raw measurements and review binding are retained in
+`evidence/xml-inspection-2026-10-06/`. All workload regressions are disclosed in
+[the results](../pending/waf-xml-checker/06-performance-results.md), including the
+approximately 15-times controls/capture wide-attribute case. Capacity counters
+do not establish allocation totals or RSS. XML subset delivery does not promote
+the general classifier, establish full CRS/FTW or start response Phase 4. No commit
+or push was authorized. Task 08 is the next planning scope.

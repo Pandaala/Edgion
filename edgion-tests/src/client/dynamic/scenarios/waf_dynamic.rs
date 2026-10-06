@@ -52,6 +52,96 @@ fn xml_detection() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicXmlDetectionTestSuite)
 }
 
+fn original_on() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicOriginalOnTestSuite)
+}
+
+fn original_detection() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicOriginalDetectionTestSuite)
+}
+
+async fn assert_original_publication(ctx: &ScenarioCtx, detection: bool) -> Result<()> {
+    for gateway in [false, true] {
+        let resource = plugin_resource(ctx, gateway).await?;
+        let waf = &resource["spec"]["waf"];
+        ensure!(
+            waf["selectedProfile"] == "original",
+            "original WAF profile was not published"
+        );
+        ensure!(
+            waf["mode"] == if detection { "detectionOnly" } else { "on" },
+            "original WAF mode mismatch"
+        );
+        let refs = waf["resolvedPolicy"]["profiles"]["original"]["bundleRefs"]
+            .as_array()
+            .context("original WAF resolved bundle reference missing")?;
+        ensure!(
+            refs.len() == 1
+                && refs[0]["name"] == "waf-rules-original-crs"
+                && refs[0]["expectedDigest"] == suites::edgion_plugins::ORIGINAL_DIGEST,
+            "original WAF resolved digest pin mismatch"
+        );
+        ensure!(
+            crate::dynamic::status::conditions(&resource)?
+                .iter()
+                .any(|condition| condition["type"] == "Accepted" && condition["status"] == "True"),
+            "original WAF configuration was not accepted"
+        );
+    }
+    Ok(())
+}
+
+async fn run_original_segment(ctx: &ScenarioCtx) -> Result<()> {
+    let result = async {
+        ctx.apply_dir("updates/to_original_on").await?;
+        ctx.wait_phase(SCENARIO, "original-on", Duration::from_secs(30)).await?;
+        assert_original_publication(ctx, false).await?;
+        ctx.apply_dir("updates/to_original_detection").await?;
+        ctx.wait_phase(SCENARIO, "original-detection", Duration::from_secs(30))
+            .await?;
+        assert_original_publication(ctx, true).await?;
+        ctx.apply_dir("updates/to_original_on").await?;
+        ctx.wait_phase(SCENARIO, "original-restored", Duration::from_secs(30))
+            .await?;
+        assert_original_publication(ctx, false).await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    // Cleanup both operations even if restoration fails; preserve the original assertion error.
+    let restored = async {
+        ctx.apply_dir("updates/to_recovered").await?;
+        ctx.wait_phase(SCENARIO, "recovered", Duration::from_secs(15)).await
+    }
+    .await;
+    let deleted = delete_original_bundle(ctx).await;
+    match (result, restored, deleted) {
+        (Ok(()), Ok(()), Ok(())) => Ok(()),
+        (result, restored, deleted) => anyhow::bail!(
+            "original CRS segment failed: result={result:?}; restoration={restored:?}; deletion={deleted:?}"
+        ),
+    }
+}
+
+async fn delete_original_bundle(ctx: &ScenarioCtx) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let identity = tokio::fs::read_to_string(ctx.resolve("delete/original_bundles.txt")).await?;
+        ensure!(
+            identity.trim() == "EdgionConfigData/edgion-default/waf-rules-original-crs",
+            "original bundle cleanup must target only its declared resource"
+        );
+        let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
+        let response = client
+            .delete("EdgionConfigData", Some("edgion-default"), "waf-rules-original-crs")
+            .await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        edgion_cli::cli::client::handle_response(response).await.map(|_| ())
+    })
+    .await
+    .context("original bundle cleanup timed out")?
+}
+
 fn json_v1() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicJsonV1TestSuite)
 }
@@ -229,6 +319,18 @@ async fn wait_invalid_json_processed(ctx: &ScenarioCtx) -> Result<()> {
 
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
+        name: "original-on",
+        factory: original_on,
+    },
+    PhaseSuite {
+        name: "original-detection",
+        factory: original_detection,
+    },
+    PhaseSuite {
+        name: "original-restored",
+        factory: original_on,
+    },
+    PhaseSuite {
         name: "xml-v1",
         factory: xml_v1,
     },
@@ -333,6 +435,7 @@ static PHASES: &[PhaseSuite] = &[
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
         let scenario = SCENARIO;
+        delete_original_bundle(&ctx).await?;
         ctx.assert_phase(scenario, "initial").await?;
         ctx.apply_dir("updates/to_v2").await?;
         ctx.wait_phase(scenario, "updated", Duration::from_secs(15)).await?;
@@ -406,6 +509,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         pinned_mode.finish().await.map_err(anyhow::Error::msg)?;
         ctx.apply_dir("updates/to_recovered").await?;
         ctx.wait_phase(scenario, "recovered", Duration::from_secs(15)).await?;
+        run_original_segment(&ctx).await?;
         ctx.delete_resources("delete/xml_bundles.txt").await?;
         ctx.delete_resources("delete/json_bundles.txt").await?;
         ctx.apply_dir("updates/to_bundle_v1").await?;

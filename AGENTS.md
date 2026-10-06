@@ -360,10 +360,11 @@ whether the feature needs incremental bytes or one complete document.
    Transport/header deferral must be reviewed separately and leave ordinary HTTP,
    native AI and SSE paths unchanged. This permits no response `BodyStorage`,
    disk spool, full-response `RawWindow`, general plugin whole-response API, or
-   usage-only aggregation. The bounded converter and separately reviewed transport/header seam are now
-   implemented under
-   [Task 03](tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md);
-   its recorded acceptance does not relax these requirements or accept broader aggregation.
+   usage-only aggregation. The bounded converter and separately reviewed
+   transport/header seam are now implemented under Task 03 (historical path:
+   `tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md`;
+   the task file is absent from the current tree). Its recorded acceptance does
+   not relax these requirements or accept broader aggregation.
 3. **A plugin-initiated outbound call is a separate bounded exchange.** Such a
    call may aggregate its response body only behind an explicit hard byte cap
    (normally a 1 MiB global/configured limit), enforced while streaming the

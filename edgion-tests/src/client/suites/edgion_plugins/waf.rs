@@ -2,6 +2,8 @@
 
 #[path = "waf_json_wire.rs"]
 pub(crate) mod json_wire;
+#[path = "waf_original_wire.rs"]
+pub(crate) mod original_wire;
 #[path = "waf_wire.rs"]
 mod wire;
 #[path = "waf_xml_wire.rs"]
@@ -609,3 +611,24 @@ macro_rules! xml_phase_suite {
 xml_phase_suite!(WafDynamicXmlV1TestSuite, "Waf XML V1", "xml-v1", false);
 xml_phase_suite!(WafDynamicXmlV2TestSuite, "Waf XML V2", "xml-v2", false);
 xml_phase_suite!(WafDynamicXmlDetectionTestSuite, "Waf XML DetectionOnly", "xml-v1", true);
+
+pub struct WafDynamicOriginalOnTestSuite;
+pub struct WafDynamicOriginalDetectionTestSuite;
+macro_rules! original_phase_suite {
+    ($type:ident, $title:literal, $detection:literal) => {
+        impl TestSuite for $type {
+            fn name(&self) -> &str {
+                $title
+            }
+            fn test_cases(&self) -> Vec<TestCase> {
+                vec![original_wire::matrix($detection)]
+            }
+        }
+    };
+}
+original_phase_suite!(WafDynamicOriginalOnTestSuite, "Waf Original CRS On", false);
+original_phase_suite!(
+    WafDynamicOriginalDetectionTestSuite,
+    "Waf Original CRS DetectionOnly",
+    true
+);

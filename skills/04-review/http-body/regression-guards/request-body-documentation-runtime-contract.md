@@ -19,7 +19,9 @@ General whole-response APIs or response BodyStorage remain unsupported. On
 2026-10-06 the user approved a narrow design exception for explicit non-streaming
 Chat-to-Anthropic conversion. The authoritative scope and required budgets are
 in [AGENTS.md](../../../../AGENTS.md#http-body-handling-invariants); implementation
-remediation remains [Task 03](../../../../tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md).
+remediation remains Task 03 (historical path:
+`tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md`;
+the task file is absent from the current tree).
 This amendment does not validate the current converter, change the request-body
 model, or authorize full-body aggregation for observation, DSL, Wasm or ExtProc.
 

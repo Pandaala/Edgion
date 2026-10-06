@@ -32,11 +32,14 @@ The dispatch contract is provider-specific:
 - Anthropic installs its translator, which owns exact usage and SSE-only estimation.
 
 Do not install a second SSE decoder or retain the translated body for accounting.
-The [bounded unary remediation](../../../../tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md)
+The bounded unary remediation
 is implemented with selective preflight, checked usage, borrowed serialization and
 shared admission/output ownership; fresh workspace/shared-topology verification
-and final independent Astra code/evidence review passed. The owning task records
-the unrelated global WAF documentation exception. The converter-only exception in
+and final independent Astra code/evidence review passed. The historical task
+attribution includes the unrelated global WAF documentation exception. Its path
+was `tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md`;
+the task file is absent from the current tree, so that historical evidence is
+not available here for independent inspection. The converter-only exception in
 [AGENTS.md](../../../../AGENTS.md#http-body-handling-invariants) authorizes no second
 usage-only response copy. Document validation, actual source EOS and client
 outcome remain distinct: Released does not synthesize source EOS or delivery success.

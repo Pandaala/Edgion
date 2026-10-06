@@ -558,8 +558,11 @@ retain their existing handling. Fully validated checked usage survives later
 serialization/delivery failure; incomplete or invalid JSON has unknown usage and
 fixed error bodies do not create character estimates.
 
-See [the audited capacity ledger](../../../tasks/todo/ai-gateway-product-completion/task03-memory-ledger.md)
-for representation assumptions and re-audit triggers.
+The historical capacity ledger for representation assumptions and re-audit
+triggers was recorded at
+`tasks/todo/ai-gateway-product-completion/task03-memory-ledger.md`.
+That ledger file is absent from the current tree; its supporting audit details
+are not available here for independent inspection.
 
 ### Upstream RemoteIp header
 
