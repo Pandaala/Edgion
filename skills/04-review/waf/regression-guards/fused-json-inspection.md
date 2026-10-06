@@ -125,8 +125,9 @@ and replay engine under an explicit domain; see
 and physical-error contract. JSON-only summary optimizations remain JSON-only.
 
 The historical `tasks/pending/waf-json-checker/` records are retained in the
-working tree. Completed capture wiring and closure evidence are recorded in
-[plan 16](../../../../tasks/waf-todo/16-json-capture-wiring-and-closure.md).
+working tree. Capture wiring and closure were tracked in the historical
+`tasks/waf-todo/16-json-capture-wiring-and-closure.md` task, which is no longer
+present in the working tree.
 Prior test and measurement results below are historical evidence, not proof of
 the new entry. Remaining WAF work is tracked in the
 [current execution queue](../../../../tasks/waf-todo/README.md).

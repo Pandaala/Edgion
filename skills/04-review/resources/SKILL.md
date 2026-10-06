@@ -27,6 +27,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Fixed spec/status property coverage and explicit open CRD boundaries](regression-guards/fixed-crd-field-coverage.md)
 - [Gateway LRU cache configuration has one key](regression-guards/gateway-cache-config-single-name.md)
 - [WAF support inspection must not imply publication](regression-guards/waf-support-inspection-must-not-imply-publication.md)
 - [Declared CRD objects use Kubernetes structural schema](regression-guards/declared-object-crd-structural-schema.md)

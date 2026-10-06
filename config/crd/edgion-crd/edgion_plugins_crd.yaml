@@ -173,14 +173,6 @@ spec:
                         description: "Optional operator-defined label echoed into PluginLog.alias for distinguishing multiple entries of the same plugin type in the access log (charset ^[a-zA-Z0-9._-]{1,32}$ enforced at preparse)"
                         maxLength: 32
                         minLength: 1
-                      # --- conditionEnable: define anchor here, reuse below ---
-                      conditionEnable: &conditionEnableSchema
-                        type: object
-                        description: "Simple conditional enable (legacy)"
-                        properties:
-                          timeBefore:
-                            type: string
-                            description: "Plugin enabled before this time (RFC3339)"
                       # --- conditions: define anchor here, reuse below ---
                       conditions: &conditionsSchema
                         type: object
@@ -632,7 +624,6 @@ spec:
                         type: boolean
                         default: true
                       alias: *aliasSchema
-                      conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
                       dye: *dyeSchema
                       type:
@@ -654,7 +645,6 @@ spec:
                         type: boolean
                         default: true
                       alias: *aliasSchema
-                      conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
                       dye: *dyeSchema
                       type:
@@ -677,7 +667,6 @@ spec:
                         type: boolean
                         default: true
                       alias: *aliasSchema
-                      conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
                       dye: *dyeSchema
                       body: *bodySchema

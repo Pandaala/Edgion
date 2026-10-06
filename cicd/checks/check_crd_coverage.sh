@@ -2,11 +2,12 @@
 # Manually run the CRD <-> struct field-coverage guards.
 #
 # This wraps:
-#   * `edgion-resources/tests/crd_coverage.rs` — structural CRDs
-#     (EdgionGatewayConfig / EdgionTls / EdgionBackendTrafficPolicy /
-#     EdgionBackend). Fails when a struct field is missing from (Direction-1)
-#     or stale in (Direction-2) its hand-written CRD YAML, and also pins the
-#     acme `status.activeChallenges` and stream `tlsRoutePlugins` fixes.
+#   * `edgion-resources/tests/crd_coverage.rs` — fixed spec/status fields in
+#     every served version of all nine custom CRDs. Explicit open config and
+#     preserved-reference boundaries are documented in the scope inventory.
+#     Detects missing/stale fields, retains the original narrow regression pins,
+#     and tests the comparator with in-memory CRD mutations. Property presence
+#     does not establish types, defaults, bounds or live admission equivalence.
 #   * `edgion-resources/tests/plugin_crd_condition_coverage.rs` — flattened
 #     `&conditionsSchema` / KeyGet type-enum guard on the EdgionPlugins CRD.
 #

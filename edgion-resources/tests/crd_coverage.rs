@@ -1,15 +1,11 @@
-//! Struct↔CRD field-coverage guard for the four fully-structural CRDs
-//! (EdgionGatewayConfig, EdgionTls, EdgionBackendTrafficPolicy, and
-//! EdgionBackend). See
-//! docs/superpowers/specs/2026-06-15-crd-struct-coverage-guard-design.md.
+//! Struct↔CRD property-presence guards for all nine custom CRDs.
 //!
 //! The walk is a lockstep node comparison: it descends EXPECTED (schemars) and
 //! ACTUAL (CRD) together, comparing property NAME sets at each node, and reports
-//! a difference at its highest absent ancestor. It is correct ONLY for resources
-//! with no tagged enums or preserve-unknown nodes. EdgionBackend credentials
-//! flatten statically shaped `SecretSlot` values; schemars emits each
-//! operator-facing `secretRef` as an ordinary property, so the nested pool
-//! remains safe for this lockstep comparison.
+//! a difference at its highest absent ancestor. Fixed-field projection merges
+//! schema composition branches by property name, following refs and array items.
+//! Explicit variant-config boundaries remain opaque; discriminators are compared
+//! by name only. Types, defaults, bounds and branch validity have separate guards.
 
 use schemars::schema_for;
 use serde_json::{Map, Value};
@@ -27,10 +23,8 @@ fn resolve<'a>(node: &'a Value, defs: &'a Map<String, Value>) -> &'a Value {
     }
     node
 }
-// NOTE: follows exactly one hop. If a $defs entry is itself a $ref (a chain
-// A->B->C), the intermediate node is returned and treated as a leaf. Schemars
-// 1.2.1 never emits such chains for plain structs, so this is fine for the
-// current four-resource scope; revisit if the schema generator changes.
+// Single-hop accessor for the narrow shape/constraint assertions below. The
+// field-presence comparator uses fixed_projection for chained refs and siblings.
 
 /// `Option<T>` becomes `{"anyOf":[<T>, {"type":"null"}]}` in schemars 1.2.1.
 /// Return the non-null branch.
@@ -86,18 +80,97 @@ fn diff(
 /// Run the lockstep diff for one resource's `spec`, applying a Direction-1
 /// allowlist of `(path)` entries that are intentionally absent from the CRD.
 fn compare_spec(expected_root: &Value, crd_spec_schema: &Value, allow_d1: &[&str]) -> (Vec<String>, Vec<String>) {
-    let empty = Map::new();
-    let edefs = expected_root
-        .get("$defs")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let (mut d1, mut d2) = (Vec::new(), Vec::new());
-    diff(expected_root, crd_spec_schema, "spec", &edefs, &empty, &mut d1, &mut d2);
+    let (mut d1, d2) = compare_fixed_fields(expected_root, crd_spec_schema, "spec", &[]);
     d1.retain(|p| !allow_d1.contains(&p.as_str()));
-    d1.sort();
-    d2.sort();
     (d1, d2)
+}
+
+/// Merge property trees, not schema constraints. A flattened enum's named fields
+/// are the union of its branches; this does not validate which branch is legal.
+fn merge_projection(target: &mut Value, source: Value) {
+    let target = target["properties"].as_object_mut().unwrap();
+    for (name, child) in source["properties"].as_object().unwrap() {
+        match target.get_mut(name) {
+            Some(existing) => merge_projection(existing, child.clone()),
+            None => {
+                target.insert(name.clone(), child.clone());
+            }
+        }
+    }
+}
+
+/// Project only fixed property names. Open bodies and dynamic map keys are not
+/// structural fields. Do not infer a boundary from preserve-unknown: a node may
+/// preserve unknown fields while still declaring fixed children that need checks.
+fn fixed_projection(node: &Value, defs: &Map<String, Value>, path: &str, opaque: &[&str], depth: usize) -> Value {
+    assert!(depth < 128, "recursive or excessively deep schema at {path}");
+    let mut projected = serde_json::json!({"properties": {}});
+    if matches_boundary(path, opaque) {
+        return projected;
+    }
+    if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
+        let name = reference
+            .strip_prefix("#/$defs/")
+            .unwrap_or_else(|| panic!("unsupported schema reference {reference} at {path}"));
+        let target = defs
+            .get(name)
+            .unwrap_or_else(|| panic!("unresolved schema reference {reference} at {path}"));
+        merge_projection(&mut projected, fixed_projection(target, defs, path, opaque, depth + 1));
+    }
+    if let Some(items) = node.get("items") {
+        merge_projection(&mut projected, fixed_projection(items, defs, path, opaque, depth + 1));
+    }
+    if let Some(properties) = node.get("properties").and_then(Value::as_object) {
+        for (name, child) in properties {
+            let child = fixed_projection(child, defs, &format!("{path}.{name}"), opaque, depth + 1);
+            let mut property = serde_json::json!({"properties": {}});
+            property["properties"]
+                .as_object_mut()
+                .unwrap()
+                .insert(name.clone(), child);
+            merge_projection(&mut projected, property);
+        }
+    }
+    for keyword in ["allOf", "oneOf", "anyOf"] {
+        if let Some(branches) = node.get(keyword).and_then(Value::as_array) {
+            for branch in branches {
+                merge_projection(&mut projected, fixed_projection(branch, defs, path, opaque, depth + 1));
+            }
+        }
+    }
+    projected
+}
+
+/// `*` matches exactly one property segment, never an arbitrary subtree.
+fn matches_boundary(path: &str, boundaries: &[&str]) -> bool {
+    boundaries.iter().any(|pattern| {
+        let mut pattern = pattern.split('.');
+        for segment in path.split('.') {
+            match pattern.next() {
+                Some("*") => {}
+                Some(expected) if expected == segment => {}
+                _ => return false,
+            }
+        }
+        pattern.next().is_none()
+    })
+}
+
+fn compare_fixed_fields(
+    expected: &Value,
+    actual: &Value,
+    section: &str,
+    opaque: &[&str],
+) -> (Vec<String>, Vec<String>) {
+    let empty = Map::new();
+    let defs = expected.get("$defs").and_then(Value::as_object).unwrap_or(&empty);
+    let expected = fixed_projection(expected, defs, section, opaque, 0);
+    let actual = fixed_projection(actual, &empty, section, opaque, 0);
+    let (mut missing, mut stale) = (Vec::new(), Vec::new());
+    diff(&expected, &actual, section, &empty, &empty, &mut missing, &mut stale);
+    missing.sort();
+    stale.sort();
+    (missing, stale)
 }
 
 #[test]
@@ -152,6 +225,471 @@ fn crd_section(file: &str, section: &str) -> Value {
          is not an object (got {result:?}); the CRD YAML path may have changed"
     );
     result
+}
+
+struct FixedFieldScope {
+    file: &'static str,
+    spec: Value,
+    status: Value,
+    opaque: &'static [&'static str],
+}
+
+// This partially declared, preserved ParentReference still checks its fixed name.
+// These optional fields survive admission without individual declarations.
+const ACME_PRESERVED_REFERENCE_FIELDS: &[&str] = &[
+    "spec.challenge.gatewayRef.group",
+    "spec.challenge.gatewayRef.kind",
+    "spec.challenge.gatewayRef.namespace",
+    "spec.challenge.gatewayRef.port",
+    "spec.challenge.gatewayRef.sectionName",
+];
+
+impl FixedFieldScope {
+    fn compare(&self, section: &str, expected: &Value, actual: &Value, opaque: &[&str]) -> (Vec<String>, Vec<String>) {
+        let (mut missing, stale) = compare_fixed_fields(expected, actual, section, opaque);
+        if self.file == "edgion_acme_crd.yaml" && section == "spec" {
+            assert_eq!(
+                actual["properties"]["challenge"]["properties"]["gatewayRef"]["x-kubernetes-preserve-unknown-fields"],
+                true,
+                "ACME Gateway reference omissions require preserved unknown fields"
+            );
+            missing.retain(|path| !ACME_PRESERVED_REFERENCE_FIELDS.contains(&path.as_str()));
+        }
+        (missing, stale)
+    }
+}
+
+/// Explicit config and undeclared reference bodies are excluded. Partially
+/// declared preserved references still compare their fixed named children.
+fn fixed_field_scopes() -> Vec<FixedFieldScope> {
+    use edgion_resources::*;
+    macro_rules! scope {
+        ($file:literal, $spec:ty, $status:ty, $opaque:expr) => {
+            FixedFieldScope {
+                file: $file,
+                spec: serde_json::to_value(schema_for!($spec)).unwrap(),
+                status: serde_json::to_value(schema_for!($status)).unwrap(),
+                opaque: $opaque,
+            }
+        };
+    }
+    vec![
+        scope!(
+            "edgion_gateway_config_crd.yaml",
+            EdgionGatewayConfigSpec,
+            EdgionGatewayConfigStatus,
+            &[]
+        ),
+        scope!("edgion_tls_crd.yaml", EdgionTlsSpec, EdgionTlsStatus, &[]),
+        scope!(
+            "edgion_backend_traffic_policy_crd.yaml",
+            EdgionBackendTrafficPolicySpec,
+            EdgionBackendTrafficPolicyStatus,
+            &[]
+        ),
+        scope!("edgion_backend_crd.yaml", EdgionBackendSpec, EdgionBackendStatus, &[]),
+        scope!(
+            "edgion_acme_crd.yaml",
+            EdgionAcmeSpec,
+            EdgionAcmeStatus,
+            &["spec.autoEdgionTls.parentRefs"]
+        ),
+        scope!(
+            "edgion_plugins_crd.yaml",
+            EdgionPluginsSpec,
+            EdgionPluginsStatus,
+            &[
+                "spec.requestPlugins.config",
+                "spec.upstreamResponseFilterPlugins.config",
+                "spec.upstreamResponseBodyFilterPlugins.config",
+                "spec.upstreamResponsePlugins.config",
+                // These shared references are preserved objects with no fixed
+                // children declared. Their containing fields remain compared.
+                "spec.*.conditions.*.*.ipRefs",
+                "spec.*.conditions.*.*.secretRef",
+                "spec.*.conditions.*.*.secretGroups",
+                "spec.*.conditions.*.*.*.ipRefs",
+                "spec.*.conditions.*.*.*.secretRef",
+                "spec.*.conditions.*.*.*.secretGroups",
+                "spec.*.body.conditions.*.*.ipRefs",
+                "spec.*.body.conditions.*.*.secretRef",
+                "spec.*.body.conditions.*.*.secretGroups",
+                "spec.*.body.conditions.*.*.*.ipRefs",
+                "spec.*.body.conditions.*.*.*.secretRef",
+                "spec.*.body.conditions.*.*.*.secretGroups",
+                "spec.*.dye.*.conditions.*.*.ipRefs",
+                "spec.*.dye.*.conditions.*.*.secretRef",
+                "spec.*.dye.*.conditions.*.*.secretGroups",
+                "spec.*.dye.*.conditions.*.*.*.ipRefs",
+                "spec.*.dye.*.conditions.*.*.*.secretRef",
+                "spec.*.dye.*.conditions.*.*.*.secretGroups",
+            ]
+        ),
+        scope!(
+            "edgion_stream_plugins_crd.yaml",
+            EdgionStreamPluginsSpec,
+            EdgionStreamPluginsStatus,
+            &["spec.plugins.config", "spec.tlsRoutePlugins.config",]
+        ),
+        scope!("link_sys_crd.yaml", LinkSysSpec, LinkSysStatus, &["spec.config"]),
+        scope!(
+            "edgion_config_data_crd.yaml",
+            EdgionConfigDataSpec,
+            EdgionConfigDataStatus,
+            &["spec.data.config"]
+        ),
+    ]
+}
+
+fn served_schemas(file: &str) -> Vec<(String, Value)> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../config/crd/edgion-crd")
+        .join(file);
+    let doc: Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let schemas: Vec<_> = doc["spec"]["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|version| version["served"] == true)
+        .map(|version| {
+            let name = version["name"].as_str().unwrap().to_string();
+            let schema = version["schema"]["openAPIV3Schema"].clone();
+            assert!(schema.is_object(), "{file}/{name}: missing schema");
+            (name, schema)
+        })
+        .collect();
+    assert!(!schemas.is_empty(), "{file}: no served versions");
+    schemas
+}
+
+fn property_node_mut<'a>(mut node: &'a mut Value, dotted: &str) -> &'a mut Value {
+    for part in dotted.split('.') {
+        if node.get("items").is_some() {
+            node = node.get_mut("items").unwrap();
+        }
+        node = node["properties"]
+            .get_mut(part)
+            .unwrap_or_else(|| panic!("missing property {dotted}"));
+    }
+    node
+}
+
+fn item_node_mut(mut node: &mut Value) -> &mut Value {
+    while node.get("items").is_some() {
+        node = node.get_mut("items").unwrap();
+    }
+    node
+}
+
+fn boundary_paths(projection: &Value, path: &str, opaque: &[&str], paths: &mut Vec<String>) {
+    if matches_boundary(path, opaque) {
+        paths.push(path.to_string());
+        return;
+    }
+    for (name, child) in projection["properties"].as_object().unwrap() {
+        boundary_paths(child, &format!("{path}.{name}"), opaque, paths);
+    }
+}
+
+#[test]
+fn all_custom_crds_have_explicit_fixed_field_scopes() {
+    let scopes = fixed_field_scopes();
+    let covered: BTreeSet<_> = scopes.iter().map(|scope| scope.file.to_string()).collect();
+    assert_eq!(covered.len(), scopes.len(), "duplicate CRD coverage scope");
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd/edgion-crd");
+    let committed: BTreeSet<_> = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "yaml"))
+        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        covered, committed,
+        "each custom CRD needs an explicit fixed-field scope"
+    );
+}
+
+#[test]
+fn all_custom_crd_fixed_spec_and_status_fields_match() {
+    let mut failures = Vec::new();
+    for scope in fixed_field_scopes() {
+        for (version, schema) in served_schemas(scope.file) {
+            for (section, expected, opaque) in [("spec", &scope.spec, scope.opaque), ("status", &scope.status, &[][..])]
+            {
+                let actual = &schema["properties"][section];
+                assert!(
+                    actual.get("properties").is_some(),
+                    "{}/{version}.{section}: missing fixed object",
+                    scope.file
+                );
+                let (missing, stale) = scope.compare(section, expected, actual, opaque);
+                if !missing.is_empty() || !stale.is_empty() {
+                    failures.push(format!(
+                        "{}/{version}.{section}: missing={missing:?}, stale={stale:?}",
+                        scope.file
+                    ));
+                }
+            }
+            let empty = Map::new();
+            let mut boundaries = Vec::new();
+            let defs = scope.spec.get("$defs").and_then(Value::as_object).unwrap_or(&empty);
+            boundary_paths(
+                &fixed_projection(&scope.spec, defs, "spec", scope.opaque, 0),
+                "spec",
+                scope.opaque,
+                &mut boundaries,
+            );
+            for boundary in boundaries {
+                let mut spec = schema["properties"]["spec"].clone();
+                let node = property_node_mut(&mut spec, boundary.strip_prefix("spec.").unwrap());
+                let node = if node.get("items").is_some() {
+                    &node["items"]
+                } else {
+                    node
+                };
+                assert_eq!(
+                    node["x-kubernetes-preserve-unknown-fields"], true,
+                    "{}: {boundary} must stay open",
+                    scope.file
+                );
+                if boundary.ends_with(".parentRefs")
+                    || scope
+                        .opaque
+                        .iter()
+                        .any(|pattern| pattern.contains('*') && matches_boundary(&boundary, &[*pattern]))
+                {
+                    assert!(
+                        node.get("properties").is_none(),
+                        "{}: {boundary} acquired fixed children; update its explicit coverage scope",
+                        scope.file
+                    );
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "fixed CRD field drift:\n{}", failures.join("\n"));
+}
+
+#[test]
+fn fixed_projection_detects_composed_fields_ref_chains_and_arrays() {
+    use serde_json::json;
+    let expected = json!({
+        "$defs": {
+            "Alias": {"$ref": "#/$defs/Item", "properties": {"sibling": {}}},
+            "Item": {"properties": {"retained": {}, "missing": {}}}
+        },
+        "allOf": [
+            {"properties": {"enable": {}}},
+            {"oneOf": [
+                {"properties": {"firstFixed": {}, "type": {}, "config": {"properties": {"variantA": {}}}}},
+                {"properties": {"secondFixed": {}, "type": {}, "config": {"properties": {"variantB": {}}}}}
+            ]}
+        ],
+        "properties": {"list": {"anyOf": [
+            {"type": "null"}, {"items": {"$ref": "#/$defs/Alias"}}
+        ]}}
+    });
+    let actual = json!({"properties": {
+        "enable": {}, "firstFixed": {}, "secondFixed": {}, "type": {}, "config": {"properties": {"futureVariant": {}}},
+        "list": {"items": {"properties": {"retained": {}, "sibling": {}, "stale": {}}}}
+    }});
+    let (missing, stale) = compare_fixed_fields(&expected, &actual, "spec", &["spec.config"]);
+    assert_eq!(missing, ["spec.list.missing"]);
+    assert_eq!(stale, ["spec.list.stale"]);
+
+    let mut absent = actual.clone();
+    absent["properties"].as_object_mut().unwrap().remove("config");
+    assert_eq!(
+        compare_fixed_fields(&expected, &absent, "spec", &["spec.config"]).0,
+        ["spec.config", "spec.list.missing"],
+        "an opaque body must still be declared"
+    );
+    let mut leaf = actual.clone();
+    leaf["properties"]["list"] = json!({"type": "string"});
+    assert_eq!(
+        compare_fixed_fields(&expected, &leaf, "spec", &["spec.config"]).0,
+        ["spec.list.missing", "spec.list.retained", "spec.list.sibling"],
+        "a scalar must not hide missing object children"
+    );
+}
+
+#[test]
+fn explicit_boundary_patterns_match_only_complete_property_paths() {
+    let pattern = &["spec.*.conditions.*.*.secretRef"];
+    assert!(matches_boundary(
+        "spec.requestPlugins.conditions.run.allOf.secretRef",
+        pattern
+    ));
+    assert!(!matches_boundary(
+        "spec.requestPlugins.conditions.run.allOf.secretRef.name",
+        pattern
+    ));
+    assert!(!matches_boundary(
+        "spec.requestPlugins.dye.request.conditions.run.allOf.secretRef",
+        pattern
+    ));
+    assert!(!matches_boundary(
+        "spec.requestPlugins.conditions.run.secretRef",
+        pattern
+    ));
+}
+
+#[test]
+fn partially_declared_acme_reference_keeps_fixed_name_and_stale_checks() {
+    let scope = fixed_field_scopes()
+        .into_iter()
+        .find(|scope| scope.file == "edgion_acme_crd.yaml")
+        .unwrap();
+    for (_, schema) in served_schemas(scope.file) {
+        let mut spec = schema["properties"]["spec"].clone();
+        let reference = property_node_mut(&mut spec, "challenge.gatewayRef");
+        reference["properties"].as_object_mut().unwrap().remove("name").unwrap();
+        reference["properties"]["staleFixedField"] = serde_json::json!({"type": "string"});
+        let (missing, stale) = scope.compare("spec", &scope.spec, &spec, scope.opaque);
+        assert!(missing.contains(&"spec.challenge.gatewayRef.name".to_string()));
+        assert!(stale.contains(&"spec.challenge.gatewayRef.staleFixedField".to_string()));
+        reference_preservation_failure(&scope, &schema["properties"]["spec"]);
+    }
+}
+
+fn reference_preservation_failure(scope: &FixedFieldScope, spec: &Value) {
+    let mut spec = spec.clone();
+    property_node_mut(&mut spec, "challenge.gatewayRef")
+        .as_object_mut()
+        .unwrap()
+        .remove("x-kubernetes-preserve-unknown-fields");
+    assert!(
+        std::panic::catch_unwind(|| scope.compare("spec", &scope.spec, &spec, scope.opaque)).is_err(),
+        "optional undeclared fields must not be exempted once admission would prune them"
+    );
+}
+
+#[test]
+#[should_panic(expected = "unresolved schema reference")]
+fn fixed_projection_rejects_unresolved_refs() {
+    compare_fixed_fields(
+        &serde_json::json!({"$ref": "#/$defs/Missing"}),
+        &serde_json::json!({}),
+        "spec",
+        &[],
+    );
+}
+
+#[test]
+#[should_panic(expected = "recursive or excessively deep schema")]
+fn fixed_projection_rejects_reference_cycles() {
+    let expected = serde_json::json!({"$defs": {"Cycle": {"$ref": "#/$defs/Cycle"}}, "$ref": "#/$defs/Cycle"});
+    compare_fixed_fields(&expected, &serde_json::json!({}), "spec", &[]);
+}
+
+fn first_nested_fixed_field(projection: &Value, prefix: &str, opaque: &[&str]) -> Option<String> {
+    for (name, child) in projection["properties"].as_object().unwrap() {
+        let path = format!("{prefix}.{name}");
+        if matches_boundary(&path, opaque) || ACME_PRESERVED_REFERENCE_FIELDS.contains(&path.as_str()) {
+            continue;
+        }
+        if let Some(nested) = first_nested_fixed_field(child, &path, opaque) {
+            return Some(nested);
+        }
+        if path.matches('.').count() >= 2 {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[test]
+fn committed_crd_mutations_detect_missing_and_stale_fixed_fields() {
+    let empty = Map::new();
+    for scope in fixed_field_scopes() {
+        for (version, schema) in served_schemas(scope.file) {
+            for (section, expected, opaque) in [("spec", &scope.spec, scope.opaque), ("status", &scope.status, &[][..])]
+            {
+                let actual = &schema["properties"][section];
+                let defs = expected.get("$defs").and_then(Value::as_object).unwrap_or(&empty);
+                let projection = fixed_projection(expected, defs, section, opaque, 0);
+                let top = projection["properties"].as_object().unwrap().keys().next().unwrap();
+                let mut paths = vec![format!("{section}.{top}")];
+                if let Some(nested) = first_nested_fixed_field(&projection, section, opaque) {
+                    paths.push(nested);
+                } else {
+                    // LinkSys spec is just type + an opaque config body.
+                    assert!(
+                        scope.file == "link_sys_crd.yaml" && section == "spec",
+                        "{}/{version}.{section}: unexpectedly lost nested fixed fields",
+                        scope.file
+                    );
+                }
+                for path in paths {
+                    let (parent, field) = path.rsplit_once('.').unwrap();
+                    let mut mutated = actual.clone();
+                    let parent = if parent == section {
+                        &mut mutated
+                    } else {
+                        property_node_mut(&mut mutated, parent.strip_prefix(&format!("{section}.")).unwrap())
+                    };
+                    let parent = item_node_mut(parent);
+                    parent["properties"].as_object_mut().unwrap().remove(field).unwrap();
+                    parent["properties"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("staleFixedField".into(), serde_json::json!({"type": "string"}));
+                    let (missing, stale) = scope.compare(section, expected, &mutated, opaque);
+                    assert!(
+                        missing.contains(&path),
+                        "{}/{version}: failed to detect removed {path}: {missing:?}",
+                        scope.file
+                    );
+                    let stale_path = format!("{}.staleFixedField", path.rsplit_once('.').unwrap().0);
+                    assert!(
+                        stale.contains(&stale_path),
+                        "{}/{version}: failed to detect {stale_path}: {stale:?}",
+                        scope.file
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn committed_open_config_bodies_remain_opaque_but_required_in_the_schema() {
+    for scope in fixed_field_scopes() {
+        for (version, schema) in served_schemas(scope.file) {
+            let actual = &schema["properties"]["spec"];
+            let baseline = scope.compare("spec", &scope.spec, actual, scope.opaque);
+            for boundary in scope.opaque.iter().filter(|boundary| !boundary.contains('*')) {
+                let mut mutated = actual.clone();
+                let path = boundary.strip_prefix("spec.").unwrap();
+                *property_node_mut(&mut mutated, path) = serde_json::json!({
+                    "type": "object", "x-kubernetes-preserve-unknown-fields": true,
+                    "properties": {"futureVariantField": {"properties": {"nested": {"type": "string"}}}}
+                });
+                assert_eq!(
+                    scope.compare("spec", &scope.spec, &mutated, scope.opaque),
+                    baseline,
+                    "{}/{version}: open-body internals must not affect fixed-field coverage: {boundary}",
+                    scope.file
+                );
+                let (parent, field) = path.rsplit_once('.').unwrap_or(("", path));
+                let parent = if parent.is_empty() {
+                    &mut mutated
+                } else {
+                    property_node_mut(&mut mutated, parent)
+                };
+                let parent = item_node_mut(parent);
+                parent["properties"].as_object_mut().unwrap().remove(field).unwrap();
+                assert!(
+                    scope
+                        .compare("spec", &scope.spec, &mutated, scope.opaque)
+                        .0
+                        .contains(&boundary.to_string()),
+                    "{}/{version}: missing open body must be detected: {boundary}",
+                    scope.file
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -473,8 +1011,8 @@ fn string_enum_values(schema: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-/// Narrow regression pins for the two one-time fixes on tagged-enum CRDs that
-/// the general guard intentionally does not cover (acme status, stream spec).
+/// Narrow historical regression pins, retained alongside complete fixed-field
+/// coverage so their original trigger and diagnostic remain independently visible.
 fn has_property(section: &Value, dotted: &str) -> bool {
     let empty = Map::new();
     let mut node = section;

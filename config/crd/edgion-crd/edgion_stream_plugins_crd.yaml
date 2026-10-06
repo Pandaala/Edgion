@@ -33,13 +33,6 @@ spec:
                       type: boolean
                       description: Whether this plugin is enabled (default true)
                       default: true
-                    conditionEnable:
-                      type: object
-                      description: Conditional enable configuration
-                      properties:
-                        timeBefore:
-                          type: string
-                          description: Plugin enabled before this time (RFC3339)
                     type:
                       type: string
                       description: Plugin type

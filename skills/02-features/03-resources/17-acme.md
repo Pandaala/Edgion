@@ -75,6 +75,11 @@ spec:
 
 ### challenge — Challenge Configuration
 
+Both `privateKeySecretRef` and `externalAccountBinding.keySecretRef` use
+`SecretObjectReference`: required `name`, optional `namespace`, `group` and `kind`.
+The group/kind fields are reserved metadata, not a resource-type selector;
+current credential resolution reads core Secrets by namespace/name.
+
 `challenge` accepts only `type: http-01` and a required `gatewayRef`. Unknown fields and other challenge types are rejected.
 
 **HTTP-01** (`type: http-01`):

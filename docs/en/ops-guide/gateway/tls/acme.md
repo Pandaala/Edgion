@@ -90,6 +90,11 @@ After creation the Controller registers the ACME account (storing its key in `pr
 
 > `privateKeySecretRef` (the ACME **account** key) and `storage.secretName` (the issued **certificate**) are two different Secrets. The account Secret is reused across renewals; the certificate Secret is overwritten on each issuance.
 
+`privateKeySecretRef` and `externalAccountBinding.keySecretRef` accept `name` and
+optional `namespace`, `group` and `kind`. The last two are reserved metadata;
+they do not select another credential resource type. Resolution currently uses
+`namespace`/`name` to read core Kubernetes Secrets.
+
 ### Challenge configuration
 
 `challenge` accepts only `type: http-01` and a required `gatewayRef`. Other challenge types and unknown fields are rejected.

@@ -38,6 +38,12 @@ spec:
                     Mirrors cert-manager's Issuer.spec.acme.privateKeySecretRef.
                   required: ["name"]
                   properties:
+                    group:
+                      type: string
+                      description: "Reserved group metadata; credential sources remain core Secrets"
+                    kind:
+                      type: string
+                      description: "Reserved kind metadata; only Secret credential sources are supported"
                     name:
                       type: string
                       description: "Name of the Secret"
@@ -104,6 +110,12 @@ spec:
                       required:
                         - name
                       properties:
+                        group:
+                          type: string
+                          description: "Reserved group metadata; credential sources remain core Secrets"
+                        kind:
+                          type: string
+                          description: "Reserved kind metadata; only Secret credential sources are supported"
                         name:
                           type: string
                         namespace:

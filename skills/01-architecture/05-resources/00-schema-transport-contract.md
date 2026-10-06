@@ -27,16 +27,33 @@ Every field must be classified deliberately.
 
 ## Automated guards
 
-`edgion-resources/tests/crd_coverage.rs` currently performs bidirectional property-presence checks
-for four fully structural specs:
+`edgion-resources/tests/crd_coverage.rs` compares fixed property names in `spec` and `status`
+for every served version of all nine custom CRDs. Its explicit scope inventory must match
+the committed CRD file set. The existing bidirectional diff operates on projections that
+merge composition branches, reference chains and reference siblings, and traverse array items.
+Union projection compares the combined property names, not variant validity. Dynamic map
+keys and value schemas are outside this fixed-property check.
 
-- `EdgionGatewayConfigSpec`
-- `EdgionTlsSpec`
-- `EdgionBackendTrafficPolicySpec`
-- `EdgionBackendSpec`
+| Resource | Fixed-field scope and open boundaries |
+|----------|---------------------------------------|
+| EdgionGatewayConfig, EdgionTls, EdgionBackendTrafficPolicy, EdgionBackend | Full structural spec and status property names |
+| EdgionAcme | Spec/status, including challenge type and gatewayRef.name; autoEdgionTls.parentRefs items remain preserved and undeclared; gatewayRef's group/kind/namespace/port/sectionName remain preserved optional omissions |
+| EdgionPlugins | Spec, stage-entry fields, conditions, body/dye declarations, access-log fields, WAF and partitioned status; stage config interiors stay opaque |
+| EdgionStreamPlugins | Both stage-entry envelopes and partitioned status; config interiors stay opaque |
+| LinkSys | Spec type/config envelope and complete partitioned status; variant config interiors stay opaque |
+| EdgionConfigData | Spec including the data type/config envelope, and status; data.config interiors stay opaque |
 
-It also contains narrow regression pins for EdgionAcme status and the stream-plugin TLS-route
-field. The property walker does not validate field types/patterns/defaults.
+HTTP condition `ipRefs`, `secretRef` and `secretGroups` bodies are explicitly excluded at
+entry, body and dye condition paths. Their containing fields are still compared. Their
+items/objects and ACME autoEdgionTls.parentRefs items must retain preserve-unknown and
+declare no fixed children; new declarations require a scope update. The partially declared
+ACME gatewayRef retains its preserve-unknown requirement and name-field checks. No blanket
+preserve-unknown exemption is inferred from the CRD.
+
+The guard retains narrow historical pins for ACME status and the stream-plugin TLS-route
+field. Regression specimens remove and add fixed top-level/nested fields in in-memory CRDs,
+and demonstrate that open-body internal differences are ignored while missing bodies fail.
+The property walker does not validate field types/patterns/defaults.
 
 `edgion-resources/tests/crd_field_contract_parity.rs` separately checks 16 selected
 scalar fields across every served EdgionGatewayConfig and EdgionBackendTrafficPolicy
@@ -64,9 +81,10 @@ guarded by `cicd/checks/check_open_extension_types.py`. Unknown names decode to
 schema-hidden invalid markers and withdraw stale runtime state. Known configurations,
 credential substructures, ACME challenge types, and resource kinds remain typed.
 
-Tagged-enum CRDs such as plugins, stream plugins, ACME, LinkSys, and EdgionConfigData preserve
-unknown config fields and are not covered field-by-field. Review their `#[schemars(skip)]`, serde,
-and redaction annotations manually.
+Fixed envelopes and status fields of tagged-enum CRDs are covered, but intentionally open
+config/reference interiors are not. Review their `#[schemars(skip)]`, serde and redaction
+annotations manually; use typed validation and dedicated enum/constraint guards for the
+contracts that property-presence checks cannot establish.
 
 ## Change checklist
 

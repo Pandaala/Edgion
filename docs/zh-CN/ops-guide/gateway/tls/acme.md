@@ -90,6 +90,10 @@ spec:
 
 > `privateKeySecretRef`（ACME **账号**密钥）和 `storage.secretName`（签发的**证书**）是两个不同的 Secret。账号 Secret 在续期中复用；证书 Secret 每次签发时覆盖。
 
+`privateKeySecretRef` 和 `externalAccountBinding.keySecretRef` 接受 `name`，以及可选的
+`namespace`、`group` 和 `kind`。后两个字段是预留元数据，不会选择其他凭据资源类型；
+当前解析仍按 `namespace`/`name` 读取 Kubernetes 核心 API 的 Secret。
+
 ### 校验配置
 
 `challenge` 仅接受 `type: http-01` 和必填的 `gatewayRef`，其他校验类型和未知字段会被拒绝。
