@@ -346,6 +346,78 @@ async fn pre_trailer_event_stays_typed_and_does_not_close_response_terminal() {
 }
 
 struct DropChunk;
+struct PreTrailerOutput;
+
+#[async_trait]
+impl StreamingResponseProcessor for PreTrailerOutput {
+    async fn on_event(
+        &mut self,
+        body: &mut Option<Bytes>,
+        event: StreamingResponseEvent,
+        _stream_kind: ResponseStreamKind,
+        _sink: &mut ResponseBodySink,
+        _session: &mut dyn PluginSession,
+    ) {
+        if event == StreamingResponseEvent::TerminalBeforeTrailers {
+            *body = Some(Bytes::from(vec![b'x'; 1024]));
+        }
+    }
+
+    async fn on_chunk(
+        &mut self,
+        _body: &mut Option<Bytes>,
+        _end_of_stream: bool,
+        _stream_kind: ResponseStreamKind,
+        _sink: &mut ResponseBodySink,
+        _session: &mut dyn PluginSession,
+    ) {
+        panic!("the typed terminal callback must be preserved")
+    }
+}
+
+#[tokio::test]
+async fn pre_trailer_generated_body_uses_scoped_maximum_delay_without_closing_eos() {
+    let proxy = EdgionHttpProxy {
+        listener_port: 0,
+        is_https_listener: false,
+        listener_key: edgion_resources::ListenerKey("unit-pre-trailer".into()),
+        server_header_opts: Default::default(),
+        access_logger: Arc::new(crate::observe::AccessLogger::new()),
+        egc: crate::config::bind_gateway_config(None),
+        enable_http2: false,
+        preflight_handler: super::super::PreflightHandler,
+        http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::new()),
+        grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::new()),
+    };
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.route_unit = Some(http_route_unit(Arc::new(bandwidth_runtime("8192"))));
+    ctx.selected_backend = Some(selected_http_backend(Arc::new(bandwidth_runtime("4096"))));
+    ctx.install_resolved_gateway_plugins(vec![Arc::new(bandwidth_runtime("1024"))]);
+    ctx.install_resolved_global_plugins(vec![Arc::new(bandwidth_runtime("2048"))]);
+    ctx.push_response_stream_processor(Box::new(PreTrailerOutput));
+    ctx.freeze_response_processor_driver();
+    let mut body = None;
+    let mut sink = ResponseBodySink::new();
+    let delay = upstream_response_body_filter_event(
+        &proxy,
+        &mut session,
+        &mut body,
+        UpstreamResponseBodyEvent::TerminalBeforeTrailers,
+        &mut sink,
+        &mut ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(delay, Some(Duration::from_secs(1)));
+    assert_eq!(body.as_ref().map(Bytes::len), Some(1024));
+    assert!(!sink.is_terminated());
+    assert_eq!(
+        ctx.response_terminal_state,
+        crate::response::terminal::ResponseTerminalState::Open
+    );
+}
+
 #[async_trait]
 impl StreamingResponseProcessor for DropChunk {
     async fn on_chunk(

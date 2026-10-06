@@ -578,6 +578,9 @@ impl EdgionGatewayCli {
             );
         }
 
+        crate::ai::config::initialize(&config.ai)
+            .map_err(|error| anyhow!("Invalid AI conversion configuration: {error}"))?;
+
         // 5. Initialize RateLimitLocal / cache / access-log sensitive global configurations
         let mirror_limits = config.request_mirror.resolve().map_err(|error| anyhow!(error))?;
         init_global_budget(&mirror_limits)

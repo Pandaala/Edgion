@@ -45,6 +45,24 @@ request_mirror:
   max_concurrent: 1024       # 1..65536 active mirror tasks
   max_buffered_bytes: 64MiB  # 1 byte..1GiB retained mirror bodies; not total RSS
 
+# Process-wide Anthropic unary conversion limits; changes require a restart.
+# Unknown keys in every AI conversion subtree fail startup. Limits apply only
+# to selected non-streaming Chat-to-Anthropic conversion. Defaults derive a
+# 25MiB reservation and ten slots; memory_budget is not a process RSS limit.
+ai:
+  conversion:
+    chat_to_anthropic:
+      unary:
+        max_input_size: 1MiB
+        max_output_size: 1MiB
+        hold_timeout: 120s
+        memory_budget: 256MiB
+        max_json_depth: 64
+        max_json_nodes: 16384
+        max_key_size: 256B
+        max_source_events: 4096
+        max_metadata_size: 64KiB
+
 gateway:
   # Controller conf_sync gRPC address.
   # Scheme: https:// when conf_sync_security carries certs (the default, see the

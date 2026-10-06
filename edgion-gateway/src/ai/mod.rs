@@ -1,6 +1,7 @@
 //! AI Gateway runtime configuration.
 
 pub mod accounting;
+pub mod config;
 pub(crate) mod connectors;
 pub(crate) mod context;
 pub(crate) mod conversion;

@@ -265,9 +265,9 @@ impl ProxyHttp for EdgionHttpProxy {
         &self,
         _session: &Session,
         boundary: ResponseHeadBoundary,
-        _ctx: &mut Self::CTX,
+        ctx: &mut Self::CTX,
     ) -> ResponseHeadBoundaryAction {
-        pg_response_head::response_head_hold_boundary(boundary)
+        pg_response_head::response_head_hold_boundary(boundary, ctx)
     }
 
     fn response_head_hold_outcome(
@@ -320,7 +320,8 @@ impl ProxyHttp for EdgionHttpProxy {
     where
         Self::CTX: Send + Sync,
     {
-        pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, Some(trailers)).await
+        pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, Some(trailers)).await?;
+        crate::ai::conversion::chat_to_anthropic::head::compact_trailers(trailers, ctx)
     }
 
     async fn logging(&self, session: &mut Session, e: Option<&Error>, ctx: &mut Self::CTX)

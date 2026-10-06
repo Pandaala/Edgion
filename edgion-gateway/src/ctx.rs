@@ -2007,8 +2007,15 @@ pub enum ResponseStreamKind {
 
 /// Request-stage declaration and response-stage activation for the one
 /// response-head Hold claimant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResponseHeadHoldOwner {
+    Guardrail,
+    AnthropicUnary,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ResponseHeadHoldClaim {
+    pub(crate) owner: ResponseHeadHoldOwner,
     pub(crate) limits: pingora_proxy::ResponseHeadHoldLimits,
     pub(crate) active: bool,
 }

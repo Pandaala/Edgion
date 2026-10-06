@@ -339,6 +339,7 @@ pub async fn response_filter(
         compression_ctx.adjust_level(level);
     }
     ctx.request_info.trace_id.reconcile_response(upstream_response);
+    crate::ai::conversion::chat_to_anthropic::head::compact_final_header(upstream_response, ctx)?;
     ctx.select_final_downstream_status(upstream_response.status.as_u16());
     // The response onion and both framing-repair passes are complete. From
     // this point through body/trailer callbacks and logging, one request-local

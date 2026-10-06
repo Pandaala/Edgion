@@ -331,12 +331,12 @@ AI request-body processing does not default to streaming: choose canonical
 streaming observation or the existing request `BodyStorage` according to
 whether the feature needs incremental bytes or one complete document.
 
-1. **Only the proxied request body may be cached.** Request plugins that require
+1. **Only the proxied request body uses shared body storage.** Request plugins that require
    the complete body share the request-scoped `BodyStorage`; it may spill from
    memory to disk and is bounded by the gateway physical body cap. Do not add a
    response-side `BodyStorage` or another request-body cache.
-2. **The main proxy upstream response is always streaming.** Process it only
-   through Pingora's per-chunk response-body path, preserving backpressure and
+2. **The main proxy upstream response streams by default.** Process it through
+   Pingora's per-chunk response-body path, preserving backpressure and
    unbounded download/SSE behavior. Response-body plugins may inspect or
    transform the current chunk but must not accumulate unbounded state.
    Full-upstream-body APIs or modes (for example DSL `resp.body` or ExtProc
@@ -347,6 +347,22 @@ whether the feature needs incremental bytes or one complete document.
    release/replace/discard, flush once at EOS, and never become full-response
    aggregation. Holding bytes is not itself backpressure; an async decision
    point provides backpressure only while its processor callback is awaited.
+   The sole full-document exception is an explicitly selected non-streaming
+   OpenAI Chat-to-Anthropic converter, owned by `ai/conversion/chat_to_anthropic`.
+   It may aggregate one response in memory only under an independently reviewed
+   design that enforces input/output byte caps while receiving/serializing,
+   parsing-complexity limits, a conservative per-exchange memory budget and a
+   process-wide concurrent-memory budget, existing deadlines, and release on
+   success, failure or cancellation. A payload cap alone is not a heap bound.
+   Conversion must finish before final downstream headers/body commit so an
+   invalid, truncated or oversized conversion can return a fixed client-dialect
+   502; budget admission failure uses the existing local failure contract.
+   Transport/header deferral must be reviewed separately and leave ordinary HTTP,
+   native AI and SSE paths unchanged. This permits no response `BodyStorage`,
+   disk spool, full-response `RawWindow`, general plugin whole-response API, or
+   usage-only aggregation. The existing converter is not accepted by this rule
+   amendment; its remediation remains
+   [Task 03](tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md).
 3. **A plugin-initiated outbound call is a separate bounded exchange.** Such a
    call may aggregate its response body only behind an explicit hard byte cap
    (normally a 1 MiB global/configured limit), enforced while streaming the

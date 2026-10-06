@@ -317,8 +317,15 @@ pub async fn upstream_response_body_filter_event(
         UpstreamResponseBodyEvent::TerminalBeforeTrailers => {
             record_first_body_time(ctx, body.as_ref());
             run_stream_processors_event(session, ctx, body, StreamingResponseEvent::TerminalBeforeTrailers, sink).await;
+            // A processor may flush its final bytes here. They still pass through
+            // the canonical readonly chain, while trailers retain ownership of EOS.
+            let delay = if body.as_ref().is_some_and(|chunk| !chunk.is_empty()) {
+                run_read_only_body_plugins(session, ctx, body, false)
+            } else {
+                None
+            };
             let _ = ctx.mark_upstream_before_trailers();
-            Ok(None)
+            Ok(delay)
         }
     }
 }

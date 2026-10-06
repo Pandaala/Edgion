@@ -1540,7 +1540,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 state.semantic_guard_claimed = false;
                 state.canonical_record_batch = None;
                 state.semantic_processor = None;
-                state.response_head_hold_claim = None;
+                if state
+                    .response_head_hold_claim
+                    .is_some_and(|claim| claim.owner == crate::ctx::ResponseHeadHoldOwner::Guardrail)
+                {
+                    state.response_head_hold_claim = None;
+                }
             }
         }
     }
@@ -1560,7 +1565,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         let state = self.ctx.ensure_ai_state();
         state.semantic_processor = Some(processor);
         if let Some(claim) = state.response_head_hold_claim.as_mut() {
-            claim.active = true;
+            if claim.owner == crate::ctx::ResponseHeadHoldOwner::Guardrail {
+                claim.active = true;
+            }
         }
         true
     }
@@ -1587,18 +1594,23 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         owner: std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>,
         head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
     ) -> bool {
-        if self
-            .ctx
-            .ai_state()
-            .is_some_and(|state| state.attached_guardrail.is_some() || state.semantic_guard_claimed)
-        {
+        if self.ctx.ai_state().is_some_and(|state| {
+            state.attached_guardrail.is_some()
+                || state.semantic_guard_claimed
+                || (head_limits.is_some() && state.response_head_hold_claim.is_some())
+        }) {
             return false;
         }
         let state = self.ctx.ensure_ai_state();
         state.attached_guardrail = Some((identity, owner));
         state.semantic_guard_claimed = true;
-        state.response_head_hold_claim =
-            head_limits.map(|limits| crate::ctx::ResponseHeadHoldClaim { limits, active: false });
+        if let Some(limits) = head_limits {
+            state.response_head_hold_claim = Some(crate::ctx::ResponseHeadHoldClaim {
+                owner: crate::ctx::ResponseHeadHoldOwner::Guardrail,
+                limits,
+                active: false,
+            });
+        }
         self.ctx.reserve_response_framing();
         true
     }

@@ -9,6 +9,8 @@ use crate::plugins::runtime::PluginSession;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiProxyError {
     ModelNotFound,
+    UpstreamResponseInvalid,
+    UpstreamTimeout,
     StreamingDisabled,
     BackendUnavailable,
     MalformedBody,
@@ -29,6 +31,18 @@ pub enum AiProxyError {
 impl AiProxyError {
     const fn fields(self) -> (u16, &'static str, &'static str, &'static str) {
         match self {
+            Self::UpstreamResponseInvalid => (
+                502,
+                "The AI backend response could not be processed.",
+                "api_error",
+                "upstream_response_invalid",
+            ),
+            Self::UpstreamTimeout => (
+                504,
+                "The AI backend response timed out.",
+                "api_error",
+                "upstream_timeout",
+            ),
             Self::ModelNotFound => (
                 404,
                 "The requested model was not found.",

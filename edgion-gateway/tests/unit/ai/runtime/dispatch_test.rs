@@ -920,3 +920,97 @@ async fn raw_encoding_survives_anthropic_header_replacement_and_fixed_error_body
     assert_eq!(snapshot.usage, None);
     assert!(composite.eos.load(std::sync::atomic::Ordering::Acquire));
 }
+
+#[tokio::test]
+async fn unary_admission_arbitrates_only_active_owners_before_dispatch() {
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let _ = crate::ai::config::initialize(&crate::ai::config::AiConfig::default());
+    let runtime = crate::ai::config::runtime().unwrap();
+    for guard_first in [true, false] {
+        for active in [false, true] {
+            let mut plan = selectable_plan(vec![RuntimeAiCredential {
+                name: "primary".into(),
+                weight: 1,
+                credential: "fixture".into(),
+                limits: None,
+            }]);
+            Arc::get_mut(plan.candidates[0].backend.as_mut().unwrap())
+                .unwrap()
+                .provider = AiProvider::Anthropic;
+            plan.canonical_openai_body =
+                Bytes::from_static(br#"{"model":"logical","messages":[{"role":"user","content":"hello"}]}"#);
+            let mut ctx = EdgionHttpContext::new();
+            let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
+            storage.finish().await.unwrap();
+            ctx.request_body.install(view);
+            let claim = crate::ctx::ResponseHeadHoldClaim {
+                owner: crate::ctx::ResponseHeadHoldOwner::Guardrail,
+                limits: pingora_proxy::ResponseHeadHoldLimits::new(1, 1, 1, 1, 1, 1, Duration::from_secs(1)),
+                active,
+            };
+            if guard_first {
+                ctx.ensure_ai_state().response_head_hold_claim = Some(claim);
+            }
+            assert!(ctx.try_set_ai_attempt_plan(AiAttemptPlan::Ready(plan)));
+            if !guard_first {
+                ctx.ensure_ai_state().response_head_hold_claim = Some(claim);
+            }
+            assert!(ctx.ai_state().unwrap().unary_possible);
+            let mut session = test_session().await;
+            let result = prepare_first_attempt(&mut session, &mut ctx, 0, None, 0);
+            if active {
+                assert!(matches!(
+                    result,
+                    Err(AiDispatchError::Client(AiProxyError::BackendUnavailable))
+                ));
+                assert!(ctx.selected_backend.is_none());
+            } else {
+                let prepared = result.unwrap();
+                assert!(prepared.unary_owner.is_some());
+                drop(prepared);
+            }
+            let AiAttemptPlan::Ready(plan) = ctx.ai_state().unwrap().attempt_plan.as_ref().unwrap() else {
+                panic!("ready plan retained");
+            };
+            assert_eq!(plan.scheduler.dispatch_count(), 0);
+            assert_eq!(ctx.ai_state().unwrap().response_head_hold_claim.unwrap().active, active);
+        }
+    }
+    let reservations: Vec<_> = (0..runtime.limits.slots)
+        .map(|_| runtime.budget.acquire().unwrap())
+        .collect();
+    let mut plan = selectable_plan(vec![RuntimeAiCredential {
+        name: "primary".into(),
+        weight: 1,
+        credential: "fixture".into(),
+        limits: None,
+    }]);
+    Arc::get_mut(plan.candidates[0].backend.as_mut().unwrap())
+        .unwrap()
+        .provider = AiProvider::Anthropic;
+    let mut ctx = EdgionHttpContext::new();
+    ctx.try_set_ai_attempt_plan(AiAttemptPlan::Ready(plan));
+    let mut session = test_session().await;
+    assert!(matches!(
+        prepare_first_attempt(&mut session, &mut ctx, 0, None, 0),
+        Err(AiDispatchError::Client(AiProxyError::BackendUnavailable))
+    ));
+    assert!(ctx.selected_backend.is_none());
+    drop(reservations);
+    let mut ctx = EdgionHttpContext::new();
+    let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
+    storage.finish().await.unwrap();
+    ctx.request_body.install(view);
+    ctx.try_set_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![RuntimeAiCredential {
+        name: "primary".into(),
+        weight: 1,
+        credential: "fixture".into(),
+        limits: None,
+    }])));
+    ctx.ensure_ai_state().unary_possible = true;
+    let prepared = prepare_first_attempt(&mut session, &mut ctx, 0, None, 0).unwrap();
+    assert!(
+        prepared.unary_owner.is_none(),
+        "native selection in a mixed pending plan does not admit unary"
+    );
+}

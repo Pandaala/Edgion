@@ -495,23 +495,33 @@ fn fixed_errors_and_local_reject(
     Box::pin(async move {
         let start = Instant::now();
         for (mode, expected_status, expected_code) in [
+            ("unary_malformed", 502, "upstream_response_invalid"),
+            ("unary_oversized", 502, "upstream_response_invalid"),
+            ("unary_wrong_media", 502, "upstream_response_invalid"),
+            ("unary_gzip", 502, "upstream_response_invalid"),
             ("status_400", 400, "provider_invalid_request"),
             ("status_401", 503, "service_unavailable"),
+            // The cooldown from Retry-After must follow cases requiring dispatch.
             ("status_429", 429, "rate_limit_exceeded"),
         ] {
             let response = match post(&ctx, base_body(false), mode, false, None, false).await {
                 Ok(response) => response,
                 Err(error) => return TestResult::failed(start.elapsed(), error),
             };
-            if response.status().as_u16() != expected_status
-                || response.headers().contains_key("request-id")
+            if response.status().as_u16() != expected_status {
+                return TestResult::failed(
+                    start.elapsed(),
+                    format!(
+                        "unexpected status for {mode}: expected {expected_status}, got {}",
+                        response.status().as_u16()
+                    ),
+                );
+            }
+            if response.headers().contains_key("request-id")
                 || response.headers().contains_key("location")
                 || response.headers().contains_key("set-cookie")
             {
-                return TestResult::failed(
-                    start.elapsed(),
-                    format!("provider error headers/status leaked for {mode}"),
-                );
+                return TestResult::failed(start.elapsed(), format!("provider error headers leaked for {mode}"));
             }
             if mode == "status_429" && response.headers().get("retry-after").and_then(|v| v.to_str().ok()) != Some("3")
             {
@@ -565,7 +575,7 @@ fn bodyless_responses(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future::Fu
         let start = Instant::now();
         for h2 in [false, true] {
             for (mode, expected_status, expected_code, expect_translation_failure) in [
-                ("bodyless_200", 200, "response_translation_failed", true),
+                ("bodyless_200", 502, "upstream_response_invalid", true),
                 ("bodyless_503", 503, "service_unavailable", false),
             ] {
                 let trace = format!("anthropic-{mode}-h2-{h2}-{}", uuid::Uuid::new_v4());
@@ -574,7 +584,7 @@ fn bodyless_responses(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future::Fu
                     Err(error) => return TestResult::failed(start.elapsed(), error),
                 };
                 if response.status().as_u16() != expected_status
-                    || response.headers().contains_key(reqwest::header::CONTENT_LENGTH)
+                    || (expected_status != 502 && response.headers().contains_key(reqwest::header::CONTENT_LENGTH))
                     || response.headers().contains_key("request-id")
                     || response.headers().contains_key("x-provider-private")
                     || response

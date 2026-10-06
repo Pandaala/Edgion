@@ -379,6 +379,17 @@ pub struct AiUsageShared {
 }
 
 impl AiUsageShared {
+    pub(crate) fn mark_json_started(&self) {
+        self.json_started.store(true, Ordering::Release);
+    }
+    pub(crate) fn mark_json_complete(&self) {
+        self.json_complete.store(true, Ordering::Release);
+    }
+    pub(crate) fn mark_json_unavailable(&self) {
+        if !self.json_complete.load(Ordering::Acquire) {
+            self.mark_observation_unavailable();
+        }
+    }
     pub fn set_input_chars(&self, chars: u64) {
         self.input_chars.store(chars, Ordering::Relaxed);
     }

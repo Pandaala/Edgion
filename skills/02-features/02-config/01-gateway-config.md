@@ -144,6 +144,20 @@ udp_log:
 
 # ─── Global plugin configuration ───
 
+ai:
+  conversion:
+    chat_to_anthropic:
+      unary:
+        max_input_size: 1MiB
+        max_output_size: 1MiB
+        hold_timeout: 120s
+        memory_budget: 256MiB
+        max_json_depth: 64
+        max_json_nodes: 16384
+        max_key_size: 256B
+        max_source_events: 4096
+        max_metadata_size: 64KiB
+
 request_mirror:
   max_concurrent: 1024                   # Process-wide, 1..=65536
   max_buffered_bytes: 64MiB              # Retained mirror bodies, 1 byte..1GiB
@@ -500,6 +514,52 @@ main request continues. This budget does not bound total process RSS, request
 headers, TLS, or connection overhead. Per-mirror tuning remains in HTTPRoute
 `edgion.io/mirror-*` annotations or EdgionPlugins inline configuration; the
 standard Gateway API filter and vendored CRDs are unchanged.
+
+### ai.conversion.chat_to_anthropic.unary
+
+These top-level Gateway process YAML fields apply only to selected non-streaming
+OpenAI Chat-to-Anthropic conversion. They do not enable conversion or change native
+AI, ordinary HTTP or SSE streaming. Omission uses the defaults below.
+
+| Field | Default | Valid domain / meaning |
+|-------|---------|------------------------|
+| `max_input_size` | `1MiB` | 1 byte through `16MiB`; provider JSON bytes |
+| `max_output_size` | `1MiB` | 1 byte through `16MiB`; serialized Chat completion bytes |
+| `hold_timeout` | `120s` | `1ms` through `1h`; absolute ceiling from Hold activation, tightened by existing absolute deadlines |
+| `memory_budget` | `256MiB` | Derived reservation `R` through `16GiB`; one process-wide admission pool |
+| `max_json_depth` | `64` | Integer `1..=64` |
+| `max_json_nodes` | `16384` | Integer `1..=16384`; includes unknown fields and overwritten duplicates |
+| `max_key_size` | `256B` | 1 byte through `256B`; decoded JSON key bytes |
+| `max_source_events` | `4096` | Integer `4..=65536`; source tasks, including empty body events |
+| `max_metadata_size` | `64KiB` | `8KiB` through `64KiB`; cumulative retained head/trailer metadata, also at most 64 fields per projection |
+
+Sizes and durations use the canonical byte-size and duration grammars. Startup
+validates every field and computes the conservative reservation `R` with checked
+arithmetic before configuration synchronization. Every new subtree (`ai`,
+`conversion`, `chat_to_anthropic`, `unary`) rejects unknown keys. Invalid values,
+zero, overflow or a pool smaller than `R` fail startup; the pool error reports the
+required reservation bytes. There are no dedicated CLI flags or environment
+aliases. All fields require a Gateway restart and remain shared across routes,
+plugins and hot-reload generations.
+
+At defaults, `R = 25MiB` and `floor(256MiB / R) = 10` concurrent reservations.
+Changing advanced bounds changes `R`; it is not an operator override or an RSS
+limit. Reservations cover conversion buffers/DOM/output and bounded retained
+transport tasks/compact metadata. Original request/header storage, socket/TLS and
+normal transport buffers, unrelated plugins, allocator overhead and fragmentation
+are excluded. Allocation success is not guaranteed by reservation admission.
+Both the exchange owner and all output clones must release before readmission.
+
+Admission exhaustion or an active incompatible Hold claim returns fixed 503
+before dispatch. Invalid successful provider JSON, unsupported media/encoding or
+conversion/resource overflow returns fixed 502 before the final head/body commits;
+Hold timeout returns fixed 504. True provider errors and selected plugin denials
+retain their existing handling. Fully validated checked usage survives later
+serialization/delivery failure; incomplete or invalid JSON has unknown usage and
+fixed error bodies do not create character estimates.
+
+See [the audited capacity ledger](../../../tasks/todo/ai-gateway-product-completion/task03-memory-ledger.md)
+for representation assumptions and re-audit triggers.
 
 ### Upstream RemoteIp header
 

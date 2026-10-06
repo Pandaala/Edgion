@@ -16,15 +16,18 @@ fn active_claim(ctx: &EdgionHttpContext) -> Option<pingora_proxy::ResponseHeadHo
 
 pub(crate) fn response_head_may_hold(ctx: &EdgionHttpContext) -> bool {
     ctx.ai_state()
-        .is_some_and(|state| state.response_head_hold_claim.is_some())
+        .is_some_and(|state| state.unary_possible || state.response_head_hold_claim.is_some())
 }
 
 pub(crate) fn response_head_commit_plan(
     _session: &Session,
-    _source: ResponseHeadSource,
+    source: ResponseHeadSource,
     response: &ResponseHeader,
     ctx: &EdgionHttpContext,
 ) -> Result<ResponseHeadCommitPlan> {
+    if let Some(owner) = ctx.ai_state().and_then(|state| state.unary_owner.as_ref()) {
+        return owner.plan(source, response, ctx);
+    }
     let Some(limits) = active_claim(ctx) else {
         return Ok(ResponseHeadCommitPlan::Immediate);
     };
@@ -57,7 +60,21 @@ pub(crate) fn response_head_commit_plan(
     Ok(ResponseHeadCommitPlan::hold(limits))
 }
 
-pub(crate) fn response_head_hold_boundary(boundary: ResponseHeadBoundary) -> ResponseHeadBoundaryAction {
+pub(crate) fn response_head_hold_boundary(
+    boundary: ResponseHeadBoundary,
+    ctx: &EdgionHttpContext,
+) -> ResponseHeadBoundaryAction {
+    if let Some(owner) = ctx
+        .ai_state()
+        .and_then(|state| state.unary_owner.as_ref())
+        .filter(|owner| owner.raw_success())
+    {
+        return ResponseHeadBoundaryAction::Fail(if boundary == ResponseHeadBoundary::Timeout {
+            owner.timeout_failure()
+        } else {
+            crate::ai::conversion::chat_to_anthropic::head::failure(false)
+        });
+    }
     let error_type = match boundary {
         ResponseHeadBoundary::InputLimit
         | ResponseHeadBoundary::OutputLimit
@@ -87,6 +104,9 @@ pub(crate) fn response_head_hold_outcome(
     let Some(claim) = state.response_head_hold_claim else {
         return;
     };
+    if claim.owner != crate::ctx::ResponseHeadHoldOwner::Guardrail {
+        return;
+    }
     let Some((_, owner)) = state.attached_guardrail.as_ref() else {
         return;
     };

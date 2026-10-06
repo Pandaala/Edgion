@@ -1,3 +1,30 @@
+// Mock unary drives exercise the pure bounded conversion logic. The real Hold
+// wiring is covered by ai_unary_hold_transport; no production fallback exists.
+impl AnthropicResponseProcessor {
+    pub(crate) fn new_with_quota(
+        canonical_model: String,
+        requested_streaming: bool,
+        effective_usage_chunk: bool,
+        created: u64,
+        usage_shared: Arc<AiUsageShared>,
+        quota: Option<Arc<QuotaAccumulator>>,
+        terminate_on_over_limit: bool,
+    ) -> Self {
+        Self::new_with_quota_and_unary(
+            canonical_model,
+            requested_streaming,
+            effective_usage_chunk,
+            created,
+            usage_shared,
+            quota,
+            terminate_on_over_limit,
+            (!requested_streaming).then(|| {
+                let pool = budget::UnaryBudget::new(1);
+                Arc::new(UnaryHead::new(unary_limits(), pool.acquire().unwrap()))
+            }),
+        )
+    }
+}
 use super::*;
 use crate::ai::accounting::usage::QUOTA_EXCEEDED_SSE_EVENT;
 use crate::ai::quota::QuotaFinalStatus;
@@ -41,6 +68,32 @@ async fn run_chunk(
 ) -> Option<Bytes> {
     let mut chunk = bytes.map(Bytes::copy_from_slice);
     let mut sink = ResponseBodySink::new();
+    if matches!(processor.mode, BodyMode::NonStreaming) {
+        if processor.sealed {
+            return None;
+        }
+        let input = bytes.unwrap_or_default();
+        if !eos && input.len() <= MAX_BODY_BYTES {
+            return None;
+        }
+        processor.sealed = true;
+        return match translate_unary(
+            input,
+            &processor.canonical_model,
+            processor.created,
+            unary_limits(),
+            Some(&processor.usage_shared),
+        ) {
+            Ok((body, ..)) => Some(Bytes::from(body)),
+            Err(_) => {
+                processor.record_translation_failure(session);
+                processor.usage_shared.mark_json_unavailable();
+                Some(Bytes::from(
+                    crate::ai::render_openai_error(crate::ai::AiProxyError::UpstreamResponseInvalid).1,
+                ))
+            }
+        };
+    }
     processor
         .on_chunk(&mut chunk, eos, ResponseStreamKind::None, &mut sink, session)
         .await;
@@ -233,7 +286,7 @@ async fn non_streaming_text_tools_stop_and_cache_usage_are_canonical() {
     assert!(run_chunk(&mut processor, &mut session, Some(&provider[..split]), false)
         .await
         .is_none());
-    let translated = run_chunk(&mut processor, &mut session, Some(&provider[split..]), true)
+    let translated = run_chunk(&mut processor, &mut session, Some(&provider), true)
         .await
         .expect("translated response");
     let translated: Value = serde_json::from_slice(&translated).expect("OpenAI response JSON");
@@ -298,7 +351,7 @@ async fn malformed_non_streaming_response_is_fixed_redacted_and_sealed() {
     .await
     .expect("fixed failure");
     let rendered = String::from_utf8(body.to_vec()).expect("fixed UTF-8");
-    assert!(rendered.contains("response_translation_failed"));
+    assert!(rendered.contains("upstream_response_invalid"));
     assert!(!rendered.contains("must-not-leak"));
     assert!(run_chunk(&mut processor, &mut session, Some(b"later raw bytes"), true)
         .await
@@ -682,7 +735,7 @@ async fn missing_required_usage_fields_fail_instead_of_publishing_zero() {
     let output = run_chunk(&mut processor, &mut session, Some(&provider), true)
         .await
         .expect("fixed error");
-    assert!(String::from_utf8_lossy(&output).contains("response_translation_failed"));
+    assert!(String::from_utf8_lossy(&output).contains("upstream_response_invalid"));
     assert_eq!(usage.reported_tokens(), None);
 
     let stream = [
@@ -918,6 +971,8 @@ async fn non_streaming_translation_never_terminates_even_when_quota_is_over_limi
         Some(quota),
         true,
     );
+    let pool = budget::UnaryBudget::new(1);
+    processor.unary = Some(Arc::new(UnaryHead::new(unary_limits(), pool.acquire().unwrap())));
     processor.on_response_header(&mut header(200, "application/json"));
 
     let mut session = mock_session();
@@ -965,5 +1020,173 @@ async fn bounds_and_stop_reason_mapping_are_stable() {
         .await
         .expect("bounded error");
     let output: Value = serde_json::from_slice(&output).expect("fixed JSON");
-    assert_eq!(output["error"]["code"], "response_too_large");
+    assert_eq!(output["error"]["code"], "upstream_response_invalid");
+}
+
+fn unary_limits() -> UnaryLimits {
+    UnaryLimits::resolve(&crate::ai::config::UnaryConfig::default()).unwrap()
+}
+fn unary_document() -> Vec<u8> {
+    serde_json::to_vec(&json!({"id":"msg_1","type":"message","role":"assistant","model":"provider","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":7,"output_tokens":11}})).unwrap()
+}
+#[test]
+fn unary_preflight_counts_unknown_duplicate_and_empty_container_nodes() {
+    let mut limits = unary_limits();
+    limits.nodes = 3;
+    limits.lexical_events = 9;
+    preflight(br#"{"a":{},"b":[]}"#, limits).unwrap();
+    assert!(preflight(br#"{"a":{},"a":{},"a":{}}"#, limits).is_err());
+    limits = unary_limits();
+    limits.depth = 1;
+    assert!(preflight(br#"{"unknown":{"deeper":{}}}"#, limits).is_err());
+    limits = unary_limits();
+    limits.key = 3;
+    assert!(preflight(br#"{"long":0}"#, limits).is_err());
+    assert!(preflight(
+        br#"{"a":18446744073709551616184467440737095516161844674407370955161618446744073709551616}"#,
+        unary_limits()
+    )
+    .is_err());
+    assert!(preflight(br#"{} {}"#, unary_limits()).is_err());
+    assert!(preflight(br#"{"a":"truncated""#, unary_limits()).is_err());
+    let input = br#"{"a":"escaped\ntext"}"#;
+    let mut limits = unary_limits();
+    limits.input = input.len();
+    limits.lexical_work = 4 * limits.input;
+    preflight(input, limits).unwrap();
+    limits.input -= 1;
+    assert!(preflight(input, limits).is_err());
+}
+#[test]
+fn unary_output_failure_preserves_validated_usage_through_cleanup() {
+    let budget = budget::UnaryBudget::new(1);
+    let reservation = budget.acquire().unwrap();
+    let owner = Arc::new(UnaryHead::new(unary_limits(), reservation));
+    let usage = Arc::new(AiUsageShared::default());
+    usage.mark_json_started();
+    let mut limits = unary_limits();
+    limits.output = 8;
+    assert_eq!(
+        translate_unary(&unary_document(), "canonical", 1, limits, Some(&usage)).unwrap_err(),
+        NonStreamingError::OutputTooLarge
+    );
+    assert_eq!(usage.reported_tokens(), Some((7, 11)));
+    assert!(!usage.observation_unavailable());
+    let mut processor = AnthropicResponseProcessor::new_with_quota_and_unary(
+        "canonical".into(),
+        false,
+        false,
+        1,
+        usage.clone(),
+        None,
+        false,
+        Some(owner.clone()),
+    );
+    processor.non_streaming_input = vec![1; 1024];
+    processor.finalize_incomplete("terminal", "local-trailer-failure");
+    assert_eq!(processor.non_streaming_input.capacity(), 0);
+    assert!(!usage.observation_unavailable());
+    assert!(budget.acquire().is_none());
+    drop(owner);
+    assert!(budget.acquire().is_some());
+    processor.release_inflight();
+    assert_eq!(usage.reported_tokens(), Some((7, 11)));
+    assert!(!usage.observation_unavailable());
+}
+#[test]
+fn unary_invalid_document_and_arithmetic_overflow_publish_no_usage_or_error_estimates() {
+    let usage = AiUsageShared::default();
+    usage.mark_json_started();
+    let mut document = unary_document();
+    document.extend_from_slice(b" secret");
+    assert!(translate_unary(&document, "canonical", 1, unary_limits(), Some(&usage)).is_err());
+    assert_eq!(usage.reported_tokens(), None);
+    assert_eq!(usage.output_chars(), 0);
+    let document=serde_json::to_vec(&json!({"id":"msg","type":"message","role":"assistant","model":"provider","content":[],"stop_reason":"end_turn","usage":{"input_tokens":u64::MAX,"output_tokens":1}})).unwrap();
+    assert!(translate_unary(&document, "canonical", 1, unary_limits(), Some(&usage)).is_err());
+    assert_eq!(usage.reported_tokens(), None);
+}
+#[test]
+fn unary_duplicate_keys_preserve_last_wins_and_compact_tool_arguments() {
+    let document=br#"{"id":"msg","type":"message","role":"assistant","model":"provider","content":[{"type":"tool_use","id":"tool","name":"lookup","input":{"key":"old","key":"new","escaped":"\n\""}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":2}}"#;
+    let (body, _, _, _, _) = translate_unary(document, "canonical", 1, unary_limits(), None).unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], Value::Null);
+    let arguments = body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+        .as_str()
+        .unwrap();
+    let parsed: Value = serde_json::from_str(arguments).unwrap();
+    assert_eq!(parsed["key"], "new");
+    assert_eq!(parsed["escaped"], "\n\"");
+    assert!(!arguments.contains(": "));
+}
+#[test]
+fn unary_adversarial_capacity_probe_stays_below_reservation() {
+    let mut value: Value = serde_json::from_slice(&unary_document()).unwrap();
+    value["unknown"] = Value::Array((0..7000).map(|_| json!({"x":[]})).collect());
+    let input = serde_json::to_vec(&value).unwrap();
+    let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        translate_unary(&input, "canonical", 1, unary_limits(), None)
+    });
+    assert!(result.is_ok());
+    assert!(
+        stats.requested_bytes < unary_limits().reservation,
+        "requested {} versus reservation {}",
+        stats.requested_bytes,
+        unary_limits().reservation
+    );
+}
+
+#[test]
+fn concurrent_adversarial_documents_and_slow_output_owners_stay_reserved() {
+    const WORKERS: usize = 4;
+    let limits = unary_limits();
+    let mut value: Value = serde_json::from_slice(&unary_document()).unwrap();
+    value["unknown"] = Value::Array((0..7000).map(|_| json!({"x":[]})).collect());
+    let input = Arc::new(serde_json::to_vec(&value).unwrap());
+    let pool = Arc::new(budget::UnaryBudget::new(WORKERS));
+    let ready = Arc::new(std::sync::Barrier::new(WORKERS));
+    let workers: Vec<_> = (0..WORKERS)
+        .map(|_| {
+            let (input, pool, ready) = (input.clone(), pool.clone(), ready.clone());
+            std::thread::spawn(move || {
+                let exchange = pool.acquire().unwrap();
+                ready.wait();
+                let ((output, clone), stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                    let mut raw = Vec::new();
+                    append(&mut raw, &input, limits.input).unwrap();
+                    let (body, ..) = translate_unary(&raw, "canonical", 1, limits, None).unwrap();
+                    drop(raw);
+                    let output = budget::output(body, exchange.clone());
+                    let clone = output.clone();
+                    (output, clone)
+                });
+                assert!(stats.requested_bytes < limits.reservation);
+                (exchange, output, clone, stats)
+            })
+        })
+        .collect();
+    let mut owners: Vec<_> = workers.into_iter().map(|worker| worker.join().unwrap()).collect();
+    assert!(pool.acquire().is_none());
+    let sum: usize = owners.iter().map(|entry| entry.3.requested_bytes).sum();
+    assert!(sum < WORKERS * limits.reservation);
+    eprintln!(
+        "unary converter layout: processor={}, borrowed_tool_view={}",
+        std::mem::size_of::<AnthropicResponseProcessor>(),
+        std::mem::size_of::<UnaryToolCall<'static>>()
+    );
+    eprintln!("unary concurrent allocation probe: workers={WORKERS}, cumulative_requested={sum}, reservation_sum={}, per_worker={:?}; allocator metadata/slack and transport/TLS excluded",WORKERS*limits.reservation,owners.iter().map(|entry|entry.3.requested_bytes).collect::<Vec<_>>());
+    let mut readmitted = Vec::new();
+    for (exchange, output, clone, _) in owners.drain(..) {
+        // Simulate output replacement and exchange cleanup while a slow consumer
+        // still owns a slice of the successfully translated body.
+        let retained = clone.slice(..);
+        drop(exchange);
+        drop(output);
+        drop(clone);
+        assert!(pool.acquire().is_none());
+        drop(retained);
+        let replacement = pool.acquire().unwrap();
+        readmitted.push(replacement);
+    }
 }

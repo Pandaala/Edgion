@@ -48,6 +48,9 @@ pub(crate) struct AiHttpState {
     /// Installed before cache lookup and activated only after the final
     /// response onion installs Guardrail's semantic processor.
     pub(crate) response_head_hold_claim: Option<ResponseHeadHoldClaim>,
+    /// Selected unary exchange owner; also retains the admitted reservation.
+    pub(crate) unary_possible: bool,
+    pub(crate) unary_owner: Option<Arc<crate::ai::conversion::chat_to_anthropic::head::UnaryHead>>,
     /// Same-callback handoff from the canonical source to the semantic guard.
     pub(crate) canonical_record_batch: Option<crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch>,
     /// Canonical semantic guard, run after the AI source processor.
@@ -83,10 +86,12 @@ impl EdgionHttpContext {
     }
 
     pub(crate) fn try_set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
+        let unary_possible = matches!(&plan, AiAttemptPlan::Ready(ready) if !ready.requested_streaming && ready.candidates.iter().any(|candidate| candidate.weight > 0 && candidate.model.is_some() && candidate.backend.as_ref().is_some_and(|backend| backend.provider == edgion_resources::resources::edgion_backend::AiProvider::Anthropic)));
         let state = self.ensure_ai_state();
         if state.attempt_plan.is_some() {
             false
         } else {
+            state.unary_possible = unary_possible;
             state.attempt_plan = Some(plan);
             true
         }

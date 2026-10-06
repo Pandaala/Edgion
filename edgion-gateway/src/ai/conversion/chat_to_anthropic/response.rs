@@ -3,12 +3,22 @@
 use std::io::{self, Write};
 use std::sync::Arc;
 
+use super::{
+    budget,
+    head::{failure, UnaryHead},
+    limits::{append, UnaryLimits},
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::EdgionErrorCode;
+use edgion_waf::seclang::{
+    JsonDiscardedStringSummary, JsonStreamInput, JsonStreamLimits, JsonStreamSelective, JsonStreamSelectiveLimits,
+    JsonStreamSelectiveSink, JsonStreamSinkError, JsonStreamToken,
+};
 use http::StatusCode;
 use pingora_http::ResponseHeader;
 use pingora_proxy::ResponseBodySink;
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::ai::accounting::usage::{terminate_over_quota, AiUsageShared};
@@ -126,6 +136,7 @@ impl TokenUsage {
 
 /// Per-request Anthropic response translator.
 pub(crate) struct AnthropicResponseProcessor {
+    unary: Option<Arc<UnaryHead>>,
     canonical_model: String,
     requested_streaming: bool,
     effective_usage_chunk: bool,
@@ -178,7 +189,8 @@ impl AnthropicResponseProcessor {
         )
     }
 
-    pub(crate) fn new_with_quota(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_quota_and_unary(
         canonical_model: String,
         requested_streaming: bool,
         effective_usage_chunk: bool,
@@ -186,8 +198,10 @@ impl AnthropicResponseProcessor {
         usage_shared: Arc<AiUsageShared>,
         quota: Option<Arc<QuotaAccumulator>>,
         terminate_on_over_limit: bool,
+        unary: Option<Arc<UnaryHead>>,
     ) -> Self {
         Self {
+            unary,
             canonical_model,
             requested_streaming,
             effective_usage_chunk,
@@ -217,12 +231,31 @@ impl AnthropicResponseProcessor {
     }
 
     fn normalize_header(&mut self, response: &mut ResponseHeader) {
+        if !self.requested_streaming && self.unary.is_none() {
+            if let Ok(mut fresh) = ResponseHeader::build_no_case(503, Some(0)) {
+                let _ = fresh.insert_header("content-type", "application/json");
+                let _ = fresh.insert_header("cache-control", "no-store");
+                *response = fresh;
+            }
+            self.mode = BodyMode::Fixed(TRANSLATION_UNAVAILABLE);
+            self.usage_shared.mark_observation_unavailable();
+            return;
+        }
         let original_status = response.status.as_u16();
+        if let Some(owner) = self.unary.as_ref() {
+            owner.observe_header(original_status == 200, self.validate_success_header(response).is_ok());
+            self.usage_shared.mark_json_started();
+            if original_status != 200 {
+                self.usage_shared.mark_observation_unavailable();
+            }
+        }
         let retry_after = response
             .headers
             .get("retry-after")
             .and_then(|value| value.to_str().ok())
-            .filter(|value| valid_retry_after(value))
+            .filter(|value| {
+                (self.unary.is_none() || (original_status == 429 && value.len() <= 64)) && valid_retry_after(value)
+            })
             .map(str::to_owned);
 
         let error = match original_status {
@@ -233,7 +266,13 @@ impl AnthropicResponseProcessor {
             _ => Some(SERVICE_UNAVAILABLE),
         };
 
-        clear_provider_headers(response);
+        if self.unary.is_some() {
+            if let Ok(fresh) = ResponseHeader::build_no_case(response.status, Some(0)) {
+                *response = fresh;
+            }
+        } else {
+            clear_provider_headers(response);
+        }
         let _ = response.insert_header("cache-control", "no-store");
         if let Some(error) = error {
             let _ = response.set_status(StatusCode::from_u16(error.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE));
@@ -266,25 +305,19 @@ impl AnthropicResponseProcessor {
             return Err(TRANSLATION_UNAVAILABLE);
         }
         if !self.requested_streaming {
-            match response
-                .headers
-                .get_all("content-length")
-                .iter()
-                .collect::<Vec<_>>()
-                .as_slice()
-            {
-                [] => {}
-                [value] => {
-                    let length = value
-                        .to_str()
-                        .ok()
-                        .and_then(|value| value.parse::<usize>().ok())
-                        .ok_or(TRANSLATION_UNAVAILABLE)?;
-                    if length > MAX_BODY_BYTES {
-                        return Err(RESPONSE_TOO_LARGE);
-                    }
+            let mut lengths = response.headers.get_all("content-length").iter();
+            if let Some(value) = lengths.next() {
+                if lengths.next().is_some() {
+                    return Err(TRANSLATION_UNAVAILABLE);
                 }
-                _ => return Err(TRANSLATION_UNAVAILABLE),
+                let length = value
+                    .to_str()
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .ok_or(TRANSLATION_UNAVAILABLE)?;
+                if length > self.unary.as_ref().map_or(MAX_BODY_BYTES, |owner| owner.limits.input) {
+                    return Err(RESPONSE_TOO_LARGE);
+                }
             }
         }
         Ok(())
@@ -306,50 +339,87 @@ impl AnthropicResponseProcessor {
         &mut self,
         chunk: &mut Option<Bytes>,
         end_of_stream: bool,
+        sink: &mut ResponseBodySink,
         session: &mut dyn PluginSession,
     ) {
+        let Some(limits) = self.unary.as_ref().map(|owner| owner.limits) else {
+            self.sealed = true;
+            self.non_streaming_input = Vec::new();
+            self.usage_shared.mark_json_unavailable();
+            *chunk = None;
+            let _ = sink.fail_response_head(failure(false));
+            return;
+        };
+        let limit = limits.input;
+        if self.unary.as_ref().is_some_and(|owner| owner.expired()) {
+            self.fail_unary(chunk, sink, session, true);
+            return;
+        }
         if let Some(bytes) = chunk.take() {
-            let Some(new_len) = self.non_streaming_input.len().checked_add(bytes.len()) else {
-                self.fail_non_streaming(chunk, session, RESPONSE_TOO_LARGE);
-                return;
-            };
-            if new_len > MAX_BODY_BYTES {
-                self.fail_non_streaming(chunk, session, RESPONSE_TOO_LARGE);
+            if append(&mut self.non_streaming_input, &bytes, limit).is_err() {
+                self.fail_unary(chunk, sink, session, false);
                 return;
             }
-            self.non_streaming_input.extend_from_slice(&bytes);
         }
         if !end_of_stream {
             return;
         }
-        match translate_non_streaming(
-            &self.non_streaming_input,
+        let input = std::mem::take(&mut self.non_streaming_input);
+        let translated = translate_unary(
+            &input,
             &self.canonical_model,
             self.created,
-            MAX_BODY_BYTES,
-        ) {
-            Ok((body, input_tokens, output_tokens, cache_read_input_tokens, cache_write_input_tokens)) => {
-                self.usage_shared.observe_reported_usage(
-                    input_tokens,
-                    output_tokens,
-                    cache_read_input_tokens,
-                    cache_write_input_tokens,
-                );
-                *chunk = Some(Bytes::from(body));
-            }
-            Err(NonStreamingError::OutputTooLarge) => {
-                self.fail_non_streaming(chunk, session, RESPONSE_TOO_LARGE);
-            }
-            Err(NonStreamingError::Invalid) => {
-                self.fail_non_streaming(chunk, session, RESPONSE_TRANSLATION_FAILED);
-            }
+            limits,
+            Some(&self.usage_shared),
+        );
+        drop(input);
+        if self.unary.as_ref().is_some_and(|owner| owner.expired()) {
+            self.fail_unary(chunk, sink, session, true);
+            return;
         }
-        self.non_streaming_input.clear();
+        match translated {
+            Ok((body, input_tokens, output_tokens, cache_read, cache_write)) => {
+                self.usage_shared
+                    .observe_reported_usage(input_tokens, output_tokens, cache_read, cache_write);
+                self.usage_shared.mark_json_complete();
+                let Some(owner) = self.unary.as_ref() else {
+                    self.fail_unary(chunk, sink, session, false);
+                    return;
+                };
+                *chunk = Some(budget::output(body, owner.reservation.clone()));
+                if !sink.release_response_head() {
+                    *chunk = None;
+                    self.record_translation_failure(session);
+                }
+                self.sealed = true;
+            }
+            Err(_) => self.fail_unary(chunk, sink, session, false),
+        }
     }
-
+    fn fail_unary(
+        &mut self,
+        chunk: &mut Option<Bytes>,
+        sink: &mut ResponseBodySink,
+        session: &mut dyn PluginSession,
+        timeout: bool,
+    ) {
+        self.sealed = true;
+        self.non_streaming_input = Vec::new();
+        self.record_translation_failure(session);
+        self.usage_shared.mark_json_unavailable();
+        *chunk = None;
+        let error = if timeout {
+            self.unary
+                .as_ref()
+                .map_or_else(|| failure(true), |owner| owner.timeout_failure())
+        } else {
+            failure(false)
+        };
+        let _ = sink.fail_response_head(error);
+    }
     fn fail_non_streaming(&mut self, chunk: &mut Option<Bytes>, session: &mut dyn PluginSession, error: FixedError) {
         self.sealed = true;
-        self.non_streaming_input.clear();
+        self.non_streaming_input = Vec::new();
         self.record_translation_failure(session);
         *chunk = Some(Bytes::from(render_fixed_error(error)));
     }
@@ -684,6 +754,25 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
     fn changes_body_length(&self) -> bool {
         true
     }
+    fn finalize_incomplete(&mut self, _outcome: &'static str, _reason: &'static str) {
+        if self.unary.is_some() {
+            self.usage_shared.mark_json_unavailable();
+        }
+        self.non_streaming_input = Vec::new();
+        self.unary = None;
+        self.sealed = true;
+    }
+    fn release_inflight(&mut self) {
+        if self.unary.is_some() {
+            self.usage_shared.mark_json_unavailable();
+        }
+        self.non_streaming_input = Vec::new();
+        self.unary = None;
+        self.sealed = true;
+    }
+    fn on_terminal_preempted(&mut self, _winner: crate::response::terminal::ResponseTerminalCause) {
+        self.release_inflight();
+    }
 
     async fn on_chunk(
         &mut self,
@@ -711,7 +800,7 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
         match self.mode {
             BodyMode::AwaitingHeader => self.fail_non_streaming(chunk, session, RESPONSE_TRANSLATION_FAILED),
             BodyMode::Fixed(error) => self.process_fixed(chunk, session, error),
-            BodyMode::NonStreaming => self.process_non_streaming(chunk, end_of_stream, session),
+            BodyMode::NonStreaming => self.process_non_streaming(chunk, end_of_stream, sink, session),
             BodyMode::Streaming => self.process_streaming(chunk, end_of_stream, session),
         }
         // `BodyMode::Streaming` is reachable only when `requested_streaming`
@@ -773,7 +862,7 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
                 sink.terminate();
             }
         }
-        if !sink.is_terminated() {
+        if !sink.is_terminated() && self.unary.is_none() {
             let chars = if matches!(self.mode, BodyMode::Streaming) {
                 self.pending_output_chars
             } else {
@@ -797,102 +886,240 @@ enum NonStreamingError {
     OutputTooLarge,
 }
 
-fn translate_non_streaming(
+struct Preflight {
+    nodes: usize,
+    limit: usize,
+}
+impl Preflight {
+    fn node(&mut self) -> Result<(), JsonStreamSinkError> {
+        self.nodes = self
+            .nodes
+            .checked_add(1)
+            .filter(|n| *n <= self.limit)
+            .ok_or(JsonStreamSinkError)?;
+        Ok(())
+    }
+}
+impl JsonStreamSelectiveSink for Preflight {
+    fn on_token(&mut self, token: JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError> {
+        match token {
+            JsonStreamToken::ObjectStart
+            | JsonStreamToken::ArrayStart
+            | JsonStreamToken::Boolean(_)
+            | JsonStreamToken::Null => self.node(),
+            _ => Ok(()),
+        }
+    }
+    fn on_number(&mut self, _raw: &str) -> Result<(), JsonStreamSinkError> {
+        self.node()
+    }
+    fn on_discarded_string(&mut self, _summary: JsonDiscardedStringSummary) -> Result<(), JsonStreamSinkError> {
+        self.node()
+    }
+}
+fn preflight(input: &[u8], limits: UnaryLimits) -> Result<(), NonStreamingError> {
+    let mut parser = JsonStreamSelective::new(JsonStreamSelectiveLimits {
+        lexical: JsonStreamLimits {
+            max_source_bytes: limits.input,
+            max_raw_token_bytes: 1538,
+            max_decoded_bytes: limits.input,
+            max_events: limits.lexical_events,
+            max_depth: limits.depth,
+            max_retained_bytes: 8192,
+            max_work: limits.lexical_work,
+        },
+        max_key_bytes: limits.key,
+        max_number_bytes: 64,
+    });
+    let mut sink = Preflight {
+        nodes: 0,
+        limit: limits.nodes,
+    };
+    parser
+        .feed(JsonStreamInput::Data(input), &mut sink)
+        .map_err(|_| NonStreamingError::Invalid)?;
+    parser
+        .feed(JsonStreamInput::Complete, &mut sink)
+        .map_err(|_| NonStreamingError::Invalid)
+}
+#[derive(Serialize)]
+struct UnaryCompletion<'a> {
+    id: &'a str,
+    object: &'static str,
+    created: u64,
+    model: &'a str,
+    choices: [UnaryChoice<'a>; 1],
+    usage: UnaryUsage,
+}
+#[derive(Serialize)]
+struct UnaryChoice<'a> {
+    index: usize,
+    message: UnaryMessage<'a>,
+    finish_reason: &'static str,
+}
+#[derive(Serialize)]
+struct UnaryMessage<'a> {
+    role: &'static str,
+    content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<UnaryToolCall<'a>>,
+}
+#[derive(Serialize)]
+struct UnaryToolCall<'a> {
+    index: usize,
+    id: &'a str,
+    #[serde(rename = "type")]
+    type_: &'static str,
+    function: UnaryFunction<'a>,
+}
+#[derive(Serialize)]
+struct UnaryFunction<'a> {
+    name: &'a str,
+    arguments: String,
+}
+#[derive(Serialize)]
+struct UnaryUsage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+}
+const _: () = {
+    assert!(std::mem::size_of::<UnaryToolCall<'static>>() <= 128);
+    assert!(std::mem::size_of::<AnthropicResponseProcessor>() <= 64 * 1024);
+};
+fn translate_unary(
     input: &[u8],
     canonical_model: &str,
     created: u64,
-    output_limit: usize,
+    limits: UnaryLimits,
+    shared: Option<&AiUsageShared>,
 ) -> Result<(Vec<u8>, u64, u64, u64, u64), NonStreamingError> {
-    let value: Value = serde_json::from_slice(input).map_err(|_| NonStreamingError::Invalid)?;
-    let message = value.as_object().ok_or(NonStreamingError::Invalid)?;
-    if required_string(message, "type").map_err(|_| NonStreamingError::Invalid)? != "message"
-        || required_string(message, "role").map_err(|_| NonStreamingError::Invalid)? != "assistant"
-    {
-        return Err(NonStreamingError::Invalid);
+    let invalid = NonStreamingError::Invalid;
+    if canonical_model.is_empty() || canonical_model.len() > MAX_IDENTIFIER_BYTES {
+        return Err(invalid);
     }
-    let id = bounded_string(message, "id", MAX_IDENTIFIER_BYTES).map_err(|_| NonStreamingError::Invalid)?;
-    let _provider_model =
-        bounded_string(message, "model", MAX_IDENTIFIER_BYTES).map_err(|_| NonStreamingError::Invalid)?;
+    preflight(input, limits)?; // Parser scratch is destroyed before the DOM exists.
+    let value: Value = serde_json::from_slice(input).map_err(|_| invalid)?;
+    let message = value.as_object().ok_or(invalid)?;
+    if required_string(message, "type").map_err(|_| invalid)? != "message"
+        || required_string(message, "role").map_err(|_| invalid)? != "assistant"
+    {
+        return Err(invalid);
+    }
+    let id = bounded_string(message, "id", MAX_IDENTIFIER_BYTES).map_err(|_| invalid)?;
+    bounded_string(message, "model", MAX_IDENTIFIER_BYTES).map_err(|_| invalid)?;
     let blocks = message
         .get("content")
         .and_then(Value::as_array)
-        .filter(|blocks| blocks.len() <= MAX_CONTENT_BLOCKS)
-        .ok_or(NonStreamingError::Invalid)?;
-    let mut text = String::new();
-    let mut tool_calls = Vec::new();
+        .filter(|b| b.len() <= MAX_CONTENT_BLOCKS)
+        .ok_or(invalid)?;
+    // Validate the supported shape completely before usage or output publication.
     for block in blocks {
-        let block = block.as_object().ok_or(NonStreamingError::Invalid)?;
-        match required_string(block, "type").map_err(|_| NonStreamingError::Invalid)? {
-            "text" => text.push_str(required_string(block, "text").map_err(|_| NonStreamingError::Invalid)?),
-            "tool_use" => {
-                let tool_id =
-                    bounded_string(block, "id", MAX_IDENTIFIER_BYTES).map_err(|_| NonStreamingError::Invalid)?;
-                let name =
-                    bounded_string(block, "name", MAX_TOOL_NAME_BYTES).map_err(|_| NonStreamingError::Invalid)?;
-                if !valid_tool_name(name) {
-                    return Err(NonStreamingError::Invalid);
-                }
-                let arguments = block
-                    .get("input")
-                    .filter(|input| input.is_object())
-                    .ok_or(NonStreamingError::Invalid)
-                    .and_then(|input| serde_json::to_string(input).map_err(|_| NonStreamingError::Invalid))?;
-                let index = tool_calls.len();
-                tool_calls.push(json!({
-                    "index":index,
-                    "id":tool_id,
-                    "type":"function",
-                    "function":{"name":name,"arguments":arguments}
-                }));
+        let block = block.as_object().ok_or(invalid)?;
+        match required_string(block, "type").map_err(|_| invalid)? {
+            "text" => {
+                required_string(block, "text").map_err(|_| invalid)?;
             }
-            _ => return Err(NonStreamingError::Invalid),
+            "tool_use" => {
+                bounded_string(block, "id", MAX_IDENTIFIER_BYTES).map_err(|_| invalid)?;
+                let name = bounded_string(block, "name", MAX_TOOL_NAME_BYTES).map_err(|_| invalid)?;
+                if !valid_tool_name(name) || !block.get("input").is_some_and(Value::is_object) {
+                    return Err(invalid);
+                }
+            }
+            _ => return Err(invalid),
         }
     }
-    let stop_reason = required_string(message, "stop_reason").map_err(|_| NonStreamingError::Invalid)?;
-    let finish_reason = map_stop_reason(stop_reason).ok_or(NonStreamingError::Invalid)?;
-    let usage_object = message
-        .get("usage")
-        .and_then(Value::as_object)
-        .ok_or(NonStreamingError::Invalid)?;
+    let finish_reason =
+        map_stop_reason(required_string(message, "stop_reason").map_err(|_| invalid)?).ok_or(invalid)?;
     let mut usage = TokenUsage::default();
     usage
-        .update_from(usage_object)
-        .map_err(|_| NonStreamingError::Invalid)?;
+        .update_from(message.get("usage").and_then(Value::as_object).ok_or(invalid)?)
+        .map_err(|_| invalid)?;
     if !usage.input_seen || !usage.output_seen {
-        return Err(NonStreamingError::Invalid);
+        return Err(invalid);
     }
-    let (input_tokens, output_tokens) = usage.normalized();
-    let content = if text.is_empty() && !tool_calls.is_empty() {
-        Value::Null
-    } else {
-        Value::String(text)
-    };
-    let mut response_message = Map::new();
-    response_message.insert("role".to_string(), Value::String("assistant".to_string()));
-    response_message.insert("content".to_string(), content);
-    if !tool_calls.is_empty() {
-        response_message.insert("tool_calls".to_string(), Value::Array(tool_calls));
+    let input_tokens = usage
+        .input
+        .checked_add(usage.cache_creation)
+        .and_then(|n| n.checked_add(usage.cache_read))
+        .ok_or(invalid)?;
+    let total = input_tokens.checked_add(usage.output).ok_or(invalid)?;
+    if let Some(shared) = shared {
+        shared.observe_reported_usage(input_tokens, usage.output, usage.cache_read, usage.cache_creation);
+        shared.mark_json_complete();
     }
-    let response = json!({
-        "id":id,
-        "object":"chat.completion",
-        "created":created,
-        "model":canonical_model,
-        "choices":[{"index":0,"message":response_message,"finish_reason":finish_reason}],
-        "usage":{"prompt_tokens":input_tokens,"completion_tokens":output_tokens,"total_tokens":input_tokens.saturating_add(output_tokens)}
-    });
-    let mut writer = LimitedWriter::new(output_limit);
-    serde_json::to_writer(&mut writer, &response).map_err(|error| {
-        if writer.overflowed || error.is_io() {
-            NonStreamingError::OutputTooLarge
+    let mut text = Vec::new();
+    let mut tools = Vec::new();
+    let mut arguments_bytes = 0usize;
+    for block in blocks {
+        let block = block.as_object().ok_or(invalid)?;
+        if required_string(block, "type").map_err(|_| invalid)? == "text" {
+            append(
+                &mut text,
+                required_string(block, "text").map_err(|_| invalid)?.as_bytes(),
+                limits.input,
+            )
+            .map_err(|_| NonStreamingError::OutputTooLarge)?;
         } else {
-            NonStreamingError::Invalid
+            let mut writer = LimitedWriter::new(
+                limits
+                    .output
+                    .checked_sub(arguments_bytes)
+                    .ok_or(NonStreamingError::OutputTooLarge)?,
+            );
+            serde_json::to_writer(&mut writer, block.get("input").ok_or(invalid)?)
+                .map_err(|_| NonStreamingError::OutputTooLarge)?;
+            arguments_bytes = arguments_bytes
+                .checked_add(writer.bytes.len())
+                .ok_or(NonStreamingError::OutputTooLarge)?;
+            let arguments = String::from_utf8(writer.bytes).map_err(|_| invalid)?;
+            if tools.len() == tools.capacity() {
+                tools.try_reserve(1).map_err(|_| NonStreamingError::OutputTooLarge)?;
+            }
+            tools.push(UnaryToolCall {
+                index: tools.len(),
+                id: required_string(block, "id").map_err(|_| invalid)?,
+                type_: "function",
+                function: UnaryFunction {
+                    name: required_string(block, "name").map_err(|_| invalid)?,
+                    arguments,
+                },
+            });
         }
-    })?;
+    }
+    let text = String::from_utf8(text).map_err(|_| invalid)?;
+    let content = if text.is_empty() && !tools.is_empty() {
+        None
+    } else {
+        Some(text.as_str())
+    };
+    let response = UnaryCompletion {
+        id,
+        object: "chat.completion",
+        created,
+        model: canonical_model,
+        choices: [UnaryChoice {
+            index: 0,
+            message: UnaryMessage {
+                role: "assistant",
+                content,
+                tool_calls: tools,
+            },
+            finish_reason,
+        }],
+        usage: UnaryUsage {
+            prompt_tokens: input_tokens,
+            completion_tokens: usage.output,
+            total_tokens: total,
+        },
+    };
+    let mut writer = LimitedWriter::new(limits.output);
+    serde_json::to_writer(&mut writer, &response).map_err(|_| NonStreamingError::OutputTooLarge)?;
     Ok((
         writer.bytes,
         input_tokens,
-        output_tokens,
+        usage.output,
         usage.cache_read,
         usage.cache_creation,
     ))
@@ -924,7 +1151,10 @@ impl Write for LimitedWriter {
             self.overflowed = true;
             return Err(io::Error::other("bounded response output overflow"));
         }
-        self.bytes.extend_from_slice(input);
+        append(&mut self.bytes, input, self.limit).map_err(|_| {
+            self.overflowed = true;
+            io::Error::other("cannot grow bounded response output")
+        })?;
         Ok(input.len())
     }
 
@@ -955,7 +1185,7 @@ fn identity_encoding(response: &ResponseHeader) -> bool {
     response_is_identity_encoded(&response.headers)
 }
 
-fn matches_media_type(response: &ResponseHeader, type_: &str, subtype: &str) -> bool {
+pub(super) fn matches_media_type(response: &ResponseHeader, type_: &str, subtype: &str) -> bool {
     let mut values = response.headers.get_all("content-type").iter();
     let Some(value) = values.next() else {
         return false;

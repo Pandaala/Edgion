@@ -138,6 +138,13 @@ impl ResponseProcessorDriver {
         })
     }
 
+    pub(crate) async fn finalize_ai_incomplete(&self) {
+        let mut state = self.state.lock().await;
+        if let Some(processor) = state.body.ai.as_mut() {
+            processor.finalize_incomplete("terminal", "logging-fallback");
+        }
+    }
+
     pub(crate) async fn finalize_semantic_incomplete(&self, outcome: &'static str, reason: &'static str) {
         let mut state = self.state.lock().await;
         if state.body_callback_cancelled {

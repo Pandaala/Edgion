@@ -15,6 +15,7 @@ named domain types and functions; internal consumers use the canonical modules:
 | Module | Ownership |
 |--------|-----------|
 | `ai/context.rs` | Lazily allocated AI request state and its context methods |
+| `ai/config.rs` | Strict startup conversion configuration and one immutable process-wide limits/admission runtime |
 | `ai/runtime/` | Backend snapshots, proof-carrying AI selections, attempt scheduling, credential health and dispatch |
 | `ai/routing/` | Model routing, candidate eligibility and adaptive selection |
 | `ai/accounting/` | Usage observation and terminal attempt/usage/quota settlement |
@@ -34,19 +35,43 @@ leases, cancellation cleanup and trailer ownership. OpenAI terminal event render
 stays in `ai/protocols/openai/terminal.rs`.
 
 Generic proxy callbacks retain transport and retry control flow. The universal
-logging callback invokes AI settlement at its existing position: active attempt
+logging callback first releases AI processor/exchange state through the existing
+driver lease before any accounting await, then invokes AI settlement at its
+existing position: active attempt
 finalization, immutable usage summary/token metrics, then business quota settlement.
 Guardrail summary cleanup remains at its later original position before access-log
 assembly. Provider response cooldown and endpoint/auth preparation execute at their
 original callback positions through AI helpers; this boundary adds no second client,
-body cache, response aggregation or request-path wrapper.
+body cache or request-path wrapper. Explicit bounded unary conversion is described below.
 
 Logical backend identities, shared backend policy/retry budgets, BodyStorage, the
 SSE decoder/RawWindow, clients/TLS/egress/DNS, Redis limiter, key extraction,
 conditions and observability retain their canonical shared owners. The refactor
 introduces no provider support or new wire behavior. Native Responses, Messages,
-Gemini and Bedrock support and the separately tracked response-retention fixes
-remain pending product tasks.
+Gemini and Bedrock support remain pending product tasks. Task 02 removed usage-only
+JSON retention; Task 03 completed bounded unary conversion and final acceptance.
+
+The [HTTP body rules](../../../AGENTS.md#http-body-handling-invariants) allow a
+narrow, design-reviewed full-document exception for explicit non-streaming
+Chat-to-Anthropic conversion. Its bytes, parsing complexity, per-exchange and
+process-wide memory, lifetime and precommit failure behavior must be bounded.
+The implemented [Task 03 converter](../../../tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md)
+uses capped input, selective preflight before DOM construction, borrowed output
+serialization, one process-wide reservation pool and owner-tagged Pingora Hold.
+Selected unary conversion finishes before final head/body commitment; invalid
+conversion returns fixed 502, predispatch admission/conflict returns 503 and Hold
+timeout returns 504. Defaults derive a 25 MiB reservation and ten slots; these
+are capacity reservations, not process RSS limits. Exchange state and output
+Bytes share a lease until both ownership branches release. Final-onion heads and
+held trailers are freshly compacted under field/metadata bounds.
+
+Native AI, passive usage observation, SSE and ordinary HTTP retain their streaming
+paths. Header deferral remains opt-in at the transport seam; vendor parsing and
+aggregation stay inside the AI conversion owner. No general response storage, disk
+spool or whole-response RawWindow is introduced. Fresh unit and real-wire evidence
+is recorded in Task 03; workspace/shared-topology checks passed and final Astra
+code/evidence review returned APPROVE. The task records the unrelated global WAF
+documentation exception. The upstream-H2 wire wrapper is test-only; production AI peers use H1.
 
 ## Canonical SSE substrate
 

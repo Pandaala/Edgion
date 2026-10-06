@@ -46,6 +46,7 @@ async fn will_commit_leaves_switching_protocols_to_transport_confirmation() {
 async fn commit_plan_is_immediate_until_request_claim_is_activated() {
     let mut ctx = EdgionHttpContext::default();
     ctx.ensure_ai_state().response_head_hold_claim = Some(crate::ctx::ResponseHeadHoldClaim {
+        owner: crate::ctx::ResponseHeadHoldOwner::Guardrail,
         limits: limits(),
         active: false,
     });
@@ -63,6 +64,7 @@ async fn active_final_sse_claim_selects_hold_and_ineligible_final_fails_closed()
     let mut ctx = EdgionHttpContext::default();
     let state = ctx.ensure_ai_state();
     state.response_head_hold_claim = Some(crate::ctx::ResponseHeadHoldClaim {
+        owner: crate::ctx::ResponseHeadHoldOwner::Guardrail,
         limits: limits(),
         active: true,
     });
@@ -91,7 +93,9 @@ fn boundary_failures_are_nonretryable() {
         ResponseHeadBoundary::InputLimit,
         ResponseHeadBoundary::Timeout,
     ] {
-        let ResponseHeadBoundaryAction::Fail(error) = response_head_hold_boundary(boundary) else {
+        let ResponseHeadBoundaryAction::Fail(error) =
+            response_head_hold_boundary(boundary, &EdgionHttpContext::default())
+        else {
             panic!("Guardrail boundaries must fail closed")
         };
         assert!(!error.retry());

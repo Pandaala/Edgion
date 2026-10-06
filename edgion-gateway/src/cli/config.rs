@@ -89,6 +89,9 @@ pub const DEFAULT_GATEWAY_PROBE_LISTEN: &str = "0.0.0.0:12000";
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
 #[serde(default)]
 pub struct EdgionGatewayConfig {
+    #[arg(skip)]
+    #[serde(default)]
+    pub ai: crate::ai::config::AiConfig,
     /// Working directory for Edgion runtime files
     /// Priority: CLI --work-dir > ENV EDGION_WORK_DIR > Config > Default (".")
     /// All relative paths in configuration will be relative to this directory.

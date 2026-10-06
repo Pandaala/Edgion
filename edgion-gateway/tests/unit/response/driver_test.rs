@@ -83,3 +83,102 @@ async fn trailer_cancellation_closes_only_the_trailer_group() {
     driver.body_lease().await.expect("body remains open").complete();
     assert_eq!(body.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn cancelled_unary_callback_releases_its_branch_promptly() {
+    use crate::ai::conversion::chat_to_anthropic::{
+        budget::UnaryBudget, head::UnaryHead, limits::UnaryLimits, AnthropicResponseProcessor,
+    };
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    struct PendingUnary {
+        inner: AnthropicResponseProcessor,
+        entered: Option<tokio::sync::oneshot::Sender<()>>,
+    }
+    #[async_trait]
+    impl StreamingResponseProcessor for PendingUnary {
+        async fn on_chunk(
+            &mut self,
+            chunk: &mut Option<bytes::Bytes>,
+            eos: bool,
+            kind: crate::ctx::ResponseStreamKind,
+            sink: &mut pingora_proxy::ResponseBodySink,
+            session: &mut dyn crate::plugins::runtime::PluginSession,
+        ) {
+            self.inner.on_chunk(chunk, eos, kind, sink, session).await;
+            let _ = self.entered.take().unwrap().send(());
+            std::future::pending::<()>().await;
+        }
+        fn release_inflight(&mut self) {
+            self.inner.release_inflight();
+        }
+        fn finalize_incomplete(&mut self, outcome: &'static str, reason: &'static str) {
+            self.inner.finalize_incomplete(outcome, reason);
+        }
+    }
+    let pool = UnaryBudget::new(1);
+    let limits = UnaryLimits::resolve(&crate::ai::config::UnaryConfig::default()).unwrap();
+    let owner = Arc::new(UnaryHead::new(limits, pool.acquire().unwrap()));
+    let usage = Arc::new(crate::ai::AiUsageShared::default());
+    let mut processor = AnthropicResponseProcessor::new_with_quota_and_unary(
+        "canonical".into(),
+        false,
+        false,
+        1,
+        usage.clone(),
+        None,
+        false,
+        Some(owner.clone()),
+    );
+    let mut head = pingora_http::ResponseHeader::build(200, None).unwrap();
+    head.insert_header("content-type", "application/json").unwrap();
+    processor.on_response_header(&mut head);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let driver = ResponseProcessorDriver::new(
+        Some(Box::new(PendingUnary {
+            inner: processor,
+            entered: Some(tx),
+        })),
+        None,
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let task_driver = driver.clone();
+    let callback = tokio::spawn(async move {
+        let mut lease = task_driver.body_lease().await.unwrap();
+        let mut chunk = Some(bytes::Bytes::from_static(b"{\"partial\":"));
+        let mut sink = pingora_proxy::ResponseBodySink::new();
+        let mut session = MockPluginSession::new();
+        session.expect_semantic_guard_active().return_const(false);
+        lease
+            .processors()
+            .ai
+            .as_mut()
+            .unwrap()
+            .on_chunk(
+                &mut chunk,
+                false,
+                crate::ctx::ResponseStreamKind::None,
+                &mut sink,
+                &mut session,
+            )
+            .await;
+        lease.complete();
+    });
+    rx.await.unwrap();
+    assert!(pool.acquire().is_none());
+    callback.abort();
+    assert!(callback.await.unwrap_err().is_cancelled());
+    assert!(driver.body_lease().await.is_none());
+    assert!(
+        pool.acquire().is_none(),
+        "the exchange branch still owns the reservation"
+    );
+    drop(owner);
+    assert!(
+        pool.acquire().is_some(),
+        "callback cancellation must release its owner without a timer or accounting IO"
+    );
+    assert!(usage.observation_unavailable());
+    driver.finalize_ai_incomplete().await;
+}

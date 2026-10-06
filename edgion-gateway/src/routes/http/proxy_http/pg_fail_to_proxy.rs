@@ -102,16 +102,46 @@ fn select_proxy_outcome_status(ctx: &mut EdgionHttpContext, e: &Error, code: u16
     }
 }
 
+fn unary_transport_error(e: &Error, code: u16) -> bool {
+    if !matches!(code, 502 | 504) {
+        return false;
+    }
+    if !matches!(e.etype(), HTTPStatus(_)) {
+        return matches!(e.esource(), ErrorSource::Upstream);
+    }
+    // The connect deadline handler wraps the upstream failure in HTTP 504.
+    // Pingora stores its immediate cause as BError (Box<Error>).
+    matches!(e.etype(), HTTPStatus(504))
+        && e.cause
+            .as_deref()
+            .and_then(|cause| cause.downcast_ref::<Box<Error>>())
+            .is_some_and(|cause| matches!(cause.esource(), ErrorSource::Upstream))
+}
+
 async fn write_proxy_error_reply(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
     code: u16,
+    error: &Error,
 ) -> bool {
     if ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched {
         send_grpc_trailers_only(session, ctx, server_header_opts, code)
             .await
             .is_err()
+    } else if let Some(owner) = ctx
+        .ai_state()
+        .and_then(|state| state.unary_owner.as_ref())
+        .filter(|owner| ctx.response_denial().is_none() && (owner.raw_success() || unary_transport_error(error, code)))
+        .cloned()
+    {
+        let reply = owner.error_reply(code, ctx);
+        match reply {
+            Ok((resp, body)) if ctx.claim_final_response(code) => {
+                session.write_error_response(resp, body).await.is_err()
+            }
+            _ => false,
+        }
     } else {
         let mut resp = pingora_core::protocols::http::ServerSession::generate_error(code);
         server_header_opts.apply_to_response(&mut resp);
@@ -154,7 +184,12 @@ pub async fn fail_to_proxy(
     // of the generic status handling below, which would otherwise re-derive a
     // code from the synthetic HTTP 200 the abort carries. Marks the response
     // committed, so that generic block then skips this request.
-    if let Some(ResponseStageDenial::Grpc { status, message }) = ctx.take_response_denial() {
+    let grpc_denial = if matches!(ctx.response_denial(), Some(ResponseStageDenial::Grpc { .. })) {
+        ctx.take_response_denial()
+    } else {
+        None
+    };
+    if let Some(ResponseStageDenial::Grpc { status, message }) = grpc_denial {
         if send_grpc_status_trailers_only(
             session,
             ctx,
@@ -175,6 +210,7 @@ pub async fn fail_to_proxy(
     // A stalled request-body upload is a client timeout, not a disconnect.
     // Other downstream transport failures keep the ClientClosed diagnostic.
     record_proxy_error_attribution(ctx, e, code);
+    crate::ai::conversion::chat_to_anthropic::head::record_timeout_diagnostic(ctx, e);
 
     // A gateway-internal error that surfaced while the captured request body
     // was being replayed to the upstream is a body-replay failure (buffer
@@ -203,7 +239,7 @@ pub async fn fail_to_proxy(
     if code > 0 && code != 499 && !ctx.response_write_started() {
         // gRPC classification uses both the media-type and route-derived facts;
         // a GRPCRoute match must never fall through to Pingora's HTML writer.
-        if write_proxy_error_reply(session, ctx, &edgion_http.server_header_opts, code).await {
+        if write_proxy_error_reply(session, ctx, &edgion_http.server_header_opts, code, e).await {
             // Delivery failed: the downstream connection is dead.
             ctx.record_error(EdgionErrorCode::ClientClosed);
         }

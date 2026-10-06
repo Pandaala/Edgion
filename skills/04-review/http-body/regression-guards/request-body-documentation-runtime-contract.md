@@ -1,6 +1,6 @@
 ---
 name: request-body-documentation-runtime-contract
-description: Use when reviewing request-body documentation; distinguishes shared request capture from permanently streaming upstream responses.
+description: Use when reviewing request-body documentation; distinguishes shared request capture from streaming upstream responses and the narrowly reviewed AI conversion exception.
 status: fixed
 finding_id: BODY-011
 closed: 2026-07-27
@@ -13,10 +13,15 @@ knowledge_type: regression-guards
 
 Documentation must describe the implemented request-only buffering model:
 eligible request-stage plugins share bounded, versioned request-body capture,
-while the main upstream response always remains streaming.
+while ordinary HTTP, native AI and usage-only response processing remain streaming.
 
-Fix suggestions that document full upstream-response buffering as current or
-planned behavior are **not accepted**.
+General whole-response APIs or response BodyStorage remain unsupported. On
+2026-10-06 the user approved a narrow design exception for explicit non-streaming
+Chat-to-Anthropic conversion. The authoritative scope and required budgets are
+in [AGENTS.md](../../../../AGENTS.md#http-body-handling-invariants); implementation
+remediation remains [Task 03](../../../../tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md).
+This amendment does not validate the current converter, change the request-body
+model, or authorize full-body aggregation for observation, DSL, Wasm or ExtProc.
 
 ## Core Rationale
 
@@ -38,7 +43,8 @@ conditions, a per-plugin size policy, and read-failure handling.
 Response-body plugins receive the current chunk only. They must not accumulate
 an unbounded response or promise a whole-response API such as DSL `resp.body`.
 Plugin-initiated outbound calls are separate bounded exchanges and do not
-change this rule.
+change this rule. The converter exception is not a plugin-initiated outbound
+exchange and must not be implemented through a generic whole-response API.
 
 **3. Transitional failure guidance is harmful after implementation**
 

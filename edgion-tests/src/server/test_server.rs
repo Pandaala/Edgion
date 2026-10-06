@@ -2543,6 +2543,29 @@ async fn anthropic_provider_handler(Path(path): Path<String>, request: AxumReque
             .unwrap();
     }
 
+    if mode.starts_with("unary_") {
+        let mut response =
+            anthropic_message_response(serde_json::json!([{"type":"text","text":"unary fixture"}]), "end_turn");
+        match mode.as_str() {
+            "unary_malformed" => {
+                *response.body_mut() = Body::from("{\"provider_private\":\"provider private detail\"} broken")
+            }
+            "unary_oversized" => *response.body_mut() = Body::from("x".repeat(1024 * 1024 + 1)),
+            "unary_wrong_media" => {
+                response
+                    .headers_mut()
+                    .insert("content-type", axum::http::HeaderValue::from_static("text/plain"));
+            }
+            "unary_gzip" => {
+                response
+                    .headers_mut()
+                    .insert("content-encoding", axum::http::HeaderValue::from_static("gzip"));
+            }
+            _ => {}
+        }
+        return response;
+    }
+
     if mode == "nonstream_tool" {
         let tools_valid = json
             .get("tools")

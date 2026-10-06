@@ -47,6 +47,7 @@ pub struct PreparedAiAttempt {
     pub limiter_core: Arc<crate::plugins::common::redis_rate_limiter::RedisRateLimiter>,
     ai_context: Option<AiRequestContext>,
     response_processor: Option<Box<dyn StreamingResponseProcessor>>,
+    unary_owner: Option<Arc<crate::ai::conversion::chat_to_anthropic::head::UnaryHead>>,
 }
 
 pub fn commit_ai_attempt_context(
@@ -61,6 +62,7 @@ pub fn commit_ai_attempt_context(
     context.quota = quota;
     ctx.replace_ai_attempt_context(context);
     ctx.ensure_ai_state().stream_processor = target.response_processor.take();
+    ctx.ensure_ai_state().unary_owner = target.unary_owner.take();
     Ok(())
 }
 
@@ -375,6 +377,38 @@ fn prepare_ready_attempt(
         candidate.weight,
     )
     .ok_or(AiDispatchError::InvalidConfiguration)?;
+    // Retire the prior prepared attempt before acquiring another reservation.
+    if let Some(state) = ctx.ai_state_mut() {
+        if let Some(mut processor) = state.stream_processor.take() {
+            processor.release_inflight();
+        }
+        state.unary_owner = None;
+    }
+    let unary_owner = if ai_backend.provider == AiProvider::Anthropic && !plan.requested_streaming {
+        if ctx
+            .ai_state()
+            .and_then(|state| state.response_head_hold_claim)
+            .is_some_and(|claim| claim.active && claim.owner != crate::ctx::ResponseHeadHoldOwner::AnthropicUnary)
+        {
+            return Err(AiDispatchError::Client(AiProxyError::BackendUnavailable));
+        }
+        if model.provider_model.is_empty() || model.provider_model.len() > 512 {
+            return Err(AiDispatchError::Client(AiProxyError::BackendUnavailable));
+        }
+        let runtime = crate::ai::config::runtime().ok_or(AiDispatchError::Client(AiProxyError::BackendUnavailable))?;
+        let reservation = runtime
+            .budget
+            .acquire()
+            .ok_or(AiDispatchError::Client(AiProxyError::BackendUnavailable))?;
+        if let Some(error) = ai_predispatch_deadline(ctx) {
+            return Err(error);
+        }
+        Some(Arc::new(
+            crate::ai::conversion::chat_to_anthropic::head::UnaryHead::new(runtime.limits, reservation),
+        ))
+    } else {
+        None
+    };
     let (body, requested_streaming, anthropic_usage_chunk) = match ai_backend.provider {
         AiProvider::OpenAI | AiProvider::OpenAICompatible => {
             let body = openai_provider_body(&plan.canonical_openai_body, &model.provider_model)?;
@@ -447,7 +481,7 @@ fn prepare_ready_attempt(
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        response_processors.push(Box::new(AnthropicResponseProcessor::new_with_quota(
+        response_processors.push(Box::new(AnthropicResponseProcessor::new_with_quota_and_unary(
             model.provider_model.clone(),
             requested_streaming,
             anthropic_usage_chunk,
@@ -455,6 +489,7 @@ fn prepare_ready_attempt(
             Arc::clone(&usage),
             quota_accumulator.clone(),
             plan.terminate_on_over_limit,
+            unary_owner.clone(),
         )));
     }
     if ai_backend.provider != AiProvider::Anthropic {
@@ -486,6 +521,7 @@ fn prepare_ready_attempt(
         limiter_core: Arc::clone(&ai_backend.credential_pool.limiter_core),
         ai_context: Some(context),
         response_processor: Some(response_processor),
+        unary_owner,
     };
     Ok(target)
 }
@@ -734,6 +770,41 @@ impl StreamingResponseProcessor for AiAttemptResponseProcessor {
         self.processors.iter().any(|processor| processor.changes_body_length())
     }
 
+    fn finalize_incomplete(&mut self, outcome: &'static str, reason: &'static str) {
+        for processor in &mut self.processors {
+            processor.finalize_incomplete(outcome, reason);
+        }
+    }
+    fn release_inflight(&mut self) {
+        for processor in &mut self.processors {
+            processor.release_inflight();
+        }
+    }
+    fn on_terminal_preempted(&mut self, winner: crate::response::terminal::ResponseTerminalCause) {
+        for processor in &mut self.processors {
+            processor.on_terminal_preempted(winner);
+        }
+    }
+    async fn on_event(
+        &mut self,
+        chunk: &mut Option<Bytes>,
+        event: crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseEvent,
+        stream_kind: crate::ctx::ResponseStreamKind,
+        sink: &mut ResponseBodySink,
+        session: &mut dyn PluginSession,
+    ) {
+        for processor in &mut self.processors {
+            processor.on_event(chunk, event, stream_kind, sink, session).await;
+            if sink.is_terminated() {
+                break;
+            }
+        }
+        // Typed terminal evidence is emitted only after the source trailer read succeeds.
+        // Release and document validation are independent of actual source completion.
+        if event.end_of_stream_for_legacy() {
+            crate::ai::runtime::attempt_runtime::mark_eos(&self.eos);
+        }
+    }
     async fn on_chunk(
         &mut self,
         chunk: &mut Option<Bytes>,
@@ -742,17 +813,16 @@ impl StreamingResponseProcessor for AiAttemptResponseProcessor {
         sink: &mut ResponseBodySink,
         session: &mut dyn PluginSession,
     ) {
-        for processor in &mut self.processors {
-            processor
-                .on_chunk(chunk, end_of_stream, stream_kind, sink, session)
-                .await;
-            if sink.is_terminated() {
-                break;
-            }
-        }
-        if end_of_stream {
-            crate::ai::runtime::attempt_runtime::mark_eos(&self.eos);
-        }
+        self.on_event(
+            chunk,
+            crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseEvent::Data {
+                end_of_stream,
+            },
+            stream_kind,
+            sink,
+            session,
+        )
+        .await;
     }
 }
 

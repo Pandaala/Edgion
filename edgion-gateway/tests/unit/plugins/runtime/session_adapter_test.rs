@@ -651,3 +651,43 @@ fn response_admission_ordinary_200_buffers() {
         RequestAdmission::Buffer
     );
 }
+
+#[tokio::test]
+async fn disabling_guard_preserves_another_owner_and_pending_unary_possibility() {
+    use tokio::io::AsyncWriteExt;
+    let (mut client, server) = tokio::io::duplex(1024);
+    client.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    let mut ctx = EdgionHttpContext::new();
+    ctx.ensure_ai_state().unary_possible = true;
+    use crate::ai::conversion::chat_to_anthropic::{budget::UnaryBudget, head::UnaryHead, limits::UnaryLimits};
+    let pool = UnaryBudget::new(1);
+    let unary = std::sync::Arc::new(UnaryHead::new(
+        UnaryLimits::resolve(&crate::ai::config::UnaryConfig::default()).unwrap(),
+        pool.acquire().unwrap(),
+    ));
+    ctx.ensure_ai_state().unary_owner = Some(unary.clone());
+    let limits = pingora_proxy::ResponseHeadHoldLimits::new(1, 1, 1, 1, 1, 1, std::time::Duration::from_secs(1));
+    for owner in [
+        crate::ctx::ResponseHeadHoldOwner::AnthropicUnary,
+        crate::ctx::ResponseHeadHoldOwner::Guardrail,
+    ] {
+        ctx.ensure_ai_state().response_head_hold_claim = Some(crate::ctx::ResponseHeadHoldClaim {
+            owner,
+            limits,
+            active: false,
+        });
+        PingoraSessionAdapter::new(&mut session, &mut ctx).disable_semantic_guard();
+        assert!(ctx.ai_state().unwrap().unary_possible);
+        assert!(std::sync::Arc::ptr_eq(
+            ctx.ai_state().unwrap().unary_owner.as_ref().unwrap(),
+            &unary
+        ));
+        assert!(pool.acquire().is_none());
+        assert_eq!(
+            ctx.ai_state().unwrap().response_head_hold_claim.is_some(),
+            owner == crate::ctx::ResponseHeadHoldOwner::AnthropicUnary
+        );
+    }
+}

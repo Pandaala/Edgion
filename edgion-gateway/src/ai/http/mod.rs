@@ -7,6 +7,18 @@ use crate::EdgionHttpContext;
 
 /// Settle AI accounting once at the existing universal terminal boundary.
 pub(crate) async fn finalize(ctx: &mut EdgionHttpContext) {
+    if ctx.ai_state().is_none() {
+        return;
+    }
+    if let Some(driver) = ctx.response_processor_driver() {
+        driver.finalize_ai_incomplete().await;
+    }
+    if let Some(state) = ctx.ai_state_mut() {
+        if let Some(processor) = state.stream_processor.as_mut() {
+            processor.finalize_incomplete("terminal", "builder-fallback");
+        }
+        state.unary_owner = None;
+    }
     crate::ai::accounting::finalize::finalize(ctx).await;
 }
 
