@@ -50,8 +50,8 @@ counters feed different things — chars feed post-hoc estimation (which has a
 `AnthropicResponseProcessor::process_streaming` (`ai/conversion/chat_to_anthropic/response.rs`)
 treats `decoder.degraded() || decoder.malformed()` as a translation failure and
 seals the stream. Only the OpenAI-schema path was exposed, because
-`ai/runtime/dispatch.rs` gives the Anthropic provider's quota accumulator to that
-processor and passes `None` to `UsageExtractionProcessor`. Making the OpenAI
+`ai/runtime/dispatch.rs` gives the Anthropic provider's quota accumulator and
+character counting to that processor, without a following generic observer. Making the OpenAI
 path fail closed too removed an inconsistency rather than inventing a policy.
 
 **3. Raising the cap is what makes fail-close defensible**
@@ -59,12 +59,11 @@ path fail closed too removed an inconsistency rather than inventing a policy.
 At 64 KiB (≈16K output tokens) a "fake streaming" provider — one that emits the
 whole completion as a single event, common among OpenAI-compatible aggregators
 and self-hosted shims — trips degradation with a perfectly legitimate payload.
-Failing closed there would cut real users' streams. At 1 MiB (≈256K tokens) no
-shipping model's one-shot output reaches the cap, so the residual population is
-genuinely pathological and "a stream we cannot parse is a stream we cannot
-bound" holds. 1 MiB also matches `ai::accounting::usage::MAX_NON_STREAMING_USAGE_BYTES`,
-which already accepts the same payload in non-streaming form, and sits at the
-same order as Envoy's 1 MiB default `per_connection_buffer_limit_bytes`.
+Failing closed there would cut legitimate large events. The retained 1 MiB cap
+is a fixed memory/compatibility tradeoff, not a guarantee about every provider's
+output size. Re-evaluate it against real event distributions. The incremental
+Chat JSON observer has separate source/work and retained-state budgets; its
+64 MiB source-inspection cap neither buffers the response nor changes this SSE cap.
 
 **4. No new failure shape**
 
@@ -90,12 +89,12 @@ but not certain there); it was closed separately as D3 —
 
 **6. What raising the cap costs**
 
-Worst-case resident memory per decoder grew 16x. The cap bounds accounted bytes,
-but `pending` + `cur_data` carry amortized-doubling slack (budget ~1-2 MiB), and
-an Anthropic request runs **two** decoders (translator + usage, see
-`ai::runtime::dispatch`), so that path doubles again. There is no aggregate bound across
-concurrent streams. Accepted because reaching it requires a hostile or broken
-**provider** — an operator-configured upstream, not an arbitrary client.
+Worst-case resident memory per decoder grew with the historical cap increase.
+Decoder buffer capacity may carry allocation slack. Current Anthropic dispatch
+uses the translator's canonical decoder without a second generic observer
+decoder. There is no aggregate bound across concurrent streams. The fixed cap
+is an accepted per-decoder bound; re-evaluate capacity accounting when changing
+its implementation.
 
 ## Fix Suggestions Not Accepted
 
@@ -109,7 +108,7 @@ concurrent streams. Accepted because reaching it requires a hostile or broken
   turns out to hurt real traffic.
 - **"Make the cap configurable"** — deliberately out of scope for the fix; a CRD
   field plus validation plus paired docs is a feature, not a review fix. The
-  constant is sized against real model output bounds instead.
+  constant remains a fixed policy tradeoff instead.
 - **"Emit a metric for degradation"** — the project routes data-plane signals
   through the access log and `EdgionErrorCode`, not new metrics. Two codes were
   added instead: `AiSseDecodeDegraded` (precision loss, any request) and

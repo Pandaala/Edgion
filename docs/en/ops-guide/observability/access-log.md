@@ -249,11 +249,20 @@ When no backend was used (route not matched, or the request was short-circuited 
 
 ### `genai` fields
 
-The final request summary contains `provider`, `model`, `input_tokens`, `output_tokens`, optional
-cache-token counts and `estimated_cost_usd`, `streaming`, `usage_estimated`, optional `quota_status`
-and `ttft_ms`, plus the per-attempt fields below. `attempts` contains at most eight dispatched
-attempts and its serialized section is capped at 8 KiB. `attempts_truncated` is present and `true`
-when later summaries were omitted to preserve either bound.
+The final request summary contains `provider`, `model`, `streaming`,
+`usage_source`, `usage_estimated`, optional `quota_status` and `ttft_ms`, plus
+per-attempt fields below. Token/cache counts and configured cost are optional:
+`unknown` and `notObserved` omit them rather than reporting zero. Known zero
+input/output counts remain numeric zero. `usage_estimated` is true only for
+`estimated`; false alone does not establish `reported` usage.
+
+Both summary and attempt `usage_source` use `reported`, `estimated`, `unknown`,
+or `notObserved`. Any unknown attempt, or mixed observed/unobserved attempts,
+makes the request summary unknown; all-unobserved attempts yield notObserved.
+Known attempt rows remain recorded. This internal state does not provide a
+public observation-off switch. `attempts` contains at most eight dispatched
+attempts and its serialized section is capped at 8 KiB. `attempts_truncated`
+is present and true when later summaries were omitted to preserve either bound.
 
 | `attempts[]` field | Type | Description |
 |--------------------|------|-------------|
@@ -265,10 +274,10 @@ when later summaries were omitted to preserve either bound.
 | `failure` | String | Fixed class: `retryable_status`, `ambiguous_transport`, `backend_request_timeout`, or `incomplete_response`. `incomplete_response` means the *provider* stopped early; a stream the gateway itself ended (over quota, or quota no longer enforceable) is not a provider failure and carries no `failure` — read its error diagnostic instead |
 | `retry_after_seconds` | Integer | Accepted bounded Retry-After cooldown, in seconds |
 | `ttft_ms` | Integer | Time to the first non-empty response body chunk for the successful final attempt |
-| `usage_source` | String | `reported` or `estimated` |
-| `input_tokens` | Integer | Reported or bounded estimated input tokens for this attempt |
-| `output_tokens` | Integer | Reported or bounded estimated output tokens for this attempt |
-| `estimated_cost_usd` | String | Estimated attempt cost when pricing is configured |
+| `usage_source` | String | `reported`, `estimated`, `unknown`, or `notObserved` |
+| `input_tokens` | Integer | Reported or bounded estimated input tokens; omitted for unknown/unobserved attempts |
+| `output_tokens` | Integer | Reported or bounded estimated output tokens; omitted for unknown/unobserved attempts |
+| `estimated_cost_usd` | String | Estimated attempt cost when pricing and known usage are available |
 
 The ledger never stores provider URLs, resolved addresses, Secret values, request/response bodies,
 provider error text, prompts, completions, or tool arguments. For an ambiguous post-dispatch result,

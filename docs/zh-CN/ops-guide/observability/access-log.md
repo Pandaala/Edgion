@@ -249,10 +249,16 @@ Authorization: Bearer <admin-token>
 
 ### `genai` 字段
 
-最终请求汇总包含 `provider`、`model`、`input_tokens`、`output_tokens`、可选的 cache token 计数与
-`estimated_cost_usd`、`streaming`、`usage_estimated`、可选的 `quota_status` 与 `ttft_ms`，以及下方的
-per-attempt 字段。`attempts` 最多包含八次已派发尝试，其序列化段上限为 8 KiB。当为遵守上述任一边界而
-省略后续汇总时，会出现 `attempts_truncated: true`。
+最终请求汇总包含 `provider`、`model`、`streaming`、`usage_source`、`usage_estimated`、
+可选的 `quota_status` 与 `ttft_ms`，以及下方的 per-attempt 字段。token/cache 计数和配置定价后的
+成本均为可选：unknown 与 notObserved 省略这些字段，不补零；已知为零的输入/输出仍为数值零。
+`usage_estimated` 仅在 estimated 时为 true，false 本身不能证明是 reported。
+
+汇总和每次尝试的 `usage_source` 均为 reported、estimated、unknown 或 notObserved。
+任一次尝试未知，或已观测与未观测尝试混合时，汇总为 unknown；全部未观测时为 notObserved。
+已知尝试仍保留各自账本。该内部状态尚不提供公开的观测关闭开关。
+`attempts` 最多包含八次已派发尝试，序列化段上限为 8 KiB。当为遵守上述任一边界而省略后续
+汇总时，会出现 `attempts_truncated: true`。
 
 | `attempts[]` 字段 | 类型 | 说明 |
 |--------------------|------|------|
@@ -264,10 +270,10 @@ per-attempt 字段。`attempts` 最多包含八次已派发尝试，其序列化
 | `failure` | String | 固定类别：`retryable_status`、`ambiguous_transport`、`backend_request_timeout` 或 `incomplete_response`。`incomplete_response` 表示**提供商**提前中断；由网关自身结束的流（超配额，或配额已无法执行）不是提供商故障，不带 `failure`，请改看其错误诊断 |
 | `retry_after_seconds` | Integer | 接受的有界 Retry-After 冷却，单位秒 |
 | `ttft_ms` | Integer | 最终成功尝试到达首个非空响应体分片的时间 |
-| `usage_source` | String | `reported` 或 `estimated` |
-| `input_tokens` | Integer | 该次尝试的上报或有界估算输入 token |
-| `output_tokens` | Integer | 该次尝试的上报或有界估算输出 token |
-| `estimated_cost_usd` | String | 配置定价时的估算尝试成本 |
+| `usage_source` | String | `reported`、`estimated`、`unknown` 或 `notObserved` |
+| `input_tokens` | Integer | 该次尝试的上报或有界估算输入 token；未知/未观测时省略 |
+| `output_tokens` | Integer | 该次尝试的上报或有界估算输出 token；未知/未观测时省略 |
+| `estimated_cost_usd` | String | 配置定价且用量已知时的估算尝试成本 |
 
 账本从不存储提供商 URL、解析后的地址、Secret 值、请求/响应体、提供商错误文本、prompt、completion
 或工具参数。对派发后的歧义结果，Redis 可能保守地保留完整的「输入 + 最大输出」预留直至窗口过期。

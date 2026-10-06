@@ -18,8 +18,10 @@ use crate::plugins::common::redis_rate_limiter::{
 use crate::ai::routing::adaptive::current_unix_second;
 use crate::ai::{
     estimated_cost_usd, AdaptiveTelemetryState, AiCredentialOutlierHandle, AiProviderLabel, AiUsageShared,
-    GenAiAttempt, GenAiAttemptFailure, GenAiAttemptUsageSource, ReportedAiUsage,
+    GenAiAttempt, GenAiAttemptFailure, GenAiAttemptUsageSource,
 };
+
+use crate::ai::accounting::usage::AiUsageUnavailableReason;
 
 const KEY_PREFIX: &str = "edgion:aic:";
 const WINDOW: Duration = Duration::from_secs(60);
@@ -154,18 +156,19 @@ impl AiAttemptRuntime {
     }
 
     fn charged_tokens(&self) -> Option<u64> {
-        match self.usage.reported_tokens() {
-            Some((input, output)) => input.checked_add(output),
-            None => Some(self.estimated_input_tokens),
-        }
+        let usage = self
+            .usage
+            .accounting_snapshot(self.estimated_input_tokens, false)
+            .usage?;
+        usage.input_tokens.checked_add(usage.output_tokens)
     }
 
     fn final_charged_tokens(&self) -> Option<u64> {
-        if let Some((input, output)) = self.usage.reported_tokens() {
-            return input.checked_add(output);
-        }
-        let output = self.usage.output_chars().checked_add(3)?.checked_div(4)?;
-        self.estimated_input_tokens.checked_add(output)
+        let usage = self
+            .usage
+            .accounting_snapshot(self.estimated_input_tokens, true)
+            .usage?;
+        usage.input_tokens.checked_add(usage.output_tokens)
     }
 
     fn ledger_entry(
@@ -175,23 +178,9 @@ impl AiAttemptRuntime {
         ttft_ms: Option<u64>,
         include_estimated_output: bool,
     ) -> Option<GenAiAttempt> {
-        let (usage, usage_source) = match self.usage.reported_usage() {
-            Some(usage) => (usage, GenAiAttemptUsageSource::Reported),
-            None => (
-                ReportedAiUsage {
-                    input_tokens: self.estimated_input_tokens,
-                    output_tokens: if include_estimated_output {
-                        ceil_chars_div_four(self.usage.output_chars())
-                    } else {
-                        Default::default()
-                    },
-                    cache_read_input_tokens: 0,
-                    cache_write_input_tokens: 0,
-                },
-                GenAiAttemptUsageSource::Estimated,
-            ),
-        };
-        usage.input_tokens.checked_add(usage.output_tokens)?;
+        let snapshot = self
+            .usage
+            .accounting_snapshot(self.estimated_input_tokens, include_estimated_output);
         Some(GenAiAttempt {
             number,
             backend: bounded_string(&self.backend_name, MAX_BACKEND_KEY_BYTES),
@@ -201,10 +190,12 @@ impl AiAttemptRuntime {
             failure,
             retry_after_seconds: self.retry_after_seconds,
             ttft_ms,
-            usage_source,
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            estimated_cost_usd: self.pricing.map(|pricing| estimated_cost_usd(pricing, usage)),
+            usage_source: snapshot.source,
+            input_tokens: snapshot.usage.map(|usage| usage.input_tokens),
+            output_tokens: snapshot.usage.map(|usage| usage.output_tokens),
+            estimated_cost_usd: snapshot
+                .usage
+                .and_then(|usage| self.pricing.map(|pricing| estimated_cost_usd(pricing, usage))),
         })
     }
 }
@@ -241,6 +232,7 @@ pub struct AiAttemptRuntimeState {
     ever_dispatched: bool,
     charged_request_tokens: u64,
     accounting_overflow: bool,
+    usage_kinds: u8,
     metric_totals: Vec<AiAttemptTokenTotals>,
     attempts: Vec<GenAiAttempt>,
     attempts_truncated: bool,
@@ -333,16 +325,26 @@ impl AiAttemptRuntimeState {
 
     #[allow(clippy::result_unit_err)]
     pub fn charged_request_tokens(&self) -> Result<u64, ()> {
-        (!self.accounting_overflow)
+        (!self.accounting_overflow && self.unresolved_usage_source().is_none())
             .then_some(self.charged_request_tokens)
             .ok_or(())
     }
 
     #[allow(clippy::result_unit_err)]
     pub fn metric_totals(&self) -> Result<&[AiAttemptTokenTotals], ()> {
-        (!self.accounting_overflow)
-            .then_some(self.metric_totals.as_slice())
-            .ok_or(())
+        Ok(self.metric_totals.as_slice())
+    }
+
+    pub(crate) fn accounting_overflow(&self) -> bool {
+        self.accounting_overflow
+    }
+
+    pub(crate) fn unresolved_usage_source(&self) -> Option<GenAiAttemptUsageSource> {
+        match self.usage_kinds {
+            4 => Some(GenAiAttemptUsageSource::NotObserved),
+            kinds if kinds & 2 != 0 || kinds & 5 == 5 => Some(GenAiAttemptUsageSource::Unknown),
+            _ => None,
+        }
     }
 
     pub fn attempts(&self) -> &[GenAiAttempt] {
@@ -379,6 +381,14 @@ impl AiAttemptRuntimeState {
         let Some(mut active) = self.active.take() else {
             return;
         };
+        if active
+            .usage
+            .accounting_snapshot(active.estimated_input_tokens, false)
+            .unavailable
+            == Some(AiUsageUnavailableReason::ArithmeticOverflow)
+        {
+            self.accounting_overflow = true;
+        }
         match failure {
             AiAttemptFailure::Known(class) => {
                 active.record_failure_once(class);
@@ -389,7 +399,14 @@ impl AiAttemptRuntimeState {
                 match active.charged_tokens() {
                     Some(charged) => self.push(active.reservation, SettlementOperation::Reconcile(charged)),
                     None => {
-                        self.accounting_overflow = true;
+                        if active
+                            .usage
+                            .accounting_snapshot(active.estimated_input_tokens, false)
+                            .unavailable
+                            == Some(AiUsageUnavailableReason::ArithmeticOverflow)
+                        {
+                            self.accounting_overflow = true;
+                        }
                         self.push(active.reservation, SettlementOperation::Retain);
                     }
                 }
@@ -434,14 +451,21 @@ impl AiAttemptRuntimeState {
             // longer enforceable) never produces an eos callback: the sink
             // terminates the response first, by design (response-body pipeline
             // spec §3.4). "No eos" therefore means one of two very different
-            // things, and only one of them is an unknown outcome:
-            //   - the upstream truncated  -> consumption is genuinely unknown;
-            //   - the gateway ended it    -> the upstream connection is being
-            //     dropped here and now, so consumption is knowable and the
-            //     attempt is not an incomplete provider response.
+            // things for transport: an upstream truncation is ambiguous, while
+            // a deliberate gateway cut is not an incomplete provider response.
+            // Usage quality is independent: even EOS or a gateway cut retains
+            // the credential reservation when accounting is unavailable.
             let settled = eos || active.usage.gateway_terminated();
             let successful_final = eos && active.status.is_some_and(|status| (200..300).contains(&status));
             let successful_ttft_ms = successful_final.then_some(ttft_ms).flatten();
+            if active
+                .usage
+                .accounting_snapshot(active.estimated_input_tokens, true)
+                .unavailable
+                == Some(AiUsageUnavailableReason::ArithmeticOverflow)
+            {
+                self.accounting_overflow = true;
+            }
             let operation = self.settlement_for(&mut active, settled, eos);
             let entry = if dispatched {
                 let failure = (!settled).then_some(GenAiAttemptFailure::IncompleteResponse);
@@ -463,20 +487,19 @@ impl AiAttemptRuntimeState {
     /// Chooses how a finished attempt settles its credential reservation.
     ///
     /// `settled` means the gateway knows the exchange is over — the upstream
-    /// delivered EOS, or the gateway itself terminated the stream — so the
-    /// reservation can be reconciled down to what was actually consumed. Only a
-    /// genuinely unknown outcome (a truncated or still-open upstream) retains
-    /// the full input + max-output charge, because retaining is what protects
-    /// the credential's per-minute budget from unobserved consumption. Retaining
-    /// on a gateway-initiated cut protects nothing and instead holds the
-    /// unconsumed remainder of the reservation against every other tenant
-    /// sharing that credential until the window's TTL expires.
+    /// delivered EOS, or the gateway itself terminated the stream. Reconciliation
+    /// additionally requires reported or valid estimated usage. Ambiguous
+    /// transport or unavailable accounting retains the full input + max-output
+    /// charge to protect the credential from unobserved consumption. A gateway
+    /// cut with valid accounting reconciles its reservation; retaining that known
+    /// remainder would hold capacity against other tenants until the window TTL.
     ///
     /// Accepted accounting bias, per the billing-adjacent rule that a trade-off
     /// must be stated: on the Anthropic path the reconciled estimate can be
     /// short by roughly one chunk's characters ÷ 4, because a terminate stops
-    /// the processor chain for that chunk (spec §3.4) before the only writer of
-    /// `output_chars` observes the translated bytes. That is a bounded,
+    /// the processor chain for that chunk (spec §3.4), and the translator's own
+    /// `!sink.is_terminated()` gate skips its character counter. There is no
+    /// following generic observer. That is a bounded,
     /// systematic tilt toward under-charging; it is accepted rather than
     /// corrected because the correction would require running processors after
     /// a terminate, which is exactly the post-terminate byte-leak class the
@@ -497,7 +520,14 @@ impl AiAttemptRuntimeState {
         match active.final_charged_tokens() {
             Some(charged) => SettlementOperation::Reconcile(charged),
             None => {
-                self.accounting_overflow = true;
+                if active
+                    .usage
+                    .accounting_snapshot(active.estimated_input_tokens, true)
+                    .unavailable
+                    == Some(AiUsageUnavailableReason::ArithmeticOverflow)
+                {
+                    self.accounting_overflow = true;
+                }
                 SettlementOperation::Retain
             }
         }
@@ -518,49 +548,49 @@ impl AiAttemptRuntimeState {
             self.accounting_overflow = true;
             return;
         };
-        let Some(charged) = entry.input_tokens.checked_add(entry.output_tokens) else {
-            self.accounting_overflow = true;
-            return;
+        self.usage_kinds |= match entry.usage_source {
+            GenAiAttemptUsageSource::Reported | GenAiAttemptUsageSource::Estimated => 1,
+            GenAiAttemptUsageSource::Unknown => 2,
+            GenAiAttemptUsageSource::NotObserved => 4,
         };
-        let Some(charged_request_tokens) = self.charged_request_tokens.checked_add(charged) else {
-            self.accounting_overflow = true;
-            return;
-        };
-        let metric_index = self
-            .metric_totals
-            .iter()
-            .position(|total| total.provider == provider && total.usage_source == entry.usage_source);
-        let metric_total = metric_index.map(|index| self.metric_totals[index]);
-        let Some(metric_input_tokens) = metric_total.map_or(Some(entry.input_tokens), |total| {
-            total.input_tokens.checked_add(entry.input_tokens)
-        }) else {
-            self.accounting_overflow = true;
-            return;
-        };
-        let Some(metric_output_tokens) = metric_total.map_or(Some(entry.output_tokens), |total| {
-            total.output_tokens.checked_add(entry.output_tokens)
-        }) else {
-            self.accounting_overflow = true;
-            return;
-        };
-
-        self.charged_request_tokens = charged_request_tokens;
-        let total = AiAttemptTokenTotals {
-            provider,
-            usage_source: entry.usage_source,
-            input_tokens: metric_input_tokens,
-            output_tokens: metric_output_tokens,
-        };
-        if let Some(index) = metric_index {
-            self.metric_totals[index] = total;
-        } else {
-            self.metric_totals.push(total);
-        }
-        if let Some(adaptive) = adaptive {
-            let second = current_unix_second();
-            adaptive.record_charged_tokens(second, charged);
-            if let Some(ttft_micros) = successful_ttft_ms.and_then(|millis| millis.checked_mul(1_000)) {
-                adaptive.record_success_ttft(second, ttft_micros);
+        if let (Some(input), Some(output)) = (entry.input_tokens, entry.output_tokens) {
+            if let Some(charged) = input.checked_add(output) {
+                if let Some(total) = self.charged_request_tokens.checked_add(charged) {
+                    self.charged_request_tokens = total;
+                } else {
+                    self.accounting_overflow = true;
+                }
+                let metric_index = self
+                    .metric_totals
+                    .iter()
+                    .position(|total| total.provider == provider && total.usage_source == entry.usage_source);
+                let prior = metric_index.map(|index| self.metric_totals[index]);
+                let input_total = prior.map_or(Some(input), |total| total.input_tokens.checked_add(input));
+                let output_total = prior.map_or(Some(output), |total| total.output_tokens.checked_add(output));
+                if let (Some(input_tokens), Some(output_tokens)) = (input_total, output_total) {
+                    let total = AiAttemptTokenTotals {
+                        provider,
+                        usage_source: entry.usage_source,
+                        input_tokens,
+                        output_tokens,
+                    };
+                    if let Some(index) = metric_index {
+                        self.metric_totals[index] = total;
+                    } else {
+                        self.metric_totals.push(total);
+                    }
+                } else {
+                    self.accounting_overflow = true;
+                }
+                if let Some(adaptive) = adaptive {
+                    let second = current_unix_second();
+                    adaptive.record_charged_tokens(second, charged);
+                    if let Some(ttft_micros) = successful_ttft_ms.and_then(|millis| millis.checked_mul(1_000)) {
+                        adaptive.record_success_ttft(second, ttft_micros);
+                    }
+                }
+            } else {
+                self.accounting_overflow = true;
             }
         }
         if self.attempts.len() >= MAX_PENDING_SETTLEMENTS {
@@ -597,10 +627,6 @@ fn bounded_string(value: &str, max_bytes: usize) -> String {
         end -= 1;
     }
     value[..end].to_string()
-}
-
-const fn ceil_chars_div_four(chars: u64) -> u64 {
-    chars / 4 + if chars.is_multiple_of(4) { 0 } else { 1 }
 }
 
 pub(crate) fn cooldown_delta_seconds(cooldown: Duration) -> u64 {

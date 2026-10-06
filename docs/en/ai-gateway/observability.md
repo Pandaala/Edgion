@@ -5,9 +5,19 @@
 AI requests add a top-level `genai` object to the structured access log. It is omitted for non-AI
 requests. See [Access Log](../ops-guide/observability/access-log.md) for the full schema.
 
-The final summary includes `provider`, `model`, `input_tokens`, `output_tokens`, optional cache
-token counts and `estimated_cost_usd`, `streaming`, `usage_estimated`, optional `quota_status` and
-`ttft_ms`, plus a bounded `attempts` array.
+The final summary includes `provider`, `model`, `streaming`, `usage_source`,
+`usage_estimated`, optional `quota_status` and `ttft_ms`, plus a bounded `attempts`
+array. Token counts and configured estimated cost are present only for known
+reported or valid estimated usage.
+
+`usage_source` is `reported`, `estimated`, `unknown`, or `notObserved`. Unknown
+usage omits token counts and cost; it does not mean zero. `usage_estimated` is
+true only for `estimated`, so false alone does not prove provider-reported usage.
+Any unknown attempt, or a mixture of observed and unobserved attempts, makes the
+request summary unknown. All-unobserved attempts yield `notObserved`. Known
+attempt entries remain available even when the request summary is unknown.
+The internal `notObserved` state does not add a public observation-off option;
+`injectUsageTracking: false` only disables request-side usage injection.
 
 `model` is the effective logical model used for upstream dispatch. It normally matches the client's
 declared model name or alias; a quota `Downgrade` action replaces it with the configured fallback.
@@ -34,9 +44,9 @@ bodies.
 ## Optional Prometheus counter
 
 `edgion_gateway_genai_tokens_total` is disabled by default, process-local, and resets when the
-Gateway restarts. When enabled, it aggregates every dispatched attempt with fixed labels only
+Gateway restarts. When enabled, it aggregates known reported/estimated dispatched attempts with fixed labels only
 (`direction`, `provider`, `usage_source`). Use it for rates and trends — not as the durable usage
-or billing source.
+or billing source. Unknown/unobserved attempts emit no token sample, including no fabricated zero. Known attempts are still counted once when another attempt is unknown.
 
 Enable in Gateway config:
 

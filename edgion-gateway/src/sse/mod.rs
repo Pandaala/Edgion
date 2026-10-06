@@ -19,9 +19,9 @@ use chain::SliceChain;
 /// the whole completion and then emits it as a single SSE event, common among
 /// OpenAI-compatible aggregators and self-hosted shims — produces roughly four
 /// bytes per output token, so today's 128K-output-token models reach ~512 KB in
-/// one event. 1 MiB covers every shipping model with headroom and matches
-/// `ai::accounting::usage::MAX_NON_STREAMING_USAGE_BYTES`, which already accepts the same
-/// payload in its non-streaming form.
+/// one event. 1 MiB provides headroom for those events. This framing budget
+/// bounds one pending SSE event independently of ordinary JSON usage observation;
+/// it is not a cap on the complete upstream response.
 ///
 /// Raw logical bytes and visible retained capacity are each bounded by this
 /// value. Slice handles, lines, ranges, and metadata have independent lower

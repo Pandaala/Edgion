@@ -1,6 +1,6 @@
 //! Attempt, usage and quota settlement at universal terminal logging.
 
-use crate::ai::{estimated_cost_usd, GenAiAttemptUsageSource, GenAiSummary, ReportedAiUsage};
+use crate::ai::{estimated_cost_usd, GenAiAttemptUsageSource, GenAiSummary};
 use crate::cli::config::get_genai_tokens_config;
 use crate::ctx::ResponseStreamKind;
 use crate::observe::metrics::{record_genai_tokens, GenAiUsageSource};
@@ -42,30 +42,35 @@ fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_e
 
     let provider = ai.provider;
     let model = ai.model.clone();
-    let (usage, usage_source) = match ai.usage.reported_usage() {
-        Some(usage) => (usage, GenAiUsageSource::Reported),
-        None => (
-            ReportedAiUsage {
-                input_tokens: ceil_chars_div_four(ai.usage.input_chars()),
-                output_tokens: ceil_chars_div_four(ai.usage.output_chars()),
-                cache_read_input_tokens: 0,
-                cache_write_input_tokens: 0,
-            },
-            GenAiUsageSource::Estimated,
-        ),
-    };
+    let mut snapshot = ai
+        .usage
+        .accounting_snapshot(ceil_chars_div_four(ai.usage.input_chars()), true);
+    if let Some(source) = state.attempt_runtime.unresolved_usage_source() {
+        snapshot.source = source;
+        snapshot.usage = None;
+    }
+    if state.attempt_runtime.accounting_overflow() {
+        snapshot.source = GenAiAttemptUsageSource::Unknown;
+        snapshot.usage = None;
+    }
+    let unavailable_diagnostic = snapshot.unavailable.is_some() && ai.usage.claim_unavailable_diagnostic();
+    let usage = snapshot.usage;
+    let usage_source = snapshot.source;
     // Store the immutable summary before metric emission. Its presence is the
     // commit sentinel, so re-entry can never increment the counters twice.
     let summary = GenAiSummary {
         provider: provider.as_str(),
         model,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        cache_read_input_tokens: usage.cache_read_input_tokens,
-        cache_write_input_tokens: usage.cache_write_input_tokens,
+        input_tokens: usage.map(|usage| usage.input_tokens),
+        output_tokens: usage.map(|usage| usage.output_tokens),
+        cache_read_input_tokens: usage
+            .and_then(|usage| (usage.cache_read_input_tokens != 0).then_some(usage.cache_read_input_tokens)),
+        cache_write_input_tokens: usage
+            .and_then(|usage| (usage.cache_write_input_tokens != 0).then_some(usage.cache_write_input_tokens)),
         streaming,
-        usage_estimated: usage_source == GenAiUsageSource::Estimated,
-        estimated_cost_usd: ai.pricing.map(|pricing| estimated_cost_usd(pricing, usage)),
+        usage_estimated: usage_source == GenAiAttemptUsageSource::Estimated,
+        usage_source,
+        estimated_cost_usd: usage.and_then(|usage| ai.pricing.map(|pricing| estimated_cost_usd(pricing, usage))),
         quota_status: ai.quota_status,
         ttft_ms,
         attempts: state.attempt_runtime.attempts().to_vec(),
@@ -78,6 +83,7 @@ fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_e
                 let source = match total.usage_source {
                     GenAiAttemptUsageSource::Reported => GenAiUsageSource::Reported,
                     GenAiAttemptUsageSource::Estimated => GenAiUsageSource::Estimated,
+                    GenAiAttemptUsageSource::Unknown | GenAiAttemptUsageSource::NotObserved => continue,
                 };
                 record_genai_tokens(
                     metrics_enabled,
@@ -88,14 +94,21 @@ fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_e
                 );
             }
         }
-    } else {
+    } else if let Some(usage) = usage {
         record_genai_tokens(
             metrics_enabled,
             provider,
-            usage_source,
+            if usage_source == GenAiAttemptUsageSource::Reported {
+                GenAiUsageSource::Reported
+            } else {
+                GenAiUsageSource::Estimated
+            },
             usage.input_tokens,
             usage.output_tokens,
         );
+    }
+    if unavailable_diagnostic {
+        ctx.record_error(edgion_resources::EdgionErrorCode::AiUsageObservationUnavailable);
     }
 }
 
@@ -109,26 +122,39 @@ async fn finalize_ai_quota(ctx: &mut EdgionHttpContext) {
     let authoritative_total = if state.attempt_runtime.ever_dispatched() {
         state.attempt_runtime.charged_request_tokens().ok()
     } else {
-        summary.input_tokens.checked_add(summary.output_tokens)
+        summary
+            .input_tokens
+            .and_then(|input| summary.output_tokens.and_then(|output| input.checked_add(output)))
     };
-    let Some(authoritative_total) = authoritative_total else {
-        if let Some(summary) = state.summary.as_mut() {
-            summary.quota_status = Some("accounting_overflow");
-        }
-        ctx.record_error(edgion_resources::EdgionErrorCode::AiQuotaReconciliationFailed);
-        return;
-    };
+    let overflow = state.attempt_runtime.accounting_overflow()
+        || state.request.as_ref().is_some_and(|ai| {
+            ai.usage
+                .accounting_snapshot(ceil_chars_div_four(ai.usage.input_chars()), true)
+                .unavailable
+                == Some(super::usage::AiUsageUnavailableReason::ArithmeticOverflow)
+        });
     let Some(quota) = state.request.as_mut().and_then(|ai| ai.quota.as_mut()) else {
         return;
     };
-    let status = quota.finalize(authoritative_total).await;
+    let status = match authoritative_total {
+        Some(total) => quota.finalize(total).await,
+        None => quota.finalize_unknown().await,
+    };
     if let Some(summary) = state.summary.as_mut() {
-        summary.quota_status = Some(status.as_str());
+        summary.quota_status = Some(
+            if overflow && status == crate::ai::quota::QuotaFinalStatus::Unresolved {
+                "accounting_overflow"
+            } else {
+                status.as_str()
+            },
+        );
     }
-    if matches!(
-        status,
-        crate::ai::quota::QuotaFinalStatus::Failed | crate::ai::quota::QuotaFinalStatus::TimedOut
-    ) {
+    if overflow
+        || matches!(
+            status,
+            crate::ai::quota::QuotaFinalStatus::Failed | crate::ai::quota::QuotaFinalStatus::TimedOut
+        )
+    {
         ctx.record_error(edgion_resources::EdgionErrorCode::AiQuotaReconciliationFailed);
     }
 }

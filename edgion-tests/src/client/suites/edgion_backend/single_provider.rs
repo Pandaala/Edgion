@@ -3024,6 +3024,9 @@ impl TestSuite for SingleProviderTestSuite {
                 "A quota-terminated stream settles its credential reservation and is not logged as an upstream truncation",
                 quota_terminated_stream_records_its_status_and_settles_its_bucket,
             ),
+            TestCase::new("incremental_json_h1", "Large ordinary H1 JSON usage observation stays bounded and incremental", incremental_json_h1),
+            TestCase::new("incremental_json_h2", "Large ordinary H2 JSON usage observation stays bounded and incremental", incremental_json_h2),
+            TestCase::new("encoded_usage_passthrough_and_reject", "Encoded usage has explicit unknown quality and Reject fails before commit", encoded_usage_passthrough_and_reject),
         ]
     }
 }
@@ -3064,6 +3067,325 @@ impl TestSuite for AiBackendSecretRotationUpdatedTestSuite {
             credential_generation_b_redacted,
         )]
     }
+}
+
+/// Check each forwarded byte while retaining only the current transport chunk.
+fn matches_json_fixture_chunk(bytes: &[u8], offset: usize, prefix: &[u8], payload_len: usize, suffix: &[u8]) -> bool {
+    bytes.iter().enumerate().all(|(index, byte)| {
+        let position = offset + index;
+        if position < prefix.len() {
+            *byte == prefix[position]
+        } else if position < prefix.len() + payload_len {
+            *byte == b'x'
+        } else {
+            suffix.get(position - prefix.len() - payload_len) == Some(byte)
+        }
+    })
+}
+
+type JsonUsageFixtureCase = (
+    &'static str,
+    &'static [u8],
+    &'static [u8],
+    &'static str,
+    Option<(u64, u64)>,
+);
+
+async fn incremental_json_quality(ctx: &TestContext, h2: bool) -> Result<(), String> {
+    const PAYLOAD_LEN: usize = 8 * 1024 * 1024;
+    let cases: &[JsonUsageFixtureCase] = &[
+        (
+            "json_large_usage_before",
+            br#"{"usage":{"prompt_tokens":2,"completion_tokens":3},"ignored":""#,
+            br#""}"#,
+            "reported",
+            Some((2, 3)),
+        ),
+        (
+            "json_large_usage_after",
+            br#"{"ignored":""#,
+            br#"","usage":{"prompt_tokens":2,"completion_tokens":3}}"#,
+            "reported",
+            Some((2, 3)),
+        ),
+        (
+            "json_large_missing_usage",
+            br#"{"ignored":""#,
+            br#""}"#,
+            "estimated",
+            None,
+        ),
+        (
+            "json_malformed_tail",
+            br#"{"usage":{"prompt_tokens":2,"completion_tokens":3},"ignored":""#,
+            br#""}garbage"#,
+            "unknown",
+            None,
+        ),
+        (
+            "json_duplicate_parent",
+            br#"{"usage":{"prompt_tokens":2,"completion_tokens":3},"ignored":""#,
+            br#"","usage":{"prompt_tokens":4,"completion_tokens":5}}"#,
+            "reported",
+            Some((4, 5)),
+        ),
+    ];
+    let metrics = MetricsClient::from_host_port(&ctx.target_host, 12090);
+    for &(mode, prefix, suffix, source, counts) in cases {
+        let trace = format!("incremental-json-{}", uuid::Uuid::new_v4());
+        let before = metrics
+            .fetch_raw_metrics()
+            .await
+            .map_err(|error| format!("metrics read failed: {error}"))?;
+        let response = client(ctx, DEFAULT_HOST, h2, true)?
+            .post(request_url(
+                ctx,
+                DEFAULT_HOST,
+                PATH,
+                &format!("?mock_mode={mode}&fixture_query={trace}"),
+            ))
+            .header("accept-encoding", "identity")
+            .header("traceparent", crate::access_log_client::traceparent_for_marker(&trace))
+            .header("access_log", "test_store")
+            .json(&json!({"model":"fixture-model","stream":false,"messages":[]}))
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(format!("{mode} returned {}", response.status()));
+        }
+        if response.headers().contains_key("content-encoding") {
+            return Err(format!("{mode} unexpectedly encoded downstream bytes"));
+        }
+        let mut stream = response.bytes_stream();
+        let mut offset = 0;
+        let mut first = None;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| format!("{mode} body failed: {error}"))?;
+            if !chunk.is_empty() && first.is_none() {
+                if chunk.len() > prefix.len() {
+                    return Err(format!("{mode} emitted tail bytes before the explicit release"));
+                }
+                first = Some(Instant::now());
+                let mut released = false;
+                for host in test_backend_hosts(ctx) {
+                    let release = ctx
+                        .http_client
+                        .post(format!("http://{host}:30001/ai-json-usage/release/{trace}"))
+                        .send()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    if release.status() == reqwest::StatusCode::NO_CONTENT {
+                        released = true;
+                        break;
+                    }
+                }
+                if !released {
+                    return Err(format!(
+                        "{mode} could not release the provider after receiving its prefix"
+                    ));
+                }
+            }
+            if !matches_json_fixture_chunk(&chunk, offset, prefix, PAYLOAD_LEN, suffix) {
+                return Err(format!("{mode} changed forwarded bytes at {offset}"));
+            }
+            offset += chunk.len();
+        }
+        if offset != prefix.len() + PAYLOAD_LEN + suffix.len() {
+            return Err(format!("{mode} forwarded an incorrect body length {offset}"));
+        }
+        if first.is_none() {
+            return Err(format!(
+                "{mode} did not forward a prefix before explicit provider release"
+            ));
+        }
+        let entry = ctx
+            .access_log_client()
+            .get_access_log_with_retry(&trace, 15, 200)
+            .await
+            .map_err(|error| error.to_string())?;
+        let usage = &entry.data["genai"];
+        if usage["usage_source"] != source || usage["attempts"][0]["usage_source"] != source {
+            return Err(format!("{mode} has wrong accounting quality: {usage}"));
+        }
+        if let Some((input, output)) = counts {
+            if usage["input_tokens"] != input || usage["output_tokens"] != output {
+                return Err(format!("{mode} lost reported usage: {usage}"));
+            }
+        } else if source == "estimated" {
+            if usage["input_tokens"].as_u64().is_none()
+                || usage["output_tokens"].as_u64() != Some((offset as u64).div_ceil(4))
+            {
+                return Err(format!(
+                    "{mode} did not preserve the complete valid JSON estimate: {usage}"
+                ));
+            }
+        } else {
+            for key in ["input_tokens", "output_tokens", "estimated_cost_usd"] {
+                if usage.get(key).is_some() || usage["attempts"][0].get(key).is_some() {
+                    return Err(format!("{mode} fabricated unknown {key}"));
+                }
+            }
+            let after = metrics.fetch_raw_metrics().await.map_err(|error| error.to_string())?;
+            for token_type in ["input", "output"] {
+                for quality in ["reported", "estimated"] {
+                    if metric_value(&after, token_type, quality) != metric_value(&before, token_type, quality) {
+                        return Err(format!("{mode} emitted token metrics for unknown usage"));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn incremental_json_h1(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        match incremental_json_quality(&ctx, false).await {
+            Ok(()) => TestResult::passed_with_message(
+                start.elapsed(),
+                "H1 ordinary JSON stayed incremental with bounded observation and explicit quality".to_string(),
+            ),
+            Err(error) => TestResult::failed(start.elapsed(), error),
+        }
+    })
+}
+fn incremental_json_h2(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        match incremental_json_quality(&ctx, true).await {
+            Ok(()) => TestResult::passed_with_message(
+                start.elapsed(),
+                "H2 ordinary JSON stayed incremental with bounded observation and explicit quality".to_string(),
+            ),
+            Err(error) => TestResult::failed(start.elapsed(), error),
+        }
+    })
+}
+
+fn encoded_usage_passthrough_and_reject(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        let run = async {
+            let metrics = MetricsClient::from_host_port(&ctx.target_host, 12090);
+            let metric_before = metrics.fetch_raw_metrics().await.map_err(|error| error.to_string())?;
+            const GZIP: &[u8] = &[
+                31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 171, 86, 42, 45, 78, 76, 79, 85, 178, 170, 86, 42, 40, 202, 207, 45,
+                40, 137, 47, 201, 207, 78, 205, 43, 86, 178, 50, 210, 81, 74, 6, 10, 228, 164, 150, 100, 230, 231, 193,
+                69, 141, 107, 107, 1, 168, 37, 36, 72, 51, 0, 0, 0,
+            ];
+            let trace = format!("encoded-json-passive-{}", uuid::Uuid::new_v4());
+            let response = client(&ctx, DEFAULT_HOST, false, true)?
+                .post(request_url(&ctx, DEFAULT_HOST, PATH, "?mock_mode=json_encoded"))
+                .header("accept-encoding", "identity")
+                .header("traceparent", crate::access_log_client::traceparent_for_marker(&trace))
+                .header("access_log", "test_store")
+                .json(&json!({"model":"fixture-model","messages":[]}))
+                .send()
+                .await
+                .map_err(|error| error.to_string())?;
+            if response.status() != reqwest::StatusCode::OK {
+                return Err("passive encoded response was rejected".to_string());
+            }
+            if response.bytes().await.map_err(|error| error.to_string())?.as_ref() != GZIP {
+                return Err("passive encoded bytes changed".to_string());
+            }
+            let entry = ctx
+                .access_log_client()
+                .get_access_log_with_retry(&trace, 15, 200)
+                .await
+                .map_err(|error| error.to_string())?;
+            if entry.data["genai"]["usage_source"] != "unknown" || entry.data["genai"].get("input_tokens").is_some() {
+                return Err("passive encoding produced fabricated usage".to_string());
+            }
+            // Freeze the minute so a new window cannot hide reservation retention.
+            let (_, elapsed) = credential_window_now();
+            if elapsed > CREDENTIAL_RESERVATION_WINDOW_SECS - 8 {
+                tokio::time::sleep(Duration::from_secs(CREDENTIAL_RESERVATION_WINDOW_SECS - elapsed + 1)).await;
+            }
+            let (window, _) = credential_window_now();
+            let uid = backend_uid(&ctx, "edgion-test", "fixture-provider-credential-tpm").await?;
+            let before = credential_tpm_used(&ctx, &uid, "primary", window).await?.unwrap_or(0);
+            let identity = format!("encoded-reject-{}", uuid::Uuid::new_v4());
+            let trace = format!("encoded-json-reject-{}", uuid::Uuid::new_v4());
+            let before_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let response = post_with_quota_identity_on_host(
+                &ctx,
+                CREDENTIAL_TPM_HOST,
+                &identity,
+                json!({"model":"fixture-model","stream":true,"messages":[]}),
+                "?mock_mode=json_encoded",
+                Some(&trace),
+            )
+            .await?;
+            if response.status() != reqwest::StatusCode::SERVICE_UNAVAILABLE
+                || response
+                    .headers()
+                    .get("content-type")
+                    .and_then(|value| value.to_str().ok())
+                    != Some("application/json")
+            {
+                return Err("encoded Reject did not use the precommit JSON 503 envelope".to_string());
+            }
+            let body: Value = response.json().await.map_err(|error| error.to_string())?;
+            if body["error"]["code"] != "token_quota_unavailable" {
+                return Err("encoded Reject leaked upstream bytes instead of the fixed error".to_string());
+            }
+            let entry = ctx
+                .access_log_client()
+                .get_access_log_with_retry(&trace, 15, 200)
+                .await
+                .map_err(|error| error.to_string())?;
+            let usage = &entry.data["genai"];
+            if usage["usage_source"] != "unknown"
+                || usage["quota_status"] != "unresolved"
+                || usage["attempts"][0]["status"] != 200
+                || usage["attempts"][0].get("failure").is_some()
+                || usage.get("input_tokens").is_some()
+            {
+                return Err(format!(
+                    "encoded Reject lost independent quality/transport settlement: {usage}"
+                ));
+            }
+            let after_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let (_, business_used) = terminate_quota_bucket_used_between(&ctx, &identity, before_ms, after_ms).await?;
+            if business_used != 0 {
+                return Err(format!(
+                    "unknown pre-body rejection fabricated a business token total {business_used}"
+                ));
+            }
+            let metric_after = metrics.fetch_raw_metrics().await.map_err(|error| error.to_string())?;
+            for token_type in ["input", "output"] {
+                for quality in ["reported", "estimated"] {
+                    if metric_value(&metric_before, token_type, quality)
+                        != metric_value(&metric_after, token_type, quality)
+                    {
+                        return Err("encoded unknown usage emitted invented token metrics".to_string());
+                    }
+                }
+            }
+            let after = credential_tpm_used(&ctx, &uid, "primary", window)
+                .await?
+                .ok_or_else(|| "missing credential TPM bucket".to_string())?;
+            if credential_window_now().0 != window || after < before + CREDENTIAL_TPM_MAX_OUTPUT_TOKENS {
+                return Err(format!(
+                    "unknown encoded usage refunded its credential reservation: {before} -> {after}"
+                ));
+            }
+            Ok::<(), String>(())
+        }
+        .await;
+        match run { Ok(()) => TestResult::passed_with_message(start.elapsed(), "passive encoding preserved exact bytes; Reject used precommit fail-close and conservative unknown settlement".to_string()), Err(error) => TestResult::failed(start.elapsed(), error) }
+    })
 }
 
 #[cfg(test)]

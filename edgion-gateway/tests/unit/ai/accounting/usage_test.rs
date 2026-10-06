@@ -1,4 +1,13 @@
 use super::*;
+
+impl AiUsageShared {
+    pub(crate) fn observation_disabled() -> Self {
+        Self {
+            observation_off: AtomicBool::new(true),
+            ..Self::default()
+        }
+    }
+}
 use crate::ai::quota::QuotaFinalStatus;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 
@@ -77,21 +86,40 @@ async fn malformed_or_partial_usage_remains_unreported() {
 
 #[tokio::test]
 async fn non_streaming_exact_boundary_is_accepted_and_overflow_degrades() {
-    let exact_shared = Arc::new(AiUsageShared::default());
-    let mut exact = UsageExtractionProcessor::new(exact_shared.clone());
-    let mut body = vec![b' '; MAX_NON_STREAMING_USAGE_BYTES];
-    let usage = br#"{"usage":{"prompt_tokens":2,"completion_tokens":3}}"#;
-    body[..usage.len()].copy_from_slice(usage);
-    feed(&mut exact, &[(&body, true)], ResponseStreamKind::None).await;
-    assert!(!exact_shared.non_streaming_overflowed());
-    assert_eq!(exact_shared.reported_tokens(), Some((2, 3)));
-
-    let overflow_shared = Arc::new(AiUsageShared::default());
-    let mut overflow = UsageExtractionProcessor::new(overflow_shared.clone());
-    let oversized = vec![b'x'; MAX_NON_STREAMING_USAGE_BYTES + 1];
-    feed(&mut overflow, &[(&oversized, true)], ResponseStreamKind::None).await;
-    assert!(overflow_shared.non_streaming_overflowed());
-    assert_eq!(overflow_shared.reported_tokens(), None);
+    use edgion_waf::seclang::{JsonStreamError, JsonStreamLimit};
+    const PADDING: [u8; 4096] = [b' '; 4096];
+    let limit = crate::ai::protocols::openai::json_usage::MAX_USAGE_SOURCE_BYTES;
+    let prefix = br#"{"usage":{"prompt_tokens":2,"completion_tokens":3}}"#;
+    for extra in [0, 1] {
+        let shared = Arc::new(AiUsageShared::default());
+        let mut processor = UsageExtractionProcessor::new(shared.clone());
+        feed(&mut processor, &[(prefix, false)], ResponseStreamKind::None).await;
+        let mut remaining = limit + extra - prefix.len();
+        while remaining >= PADDING.len() {
+            feed(&mut processor, &[(&PADDING, false)], ResponseStreamKind::None).await;
+            remaining -= PADDING.len();
+        }
+        feed(
+            &mut processor,
+            &[(&PADDING[..remaining], true)],
+            ResponseStreamKind::None,
+        )
+        .await;
+        if extra == 0 {
+            assert!(!shared.observation_unavailable());
+            assert_eq!(shared.reported_tokens(), Some((2, 3)));
+        } else {
+            assert!(shared.observation_unavailable());
+            assert_eq!(shared.reported_tokens(), None);
+            assert_eq!(
+                processor.json.as_mut().unwrap().finish(),
+                JsonUsageOutcome::Unavailable(JsonStreamError::Limit {
+                    kind: JsonStreamLimit::SourceBytes,
+                    limit
+                })
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -961,4 +989,93 @@ async fn openai_streaming_processor_updates_quota_only_for_semantic_deltas() {
     }
     feed(&mut processor, &[(b"data: [DONE]\n\n", true)], ResponseStreamKind::Sse).await;
     assert_eq!(shared.reported_tokens(), Some((10, 7)));
+}
+
+#[test]
+fn accounting_quality_precedence_and_checked_arithmetic() {
+    let shared = AiUsageShared::default();
+    shared.set_input_chars(8);
+    assert_eq!(
+        shared.accounting_snapshot(2, true).source,
+        GenAiAttemptUsageSource::Estimated
+    );
+    shared.json_started.store(true, Ordering::Release);
+    assert_eq!(
+        shared.accounting_snapshot(2, false).unavailable,
+        Some(AiUsageUnavailableReason::IncompleteJson)
+    );
+    shared.json_complete.store(true, Ordering::Release);
+    assert_eq!(
+        shared.accounting_snapshot(2, true).source,
+        GenAiAttemptUsageSource::Estimated
+    );
+    shared.observe_reported_usage(u64::MAX, 0, u64::MAX, 1);
+    assert_eq!(shared.reported_usage().unwrap().cache_read_input_tokens, 0);
+    assert_eq!(shared.reported_usage().unwrap().cache_write_input_tokens, 0);
+    assert_eq!(
+        shared.accounting_snapshot(2, true).source,
+        GenAiAttemptUsageSource::Reported
+    );
+    shared.observe_reported_usage(u64::MAX, 1, 0, 0);
+    let snapshot = shared.accounting_snapshot(2, true);
+    assert_eq!(snapshot.unavailable, Some(AiUsageUnavailableReason::ArithmeticOverflow));
+    assert_eq!(snapshot.usage, None);
+    shared.mark_observation_unavailable();
+    assert_eq!(
+        shared.accounting_snapshot(2, true).source,
+        GenAiAttemptUsageSource::Unknown
+    );
+    let off = AiUsageShared::observation_disabled();
+    assert_eq!(
+        off.accounting_snapshot(2, true).source,
+        GenAiAttemptUsageSource::NotObserved
+    );
+    assert_eq!(off.accounting_snapshot(2, true).usage, None);
+}
+
+#[tokio::test]
+async fn ordinary_json_usage_is_provisional_and_malformed_tail_is_unknown() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    feed(
+        &mut processor,
+        &[(br#"{"usage":{"prompt_tokens":2,"completion_tokens":3}}"#, false)],
+        ResponseStreamKind::None,
+    )
+    .await;
+    assert_eq!(shared.reported_usage(), None);
+    assert_eq!(
+        shared.accounting_snapshot(2, true).source,
+        GenAiAttemptUsageSource::Unknown
+    );
+    feed(&mut processor, &[(b"garbage", true)], ResponseStreamKind::None).await;
+    assert_eq!(shared.reported_usage(), None);
+    assert_eq!(
+        shared.accounting_snapshot(2, true).source,
+        GenAiAttemptUsageSource::Unknown
+    );
+}
+
+#[tokio::test]
+async fn encoded_passthrough_does_not_parse_or_count_transformed_bytes() {
+    let shared = Arc::new(AiUsageShared::default());
+    let mut processor = UsageExtractionProcessor::new(shared.clone());
+    let mut header = pingora_http::ResponseHeader::build(200, None).unwrap();
+    header.append_header("content-encoding", "identity").unwrap();
+    header.append_header("content-encoding", "gzip").unwrap();
+    processor.on_response_header(&mut header);
+    header.remove_header("content-encoding");
+    feed(
+        &mut processor,
+        &[(br#"{"usage":{"prompt_tokens":2,"completion_tokens":3}}"#, true)],
+        ResponseStreamKind::None,
+    )
+    .await;
+    assert_eq!(shared.output_chars(), 0);
+    assert_eq!(shared.reported_usage(), None);
+    assert_eq!(
+        shared.accounting_snapshot(2, true).source,
+        GenAiAttemptUsageSource::Unknown
+    );
+    assert!(processor.json.is_none());
 }

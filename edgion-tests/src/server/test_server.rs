@@ -79,6 +79,9 @@ const OAUTH2_PREVIOUS_CLIENT_SECRET: &str = "previous-secret";
 
 /// Per-scenario, fixed-label state for AI resilience integration tests. Only
 /// an opaque fixture ID, bounded server-owned modes, and counters are kept.
+static AI_JSON_USAGE_RELEASES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
 static AI_RESILIENCE_STATE: std::sync::LazyLock<Mutex<std::collections::HashMap<String, AiResilienceFixtureState>>> =
     std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
@@ -618,6 +621,10 @@ fn create_echo_router(server_addr_str: String) -> Router {
         )
         .route("/guardrail/observation/{action}", get(guardrail_observation_handler))
         .route("/guardrail/reset", axum::routing::post(guardrail_reset_handler))
+        .route(
+            "/ai-json-usage/release/{fixture_id}",
+            axum::routing::post(ai_json_usage_release_handler),
+        )
         .route("/ai-resilience/count/{trace_id}", get(ai_resilience_count_handler))
         .route("/ai-resilience/counts/{fixture_id}", get(ai_resilience_counts_handler))
         .route(
@@ -1786,6 +1793,102 @@ async fn guardrail_reset_handler() -> axum::http::StatusCode {
     axum::http::StatusCode::NO_CONTENT
 }
 
+async fn ai_json_usage_release_handler(Path(fixture_id): Path<String>) -> axum::http::StatusCode {
+    let release = AI_JSON_USAGE_RELEASES.lock().get(&fixture_id).cloned();
+    match release {
+        Some(release) => {
+            release.notify_one();
+            axum::http::StatusCode::NO_CONTENT
+        }
+        None => axum::http::StatusCode::NOT_FOUND,
+    }
+}
+
+/// A bounded producer for ordinary JSON accounting. The eight MiB field is
+/// emitted as shared 32 KiB slices, never assembled as a complete response.
+fn incremental_json_usage_fixture(mode: Option<&str>, fixture_id: Option<&str>) -> Option<axum::response::Response> {
+    let mode = mode?;
+    if mode == "json_encoded" {
+        // Deterministic gzip of the small usage document; these are real encoded
+        // bytes so passive observation must preserve them without parsing.
+        const GZIP: &[u8] = &[
+            31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 171, 86, 42, 45, 78, 76, 79, 85, 178, 170, 86, 42, 40, 202, 207, 45, 40,
+            137, 47, 201, 207, 78, 205, 43, 86, 178, 50, 210, 81, 74, 6, 10, 228, 164, 150, 100, 230, 231, 193, 69,
+            141, 107, 107, 1, 168, 37, 36, 72, 51, 0, 0, 0,
+        ];
+        return Some(
+            axum::response::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .header("content-encoding", "identity")
+                .header("content-encoding", "gzip")
+                .body(Body::from(GZIP))
+                .unwrap(),
+        );
+    }
+    let (prefix, suffix): (&'static [u8], &'static [u8]) = match mode {
+        "json_large_usage_before" => (
+            br#"{"usage":{"prompt_tokens":2,"completion_tokens":3},"ignored":""#,
+            br#""}"#,
+        ),
+        "json_large_usage_after" => (
+            br#"{"ignored":""#,
+            br#"","usage":{"prompt_tokens":2,"completion_tokens":3}}"#,
+        ),
+        "json_large_missing_usage" => (br#"{"ignored":""#, br#""}"#),
+        "json_malformed_tail" => (
+            br#"{"usage":{"prompt_tokens":2,"completion_tokens":3},"ignored":""#,
+            br#""}garbage"#,
+        ),
+        "json_duplicate_parent" => (
+            br#"{"usage":{"prompt_tokens":2,"completion_tokens":3},"ignored":""#,
+            br#"","usage":{"prompt_tokens":4,"completion_tokens":5}}"#,
+        ),
+        _ => return None,
+    };
+    let fixture_id = fixture_id.filter(|id| !id.is_empty() && id.len() <= 80)?.to_string();
+    let release = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut pending = AI_JSON_USAGE_RELEASES.lock();
+        if pending.len() >= 16 || pending.contains_key(&fixture_id) {
+            return None;
+        }
+        pending.insert(fixture_id.clone(), release.clone());
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    tokio::spawn(async move {
+        let sent_prefix = tx.send(Ok(Bytes::from_static(prefix))).await.is_ok();
+        let released = sent_prefix
+            && tokio::time::timeout(Duration::from_secs(5), release.notified())
+                .await
+                .is_ok();
+        AI_JSON_USAGE_RELEASES.lock().remove(&fixture_id);
+        if !released {
+            let _ = tx
+                .send(Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "JSON fixture prefix was not released",
+                )))
+                .await;
+            return;
+        }
+        let payload = Bytes::from(vec![b'x'; 32 * 1024]);
+        for _ in 0..256 {
+            if tx.send(Ok(payload.clone())).await.is_err() {
+                return;
+            }
+        }
+        let _ = tx.send(Ok(Bytes::from_static(suffix))).await;
+    });
+    Some(
+        axum::response::Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
+            .unwrap(),
+    )
+}
+
 async fn ai_provider_handler(
     Path(path): Path<String>,
     Query(query): Query<AiProviderQuery>,
@@ -1943,6 +2046,10 @@ async fn ai_provider_handler(
                 r#"{"error":{"message":"fixed retryable provider failure"}}"#,
             ))
             .unwrap();
+    }
+
+    if let Some(response) = incremental_json_usage_fixture(query.mock_mode.as_deref(), query.fixture_query.as_deref()) {
+        return response;
     }
 
     if !streaming {
@@ -2164,7 +2271,7 @@ struct AnthropicProviderObservation {
     authorization_absent: bool,
     version_valid: bool,
     beta_absent: bool,
-    accept_encoding_absent: bool,
+    accept_encoding_identity: bool,
     host_valid: bool,
     path_valid: bool,
     query_absent: bool,
@@ -2200,7 +2307,10 @@ fn anthropic_provider_observation(
         authorization_absent: !headers.contains_key(axum::http::header::AUTHORIZATION),
         version_valid: headers.get("anthropic-version").and_then(|value| value.to_str().ok()) == Some("2023-06-01"),
         beta_absent: !headers.contains_key("anthropic-beta"),
-        accept_encoding_absent: !headers.contains_key(axum::http::header::ACCEPT_ENCODING),
+        accept_encoding_identity: {
+            let mut values = headers.get_all(axum::http::header::ACCEPT_ENCODING).iter();
+            values.next().and_then(|value| value.to_str().ok()) == Some("identity") && values.next().is_none()
+        },
         host_valid: headers
             .get(axum::http::header::HOST)
             .and_then(|value| value.to_str().ok())

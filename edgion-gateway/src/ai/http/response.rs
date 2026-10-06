@@ -4,6 +4,55 @@ use crate::EdgionHttpContext;
 use pingora_http::ResponseHeader;
 use std::time::{Duration, SystemTime};
 
+/// Capture raw encoding eligibility before conversion and operator header changes.
+/// Active Reject enforcement cannot observe encoded SSE, so use the existing
+/// precommit local-reply path rather than injecting cleartext into encoded bytes.
+pub(crate) fn enforce_observation_encoding(
+    session: &mut pingora_proxy::Session,
+    ctx: &mut EdgionHttpContext,
+    response: &mut ResponseHeader,
+) -> bool {
+    let Some(state) = ctx.ai_state() else {
+        return false;
+    };
+    let Some(ai) = state.request.as_ref() else {
+        return false;
+    };
+    if crate::routes::http::proxy_http::content_type::response_is_identity_encoded(&response.headers) {
+        return false;
+    }
+    ai.usage.mark_encoding_unavailable();
+    let reject = ai.requested_streaming
+        && ai.quota.is_some()
+        && matches!(state.attempt_plan.as_ref(), Some(crate::ai::AiAttemptPlan::Ready(plan)) if plan.terminate_on_over_limit);
+    if !reject {
+        return false;
+    }
+    ai.usage.mark_gateway_terminated();
+    let diagnostic = ai.usage.claim_unavailable_diagnostic();
+    if diagnostic {
+        ctx.record_error(edgion_resources::EdgionErrorCode::AiUsageObservationUnavailable);
+    }
+    // The local reply builds a fresh header; a queued override, rather than an
+    // edit to the upstream header, supplies the JSON envelope content type.
+    ctx.queue_pending_response_header_op(crate::ctx::PendingHeaderOp::Set {
+        name: "content-type".to_string(),
+        value: http::HeaderValue::from_static("application/json"),
+    });
+    let mut adapter =
+        crate::plugins::runtime::session_adapter::PingoraSessionAdapter::with_response_header(session, ctx, response);
+    let result = crate::ai::protocols::openai::error::openai_error_response(
+        &mut adapter,
+        crate::ai::AiProxyError::QuotaUnavailable,
+    );
+    if let edgion_resources::filters::PluginRunningResult::ErrResponse { status, body } = result {
+        if !adapter.apply_response_local_reply(status, body) {
+            adapter.set_response_denied(status);
+        }
+    }
+    true
+}
+
 const MAX_PROVIDER_RESET_HINT_BYTES: usize = 64;
 const OPENAI_RESET_HEADERS: [&str; 2] = ["x-ratelimit-reset-requests", "x-ratelimit-reset-tokens"];
 

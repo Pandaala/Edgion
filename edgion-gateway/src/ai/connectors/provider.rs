@@ -29,6 +29,9 @@ pub(crate) fn prepare_provider_request(
             .map_err(|_| AiDispatchError::InvalidConfiguration)?;
     }
     adapter
+        .set_request_header("accept-encoding", "identity")
+        .map_err(|_| AiDispatchError::InvalidConfiguration)?;
+    adapter
         .set_upstream_uri(&uri)
         .map_err(|_| AiDispatchError::InvalidConfiguration)?;
     adapter

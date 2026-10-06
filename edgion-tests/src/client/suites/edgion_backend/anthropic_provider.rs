@@ -145,7 +145,7 @@ fn assert_observation(observation: &Value, require_system: bool) -> Result<(), S
         "authorization_absent",
         "version_valid",
         "beta_absent",
-        "accept_encoding_absent",
+        "accept_encoding_identity",
         "host_valid",
         "path_valid",
         "query_absent",

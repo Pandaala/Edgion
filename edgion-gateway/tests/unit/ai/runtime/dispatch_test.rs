@@ -855,6 +855,7 @@ async fn composite_ai_processor_stops_its_inner_chain_on_terminate() {
     let ran = Arc::new(Mutex::new(false));
     let mut composite = AiAttemptResponseProcessor {
         processors: vec![Box::new(Terminator), Box::new(MarkRan { ran: ran.clone() })],
+        usage: Arc::new(AiUsageShared::default()),
         eos: Arc::new(AtomicBool::new(false)),
     };
     let mut chunk = Some(Bytes::from_static(b"x"));
@@ -873,4 +874,49 @@ async fn composite_ai_processor_stops_its_inner_chain_on_terminate() {
 
     assert!(sink.is_terminated());
     assert!(!*ran.lock(), "the sub-processor after an inner terminate must not run");
+}
+
+#[tokio::test]
+async fn raw_encoding_survives_anthropic_header_replacement_and_fixed_error_body() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let usage = Arc::new(AiUsageShared::default());
+    let converter = AnthropicResponseProcessor::new_with_quota(
+        "fixture-model".to_string(),
+        false,
+        false,
+        0,
+        usage.clone(),
+        None,
+        false,
+    );
+    let mut composite = AiAttemptResponseProcessor {
+        processors: vec![Box::new(converter)],
+        usage: usage.clone(),
+        eos: Arc::new(AtomicBool::new(false)),
+    };
+    let mut header = ResponseHeader::build(200, None).unwrap();
+    header.insert_header("content-type", "application/json").unwrap();
+    header.append_header("content-encoding", "identity").unwrap();
+    header.append_header("content-encoding", "gzip").unwrap();
+    composite.on_response_header(&mut header);
+    assert_eq!(header.status.as_u16(), 503);
+    assert!(!header.headers.contains_key("content-encoding"));
+    let mut body = Some(Bytes::from_static(b"encoded upstream bytes"));
+    let mut sink = ResponseBodySink::new();
+    let mut session = MockPluginSession::new();
+    session.expect_record_error().return_const(());
+    session.expect_semantic_guard_active().return_const(false);
+    composite
+        .on_chunk(
+            &mut body,
+            true,
+            crate::ctx::ResponseStreamKind::None,
+            &mut sink,
+            &mut session,
+        )
+        .await;
+    let snapshot = usage.accounting_snapshot(2, true);
+    assert_eq!(snapshot.source, crate::ai::GenAiAttemptUsageSource::Unknown);
+    assert_eq!(snapshot.usage, None);
+    assert!(composite.eos.load(std::sync::atomic::Ordering::Acquire));
 }

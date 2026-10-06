@@ -118,6 +118,43 @@ Alert on:
 | `AiSseDecodeMalformed` | At least one completed SSE event contained invalid UTF-8 and was excluded from usage parsing. Recorded once per request, whether or not quota enforcement is active. |
 | `AiSseMalformedQuotaTerminated` | The second cumulative malformed SSE event caused streaming Reject enforcement to fail closed. This is neither an actual over-limit result nor permanent decoder degradation. |
 
+## JSON observation and unavailable usage
+
+Non-streaming OpenAI Chat JSON usage is extracted incrementally while original
+chunks are forwarded. Content strings are validated and discarded by the
+observer; the response is not retained for an EOS parse. Selected values become
+reported usage only after the complete document is valid. Duplicate selected
+keys and replacement of `usage`/details parents use last-wins semantics within
+that document, independently of cumulative SSE snapshot merging.
+
+Inspection has fixed bounds: 64 MiB source and decoded bytes, nesting depth 64,
+256-byte decoded keys, 1,538-byte raw keys, 64-byte number spellings, 131,072
+lexical events, 256 Mi work units, and 8 KiB retained heap capacity. These are
+observation limits, not response/download size limits. Malformed or incomplete
+JSON, exhausted inspection budgets, unsupported content encoding, or token
+arithmetic overflow produce unknown usage. Passive observation still forwards
+original response bytes; it never invents actual zero usage or final cost.
+
+The gateway requests upstream `Accept-Encoding: identity` and checks all raw
+response encoding fields before conversion or response-header edits. An encoded
+response on an admitted streaming `tokenQuota` + `Reject` request fails before
+header commitment with HTTP 503 and the existing `token_quota_unavailable` JSON
+envelope. It does not append cleartext SSE into compressed bytes. `Throttle`
+and `Downgrade` do not acquire this hard rejection. The existing Anthropic
+converter retains its own error handling when no Reject precommit applies.
+
+Unknown usage retains conservative credential reservations even at EOS or a
+gateway cut. Business quota finalizes as `unresolved` after a successful
+conservative flush; Redis failure or deadline expiry can still yield `failed`
+or `timed_out`. It flushes the highest
+observed, acknowledged or sent watermark without refunding a possibly committed
+Redis apply. The worker still terminates; a zero observed watermark is not a
+claim of zero actual consumption. Valid estimated client-disconnect and gateway-cut
+accounting remain supported; transport ambiguity and usage quality are separate.
+Inspect `AiUsageObservationUnavailable`; with business quota configured,
+arithmetic overflow additionally uses `AiQuotaReconciliationFailed`.
+Known attempt rows remain in the access log.
+
 ## Estimated cost
 
 Configure optional `models[].pricing` on EdgionBackend:
@@ -130,7 +167,7 @@ Configure optional `models[].pricing` on EdgionBackend:
 | `cacheWriteInputPerMillionUsd` | Optional; defaults to input price |
 
 Estimated cost appears in the access-log `genai` summary and per-attempt ledger when pricing is
-configured. `CostWeighted` selection also requires pricing plus an output-token bound for every
+configured and usage is reported or validly estimated. Unknown/unobserved usage omits cost. `CostWeighted` selection also requires pricing plus an output-token bound for every
 otherwise eligible candidate.
 
 Durable billing and usage attribution belong in the access log — see

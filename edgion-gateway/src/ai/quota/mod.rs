@@ -40,6 +40,7 @@ pub enum QuotaFinalStatus {
     OverLimit = 2,
     Failed = 3,
     TimedOut = 4,
+    Unresolved = 5,
 }
 
 impl QuotaFinalStatus {
@@ -49,6 +50,7 @@ impl QuotaFinalStatus {
             Self::OverLimit => "over_limit",
             Self::Failed => "failed",
             Self::TimedOut => "timed_out",
+            Self::Unresolved => "unresolved",
         }
     }
 
@@ -58,6 +60,7 @@ impl QuotaFinalStatus {
             2 => Some(Self::OverLimit),
             3 => Some(Self::Failed),
             4 => Some(Self::TimedOut),
+            5 => Some(Self::Unresolved),
             _ => None,
         }
     }
@@ -67,6 +70,7 @@ pub struct QuotaAccumulator {
     observed_output: AtomicU64,
     final_total: AtomicU64,
     final_requested: AtomicBool,
+    final_unknown: AtomicBool,
     completed: AtomicU8,
     /// Sticky "this request is over its limit" latch, set as soon as ANY
     /// flush — mid-stream or final — reports the cumulative total exceeded
@@ -88,6 +92,7 @@ impl QuotaAccumulator {
             observed_output: AtomicU64::new(0),
             final_total: AtomicU64::new(0),
             final_requested: AtomicBool::new(false),
+            final_unknown: AtomicBool::new(false),
             completed: AtomicU8::new(0),
             over_limit: AtomicBool::new(false),
             flush_tokens: flush_tokens.max(1),
@@ -134,7 +139,14 @@ impl QuotaAccumulator {
     }
 
     fn request_final(&self, total: u64) {
+        self.final_unknown.store(false, Ordering::Relaxed);
         self.final_total.store(total, Ordering::Relaxed);
+        self.final_requested.store(true, Ordering::Release);
+        self.notify_worker.notify_one();
+    }
+
+    fn request_final_unknown(&self) {
+        self.final_unknown.store(true, Ordering::Relaxed);
         self.final_requested.store(true, Ordering::Release);
         self.notify_worker.notify_one();
     }
@@ -214,6 +226,15 @@ impl AiQuotaRequest {
 
     pub async fn finalize(&mut self, authoritative_total: u64) -> QuotaFinalStatus {
         self.accumulator.request_final(authoritative_total);
+        self.wait_final().await
+    }
+
+    pub(crate) async fn finalize_unknown(&mut self) -> QuotaFinalStatus {
+        self.accumulator.request_final_unknown();
+        self.wait_final().await
+    }
+
+    async fn wait_final(&mut self) -> QuotaFinalStatus {
         let status = match tokio::time::timeout(self.final_timeout, self.accumulator.wait_completed()).await {
             Ok(status) => status,
             Err(_) => {
@@ -253,6 +274,9 @@ async fn run_worker(
     let mut lease_interval = tokio::time::interval_at(lease_start, lease_refresh_interval);
     let mut revision = 0_u64;
     let mut charged_total = 0_u64;
+    // A failed or timed-out apply may have committed in one or more Redis buckets.
+    // Record attempted targets before awaiting, independently of acknowledgements.
+    let mut sent_high_water = 0_u64;
     let mut final_deadline = None;
     let mut retry_final = false;
     let mut has_charge = false;
@@ -270,9 +294,18 @@ async fn run_worker(
         };
 
         let final_update = accumulator.final_requested.load(Ordering::Acquire);
+        let unknown_final = final_update && accumulator.final_unknown.load(Ordering::Relaxed);
         let target = if final_update {
             final_deadline.get_or_insert_with(|| tokio::time::Instant::now() + final_timeout);
-            accumulator.final_total.load(Ordering::Relaxed)
+            if unknown_final {
+                accumulator
+                    .observed_output
+                    .load(Ordering::Relaxed)
+                    .max(charged_total)
+                    .max(sent_high_water)
+            } else {
+                accumulator.final_total.load(Ordering::Relaxed)
+            }
         } else {
             accumulator.observed_output.load(Ordering::Relaxed)
         };
@@ -281,6 +314,7 @@ async fn run_worker(
         }
 
         revision = revision.saturating_add(1);
+        sent_high_water = sent_high_water.max(target);
         match sink.apply_cumulative(revision, target, final_update).await {
             Ok(result) => {
                 charged_total = target;
@@ -294,7 +328,9 @@ async fn run_worker(
                 }
                 lease_interval.reset_after(lease_refresh_interval);
                 if final_update {
-                    accumulator.finish(if result.over_limit {
+                    accumulator.finish(if unknown_final {
+                        QuotaFinalStatus::Unresolved
+                    } else if result.over_limit {
                         QuotaFinalStatus::OverLimit
                     } else {
                         QuotaFinalStatus::Charged

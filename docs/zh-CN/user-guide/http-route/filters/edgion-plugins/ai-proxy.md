@@ -43,3 +43,9 @@ spec:
 
 Secret、EdgionBackend 与 HTTPRoute 见
 [完整配置示例](../../../../ai-gateway/quick-start.md#完整示例)。
+
+## 用量观测
+
+当前 Chat JSON 用量使用有界状态增量提取，原始分片立即转发。编码不支持或 JSON 非法/不完整时，
+用量为 unknown，计数和成本省略。执行与结算规则见[配额与成本](../../../../ai-gateway/quotas-and-cost.md)。
+`injectUsageTracking` 控制请求修改，不控制响应观测器是否安装；本次变更未新增公开的观测关闭配置。

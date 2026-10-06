@@ -264,7 +264,7 @@ fn provider_429_priority_fallback(
             "authorization_absent",
             "version_valid",
             "beta_absent",
-            "accept_encoding_absent",
+            "accept_encoding_identity",
             "host_valid",
             "path_valid",
             "query_absent",

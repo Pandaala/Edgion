@@ -44,3 +44,12 @@ spec:
 
 See the [complete configuration example](../../../../ai-gateway/quick-start.md#complete-example)
 for Secret, EdgionBackend, and HTTPRoute resources.
+
+## Usage observation
+
+Current Chat JSON usage extraction uses bounded incremental state and forwards
+original chunks immediately. Unsupported encoding or invalid/incomplete JSON
+makes usage unknown; counts and cost are omitted. See [Quotas and Cost](../../../../ai-gateway/quotas-and-cost.md)
+for enforcement and settlement. `injectUsageTracking` controls request mutation,
+not whether response usage observation is installed. There is no new public
+observation-off configuration in this change.

@@ -7,7 +7,7 @@ closed: 2026-08-09
 knowledge_type: regression-guards
 ---
 
-# Anthropic translated output uses estimation-only observation — FIXED
+# Anthropic translation owns usage and fallback estimation
 
 ## Conclusion
 
@@ -16,38 +16,38 @@ quota accumulation, and mid-stream quota termination. The generic
 `UsageExtractionProcessor` therefore must not buffer or parse the translated
 OpenAI-shaped body again.
 
-It cannot be removed entirely. It remains the sole writer of translated
-`output_chars`, which is the bounded fallback used when a stream terminates or
-fails before Anthropic publishes final usage. Removing it would reconcile those
-attempts as if they produced zero output tokens.
+The translator also owns translated `output_chars`, the bounded fallback for
+eligible incomplete streams. Dispatch installs no generic observer after it.
+This supersedes the historical estimation-only observer described by gw-18:
+that observer was needed while it was the sole character-counter owner, but
+ownership has since moved into the translator.
 
-The dispatch contract is consequently provider-specific:
+The dispatch contract is provider-specific:
 
 - OpenAI and OpenAI-compatible providers install full usage extraction.
-- Anthropic installs its translator followed by an estimation-only observer.
+- Anthropic installs its translator, which owns exact usage and estimation.
 
-Estimation-only mode retains UTF-8/SSE character counting and EOS flushing, but
-does not retain a non-streaming body, run a second SSE decoder, parse JSON,
-publish reported usage, diagnose SSE degradation, or enforce quota.
+Do not install a second SSE decoder or retain the translated body for accounting.
+The existing non-streaming translation accumulator is a separate pending
+conversion task; this guard does not endorse full-response buffering.
 
 ## Review Guidance
 
-Do not reintroduce the full generic processor after Anthropic translation, and
-do not optimize it away completely. Either change loses one side of the
-contract: redundant hot-path memory/CPU in the first case, or under-accounted
-incomplete and gateway-terminated attempts in the second.
+Do not reintroduce the generic processor after Anthropic translation or remove
+the translator's character counter. Verify reported usage and valid estimated
+disconnect/gateway-cut paths. Unsupported raw content encoding must be marked
+unavailable before the translator rebuilds headers; translated error-envelope
+characters must not restore estimated accounting.
 
-Re-evaluate only if the Anthropic translator becomes the owner of translated
-`output_chars` as well as exact usage. If that happens, remove the
-estimation-only observer and update the accepted one-chunk undercount rationale
-in `gateway-terminated-stream-settles-its-reservation.md`.
+Re-evaluate when character ownership, encoding eligibility, or termination
+ordering changes. The translator's `!sink.is_terminated()` gate still excludes
+the terminating chunk from its fallback counter; preserve the accepted bias in
+`gateway-terminated-stream-settles-its-reservation.md`.
 
 ## Regression Coverage
 
-- `ai::runtime::dispatch::tests::anthropic_uses_estimation_only_after_provider_translation`
-- `ai::accounting::usage::tests::estimation_only_counts_without_buffering_or_parsing`
-- Existing Anthropic usage/quota and gateway-terminated settlement tests
-
+- Mirrored dispatch tests verify translator-only processing and encoding capture.
+- Existing Anthropic usage/quota and gateway-terminated settlement tests.
 
 ## Resolution references
 

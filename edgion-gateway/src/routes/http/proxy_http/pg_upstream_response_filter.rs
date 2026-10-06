@@ -300,6 +300,14 @@ pub fn upstream_response_filter(
         }
     }
 
+    if crate::ai::http::response::enforce_observation_encoding(session, ctx, upstream_response) {
+        release_late_request_body_view(ctx);
+        if let Some(denial) = ctx.response_denial() {
+            return Err(response_denial_error(denial));
+        }
+        return Ok(());
+    }
+
     // Private response processors see only the final, non-retried response.
     // They may normalize a provider status/content type and retain the body
     // mode they will use later. Per-attempt upstream bookkeeping above keeps

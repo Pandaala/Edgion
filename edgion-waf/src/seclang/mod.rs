@@ -27,8 +27,9 @@ pub use json_checker::{
 pub use json_number::JsonNumber;
 
 pub use json_stream::{
-    JsonStream, JsonStreamError, JsonStreamInput, JsonStreamLimit, JsonStreamLimits, JsonStreamSinkError,
-    JsonStreamToken, JsonStreamUsage,
+    JsonDiscardedStringSummary, JsonStream, JsonStreamError, JsonStreamInput, JsonStreamLimit, JsonStreamLimits,
+    JsonStreamSelective, JsonStreamSelectiveLimits, JsonStreamSelectiveSink, JsonStreamSinkError, JsonStreamToken,
+    JsonStreamUsage,
 };
 
 pub use directive::{

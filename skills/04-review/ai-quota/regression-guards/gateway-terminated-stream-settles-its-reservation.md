@@ -29,14 +29,19 @@ cause:
   log line.
 
 Fixed on 2026-08-05: `AiUsageShared` carries a `gateway_terminated` latch set in
-`terminate_ai_stream` (`ai/accounting/usage.rs`) — the single place that decides a
-deliberate cut — and settlement treats `eos || gateway_terminated` as "the
-exchange is over and its consumption is knowable".
+`terminate_ai_stream` (`ai/accounting/usage.rs`) — the owner that decides a
+deliberate mid-stream cut — and settlement treats `eos || gateway_terminated` as "the
+exchange is over". Current settlement separately checks whether accounting
+evidence is valid: a deliberate cut alone cannot make unavailable usage known.
+The precommit encoding rejection in `ai/http/response.rs` also sets this latch;
+it shares deliberate-termination semantics without injecting a mid-stream event.
 
 Re-reports of the form "resurrect the eos callback after a terminate", "a
 terminated attempt should keep its reservation because the outcome is unknown",
 or "`incomplete_response` is correct because the response really was incomplete"
-are **not accepted**.
+are **not accepted** for valid reported/estimated accounting. Unknown observation
+(including unsupported encoding or incomplete Chat JSON) retains the credential
+reservation even at EOS or a gateway cut, without claiming a provider failure.
 
 ## Core Rationale
 
@@ -45,10 +50,16 @@ are **not accepted**.
 An absent eos means either the upstream truncated (consumption genuinely
 unknown → retaining the conservative charge is what protects the credential) or
 the gateway ended it (the gateway is dropping that upstream connection here and
-now — H1 close, H2 `RST_STREAM CANCEL` — so consumption is knowable). Retaining
+now — H1 close, H2 `RST_STREAM CANCEL` — so valid observed consumption can be settled). Retaining
 on the second case protects nothing; it only holds the unconsumed remainder
 against every other tenant sharing the credential. The latch restores the
 distinction that `finalize` needs, at the only site that has it.
+
+Transport ambiguity here is not synonymous with `usage_source: unknown`.
+A valid observed SSE prefix can still produce estimated ledger/business usage
+on client disconnect while the credential reservation is retained. Invalid or
+incomplete Chat JSON instead yields unknown accounting with no numeric actual
+total. Evaluate transport and usage quality independently.
 
 **2. The latch belongs on the terminate path, not on the eos path**
 
@@ -82,9 +93,9 @@ unchanged for the same reason.
 
 On the Anthropic path the reconciled estimate can be short by roughly one
 chunk's characters ÷ 4: `AiAttemptResponseProcessor` breaks its inner chain
-after a processor terminates (spec §3.4), so `UsageExtractionProcessor` — the
-only writer of `output_chars` — never observes the terminating chunk's
-translated output. That is a bounded, systematic tilt toward **under**-charging
+after a processor terminates (spec §3.4), and the translator's own
+`!sink.is_terminated()` character-count gate excludes the terminating chunk's
+translated output. No generic observer follows the translator. That is a bounded, systematic tilt toward **under**-charging
 (tens of tokens against a reservation of thousands), accepted rather than
 corrected because the correction would mean running processors after a
 terminate. The comment on `settlement_for` states the direction explicitly.
@@ -109,12 +120,14 @@ terminate. The comment on `settlement_for` states the direction explicitly.
 
 Re-open this decision only if:
 
-- A third deliberate-termination site appears that does not route through
-  `terminate_ai_stream` — it would silently reacquire the leak.
+- A new deliberate-termination site fails to set the shared latch. Mid-stream
+  cuts use `terminate_ai_stream`; precommit encoding rejection sets it directly.
 - The response-body pipeline gains a settlement callback that survives a
   terminate, which would make the latch redundant.
-- The Anthropic path gains its own `output_chars` writer, which would remove the
+- The Anthropic character counter's termination gate changes, affecting the
   accepted under-count in rationale 5.
+- Observation becomes unavailable through a new path; verify independent usage
+  quality, credential retention and unresolved business-quota watermarks.
 
 ## Reference Cases
 

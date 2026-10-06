@@ -99,6 +99,30 @@ usage 时，Edgion 会保留各 token 分量观察到的最高值；后续较低
 | `AiSseDecodeMalformed` | 至少一条完整 SSE 事件包含无效 UTF-8，因而未参与用量解析。无论是否启用配额执行，每个请求只记录一次。 |
 | `AiSseMalformedQuotaTerminated` | 同一响应内累计出现第二条 malformed SSE 事件，触发流式 Reject 执行 fail-close；它既不表示实际超限，也不表示解码器永久降级。 |
 
+## JSON 观测与未知用量
+
+非流式 OpenAI Chat JSON 用量会增量提取，原始分片持续转发。观测器验证并丢弃内容字符串，
+不保存整份响应等待 EOS 解析；仅在完整文档合法后发布上报用量。文档内重复选中字段和整个
+usage/details 父对象的替换遵循最后一个值生效，与 SSE 累计快照的高水位合并分别处理。
+
+观测采用固定边界：源字节与解码字节各 64 MiB、深度 64、解码 key 256 字节、原始 key
+1,538 字节、数字文本 64 字节、词法事件 131,072、工作量 256 Mi 单位、保留堆容量 8 KiB。
+这些是观测限制，不限制响应或下载大小。JSON 非法/不完整、预算耗尽、编码不支持或 token
+算术溢出都会产生未知用量。被动观测继续转发原始字节，不把未知用量伪装成零或最终成本。
+
+网关向上游发送 `Accept-Encoding: identity`，在转换或响应头修改前检查所有原始编码字段。
+已准入的流式 tokenQuota + Reject 请求遇到编码响应时，在提交响应头前返回 HTTP 503 和
+现有的 token_quota_unavailable JSON 错误体，不往压缩字节中插入明文 SSE。
+Throttle 和 Downgrade 不新增这种硬拒绝；未触发 Reject 前置拒绝时，既有 Anthropic
+转换器仍按其自身错误处理规则执行。
+
+未知用量即使收到 EOS 或由网关截断，仍保留保守的凭据预留。业务配额成功完成保守刷新后以
+unresolved 结束；Redis 失败或期限耗尽仍可能为 failed 或 timed_out。
+刷新使用已观测、已确认或已发送的最高水位，避免退款一个可能已在 Redis 提交的请求；worker
+仍会停止。观测水位为零不代表实际消耗为零。有效估算的客户端断开和网关截断仍按原规则处理，
+传输歧义与用量质量是独立事实。检查 AiUsageObservationUnavailable；配置业务配额时，
+算术溢出还使用 AiQuotaReconciliationFailed。已知尝试仍保留在 access log 中。
+
 ## 估算成本
 
 在 EdgionBackend 上配置可选的 `models[].pricing`：
@@ -110,7 +134,7 @@ usage 时，Edgion 会保留各 token 分量观察到的最高值；后续较低
 | `cacheReadInputPerMillionUsd` | 可选；默认等于输入价 |
 | `cacheWriteInputPerMillionUsd` | 可选；默认等于输入价 |
 
-配置定价后，估算成本会出现在 access log 的 `genai` 汇总与 per-attempt 账本中。`CostWeighted`
-选择还要求每个原本符合条件的候选都有定价与输出 token 上限。
+配置定价且用量为上报或有效估算时，估算成本会出现在 access log 的 `genai` 汇总与 per-attempt 账本中。
+未知/未观测用量省略成本。`CostWeighted` 选择还要求每个原本符合条件的候选都有定价与输出 token 上限。
 
 持久计费与用量归属以 access log 为准 — 见 [可观测性](./observability.md)。

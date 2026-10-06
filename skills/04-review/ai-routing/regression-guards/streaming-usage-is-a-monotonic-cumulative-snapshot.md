@@ -19,6 +19,17 @@ bounded estimated units, while provider cumulative totals raise the same
 request watermark monotonically. Worker tests separately lock down failed
 incremental retry, final timeout, and cancellation on request drop.
 
+## Single JSON document versus streaming snapshots
+
+Within one non-streaming Chat JSON document, decoded duplicate selected keys
+and replacement of whole `usage`/details parents use JSON last-wins semantics.
+The bounded selective observer keeps values provisional until valid EOS;
+malformed tails and incomplete documents cannot publish reported usage. This
+single-document rule is distinct from merging successive provider snapshots.
+After a complete document succeeds, publication uses the same shared snapshot
+owner. Exact nonnegative u64 token counts and checked cache/total additions
+prevent overflow from becoming an apparently valid smaller usage/cost result.
+
 ## Resolution references
 
 - `test-05` — 2026-08-09.

@@ -275,3 +275,18 @@ external owner/slot/generation/occupied state before following local links, and
 retain profile/outcome parent checks. Physical growth uses actual production types;
 the measured 64-bit Candidate and Slot<Candidate> are 160 and 176 bytes. Re-evaluate
 packing, lifecycle and physical failure thresholds when any link or pool changes.
+
+## Selective tokenizer reuse by AI usage observation
+
+`JsonStreamSelective` is an opt-in wrapper over the same transport-neutral JSON
+grammar. It captures bounded decoded keys and raw number spellings; unselected
+strings are UTF-8/escape/surrogate-validated and reported as discarded metadata.
+Skipped content is subject to source/decoded/work limits without inheriting the
+key-capture cap. No frame-sized continuation copy or provider-specific logic is
+introduced into the WAF crate. The AI caller owns its profile and selected paths.
+
+Default `JsonStream` token borrowing, capture, counters, errors, limits and WAF
+verdicts remain unchanged. Selective coverage is additive: preserve the existing
+test identities and compare whole, byte and mixed schedules under every budget.
+The fresh supporting full WAF library run for Task 02 passed 642 tests with two
+ignored; this is a dated implementation result, not a substitute for revalidation.

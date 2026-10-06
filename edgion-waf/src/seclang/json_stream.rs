@@ -243,9 +243,92 @@ enum Lexical {
     Literal { literal: Literal, next: usize },
 }
 
+/// Limits for validating and discarding string values while capturing keys/numbers.
+/// The lexical budgets retain their default meaning for the capture-all API.
+#[derive(Debug, Clone, Copy)]
+pub struct JsonStreamSelectiveLimits {
+    pub lexical: JsonStreamLimits,
+    pub max_key_bytes: usize,
+    pub max_number_bytes: usize,
+}
+
+/// Metadata from a validated string value. Original text is never retained.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JsonDiscardedStringSummary {
+    pub decoded_bytes: usize,
+    pub decoded_chars: usize,
+}
+
+/// Synchronous consumer of selective JSON events. `on_token` never receives
+/// String/Number; those values use their explicit callbacks instead.
+pub trait JsonStreamSelectiveSink {
+    fn on_token(&mut self, token: JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>;
+    fn on_number(&mut self, raw: &str) -> Result<(), JsonStreamSinkError>;
+    fn on_discarded_string(&mut self, summary: JsonDiscardedStringSummary) -> Result<(), JsonStreamSinkError>;
+}
+
+/// Opt-in selective capture over the same grammar as `JsonStream`.
+#[derive(Debug)]
+pub struct JsonStreamSelective {
+    inner: JsonStream,
+}
+
+impl JsonStreamSelective {
+    pub fn new(limits: JsonStreamSelectiveLimits) -> Self {
+        let mut inner = JsonStream::new(limits.lexical);
+        inner.selective = Some(limits);
+        Self { inner }
+    }
+
+    pub fn feed(
+        &mut self,
+        input: JsonStreamInput<'_>,
+        sink: &mut impl JsonStreamSelectiveSink,
+    ) -> Result<(), JsonStreamError> {
+        self.inner.feed_internal(input, &mut SelectiveSink(sink))
+    }
+
+    pub const fn usage(&self) -> JsonStreamUsage {
+        self.inner.usage()
+    }
+}
+
+trait InternalSink {
+    fn token(&mut self, token: JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>;
+    fn number(&mut self, raw: &str) -> Result<(), JsonStreamSinkError>;
+    fn discarded(&mut self, summary: JsonDiscardedStringSummary) -> Result<(), JsonStreamSinkError>;
+}
+
+struct CaptureAll<F>(F);
+impl<F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>> InternalSink for CaptureAll<F> {
+    fn token(&mut self, token: JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError> {
+        (self.0)(token)
+    }
+    fn number(&mut self, _raw: &str) -> Result<(), JsonStreamSinkError> {
+        Err(JsonStreamSinkError)
+    }
+    fn discarded(&mut self, _summary: JsonDiscardedStringSummary) -> Result<(), JsonStreamSinkError> {
+        Err(JsonStreamSinkError)
+    }
+}
+struct SelectiveSink<'a, S>(&'a mut S);
+impl<S: JsonStreamSelectiveSink> InternalSink for SelectiveSink<'_, S> {
+    fn token(&mut self, token: JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError> {
+        self.0.on_token(token)
+    }
+    fn number(&mut self, raw: &str) -> Result<(), JsonStreamSinkError> {
+        self.0.on_number(raw)
+    }
+    fn discarded(&mut self, summary: JsonDiscardedStringSummary) -> Result<(), JsonStreamSinkError> {
+        self.0.on_discarded_string(summary)
+    }
+}
+
 /// One bounded token buffer and a grammar stack. No document or token list is retained.
 pub struct JsonStream {
     limits: JsonStreamLimits,
+    selective: Option<JsonStreamSelectiveLimits>,
+    discarded: JsonDiscardedStringSummary,
     usage: JsonStreamUsage,
     terminal: Terminal,
     lexical: Lexical,
@@ -277,6 +360,8 @@ impl JsonStream {
         measurements::record(Event::GrammarInstances, 1);
         Self {
             limits,
+            selective: None,
+            discarded: JsonDiscardedStringSummary::default(),
             usage: JsonStreamUsage::default(),
             terminal: Terminal::Active,
             lexical: Lexical::Idle,
@@ -298,16 +383,24 @@ impl JsonStream {
 
     /// An error is sticky. Error, abandonment and successful completion release
     /// allocated buffers; subsequent calls never invoke the token consumer.
-    pub fn feed<F>(&mut self, input: JsonStreamInput<'_>, mut sink: F) -> Result<(), JsonStreamError>
+    pub fn feed<F>(&mut self, input: JsonStreamInput<'_>, sink: F) -> Result<(), JsonStreamError>
     where
         F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
     {
+        self.feed_internal(input, &mut CaptureAll(sink))
+    }
+
+    fn feed_internal(
+        &mut self,
+        input: JsonStreamInput<'_>,
+        sink: &mut impl InternalSink,
+    ) -> Result<(), JsonStreamError> {
         match self.terminal {
             Terminal::Failed(error) => return Err(error),
             Terminal::Complete => return Err(JsonStreamError::AlreadyComplete),
             Terminal::Active => {}
         }
-        let result = self.feed_active(input, &mut sink);
+        let result = self.feed_active(input, sink);
         if let Err(error) = result {
             self.terminal = Terminal::Failed(error);
             self.release();
@@ -317,7 +410,7 @@ impl JsonStream {
 
     fn feed_active<F>(&mut self, input: JsonStreamInput<'_>, sink: &mut F) -> Result<(), JsonStreamError>
     where
-        F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
+        F: InternalSink,
     {
         match input {
             JsonStreamInput::Data(bytes) => {
@@ -329,7 +422,7 @@ impl JsonStream {
                         escape: EscapeState::Plain,
                     } = self.lexical
                     {
-                        if self.utf8_remaining == 0 {
+                        if self.utf8_remaining == 0 && self.selective.is_none() {
                             if self.token.is_empty() {
                                 offset += self.borrow_string_prefix(&bytes[offset..], key, sink)?;
                                 continue;
@@ -412,11 +505,11 @@ impl JsonStream {
     // borrows this chunk; escape or chunk end retains only its consumed prefix.
     fn borrow_string_prefix<F>(&mut self, bytes: &[u8], key: bool, sink: &mut F) -> Result<usize, JsonStreamError>
     where
-        F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
+        F: InternalSink,
     {
         #[cfg(test)]
         if self.sequential_ascii {
-            return self.borrow_string_prefix_sequential(bytes, key, sink);
+            return self.borrow_string_prefix_sequential(bytes, key, &mut |token| sink.token(token));
         }
         let mut offset = 0;
         while offset < bytes.len() {
@@ -465,7 +558,7 @@ impl JsonStream {
                     self.work(offset)?;
                     self.event()?;
                     let value = std::str::from_utf8(&bytes[..offset]).map_err(|_| JsonStreamError::Utf8)?;
-                    sink(if key {
+                    sink.token(if key {
                         JsonStreamToken::Key(value)
                     } else {
                         JsonStreamToken::String(value)
@@ -501,7 +594,7 @@ impl JsonStream {
 
     fn byte<F>(&mut self, byte: u8, sink: &mut F) -> Result<(), JsonStreamError>
     where
-        F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
+        F: InternalSink,
     {
         match self.lexical {
             Lexical::Idle => self.idle(byte, sink),
@@ -542,7 +635,7 @@ impl JsonStream {
 
     fn idle<F>(&mut self, byte: u8, sink: &mut F) -> Result<(), JsonStreamError>
     where
-        F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
+        F: InternalSink,
     {
         if is_whitespace(byte) {
             return Ok(());
@@ -608,6 +701,7 @@ impl JsonStream {
                     self.start_value()?;
                 }
                 self.token.clear();
+                self.discarded = JsonDiscardedStringSummary::default();
                 self.utf8_remaining = 0;
                 self.lexical = Lexical::String {
                     key,
@@ -618,6 +712,9 @@ impl JsonStream {
             b'-' | b'0'..=b'9' => {
                 self.start_value()?;
                 self.token.clear();
+                if self.selective.is_some_and(|limits| limits.max_number_bytes == 0) {
+                    return Err(limit_error(JsonStreamLimit::RawTokenBytes, 0));
+                }
                 self.append(&[byte])?;
                 self.lexical = Lexical::Number(match byte {
                     b'-' => NumberState::Minus,
@@ -658,7 +755,7 @@ impl JsonStream {
 
     fn string<F>(&mut self, byte: u8, key: bool, escape: EscapeState, sink: &mut F) -> Result<(), JsonStreamError>
     where
-        F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
+        F: InternalSink,
     {
         self.raw_byte()?;
         let next = match escape {
@@ -672,13 +769,18 @@ impl JsonStream {
                         b'"' => {
                             self.work(self.token.len())?;
                             self.event()?;
-                            let value = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Utf8)?;
-                            sink(if key {
-                                JsonStreamToken::Key(value)
+                            if self.selective.is_some() && !key {
+                                sink.discarded(self.discarded)
+                                    .map_err(|_| JsonStreamError::SinkRejected)?;
                             } else {
-                                JsonStreamToken::String(value)
-                            })
-                            .map_err(|_| JsonStreamError::SinkRejected)?;
+                                let value = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Utf8)?;
+                                sink.token(if key {
+                                    JsonStreamToken::Key(value)
+                                } else {
+                                    JsonStreamToken::String(value)
+                                })
+                                .map_err(|_| JsonStreamError::SinkRejected)?;
+                            }
                             self.token.clear();
                             self.lexical = Lexical::Idle;
                             if key {
@@ -807,16 +909,24 @@ impl JsonStream {
 
     fn finish_number<F>(&mut self, sink: &mut F) -> Result<(), JsonStreamError>
     where
-        F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
+        F: InternalSink,
     {
         // Charge both UTF-8 views, form classification, integer accumulation,
         // and possible float fallback as a conservative linear scan bound.
         self.work(self.token.len().checked_mul(5).ok_or(JsonStreamError::Arithmetic)?)?;
         let raw = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Number)?;
-        let value = JsonNumber::from_validated_lexeme(raw).map_err(|_| JsonStreamError::Number)?;
-        self.event()?;
-        let raw = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Number)?;
-        sink(JsonStreamToken::Number { raw, value }).map_err(|_| JsonStreamError::SinkRejected)?;
+        if self.selective.is_some() {
+            // Grammar is already validated. Do not coerce exact spelling through f64.
+            self.event()?;
+            let raw = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Number)?;
+            sink.number(raw).map_err(|_| JsonStreamError::SinkRejected)?;
+        } else {
+            let value = JsonNumber::from_validated_lexeme(raw).map_err(|_| JsonStreamError::Number)?;
+            self.event()?;
+            let raw = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Number)?;
+            sink.token(JsonStreamToken::Number { raw, value })
+                .map_err(|_| JsonStreamError::SinkRejected)?;
+        }
         self.token.clear();
         self.lexical = Lexical::Idle;
         Ok(())
@@ -824,10 +934,10 @@ impl JsonStream {
 
     fn emit<F>(&mut self, token: JsonStreamToken<'_>, sink: &mut F) -> Result<(), JsonStreamError>
     where
-        F: FnMut(JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>,
+        F: InternalSink,
     {
         self.event()?;
-        sink(token).map_err(|_| JsonStreamError::SinkRejected)
+        sink.token(token).map_err(|_| JsonStreamError::SinkRejected)
     }
 
     fn event(&mut self) -> Result<(), JsonStreamError> {
@@ -849,12 +959,16 @@ impl JsonStream {
     }
 
     fn raw_byte(&mut self) -> Result<(), JsonStreamError> {
-        charge(
-            &mut self.raw_token_bytes,
-            1,
-            self.limits.max_raw_token_bytes,
-            JsonStreamLimit::RawTokenBytes,
-        )
+        if self.selective.is_some() && matches!(self.lexical, Lexical::String { key: false, .. }) {
+            return Ok(());
+        }
+        let limit = if matches!(self.lexical, Lexical::Number(_)) {
+            self.selective
+                .map_or(self.limits.max_raw_token_bytes, |limits| limits.max_number_bytes)
+        } else {
+            self.limits.max_raw_token_bytes
+        };
+        charge(&mut self.raw_token_bytes, 1, limit, JsonStreamLimit::RawTokenBytes)
     }
 
     fn decoded(&mut self, amount: usize) -> Result<(), JsonStreamError> {
@@ -869,6 +983,32 @@ impl JsonStream {
 
     fn append(&mut self, bytes: &[u8]) -> Result<(), JsonStreamError> {
         self.decoded(bytes.len())?;
+        if let Some(limits) = self.selective {
+            if matches!(self.lexical, Lexical::String { key: false, .. }) {
+                self.discarded.decoded_bytes = self
+                    .discarded
+                    .decoded_bytes
+                    .checked_add(bytes.len())
+                    .ok_or(JsonStreamError::Arithmetic)?;
+                if bytes.len() > 1 || self.utf8_remaining == 0 {
+                    self.discarded.decoded_chars = self
+                        .discarded
+                        .decoded_chars
+                        .checked_add(1)
+                        .ok_or(JsonStreamError::Arithmetic)?;
+                }
+                return Ok(());
+            }
+            if matches!(self.lexical, Lexical::String { key: true, .. })
+                && self
+                    .token
+                    .len()
+                    .checked_add(bytes.len())
+                    .is_none_or(|size| size > limits.max_key_bytes)
+            {
+                return Err(limit_error(JsonStreamLimit::DecodedBytes, limits.max_key_bytes));
+            }
+        }
         self.retain_token_bytes(bytes)
     }
 

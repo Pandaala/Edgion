@@ -349,3 +349,94 @@ async fn sparse_lease_heartbeats_keep_an_active_request_reconcilable() {
     assert_eq!(request.finalize(2).await, QuotaFinalStatus::Charged);
     assert_eq!(sink.calls.lock().last(), Some(&(5, 2, true)));
 }
+
+#[tokio::test]
+async fn unknown_finalization_retains_uncertain_sent_watermark_and_joins_worker() {
+    let sink = Arc::new(RecordingSink::new());
+    sink.fail_next_calls(1);
+    let mut request = AiQuotaRequest::start(
+        sink.clone(),
+        1,
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        Duration::from_secs(1),
+    );
+    let accumulator = request.accumulator();
+    // An authoritative update can exceed output-only observations. Its failed
+    // result does not establish whether Redis committed the cumulative target.
+    accumulator.request_final(200);
+    sink.wait_for_calls(1).await;
+    assert_eq!(request.finalize_unknown().await, QuotaFinalStatus::Unresolved);
+    assert!(
+        accumulator.over_limit(),
+        "unknown quality must not clear enforcement history"
+    );
+    assert!(request.worker.is_none());
+    let calls = sink.calls.lock();
+    assert!(calls.len() >= 2);
+    assert!(calls.iter().all(|(_, total, _)| *total == 200));
+    assert!(calls.last().unwrap().2);
+}
+
+#[tokio::test]
+async fn unknown_finalization_flushes_unpublished_partial_output_without_guessing_input() {
+    let sink = Arc::new(RecordingSink::new());
+    let mut request = AiQuotaRequest::start(
+        sink.clone(),
+        100,
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        Duration::from_secs(1),
+    );
+    request.accumulator().add_output_units(7);
+    assert_eq!(request.finalize_unknown().await, QuotaFinalStatus::Unresolved);
+    assert_eq!(sink.calls.lock().as_slice(), &[(1, 7, true)]);
+}
+
+#[tokio::test]
+async fn unknown_finalization_keeps_failure_and_timeout_distinct_from_unresolved() {
+    let sink = Arc::new(RecordingSink::new());
+    sink.fail_next_calls(u64::MAX);
+    let mut request = AiQuotaRequest::start(
+        sink,
+        1,
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        Duration::from_millis(40),
+    );
+    request.accumulator().add_output_units(9);
+    assert_eq!(request.finalize_unknown().await, QuotaFinalStatus::Failed);
+    assert!(request.worker.is_none());
+    let hanging = Arc::new(HangingSink::new());
+    let mut request = AiQuotaRequest::start(
+        hanging.clone(),
+        1,
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        Duration::from_millis(20),
+    );
+    request.accumulator().add_output_units(9);
+    assert_eq!(request.finalize_unknown().await, QuotaFinalStatus::TimedOut);
+    assert!(request.worker.is_none());
+    tokio::task::yield_now().await;
+    assert_eq!(hanging.cancelled.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn incremental_apply_error_then_unknown_final_does_not_refund_attempted_output() {
+    let sink = Arc::new(RecordingSink::new());
+    sink.fail_next_calls(1);
+    let mut request = AiQuotaRequest::start(
+        sink.clone(),
+        1,
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        Duration::from_secs(1),
+    );
+    request.accumulator().add_output_units(200);
+    sink.wait_for_calls(1).await;
+    assert_eq!(request.finalize_unknown().await, QuotaFinalStatus::Unresolved);
+    assert!(request.accumulator().over_limit());
+    assert!(request.worker.is_none());
+    assert!(sink.calls.lock().iter().all(|(_, total, _)| *total == 200));
+}

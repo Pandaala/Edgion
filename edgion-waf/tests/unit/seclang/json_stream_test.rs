@@ -1244,3 +1244,158 @@ fn buffered_ascii_reuses_long_token_capacity_for_short_tokens_and_chunks() {
         assert_buffered_ascii_trace(&chunks, JsonStreamLimits::default(), false);
     }
 }
+
+#[derive(Default)]
+struct SelectiveEvents(Vec<String>);
+impl JsonStreamSelectiveSink for SelectiveEvents {
+    fn on_token(&mut self, token: JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError> {
+        self.0.push(match token {
+            JsonStreamToken::Key(key) => format!("key:{key}"),
+            JsonStreamToken::ObjectStart => "object".into(),
+            JsonStreamToken::ObjectEnd => "end-object".into(),
+            JsonStreamToken::ArrayStart => "array".into(),
+            JsonStreamToken::ArrayEnd => "end-array".into(),
+            JsonStreamToken::Boolean(value) => format!("bool:{value}"),
+            JsonStreamToken::Null => "null".into(),
+            JsonStreamToken::String(_) | JsonStreamToken::Number { .. } => {
+                panic!("capture-all scalar in selective callback")
+            }
+        });
+        Ok(())
+    }
+    fn on_number(&mut self, raw: &str) -> Result<(), JsonStreamSinkError> {
+        self.0.push(format!("number:{raw}"));
+        Ok(())
+    }
+    fn on_discarded_string(&mut self, summary: JsonDiscardedStringSummary) -> Result<(), JsonStreamSinkError> {
+        self.0
+            .push(format!("discard:{}:{}", summary.decoded_bytes, summary.decoded_chars));
+        Ok(())
+    }
+}
+fn selective_limits() -> JsonStreamSelectiveLimits {
+    JsonStreamSelectiveLimits {
+        lexical: JsonStreamLimits {
+            max_raw_token_bytes: 1538,
+            ..JsonStreamLimits::default()
+        },
+        max_key_bytes: 256,
+        max_number_bytes: 64,
+    }
+}
+fn selective_run(
+    body: &[u8],
+    width: usize,
+    limits: JsonStreamSelectiveLimits,
+) -> (Result<(), JsonStreamError>, Vec<String>, JsonStreamUsage) {
+    let mut stream = JsonStreamSelective::new(limits);
+    let mut events = SelectiveEvents::default();
+    let mut result = Ok(());
+    for chunk in body.chunks(width) {
+        result = stream.feed(JsonStreamInput::Data(chunk), &mut events);
+        if result.is_err() {
+            break;
+        }
+    }
+    if result.is_ok() {
+        result = stream.feed(JsonStreamInput::Complete, &mut events);
+    }
+    (result, events.0, stream.usage())
+}
+
+#[test]
+fn selective_discard_validates_strings_without_retaining_them_or_coercing_numbers() {
+    let body = br#"{"key":"a\u00e9\uD834\uDD1E","ignored":1e1000,"other":null}"#;
+    let expected = selective_run(body, body.len(), selective_limits());
+    assert_eq!(expected.0, Ok(()));
+    assert!(expected.1.contains(&"discard:7:3".to_string()));
+    assert!(expected.1.contains(&"number:1e1000".to_string()));
+    for width in 1..=body.len() {
+        assert_eq!(selective_run(body, width, selective_limits()), expected);
+    }
+    let large = format!("{{\"key\":\"{}\"}}", "x".repeat(100_000));
+    let (result, events, usage) = selective_run(large.as_bytes(), 13, selective_limits());
+    assert_eq!(result, Ok(()));
+    assert!(events.contains(&"discard:100000:100000".to_string()));
+    assert!(usage.peak_retained_bytes < 1024);
+}
+
+#[test]
+fn selective_independent_budgets_and_error_counters_are_chunk_invariant() {
+    let body = br#"{"abc":[12345,"xyz\u00e9",{"ab":"tail"}]}"#;
+    let baseline = selective_run(body, body.len(), selective_limits());
+    assert_eq!(baseline.0, Ok(()));
+    let mut profiles = Vec::new();
+    for budget in 0..=baseline.2.work + 1 {
+        let mut limits = selective_limits();
+        limits.lexical.max_work = budget;
+        profiles.push(limits);
+    }
+    for budget in 0..=body.len() + 1 {
+        let mut limits = selective_limits();
+        limits.lexical.max_source_bytes = budget;
+        profiles.push(limits);
+    }
+    for budget in 0..=baseline.2.decoded_bytes + 1 {
+        let mut limits = selective_limits();
+        limits.lexical.max_decoded_bytes = budget;
+        profiles.push(limits);
+    }
+    for budget in 0..=baseline.2.events + 1 {
+        let mut limits = selective_limits();
+        limits.lexical.max_events = budget;
+        profiles.push(limits);
+    }
+    for budget in 0..=baseline.2.peak_retained_bytes + 1 {
+        let mut limits = selective_limits();
+        limits.lexical.max_retained_bytes = budget;
+        profiles.push(limits);
+    }
+    for budget in 0..=6 {
+        let mut limits = selective_limits();
+        limits.max_number_bytes = budget;
+        profiles.push(limits);
+        let mut limits = selective_limits();
+        limits.max_key_bytes = budget;
+        profiles.push(limits);
+        let mut limits = selective_limits();
+        limits.lexical.max_raw_token_bytes = budget;
+        profiles.push(limits);
+        let mut limits = selective_limits();
+        limits.lexical.max_depth = budget;
+        profiles.push(limits);
+    }
+    for limits in profiles {
+        let whole = selective_run(body, body.len(), limits);
+        for width in [1, 2, 7] {
+            assert_eq!(
+                selective_run(body, width, limits),
+                whole,
+                "profile {limits:?}, width {width}"
+            );
+        }
+    }
+}
+
+#[test]
+fn selective_syntax_failures_stay_sticky_and_release_state() {
+    for body in [
+        br#"{"key":"\uD800x"}"#.as_slice(),
+        b"{\"key\":\"\xff\"}".as_slice(),
+        br#"{"key":"tail"#.as_slice(),
+        br#"{"key":"valid"}x"#.as_slice(),
+    ] {
+        let whole = selective_run(body, body.len(), selective_limits());
+        assert!(whole.0.is_err());
+        assert_eq!(whole.2.retained_bytes, 0);
+        for width in 1..=body.len() {
+            assert_eq!(selective_run(body, width, selective_limits()), whole);
+        }
+    }
+    let mut stream = JsonStreamSelective::new(selective_limits());
+    let mut events = SelectiveEvents::default();
+    let first = stream.feed(JsonStreamInput::Data(b"?"), &mut events);
+    assert_eq!(stream.feed(JsonStreamInput::Data(b"{}"), &mut events), first);
+    assert_eq!(stream.feed(JsonStreamInput::Complete, &mut events), first);
+    assert!(events.0.is_empty());
+}

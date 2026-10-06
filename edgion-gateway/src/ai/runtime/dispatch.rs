@@ -467,6 +467,7 @@ fn prepare_ready_attempt(
     }
     let response_processor: Box<dyn StreamingResponseProcessor> = Box::new(AiAttemptResponseProcessor {
         processors: response_processors,
+        usage: Arc::clone(&usage),
         eos: Arc::clone(&eos),
     });
 
@@ -712,12 +713,18 @@ fn apply_backend_request_headers(
 
 struct AiAttemptResponseProcessor {
     processors: Vec<Box<dyn StreamingResponseProcessor>>,
+    usage: Arc<AiUsageShared>,
     eos: Arc<AtomicBool>,
 }
 
 #[async_trait]
 impl StreamingResponseProcessor for AiAttemptResponseProcessor {
     fn on_response_header(&mut self, response: &mut ResponseHeader) {
+        // Converters may replace every header. Preserve raw eligibility before
+        // any child sees it so translated error text cannot become usage evidence.
+        if !crate::routes::http::proxy_http::content_type::response_is_identity_encoded(&response.headers) {
+            self.usage.mark_encoding_unavailable();
+        }
         for processor in &mut self.processors {
             processor.on_response_header(response);
         }

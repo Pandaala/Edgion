@@ -67,6 +67,8 @@ pub enum EdgionErrorCode {
     /// is the precondition for `AiSseDegradedQuotaTerminated`, so it is worth
     /// alerting on even when no stream was cut.
     AiSseDecodeDegraded,
+    /// Usage observation could not produce trustworthy response evidence.
+    AiUsageObservationUnavailable,
 
     /// The gateway cut an AI streaming response short because SSE decoding
     /// had degraded while token-quota enforcement was active. A stream whose
@@ -385,6 +387,7 @@ impl EdgionErrorCode {
             Self::AiQuotaOverLimitTerminated => "AiQuotaOverLimitTerminated",
             Self::AiQuotaErrorEventDropped => "AiQuotaErrorEventDropped",
             Self::AiSseDecodeDegraded => "AiSseDecodeDegraded",
+            Self::AiUsageObservationUnavailable => "AiUsageObservationUnavailable",
             Self::AiSseDegradedQuotaTerminated => "AiSseDegradedQuotaTerminated",
             Self::AiSseDecodeMalformed => "AiSseDecodeMalformed",
             Self::AiSseMalformedQuotaTerminated => "AiSseMalformedQuotaTerminated",

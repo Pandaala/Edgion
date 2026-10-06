@@ -15,6 +15,7 @@ use serde::Serialize;
 
 use crate::ai::protocols::openai::canonical_sse::{observe_canonical_event, CanonicalRecordBatch};
 use crate::ai::protocols::openai::error::render_openai_error;
+use crate::ai::protocols::openai::json_usage::{JsonUsageObserver, JsonUsageOutcome};
 use crate::ai::quota::{AiQuotaRequest, QuotaAccumulator};
 use crate::response::terminal::{ResponseTerminalCause, TerminalEmission};
 
@@ -42,8 +43,6 @@ include!("../../../tests/support/ai/accounting/usage_test/119_macro_definition.r
 
 #[cfg(test)]
 include!("../../../tests/support/ai/accounting/usage_test/158_macro_definition.rs");
-
-pub const MAX_NON_STREAMING_USAGE_BYTES: usize = 1024 * 1024;
 
 /// Renders one injected mid-stream error event.
 ///
@@ -256,14 +255,17 @@ pub struct AiRequestContext {
 pub struct GenAiSummary {
     pub provider: &'static str,
     pub model: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub cache_read_input_tokens: u64,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub cache_write_input_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_input_tokens: Option<u64>,
     pub streaming: bool,
     pub usage_estimated: bool,
+    pub usage_source: GenAiAttemptUsageSource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub estimated_cost_usd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -277,10 +279,6 @@ pub struct GenAiSummary {
     /// or 8 KiB attempt-log boundary.
     #[serde(default, skip_serializing_if = "is_false")]
     pub attempts_truncated: bool,
-}
-
-const fn is_zero(value: &u64) -> bool {
-    *value == 0
 }
 
 const fn is_false(value: &bool) -> bool {
@@ -306,8 +304,10 @@ pub struct GenAiAttempt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttft_ms: Option<u64>,
     pub usage_source: GenAiAttemptUsageSource,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub estimated_cost_usd: Option<String>,
 }
@@ -326,6 +326,23 @@ pub enum GenAiAttemptFailure {
 pub enum GenAiAttemptUsageSource {
     Reported,
     Estimated,
+    Unknown,
+    #[serde(rename = "notObserved")]
+    NotObserved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AiUsageUnavailableReason {
+    ObservationUnavailable,
+    IncompleteJson,
+    ArithmeticOverflow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AiUsageSnapshot {
+    pub source: GenAiAttemptUsageSource,
+    pub usage: Option<ReportedAiUsage>,
+    pub unavailable: Option<AiUsageUnavailableReason>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -352,7 +369,12 @@ pub struct AiUsageShared {
     output_chars: AtomicU64,
     reported_usage: ArcSwapOption<ReportedAiUsage>,
     sse_degraded: AtomicBool,
-    non_streaming_overflowed: AtomicBool,
+    observation_unavailable: AtomicBool,
+    encoding_unavailable: AtomicBool,
+    observation_diagnostic_recorded: AtomicBool,
+    observation_off: AtomicBool,
+    json_started: AtomicBool,
+    json_complete: AtomicBool,
     gateway_terminated: AtomicBool,
 }
 
@@ -382,8 +404,75 @@ impl AiUsageShared {
         self.sse_degraded.load(Ordering::Acquire)
     }
 
-    pub fn non_streaming_overflowed(&self) -> bool {
-        self.non_streaming_overflowed.load(Ordering::Acquire)
+    pub(crate) fn observation_unavailable(&self) -> bool {
+        self.observation_unavailable.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_encoding_unavailable(&self) {
+        self.encoding_unavailable.store(true, Ordering::Release);
+        self.mark_observation_unavailable();
+    }
+
+    pub(crate) fn mark_observation_unavailable(&self) {
+        self.observation_unavailable.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn claim_unavailable_diagnostic(&self) -> bool {
+        !self.observation_diagnostic_recorded.swap(true, Ordering::AcqRel)
+    }
+
+    pub(crate) fn accounting_snapshot(&self, estimated_input: u64, include_output: bool) -> AiUsageSnapshot {
+        let unavailable = if self.observation_off.load(Ordering::Acquire) {
+            return AiUsageSnapshot {
+                source: GenAiAttemptUsageSource::NotObserved,
+                usage: None,
+                unavailable: None,
+            };
+        } else if self.observation_unavailable() {
+            Some(AiUsageUnavailableReason::ObservationUnavailable)
+        } else if self.json_started.load(Ordering::Acquire) && !self.json_complete.load(Ordering::Acquire) {
+            Some(AiUsageUnavailableReason::IncompleteJson)
+        } else {
+            None
+        };
+        if unavailable.is_some() {
+            return AiUsageSnapshot {
+                source: GenAiAttemptUsageSource::Unknown,
+                usage: None,
+                unavailable,
+            };
+        }
+        let (usage, source) = self.reported_usage().map_or_else(
+            || {
+                (
+                    ReportedAiUsage {
+                        input_tokens: estimated_input,
+                        output_tokens: if include_output {
+                            ceil_chars_div_four(self.output_chars())
+                        } else {
+                            0
+                        },
+                        cache_read_input_tokens: 0,
+                        cache_write_input_tokens: 0,
+                    },
+                    GenAiAttemptUsageSource::Estimated,
+                )
+            },
+            |usage| (usage, GenAiAttemptUsageSource::Reported),
+        );
+        if usage.input_tokens.checked_add(usage.output_tokens).is_none() {
+            AiUsageSnapshot {
+                source: GenAiAttemptUsageSource::Unknown,
+                usage: None,
+                unavailable: Some(AiUsageUnavailableReason::ArithmeticOverflow),
+            }
+        } else {
+            AiUsageSnapshot {
+                source,
+                usage: Some(usage),
+                unavailable: None,
+            }
+        }
     }
 
     /// True once the gateway itself ended the stream (over quota, or quota no
@@ -393,7 +482,7 @@ impl AiUsageShared {
         self.gateway_terminated.load(Ordering::Acquire)
     }
 
-    fn mark_gateway_terminated(&self) {
+    pub(crate) fn mark_gateway_terminated(&self) {
         self.gateway_terminated.store(true, Ordering::Release);
     }
 
@@ -430,8 +519,8 @@ impl AiUsageShared {
         let cache_write_input = current.map_or(cache_write_input, |usage| {
             usage.cache_write_input_tokens.max(cache_write_input)
         });
-        let cache_total = cache_read_input.saturating_add(cache_write_input);
-        let (cache_read_input, cache_write_input) = if cache_total <= input {
+        let cache_total = cache_read_input.checked_add(cache_write_input);
+        let (cache_read_input, cache_write_input) = if cache_total.is_some_and(|total| total <= input) {
             (cache_read_input, cache_write_input)
         } else {
             // Preserve authoritative totals but discard inconsistent optional
@@ -549,9 +638,8 @@ pub struct UsageExtractionProcessor {
     /// request instead of being silently overridden once the stream starts.
     terminate_on_over_limit: bool,
     sse: SseDecoder,
-    non_streaming: Vec<u8>,
-    non_streaming_overflowed: bool,
-    non_streaming_parsed: bool,
+    json: Option<Box<JsonUsageObserver>>,
+    observation_failure_reported: bool,
     non_streaming_chars: Utf8CharCounter,
     chars_finished: bool,
     /// Latches the one-shot `AiSseDecodeDegraded` record. The decoder's
@@ -584,9 +672,8 @@ impl UsageExtractionProcessor {
             requested_streaming,
             terminate_on_over_limit,
             sse,
-            non_streaming: Vec::new(),
-            non_streaming_overflowed: false,
-            non_streaming_parsed: false,
+            json: None,
+            observation_failure_reported: false,
             non_streaming_chars: Utf8CharCounter::default(),
             chars_finished: false,
             sse_degraded_reported: false,
@@ -672,20 +759,14 @@ impl UsageExtractionProcessor {
     }
 
     fn observe_non_streaming(&mut self, chunk: &[u8]) {
-        if self.non_streaming_overflowed {
+        if chunk.is_empty() || self.shared.observation_unavailable() {
             return;
         }
-        let fits = self
-            .non_streaming
-            .len()
-            .checked_add(chunk.len())
-            .is_some_and(|size| size <= MAX_NON_STREAMING_USAGE_BYTES);
-        if fits {
-            self.non_streaming.extend_from_slice(chunk);
-        } else {
-            self.non_streaming_overflowed = true;
-            self.shared.non_streaming_overflowed.store(true, Ordering::Release);
-            self.non_streaming.clear();
+        self.shared.json_started.store(true, Ordering::Release);
+        let observer = self.json.get_or_insert_with(|| Box::new(JsonUsageObserver::new()));
+        observer.feed(chunk);
+        if observer.failed() {
+            self.shared.mark_observation_unavailable();
         }
     }
 
@@ -698,9 +779,23 @@ impl UsageExtractionProcessor {
             self.shared.add_output_chars(remaining);
             self.chars_finished = true;
         }
-        if stream_kind == ResponseStreamKind::None && !self.non_streaming_overflowed && !self.non_streaming_parsed {
-            self.non_streaming_parsed = true;
-            try_publish_usage(&self.shared, &self.non_streaming);
+        if stream_kind == ResponseStreamKind::None && !self.shared.observation_unavailable() {
+            let observer = self.json.get_or_insert_with(|| Box::new(JsonUsageObserver::new()));
+            match observer.finish() {
+                JsonUsageOutcome::Reported(usage) => {
+                    self.shared.observe_reported_usage(
+                        usage.input_tokens,
+                        usage.output_tokens,
+                        usage.cache_read_input_tokens,
+                        usage.cache_write_input_tokens,
+                    );
+                    self.shared.json_complete.store(true, Ordering::Release);
+                }
+                JsonUsageOutcome::Missing => {
+                    self.shared.json_complete.store(true, Ordering::Release);
+                }
+                JsonUsageOutcome::Unavailable(_) => self.shared.mark_observation_unavailable(),
+            }
         }
     }
 }
@@ -714,6 +809,12 @@ use legacy_usage_observer::{approximate_openai_output_units, observe_openai_stre
 
 #[async_trait]
 impl StreamingResponseProcessor for UsageExtractionProcessor {
+    fn on_response_header(&mut self, response: &mut pingora_http::ResponseHeader) {
+        if !crate::routes::http::proxy_http::content_type::response_is_identity_encoded(&response.headers) {
+            self.shared.mark_encoding_unavailable();
+        }
+    }
+
     /// Terminating on over-quota shortens the body, and injecting an error
     /// event lengthens it. Either way the upstream `content-length` cannot
     /// stand, so it must be stripped at the response-header boundaries.
@@ -741,6 +842,15 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         sink: &mut ResponseBodySink,
         session: &mut dyn PluginSession,
     ) {
+        if self.shared.encoding_unavailable.load(Ordering::Acquire) {
+            if !self.observation_failure_reported {
+                self.observation_failure_reported = true;
+                if self.shared.claim_unavailable_diagnostic() {
+                    session.record_error(EdgionErrorCode::AiUsageObservationUnavailable);
+                }
+            }
+            return;
+        }
         let semantic_guard_active = session.semantic_guard_active() && stream_kind == ResponseStreamKind::Sse;
         let mut canonical_batch = None;
         if let Some(bytes) = chunk.take() {
@@ -756,6 +866,12 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
                 }
             } else {
                 *chunk = Some(original);
+            }
+        }
+        if self.shared.observation_unavailable() && !self.observation_failure_reported {
+            self.observation_failure_reported = true;
+            if self.shared.claim_unavailable_diagnostic() {
+                session.record_error(EdgionErrorCode::AiUsageObservationUnavailable);
             }
         }
         // Recorded for every degraded stream, quota'd or not: even where no
@@ -791,6 +907,12 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
                 }
             }
             self.finish(stream_kind);
+            if self.shared.observation_unavailable() && !self.observation_failure_reported {
+                self.observation_failure_reported = true;
+                if self.shared.claim_unavailable_diagnostic() {
+                    session.record_error(EdgionErrorCode::AiUsageObservationUnavailable);
+                }
+            }
             return;
         }
         if let Some(batch) = canonical_batch {
@@ -874,35 +996,8 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
     }
 }
 
-fn try_publish_usage(shared: &AiUsageShared, json: &[u8]) {
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(json) else {
-        return;
-    };
-    try_publish_usage_value(shared, &value);
-}
-
-fn try_publish_usage_value(shared: &AiUsageShared, value: &serde_json::Value) {
-    let Some(usage) = value.get("usage").and_then(serde_json::Value::as_object) else {
-        return;
-    };
-    let Some(input) = usage.get("prompt_tokens").and_then(serde_json::Value::as_u64) else {
-        return;
-    };
-    let Some(output) = usage.get("completion_tokens").and_then(serde_json::Value::as_u64) else {
-        return;
-    };
-    let cache_read = usage
-        .get("prompt_tokens_details")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|details| details.get("cached_tokens"))
-        .and_then(serde_json::Value::as_u64)
-        .or_else(|| usage.get("cache_read_input_tokens").and_then(serde_json::Value::as_u64))
-        .unwrap_or(0);
-    let cache_write = usage
-        .get("cache_creation_input_tokens")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    shared.observe_reported_usage(input, output, cache_read, cache_write);
+const fn ceil_chars_div_four(chars: u64) -> u64 {
+    chars / 4 + if chars.is_multiple_of(4) { 0 } else { 1 }
 }
 
 #[cfg(test)]

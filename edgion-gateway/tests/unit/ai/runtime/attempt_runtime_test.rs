@@ -386,7 +386,7 @@ fn ambiguous_failures_log_observed_input_while_redis_reservation_is_retained() {
     // the full Redis reservation. Access and identity accounting do not
     // pretend the unobserved reserved output was consumed.
     assert_eq!(state.charged_request_tokens(), Ok(12));
-    assert!(state.attempts().iter().all(|entry| entry.output_tokens == 0));
+    assert!(state.attempts().iter().all(|entry| entry.output_tokens == Some(0)));
 }
 
 #[tokio::test]
@@ -477,8 +477,8 @@ fn serialized_attempt_has_only_the_safe_bounded_schema() {
         retry_after_seconds: Some(3),
         ttft_ms: Some(11),
         usage_source: GenAiAttemptUsageSource::Reported,
-        input_tokens: 2,
-        output_tokens: 1,
+        input_tokens: Some(2),
+        output_tokens: Some(1),
         estimated_cost_usd: Some("0.00001".to_string()),
     };
     let value = serde_json::to_value(entry).unwrap();
@@ -561,4 +561,51 @@ async fn accounting_overflow_fails_closed_without_wrapping() {
             .await,
         AiAttemptAdmission::DependencyDenied
     ));
+}
+
+#[tokio::test]
+async fn unknown_attempts_keep_identity_and_known_metric_buckets() {
+    let mut state = AiAttemptRuntimeState::default();
+    state.install(attempt(2, 4, true));
+    state.mark_dispatched();
+    state.finalize(None).await;
+    let unknown = attempt(3, 8, true);
+    unknown.usage.mark_observation_unavailable();
+    unknown.usage.mark_gateway_terminated();
+    state.install(unknown);
+    state.mark_dispatched();
+    state.finalize(None).await;
+    assert_eq!(state.charged_request_tokens(), Err(()));
+    assert!(!state.accounting_overflow());
+    assert_eq!(state.unresolved_usage_source(), Some(GenAiAttemptUsageSource::Unknown));
+    assert_eq!(state.attempts().len(), 2);
+    assert_eq!(state.attempts()[1].usage_source, GenAiAttemptUsageSource::Unknown);
+    assert_eq!(state.attempts()[1].input_tokens, None);
+    assert_eq!(state.attempts()[1].output_tokens, None);
+    assert_eq!(state.attempts()[1].failure, None);
+    assert_eq!(
+        state.settlement_decisions_for_test(),
+        [SettlementOperation::Reconcile(3), SettlementOperation::Retain]
+    );
+    assert_eq!(state.metric_totals().unwrap()[0].input_tokens, 2);
+}
+
+#[tokio::test]
+async fn all_off_and_mixed_observation_reduce_distinctly() {
+    let mut state = AiAttemptRuntimeState::default();
+    let mut off = attempt(2, 0, true);
+    off.usage = Arc::new(AiUsageShared::observation_disabled());
+    state.install(off);
+    state.mark_dispatched();
+    state.finalize(None).await;
+    assert_eq!(
+        state.unresolved_usage_source(),
+        Some(GenAiAttemptUsageSource::NotObserved)
+    );
+    state.install(attempt(2, 0, true));
+    state.mark_dispatched();
+    state.finalize(None).await;
+    assert_eq!(state.unresolved_usage_source(), Some(GenAiAttemptUsageSource::Unknown));
+    assert_eq!(state.attempts().len(), 2);
+    assert_eq!(state.charged_request_tokens(), Err(()));
 }
