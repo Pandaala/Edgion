@@ -121,8 +121,9 @@ Key points:
 ### 3. Kafka and HttpDns
 
 Kafka is fully wired through its provider, unified-table persistent runners, full/partial
-LinkSys dispatch, and `get_kafka_client` (published handle; D14). HttpDns is a `SystemConfig` variant consumed by the DNS resolver path; it is
-intentionally not inserted into a generic LinkSys runtime-client store.
+LinkSys dispatch, and `get_kafka_client` (published handle; D14). HttpDns owns
+Common's `PreparedHttpDns` in the same typed runtime table. Use its typed getter
+from DNS selection; never prepare a client from a request callback.
 
 ## The real ConfHandler bridging pattern
 
@@ -135,7 +136,8 @@ The bridging for LinkSys is now fixed:
 5. Then calls `LinkSysStore.replace_all()` / `update()`.
 6. `runtime/store.rs` ordered `dispatch_full_set()` / `dispatch_partial_update()`
    apply Redis / Etcd / Elasticsearch / Kafka / OTLP persistent runners and the
-   prepared Webhook object. HttpDns is consumed by DNS resolution, and
+   prepared Webhook and HTTPDNS objects synchronously before source publication.
+   HttpDns is consumed by DNS resolution, and
    CredentialSource is Controller-only.
 
 So if you are changing gateway-side runtime behavior, focus on:

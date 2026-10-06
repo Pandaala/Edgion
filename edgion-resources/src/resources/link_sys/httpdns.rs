@@ -19,7 +19,7 @@ use crate::resources::common::TlsConfig;
 //
 // NOTE: no `PartialEq`/`Eq` — `TlsConfig` derives neither, so structural
 // equality is unavailable here (and unnecessary). Do not add them.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpDnsConnection {
     /// Allow this HTTP DNS endpoint to use loopback addresses. Default false.
@@ -34,7 +34,58 @@ pub struct HttpDnsConnection {
     pub tls: Option<TlsConfig>,
     /// Request timeout in milliseconds. Absent = the fetcher's built-in default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 120000))]
     pub timeout_ms: Option<u64>,
+    /// Connect timeout in milliseconds. Absent = effective total timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 120000))]
+    pub connect_timeout_ms: Option<u64>,
+    /// Idle connections retained per endpoint host. Default 8; zero disables pooling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = 256))]
+    pub pool_max_idle_per_host: Option<usize>,
+    /// Idle connection lifetime in milliseconds. Default 90000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 600000))]
+    pub pool_idle_timeout_ms: Option<u64>,
+    /// Maximum response bytes; cannot exceed the 65536-byte physical cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 65536))]
+    pub max_response_bytes: Option<usize>,
+}
+
+impl HttpDnsConnection {
+    pub const DEFAULT_TIMEOUT_MS: u64 = 3000;
+    pub const DEFAULT_POOL_MAX_IDLE_PER_HOST: usize = 8;
+    pub const DEFAULT_POOL_IDLE_TIMEOUT_MS: u64 = 90000;
+    pub const MAX_RESPONSE_BYTES: usize = 65536;
+
+    /// Validate both admission and runtime construction through the same bounds.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        let total = self.timeout_ms.unwrap_or(Self::DEFAULT_TIMEOUT_MS);
+        let connect = self.connect_timeout_ms.unwrap_or(total);
+        if !(1..=120000).contains(&total) {
+            errors.push("HTTP DNS timeoutMs must be between 1 and 120000".into());
+        }
+        if !(1..=120000).contains(&connect) || connect > total {
+            errors.push("HTTP DNS connectTimeoutMs must be between 1 and timeoutMs (at most 120000)".into());
+        }
+        if self
+            .pool_max_idle_per_host
+            .unwrap_or(Self::DEFAULT_POOL_MAX_IDLE_PER_HOST)
+            > 256
+        {
+            errors.push("HTTP DNS poolMaxIdlePerHost must be between 0 and 256".into());
+        }
+        if !(1..=600000).contains(&self.pool_idle_timeout_ms.unwrap_or(Self::DEFAULT_POOL_IDLE_TIMEOUT_MS)) {
+            errors.push("HTTP DNS poolIdleTimeoutMs must be between 1 and 600000".into());
+        }
+        if !(1..=Self::MAX_RESPONSE_BYTES).contains(&self.max_response_bytes.unwrap_or(Self::MAX_RESPONSE_BYTES)) {
+            errors.push("HTTP DNS maxResponseBytes must be between 1 and 65536".into());
+        }
+        errors
+    }
 }
 
 /// Built-in vendor presets. Each preset implies a known URL template and
@@ -163,6 +214,9 @@ impl HttpDnsResolverConfig {
     /// Validate the configuration; empty result means OK.
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
+        if let Some(connection) = &self.connection {
+            errors.extend(connection.validate());
+        }
         // A urlTemplate, whenever present, must carry the `{domain}` placeholder —
         // including alongside a preset (a preset + explicit urlTemplate reuses the
         // preset's response format with a custom URL). With no urlTemplate, a

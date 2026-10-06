@@ -32,7 +32,7 @@ pub use circuit_breaker::CircuitBreakerTestSuite;
 pub use degrade_threshold::DegradeThresholdTestSuite;
 pub use dns_resolution::DnsResolutionTestSuite;
 pub use dns_resolution_failure::DnsResolutionFailureTestSuite;
-pub use dns_resolution_flap::{DnsFlapFailingTestSuite, DnsFlapWorkingTestSuite};
+pub use dns_resolution_flap::{DnsFlapBoundedTestSuite, DnsFlapFailingTestSuite, DnsFlapWorkingTestSuite};
 pub use grpc_health_check::GrpcHealthCheckTestSuite;
 pub use h2_mtls_persistence::H2MtlsPersistenceTestSuite;
 pub use health_check::HealthCheckTestSuite;

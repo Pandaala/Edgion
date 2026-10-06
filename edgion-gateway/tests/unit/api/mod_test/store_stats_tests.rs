@@ -110,6 +110,7 @@ fn store_stats_response_serializes() {
             es_clients: 0,
             kafka_clients: 0,
             webhook_clients: 0,
+            httpdns_clients: 0,
             otlp_clients: 0,
             otlp_retiring_clients: 0,
         },
@@ -144,6 +145,7 @@ fn store_stats_response_serializes() {
     assert_eq!(json["link_sys_runtime"]["keys"], serde_json::json!([]));
     assert_eq!(json["link_sys_runtime"]["kafka_clients"], 0);
     assert_eq!(json["link_sys_runtime"]["webhook_clients"], 0);
+    assert_eq!(json["link_sys_runtime"]["httpdns_clients"], 0);
     assert_eq!(json["link_sys_runtime"]["otlp_retiring_clients"], 0);
     assert!(json.get("plugin_store_v2").is_some());
     assert!(json.get("stream_plugin_store_v2").is_some());

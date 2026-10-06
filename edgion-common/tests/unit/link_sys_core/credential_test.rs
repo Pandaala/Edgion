@@ -377,6 +377,7 @@ fn tls_ready_httpdns_false_when_client_cert_unresolved() {
         allow_loopback: false,
         tls: Some(tls_with_unresolved_client_cert()),
         timeout_ms: None,
+        ..Default::default()
     }));
     assert!(!tls_ready(&ls), "httpdns connection.tls readiness must not fail open");
 }

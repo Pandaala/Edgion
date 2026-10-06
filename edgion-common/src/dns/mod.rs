@@ -11,8 +11,95 @@ pub mod standard;
 pub mod system;
 
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
+
+/// Configuration-owned HTTP DNS generation. Querying never builds clients or
+/// reads inherited TLS policy; an unusable generation retains its own fallback.
+pub struct PreparedHttpDns {
+    config: HttpDnsResolverConfig,
+    fetcher: Option<http_fetcher::ReqwestHttpDnsFetcher>,
+    address_fingerprint: String,
+    runtime_identity: [u8; 32],
+}
+
+impl std::fmt::Debug for PreparedHttpDns {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedHttpDns")
+            .field("ready", &self.is_ready())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedHttpDns {
+    /// Cold configuration preparation. Even invalid input publishes a new state.
+    pub fn prepare(mut config: HttpDnsResolverConfig) -> Arc<Self> {
+        let defaults = crate::link_sys_core::outbound_tls::outbound_global_default();
+        let runtime_identity = Self::identity_for(&config, &defaults);
+        let address_fingerprint = {
+            let _redact = edgion_resources::redact::AdminRedactGuard::new();
+            format!("httpdns:{}", serde_json::to_string(&config).unwrap_or_default())
+        };
+        let fetcher = if config.validate().is_empty() {
+            http_fetcher::ReqwestHttpDnsFetcher::with_defaults(config.connection.as_ref(), defaults).ok()
+        } else {
+            None
+        };
+        // Connection policy and resolved Secret bodies are consumed only by the
+        // native client. Do not retain another copy in the query generation.
+        config.connection = None;
+        Arc::new(Self {
+            config,
+            fetcher,
+            address_fingerprint,
+            runtime_identity,
+        })
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.fetcher.is_some()
+    }
+
+    /// Called only on configuration publication or Controller refresh ticks.
+    pub fn matches_config(&self, config: &HttpDnsResolverConfig) -> bool {
+        self.runtime_identity
+            == Self::identity_for(config, &crate::link_sys_core::outbound_tls::outbound_global_default())
+    }
+
+    fn identity_for(
+        config: &HttpDnsResolverConfig,
+        defaults: &edgion_resources::resources::common::OutboundTlsConfig,
+    ) -> [u8; 32] {
+        use crate::link_sys_core::fingerprint::{hash_tls_material, hash_tls_policy, FingerprintHasher};
+        let mut hash = FingerprintHasher::new();
+        {
+            let _redact = edgion_resources::redact::AdminRedactGuard::new();
+            hash.bytes(&serde_json::to_vec(config).unwrap_or_default());
+        }
+        let local = config
+            .connection
+            .as_ref()
+            .and_then(|connection| connection.tls.as_ref());
+        hash_tls_material(&mut hash, local);
+        if local.is_some_and(|tls| tls.enabled) {
+            let global = defaults.clone();
+            let inherited = edgion_resources::resources::common::TlsConfig {
+                enabled: true,
+                outbound: edgion_resources::resources::common::OutboundTlsLocal {
+                    verify: Some(global.verify),
+                    validation: global.validation,
+                    client_certificate_ref: global.client_certificate_ref,
+                },
+                resolved_ca_certificates: global.resolved_ca_certificates,
+                resolved_client_certificate: global.resolved_client_certificate,
+            };
+            hash_tls_policy(&mut hash, Some(&inherited));
+            hash_tls_material(&mut hash, Some(&inherited));
+        }
+        hash.finish()
+    }
+}
 
 /// Strip a single pair of surrounding `[` `]` brackets, if present (bracketed
 /// IPv6 literal without a port, e.g. `"[::1]"`). Shared by the standard-DNS
@@ -23,18 +110,14 @@ pub(crate) fn strip_brackets(s: &str) -> &str {
 }
 
 /// A fully-resolved resolver choice (precedence resolution happens in callers).
-// No `PartialEq`/`Eq`: the `HttpDns` arm wraps `HttpDnsResolverConfig`, which has neither.
 #[derive(Debug, Clone)]
 pub enum ResolverSpec {
     /// OS/system resolver (no configuration).
     System,
     /// Standard DNS against an explicit server list (`ip[:port]`).
     StandardDns { servers: Vec<String> },
-    /// HTTP DNS via a LinkSys httpdns config.
-    ///
-    /// Boxed: `HttpDnsResolverConfig` is much larger than the other variants, so
-    /// carrying it inline triggers `clippy::large_enum_variant`.
-    HttpDns(Box<HttpDnsResolverConfig>),
+    /// HTTP DNS via a configuration-prepared LinkSys generation.
+    HttpDns(Arc<PreparedHttpDns>),
 }
 
 impl ResolverSpec {
@@ -42,28 +125,14 @@ impl ResolverSpec {
     /// key component so a resolver change (different servers, a swapped httpdns
     /// config) invalidates cached addresses instead of serving stale ones.
     ///
-    /// `System` and `StandardDns` fingerprint from their fields directly; the
-    /// `HttpDns` variant serializes its config (order-stable serde) because it
-    /// has no cheaper structural identity.
+    /// HTTP DNS returns a precomputed admin-redacted address-cache identity.
+    /// Secret bytes belong only to the private preparation identity; rotating
+    /// them does not invalidate otherwise unchanged resolved backend addresses.
     pub fn fingerprint(&self) -> String {
         match self {
             ResolverSpec::System => "system".to_string(),
             ResolverSpec::StandardDns { servers } => format!("std:{}", servers.join(",")),
-            // serde_json is order-stable for struct fields; a serialize failure
-            // (not expected for this plain config) degrades to a constant tag,
-            // which only means "do not distinguish two httpdns configs" — never
-            // a correctness hazard because the resolved addresses are re-validated.
-            //
-            // Serialize under an admin-redact guard so any resolved secret
-            // material in `connection.tls` (client key / CA PEMs) collapses to
-            // "[redacted]" and never enters the process-global cache key. A
-            // secret-only change (e.g. a rotated client cert) does not alter the
-            // resolved IPs, so redacting it from the key is also semantically
-            // correct — it must not force a cache invalidation.
-            ResolverSpec::HttpDns(cfg) => {
-                let _redact = edgion_resources::redact::AdminRedactGuard::new();
-                format!("httpdns:{}", serde_json::to_string(cfg).unwrap_or_default())
-            }
+            ResolverSpec::HttpDns(prepared) => prepared.address_fingerprint.clone(),
         }
     }
 }
@@ -103,17 +172,10 @@ pub async fn resolve(spec: &ResolverSpec, domain: &str) -> Result<Vec<IpAddr>, D
             }
         }
         ResolverSpec::StandardDns { servers } => standard::resolve_standard(servers, domain).await,
-        ResolverSpec::HttpDns(cfg) => {
-            // Build the real network fetcher from the resolver's connection
-            // settings (outbound TLS + timeout) and run the transport-free
-            // render/parse/fallback core against it. If the client cannot even be
-            // built (e.g. invalid resolved TLS material), fall through to the
-            // configured fallback rather than dropping it.
-            match http_fetcher::ReqwestHttpDnsFetcher::new(cfg.connection.as_ref()) {
-                Ok(fetcher) => httpdns::resolve_http_dns_with(&fetcher, cfg, domain).await,
-                Err(_build_err) => httpdns::resolve_via_fallback(cfg, domain).await,
-            }
-        }
+        ResolverSpec::HttpDns(prepared) => match prepared.fetcher.as_ref() {
+            Some(fetcher) => httpdns::resolve_http_dns_with(fetcher, &prepared.config, domain).await,
+            None => httpdns::resolve_via_fallback(&prepared.config, domain).await,
+        },
     }
 }
 

@@ -12,9 +12,10 @@
 
 use std::collections::BTreeMap;
 
+use super::PreparedHttpDns;
 use edgion_resources::constants::annotations::edgion::{DNS_RESOLVER, DNS_RESOLVER_REF};
 use edgion_resources::resources::edgion_gateway_config::DnsResolverConfig as EgcDnsResolver;
-use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
+use std::sync::Arc;
 
 use super::ResolverSpec;
 
@@ -123,7 +124,7 @@ pub fn candidate_from_egc_default(egc: &EgcDnsResolver) -> Option<ResolverCandid
 /// - No candidate in any layer → [`ResolverSpec::System`].
 pub fn resolve_effective_spec<F>(layers: &[Option<ResolverCandidate>], lookup: F) -> ResolverSpec
 where
-    F: Fn(&LinkSysKey) -> Option<HttpDnsResolverConfig>,
+    F: Fn(&LinkSysKey) -> Option<Arc<PreparedHttpDns>>,
 {
     // The first configured layer (most-specific first) wins; `flatten` skips the
     // unconfigured (`None`) layers.
@@ -134,7 +135,7 @@ where
         },
         Some(ResolverCandidate::Servers(_)) => ResolverSpec::System,
         Some(ResolverCandidate::HttpDnsRef(key)) => match lookup(key) {
-            Some(cfg) => ResolverSpec::HttpDns(Box::new(cfg)),
+            Some(prepared) => ResolverSpec::HttpDns(prepared),
             None => ResolverSpec::System,
         },
     }

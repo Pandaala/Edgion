@@ -126,6 +126,7 @@ fn http_dns_config_with_lean_connection_roundtrips() {
             allow_loopback: false,
             tls: None,
             timeout_ms: Some(2000),
+            ..Default::default()
         }),
     };
     let out = serde_yaml::to_string(&cfg).unwrap();
@@ -162,4 +163,46 @@ fn dns_fallback_accepts_valid_server_strings() {
         connection: None,
     };
     assert!(cfg.validate().is_empty(), "valid servers must validate clean");
+}
+
+#[test]
+fn connection_bounds_defaults_and_typed_roundtrip() {
+    let defaults: HttpDnsConnection = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(defaults.validate().is_empty());
+    assert_eq!(defaults.timeout_ms, None);
+    assert_eq!(HttpDnsConnection::DEFAULT_TIMEOUT_MS, 3000);
+    assert_eq!(HttpDnsConnection::DEFAULT_POOL_MAX_IDLE_PER_HOST, 8);
+    assert_eq!(HttpDnsConnection::DEFAULT_POOL_IDLE_TIMEOUT_MS, 90000);
+    assert_eq!(HttpDnsConnection::MAX_RESPONSE_BYTES, 65536);
+    for (field, valid, invalid) in [
+        ("timeoutMs", vec![1, 120000], vec![0, 120001]),
+        ("connectTimeoutMs", vec![1, 3000], vec![0, 3001, 120001]),
+        ("poolMaxIdlePerHost", vec![0, 256], vec![257]),
+        ("poolIdleTimeoutMs", vec![1, 600000], vec![0, 600001]),
+        ("maxResponseBytes", vec![1, 65536], vec![0, 65537]),
+    ] {
+        for value in valid {
+            let input = serde_json::json!({field: value});
+            let connection: HttpDnsConnection = serde_json::from_value(input.clone()).unwrap();
+            assert!(connection.validate().is_empty(), "{input}: {:?}", connection.validate());
+            assert_eq!(serde_json::to_value(&connection).unwrap()[field], value);
+        }
+        for value in invalid {
+            let connection: HttpDnsConnection = serde_json::from_value(serde_json::json!({field: value})).unwrap();
+            assert!(!connection.validate().is_empty(), "{field}={value} must be rejected");
+        }
+        assert!(serde_json::from_value::<HttpDnsConnection>(serde_json::json!({field: "1"})).is_err());
+        let schema = serde_json::to_value(schemars::schema_for!(HttpDnsConnection)).unwrap();
+        assert!(schema["properties"].get(field).is_some());
+    }
+    let connection: HttpDnsConnection =
+        serde_json::from_value(serde_json::json!({"timeoutMs": 50, "connectTimeoutMs": 51})).unwrap();
+    assert!(!connection.validate().is_empty());
+    let config: HttpDnsResolverConfig =
+        serde_json::from_value(serde_json::json!({"preset": "aliyun", "connection": {"maxResponseBytes": 65537}}))
+            .unwrap();
+    assert!(
+        !config.validate().is_empty(),
+        "resource validation must include transport bounds"
+    );
 }

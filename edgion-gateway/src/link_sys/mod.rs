@@ -4,9 +4,8 @@
 //! LinkSys resources. The Etcd provider and its runtime live in the shared
 //! `edgion_common::link_sys_core` and are re-exported through this module.
 //!
-//! `HttpDns` and `CredentialSource` are valid `SystemConfig` variants, but neither
-//! creates a generic Gateway runtime client: HttpDns is consumed by the DNS resolver
-//! path, while CredentialSource is Controller-managed acquisition metadata.
+//! `HttpDns` publishes prepared DNS clients in the same typed runtime table.
+//! `CredentialSource` is Controller-managed acquisition metadata.
 //! LocalFile is a logging-only sink; OTLP is a LinkSys provider.
 //!
 //! The `LinkSysStore` provides a unified store with `ConfHandler<LinkSys>` integration,

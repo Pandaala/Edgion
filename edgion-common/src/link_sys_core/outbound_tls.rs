@@ -202,7 +202,26 @@ pub fn resolve_outbound_tls(
     context: &str,
 ) -> Result<ResolvedOutboundTls, EdgionErrorCode> {
     let global = outbound_global_default();
-    let result = resolve_outbound_tls_with_defaults(local, resolved_ca, resolved_client, provider_can_disable, &global);
+    resolve_outbound_tls_audited_with_defaults(
+        local,
+        resolved_ca,
+        resolved_client,
+        provider_can_disable,
+        context,
+        &global,
+    )
+}
+
+/// Cold preparation against one inherited-policy snapshot, retaining canonical audit.
+pub(crate) fn resolve_outbound_tls_audited_with_defaults(
+    local: &OutboundTlsLocal,
+    resolved_ca: Option<&[Secret]>,
+    resolved_client: Option<&Secret>,
+    provider_can_disable: bool,
+    context: &str,
+    global: &OutboundTlsConfig,
+) -> Result<ResolvedOutboundTls, EdgionErrorCode> {
+    let result = resolve_outbound_tls_with_defaults(local, resolved_ca, resolved_client, provider_can_disable, global);
     match &result {
         Err(EdgionErrorCode::OutboundTlsVerifyUnsupported) => {
             tracing::warn!(

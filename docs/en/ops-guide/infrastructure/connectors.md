@@ -85,6 +85,34 @@ spec:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `connection.allowLoopback` | Boolean | `false` | Permit this HTTP DNS service to use `127.0.0.0/8` or `::1`. |
+| `connection.timeoutMs` | Integer | `3000` | Total HTTP query timeout, from 1 to 120000 ms. |
+| `connection.connectTimeoutMs` | Integer | Effective `timeoutMs` | Connection timeout, from 1 to 120000 ms and no greater than the total timeout. |
+| `connection.poolMaxIdlePerHost` | Integer | `8` | Maximum idle connections retained per endpoint host, from 0 to 256; 0 disables idle retention. |
+| `connection.poolIdleTimeoutMs` | Integer | `90000` | Idle connection lifetime, from 1 to 600000 ms. |
+| `connection.maxResponseBytes` | Integer | `65536` | Maximum received response body, from 1 to 65536 bytes. The hard ceiling cannot be raised. |
+| `connection.tls` | Object | Absent | Optional enabled TLS policy, including CA references, client certificate reference, and verification settings. |
+
+Gateway prepares an immutable HTTP client when the LinkSys configuration arrives
+and reuses its connection pool for subsequent queries. TLS audit warnings belong
+to preparation, not each query. Configuration changes and consumed certificate
+material changes replace the prepared generation; a global outbound TLS policy
+change also rebuilds it. Secret-only rotation leaves the resolved-address cache
+identity unchanged. Removed or differently typed LinkSys resources withdraw the
+current handle; queries that already borrowed a handle may finish.
+
+An invalid or unresolved connection configuration publishes the latest
+configuration's fallback state instead of continuing to use an old client.
+`fallback: none` therefore remains a resolution error. HTTPDNS has no persistent
+background provider runner, so `linkSys.maxInstancesPerKind` does not limit its
+prepared handles, just as it does not limit Webhook. The connection-pool controls
+above bound idle retention per prepared handle. No retry or active health-check
+worker is configured for HTTPDNS.
+
+The Controller background resolver also prepares clients before querying and
+reuses each Service's unchanged configuration across refresh ticks. Its raw
+Kubernetes LinkSys lookup does not contain Controller-resolved TLS Secret fields;
+custom CA or mTLS references requiring those fields continue to use the configured
+fallback on that path. Gateway consumes the resolved configuration from conf_sync.
 
 The policy checks both literal URL addresses and addresses resolved from service
 hostnames, including IPv4-mapped IPv6. Private IPv4 and IPv6 unique-local services

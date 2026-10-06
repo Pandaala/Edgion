@@ -44,7 +44,7 @@ URI secrets observable. A key-only sender cannot recreate a transport or probe.
   keep its cancellation timer owned by that task, join the SDK thread, and signal
   exporter/channel release only after dropping the inner exporter. Limit retirement
   to one generation; cancelled/concurrent shutdown waiters cannot orphan cleanup.
-- Full/partial desired updates execute in the same ordered generic dispatch task
+- Full/partial desired updates execute in the same ordered generic dispatch
   as Redis. A later unrelated delta cannot suppress an earlier OTLP key. Type
   changes, removals, and process shutdown use the persistent-runner lifecycle.
   OTLP store stats/counts report runner keys and participate in residue detection.
@@ -54,14 +54,14 @@ URI secrets observable. A key-only sender cannot recreate a transport or probe.
 OTLP-REVIEW-001 exposed a gap outside the former OTLP owner: a resource changed from a
 foreign provider to OTLP could keep its old typed client if an unrelated later
 delta reached the global Webhook sequence fence first. All three production
-source callbacks now reserve generic async admission through `spawn_ordered_dispatch`
-inside the source-event lock. Each task awaits its predecessor before entering
-unified registry mutation (historically the Webhook mutation guard). This orders
-full/partial publications, type-change cleanup, and subsequent recreation
-or rebuilding the full resource set for a delta. The private tail retains one
-handle; pending tasks still scale with outstanding source events, as before.
-Predecessor failure releases successors with a fixed diagnostic. No public task
-abort API is exposed, and no synchronous lock is held across an await.
+source callbacks now reserve synchronous admission under the source-event lock
+and finish unified registry preparation before publishing the source snapshot.
+This orders full/partial publications, type-change cleanup, and subsequent
+recreation without dropping unrelated deltas. Registry preparation has no
+network await; provider connection workers retain their normal asynchronous
+lifecycle. The historical predecessor-task chain was removed during
+[HTTPDNS preparation](httpdns-prepared-runtime.md); its task-tail and failure
+release mechanics are no longer current requirements.
 
 OTLP-REVIEW-002 exposed a post-validation resolution gap: lenient admission kept
 parsing an invalid `group`/`kind`, and the generic lookup selected a same-name core
@@ -75,10 +75,13 @@ reason with fixed field identities, without echoing malformed input. The Gateway
 still independently validates before activation; the original defect was wrong
 Secret resolution/transport, not a ReferenceGrant bypass or credential egress.
 
-Regression tests in `runtime/store.rs` force successor polling before gated
+Historical regression tests forced successor polling before gated
 generic full/partial OTLP dispatch, check all foreign typed maps and the callable
-Webhook registry, and verify later same-key recreation and predecessor panic. Provider
-constructors remain uninitialized, so these tests open no network connections.
+Webhook registry, and verified later same-key recreation and predecessor panic.
+The async dispatch-tail tests were replaced when source publication became
+synchronous. Current store tests verify runtime publication before source
+publication, unrelated delta preservation, stale sequence rejection, and provider
+ownership; see [prepared HTTPDNS runtime](httpdns-prepared-runtime.md).
 Controller handler tests cover invalid group/kind for auth, CA, and mTLS with
 same-name Secrets and permissive grants, stale-material cleanup, valid sibling
 dependencies, transport serialization, and recovery after correction. The isolated

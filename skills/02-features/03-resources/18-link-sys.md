@@ -417,8 +417,13 @@ Key fields:
 - `preset` (`aliyun` | `tencent`) — selects the response **format** (Aliyun JSON `ips`; Tencent DNSPod `;`-delimited) plus a best-effort built-in URL. The built-in URLs are plain HTTP against the vendors' public resolving IPs and are account-less, so for real vendor accounts combine `preset` with an explicit `urlTemplate`.
 - `urlTemplate` — request URL with a `{domain}` placeholder. **Wins over a preset's built-in URL**, so `preset` + `urlTemplate` = the preset's response format with a custom (account-scoped / correct-scheme) endpoint. Required only when no `preset` is set.
 - `response` — parsing rules (`json` with `ipPath`, or `delimited` with `delimiter`); ignored when a `preset` is set.
-- `connection` — `{ tls, timeoutMs, allowLoopback }` (no `target`); outbound TLS, request timeout, and per-resolver loopback exception (default false).
-- `fallback` — `system` | `dns` (server list) | `none`, applied on fetch/parse failure.
+- `connection` — outbound TLS, total/connect timeouts, native HTTP connection pool,
+  bounded response size, and per-resolver loopback exception (no `target`). See the
+  [operator connection reference](../../../docs/en/ops-guide/infrastructure/connectors.md#http-dns-resolver)
+  for defaults and enforced bounds.
+- `fallback` — `system` | `dns` (server list) | `none`, applied on preparation,
+  fetch, or parse failure. Gateway publishes the latest prepared or fallback-only
+  generation at configuration time, rather than constructing a client per query.
 
 Endpoint hostnames bootstrap through System DNS with the shared EgressResolver;
 IP literals are classified before sending. RFC1918/ULA remain allowed;

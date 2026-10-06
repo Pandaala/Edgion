@@ -168,7 +168,9 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
 
 - **Canon**: `edgion-common/src/dns/` — `ResolverSpec`
   (`System` | `StandardDns` via hickory-resolver | `HttpDns` via the LinkSys
-  httpdns config), with `fingerprint()` as the cache-key component. Controller
+  prepared HTTPDNS generation), with `fingerprint()` as the cache-key component.
+  HTTPDNS clients are prepared when configuration is published or reconciled;
+  resolution never constructs a client or audits TLS. Controller
   background resolution:
   `edgion-controller/src/services/dns_resolver/service.rs`; gateway
   data-plane cache: `edgion-gateway/src/backends/discovery/dns_cache.rs`.

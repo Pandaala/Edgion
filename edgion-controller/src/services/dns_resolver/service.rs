@@ -13,6 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -26,7 +27,7 @@ use parking_lot::Mutex;
 use edgion_common::dns::resolver_select::{
     candidate_from_annotations, resolve_effective_spec, LinkSysKey, ResolverCandidate,
 };
-use edgion_common::dns::{resolve, ResolverSpec};
+use edgion_common::dns::{resolve, PreparedHttpDns, ResolverSpec};
 use edgion_common::time::now_rfc3339;
 use edgion_resources::constants::annotations::edgion::DNS_RESOLUTION_MODE;
 use edgion_resources::constants::labels::k8s::SERVICE_NAME;
@@ -101,6 +102,32 @@ pub fn stop_dns_resolver_service() {
     }
 }
 
+/// Per-Service ownership keeps preparation independent of EndpointSlice writes.
+#[derive(Default)]
+struct ServiceDnsState {
+    applied_fingerprint: Option<String>,
+    prepared: Option<(LinkSysKey, Arc<PreparedHttpDns>)>,
+}
+
+impl ServiceDnsState {
+    fn prepare(
+        &mut self,
+        key: &LinkSysKey,
+        config: edgion_resources::resources::link_sys::HttpDnsResolverConfig,
+    ) -> Arc<PreparedHttpDns> {
+        if let Some((previous_key, prepared)) = &self.prepared {
+            if previous_key == key && prepared.matches_config(&config) {
+                return Arc::clone(prepared);
+            }
+        }
+        let prepared = PreparedHttpDns::prepare(config);
+        // Store before the query, including failure, so refreshes do not rebuild
+        // invalid generations or repeat their TLS audit every tick.
+        self.prepared = Some((key.clone(), Arc::clone(&prepared)));
+        prepared
+    }
+}
+
 /// The loop body. Ticks on `refresh_interval` and reconciles every tick.
 async fn run(client: Client, watch_namespaces: Vec<String>) {
     let config = dns_resolver_config();
@@ -119,7 +146,7 @@ async fn run(client: Client, watch_namespaces: Vec<String>) {
     // applied. Lets a tick skip the SSA write when nothing changed, avoiding
     // data-plane churn every interval. Empty after a (re)start → the first tick
     // reconciles everything from scratch.
-    let mut last_applied: HashMap<String, String> = HashMap::new();
+    let mut last_applied: HashMap<String, ServiceDnsState> = HashMap::new();
 
     loop {
         ticker.tick().await;
@@ -154,7 +181,7 @@ async fn reconcile_once(
     client: &Client,
     watch_namespaces: &[String],
     config: &DnsResolverConfig,
-    last_applied: &mut HashMap<String, String>,
+    last_applied: &mut HashMap<String, ServiceDnsState>,
 ) -> Result<()> {
     let owned = list_owned_slices(client, watch_namespaces).await?;
     let observed: HashSet<String> = owned.iter().filter_map(owned_slice_service_key).collect();
@@ -256,7 +283,7 @@ async fn resolve_and_apply(
     name: &str,
     external_name: &str,
     default_candidate: &Option<ResolverCandidate>,
-    last_applied: &mut HashMap<String, String>,
+    last_applied: &mut HashMap<String, ServiceDnsState>,
     observed: &HashSet<String>,
 ) {
     let service_key = format!("{namespace}/{name}");
@@ -283,7 +310,8 @@ async fn resolve_and_apply(
     };
 
     let annotations = svc.metadata.annotations.clone().unwrap_or_default();
-    let spec = effective_spec(client, &annotations, default_candidate).await;
+    let state = last_applied.entry(service_key.clone()).or_default();
+    let spec = effective_spec(client, &annotations, default_candidate, state).await;
 
     let mut ips = match resolve(&spec, external_name).await {
         Ok(ips) => ips,
@@ -343,7 +371,7 @@ async fn resolve_and_apply(
     // Only record the fingerprint on a fully successful apply, so a partial
     // failure is retried (re-applied) on the next tick.
     if all_ok {
-        last_applied.insert(service_key.clone(), fingerprint);
+        last_applied.entry(service_key.clone()).or_default().applied_fingerprint = Some(fingerprint);
         tracing::debug!(
             component = "dns_resolver_service",
             service = %service_key,
@@ -362,11 +390,15 @@ async fn resolve_and_apply(
 /// forever and leave the backend with zero endpoints.
 fn can_skip_apply(
     observed: &HashSet<String>,
-    last_applied: &HashMap<String, String>,
+    last_applied: &HashMap<String, ServiceDnsState>,
     service_key: &str,
     fingerprint: &str,
 ) -> bool {
-    observed.contains(service_key) && last_applied.get(service_key).map(|f| f == fingerprint).unwrap_or(false)
+    observed.contains(service_key)
+        && last_applied
+            .get(service_key)
+            .and_then(|state| state.applied_fingerprint.as_deref())
+            == Some(fingerprint)
 }
 
 /// Content fingerprint (sorted IPs + sorted Service port numbers) used to detect
@@ -406,35 +438,24 @@ async fn effective_spec(
     client: &Client,
     svc_annotations: &std::collections::BTreeMap<String, String>,
     default_candidate: &Option<ResolverCandidate>,
+    state: &mut ServiceDnsState,
 ) -> ResolverSpec {
     let service_candidate = candidate_from_annotations(svc_annotations);
-
-    // Prefetch the httpdns configs any layer references, keyed by (ns, name),
-    // so `resolve_effective_spec` can look them up synchronously.
-    let mut cache: HashMap<
-        (String, String),
-        Option<Box<edgion_resources::resources::link_sys::HttpDnsResolverConfig>>,
-    > = HashMap::new();
-    for candidate in [&service_candidate, default_candidate].into_iter().flatten() {
-        if let ResolverCandidate::HttpDnsRef(key) = candidate {
-            let map_key = (key.namespace.clone(), key.name.clone());
-            if let std::collections::hash_map::Entry::Vacant(slot) = cache.entry(map_key) {
-                let cfg = fetch_httpdns_config(client, key).await.map(Box::new);
-                slot.insert(cfg);
+    let layers = [service_candidate, default_candidate.clone()];
+    let prepared = match layers.iter().flatten().next() {
+        Some(ResolverCandidate::HttpDnsRef(key)) => match fetch_httpdns_config(client, key).await {
+            Some(config) => Some(state.prepare(key, config)),
+            None => {
+                state.prepared = None;
+                None
             }
-        }
-    }
-
-    resolve_effective_spec(
-        &[service_candidate.clone(), default_candidate.clone()],
-        |key: &LinkSysKey| {
-            cache
-                .get(&(key.namespace.clone(), key.name.clone()))
-                .cloned()
-                .flatten()
-                .map(|boxed| *boxed)
         },
-    )
+        _ => {
+            state.prepared = None;
+            None
+        }
+    };
+    resolve_effective_spec(&layers, |_| prepared.clone())
 }
 
 /// Resolve the Controller-wide default through the same precedence and
@@ -442,7 +463,13 @@ async fn effective_spec(
 pub(crate) async fn controller_default_resolver(client: &Client) -> ResolverSpec {
     let config = dns_resolver_config();
     let default_candidate = controller_default_candidate(&config);
-    effective_spec(client, &std::collections::BTreeMap::new(), &default_candidate).await
+    effective_spec(
+        client,
+        &std::collections::BTreeMap::new(),
+        &default_candidate,
+        &mut ServiceDnsState::default(),
+    )
+    .await
 }
 
 /// Kube-less fallback for persist-off acquisition on FS/etcd.
@@ -494,7 +521,7 @@ async fn gc_orphaned_slices(
     client: &Client,
     owned: &[EndpointSlice],
     desired: &HashSet<String>,
-    last_applied: &mut HashMap<String, String>,
+    last_applied: &mut HashMap<String, ServiceDnsState>,
 ) {
     for slice in owned {
         let Some(service_key) = owned_slice_service_key(slice) else {

@@ -85,6 +85,9 @@ pub struct OutboundClientConfig {
     /// applied through the shared [`super::tls`] helpers. The caller is
     /// responsible for the `tls.enabled` gate — pass `None` when TLS is disabled.
     pub tls: Option<TlsConfig>,
+    /// Optional preparation snapshot, so runtime identity and TLS construction
+    /// consume the same inherited policy. Absent uses the process default.
+    pub tls_defaults: Option<edgion_resources::resources::common::OutboundTlsConfig>,
     /// Fully prepared rustls configuration for shared custom-verifier support.
     /// Mutually exclusive with `tls`; resolution remains the caller's responsibility.
     pub preconfigured_tls: Option<rustls::ClientConfig>,
@@ -137,7 +140,11 @@ pub fn apply_outbound_policy(builder: ClientBuilder, cfg: OutboundClientConfig) 
     }
     if let Some(tls) = cfg.tls.as_ref() {
         let ctx = cfg.tls_context.unwrap_or("OutboundClient");
-        builder = apply_resolved_outbound_tls(builder, tls, ctx)?;
+        builder = if let Some(defaults) = cfg.tls_defaults.as_ref() {
+            super::tls::apply_resolved_outbound_tls_with_defaults(builder, tls, ctx, defaults)?
+        } else {
+            apply_resolved_outbound_tls(builder, tls, ctx)?
+        };
     }
     if let Some(tls) = cfg.preconfigured_tls {
         builder = builder.use_preconfigured_tls(tls);

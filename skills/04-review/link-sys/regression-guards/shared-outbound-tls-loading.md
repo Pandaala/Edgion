@@ -64,7 +64,10 @@ authentication readiness. Do not disable URL-implied TLS to make a resource read
 This correction does not redesign full/partial client replacement or change the
 global `OutboundTlsConfig` (which has no enable switch). Webhook prepares a managed
 client before publication in the unified typed runtime table, rather than using
-the persistent-provider runner. HttpDns has no runtime client in that table.
+the persistent-provider runner. HttpDns now owns a prepared immutable runtime in
+that same table; it publishes the latest configuration's fallback when preparation
+fails instead of adopting Webhook's ordinary last-good behavior. See
+[prepared HTTPDNS generations](httpdns-prepared-runtime.md).
 Plugin-local TLS admission and resolution paths are outside this LinkSys fix.
 
 The historical `g9a-007` resolution unified reqwest CA/mTLS loading. Its old symbols

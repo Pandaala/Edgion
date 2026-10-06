@@ -8,17 +8,23 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-Five persistent providers use one Gateway LinkSys TLS policy encoder. Those
-providers and Webhook use one TLS material encoder. Provider-specific
-configuration and credential hashing remain local; Webhook still hashes its
-prepared connection through serialization after filtering disabled TLS.
+Five persistent providers use one canonical TLS policy encoder. Those
+providers, Webhook, and prepared HTTPDNS clients use one TLS material encoder
+in Common's `link_sys_core/fingerprint.rs`. Gateway re-exports that helper;
+Controller HTTPDNS preparation consumes the same implementation through Common.
+Provider-specific configuration and credential hashing remain local. Webhook
+filters disabled TLS before hashing its prepared connection. HTTPDNS hashes its
+redacted configuration plus enabled TLS material; disabled TLS policy fields can
+still change its configuration identity, while disabled Secret bytes do not.
 
 ## Rationale and evidence
 
 The provider-local encoders previously repeated the same option tags, ordered
 SAN/reference/CA lists, and sorted Secret data-key encoding. A shared helper
-in `link_sys/runtime/apply.rs` removes the drift opportunity without changing
-the position of each hash contribution. Secret metadata remains excluded.
+now lives in `edgion-common/src/link_sys_core/fingerprint.rs`, allowing both
+Controller and Gateway to reuse it without another encoder. Secret metadata
+remains excluded. HTTPDNS material identity is separate from its redacted
+address-cache fingerprint; see [prepared HTTPDNS runtime](httpdns-prepared-runtime.md).
 
 ## Verification and re-evaluation
 

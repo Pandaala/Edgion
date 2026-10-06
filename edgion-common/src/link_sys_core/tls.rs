@@ -160,12 +160,22 @@ pub fn apply_resolved_outbound_tls(
     tls: &TlsConfig,
     provider: &str,
 ) -> Result<reqwest::ClientBuilder> {
-    let resolved = outbound_tls::resolve_outbound_tls(
+    apply_resolved_outbound_tls_with_defaults(builder, tls, provider, &outbound_tls::outbound_global_default())
+}
+
+pub(crate) fn apply_resolved_outbound_tls_with_defaults(
+    builder: reqwest::ClientBuilder,
+    tls: &TlsConfig,
+    provider: &str,
+    defaults: &edgion_resources::resources::common::OutboundTlsConfig,
+) -> Result<reqwest::ClientBuilder> {
+    let resolved = outbound_tls::resolve_outbound_tls_audited_with_defaults(
         &tls.outbound,
         tls.resolved_ca_certificates.as_deref(),
         tls.resolved_client_certificate.as_ref(),
         true,
         provider,
+        defaults,
     )
     .map_err(|e| anyhow::anyhow!("{provider} TLS configuration error: {e:?}"))?;
 

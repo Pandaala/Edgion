@@ -87,9 +87,10 @@ Cargo target directory with a source archive's old timestamps can also reuse
 stale local-crate artifacts: require demonstrable recompilation before using
 such an archive as verification evidence.
 
-The original [synchronization task](../../../../tasks/pingora-0.9.0/002-fork-baseline-synchronization.md)
-now records verified local test corrections and consumer acceptance; it remains
-open for publication provenance. Candidate success is not evidence that its
+The original synchronization task (`P090-002`) recorded verified local test
+corrections and consumer acceptance, with publication provenance still open at
+that time. Its task file is absent from the current tree; absence does not prove
+that publication completed. Candidate success is not evidence that its
 uncommitted test changes entered the locked source or a completed release.
 Re-evaluate when the consumer lock, tested worktree,
 dependency resolution, or remote publication evidence changes.
@@ -101,4 +102,4 @@ dependency resolution, or remote publication evidence changes.
   consistency, no-rev and single-commit enforcement remain unchanged.
 - `BODY-WORK-008` — 2026-07-27.
 - `P090-002` — scoped documentation/provenance correction and locked-baseline
-  verification; remaining acceptance is tracked in the original task.
+  verification; the original task file is no longer available in this tree.

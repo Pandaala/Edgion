@@ -46,8 +46,10 @@ This closes an operator-configured egress coverage gap, not a demonstrated
 unauthenticated arbitrary-URL attack. A permitted local proxy can itself forward
 requests elsewhere; its own destination policy is outside this guard.
 System/standard DNS server addresses and returned backend policy are separate.
-Per-request client/TLS preparation remains tracked in
-[the runtime preparation task](../../../../tasks/todo/prepare-httpdns-runtime-and-config-audit.md).
+Client/TLS preparation now belongs to configuration generations rather than
+individual queries. See
+[prepared HTTPDNS generations](../../link-sys/regression-guards/httpdns-prepared-runtime.md)
+for publication, fallback, and certificate-rotation boundaries.
 
 ## Verification and re-evaluation
 

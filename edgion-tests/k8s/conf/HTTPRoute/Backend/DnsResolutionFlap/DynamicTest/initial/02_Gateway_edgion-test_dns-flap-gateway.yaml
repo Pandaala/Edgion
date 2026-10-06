@@ -4,7 +4,7 @@ metadata:
   name: dns-flap-gateway
   namespace: edgion-test
 spec:
-  gatewayClassName: public-gateway
+  gatewayClassName: dns-flap-class
   listeners:
     - name: http
       protocol: HTTP

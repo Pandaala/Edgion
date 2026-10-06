@@ -10,8 +10,10 @@ knowledge_type: regression-guards
 
 The unified `RuntimeRegistry` in `runtime/store.rs` holds its mutation mutex
 across sequence validation, map cloning, side-effect replacement, and publication.
-Source events reserve and enqueue ordered dispatch while holding the source-event
-lock. Reads load the ArcSwap without taking the mutation mutex. Both full and
+Source events reserve and execute synchronous dispatch while holding the
+source-event lock, before publishing their source snapshot. Preparation performs
+no network IO; persistent provider connection workers remain asynchronous.
+Reads load the ArcSwap without taking the mutation mutex. Both full and
 partial updates obey this order; an older full set cannot overtake a later delta.
 The source snapshot also retains capacity-denied intent for ordered retry.
 
@@ -19,9 +21,12 @@ This preserves the original no-lost-update invariant without the deleted
 `ProviderRuntimeStore` or its RCU helpers. See
 [provider-owned runtime](../../link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md).
 Relevant current tests include
-`ordered_dispatch_preserves_unrelated_deltas_and_captured_snapshot` and
+`synchronous_dispatch_publishes_before_source_and_preserves_unrelated_deltas` and
 `stale_full_or_partial_dispatch_cannot_replace_newer_current`. These are
 deterministic ownership/ordering tests, not live SDK integration evidence.
+The former async dispatch tail was removed by
+[prepared HTTPDNS publication](../../link-sys/regression-guards/httpdns-prepared-runtime.md);
+its task-chain tests do not establish a current implementation requirement.
 
 ## Historical RCU implementation (inactive)
 

@@ -124,15 +124,52 @@ impl TestSuite for DnsFlapFailingTestSuite {
 /// Phase "working": live httpdns resolver → 200.
 pub struct DnsFlapWorkingTestSuite;
 
+/// A reachable resolver whose body exceeds the configured prepared-client cap.
+pub struct DnsFlapBoundedTestSuite;
+
+#[async_trait]
+impl TestSuite for DnsFlapBoundedTestSuite {
+    fn name(&self) -> &str {
+        "DnsFlapBounded"
+    }
+
+    fn port_key(&self) -> Option<&str> {
+        None
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![TestCase::new(
+            "response_cap_hot_reload",
+            "the new body cap rejects a real HTTPDNS response without using an old client",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let result = async {
+                        let before = live_resolver_hits(&ctx).await?;
+                        let status = flap_status(&ctx).await?;
+                        let after = live_resolver_hits(&ctx).await?;
+                        if status < 500 || after <= before {
+                            return Err(format!(
+                                "expected a capped response failure after a real lookup; status={status}, hits={before}->{after}"
+                            ));
+                        }
+                        Ok(())
+                    }
+                    .await;
+                    match result {
+                        Ok(()) => TestResult::passed(start.elapsed()),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )]
+    }
+}
+
 impl DnsFlapWorkingTestSuite {
     /// After the resolver-ref flips to the live httpdns LinkSys, a request must
-    /// route through that endpoint — proven by its resolution hit-count growing.
-    ///
-    /// Asserts on the resolver hit-count rather than a 200 so the check is
-    /// independent of the upstream loopback SSRF gate (dynamic scenarios run in a
-    /// multi-suite context where `allowLoopbackUpstream` may be off; resolution
-    /// still runs and the endpoint is still hit even if the upstream connect is
-    /// then refused).
+    /// route through that endpoint and reach the backend. The scenario owns a
+    /// dedicated GatewayClass/EGC, so shared-suite policy cannot mask failures.
     fn test_resolver_switched_live() -> TestCase {
         TestCase::new(
             "resolver_switched_live",
@@ -144,8 +181,12 @@ impl DnsFlapWorkingTestSuite {
                         Ok(n) => n,
                         Err(e) => return TestResult::failed(start.elapsed(), e),
                     };
-                    if let Err(e) = flap_status(&ctx).await {
-                        return TestResult::failed(start.elapsed(), e);
+                    match flap_status(&ctx).await {
+                        Ok(200) => {}
+                        Ok(status) => {
+                            return TestResult::failed(start.elapsed(), format!("expected 200, got {status}"))
+                        }
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
                     }
                     let after = match live_resolver_hits(&ctx).await {
                         Ok(n) => n,

@@ -23,6 +23,10 @@ fn working() -> Box<dyn TestSuite> {
     Box::new(suites::DnsFlapWorkingTestSuite)
 }
 
+fn bounded() -> Box<dyn TestSuite> {
+    Box::new(suites::DnsFlapBoundedTestSuite)
+}
+
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "failing",
@@ -31,6 +35,10 @@ static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "working",
         factory: working,
+    },
+    PhaseSuite {
+        name: "bounded",
+        factory: bounded,
     },
 ];
 
@@ -45,6 +53,17 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
         // A LinkSys update must also replace the endpoint policy generation.
         // Link-local remains denied even with an explicit loopback exception.
         ctx.apply_dir("updates/to_blocked").await?;
+        ctx.wait_phase(scenario, "failing", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_restored").await?;
+        ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
+        // Tightening the body cap must reach the prepared transport generation.
+        ctx.apply_dir("updates/to_small_response").await?;
+        ctx.wait_phase(scenario, "bounded", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_restored").await?;
+        ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
+        // Advisory admission must not preserve an old usable client or silently
+        // use System DNS when the latest connection cannot be prepared.
+        ctx.apply_dir("updates/to_invalid_connection").await?;
         ctx.wait_phase(scenario, "failing", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/to_restored").await?;
         ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;

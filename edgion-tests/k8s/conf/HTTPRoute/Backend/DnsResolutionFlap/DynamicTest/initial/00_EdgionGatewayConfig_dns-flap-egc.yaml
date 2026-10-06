@@ -1,0 +1,8 @@
+# Mirror the local scenario's independently owned upstream policy.
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: dns-flap-egc
+spec:
+  securityProtect:
+    allowLoopbackUpstream: true

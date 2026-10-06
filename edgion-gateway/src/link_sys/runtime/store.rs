@@ -33,33 +33,6 @@ type LinkSysMap = HashMap<String, LinkSys>;
 
 static LINK_SYS_SOURCE_EVENT_LOCK: Mutex<()> = Mutex::new(());
 static NEXT_LINK_SYS_DISPATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-static LINK_SYS_DISPATCH_TAIL: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
-
-/// Reserve async admission order while the caller holds the source-event lock.
-/// Every delta must run, including an earlier update to an unrelated key.
-/// One tail owns the pending task chain; completed predecessors are released.
-fn spawn_ordered_dispatch(
-    handle: &tokio::runtime::Handle,
-    tail: &Mutex<Option<tokio::task::JoinHandle<()>>>,
-    dispatch: impl std::future::Future<Output = ()> + Send + 'static,
-) {
-    let mut tail = tail.lock();
-    let previous = tail.take();
-    *tail = Some(handle.spawn(dispatch_after(previous, dispatch)));
-}
-
-async fn dispatch_after(
-    previous: Option<tokio::task::JoinHandle<()>>,
-    dispatch: impl std::future::Future<Output = ()>,
-) {
-    if let Some(previous) = previous {
-        if previous.await.is_err() {
-            tracing::warn!(reason = "dispatch_failed", "Previous LinkSys dispatch did not complete");
-        }
-    }
-    dispatch.await;
-}
-
 fn reserve_dispatch_sequence(counter: &AtomicU64) -> Option<u64> {
     counter
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
@@ -119,10 +92,8 @@ impl LinkSysStore {
                 &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
                 &LINK_SYS_SOURCE_EVENT_LOCK,
                 |sequence, dispatch_data| {
-                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        spawn_ordered_dispatch(&handle, &LINK_SYS_DISPATCH_TAIL, async move {
-                            dispatch_full_set(sequence, &dispatch_data, false).await;
-                        });
+                    if tokio::runtime::Handle::try_current().is_ok() {
+                        dispatch_full_set(sequence, &dispatch_data, false);
                     } else {
                         // Reachable only outside a tokio runtime (currently: the four sync
                         // unit tests that exercise the resource map only). Production
@@ -150,10 +121,8 @@ impl LinkSysStore {
                 &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
                 &LINK_SYS_SOURCE_EVENT_LOCK,
                 |sequence, dispatch_data, remove_set, snapshot| {
-                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        spawn_ordered_dispatch(&handle, &LINK_SYS_DISPATCH_TAIL, async move {
-                            dispatch_partial_update(sequence, &dispatch_data, &remove_set, &snapshot).await;
-                        });
+                    if tokio::runtime::Handle::try_current().is_ok() {
+                        dispatch_partial_update(sequence, &dispatch_data, &remove_set, &snapshot);
                     } else {
                         // See `replace_all` for the rationale — this branch is only hit by
                         // sync unit tests today; logging makes any future outside-runtime
@@ -179,10 +148,8 @@ impl LinkSysStore {
                 &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
                 &LINK_SYS_SOURCE_EVENT_LOCK,
                 |sequence, dispatch_data| {
-                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        spawn_ordered_dispatch(&handle, &LINK_SYS_DISPATCH_TAIL, async move {
-                            dispatch_full_set(sequence, &dispatch_data, true).await;
-                        });
+                    if tokio::runtime::Handle::try_current().is_ok() {
+                        dispatch_full_set(sequence, &dispatch_data, true);
                     } else {
                         tracing::error!(
                             "LinkSysStore::rebuild_clients called outside a tokio runtime — dispatch skipped"
@@ -198,17 +165,15 @@ impl LinkSysStore {
 
     /// Reconsider unadmitted keys after a cap increase without rebuilding live clients.
     fn retry_admission(&self) {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        if tokio::runtime::Handle::try_current().is_err() {
             return;
-        };
+        }
         if self
             .rebuild_clients_with_dispatch(
                 &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
                 &LINK_SYS_SOURCE_EVENT_LOCK,
                 |sequence, snapshot| {
-                    spawn_ordered_dispatch(&handle, &LINK_SYS_DISPATCH_TAIL, async move {
-                        RUNTIMES.retry_admission(sequence, &snapshot);
-                    });
+                    RUNTIMES.retry_admission(sequence, &snapshot);
                 },
             )
             .is_err()
@@ -222,18 +187,17 @@ impl LinkSysStore {
         counter: &AtomicU64,
         source_lock: &Mutex<()>,
         build_snapshot: impl FnOnce(&LinkSysMap) -> Arc<LinkSysMap>,
-        create_dispatch_task: impl FnOnce(u64, Arc<LinkSysMap>),
+        dispatch: impl FnOnce(u64, Arc<LinkSysMap>),
     ) -> Result<u64, DispatchSequenceExhausted> {
         let _source_guard = source_lock.lock();
         let sequence = reserve_dispatch_sequence(counter).ok_or(DispatchSequenceExhausted)?;
         let current = self.resources.load_full();
         let next = build_snapshot(current.as_ref());
 
-        // Publication and task creation share the same synchronous source-event
-        // critical section. Async polling order may differ, but sequence order
-        // always reflects the authoritative source entry order.
-        self.resources.store(Arc::clone(&next));
-        create_dispatch_task(sequence, next);
+        // Prepare and publish runtime handles within the source-event order.
+        // Readers cannot observe the new raw generation before its preparation.
+        dispatch(sequence, Arc::clone(&next));
+        self.resources.store(next);
         Ok(sequence)
     }
 
@@ -242,17 +206,17 @@ impl LinkSysStore {
         data: HashMap<String, LinkSys>,
         counter: &AtomicU64,
         source_lock: &Mutex<()>,
-        create_dispatch_task: impl FnOnce(u64, Arc<LinkSysMap>),
+        dispatch: impl FnOnce(u64, Arc<LinkSysMap>),
     ) -> Result<u64, DispatchSequenceExhausted> {
         // Wrap once and share the exact authoritative snapshot with both the
-        // ArcSwap publication and the dispatch task.
+        // ArcSwap publication and the synchronous dispatch.
         let data = Arc::new(data);
         let dispatch_data = Arc::clone(&data);
         self.publish_source_event(
             counter,
             source_lock,
             |_| Arc::clone(&data),
-            |sequence, _| create_dispatch_task(sequence, dispatch_data),
+            |sequence, _| dispatch(sequence, dispatch_data),
         )
     }
 
@@ -262,9 +226,9 @@ impl LinkSysStore {
         remove: &HashSet<String>,
         counter: &AtomicU64,
         source_lock: &Mutex<()>,
-        create_dispatch_task: impl FnOnce(u64, Arc<LinkSysMap>, HashSet<String>, Arc<LinkSysMap>),
+        dispatch: impl FnOnce(u64, Arc<LinkSysMap>, HashSet<String>, Arc<LinkSysMap>),
     ) -> Result<u64, DispatchSequenceExhausted> {
-        // Wrap once and share with the dispatch task to avoid a second deep clone
+        // Wrap once and share with the synchronous dispatch to avoid a second deep clone
         // of the delta (each LinkSys carries nested credential structs).
         let add_or_update = Arc::new(add_or_update);
         let dispatch_data = Arc::clone(&add_or_update);
@@ -282,7 +246,7 @@ impl LinkSysStore {
                 }
                 Arc::new(new_map)
             },
-            |sequence, snapshot| create_dispatch_task(sequence, dispatch_data, remove_set, snapshot),
+            |sequence, snapshot| dispatch(sequence, dispatch_data, remove_set, snapshot),
         )
     }
 
@@ -290,16 +254,16 @@ impl LinkSysStore {
         &self,
         counter: &AtomicU64,
         source_lock: &Mutex<()>,
-        create_dispatch_task: impl FnOnce(u64, Arc<LinkSysMap>),
+        dispatch: impl FnOnce(u64, Arc<LinkSysMap>),
     ) -> Result<u64, DispatchSequenceExhausted> {
         let _source_guard = source_lock.lock();
         let sequence = reserve_dispatch_sequence(counter).ok_or(DispatchSequenceExhausted)?;
         let snapshot = self.resources.load_full();
 
-        // Reserve and enqueue under the same lock used by LinkSys source
+        // Reserve and dispatch under the same lock used by LinkSys source
         // events. This makes the dependency-triggered rebuild part of their
         // total order without republishing or cloning the source snapshot.
-        create_dispatch_task(sequence, snapshot);
+        dispatch(sequence, snapshot);
         Ok(sequence)
     }
 }
@@ -312,6 +276,7 @@ enum ProviderKind {
     Kafka,
     Otlp,
     Webhook,
+    HttpDns,
 }
 
 impl ProviderKind {
@@ -323,7 +288,8 @@ impl ProviderKind {
             SystemConfig::Kafka(_) => Some(Self::Kafka),
             SystemConfig::Otlp(_) => Some(Self::Otlp),
             SystemConfig::Webhook(_) => Some(Self::Webhook),
-            SystemConfig::HttpDns(_) | SystemConfig::CredentialSource(_) | SystemConfig::Unsupported => None,
+            SystemConfig::HttpDns(_) => Some(Self::HttpDns),
+            SystemConfig::CredentialSource(_) | SystemConfig::Unsupported => None,
         }
     }
 }
@@ -335,6 +301,7 @@ enum ProviderRuntime {
     Kafka(Arc<PersistentRunner<KafkaApply>>),
     Otlp(Arc<PersistentRunner<OtlpApply>>),
     Webhook(Arc<WebhookLinkClient>),
+    HttpDns(Arc<edgion_common::dns::PreparedHttpDns>),
 }
 
 /// The registry owns this wrapper, while background tasks own only their runner.
@@ -360,6 +327,7 @@ impl RuntimeEntry {
             ProviderRuntime::Kafka(_) => ProviderKind::Kafka,
             ProviderRuntime::Otlp(_) => ProviderKind::Otlp,
             ProviderRuntime::Webhook(_) => ProviderKind::Webhook,
+            ProviderRuntime::HttpDns(_) => ProviderKind::HttpDns,
         }
     }
 
@@ -384,6 +352,7 @@ impl RuntimeEntry {
                 }
             }
             ProviderRuntime::Webhook(client) => client.retire(),
+            ProviderRuntime::HttpDns(_) => {}
         }
     }
 }
@@ -395,11 +364,11 @@ impl Drop for RuntimeEntry {
 }
 
 type RuntimeMap = HashMap<String, Arc<RuntimeEntry>>;
-type ProviderCounts = [usize; 6];
+type ProviderCounts = [usize; 7];
 
 /// Mutation-local admission counts: never a second published runtime authority.
 fn count_providers(entries: &RuntimeMap) -> ProviderCounts {
-    let mut counts = [0; 6];
+    let mut counts = [0; 7];
     for entry in entries.values() {
         counts[entry.kind() as usize] += 1;
     }
@@ -550,6 +519,7 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
     let existing = entries.get(key);
     let was_registered = existing.is_some();
     if kind != ProviderKind::Webhook
+        && kind != ProviderKind::HttpDns
         && !was_registered
         && counts[kind as usize] >= get_link_sys_max_instances_per_kind()
     {
@@ -672,7 +642,30 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
                 Err(error) => tracing::error!(key, label = "Webhook", error = %error, "LinkSys preparation failed"),
             }
         }
-        SystemConfig::HttpDns(_) | SystemConfig::CredentialSource(_) | SystemConfig::Unsupported => {}
+        SystemConfig::HttpDns(config) => {
+            if !forced {
+                if let Some(entry) = existing {
+                    if let ProviderRuntime::HttpDns(prepared) = &entry.provider {
+                        if prepared.matches_config(config) {
+                            return;
+                        }
+                    }
+                }
+            }
+            let prepared = edgion_common::dns::PreparedHttpDns::prepare(config.clone());
+            if !prepared.is_ready() {
+                tracing::warn!(
+                    key,
+                    label = "HttpDns",
+                    "LinkSys preparation failed; using configured fallback"
+                );
+            }
+            let entry = RuntimeEntry::new(ProviderRuntime::HttpDns(prepared));
+            if let Some(old) = entries.insert(key.to_string(), entry) {
+                old.stop();
+            }
+        }
+        SystemConfig::CredentialSource(_) | SystemConfig::Unsupported => {}
     }
     if !was_registered && entries.contains_key(key) {
         counts[kind as usize] += 1;
@@ -814,6 +807,23 @@ pub fn list_runtime_clients() -> Vec<String> {
     RUNTIMES.entries.load().keys().cloned().collect()
 }
 
+/// The current HTTP DNS generation, including preparation-failed fallback states.
+pub fn get_httpdns_client(name: &str) -> Option<Arc<edgion_common::dns::PreparedHttpDns>> {
+    let entry = RUNTIMES.get(name)?;
+    match &entry.provider {
+        ProviderRuntime::HttpDns(prepared) => Some(Arc::clone(prepared)),
+        _ => None,
+    }
+}
+
+pub fn list_httpdns_clients() -> Vec<String> {
+    RUNTIMES.keys(ProviderKind::HttpDns)
+}
+
+pub fn httpdns_client_count() -> usize {
+    RUNTIMES.count(ProviderKind::HttpDns)
+}
+
 pub fn get_webhook_client(name: &str) -> Option<Arc<WebhookLinkClient>> {
     let entry = RUNTIMES.get(name)?;
     match &entry.provider {
@@ -897,7 +907,7 @@ fn record_registry_health(registry: &RuntimeRegistry) {
             ProviderRuntime::Elasticsearch(runner) => runner.current().map(|client| client.healthy()),
             ProviderRuntime::Kafka(runner) => runner.current().map(|client| client.healthy()),
             ProviderRuntime::Otlp(runner) => runner.current().map(|client| client.healthy()),
-            ProviderRuntime::Webhook(_) => None,
+            ProviderRuntime::Webhook(_) | ProviderRuntime::HttpDns(_) => None,
         };
         if let Some(healthy) = healthy {
             record_link_sys_health(name, healthy);
@@ -991,11 +1001,11 @@ fn webhook_can_reuse(existing: &WebhookLinkClient, resource: &LinkSys, forced: b
     live.equal_runtime(&incoming) || live.rv_skip_allows_reuse(&incoming)
 }
 
-async fn dispatch_full_set(sequence: u64, data: &LinkSysMap, forced: bool) {
+fn dispatch_full_set(sequence: u64, data: &LinkSysMap, forced: bool) {
     RUNTIMES.apply(sequence, data, &HashSet::new(), data, true, forced);
 }
 
-async fn dispatch_partial_update(sequence: u64, changed: &LinkSysMap, remove: &HashSet<String>, snapshot: &LinkSysMap) {
+fn dispatch_partial_update(sequence: u64, changed: &LinkSysMap, remove: &HashSet<String>, snapshot: &LinkSysMap) {
     RUNTIMES.apply(sequence, changed, remove, snapshot, false, false);
 }
 

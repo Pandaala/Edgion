@@ -4,6 +4,9 @@ use edgion_resources::resources::common::outbound_tls::{OutboundTlsLocal, Outbou
 use k8s_openapi::ByteString;
 
 use super::*;
+use edgion_resources::resources::backend_tls_policy::WellKnownCACertificates;
+use edgion_resources::resources::common::TlsConfig;
+use k8s_openapi::api::core::v1::Secret;
 
 fn tls_digest(tls: Option<&TlsConfig>, policy: bool) -> [u8; 32] {
     let mut hasher = FingerprintHasher::new();

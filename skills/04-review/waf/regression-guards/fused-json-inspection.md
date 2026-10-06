@@ -96,8 +96,9 @@ check/Clippy, 170 request-body tests and fresh WafDynamic live integration.
 The configured native CRS profile passed 4,741 admitted stages, including 896
 negative stages, after matching the upstream FTW XML-attribute test opt-in.
 This is not full-CRS compatibility or production throughput evidence. Scoped
-release measurements and their substantial remaining allocation costs are in
-[the results](../../../../tasks/pending/waf-json-checker/13-results.md).
+release measurements and their substantial remaining allocation costs were
+recorded in the former `waf-json-checker/13-results.md` task artifact, which is
+absent from the current tree. That historical measurement is not fresh evidence.
 
 Re-evaluate when selector admissibility, duplicate ordering, transformation
 validation, result lifetimes, phase controls, limit precedence or BodyStorage
@@ -105,8 +106,10 @@ materialization changes. Preserve the mirrored checker/collector/runtime tests
 and Gateway completeness, one-read, source-lifetime and error-classification
 regressions.
 
-The unified follow-up design, review gates and measurements are recorded in
-[the optimization spec](../../../../tasks/pending/waf-json-checker/15-optimization-spec.md).
+The unified follow-up design, review gates and measurements were recorded in the
+former `waf-json-checker/15-optimization-spec.md` task artifact, which is absent
+from the current tree. Current allocation follow-up is tracked in
+[the WAF optimization task](../../../../tasks/todo/waf-transformation-and-allocation-optimization.md).
 Re-evaluate physical capacity/work thresholds when inline sizes, retained scratch,
 shared outcome destruction or broad dispatch ordering changes. Preserve successful
 semantic results, strict charged limits and terminal failure behavior; do not infer

@@ -488,6 +488,7 @@ struct LinkSysRuntimeStats {
     es_clients: usize,
     kafka_clients: usize,
     webhook_clients: usize,
+    httpdns_clients: usize,
     otlp_clients: usize,
     otlp_retiring_clients: usize,
 }
@@ -590,6 +591,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         es_clients: crate::link_sys::runtime::store::es_client_count(),
         kafka_clients: crate::link_sys::runtime::store::kafka_client_count(),
         webhook_clients: crate::link_sys::runtime::store::webhook_client_count(),
+        httpdns_clients: crate::link_sys::runtime::store::httpdns_client_count(),
         otlp_clients: crate::link_sys::runtime::store::otlp_client_count(),
         otlp_retiring_clients: crate::link_sys::runtime::store::otlp_retiring_client_count(),
     };

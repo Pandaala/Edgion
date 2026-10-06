@@ -15,6 +15,7 @@
 //! data-plane runtime providers and stores belong in `gateway::link_sys`.
 
 pub mod credential;
+pub mod fingerprint;
 pub mod health;
 pub mod http_client;
 pub mod outbound_tls;

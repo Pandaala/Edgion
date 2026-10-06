@@ -1,6 +1,7 @@
 use super::*;
 use edgion_resources::resources::edgion_plugins::plugin_configs::LinkSysRef;
 use edgion_resources::resources::link_sys::httpdns::{HttpDnsFallback, HttpDnsResponseFormat};
+use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
 
 fn ann(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
@@ -17,9 +18,9 @@ fn dummy_httpdns() -> HttpDnsResolverConfig {
 }
 
 /// lookup that resolves only the key `dns/aliyun`.
-fn lookup_aliyun(key: &LinkSysKey) -> Option<HttpDnsResolverConfig> {
+fn lookup_aliyun(key: &LinkSysKey) -> Option<Arc<PreparedHttpDns>> {
     if key.namespace == "dns" && key.name == "aliyun" {
-        Some(dummy_httpdns())
+        Some(PreparedHttpDns::prepare(dummy_httpdns()))
     } else {
         None
     }
@@ -180,7 +181,7 @@ fn unsupported_linksys_does_not_reuse_httpdns_and_falls_back_to_system() {
     ] {
         // This is the same typed projection used by Gateway's raw LinkSys lookup.
         let spec = resolve_effective_spec(&[reference.clone(), fallback.clone()], |_| {
-            config.as_http_dns().cloned()
+            config.as_http_dns().cloned().map(PreparedHttpDns::prepare)
         });
         match config {
             SystemConfig::Unsupported => {
@@ -191,7 +192,10 @@ fn unsupported_linksys_does_not_reuse_httpdns_and_falls_back_to_system() {
         }
     }
     assert!(matches!(
-        resolve_effective_spec(&[reference], |_| SystemConfig::Unsupported.as_http_dns().cloned()),
+        resolve_effective_spec(&[reference], |_| SystemConfig::Unsupported
+            .as_http_dns()
+            .cloned()
+            .map(PreparedHttpDns::prepare)),
         ResolverSpec::System
     ));
 }

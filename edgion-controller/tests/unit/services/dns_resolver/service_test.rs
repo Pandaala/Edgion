@@ -1,4 +1,43 @@
 use super::*;
+
+#[tokio::test(flavor = "current_thread")]
+async fn service_preparation_reuses_failures_independently_of_applied_slice() {
+    let config = serde_json::from_value(
+        serde_json::json!({"preset": "aliyun", "connection": {"timeoutMs": 0}, "fallback": {"type": "none"}}),
+    )
+    .unwrap();
+    let key = LinkSysKey {
+        namespace: "test".into(),
+        name: "dns".into(),
+    };
+    let mut state = ServiceDnsState {
+        applied_fingerprint: Some("last-good-slice".into()),
+        ..Default::default()
+    };
+    let first = state.prepare(&key, config);
+    assert!(!first.is_ready());
+    assert!(resolve(&ResolverSpec::HttpDns(first.clone()), "localhost")
+        .await
+        .is_err());
+    let config = serde_json::from_value(
+        serde_json::json!({"preset": "aliyun", "connection": {"timeoutMs": 0}, "fallback": {"type": "none"}}),
+    )
+    .unwrap();
+    assert!(Arc::ptr_eq(&first, &state.prepare(&key, config)));
+    assert_eq!(state.applied_fingerprint.as_deref(), Some("last-good-slice"));
+    let other = LinkSysKey {
+        namespace: "test".into(),
+        name: "other".into(),
+    };
+    let config = serde_json::from_value(
+        serde_json::json!({"preset": "aliyun", "connection": {"timeoutMs": 0}, "fallback": {"type": "none"}}),
+    )
+    .unwrap();
+    assert!(
+        !Arc::ptr_eq(&first, &state.prepare(&other, config)),
+        "changing references retires the previous prepared owner"
+    );
+}
 use http::{Response, StatusCode};
 use kube::client::Body;
 use serde_json::json;
@@ -61,6 +100,65 @@ async fn reconcile_lists_only_configured_namespaces() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn controller_ticks_reuse_failed_preparation_and_clear_changed_or_removed_services() {
+    let mode = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed_mode = mode.clone();
+    let service = service_fn(move |request: http::Request<Body>| {
+        let mode = observed_mode.load(std::sync::atomic::Ordering::Relaxed);
+        async move {
+            let path = request.uri().path();
+            let payload = if path.contains("endpointslices") {
+                json!({"apiVersion": "discovery.k8s.io/v1", "kind": "EndpointSliceList", "metadata": {}, "items": []})
+            } else if path.contains("linksys") {
+                json!({"apiVersion": "edgion.io/v1", "kind": "LinkSys", "metadata": {"namespace": "test", "name": "dns"},
+                    "spec": {"type": "httpdns", "config": {"preset": "aliyun", "connection": {"timeoutMs": 0}, "fallback": {"type": "none"}}}})
+            } else {
+                let items = if mode == 2 {
+                    vec![]
+                } else {
+                    vec![json!({"apiVersion": "v1", "kind": "Service", "metadata": {
+                        "namespace": "test", "name": "svc", "uid": "service-uid",
+                        "annotations": {"edgion.io/dns-resolution-mode": "controller", "edgion.io/dns-resolver-ref": if mode == 0 { "test/dns" } else { "" }}
+                        }, "spec": {"type": "ExternalName", "externalName": "1.2.3.4", "ports": [{"port": 80}]}})]
+                };
+                json!({"apiVersion": "v1", "kind": "ServiceList", "metadata": {}, "items": items})
+            };
+            Ok::<_, Infallible>(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap(),
+            )
+        }
+    });
+    let client = Client::new(service, "test");
+    let config = DnsResolverConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let mut states = HashMap::new();
+    reconcile_once(&client, &[], &config, &mut states).await.unwrap();
+    let first = states["test/svc"].prepared.as_ref().unwrap().1.clone();
+    assert!(!first.is_ready());
+    states.get_mut("test/svc").unwrap().applied_fingerprint = Some("last-good".into());
+    reconcile_once(&client, &[], &config, &mut states).await.unwrap();
+    assert!(Arc::ptr_eq(&first, &states["test/svc"].prepared.as_ref().unwrap().1));
+    assert_eq!(states["test/svc"].applied_fingerprint.as_deref(), Some("last-good"));
+    // An empty resolver-ref selects System without touching LinkSys; the IP
+    // literal takes resolve_system's pure fast path without any OS DNS lookup.
+    mode.store(1, std::sync::atomic::Ordering::Relaxed);
+    reconcile_once(&client, &[], &config, &mut states).await.unwrap();
+    assert!(states["test/svc"].prepared.is_none());
+    mode.store(2, std::sync::atomic::Ordering::Relaxed);
+    reconcile_once(&client, &[], &config, &mut states).await.unwrap();
+    assert!(
+        states.is_empty(),
+        "removed Service must release the prepared generation and slice state"
+    );
+}
+
 #[test]
 fn kube_less_default_resolver_falls_back_to_system_without_inline_servers() {
     assert!(
@@ -94,7 +192,13 @@ fn can_skip_apply_requires_existence_and_matching_fingerprint() {
     let key = "app/ext".to_string();
     let fp = "10.0.0.1|80".to_string();
     let mut last_applied = HashMap::new();
-    last_applied.insert(key.clone(), fp.clone());
+    last_applied.insert(
+        key.clone(),
+        ServiceDnsState {
+            applied_fingerprint: Some(fp.clone()),
+            ..Default::default()
+        },
+    );
 
     let mut observed = HashSet::new();
     observed.insert(key.clone());

@@ -80,6 +80,27 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `connection.allowLoopback` | Boolean | `false` | 允许该 HTTP DNS 服务使用 `127.0.0.0/8` 或 `::1`。 |
+| `connection.timeoutMs` | Integer | `3000` | HTTP 查询总超时，范围为 1 至 120000 毫秒。 |
+| `connection.connectTimeoutMs` | Integer | 生效的 `timeoutMs` | 连接超时，范围为 1 至 120000 毫秒，且不能大于总超时。 |
+| `connection.poolMaxIdlePerHost` | Integer | `8` | 每个端点主机保留的空闲连接数，范围为 0 至 256；0 表示不保留空闲连接。 |
+| `connection.poolIdleTimeoutMs` | Integer | `90000` | 空闲连接保留时间，范围为 1 至 600000 毫秒。 |
+| `connection.maxResponseBytes` | Integer | `65536` | 实际接收的响应体大小上限，范围为 1 至 65536 字节，不能提高硬上限。 |
+| `connection.tls` | Object | 未配置 | 可启用 TLS 策略，包括 CA 引用、客户端证书引用及验证设置。 |
+
+Gateway 在 LinkSys 配置到达时准备不可变 HTTP 客户端，后续查询复用其连接池。
+TLS 配置审计警告在准备阶段记录，不会每次查询重复打印。配置、实际使用的证书材料
+或全局 outbound TLS 策略变化时替换客户端。仅轮换 Secret 不改变已解析地址的缓存标识。
+删除 LinkSys 或改为其他类型后撤下当前句柄，已取得旧句柄的查询仍可结束。
+
+连接配置无效或证书材料未解析时，发布新配置指定的 fallback 状态，不再继续使用旧客户端。
+因此 `fallback: none` 仍返回解析错误。HTTPDNS 没有持久后台 provider runner，
+与 Webhook 一样不受 `linkSys.maxInstancesPerKind` 限制。上面的连接池参数限制每个
+准备好的客户端保留的空闲连接；HTTPDNS 不配置重试或主动健康检查后台任务。
+
+Controller 后台解析也在查询前准备客户端，并在 Service 配置未变化时跨刷新周期复用。
+该路径读取的 Kubernetes LinkSys 原始对象不包含 Controller 解析后的 TLS Secret 字段，
+需要这些字段的自定义 CA 或 mTLS 引用仍使用配置指定的 fallback。
+Gateway 则使用 conf_sync 传来的已解析配置。
 
 检查覆盖 URL 中的 IP 字面量和服务域名解析出的地址，也覆盖 IPv4-mapped IPv6。
 允许 IPv4 私网和 IPv6 unique-local 地址；即使开启 `allowLoopback`，

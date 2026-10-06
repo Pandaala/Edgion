@@ -19,15 +19,6 @@ use crate::egress::{classify_ip, EgressPolicy, EgressResolver, IpClass};
 use crate::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig};
 use crate::test_mode::is_integration_testing_mode;
 
-/// Default per-request timeout when the resolver config does not set one.
-const DEFAULT_HTTP_DNS_TIMEOUT_MS: u64 = 3000;
-
-/// Upper bound on an HTTP DNS response body. A well-formed IP list is tiny; this
-/// only guards against an endpoint that streams an unbounded body (the parser
-/// separately caps the accepted IP count). 64 KiB is generous for any real
-/// vendor response.
-const MAX_HTTP_DNS_BODY_BYTES: usize = 64 * 1024;
-
 /// Production [`HttpDnsFetcher`] over a `reqwest::Client`.
 pub struct ReqwestHttpDnsFetcher {
     client: reqwest::Client,
@@ -38,13 +29,27 @@ pub struct ReqwestHttpDnsFetcher {
 impl ReqwestHttpDnsFetcher {
     /// Build a fetcher from the resolver's optional connection settings.
     ///
-    /// - `timeout_ms` → whole-request timeout (default [`DEFAULT_HTTP_DNS_TIMEOUT_MS`]).
+    /// - Timeouts and native connection-pool bounds are resolved at preparation.
     /// - `tls` (when `enabled`) → outbound TLS policy (custom CA / mTLS / gated
     ///   `verify=false`). When absent, HTTPS uses the default system roots.
     /// - Proxies are disabled and redirects denied (SSRF hardening) by the
     ///   shared client factory's defaults.
     pub fn new(conn: Option<&HttpDnsConnection>) -> Result<Self, DnsError> {
-        let timeout_ms = conn.and_then(|c| c.timeout_ms).unwrap_or(DEFAULT_HTTP_DNS_TIMEOUT_MS);
+        Self::with_defaults(conn, crate::link_sys_core::outbound_tls::outbound_global_default())
+    }
+
+    pub(super) fn with_defaults(
+        conn: Option<&HttpDnsConnection>,
+        defaults: edgion_resources::resources::common::OutboundTlsConfig,
+    ) -> Result<Self, DnsError> {
+        if let Some(connection) = conn {
+            if !connection.validate().is_empty() {
+                return Err(DnsError::Http("invalid HTTP DNS connection settings".into()));
+            }
+        }
+        let timeout_ms = conn
+            .and_then(|c| c.timeout_ms)
+            .unwrap_or(HttpDnsConnection::DEFAULT_TIMEOUT_MS);
         // Match the canonical resolver's test exception on the literal path too.
         let allow_loopback = conn.is_some_and(|c| c.allow_loopback) || cfg!(test) || is_integration_testing_mode();
         // Bootstrap is always System: resolving the endpoint through HTTP DNS
@@ -62,8 +67,20 @@ impl ReqwestHttpDnsFetcher {
         let tls = conn.and_then(|c| c.tls.clone()).filter(|t| t.enabled);
         let cfg = OutboundClientConfig {
             total_timeout: Some(Duration::from_millis(timeout_ms)),
+            connect_timeout: Some(Duration::from_millis(
+                conn.and_then(|c| c.connect_timeout_ms).unwrap_or(timeout_ms),
+            )),
+            pool_max_idle_per_host: Some(
+                conn.and_then(|c| c.pool_max_idle_per_host)
+                    .unwrap_or(HttpDnsConnection::DEFAULT_POOL_MAX_IDLE_PER_HOST),
+            ),
+            pool_idle_timeout: Some(Duration::from_millis(
+                conn.and_then(|c| c.pool_idle_timeout_ms)
+                    .unwrap_or(HttpDnsConnection::DEFAULT_POOL_IDLE_TIMEOUT_MS),
+            )),
             disable_proxy: true,
             tls,
+            tls_defaults: Some(defaults),
             tls_context: Some("HttpDns"),
             dns_resolver: Some(Arc::new(resolver)),
             ..Default::default()
@@ -71,7 +88,9 @@ impl ReqwestHttpDnsFetcher {
         let client = build_outbound_client(cfg).map_err(|e| DnsError::Http(e.to_string()))?;
         Ok(Self {
             client,
-            max_response_bytes: MAX_HTTP_DNS_BODY_BYTES,
+            max_response_bytes: conn
+                .and_then(|c| c.max_response_bytes)
+                .unwrap_or(HttpDnsConnection::MAX_RESPONSE_BYTES),
             allow_loopback,
         })
     }

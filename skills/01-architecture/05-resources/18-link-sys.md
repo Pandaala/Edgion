@@ -27,8 +27,10 @@ configuration to recover its discarded type and payload.
 On replacement, Controller clears obsolete Secret/cross-namespace edges and
 credential-source desired state/results, then requeues dependents. Gateway full and
 partial updates retire any old provider through the existing wrong-kind removal.
-HTTPDNS references resolve against the current raw LinkSys and retain their existing
-System-resolver fallback on a missing or wrong-type target. Existing borrowed handles
+HTTPDNS references resolve against the current prepared typed runtime and retain
+their existing System-resolver fallback on a missing or wrong-type target. A valid
+HTTPDNS resource whose preparation failed retains its own configured fallback.
+Existing borrowed handles
 and asynchronous cleanup follow normal deletion semantics. Reapplying a supported
 type allows recovery. Adding a provider requires Rust/runtime wiring and tests,
 not an extension-name CRD whitelist update.
@@ -83,8 +85,9 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
     Gateway fingerprint/build and Common construction independently reject invalid
     policy, regardless of advisory Controller status.
   - Webhook (redesigned): a Service target (`target.name`/`target.port`) missing `name`/`port` or with an unsupported `kind`, OR a `url` target that is not origin-only, is set together with any Service field (mutually exclusive), or combines `http://` with `tls.enabled: true`; `request` template parse error; a field name in both `origin` and `custom`, duplicate names within a block, or a `headers.origin: [{name: Cookie}]` / non-empty `cookies` conflict; `statusOnError` out of range; `maxResponseBytes` over the cap → error. See [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
-- Kafka has a live Gateway runtime client/store. HttpDns is consumed by the DNS resolver path and
-  intentionally has no generic LinkSys runtime-client store.
+- Kafka has a live Gateway runtime client/store. HttpDns prepares an immutable
+  Common resolver handle published in the Gateway's unified typed LinkSys runtime
+  table; it has no persistent runner.
 - `credentialSource` is Controller-only acquisition metadata. Persist-on writes a generated
   Secret; `publication.persist: false` stores a capped map on
   `ControllerRuntime.credential_memory` (never on the LinkSys object). Kubernetes

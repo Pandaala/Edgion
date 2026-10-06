@@ -788,11 +788,150 @@ fn webhook_port(registry: &RuntimeRegistry, key: &str) -> i32 {
 fn empty_unified_store_reports_no_residue() {
     let registry = RuntimeRegistry::new();
     assert!(registry.entries.load().is_empty());
+    assert_eq!(registry.count(ProviderKind::HttpDns), 0);
+    assert!(registry.keys(ProviderKind::HttpDns).is_empty());
     for resource in resources(InjectedSecret::Valid) {
         let kind = ProviderKind::of(&resource.spec.config).unwrap();
         assert_eq!(registry.count(kind), 0);
         assert!(registry.keys(kind).is_empty());
     }
+}
+
+fn httpdns_resource(timeout: u64) -> LinkSys {
+    serde_json::from_value(serde_json::json!({
+        "apiVersion": "edgion.io/v1", "kind": "LinkSys",
+        "metadata": {"name": "link", "namespace": "test", "resourceVersion": "same-rv"},
+        "spec": {"type": "httpdns", "config": {
+            "preset": "aliyun", "fallback": {"type": "none"}, "connection": {"timeoutMs": timeout}
+        }}
+    }))
+    .unwrap()
+}
+
+fn httpdns_handle(registry: &RuntimeRegistry) -> Arc<edgion_common::dns::PreparedHttpDns> {
+    let entry = registry.get("test/link").unwrap();
+    let ProviderRuntime::HttpDns(prepared) = &entry.provider else {
+        panic!("expected HTTP DNS")
+    };
+    prepared.clone()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn httpdns_relist_reuses_but_changes_even_with_same_rv_publish_latest_fallback() {
+    let registry = RuntimeRegistry::new();
+    let original = one(httpdns_resource(100));
+    registry.apply(1, &original, &HashSet::new(), &original, true, false);
+    let first = httpdns_handle(&registry);
+    assert!(first.is_ready());
+    registry.apply(2, &original, &HashSet::new(), &original, false, false);
+    assert!(Arc::ptr_eq(&first, &httpdns_handle(&registry)));
+    let invalid = one(httpdns_resource(0));
+    registry.apply(3, &invalid, &HashSet::new(), &invalid, false, false);
+    let failed = httpdns_handle(&registry);
+    assert!(!failed.is_ready());
+    assert!(!Arc::ptr_eq(&first, &failed));
+    assert!(
+        edgion_common::dns::resolve(&edgion_common::dns::ResolverSpec::HttpDns(failed.clone()), "localhost")
+            .await
+            .is_err()
+    );
+    registry.apply(4, &invalid, &HashSet::new(), &invalid, true, false);
+    assert!(
+        Arc::ptr_eq(&failed, &httpdns_handle(&registry)),
+        "failed preparation is reused across relists"
+    );
+    registry.apply(5, &invalid, &HashSet::new(), &invalid, true, true);
+    assert!(
+        !Arc::ptr_eq(&failed, &httpdns_handle(&registry)),
+        "forced inherited-policy rebuild replaces failed state too"
+    );
+    registry.apply(6, &original, &HashSet::new(), &original, false, false);
+    let recovered = httpdns_handle(&registry);
+    assert!(recovered.is_ready());
+    registry.apply(7, &original, &HashSet::new(), &original, true, true);
+    assert!(!Arc::ptr_eq(&recovered, &httpdns_handle(&registry)));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn httpdns_delete_kind_change_and_full_omission_have_one_current_owner() {
+    let registry = RuntimeRegistry::new();
+    let original = one(httpdns_resource(100));
+    registry.apply(1, &original, &HashSet::new(), &original, true, false);
+    let old = registry.get("test/link").unwrap();
+    let webhook = one(create_test_webhook_linksys("test", "link"));
+    registry.apply(2, &webhook, &HashSet::new(), &webhook, false, false);
+    assert!(old.stopped.load(Ordering::Acquire));
+    assert_eq!(registry.count(ProviderKind::HttpDns), 0);
+    assert_eq!(registry.count(ProviderKind::Webhook), 1);
+    registry.apply(3, &original, &HashSet::new(), &original, false, false);
+    assert_eq!(registry.entries.load().len(), 1);
+    registry.apply(4, &LinkSysMap::new(), &HashSet::new(), &LinkSysMap::new(), true, false);
+    assert!(registry.entries.load().is_empty());
+    registry.apply(3, &original, &HashSet::new(), &original, false, false);
+    assert!(
+        registry.entries.load().is_empty(),
+        "stale publication cannot recreate omission"
+    );
+    registry.apply(5, &original, &HashSet::new(), &original, false, false);
+    registry.apply(
+        6,
+        &LinkSysMap::new(),
+        &HashSet::from(["test/link".into()]),
+        &LinkSysMap::new(),
+        false,
+        false,
+    );
+    assert!(registry.entries.load().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn httpdns_secret_material_rotation_replaces_client_and_preserves_address_identity() {
+    use k8s_openapi::{api::core::v1::Secret, ByteString};
+    let registry = RuntimeRegistry::new();
+    let mut resource = httpdns_resource(100);
+    let SystemConfig::HttpDns(config) = &mut resource.spec.config else {
+        unreachable!()
+    };
+    config.connection.as_mut().unwrap().tls = Some(edgion_resources::resources::common::TlsConfig {
+        enabled: true,
+        resolved_ca_certificates: Some(vec![Secret {
+            data: Some(std::collections::BTreeMap::from([(
+                "tls.ca.crt".into(),
+                ByteString(b"old-material".to_vec()),
+            )])),
+            ..Default::default()
+        }]),
+        ..Default::default()
+    });
+    let data = one(resource.clone());
+    registry.apply(1, &data, &HashSet::new(), &data, true, false);
+    let first = httpdns_handle(&registry);
+    let fingerprint = edgion_common::dns::ResolverSpec::HttpDns(first.clone()).fingerprint();
+    let SystemConfig::HttpDns(config) = &mut resource.spec.config else {
+        unreachable!()
+    };
+    config
+        .connection
+        .as_mut()
+        .unwrap()
+        .tls
+        .as_mut()
+        .unwrap()
+        .resolved_ca_certificates
+        .as_mut()
+        .unwrap()[0]
+        .data
+        .as_mut()
+        .unwrap()
+        .insert("tls.ca.crt".into(), ByteString(b"new-material".to_vec()));
+    let data = one(resource);
+    registry.apply(2, &data, &HashSet::new(), &data, false, false);
+    let second = httpdns_handle(&registry);
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert_eq!(
+        fingerprint,
+        edgion_common::dns::ResolverSpec::HttpDns(second).fingerprint()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -873,10 +1012,19 @@ async fn metadata_only_kind_change_removes_previous_runtime() {
         let old_data = one(create_test_webhook_linksys("test", "link"));
         registry.apply(1, &old_data, &HashSet::new(), &old_data, true, false);
         let mut resource = old_data["test/link"].clone();
+        let expects_httpdns = matches!(&config, SystemConfig::HttpDns(_));
         resource.spec.config = config;
         let data = one(resource);
         registry.apply(2, &data, &HashSet::new(), &data, false, false);
-        assert!(registry.get("test/link").is_none());
+        if expects_httpdns {
+            assert!(matches!(
+                registry.get("test/link").as_deref().map(|entry| &entry.provider),
+                Some(ProviderRuntime::HttpDns(_))
+            ));
+            assert_eq!(registry.count(ProviderKind::Webhook), 0);
+        } else {
+            assert!(registry.get("test/link").is_none());
+        }
     }
 }
 
@@ -997,7 +1145,9 @@ async fn capacity_release_retries_latest_unadmitted_configuration() {
             ProviderRuntime::Elasticsearch(runner) => runner.desired_link_for_test(),
             ProviderRuntime::Kafka(runner) => runner.desired_link_for_test(),
             ProviderRuntime::Otlp(runner) => runner.desired_link_for_test(),
-            ProviderRuntime::Webhook(_) => panic!("test covers persistent providers only"),
+            ProviderRuntime::Webhook(_) | ProviderRuntime::HttpDns(_) => {
+                panic!("test covers persistent providers only")
+            }
         }
         .unwrap();
         assert_eq!(desired.metadata.resource_version.as_deref(), Some("latest"));
@@ -1096,72 +1246,41 @@ async fn stale_full_or_partial_dispatch_cannot_replace_newer_current() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn ordered_dispatch_preserves_unrelated_deltas_and_captured_snapshot() {
+async fn synchronous_dispatch_publishes_before_source_and_preserves_unrelated_deltas() {
     let source = LinkSysStore::new();
-    let registry = Arc::new(RuntimeRegistry::new());
+    let registry = RuntimeRegistry::new();
     let counter = AtomicU64::new(0);
     let source_lock = Mutex::new(());
-    let tail = Mutex::new(None);
-    let (release, gate) = tokio::sync::oneshot::channel();
-    let first = HashMap::from([("test/first".to_string(), create_test_webhook_linksys("test", "first"))]);
-    let captured = Mutex::new(None);
-    source
-        .update_with_dispatch(
-            first,
-            &HashSet::new(),
-            &counter,
-            &source_lock,
-            |sequence, changed, remove, snapshot| {
-                *captured.lock() = Some(snapshot.clone());
-                let registry = registry.clone();
-                spawn_ordered_dispatch(&tokio::runtime::Handle::current(), &tail, async move {
-                    gate.await.unwrap();
+    for name in ["first", "second"] {
+        let key = format!("test/{name}");
+        let changed = HashMap::from([(key.clone(), create_test_webhook_linksys("test", name))]);
+        source
+            .update_with_dispatch(
+                changed,
+                &HashSet::new(),
+                &counter,
+                &source_lock,
+                |sequence, changed, remove, snapshot| {
+                    assert!(!source.contains(&key), "raw source must not outrun preparation");
                     registry.apply(sequence, &changed, &remove, &snapshot, false, false);
-                });
-            },
-        )
-        .unwrap();
-    let second = HashMap::from([("test/second".to_string(), create_test_webhook_linksys("test", "second"))]);
+                    assert!(
+                        registry.get(&key).is_some(),
+                        "dispatch is complete before source publication"
+                    );
+                },
+            )
+            .unwrap();
+        assert!(source.contains(&key));
+    }
+    assert_eq!(registry.entries.load().len(), 2);
     source
-        .update_with_dispatch(
-            second,
-            &HashSet::new(),
-            &counter,
-            &source_lock,
-            |sequence, changed, remove, snapshot| {
-                let registry = registry.clone();
-                spawn_ordered_dispatch(&tokio::runtime::Handle::current(), &tail, async move {
-                    registry.apply(sequence, &changed, &remove, &snapshot, false, false);
-                });
-            },
-        )
+        .replace_all_with_dispatch(HashMap::new(), &counter, &source_lock, |sequence, snapshot| {
+            registry.apply(sequence, &snapshot, &HashSet::new(), &snapshot, true, false);
+            assert!(registry.entries.load().is_empty());
+            assert_eq!(source.count(), 2);
+        })
         .unwrap();
-    assert_eq!(
-        captured.lock().as_ref().unwrap().len(),
-        1,
-        "captured snapshot must not observe later source events"
-    );
-    release.send(()).unwrap();
-    let task = tail.lock().take().unwrap();
-    task.await.unwrap();
-    assert_eq!(
-        registry.entries.load().len(),
-        2,
-        "later unrelated delta must not skip its predecessor"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn ordered_dispatch_releases_successor_after_predecessor_failure() {
-    let predecessor = tokio::spawn(async { panic!("injected predecessor failure") });
-    let ran = Arc::new(AtomicBool::new(false));
-    let observed = ran.clone();
-    dispatch_after(
-        Some(predecessor),
-        async move { observed.store(true, Ordering::Release) },
-    )
-    .await;
-    assert!(ran.load(Ordering::Acquire));
+    assert_eq!(source.count(), 0);
 }
 
 #[tokio::test(flavor = "current_thread")]

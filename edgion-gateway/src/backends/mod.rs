@@ -39,7 +39,6 @@ pub use selector::{
 pub use service_kind::ServiceBackendKind;
 pub use validation::validate_endpoint_in_route;
 
-use crate::link_sys::get_global_link_sys_store;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::runtime::{GatewayInfo, ServerHeaderOpts};
 use crate::EdgionHttpContext;
@@ -50,7 +49,6 @@ use edgion_common::dns::resolver_select::{
 use edgion_common::dns::{resolve, ResolverSpec};
 use edgion_resources::constants::annotations::edgion as edgion_annotations;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
-use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
 use edgion_resources::EdgionErrorCode;
 use peer_builder::first_safe_inet_addr;
 use peer_builder::{
@@ -64,7 +62,6 @@ use pingora_proxy::Session;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
 use std::sync::Arc;
 
 use crate::backends::discovery::ServiceSectionKey;
@@ -491,14 +488,12 @@ pub(crate) fn compute_routed_external_resolver(ctx: &EdgionHttpContext) -> Resol
     })
 }
 
-/// Look up an httpdns [`HttpDnsResolverConfig`] by `namespace/name` from the
-/// gateway's LinkSys store. Returns `None` when the ref is missing or the target
+/// Look up a prepared HTTP DNS generation by `namespace/name` from the
+/// gateway's typed LinkSys runtime table. Returns `None` when the ref is missing or the target
 /// LinkSys is not an httpdns resolver.
-fn httpdns_config_for_ref(key: &LinkSysKey) -> Option<HttpDnsResolverConfig> {
+fn httpdns_config_for_ref(key: &LinkSysKey) -> Option<Arc<edgion_common::dns::PreparedHttpDns>> {
     let store_key = format!("{}/{}", key.namespace, key.name);
-    get_global_link_sys_store()
-        .get(&store_key)
-        .and_then(|ls| ls.spec.config.as_http_dns().cloned())
+    crate::link_sys::runtime::store::get_httpdns_client(&store_key)
 }
 
 /// Resolve an `ExternalName` to IPs through `spec`, honoring the short-TTL

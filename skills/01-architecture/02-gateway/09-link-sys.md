@@ -18,7 +18,7 @@ description: LinkSys external system integration — CRD connector variants, run
 | Webhook | `providers/webhook/` | WebhookLinkClient | HTTP | External service calls, WebhookKeyGet resolution |
 | Kafka | `providers/kafka/` | `KafkaLinkClient` | Kafka producer | Persistent runtime client and log delivery |
 | OTLP | `providers/otlp/` | `OtlpLinkClient` | OTLP/gRPC over HTTP/HTTPS | Persistent runner, shared log export, safe egress |
-| HttpDns | resource + DNS resolver service | resolver configuration | HTTP DNS | DNS-resolution configuration; not a LinkSys runtime-client store |
+| HttpDns | Common DNS + typed runtime table | `PreparedHttpDns` | HTTP DNS | Immutable prepared HTTP client or configured fallback-only generation |
 
 `LocalFileWriter` is a logging-only DataSender. OTLP is a dedicated LinkSys
 provider; its key-only OtlpLogSender never owns an exporter or probe.
@@ -113,7 +113,8 @@ pub struct LinkSysStore {
 ```
 
 Operations:
-- `replace_all(data)` — full replace (full sync), atomic update + async dispatch to each provider manager.
+- `replace_all(data)` — full replace (full sync), synchronous runtime preparation
+  in source-event order, then publication of the immutable source snapshot.
 - `update(add_or_update, remove)` — incremental update (partial sync).
 - `get(key)` / `contains(key)` / `count()` — queries.
 
@@ -123,10 +124,11 @@ Global singleton: `get_global_link_sys_store()`.
 
 One runtime table maps `namespace/name` to a typed provider object. Redis,
 Etcd, Elasticsearch, Kafka, and OTLP entries own their existing
-`PersistentRunner`; Webhook entries own a prepared `WebhookLinkClient`.
+`PersistentRunner`; Webhook entries own a prepared `WebhookLinkClient`, and
+HttpDns entries own Common's immutable `PreparedHttpDns`.
 Typed `get_*_client` APIs select only the matching current entry, then obtain
 its published client. Webhook call-handle lookup uses the same table directly.
-HttpDns and CredentialSource remain configuration-only variants.
+CredentialSource remains Controller-managed acquisition configuration.
 
 The serialized source snapshot remains separate for configuration consumers.
 It is not a second authority for client publication. Counts, keys, health
@@ -141,6 +143,11 @@ generation fencing, and live-connection handover. Webhook prepares a complete
 managed outbound client before replacing a same-type entry; equal fingerprints
 reuse the current client.
 
+HTTPDNS publishes the latest prepared handle, including its configured fallback
+when preparation fails. Equal runtime material reuses the handle; Secret changes
+and forced global TLS rebuilds replace it. Queries never build clients or audit
+TLS. See [prepared HTTPDNS generations](../../04-review/link-sys/regression-guards/httpdns-prepared-runtime.md).
+
 Deletion removes the current entry and signals its background work to stop.
 It does not wait for asynchronous provider shutdown or every caller-held Arc.
 A type change is removal followed by creation: temporary unavailability and
@@ -148,7 +155,8 @@ brief overlap with stopping old work are accepted. Cleanup never recreates a
 key or removes a newer entry. There are no per-provider deleting/pending maps,
 tombstones, or cross-type supervisors.
 
-The per-kind capacity limit counts current registered objects. Desired resources
+The per-kind capacity limit counts current persistent-provider objects; Webhook
+and HTTPDNS are exempt. Desired resources
 that cannot yet be admitted remain in the source configuration; removal or cap
 increase retries admission from the ordered snapshot. Unresolved credentials
 never degrade to anonymous access.

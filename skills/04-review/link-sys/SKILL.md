@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [HTTPDNS clients are prepared and owned by configuration generations](regression-guards/httpdns-prepared-runtime.md)
+
 - [Etcd configuration and early message boundaries](regression-guards/etcd-configuration-and-message-boundaries.md)
 
 - [Removed Webhook fields produce unknown-field feedback](regression-guards/webhook-removed-fields-unknown-feedback.md)
