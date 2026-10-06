@@ -306,6 +306,55 @@ fn inspection_records_and_comparison_work_use_existing_compiler_budgets() {
 }
 
 #[test]
+fn xml_broad_vectors_reuse_profile_order_under_exact_shared_compile_work() {
+    let generation = compile(
+        concat!(
+            "SecRule XML|XML:/*|XML://@* \"@contains first\" \"id:1,phase:2,pass,t:none\"\n",
+            "SecRule XML \"@contains second\" \"id:2,phase:2,pass,t:lowercase\"\n",
+            "SecRule XML \"@contains third\" \"id:3,phase:2,pass,t:none\"\n",
+            "SecRule XML \"@contains fourth\" \"id:4,phase:2,pass,t:lowercase,multiMatch\"\n"
+        ),
+        CompilerLimits::default(),
+    )
+    .unwrap();
+    let compile_plan = |limit| {
+        let mut work = CanonicalWork::default();
+        let mut memory = MatcherCompileWork {
+            limits: CompilerLimits {
+                max_group_key_record_comparisons: limit,
+                ..CompilerLimits::default()
+            },
+            validated_bytes: 0,
+            working_bytes: 0,
+            compiler_owned_bytes: 0,
+            matcher_charged_bytes: 0,
+            peak_bytes: 0,
+            requirement_cursors: [0; 8],
+        };
+        let result =
+            CompiledJsonPlan::compile_domain(&generation, &mut memory, &mut work, super::super::InspectionDomain::Xml);
+        (result, work.record_comparisons, memory.compiler_owned_bytes)
+    };
+    let (result, exact, owned) = compile_plan(usize::MAX);
+    let plan = result.unwrap();
+    assert_eq!(plan.groups.len(), 4);
+    assert_eq!(plan.profiles.len(), 3);
+    assert!(plan.broad_only_order.is_empty());
+    for order in [&plan.xml_text, &plan.xml_attributes] {
+        assert_eq!(order.len(), 4);
+        assert!(order
+            .windows(2)
+            .all(|pair| (plan.groups[pair[0]].profile, pair[0]) < (plan.groups[pair[1]].profile, pair[1])));
+    }
+    assert!(compile_plan(exact).0.is_ok());
+    assert!(matches!(
+        compile_plan(exact - 1).0,
+        Err(CompilerError::GroupKeyRecordComparisonLimit { .. })
+    ));
+    assert_eq!(compile_plan(exact).2, owned);
+}
+
+#[test]
 fn dense_profiles_share_recipes_but_partition_view_and_multi_match() {
     let generation = compile(
         r#"

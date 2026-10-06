@@ -353,10 +353,10 @@ this field supplies a complete override profile. Zero is restrictive, and every
 field in an explicit profile is required. Legacy `document`, `plan` and `facts`
 fields are rejected.
 
-The Gateway proves complete bounded capture before one canonical body read.
-Resident contiguous bodies share their existing Bytes allocation. Spilled or
-edited bodies may require canonical BodyStorage materialization. The checker
-scans that stable source once, matches precompiled rules as values complete,
+The Gateway feeds actual capture chunks to the checker and proves bounded
+completion before Phase 2. Cached bodies use bounded immutable snapshot chunks;
+JSON-only spilled bodies need no complete materialization. The checker
+uses one grammar pass, matches precompiled rules as values complete,
 and retains only required names, matching results and explicitly named deferred
 values. It does not build a complete JSON value tree. Raw REQUEST_BODY visibility
 remains controlled by the existing processor and ctl rules.
@@ -421,8 +421,77 @@ Logical publication checks use fixed priority: source/prelude, name length,
 depth, entries, decoded bytes, traversal work, then combined totals. Each limit
 remains independent; competing failures may differ from the former DOM parser.
 Depth is independently configurable; there is no historical 127-container guard.
-WAF runtime-byte metrics represent logical transaction accounting, not physical
-inspection capacity or RSS. Prefix inspected-byte metrics exclude full scans.
+The WAF runtime-byte gauge combines logical transaction accounting with known
+provisional parser/result heap capacities during inspection. It excludes source
+storage and allocator overhead and does not measure RSS.
+
+## Bounded XML inspection
+
+Effective XML processors also use native inspection with `requestBody.inspection:
+full`. Automatic selection recognizes `application/xml`, `text/xml` and media
+types ending in `+xml`, ignoring case and parameters. A phase-1
+`ctl:requestBodyProcessor=XML` can override selection. HTTP Content-Type parameters,
+including `charset`, do not drive transcoding or XML encoding validation. Input
+bytes must be UTF-8; an XML declaration's encoding must be UTF-8 when present.
+Use your existing policy resource with complete inspection:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: application-waf
+  namespace: default
+spec:
+  waf:
+    mode: on
+    priority: 100
+    requestBody:
+      inspection: full
+    policyRef:
+      name: application-waf-policy
+```
+
+In the referenced rule bundle, `XML` selects emitted text and attribute values,
+`XML:/*` selects text/CDATA, and `XML://@*` selects attributes. For example:
+
+```apache
+SecRule XML:/*|XML://@* "@contains forbidden" "id:100001,phase:2,deny,status:403"
+```
+
+These selectors use the engine's value projection, not arbitrary XPath. Normal
+text is emitted separately between markup and trims outer literal XML whitespace;
+CDATA is separate and untrimmed. Attributes use their lexical qualified names,
+including namespace declarations. Matched names are `XML` or `XML:<attribute>`.
+Comments, processing instructions and element names are not values. XML does not
+add ARGS entries; combined-size metadata includes query arguments only.
+
+The supported profile is UTF-8/XML 1.0 with optional BOM/declaration. It validates
+structure, characters, namespace bindings and duplicate attributes, normalizes
+line endings and attribute literal whitespace, and accepts the five predefined
+entities plus valid numeric references. DTD, external/general entities, non-UTF-8
+bytes/declarations and unsupported XML paths are rejected. This is not schema validation.
+Dynamic XML value operands fail Full validation; dynamic count operands remain
+supported. Existing CRS attribute exclusions still apply in rule order.
+
+| Domain | Fixed default limits |
+|---|---|
+| parser | source/raw token 16 MiB; name 16 KiB; decoded bytes 32 MiB; events 262144; depth 64 |
+| structure | attributes per tag 65536; active namespace bindings 65536; active names/namespaces 8 MiB |
+| storage/work | parser heap 32 MiB and work 128 MiB; selected-result limits match the JSON result defaults |
+
+There is no `requestBody.xml` configuration field. Parser safeguards remain
+independent of logical WAF and Gateway body limits. Contiguous ordinary values
+are borrowed; cross-chunk or normalized values use reusable inline scratch with
+bounded growth. The engine keeps no complete XML tree or extracted value map.
+Required matching/count metadata and captures can still consume bounded storage.
+
+Full XML uses the same canonical BodyStorage capture and replay path as JSON;
+XML-only spill needs no complete materialization. Raw visibility and malformed
+DetectionOnly fallback retain existing policy; malformed input discards provisional
+XML matches. Physical failures reject even in DetectionOnly. Empty transport
+bodies are accepted, while nonempty whitespace/comment-only documents need a root.
+Phase-2 capture, chain, TX and control effects derived from XML values run after
+complete admission in rule order. Phase-1 effects execute before body inspection.
 
 ## Reload behavior
 

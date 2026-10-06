@@ -150,12 +150,14 @@ pub use request_restriction::RequestRestrictionTestSuite;
 pub use resolved_refs::ResolvedRefsTestSuite;
 pub use response_rewrite::ResponseRewriteTestSuite;
 pub(crate) use waf::json_wire::PausedJsonUpload;
+pub(crate) use waf::xml_wire::paused as paused_xml_upload;
 pub use waf::{
     WafDynamicBundleV1TestSuite, WafDynamicBundleV2TestSuite, WafDynamicConfiguredPrefixTestSuite,
     WafDynamicControlTestSuite, WafDynamicDeletedTestSuite, WafDynamicDetectionTestSuite, WafDynamicInitialTestSuite,
     WafDynamicInjectionTestSuite, WafDynamicJsonDetectionTestSuite, WafDynamicJsonV1TestSuite,
     WafDynamicJsonV2TestSuite, WafDynamicJsonZeroSourceTestSuite, WafDynamicRecoveredTestSuite,
-    WafDynamicSelectorHighTestSuite, WafDynamicUpdatedTestSuite,
+    WafDynamicSelectorHighTestSuite, WafDynamicUpdatedTestSuite, WafDynamicXmlDetectionTestSuite,
+    WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite,
 };
 pub use wasm::WasmPluginTestSuite;
 pub use webhook_key_get::WebhookKeyGetTestSuite;

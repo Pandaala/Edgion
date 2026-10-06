@@ -35,7 +35,14 @@ fn transaction(rules: &str, mode: RuleEngineMode) -> Transaction<'static> {
     .unwrap()
     .into_parts()
     .0;
-    let headers = [RequestHeader::new(b"content-type", b"application/json")];
+    let headers = [RequestHeader::new(
+        b"content-type",
+        if rules.contains("XML") {
+            b"application/xml".as_slice()
+        } else {
+            b"application/json".as_slice()
+        },
+    )];
     let head = RequestHead::new(
         b"POST / HTTP/1.1",
         b"POST",
@@ -122,6 +129,15 @@ fn io_counts() -> (IoCounts, IoHook) {
 
 #[tokio::test]
 async fn fresh_spilled_json_inspects_real_chunks_before_eof_without_read_all() {
+    fresh_spilled(false).await;
+}
+
+#[tokio::test]
+async fn fresh_spilled_xml_inspects_real_chunks_before_eof_without_read_all() {
+    fresh_spilled(true).await;
+}
+
+async fn fresh_spilled(xml: bool) {
     let recorder = DebuggingRecorder::new();
     let snapshots = MetricObservation::new(&recorder);
     let _metrics = metrics::set_default_local_recorder(&recorder);
@@ -133,12 +149,22 @@ async fn fresh_spilled_json_inspects_real_chunks_before_eof_without_read_all() {
     let mut downstream = pingora_proxy::Session::new_h1(Box::new(server));
     downstream.read_request().await.unwrap();
     let mut ctx = context();
-    let mut tx = transaction(
-        "SecRule ARGS \"@contains blocked\" \"id:1,phase:2,deny\"",
-        RuleEngineMode::On,
-    );
-    let first = b"{\"a\":\"blocked\",";
-    let last = b"\"a\":\"safe\"}";
+    let rules = if xml {
+        "SecRule XML \"@contains blocked\" \"id:1,phase:2,deny\""
+    } else {
+        "SecRule ARGS \"@contains blocked\" \"id:1,phase:2,deny\""
+    };
+    let mut tx = transaction(rules, RuleEngineMode::On);
+    let first = if xml {
+        b"<r a='blocked'>".as_slice()
+    } else {
+        b"{\"a\":\"blocked\",".as_slice()
+    };
+    let last = if xml {
+        b"safe</r>".as_slice()
+    } else {
+        b"\"a\":\"safe\"}".as_slice()
+    };
     client
         .write_all(format!("{:x}\r\n", first.len()).as_bytes())
         .await
@@ -148,10 +174,14 @@ async fn fresh_spilled_json_inspects_real_chunks_before_eof_without_read_all() {
     let (counts, hook) = io_counts();
     {
         let mut adapter = PingoraSessionAdapter::new(&mut downstream, &mut ctx);
-        let inspection = inspect(
+        let inspection = inspect_structured(
             &mut adapter,
             &mut tx,
-            JsonInspectionLimits::default(),
+            if xml {
+                InspectionLimits::Xml(XmlInspectionLimits::default())
+            } else {
+                InspectionLimits::Json(JsonInspectionLimits::default())
+            },
             RuntimeLimits::default(),
             1 << 20,
             true,
@@ -185,20 +215,39 @@ async fn fresh_spilled_json_inspects_real_chunks_before_eof_without_read_all() {
     gauge_is_released(&snapshots);
     assert_eq!(counts[0].load(Ordering::Relaxed), 0);
     assert_eq!(counts[1].load(Ordering::Relaxed), 0);
-    assert!(tx.execute_request_body().unwrap().intervention().is_none());
+    assert_eq!(
+        tx.execute_request_body()
+            .unwrap()
+            .intervention()
+            .map(|intervention| intervention.status()),
+        xml.then_some(403)
+    );
     let mut reader = ctx.request_body.snapshot_reader(false).unwrap();
     let mut replay = Vec::new();
     while let Some(chunk) = reader.next_chunk().await.unwrap() {
         replay.extend_from_slice(&chunk);
     }
-    assert_eq!(replay, [first.as_slice(), last.as_slice()].concat());
+    assert_eq!(replay, [first, last].concat());
     assert!(ctx.request_body.overwrite(Bytes::from_static(b"different")).is_err());
 }
 
 #[tokio::test]
 async fn cached_spilled_json_reads_bounded_snapshot_and_rejects_oversize_before_io() {
+    cached_spilled(false).await;
+}
+
+#[tokio::test]
+async fn cached_spilled_xml_capture() {
+    cached_spilled(true).await;
+}
+
+async fn cached_spilled(xml: bool) {
     for oversized in [false, true] {
-        let input = Bytes::from_static(br#"{"a":"blocked"}"#);
+        let input = if xml {
+            Bytes::from_static(b"<r a='blocked'/>")
+        } else {
+            Bytes::from_static(br#"{"a":"blocked"}"#)
+        };
         let (mut storage, view) = BodyStorage::new(1, 1024);
         storage.write(&input).await.unwrap();
         storage.finish().await.unwrap();
@@ -207,7 +256,11 @@ async fn cached_spilled_json_reads_bounded_snapshot_and_rejects_oversize_before_
         let (_, server) = tokio::io::duplex(4096);
         let mut downstream = pingora_proxy::Session::new_h1(Box::new(server));
         let mut tx = transaction(
-            "SecRule ARGS \"@contains blocked\" \"id:1,phase:2,deny\"",
+            if xml {
+                "SecRule XML \"@contains blocked\" \"id:1,phase:2,deny\""
+            } else {
+                "SecRule ARGS \"@contains blocked\" \"id:1,phase:2,deny\""
+            },
             RuleEngineMode::On,
         );
         let (counts, hook) = io_counts();
@@ -222,14 +275,48 @@ async fn cached_spilled_json_reads_bounded_snapshot_and_rejects_oversize_before_
         let result = STORAGE_IO_TEST_HOOK
             .scope(
                 hook,
-                inspect(&mut adapter, &mut tx, limits, RuntimeLimits::default(), 1024, true),
+                inspect_structured(
+                    &mut adapter,
+                    &mut tx,
+                    if xml {
+                        InspectionLimits::Xml(XmlInspectionLimits {
+                            parser: edgion_waf::seclang::XmlStreamLimits {
+                                max_source_bytes: limits.lexical.max_source_bytes,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        })
+                    } else {
+                        InspectionLimits::Json(limits)
+                    },
+                    RuntimeLimits::default(),
+                    1024,
+                    true,
+                ),
             )
             .await;
         if oversized {
-            assert!(matches!(
-                result,
-                Err(JsonCaptureError::Runtime(RuntimeError::JsonChecker { .. }))
-            ));
+            if xml {
+                assert!(matches!(
+                    result,
+                    Err(JsonCaptureError::Runtime(RuntimeError::XmlStream {
+                        kind: XmlStreamError::Limit {
+                            kind: XmlStreamLimit::SourceBytes,
+                            ..
+                        }
+                    }))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(JsonCaptureError::Runtime(RuntimeError::JsonChecker {
+                        kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
+                            kind: JsonStreamLimit::SourceBytes,
+                            ..
+                        })
+                    }))
+                ));
+            }
             assert_eq!(counts[1].load(Ordering::Relaxed), 0);
         } else {
             assert!(result.is_ok());
@@ -242,24 +329,48 @@ async fn cached_spilled_json_reads_bounded_snapshot_and_rejects_oversize_before_
 
 #[tokio::test]
 async fn cancelled_capture_releases_provisional_gauge_and_abandons_transaction() {
+    cancelled(false).await;
+}
+
+#[tokio::test]
+async fn cancelled_xml_capture() {
+    cancelled(true).await;
+}
+
+async fn cancelled(xml: bool) {
     let recorder = DebuggingRecorder::new();
     let snapshots = MetricObservation::new(&recorder);
     let _metrics = metrics::set_default_local_recorder(&recorder);
     let (mut client, server) = tokio::io::duplex(4096);
     client
-        .write_all(b"POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{\"\r\n")
+        .write_all(if xml {
+            b"POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n<r\r\n".as_slice()
+        } else {
+            b"POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{\"\r\n".as_slice()
+        })
         .await
         .unwrap();
     let mut downstream = pingora_proxy::Session::new_h1(Box::new(server));
     downstream.read_request().await.unwrap();
     let mut ctx = context();
-    let mut tx = transaction("SecAction \"id:1,phase:2,pass\"", RuleEngineMode::On);
+    let mut tx = transaction(
+        if xml {
+            "SecRule XML \"@contains blocked\" \"id:1,phase:2,pass\""
+        } else {
+            "SecAction \"id:1,phase:2,pass\""
+        },
+        RuleEngineMode::On,
+    );
     let mut adapter = PingoraSessionAdapter::new(&mut downstream, &mut ctx);
     {
-        let inspection = inspect(
+        let inspection = inspect_structured(
             &mut adapter,
             &mut tx,
-            JsonInspectionLimits::default(),
+            if xml {
+                InspectionLimits::Xml(XmlInspectionLimits::default())
+            } else {
+                InspectionLimits::Json(JsonInspectionLimits::default())
+            },
             RuntimeLimits::default(),
             1024,
             true,
@@ -283,24 +394,46 @@ async fn cancelled_capture_releases_provisional_gauge_and_abandons_transaction()
         .expect("partial chunk must reach the inspector before cancellation");
     }
     gauge_is_released(&snapshots);
-    assert!(matches!(
-        tx.execute_request_body(),
-        Err(RuntimeError::JsonChecker {
-            kind: JsonCheckerError::Lexical(JsonStreamError::Abandoned)
-        })
-    ));
+    if xml {
+        assert_eq!(
+            tx.execute_request_body(),
+            Err(RuntimeError::XmlStream {
+                kind: XmlStreamError::Abandoned
+            })
+        );
+    } else {
+        assert_eq!(
+            tx.execute_request_body(),
+            Err(RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Lexical(JsonStreamError::Abandoned)
+            })
+        );
+    }
     assert_eq!(ctx.request_body.cached_len(), Ok(None));
 }
 
 #[tokio::test]
 async fn latched_json_failure_preserves_capture_error_priority_and_releases_gauge() {
+    latched(false).await;
+}
+
+#[tokio::test]
+async fn latched_xml_capture() {
+    latched(true).await;
+}
+
+async fn latched(xml: bool) {
     for over_cap in [false, true] {
         let recorder = DebuggingRecorder::new();
         let snapshots = MetricObservation::new(&recorder);
         let _metrics = metrics::set_default_local_recorder(&recorder);
         let (mut client, server) = tokio::io::duplex(4096);
         client
-            .write_all(b"POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{]\r\n")
+            .write_all(if xml {
+                b"POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n<]\r\n".as_slice()
+            } else {
+                b"POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{]\r\n".as_slice()
+            })
             .await
             .unwrap();
         if over_cap {
@@ -311,14 +444,22 @@ async fn latched_json_failure_preserves_capture_error_priority_and_releases_gaug
         downstream.read_request().await.unwrap();
         let mut ctx = context();
         let mut tx = transaction(
-            "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"",
+            if xml {
+                "SecRule XML \"@contains hit\" \"id:1,phase:2,pass\""
+            } else {
+                "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\""
+            },
             RuleEngineMode::On,
         );
         let mut adapter = PingoraSessionAdapter::new(&mut downstream, &mut ctx);
-        let result = inspect(
+        let result = inspect_structured(
             &mut adapter,
             &mut tx,
-            JsonInspectionLimits::default(),
+            if xml {
+                InspectionLimits::Xml(XmlInspectionLimits::default())
+            } else {
+                InspectionLimits::Json(JsonInspectionLimits::default())
+            },
             RuntimeLimits::default(),
             4,
             true,
@@ -342,8 +483,23 @@ async fn latched_json_failure_preserves_capture_error_priority_and_releases_gaug
 
 #[tokio::test]
 async fn actual_raw_visibility_materializes_once_and_detection_fallback_uses_full_length() {
+    raw_visibility(false).await;
+}
+
+#[tokio::test]
+async fn raw_visibility_xml_capture() {
+    raw_visibility(true).await;
+}
+
+async fn raw_visibility(xml: bool) {
     for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
-        let input = if mode == RuleEngineMode::On {
+        let input = if xml {
+            if mode == RuleEngineMode::On {
+                Bytes::from_static(b"<r>blocked</r>")
+            } else {
+                Bytes::from_static(b"<] remaining blocked")
+            }
+        } else if mode == RuleEngineMode::On {
             Bytes::from_static(br#"{"a":"blocked"}"#)
         } else {
             Bytes::from_static(b"{] remaining blocked")
@@ -354,6 +510,11 @@ async fn actual_raw_visibility_materializes_once_and_detection_fallback_uses_ful
             ""
         };
         let rules = format!("{force}SecRule REQUEST_BODY \"@contains blocked\" \"id:2,phase:2,pass,setvar:tx.raw=yes\"\nSecRule REQUEST_BODY_LENGTH \"@eq {}\" \"id:3,phase:2,pass,setvar:tx.length=yes\"", input.len());
+        let rules = if xml {
+            format!("{rules}\nSecRule XML \"@contains blocked\" \"id:4,phase:2,pass\"")
+        } else {
+            rules
+        };
         let (mut storage, view) = BodyStorage::new(1, 1024);
         storage.write(&input).await.unwrap();
         storage.finish().await.unwrap();
@@ -367,10 +528,14 @@ async fn actual_raw_visibility_materializes_once_and_detection_fallback_uses_ful
         assert!(STORAGE_IO_TEST_HOOK
             .scope(
                 hook,
-                inspect(
+                inspect_structured(
                     &mut adapter,
                     &mut tx,
-                    JsonInspectionLimits::default(),
+                    if xml {
+                        InspectionLimits::Xml(XmlInspectionLimits::default())
+                    } else {
+                        InspectionLimits::Json(JsonInspectionLimits::default())
+                    },
                     RuntimeLimits::default(),
                     1024,
                     true

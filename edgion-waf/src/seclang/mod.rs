@@ -16,8 +16,13 @@ mod syntax;
 mod target;
 mod tokenizer;
 mod transform;
+mod xml_stream;
 
 pub(crate) use semantic::validate_executable_profile;
+pub use xml_stream::{
+    XmlSemanticSummary, XmlStream, XmlStreamError, XmlStreamInput, XmlStreamLimit, XmlStreamLimits, XmlStreamSink,
+    XmlStreamSinkError, XmlStreamUsage,
+};
 
 pub use json_checker::{
     JsonChecker, JsonCheckerError, JsonCheckerSink, JsonCheckerSinkError, JsonScalarKind, JsonSemanticSummary,
@@ -43,9 +48,10 @@ pub use action::{
     ActionValue, ActionValueSpelling, EmptyActionKind,
 };
 pub use body::{
-    BodyError, BodyLimits, BodyProcessorSelection, JsonPublicationSummary, RequestBody, DEFAULT_MAX_BODY_DECODED_BYTES,
-    DEFAULT_MAX_BODY_DEPTH, DEFAULT_MAX_BODY_ENTRIES, DEFAULT_MAX_BODY_NAME_BYTES, DEFAULT_MAX_BODY_WORK_BYTES,
-    DEFAULT_MAX_MULTIPART_HEADERS, DEFAULT_MAX_MULTIPART_PARTS, DEFAULT_MAX_REQUEST_BODY_BYTES,
+    BodyError, BodyLimits, BodyProcessorSelection, JsonPublicationSummary, RequestBody, XmlPublicationSummary,
+    DEFAULT_MAX_BODY_DECODED_BYTES, DEFAULT_MAX_BODY_DEPTH, DEFAULT_MAX_BODY_ENTRIES, DEFAULT_MAX_BODY_NAME_BYTES,
+    DEFAULT_MAX_BODY_WORK_BYTES, DEFAULT_MAX_MULTIPART_HEADERS, DEFAULT_MAX_MULTIPART_PARTS,
+    DEFAULT_MAX_REQUEST_BODY_BYTES,
 };
 pub use compiler::{
     compile_validated, CompiledGeneration, CompiledRuleMemberView, CompiledRuleUnitView, CompiledScheduleEntryKind,
@@ -56,11 +62,13 @@ pub use compiler::{
     PhraseAssetSinkError, PhraseAssetSource, PhraseMatcherErrorKind, RequestBodyExecutionClass,
     RequestBodyExecutionSummary, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead, ResponseHeader,
     ResponseWindow, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits, RuntimeMatcherError,
-    RuntimeTransformError, Transaction, DEFAULT_MAX_RUNTIME_CAPTURE_BYTES, DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES,
-    DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES, DEFAULT_MAX_RUNTIME_COOKIES, DEFAULT_MAX_RUNTIME_FINDINGS,
-    DEFAULT_MAX_RUNTIME_HEADERS, DEFAULT_MAX_RUNTIME_HEADER_BYTES, DEFAULT_MAX_RUNTIME_INPUT_BYTES,
-    DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES, DEFAULT_MAX_RUNTIME_OPERATOR_EVALUATIONS,
-    DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES, DEFAULT_MAX_RUNTIME_QUERY_ARGUMENTS, DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS,
+    RuntimeTransformError, Transaction, XmlInspectionLimits, XmlInspectionSession, XmlInspectionUnsupported,
+    XmlInspectionUnsupportedReason, XmlInspectionUsage, DEFAULT_MAX_RUNTIME_CAPTURE_BYTES,
+    DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES, DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES, DEFAULT_MAX_RUNTIME_COOKIES,
+    DEFAULT_MAX_RUNTIME_FINDINGS, DEFAULT_MAX_RUNTIME_HEADERS, DEFAULT_MAX_RUNTIME_HEADER_BYTES,
+    DEFAULT_MAX_RUNTIME_INPUT_BYTES, DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES,
+    DEFAULT_MAX_RUNTIME_OPERATOR_EVALUATIONS, DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES,
+    DEFAULT_MAX_RUNTIME_QUERY_ARGUMENTS, DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS,
     DEFAULT_MAX_RUNTIME_RESPONSE_HEADER_BYTES, DEFAULT_MAX_RUNTIME_RESPONSE_WINDOW_BYTES,
     DEFAULT_MAX_RUNTIME_RETAINED_BYTES, DEFAULT_MAX_RUNTIME_SELECTED_VALUES, DEFAULT_MAX_RUNTIME_SETVAR_ACTIONS,
     DEFAULT_MAX_RUNTIME_TRANSFORMATION_OUTPUT_BYTES, DEFAULT_MAX_RUNTIME_TRANSFORMATION_WORK_BYTES,

@@ -1,5 +1,13 @@
 use super::*;
 
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn xml_kind_variants_preserve_selected_value_storage_size() {
+    // Frozen pre-optimization sizes: the count operand remains the largest payload.
+    assert_eq!(size_of::<SelectedBytes>(), 48);
+    assert_eq!(size_of::<SelectedValue>(), 80);
+}
+
 fn owned_key_request() -> RequestState<'static> {
     RequestState {
         bytes: Vec::new(),

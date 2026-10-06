@@ -42,6 +42,16 @@ fn control() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicControlTestSuite)
 }
 
+fn xml_v1() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicXmlV1TestSuite)
+}
+fn xml_v2() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicXmlV2TestSuite)
+}
+fn xml_detection() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicXmlDetectionTestSuite)
+}
+
 fn json_v1() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicJsonV1TestSuite)
 }
@@ -219,6 +229,18 @@ async fn wait_invalid_json_processed(ctx: &ScenarioCtx) -> Result<()> {
 
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
+        name: "xml-v1",
+        factory: xml_v1,
+    },
+    PhaseSuite {
+        name: "xml-v2",
+        factory: xml_v2,
+    },
+    PhaseSuite {
+        name: "xml-detection",
+        factory: xml_detection,
+    },
+    PhaseSuite {
         name: "json-v1",
         factory: json_v1,
     },
@@ -365,6 +387,26 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             .await?;
         ctx.apply_dir("updates/to_recovered").await?;
         ctx.wait_phase(scenario, "recovered", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_xml_v1").await?;
+        ctx.wait_phase(scenario, "xml-v1", Duration::from_secs(20)).await?;
+        let pinned_xml = suites::edgion_plugins::paused_xml_upload(&ctx.test_ctx)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        ctx.apply_dir("updates/to_xml_v2").await?;
+        ctx.wait_phase(scenario, "xml-v2", Duration::from_secs(20)).await?;
+        pinned_xml.finish().await.map_err(anyhow::Error::msg)?;
+        ctx.apply_dir("updates/to_xml_v1").await?;
+        ctx.wait_phase(scenario, "xml-v1", Duration::from_secs(20)).await?;
+        let pinned_mode = suites::edgion_plugins::paused_xml_upload(&ctx.test_ctx)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        ctx.apply_dir("updates/to_xml_detection").await?;
+        ctx.wait_phase(scenario, "xml-detection", Duration::from_secs(20))
+            .await?;
+        pinned_mode.finish().await.map_err(anyhow::Error::msg)?;
+        ctx.apply_dir("updates/to_recovered").await?;
+        ctx.wait_phase(scenario, "recovered", Duration::from_secs(15)).await?;
+        ctx.delete_resources("delete/xml_bundles.txt").await?;
         ctx.delete_resources("delete/json_bundles.txt").await?;
         ctx.apply_dir("updates/to_bundle_v1").await?;
         ctx.wait_phase(scenario, "bundle-v1", Duration::from_secs(15)).await?;

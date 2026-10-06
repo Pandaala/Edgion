@@ -28,6 +28,39 @@ async fn verify(
     body: &[u8],
     expected_status: u16,
 ) -> Result<(), String> {
+    verify_structured(
+        ctx,
+        upstream_h2,
+        downstream_h2,
+        version,
+        path,
+        StructuredBody {
+            content_type: "application/json",
+            bytes: body,
+        },
+        expected_status,
+    )
+    .await
+}
+
+pub(super) struct StructuredBody<'a> {
+    pub(super) content_type: &'a str,
+    pub(super) bytes: &'a [u8],
+}
+
+pub(super) async fn verify_structured(
+    ctx: &TestContext,
+    upstream_h2: bool,
+    downstream_h2: bool,
+    version: &str,
+    path: &str,
+    body: StructuredBody<'_>,
+    expected_status: u16,
+) -> Result<(), String> {
+    let StructuredBody {
+        content_type,
+        bytes: body,
+    } = body;
     let recorder = env_host_or("EDGION_TEST_TRANSPORT_RECORDER_HOST", &ctx.target_host);
     let probe = TransportProbe::start(&recorder, RECORDER_PORT, "waf-json").await?;
     let host = format!("waf-transport-h{}.example.com", if upstream_h2 { 2 } else { 1 });
@@ -54,7 +87,7 @@ async fn verify(
             crate::access_log_client::traceparent_for_marker(probe.trace_id()),
         )
         .header("x-waf-version", version)
-        .header("content-type", "application/json")
+        .header("content-type", content_type)
         .body(body.to_vec())
         .send()
         .await
@@ -95,14 +128,50 @@ async fn verify(
 }
 
 pub(crate) struct PausedJsonUpload {
-    connection: RawH1Conn,
-    probe: TransportProbe,
+    inner: PausedStructuredUpload,
 }
-
 impl PausedJsonUpload {
     pub(crate) async fn start(ctx: &TestContext) -> Result<Self, String> {
+        Ok(Self {
+            inner: PausedStructuredUpload::start(
+                ctx,
+                "application/json",
+                "json-v1",
+                br#"{"a":"blo\u00"#,
+                br#"63ked"}"#,
+                406,
+            )
+            .await?,
+        })
+    }
+    pub(crate) async fn finish(self) -> Result<(), String> {
+        self.inner.finish().await
+    }
+    async fn abort(self) -> Result<(), String> {
+        self.inner.abort().await
+    }
+}
+
+pub(crate) struct PausedStructuredUpload {
+    connection: RawH1Conn,
+    probe: TransportProbe,
+    last: &'static [u8],
+    expected_status: u16,
+}
+impl PausedStructuredUpload {
+    pub(crate) async fn start(
+        ctx: &TestContext,
+        content_type: &str,
+        version: &str,
+        first: &[u8],
+        last: &'static [u8],
+        expected_status: u16,
+    ) -> Result<Self, String> {
+        if expected_status == 200 {
+            return Err("Paused rejection helper requires a denied response".to_string());
+        }
         let recorder = env_host_or("EDGION_TEST_TRANSPORT_RECORDER_HOST", &ctx.target_host);
-        let probe = TransportProbe::start(&recorder, RECORDER_PORT, "waf-json-pinned").await?;
+        let probe = TransportProbe::start(&recorder, RECORDER_PORT, "waf-structured-pinned").await?;
         let traceparent = crate::access_log_client::traceparent_for_marker(probe.trace_id());
         let mut connection = RawH1Conn::connect(&ctx.target_host, ctx.http_port).await?;
         connection
@@ -113,37 +182,40 @@ impl PausedJsonUpload {
                 &[
                     ("transfer-encoding", "chunked"),
                     ("expect", "100-continue"),
-                    ("content-type", "application/json"),
-                    ("x-waf-version", "json-v1"),
+                    ("content-type", content_type),
+                    ("x-waf-version", version),
                     ("traceparent", &traceparent),
                 ],
             )
             .await?;
         let interim = connection.read_interim(Duration::from_secs(5)).await?;
         if interim.as_ref().map(|head| head.status) != Some(100) {
-            return Err(format!(
-                "JSON paused upload expected local 100 Continue, got {interim:?}"
-            ));
+            return Err(format!("Paused upload expected local 100 Continue, got {interim:?}"));
         }
-        // The local Continue proves capture has started after Phase 1 and JSON
-        // admission. Split the escape and keep the transport EOF outstanding.
-        connection.write_chunk(br#"{"a":"blo\u00"#).await?;
+        // Continue pins the generation after Phase 1. EOF remains outstanding.
+        connection.write_chunk(first).await?;
         no_forward(&probe).await?;
-        Ok(Self { connection, probe })
+        Ok(Self {
+            connection,
+            probe,
+            last,
+            expected_status,
+        })
     }
-
     pub(crate) async fn finish(mut self) -> Result<(), String> {
-        self.connection.write_chunk(br#"63ked"}"#).await?;
+        self.connection.write_chunk(self.last).await?;
         no_forward(&self.probe).await?;
         self.connection.finish_chunked().await?;
         let response = self.connection.read_response_head(Duration::from_secs(10)).await?;
-        if response.status != 406 {
-            return Err(format!("pinned JSON V1/split escape expected 406, got {response}"));
+        if response.status != self.expected_status {
+            return Err(format!(
+                "Pinned split upload expected {}, got {response}",
+                self.expected_status
+            ));
         }
         no_forward(&self.probe).await
     }
-
-    async fn abort(self) -> Result<(), String> {
+    pub(crate) async fn abort(self) -> Result<(), String> {
         self.connection.abort();
         no_forward(&self.probe).await
     }

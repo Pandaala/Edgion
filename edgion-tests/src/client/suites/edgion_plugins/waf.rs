@@ -4,6 +4,8 @@
 pub(crate) mod json_wire;
 #[path = "waf_wire.rs"]
 mod wire;
+#[path = "waf_xml_wire.rs"]
+pub(crate) mod xml_wire;
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
@@ -579,3 +581,31 @@ phase_suite!(
         ),
     ]
 );
+
+pub struct WafDynamicXmlV1TestSuite;
+pub struct WafDynamicXmlV2TestSuite;
+pub struct WafDynamicXmlDetectionTestSuite;
+macro_rules! xml_phase_suite {
+    ($type:ident, $title:literal, $version:literal, $detection:literal) => {
+        impl TestSuite for $type {
+            fn name(&self) -> &str {
+                $title
+            }
+            fn test_cases(&self) -> Vec<TestCase> {
+                vec![
+                    request_case(
+                        "waf_xml_generation_ready",
+                        "Phase 1 confirms XML generation readiness",
+                        $version,
+                        None,
+                        200,
+                    ),
+                    xml_wire::matrix($version, $detection),
+                ]
+            }
+        }
+    };
+}
+xml_phase_suite!(WafDynamicXmlV1TestSuite, "Waf XML V1", "xml-v1", false);
+xml_phase_suite!(WafDynamicXmlV2TestSuite, "Waf XML V2", "xml-v2", false);
+xml_phase_suite!(WafDynamicXmlDetectionTestSuite, "Waf XML DetectionOnly", "xml-v1", true);

@@ -5,7 +5,8 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use json_inspection::{CandidateId, InspectionBudget, SealedMatchValue};
+use super::InspectionDomain;
+use json_inspection::{CandidateId, CandidateKind, InspectionBudget, SealedMatchValue, SealedResults};
 use json_inspection_runtime::{map_store_error, JsonPublication};
 use thiserror::Error;
 
@@ -289,6 +290,14 @@ impl<'input> RequestHead<'input> {
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeError {
+    #[error("XML inspection parser failed: {kind}")]
+    XmlStream { kind: crate::seclang::XmlStreamError },
+    #[error("XML inspection result limit exceeded")]
+    XmlResultLimit { kind: JsonResultLimit },
+    #[error("XML inspection state is inconsistent")]
+    XmlInspectionState,
+    #[error("XML inspection dependency is unsupported for rule {rule_id}")]
+    XmlUnsupported { rule_id: u64 },
     #[error("JSON checker failed: {kind}")]
     JsonChecker { kind: crate::seclang::JsonCheckerError },
     #[error("JSON inspection result limit exceeded")]
@@ -512,6 +521,9 @@ enum SelectedBytes {
     MatchedVars(usize),
     CtlProcessor,
     Json(CandidateId),
+    XmlText(CandidateId),
+    XmlAttribute(CandidateId),
+    XmlMetadata,
     JsonMetadata,
     Count { digits: [u8; 40], start: u8 },
 }
@@ -519,6 +531,7 @@ enum SelectedBytes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectedName {
     Json(CandidateId),
+    Xml(CandidateId),
     Request(ByteRange),
     Body(usize),
     Response(usize),
@@ -551,6 +564,13 @@ impl SelectedValue {
                     candidate.deferred.ok_or(RuntimeError::JsonInspectionState)
                 }
             }
+            SelectedBytes::XmlText(_) | SelectedBytes::XmlAttribute(_) => Err(RuntimeError::XmlInspectionState),
+            SelectedBytes::XmlMetadata => request
+                .body
+                .as_ref()
+                .and_then(RequestBodyPublication::xml)
+                .and_then(|body| body.metadata_value(self.collection))
+                .ok_or(RuntimeError::XmlInspectionState),
             SelectedBytes::JsonMetadata => request
                 .body
                 .as_ref()
@@ -608,6 +628,20 @@ impl SelectedValue {
     }
 }
 
+fn inspection_error(request: &RequestState, error: RuntimeError) -> RuntimeError {
+    if request
+        .body
+        .as_ref()
+        .and_then(RequestBodyPublication::structured_results)
+        .is_some_and(|results| results.domain() == InspectionDomain::Xml)
+        || matches!(request.body, Some(RequestBodyPublication::Xml(_)))
+    {
+        xml_inspection_runtime::xml_error(error)
+    } else {
+        error
+    }
+}
+
 fn selected_name_bytes<'value>(
     name: Option<SelectedName>,
     request: &'value RequestState,
@@ -616,12 +650,11 @@ fn selected_name_bytes<'value>(
     json_budget: Option<&mut InspectionBudget>,
 ) -> Result<Option<&'value [u8]>, RuntimeError> {
     name.map(|name| match name {
-        SelectedName::Json(id) => request
+        SelectedName::Json(id) | SelectedName::Xml(id) => request
             .body
             .as_ref()
-            .and_then(RequestBodyPublication::json)
+            .and_then(RequestBodyPublication::structured_results)
             .ok_or(RuntimeError::JsonInspectionState)?
-            .results()?
             .candidate(json_budget.ok_or(RuntimeError::JsonInspectionState)?, id)
             .map(|candidate| candidate.name)
             .map_err(map_store_error),
@@ -651,12 +684,14 @@ fn selected_name_bytes<'value>(
             .bytes(request, json_budget),
     })
     .transpose()
+    .map_err(|error| inspection_error(request, error))
 }
 
 const COLLECTION_COUNT: usize = CollectionKind::ALL.len();
 
 enum RequestBodyPublication<'generation> {
     Json(Vec<JsonPublication<'generation>>),
+    Xml(Vec<xml_inspection_runtime::XmlPublication<'generation>>),
     Materialized(BodyPublication),
 }
 impl RequestBodyPublication<'_> {
@@ -666,22 +701,37 @@ impl RequestBodyPublication<'_> {
             _ => None,
         }
     }
+    fn xml(&self) -> Option<&xml_inspection_runtime::XmlPublication<'_>> {
+        match self {
+            Self::Xml(body) => body.first(),
+            _ => None,
+        }
+    }
+    fn structured_results(&self) -> Option<&SealedResults<'_>> {
+        match self {
+            Self::Json(body) => body.first().and_then(|body| body.results.as_ref()),
+            Self::Xml(body) => body.first().and_then(|body| body.results.as_ref()),
+            _ => None,
+        }
+    }
     fn materialized(&self) -> Option<&BodyPublication> {
         match self {
             Self::Materialized(body) => Some(body),
-            Self::Json(_) => None,
+            Self::Json(_) | Self::Xml(_) => None,
         }
     }
     fn entry_count(&self) -> usize {
         match self {
             Self::Materialized(body) => body.entries.len(),
             Self::Json(body) => body.first().map_or(0, |body| body.summary.entries),
+            Self::Xml(body) => body.first().map_or(0, |body| body.summary.entries),
         }
     }
     fn retained_bytes(&self) -> usize {
         match self {
             Self::Materialized(body) => body.retained_bytes,
             Self::Json(body) => body.first().map_or(0, |body| body.summary.retained_bytes),
+            Self::Xml(body) => body.first().map_or(0, |body| body.summary.retained_bytes),
         }
     }
 }
@@ -743,11 +793,10 @@ impl MatchValue {
             Self::Json(value) => request
                 .body
                 .as_ref()
-                .and_then(RequestBodyPublication::json)
-                .ok_or(RuntimeError::JsonInspectionState)?
-                .results()?
+                .and_then(RequestBodyPublication::structured_results)
+                .ok_or_else(|| inspection_error(request, RuntimeError::JsonInspectionState))?
                 .observe_match_value(*value)
-                .map_err(map_store_error),
+                .map_err(|error| inspection_error(request, map_store_error(error))),
         }
     }
     fn try_clone(&self) -> Result<Self, RuntimeError> {
@@ -766,11 +815,13 @@ impl MatchValue {
             Self::Json(value) => request
                 .body
                 .as_ref()
-                .and_then(RequestBodyPublication::json)
-                .ok_or(RuntimeError::JsonInspectionState)?
-                .results()?
-                .match_value(budget.ok_or(RuntimeError::JsonInspectionState)?, *value)
-                .map_err(map_store_error),
+                .and_then(RequestBodyPublication::structured_results)
+                .ok_or_else(|| inspection_error(request, RuntimeError::JsonInspectionState))?
+                .match_value(
+                    budget.ok_or_else(|| inspection_error(request, RuntimeError::JsonInspectionState))?,
+                    *value,
+                )
+                .map_err(|error| inspection_error(request, map_store_error(error))),
         }
     }
 }
@@ -1446,7 +1497,7 @@ impl<'generation> Transaction<'generation> {
             return Err(error);
         }
         if let Some(error) = self.json_budget.as_ref().and_then(InspectionBudget::failure) {
-            return Err(map_store_error(error));
+            return Err(inspection_error(&self.request, map_store_error(error)));
         }
         Ok(())
     }
@@ -2345,7 +2396,10 @@ impl<'generation> Transaction<'generation> {
                     scan_cache: None,
                     json_budget: self.json_budget.as_mut(),
                 };
-                let matched = if let SelectedBytes::Json(id) = selected.value {
+                let matched = if let SelectedBytes::Json(id)
+                | SelectedBytes::XmlText(id)
+                | SelectedBytes::XmlAttribute(id) = selected.value
+                {
                     json_inspection_runtime::evaluate_json_selected(
                         &mut context,
                         SingleInputPlan {
@@ -2362,7 +2416,14 @@ impl<'generation> Transaction<'generation> {
                         &mut work,
                         &mut self.detector_work_bytes,
                         matches.len(),
-                    )?
+                    )
+                    .map_err(|error| {
+                        if selected.collection == CollectionKind::Xml {
+                            xml_inspection_runtime::xml_error(error)
+                        } else {
+                            error
+                        }
+                    })?
                 } else {
                     let value = selected.bytes(
                         &self.request,
@@ -2457,12 +2518,12 @@ impl<'generation> Transaction<'generation> {
         };
         let queries = self.request.collection_records(CollectionKind::Args)?;
         let bounds = (|| {
-            let count = results.summary.argument_count;
+            let count = results.json_summary().ok()?.argument_count;
             let selected_count = queries.len().checked_add(count)?;
-            let selection_work = count.checked_mul(2)?;
-            let replay_work = count.checked_mul(5)?;
+            let selection_work = count;
+            let replay_work = count.checked_mul(3)?;
             let physical_work = selection_work.checked_add(replay_work)?;
-            let logical_work = results.summary.argument_value_bytes.checked_mul(2)?;
+            let logical_work = results.json_summary().ok()?.argument_value_bytes.checked_mul(2)?;
             let mut combined_work = logical_work;
             for query in queries {
                 // None/lowercase preserve byte length. Charge a possible hit's
@@ -4261,12 +4322,36 @@ impl CandidateCursor {
                     self.next_json = request
                         .body
                         .as_ref()
-                        .and_then(RequestBodyPublication::json)
-                        .and_then(|body| body.results.as_ref())
+                        .and_then(RequestBodyPublication::structured_results)
                         .and_then(|results| results.receipt)
                         .map(|receipt| receipt.head);
                 }
                 if self.stage == 1 {
+                    if let Some(body) = request.body.as_ref().and_then(RequestBodyPublication::xml) {
+                        if self.include_json && collection == CollectionKind::Xml {
+                            if let Some(id) = self.next_json {
+                                let results = body.results.as_ref().ok_or(RuntimeError::XmlInspectionState)?;
+                                if results.domain() != InspectionDomain::Xml {
+                                    return Err(RuntimeError::XmlInspectionState);
+                                }
+                                let candidate = results
+                                    .candidate(json_budget.ok_or(RuntimeError::XmlInspectionState)?, id)
+                                    .map_err(map_store_error)
+                                    .map_err(xml_inspection_runtime::xml_error)?;
+                                self.next_json = candidate.next;
+                                return match candidate.kind {
+                                    CandidateKind::XmlText => Ok(selected(None, SelectedBytes::XmlText(id))),
+                                    CandidateKind::XmlAttribute => {
+                                        Ok(selected(Some(SelectedName::Xml(id)), SelectedBytes::XmlAttribute(id)))
+                                    }
+                                    _ => Err(RuntimeError::XmlInspectionState),
+                                };
+                            }
+                        } else if body.metadata_value(collection).is_some() {
+                            self.stage = 2;
+                            return Ok(selected(None, SelectedBytes::XmlMetadata));
+                        }
+                    }
                     if let Some(body) = request.body.as_ref().and_then(RequestBodyPublication::json) {
                         if self.include_json && matches!(collection, CollectionKind::Args | CollectionKind::ArgsNames) {
                             if let Some(id) = self.next_json {
@@ -4312,11 +4397,11 @@ fn selector_matches(
     candidate: SelectedValue,
     json_budget: Option<&mut InspectionBudget>,
 ) -> Result<bool, RuntimeError> {
-    let name = candidate.name_bytes(request, tx, response, json_budget)?;
     match selector {
         super::CompiledTargetSelector::None => Ok(true),
         super::CompiledTargetSelector::Literal(expected) => {
             let expected = generation_bytes(&generation.target_bytes, expected)?;
+            let name = candidate.name_bytes(request, tx, response, json_budget)?;
             let Some(name) = name else {
                 return Ok(false);
             };
@@ -4336,6 +4421,16 @@ fn selector_matches(
         }
         super::CompiledTargetSelector::Path(path) => {
             let path = generation_bytes(&generation.target_bytes, path)?;
+            if matches!(
+                candidate.value,
+                SelectedBytes::XmlText(_) | SelectedBytes::XmlAttribute(_)
+            ) {
+                return match path {
+                    b"/*" => Ok(matches!(candidate.value, SelectedBytes::XmlText(_))),
+                    b"//@*" => Ok(matches!(candidate.value, SelectedBytes::XmlAttribute(_))),
+                    _ => Err(RuntimeError::XmlSelectorUnavailable),
+                };
+            }
             let SelectedBytes::Body(index) = candidate.value else {
                 return Ok(false);
             };
@@ -4355,6 +4450,7 @@ fn selector_matches(
             }
         }
         super::CompiledTargetSelector::Regex { program, .. } => {
+            let name = candidate.name_bytes(request, tx, response, json_budget)?;
             let Some(name) = name else {
                 return Ok(false);
             };
@@ -5619,3 +5715,7 @@ mod json_inspection;
 mod json_inspection_collector;
 #[path = "json_inspection_runtime.rs"]
 mod json_inspection_runtime;
+
+#[path = "xml_inspection_runtime.rs"]
+mod xml_inspection_runtime;
+pub use xml_inspection_runtime::{XmlInspectionLimits, XmlInspectionSession, XmlInspectionUsage};

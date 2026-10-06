@@ -92,6 +92,11 @@ pub(super) struct JsonRegexRow {
 #[derive(Debug, Default)]
 pub(super) struct CompiledJsonPlan {
     pub members: Vec<JsonMemberPlan>,
+    pub xml_text: Vec<usize>,
+    pub xml_attributes: Vec<usize>,
+    pub xml_candidate_text: bool,
+    pub xml_candidate_attributes: bool,
+    pub xml_unsupported: Vec<super::xml_inspection_plan::XmlInspectionUnsupported>,
     pub groups: Vec<JsonGroup>,
     pub profiles: Vec<JsonProfile>,
     pub broad_names: Vec<usize>,
@@ -334,6 +339,14 @@ impl CompiledJsonPlan {
         memory: &mut MatcherCompileWork,
         work: &mut CanonicalWork,
     ) -> Result<Self, CompilerError> {
+        Self::compile_domain(generation, memory, work, InspectionDomain::Json)
+    }
+    pub(super) fn compile_domain(
+        generation: &CompiledGeneration,
+        memory: &mut MatcherCompileWork,
+        work: &mut CanonicalWork,
+        domain: InspectionDomain,
+    ) -> Result<Self, CompilerError> {
         let mut plan = Self::default();
         let mut possible_groups = 0;
         for member in &generation.members {
@@ -351,10 +364,12 @@ impl CompiledJsonPlan {
                 {
                     work.charge_records(1, memory.limits)?;
                     if record.modifier == TargetModifier::None {
-                        if record.collection == CollectionKind::Args {
+                        if (domain == InspectionDomain::Json && record.collection == CollectionKind::Args)
+                            || (domain == InspectionDomain::Xml && record.collection == CollectionKind::Xml)
+                        {
                             views[0] = true;
                         }
-                        if record.collection == CollectionKind::ArgsNames {
+                        if domain == InspectionDomain::Json && record.collection == CollectionKind::ArgsNames {
                             views[1] = true;
                         }
                     }
@@ -388,7 +403,9 @@ impl CompiledJsonPlan {
             for id in unit.member_start..checked_add(unit.member_start, unit.member_count)? {
                 work.charge_records(1, memory.limits)?;
                 let member = *generation.members.get(id).ok_or_else(invariant)?;
-                plan.macros_for_member(generation, member, memory, work)?;
+                if domain == InspectionDomain::Json {
+                    plan.macros_for_member(generation, member, memory, work)?;
+                }
                 let member_multi = multi_match(generation, member, work, memory.limits)?;
                 work.charge_records(member.action_count, memory.limits)?;
                 let member_capture = generation
@@ -409,6 +426,22 @@ impl CompiledJsonPlan {
                 let explicit_exclusions = records.iter().any(|record| record.modifier == TargetModifier::Exclude);
                 for target in records {
                     work.charge_records(1, memory.limits)?;
+                    if domain == InspectionDomain::Xml && target.collection == CollectionKind::Xml {
+                        if let CompiledTargetSelector::Path(path) = target.selector {
+                            if !matches!(byte_range(&generation.target_bytes, path)?, b"/*" | b"//@*") {
+                                push(
+                                    &mut plan.xml_unsupported,
+                                    super::xml_inspection_plan::XmlInspectionUnsupported {
+                                        rule_id: unit.id,
+                                        member: id,
+                                        reason: super::xml_inspection_plan::XmlInspectionUnsupportedReason::Path,
+                                    },
+                                    memory,
+                                )?;
+                                continue;
+                            }
+                        }
+                    }
                     if target.modifier == TargetModifier::Exclude {
                         continue;
                     }
@@ -418,19 +451,24 @@ impl CompiledJsonPlan {
                     if target.collection == CollectionKind::ArgsCombinedSize {
                         plan.needs_combined_size = true;
                     }
-                    let view = match target.collection {
-                        CollectionKind::Args => JsonView::Value,
-                        CollectionKind::ArgsNames => JsonView::Name,
+                    let view = match (domain, target.collection) {
+                        (InspectionDomain::Json, CollectionKind::Args)
+                        | (InspectionDomain::Xml, CollectionKind::Xml) => JsonView::Value,
+                        (InspectionDomain::Json, CollectionKind::ArgsNames) => JsonView::Name,
                         _ => continue,
                     };
                     if target.modifier == TargetModifier::Count {
                         plan.needs_argument_count = true;
-                        if controls || explicit_exclusions || target.selector != CompiledTargetSelector::None {
-                            plan.require_candidate(target.selector, memory)?;
+                        if domain == InspectionDomain::Xml
+                            || controls
+                            || explicit_exclusions
+                            || target.selector != CompiledTargetSelector::None
+                        {
+                            plan.require_candidate_domain(target.selector, generation, domain, memory)?;
                         }
                         continue;
                     }
-                    plan.require_candidate(target.selector, memory)?;
+                    plan.require_candidate_domain(target.selector, generation, domain, memory)?;
                     let operator = generation
                         .operator_plans
                         .get(id)
@@ -449,8 +487,19 @@ impl CompiledJsonPlan {
                     };
                     let mode = if is_static {
                         let group = plan.group(generation, id, view, member_multi, &mut group_slots, memory, work)?;
-                        plan.subscribe(group, view, target.selector, memory)?;
+                        plan.subscribe_domain(group, view, target.selector, generation, domain, memory)?;
                         JsonMemberMode::StaticFact(group)
+                    } else if domain == InspectionDomain::Xml {
+                        push(
+                            &mut plan.xml_unsupported,
+                            super::xml_inspection_plan::XmlInspectionUnsupported {
+                                rule_id: unit.id,
+                                member: id,
+                                reason: super::xml_inspection_plan::XmlInspectionUnsupportedReason::DynamicValueOperand,
+                            },
+                            memory,
+                        )?;
+                        JsonMemberMode::Unsupported
                     } else if view == JsonView::Name {
                         JsonMemberMode::NameDynamic
                     } else if matches!(
@@ -580,7 +629,12 @@ impl CompiledJsonPlan {
             push(&mut plan.macro_demands, demand, memory)?;
         }
         plan.needs_candidate_names |= !plan.named_demands.is_empty();
-        for broad in [&mut plan.broad_names, &mut plan.broad_values] {
+        for broad in [
+            &mut plan.broad_names,
+            &mut plan.broad_values,
+            &mut plan.xml_text,
+            &mut plan.xml_attributes,
+        ] {
             sort(broad, |a, b| {
                 work.charge_records(1, memory.limits)?;
                 Ok(a.cmp(&b))
@@ -631,6 +685,12 @@ impl CompiledJsonPlan {
             }
         }
         if plan.literals.is_empty() && plan.regexes.is_empty() {
+            for broad in [&mut plan.xml_text, &mut plan.xml_attributes] {
+                sort(broad, |a, b| {
+                    work.charge_records(1, memory.limits)?;
+                    Ok((plan.groups[a].profile, a).cmp(&(plan.groups[b].profile, b)))
+                })?;
+            }
             for &id in plan.broad_names.iter().chain(&plan.broad_values) {
                 work.charge_records(1, memory.limits)?;
                 push(&mut plan.broad_only_order, id, memory)?;
@@ -748,6 +808,61 @@ impl CompiledJsonPlan {
         )?;
         slots[position] = CanonicalSlot { hash, id };
         Ok(id)
+    }
+
+    fn require_candidate_domain(
+        &mut self,
+        selector: CompiledTargetSelector,
+        generation: &CompiledGeneration,
+        domain: InspectionDomain,
+        memory: &mut MatcherCompileWork,
+    ) -> Result<(), CompilerError> {
+        if domain == InspectionDomain::Json {
+            return self.require_candidate(selector, memory);
+        }
+        self.needs_candidate_names = true;
+        match selector {
+            CompiledTargetSelector::None => {
+                self.xml_candidate_text = true;
+                self.xml_candidate_attributes = true;
+            }
+            CompiledTargetSelector::Path(path) => match byte_range(&generation.target_bytes, path)? {
+                b"/*" => self.xml_candidate_text = true,
+                b"//@*" => self.xml_candidate_attributes = true,
+                _ => return Err(invariant()),
+            },
+            CompiledTargetSelector::Literal(name) => {
+                push(&mut self.candidate_literals, JsonNameRef::Target(name), memory)?
+            }
+            selector @ CompiledTargetSelector::Regex { .. } => push(&mut self.candidate_regexes, selector, memory)?,
+        }
+        Ok(())
+    }
+    fn subscribe_domain(
+        &mut self,
+        group: usize,
+        view: JsonView,
+        selector: CompiledTargetSelector,
+        generation: &CompiledGeneration,
+        domain: InspectionDomain,
+        memory: &mut MatcherCompileWork,
+    ) -> Result<(), CompilerError> {
+        if domain == InspectionDomain::Json {
+            return self.subscribe(group, view, selector, memory);
+        }
+        match selector {
+            CompiledTargetSelector::None => {
+                push(&mut self.xml_text, group, memory)?;
+                push(&mut self.xml_attributes, group, memory)?;
+            }
+            CompiledTargetSelector::Path(path) => match byte_range(&generation.target_bytes, path)? {
+                b"/*" => push(&mut self.xml_text, group, memory)?,
+                b"//@*" => push(&mut self.xml_attributes, group, memory)?,
+                _ => return Err(invariant()),
+            },
+            _ => self.subscribe(group, view, selector, memory)?,
+        }
+        Ok(())
     }
 
     fn require_candidate(

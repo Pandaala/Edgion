@@ -1,0 +1,33 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-rules-xml-v1
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: '1'
+      profile: xml-v1
+      provenance: edgion-tests/waf-dynamic
+      digest: 67f56f3b38b1f12c8cce80eec5f0659ca05b4004e8fc3775096446a82f999ffb
+      roots:
+      - main.conf
+      rules:
+      - name: main.conf
+        content: 'SecRule REQUEST_HEADERS:X-Waf-Version "!@rx ^xml-v1(-opt-in)?$"
+          "id:7101,phase:1,deny,status:451"
+
+          SecAction "id:7102,phase:1,pass,setvar:tx.crs_xml_attr_inspect=0"
+
+          SecRule REQUEST_HEADERS:X-Waf-Version "@endsWith -opt-in" "id:7103,phase:1,pass,setvar:tx.crs_xml_attr_inspect=1"
+
+          SecRule REQUEST_HEADERS:Content-Type "@streq text/plain" "id:7104,phase:1,pass,ctl:requestBodyProcessor=XML"
+
+          SecRule ARGS:q "@pm query-deny" "id:7105,phase:2,deny,status:409"
+
+          SecRule TX:crs_xml_attr_inspect "@eq 0" "id:901181,phase:2,pass,ctl:ruleRemoveTargetByTag=attack-protocol;XML://@*,ctl:ruleRemoveTargetByTag=attack-lfi;XML://@*,ctl:ruleRemoveTargetByTag=attack-rfi;XML://@*,ctl:ruleRemoveTargetByTag=attack-rce;XML://@*,ctl:ruleRemoveTargetByTag=attack-php;XML://@*,ctl:ruleRemoveTargetByTag=attack-generic;XML://@*,ctl:ruleRemoveTargetByTag=attack-xss;XML://@*,ctl:ruleRemoveTargetByTag=attack-sqli;XML://@*,ctl:ruleRemoveTargetByTag=attack-fixation;XML://@*"
+
+          SecRule XML:/*|XML://@* "@pm blocked" "id:7106,phase:2,deny,status:406,tag:attack-generic"
+
+          '

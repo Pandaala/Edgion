@@ -173,7 +173,7 @@ fn no_hit_summary_skips_candidate_storage_and_preserves_later_actions() {
             let before = fast.json_budget.as_ref().unwrap().usage().work;
             let count = fast.request.body.as_ref().unwrap().json().unwrap().argument_count();
             assert_no_hit_cursor_parity(&mut fast, &mut cursor);
-            assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 7 * count);
+            assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 4 * count);
             assert_eq!(fast.selected_scratch.capacity(), 0);
             assert_eq!(fast.tx_value(b"wrong"), None);
             assert_eq!(fast.tx_value(b"later"), Some(b"1".as_slice()));
@@ -201,9 +201,9 @@ fn no_hit_summary_exact_and_failing_budgets_match_cursor_counters() {
         for logical in [0, 7, 8, 9] {
             for physical in [
                 publication_work,
-                publication_work + 3,
-                publication_work + 13,
-                publication_work + 14,
+                publication_work + 1,
+                publication_work + 7,
+                publication_work + 8,
             ] {
                 let limits = RuntimeLimits {
                     max_selected_values: selected,
@@ -370,7 +370,7 @@ fn no_hit_summary_reuses_existing_selected_capacity_without_changing_it() {
     let before = fast.json_budget.as_ref().unwrap().usage().work;
     assert!(fast.evaluate_member_matches(1, 1, &staged, false).unwrap().is_empty());
     assert_eq!(fast.selected_scratch.capacity(), capacity);
-    assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 7);
+    assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 4);
 }
 fn query_tail_json(count: usize) -> Vec<u8> {
     format!(
@@ -415,7 +415,7 @@ fn query_no_hit_tail_preserves_all_matches_actions_names_and_argument_counts() {
         );
         let before = fast.json_budget.as_ref().unwrap().usage().work;
         assert_no_hit_cursor_parity(&mut fast, &mut cursor);
-        assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 7 * 16);
+        assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 4 * 16);
         assert_eq!(fast.tx_value(b"count"), Some(b"1".as_slice()));
         assert_eq!(fast.tx.matched_vars.len(), 0); // Final SecAction hides previous observers.
         let expected = hits.to_string();
@@ -485,7 +485,7 @@ fn query_no_hit_tail_selection_logical_and_physical_boundaries_match_cursor() {
     let combined = body_work + 3 * (3 + 4) + 2 * 6 + 2 * size_of::<MemberMatch>();
     for selected in [0, 1, 6, 7, 8] {
         for logical in [0, body_work - 1, body_work, combined - 1, combined, combined + 1] {
-            for physical in [0, 9, 10, 34, 35, 36] {
+            for physical in [0, 4, 5, 19, 20, 21] {
                 let limits = RuntimeLimits {
                     max_selected_values: selected,
                     max_operator_work_bytes: logical,
@@ -498,7 +498,7 @@ fn query_no_hit_tail_selection_logical_and_physical_boundaries_match_cursor() {
                 let mut fast = no_hit_transaction(&generation, &json, uri, limits, result_limits, false);
                 let mut cursor = no_hit_transaction(&generation, &json, uri, limits, result_limits, true);
                 assert_no_hit_cursor_parity(&mut fast, &mut cursor);
-                if selected >= 7 && logical >= combined && physical >= 35 {
+                if selected >= 7 && logical >= combined && physical >= 20 {
                     assert_eq!(fast.selected_scratch.capacity(), 4);
                     assert_eq!(cursor.selected_scratch.capacity(), selected.min(8));
                 }
@@ -614,7 +614,7 @@ fn query_no_hit_tail_virtual_capacity_preserves_query_match_admission() {
         })
     );
     assert_eq!(left.as_ref().err(), right.as_ref().err());
-    assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 2 * 17);
+    assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 17);
     assert_eq!(
         fast.json_budget.as_ref().unwrap().usage().work,
         cursor.json_budget.as_ref().unwrap().usage().work
@@ -657,7 +657,7 @@ fn query_no_hit_tail_reuses_existing_selected_capacity_without_shadow_retention(
     assert_eq!(tx.selected_scratch.capacity(), capacity);
     assert_eq!(tx.selected_scratch.as_ptr(), pointer);
     assert_eq!(tx.retained_bytes(), retained);
-    assert_eq!(tx.json_budget.as_ref().unwrap().usage().work - before, 7 * 8);
+    assert_eq!(tx.json_budget.as_ref().unwrap().usage().work - before, 4 * 8);
 }
 
 #[test]
@@ -705,7 +705,7 @@ fn query_no_hit_tail_stop_first_and_query_errors_charge_selection_only() {
             .unwrap(),
         b"ARGS:a"
     );
-    assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 2 * 16);
+    assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 16);
     assert_eq!(
         fast.json_budget.as_ref().unwrap().usage().work,
         cursor.json_budget.as_ref().unwrap().usage().work
@@ -716,7 +716,7 @@ fn query_no_hit_tail_stop_first_and_query_errors_charge_selection_only() {
     );
     assert!(fast.selected_scratch.capacity() < cursor.selected_scratch.capacity());
     for selected in [17, 18] {
-        for physical in [31, 32, 112] {
+        for physical in [15, 16, 64] {
             let limits = RuntimeLimits {
                 max_selected_values: selected,
                 ..RuntimeLimits::default()
@@ -730,7 +730,7 @@ fn query_no_hit_tail_stop_first_and_query_errors_charge_selection_only() {
             let left = fast.evaluate_member_matches(0, 0, &TxState::default(), true);
             let right = cursor.evaluate_member_matches(0, 0, &TxState::default(), true);
             assert_eq!(left.as_ref().err(), right.as_ref().err());
-            assert_eq!(left.is_ok(), selected == 18 && physical >= 32);
+            assert_eq!(left.is_ok(), selected == 18 && physical >= 16);
             assert_eq!(
                 fast.json_budget.as_ref().unwrap().usage().work,
                 cursor.json_budget.as_ref().unwrap().usage().work
@@ -776,7 +776,7 @@ fn query_no_hit_tail_stop_first_and_query_errors_charge_selection_only() {
         } else {
             assert!(matches!(left, Err(RuntimeError::Transformation { .. })));
         }
-        assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 10);
+        assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 5);
         assert_eq!(
             fast.json_budget.as_ref().unwrap().usage().work,
             cursor.json_budget.as_ref().unwrap().usage().work

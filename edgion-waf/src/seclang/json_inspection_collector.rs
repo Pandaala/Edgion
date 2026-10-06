@@ -118,6 +118,7 @@ pub(super) struct JsonCollectorState<'generation> {
     dispatch: DispatchScratch,
     captures: JsonCaptureScratch<'generation>,
     failure: Option<CollectorError>,
+    xml_receipt: Option<Receipt>,
 }
 
 /// The context is borrowed only while one checker feed invokes its sink.
@@ -133,15 +134,35 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         mode: EvaluationMode,
         limits: ResultLimits,
     ) -> Collected<Self> {
-        if !std::ptr::eq(&*generation, context.generation) || !generation.json_inspection.unsupported.is_empty() {
+        Self::new_domain(
+            generation,
+            context,
+            runtime,
+            mode,
+            limits,
+            super::super::InspectionDomain::Json,
+        )
+    }
+    pub(super) fn new_domain(
+        generation: GenerationHandle<'generation>,
+        context: SingleInputContext<'call>,
+        runtime: RuntimeLimits,
+        mode: EvaluationMode,
+        limits: ResultLimits,
+        domain: super::super::InspectionDomain,
+    ) -> Collected<Self> {
+        if !std::ptr::eq(&*generation, context.generation)
+            || (!generation.inspection_plan(domain).unsupported.is_empty()
+                || !generation.inspection_plan(domain).xml_unsupported.is_empty())
+        {
             return Err(CollectorError::State);
         }
-        let group_count = generation.json_inspection.groups.len();
-        let profile_count = generation.json_inspection.profiles.len();
-        let scan_capacity = generation.json_inspection.matcher_scan_capacity;
+        let group_count = generation.inspection_plan(domain).groups.len();
+        let profile_count = generation.inspection_plan(domain).profiles.len();
+        let scan_capacity = generation.inspection_plan(domain).matcher_scan_capacity;
         let capture_generation = generation.clone();
         let mut state = JsonCollectorState {
-            store: ResultStore::new(generation, runtime, mode, limits)?,
+            store: ResultStore::new_domain(generation, runtime, mode, limits, domain)?,
             runtime,
             mode,
             transform: TransformScratch::default(),
@@ -151,6 +172,7 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
                 builder: CaptureBuilder::default(),
             },
             failure: None,
+            xml_receipt: None,
         };
         // Each allocation admits its old/new overlap and reports allocator capacity.
         let mut total = 0;
@@ -198,19 +220,34 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         })
     }
     fn collect_scalar(&mut self, name: &[u8], value: &[u8], kind: JsonScalarKind) -> Collected<Option<Receipt>> {
+        self.collect_value(name, value, kind, None)
+    }
+    fn collect_value(
+        &mut self,
+        name: &[u8],
+        value: &[u8],
+        kind: JsonScalarKind,
+        xml_attribute: Option<bool>,
+    ) -> Collected<Option<Receipt>> {
         if let Some(error) = self.state.failure {
             return Err(error);
         }
         #[cfg(test)]
         let dispatch_work_before = self.store.usage().work;
         let generation = self.context.generation;
-        let plan = &generation.json_inspection;
+        let plan = generation.inspection_plan(self.state.store.domain());
         let deferred = exact_name_match(generation, &plan.named_demands, name, &mut self.state.store)?;
-        let mut retain = deferred || plan.needs_all_candidate_names;
-        if !retain {
+        let mut retain = deferred
+            || plan.needs_all_candidate_names
+            || match xml_attribute {
+                Some(true) => plan.xml_candidate_attributes,
+                Some(false) => plan.xml_candidate_text,
+                None => false,
+            };
+        if !retain && xml_attribute != Some(false) {
             retain = exact_name_match(generation, &plan.candidate_literals, name, &mut self.state.store)?;
         }
-        if !retain {
+        if !retain && xml_attribute != Some(false) {
             for &selector in &plan.candidate_regexes {
                 if match_name(
                     generation,
@@ -242,11 +279,25 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         self.state.dispatch.profiles.clear();
         let broad_only = plan.literals.is_empty() && plan.regexes.is_empty();
         if broad_only {
-            for &id in &plan.broad_only_order {
+            let order = match xml_attribute {
+                Some(true) => &plan.xml_attributes,
+                Some(false) => &plan.xml_text,
+                None => &plan.broad_only_order,
+            };
+            for &id in order {
                 self.state.dispatch.add(id, &mut self.state.store)?;
             }
         } else {
-            for &id in plan.broad_names.iter().chain(&plan.broad_values) {
+            let xml_broad = match xml_attribute {
+                Some(true) => &plan.xml_attributes[..],
+                Some(false) => &plan.xml_text[..],
+                None => &[],
+            };
+            for &id in xml_broad
+                .iter()
+                .chain(plan.broad_names.iter())
+                .chain(&plan.broad_values)
+            {
                 self.state.dispatch.add(id, &mut self.state.store)?;
             }
             self.state.store.charge_work(
@@ -257,16 +308,20 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
                 .literal_matches(generation, name)
                 .map_err(|_| CollectorError::State)?
             {
-                self.state.dispatch.add(row.group, &mut self.state.store)?;
+                if xml_attribute != Some(false) {
+                    self.state.dispatch.add(row.group, &mut self.state.store)?;
+                }
             }
             for row in &plan.regexes {
-                if match_name(
-                    generation,
-                    self.context.boolean_scratch,
-                    row.selector,
-                    name,
-                    &mut self.state.store,
-                )? {
+                if xml_attribute != Some(false)
+                    && match_name(
+                        generation,
+                        self.context.boolean_scratch,
+                        row.selector,
+                        name,
+                        &mut self.state.store,
+                    )?
+                {
                     self.state.dispatch.add(row.group, &mut self.state.store)?;
                 }
             }
@@ -284,9 +339,12 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         let n = self.state.dispatch.groups.len();
         #[cfg(test)]
         measurements::record(Event::DispatchWork, self.store.usage().work - dispatch_work_before);
-        let candidate = self
-            .store
-            .begin_candidate(name, value.len(), kind, deferred.then_some(value))?;
+        let candidate = if let Some(attribute) = xml_attribute {
+            self.store.begin_xml_candidate(attribute.then_some(name), value.len())?
+        } else {
+            self.store
+                .begin_candidate(name, value.len(), kind, deferred.then_some(value))?
+        };
         let mut start = 0;
         while start < n {
             let profile_id = plan.groups[self.state.dispatch.groups[start].id].profile;
@@ -449,6 +507,44 @@ impl JsonCheckerSink for JsonCollector<'_, '_> {
         self.state.captures.release();
         self.state.store.release_scratch();
         self.state.store.abandon();
+    }
+}
+
+impl crate::seclang::XmlStreamSink for JsonCollector<'_, '_> {
+    fn value(&mut self, name: Option<&[u8]>, value: &[u8]) -> Result<(), crate::seclang::XmlStreamSinkError> {
+        let result = (|| {
+            let receipt = self.collect_value(
+                name.unwrap_or_default(),
+                value,
+                JsonScalarKind::String,
+                Some(name.is_some()),
+            )?;
+            self.state.xml_receipt = self.state.store.concat(self.state.xml_receipt, receipt)?;
+            Ok(())
+        })();
+        result.map_err(|error: CollectorError| {
+            self.state.failure.get_or_insert(error);
+            crate::seclang::XmlStreamSinkError
+        })
+    }
+}
+impl JsonCollector<'_, '_> {
+    pub(super) fn abandon_xml(&mut self) {
+        JsonCheckerSink::abandon(self);
+        self.state.xml_receipt = None;
+    }
+    pub(super) fn seal_xml(&mut self, summary: crate::seclang::XmlSemanticSummary) -> Collected<()> {
+        self.state.captures.release();
+        let scratch = self
+            .dispatch
+            .bytes()?
+            .checked_add(self.state.transform.retained_bytes().map_err(map_transform_error)?)
+            .ok_or(StoreError::Arithmetic)?;
+        self.state.store.scratch_capacity(scratch)?;
+        self.state
+            .store
+            .seal_xml(self.state.xml_receipt, summary)
+            .map_err(Into::into)
     }
 }
 
@@ -623,7 +719,7 @@ impl TransformObserver for ProfileObserver<'_, '_, '_> {
                 continue;
             }
             let group = generation
-                .json_inspection
+                .inspection_plan(self.store.domain())
                 .groups
                 .get(run.id)
                 .ok_or(CollectorError::State)?;

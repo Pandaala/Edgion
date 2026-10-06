@@ -103,9 +103,30 @@ independent component peaks are not a simultaneous aggregate peak.
 
 ## Verification and re-evaluation
 
-The historical `tasks/pending/waf-json-checker/` records describe the earlier
-work. The former `16-json-capture-wiring-and-closure.md` plan is no longer in
-the active task tree; consult the current execution queue below for fresh gates.
+JSON classification reports must distinguish historical analyst conclusions from
+the replacement implementation. CAND-local-001 corrected retired narrow-lane,
+always-copy, production-serde-number and fixed-depth descriptions in
+`tasks/pending/waf-json-rule-classification/`. Its current contract and inventories
+are bound to a separately hashed source manifest; each member assessment leaves
+original-unit compiler admission and runtime acceptance explicitly untested.
+Original reports and corpus bodies remain unchanged. Verification defaults to
+read-only current scoped hashes or historical `git show` evidence and publishes
+only explicitly requested separate result files. Isolated regeneration must
+preserve the current overlay and original attribution. Re-evaluate the assessment
+and source manifest after any relevant compiler, parser or Gateway entry change;
+never infer current support from a historical category or old pass record.
+
+The classification reconciliation remains a frozen `5554f0c` baseline after
+native XML extends shared compiler/collector/transaction and Gateway files.
+Current-worktree hashes can therefore differ intentionally; do not refresh the
+manifest to imply new original-rule validation. XML shares the selected-result
+and replay engine under an explicit domain; see
+[the XML regression guard](native-xml-inspection.md) for its separate projection
+and physical-error contract. JSON-only summary optimizations remain JSON-only.
+
+The historical `tasks/pending/waf-json-checker/` records are retained in the
+working tree. Completed capture wiring and closure evidence are recorded in
+[plan 16](../../../../tasks/waf-todo/16-json-capture-wiring-and-closure.md).
 Prior test and measurement results below are historical evidence, not proof of
 the new entry. Remaining WAF work is tracked in the
 [current execution queue](../../../../tasks/waf-todo/README.md).
@@ -172,8 +193,13 @@ special-byte and near-limit errors, verified against a test-only lexical oracle.
 Accelerated no-hit JSON-tail replay requires a sealed completed sole-value-profile
 proof, never-allocated outcome/profile/change pools, static unmodified Args selection,
 identity checks and successful logical/physical/hypothetical-selection preflight.
-It charges the cursor's 2N selection and 5N replay work without materializing
-body candidates. Queries are selected and evaluated normally: full Q+N selection,
+It charges the current cursor's N selection and 3N replay work without
+materializing body candidates. Shared XML/JSON read reuse removed the None
+selector's redundant name read and static replay's duplicate candidate/profile
+reads; the historical pre-optimization ledger was 2N/5N. This remains a JSON-only
+proof. Its counts must follow actual canonical reads, with exact/one-less and
+forced-cursor differential coverage, never a blanket admission waiver.
+Queries are selected and evaluated normally: full Q+N selection,
 geometric capacity and possible-query-match admission precede matching; virtual
 body capacity exists only in MatchStorage.fixed_bytes. Persistent scratch retains
 actual capacity. Query errors or early stops do not charge JSON-tail replay. Later

@@ -55,9 +55,9 @@ impl JsonPublication<'_> {
         self.results.as_ref().ok_or(RuntimeError::JsonInspectionState)
     }
     pub(super) fn argument_count(&self) -> usize {
-        self.results
-            .as_ref()
-            .map_or(0, |results| results.summary.argument_count)
+        self.results.as_ref().map_or(0, |results| {
+            results.json_summary().map_or(0, |summary| summary.argument_count)
+        })
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +148,12 @@ impl<'generation> Transaction<'generation> {
     ) -> Result<(), RuntimeError> {
         let (source, requested) = body.into_parts();
         let processor = self.preflight_request_body(requested)?;
+        if processor == BodyProcessorSelection::Xml {
+            return self.publish_request_body_with_xml_limits(
+                RequestBody::new(source, processor),
+                XmlInspectionLimits::default(),
+            );
+        }
         if processor != BodyProcessorSelection::Json {
             return self.publish_non_json_body(RequestBody::new(source, processor));
         }
@@ -214,7 +220,7 @@ impl<'generation> Transaction<'generation> {
                 Ok(()) => {
                     let (sealed, inspection_budget) = collector.into_sealed().map_err(map_collector_error)?;
                     accounting
-                        .apply_json_summary(sealed.summary)
+                        .apply_json_summary(sealed.json_summary().map_err(map_store_error)?)
                         .map_err(|kind| RuntimeError::Body { kind })?;
                     results = Some(sealed);
                     budget = inspection_budget;
@@ -578,7 +584,7 @@ impl JsonInspectionSession<'_, '_> {
         let mut accounting = self.accounting.take().ok_or(RuntimeError::JsonInspectionState)?;
         if let Some(results) = &results {
             accounting
-                .apply_json_summary(results.summary)
+                .apply_json_summary(results.json_summary().map_err(map_store_error)?)
                 .map_err(|kind| RuntimeError::Body { kind })?;
         } else if body_error.is_none() {
             accounting
@@ -632,17 +638,23 @@ pub(super) fn evaluate_json_selected(
     let results = request
         .body
         .as_ref()
-        .and_then(RequestBodyPublication::json)
-        .ok_or(RuntimeError::JsonInspectionState)?
-        .results()?;
+        .and_then(RequestBodyPublication::structured_results)
+        .ok_or(RuntimeError::JsonInspectionState)?;
+    let expected = if collection == CollectionKind::Xml {
+        InspectionDomain::Xml
+    } else {
+        InspectionDomain::Json
+    };
+    if results.domain() != expected {
+        return Err(RuntimeError::JsonInspectionState);
+    }
     let budget = context
         .json_budget
         .as_deref_mut()
         .ok_or(RuntimeError::JsonInspectionState)?;
-    let candidate = results.candidate(budget, id).map_err(map_store_error)?;
     let mode = context
         .generation
-        .json_inspection
+        .inspection_plan(results.domain())
         .members
         .get(member)
         .ok_or(RuntimeError::JsonInspectionState)?;
@@ -651,12 +663,8 @@ pub(super) fn evaluate_json_selected(
     } else {
         mode.value
     };
-    let name = candidate.name;
-    let make_matched = |value: &[u8], _: Option<&mut InspectionBudget>| {
-        Ok((owned_copy(value)?, matched_variable_name(collection, Some(name))?))
-    };
-    match mode {
-        JsonMemberMode::StaticFact(group) => replay_static(
+    if let JsonMemberMode::StaticFact(group) = mode {
+        return replay_static(
             results,
             budget,
             context.generation,
@@ -665,7 +673,14 @@ pub(super) fn evaluate_json_selected(
             work,
             detector_work,
             matched_count,
-        ),
+        );
+    }
+    let candidate = results.candidate(budget, id).map_err(map_store_error)?;
+    let name = candidate.name;
+    let make_matched = |value: &[u8], _: Option<&mut InspectionBudget>| {
+        Ok((owned_copy(value)?, matched_variable_name(collection, Some(name))?))
+    };
+    match mode {
         JsonMemberMode::NameDynamic => {
             evaluate_single_input(context, plan, name, work, detector_work, matched_count, make_matched)
         }
@@ -754,7 +769,7 @@ fn replay_static(
     matched_count: usize,
 ) -> Result<Option<MemberMatch>, RuntimeError> {
     use super::json_inspection::{OutcomeValue, SelectedOutcome};
-    let outcome = results
+    let (outcome, profile) = results
         .lookup_selected(
             budget,
             selected.id,
@@ -774,13 +789,10 @@ fn replay_static(
         candidate.semantic_len
     };
     let group = generation
-        .json_inspection
+        .inspection_plan(results.domain())
         .groups
         .get(selected.group)
         .ok_or(RuntimeError::JsonInspectionState)?;
-    let profile = results
-        .profile(budget, selected.id, group.profile)
-        .map_err(map_store_error)?;
     let stored = match outcome {
         SelectedOutcome::MatchOrError(id) => {
             Some((id, results.outcome(budget, selected.id, id).map_err(map_store_error)?))

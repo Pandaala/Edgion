@@ -1,8 +1,84 @@
-//! Awaited JSON inspection through the canonical request-body capture seam.
+//! Awaited structured inspection through the canonical request-body capture seam.
 use super::*;
 use crate::plugins::runtime::traits::session::RequestBodyChunkConsumer;
 use bytes::Bytes;
-use edgion_waf::seclang::JsonInspectionSession;
+use edgion_waf::seclang::{
+    JsonInspectionSession, XmlInspectionLimits, XmlInspectionSession, XmlStreamError, XmlStreamLimit,
+};
+
+#[derive(Clone, Copy)]
+enum InspectionLimits {
+    Json(JsonInspectionLimits),
+    Xml(XmlInspectionLimits),
+}
+impl InspectionLimits {
+    fn source_limit(self) -> usize {
+        match self {
+            Self::Json(limits) => limits.lexical.max_source_bytes,
+            Self::Xml(limits) => limits.parser.max_source_bytes,
+        }
+    }
+    fn source_error(self) -> RuntimeError {
+        match self {
+            Self::Json(limits) => RuntimeError::JsonChecker {
+                kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
+                    kind: JsonStreamLimit::SourceBytes,
+                    limit: limits.lexical.max_source_bytes,
+                }),
+            },
+            Self::Xml(limits) => RuntimeError::XmlStream {
+                kind: XmlStreamError::Limit {
+                    kind: XmlStreamLimit::SourceBytes,
+                    limit: limits.parser.max_source_bytes,
+                },
+            },
+        }
+    }
+}
+// Keep both borrowed sessions inline to avoid a request-path heap allocation.
+#[allow(clippy::large_enum_variant)]
+enum InspectionSession<'call, 'generation> {
+    Json(JsonInspectionSession<'call, 'generation>),
+    Xml(XmlInspectionSession<'call, 'generation>),
+}
+impl InspectionSession<'_, '_> {
+    fn feed(&mut self, data: &[u8]) -> Result<(), RuntimeError> {
+        match self {
+            Self::Json(session) => session.feed(data),
+            Self::Xml(session) => session.feed(data),
+        }
+    }
+    fn complete(&mut self, len: usize) -> Result<(), RuntimeError> {
+        match self {
+            Self::Json(session) => session.complete(len),
+            Self::Xml(session) => session.complete(len),
+        }
+    }
+    fn requires_raw_source(&self) -> bool {
+        match self {
+            Self::Json(session) => session.requires_raw_source(),
+            Self::Xml(session) => session.requires_raw_source(),
+        }
+    }
+    fn runtime_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Json(session) => session.runtime_bytes(),
+            Self::Xml(session) => session.runtime_bytes(),
+        }
+    }
+    fn inspected_source_bytes(&self) -> usize {
+        match self {
+            Self::Json(session) => session.usage().inspected_source_bytes,
+            Self::Xml(session) => session.usage().parser.source_bytes,
+        }
+    }
+    fn finish(self, source: Option<Bytes>) -> Result<(), RuntimeError> {
+        match self {
+            Self::Json(session) => session.finish(source),
+            Self::Xml(session) => session.finish(source),
+        }
+    }
+}
 
 pub(super) enum JsonCaptureError {
     Body(BodyReadError),
@@ -33,19 +109,19 @@ impl Drop for RuntimeCharge {
 }
 
 struct JsonCapture<'call, 'generation> {
-    inspection: JsonInspectionSession<'call, 'generation>,
+    inspection: InspectionSession<'call, 'generation>,
     charge: RuntimeCharge,
     inspected: usize,
     failure: Option<RuntimeError>,
 }
 impl JsonCapture<'_, '_> {
     fn refresh(&mut self) {
-        let usage = self.inspection.usage();
-        let delta = usage.inspected_source_bytes.saturating_sub(self.inspected);
+        let inspected = self.inspection.inspected_source_bytes();
+        let delta = inspected.saturating_sub(self.inspected);
         if delta != 0 {
             crate::observe::metrics::record_waf_body_bytes_inspected("request", delta);
         }
-        self.inspected = usage.inspected_source_bytes;
+        self.inspected = inspected;
         if let Some(bytes) = self.inspection.runtime_bytes() {
             self.charge.update(bytes);
         } else {
@@ -67,7 +143,7 @@ impl RequestBodyChunkConsumer for JsonCapture<'_, '_> {
 fn admitted_len(
     len: u64,
     runtime: RuntimeLimits,
-    limits: JsonInspectionLimits,
+    limits: InspectionLimits,
     cap: u64,
 ) -> Result<usize, JsonCaptureError> {
     if len > cap {
@@ -84,13 +160,8 @@ fn admitted_len(
             },
         }));
     }
-    if len > limits.lexical.max_source_bytes {
-        return Err(JsonCaptureError::Runtime(RuntimeError::JsonChecker {
-            kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
-                kind: JsonStreamLimit::SourceBytes,
-                limit: limits.lexical.max_source_bytes,
-            }),
-        }));
+    if len > limits.source_limit() {
+        return Err(JsonCaptureError::Runtime(limits.source_error()));
     }
     Ok(len)
 }
@@ -99,6 +170,42 @@ pub(super) async fn inspect(
     session: &mut dyn PluginSession,
     transaction: &mut Transaction<'static>,
     limits: JsonInspectionLimits,
+    runtime: RuntimeLimits,
+    capture_cap: u64,
+    requires_body: bool,
+) -> Result<(), JsonCaptureError> {
+    inspect_structured(
+        session,
+        transaction,
+        InspectionLimits::Json(limits),
+        runtime,
+        capture_cap,
+        requires_body,
+    )
+    .await
+}
+pub(super) async fn inspect_xml(
+    session: &mut dyn PluginSession,
+    transaction: &mut Transaction<'static>,
+    limits: XmlInspectionLimits,
+    runtime: RuntimeLimits,
+    capture_cap: u64,
+    requires_body: bool,
+) -> Result<(), JsonCaptureError> {
+    inspect_structured(
+        session,
+        transaction,
+        InspectionLimits::Xml(limits),
+        runtime,
+        capture_cap,
+        requires_body,
+    )
+    .await
+}
+async fn inspect_structured(
+    session: &mut dyn PluginSession,
+    transaction: &mut Transaction<'static>,
+    limits: InspectionLimits,
     runtime: RuntimeLimits,
     capture_cap: u64,
     requires_body: bool,
@@ -115,9 +222,18 @@ pub(super) async fn inspect(
     } else {
         None
     };
-    let inspection = transaction
-        .start_json_inspection(limits, hint)
-        .map_err(JsonCaptureError::Runtime)?;
+    let inspection = match limits {
+        InspectionLimits::Json(limits) => InspectionSession::Json(
+            transaction
+                .start_json_inspection(limits, hint)
+                .map_err(JsonCaptureError::Runtime)?,
+        ),
+        InspectionLimits::Xml(limits) => InspectionSession::Xml(
+            transaction
+                .start_xml_inspection(limits, hint)
+                .map_err(JsonCaptureError::Runtime)?,
+        ),
+    };
     let mut capture = JsonCapture {
         inspection,
         charge: RuntimeCharge { bytes: 0 },

@@ -222,7 +222,7 @@ fn build_publication_inner(
             BodyProcessorSelection::UrlEncoded => parse_urlencoded(&body.bytes, &mut builder)?,
             BodyProcessorSelection::Json => return Err(BodyError::Malformed { processor }),
             BodyProcessorSelection::Multipart => parse_multipart(&body.bytes, content_type, &mut builder)?,
-            BodyProcessorSelection::Xml => parse_xml(&body.bytes, &mut builder)?,
+            BodyProcessorSelection::Xml => return Err(BodyError::Malformed { processor }),
         }
     }
     let combined_size = builder.accounting.combined_size(head_args_combined_size)?.to_string();
@@ -282,6 +282,15 @@ pub struct JsonPublicationSummary {
     pub retained_bytes: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XmlPublicationSummary {
+    pub entries: usize,
+    pub decoded_bytes: usize,
+    pub work_bytes: usize,
+    pub args_combined_size: usize,
+    pub retained_bytes: usize,
+}
+
 fn decimal_bytes(value: usize) -> usize {
     value.checked_ilog10().map_or(1, |digits| digits as usize + 1)
 }
@@ -317,6 +326,14 @@ impl BodyAccounting {
         limits: BodyLimits,
         retain_raw_body: bool,
     ) -> Result<Self, BodyError> {
+        Self::structured_prelude(source_bytes, limits, retain_raw_body, BodyProcessorSelection::Json)
+    }
+    pub(super) fn structured_prelude(
+        source_bytes: usize,
+        limits: BodyLimits,
+        retain_raw_body: bool,
+        processor: BodyProcessorSelection,
+    ) -> Result<Self, BodyError> {
         check_body_bytes(source_bytes, limits)?;
         let mut accounting = Self::new(limits);
         accounting.charge_work(source_bytes)?;
@@ -324,43 +341,61 @@ impl BodyAccounting {
             accounting.push(CollectionKind::RequestBody, None, source_bytes)?;
         }
         accounting.push(CollectionKind::RequestBodyLength, None, decimal_bytes(source_bytes))?;
-        accounting.push(
-            CollectionKind::ReqbodyProcessor,
-            None,
-            BodyProcessorSelection::Json.as_bytes().len(),
-        )?;
+        accounting.push(CollectionKind::ReqbodyProcessor, None, processor.as_bytes().len())?;
         Ok(accounting)
     }
 
     /// Fixed final priority replaces the DOM walk's first failing node: names,
     /// depth, entries, decoded bytes, traversal work, then final metadata.
     pub(super) fn apply_json_summary(&mut self, summary: super::JsonSemanticSummary) -> Result<(), BodyError> {
-        check_name_bytes(summary.max_checked_name_bytes, self.limits.max_name_bytes)?;
-        if summary.max_value_depth > self.limits.max_depth {
+        self.apply_structured_summary(
+            summary.max_checked_name_bytes,
+            summary.max_value_depth,
+            summary.body_entry_count,
+            summary.decoded_bytes,
+            summary.traversal_work,
+            summary.combined_size,
+        )
+    }
+    pub(super) fn apply_xml_summary(&mut self, summary: super::XmlSemanticSummary) -> Result<(), BodyError> {
+        self.apply_structured_summary(
+            summary.max_name_bytes,
+            summary.max_depth,
+            summary.value_count,
+            summary.decoded_bytes,
+            summary.traversal_work,
+            0,
+        )
+    }
+    fn apply_structured_summary(
+        &mut self,
+        name: usize,
+        depth: usize,
+        entries: usize,
+        decoded: usize,
+        work: usize,
+        args_size: usize,
+    ) -> Result<(), BodyError> {
+        check_name_bytes(name, self.limits.max_name_bytes)?;
+        if depth > self.limits.max_depth {
             return Err(BodyError::DepthLimit {
                 limit: self.limits.max_depth,
             });
         }
-        self.entries = self
-            .entries
-            .checked_add(summary.body_entry_count)
-            .ok_or(BodyError::Arithmetic)?;
+        self.entries = self.entries.checked_add(entries).ok_or(BodyError::Arithmetic)?;
         if self.entries > self.limits.max_entries {
             return Err(BodyError::EntryLimit {
                 limit: self.limits.max_entries,
             });
         }
-        self.decoded_bytes = self
-            .decoded_bytes
-            .checked_add(summary.decoded_bytes)
-            .ok_or(BodyError::Arithmetic)?;
+        self.decoded_bytes = self.decoded_bytes.checked_add(decoded).ok_or(BodyError::Arithmetic)?;
         if self.decoded_bytes > self.limits.max_decoded_bytes {
             return Err(BodyError::DecodedByteLimit {
                 limit: self.limits.max_decoded_bytes,
             });
         }
-        self.charge_work(summary.traversal_work)?;
-        self.body_args_size = summary.combined_size;
+        self.charge_work(work)?;
+        self.body_args_size = args_size;
         Ok(())
     }
 
@@ -381,6 +416,21 @@ impl BodyAccounting {
         })
     }
 
+    pub(super) fn finish_xml(mut self, head_args_combined_size: usize) -> Result<XmlPublicationSummary, BodyError> {
+        let args_combined_size = self.combined_size(head_args_combined_size)?;
+        self.push(
+            CollectionKind::ArgsCombinedSize,
+            None,
+            decimal_bytes(args_combined_size),
+        )?;
+        Ok(XmlPublicationSummary {
+            entries: self.entries,
+            decoded_bytes: self.decoded_bytes,
+            work_bytes: self.work_bytes,
+            args_combined_size,
+            retained_bytes: self.retained_bytes()?,
+        })
+    }
     fn new(limits: BodyLimits) -> Self {
         Self {
             limits,
@@ -758,244 +808,6 @@ fn disposition_parameter_value<'input>(parameter: &'input [u8], expected: &[u8])
     } else {
         Some(value)
     }
-}
-
-fn parse_xml(input: &[u8], builder: &mut BodyBuilder) -> Result<(), BodyError> {
-    if input.windows(9).any(|window| window.eq_ignore_ascii_case(b"<!DOCTYPE"))
-        || input.windows(8).any(|window| window.eq_ignore_ascii_case(b"<!ENTITY"))
-    {
-        return Err(BodyError::Malformed {
-            processor: BodyProcessorSelection::Xml,
-        });
-    }
-    let mut cursor = 0_usize;
-    let mut elements: Vec<Vec<u8>> = Vec::new();
-    let mut roots = 0_usize;
-    while cursor < input.len() {
-        let Some(open) = input[cursor..].iter().position(|byte| *byte == b'<') else {
-            let text = trim_ascii(&input[cursor..]);
-            if !text.is_empty() {
-                if elements.is_empty() {
-                    return Err(BodyError::Malformed {
-                        processor: BodyProcessorSelection::Xml,
-                    });
-                }
-                builder.push(CollectionKind::Xml, None, &decode_xml(text)?, false)?;
-            }
-            break;
-        };
-        let text_end = cursor.checked_add(open).ok_or(BodyError::Arithmetic)?;
-        let text = trim_ascii(&input[cursor..text_end]);
-        if !text.is_empty() {
-            if elements.is_empty() {
-                return Err(BodyError::Malformed {
-                    processor: BodyProcessorSelection::Xml,
-                });
-            }
-            builder.push(CollectionKind::Xml, None, &decode_xml(text)?, false)?;
-        }
-        if input.get(text_end..text_end + 4) == Some(b"<!--") {
-            let Some(end) = find_bytes(&input[text_end + 4..], b"-->") else {
-                return Err(BodyError::Malformed {
-                    processor: BodyProcessorSelection::Xml,
-                });
-            };
-            cursor = text_end + 4 + end + 3;
-            continue;
-        }
-        if input.get(text_end..text_end + 9) == Some(b"<![CDATA[") {
-            if elements.is_empty() {
-                return Err(BodyError::Malformed {
-                    processor: BodyProcessorSelection::Xml,
-                });
-            }
-            let Some(end) = find_bytes(&input[text_end + 9..], b"]]>") else {
-                return Err(BodyError::Malformed {
-                    processor: BodyProcessorSelection::Xml,
-                });
-            };
-            builder.push(
-                CollectionKind::Xml,
-                None,
-                &input[text_end + 9..text_end + 9 + end],
-                false,
-            )?;
-            cursor = text_end + 9 + end + 3;
-            continue;
-        }
-        let Some(close) = input[text_end..].iter().position(|byte| *byte == b'>') else {
-            return Err(BodyError::Malformed {
-                processor: BodyProcessorSelection::Xml,
-            });
-        };
-        let tag_end = text_end.checked_add(close).ok_or(BodyError::Arithmetic)?;
-        let tag = trim_ascii(&input[text_end + 1..tag_end]);
-        if tag.starts_with(b"?") {
-            cursor = tag_end + 1;
-            continue;
-        }
-        if tag.starts_with(b"/") {
-            let closing = trim_ascii(&tag[1..]);
-            let opening = elements.pop().ok_or(BodyError::Malformed {
-                processor: BodyProcessorSelection::Xml,
-            })?;
-            if closing != opening {
-                return Err(BodyError::Malformed {
-                    processor: BodyProcessorSelection::Xml,
-                });
-            }
-        } else {
-            let self_closing = tag.ends_with(b"/");
-            let opening = trim_ascii(tag.strip_suffix(b"/").unwrap_or(tag));
-            let name_end = opening
-                .iter()
-                .position(u8::is_ascii_whitespace)
-                .unwrap_or(opening.len());
-            let name = &opening[..name_end];
-            if name.is_empty() || name.iter().copied().any(|byte| b"<>&\"'=/".contains(&byte)) {
-                return Err(BodyError::Malformed {
-                    processor: BodyProcessorSelection::Xml,
-                });
-            }
-            if elements.is_empty() {
-                roots = roots.checked_add(1).ok_or(BodyError::Arithmetic)?;
-                if roots > 1 {
-                    return Err(BodyError::Malformed {
-                        processor: BodyProcessorSelection::Xml,
-                    });
-                }
-            }
-            let depth = elements.len().checked_add(1).ok_or(BodyError::Arithmetic)?;
-            if depth > builder.accounting.limits.max_depth {
-                return Err(BodyError::DepthLimit {
-                    limit: builder.accounting.limits.max_depth,
-                });
-            }
-            parse_xml_attributes(opening, builder)?;
-            if !self_closing {
-                elements.try_reserve(1).map_err(|_| BodyError::Allocation)?;
-                elements.push(try_copy(name)?);
-            }
-        }
-        builder.charge_work(tag.len())?;
-        cursor = tag_end + 1;
-    }
-    if !elements.is_empty() || roots != 1 {
-        return Err(BodyError::Malformed {
-            processor: BodyProcessorSelection::Xml,
-        });
-    }
-    Ok(())
-}
-
-fn parse_xml_attributes(tag: &[u8], builder: &mut BodyBuilder) -> Result<(), BodyError> {
-    let mut cursor = tag.iter().position(u8::is_ascii_whitespace).unwrap_or(tag.len());
-    while cursor < tag.len() {
-        while cursor < tag.len() && tag[cursor].is_ascii_whitespace() {
-            cursor += 1;
-        }
-        if cursor == tag.len() {
-            break;
-        }
-        let start = cursor;
-        while cursor < tag.len() && !tag[cursor].is_ascii_whitespace() && tag[cursor] != b'=' {
-            cursor += 1;
-        }
-        let name = &tag[start..cursor];
-        while cursor < tag.len() && tag[cursor].is_ascii_whitespace() {
-            cursor += 1;
-        }
-        if tag.get(cursor) != Some(&b'=') {
-            return Err(BodyError::Malformed {
-                processor: BodyProcessorSelection::Xml,
-            });
-        }
-        cursor += 1;
-        while cursor < tag.len() && tag[cursor].is_ascii_whitespace() {
-            cursor += 1;
-        }
-        let quote = *tag.get(cursor).ok_or(BodyError::Malformed {
-            processor: BodyProcessorSelection::Xml,
-        })?;
-        if !matches!(quote, b'\'' | b'"') {
-            return Err(BodyError::Malformed {
-                processor: BodyProcessorSelection::Xml,
-            });
-        }
-        cursor += 1;
-        let value_start = cursor;
-        while cursor < tag.len() && tag[cursor] != quote {
-            cursor += 1;
-        }
-        let value = tag.get(value_start..cursor).ok_or(BodyError::Malformed {
-            processor: BodyProcessorSelection::Xml,
-        })?;
-        cursor = cursor.checked_add(1).ok_or(BodyError::Arithmetic)?;
-        builder.push(CollectionKind::Xml, Some(name), &decode_xml(value)?, true)?;
-    }
-    Ok(())
-}
-
-fn decode_xml(value: &[u8]) -> Result<Vec<u8>, BodyError> {
-    let mut output = Vec::new();
-    output
-        .try_reserve_exact(value.len())
-        .map_err(|_| BodyError::Allocation)?;
-    let mut cursor = 0_usize;
-    while cursor < value.len() {
-        if value[cursor] != b'&' {
-            output.push(value[cursor]);
-            cursor += 1;
-            continue;
-        }
-        let Some(relative_end) = value[cursor..].iter().position(|byte| *byte == b';') else {
-            return Err(BodyError::Malformed {
-                processor: BodyProcessorSelection::Xml,
-            });
-        };
-        let end = cursor + relative_end;
-        let entity = &value[cursor + 1..end];
-        match entity {
-            b"amp" => output.push(b'&'),
-            b"lt" => output.push(b'<'),
-            b"gt" => output.push(b'>'),
-            b"quot" => output.push(b'"'),
-            b"apos" => output.push(b'\''),
-            _ => {
-                let (digits, radix) = if let Some(digits) = entity.strip_prefix(b"#x") {
-                    (digits, 16)
-                } else if let Some(digits) = entity.strip_prefix(b"#") {
-                    (digits, 10)
-                } else {
-                    return Err(BodyError::Malformed {
-                        processor: BodyProcessorSelection::Xml,
-                    });
-                };
-                let digits = std::str::from_utf8(digits).map_err(|_| BodyError::Malformed {
-                    processor: BodyProcessorSelection::Xml,
-                })?;
-                let scalar = u32::from_str_radix(digits, radix)
-                    .ok()
-                    .and_then(char::from_u32)
-                    .filter(|value| is_xml_scalar(*value))
-                    .ok_or(BodyError::Malformed {
-                        processor: BodyProcessorSelection::Xml,
-                    })?;
-                let mut encoded = [0_u8; 4];
-                output.extend_from_slice(scalar.encode_utf8(&mut encoded).as_bytes());
-            }
-        }
-        cursor = end + 1;
-    }
-    Ok(output)
-}
-
-fn is_xml_scalar(value: char) -> bool {
-    let value = u32::from(value);
-    matches!(value, 0x09 | 0x0A | 0x0D)
-        || (0x20..=0xD7FF).contains(&value)
-        || (0xE000..=0xFFFD).contains(&value)
-        || (0x10000..=0x10FFFF).contains(&value)
 }
 
 fn percent_decode(value: &[u8]) -> Result<Vec<u8>, BodyError> {

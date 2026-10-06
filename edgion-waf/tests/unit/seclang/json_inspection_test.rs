@@ -30,17 +30,45 @@ fn generation() -> CompiledGeneration {
     .unwrap()
 }
 fn store(g: &CompiledGeneration) -> ResultStore<'_> {
-    ResultStore::new(
+    ResultStore::new_domain(
         GenerationHandle::Borrowed(g),
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         ResultLimits::default(),
+        InspectionDomain::Json,
     )
     .unwrap()
 }
 fn finish(s: &mut ResultStore<'_>, id: CandidateId, profiles: &[usize]) -> Receipt {
     let proof = s.completion_proof(id, profiles).unwrap();
     s.complete_candidate(proof).unwrap()
+}
+
+#[test]
+fn selected_lookup_returns_the_checked_profile_with_two_implicit_reads() {
+    let g = generation();
+    let mut s = store(&g);
+    let id = s.begin_candidate(b"a", 4, JsonScalarKind::String, None).unwrap();
+    s.complete_profile(id, 0).unwrap();
+    let receipt = finish(&mut s, id, &[0]);
+    s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+    let (sealed, mut budget) = s.into_sealed().unwrap();
+    let before = budget.usage().work;
+    let (outcome, profile) = sealed
+        .lookup_selected(
+            &mut budget,
+            id,
+            0,
+            &g,
+            RuntimeLimits::default(),
+            EvaluationMode::Accelerated,
+        )
+        .unwrap();
+    assert_eq!(outcome, SelectedOutcome::NoMatch);
+    assert!(profile.record.is_none());
+    assert!(profile.first_change.is_none());
+    assert!(profile.error.is_none());
+    assert_eq!(budget.usage().work - before, 2);
 }
 
 #[test]
@@ -163,14 +191,16 @@ fn wide_no_hit_storage_uses_sparse_profile_records() {
         assert!(usage.peak_retained_bytes <= 32 << 20);
         let (sealed, mut budget) = s.into_sealed().unwrap();
         assert!(matches!(
-            sealed.lookup_selected(
-                &mut budget,
-                receipt.unwrap().head,
-                0,
-                &g,
-                RuntimeLimits::default(),
-                EvaluationMode::Accelerated
-            ),
+            sealed
+                .lookup_selected(
+                    &mut budget,
+                    receipt.unwrap().head,
+                    0,
+                    &g,
+                    RuntimeLimits::default(),
+                    EvaluationMode::Accelerated
+                )
+                .map(|(outcome, _)| outcome),
             Ok(SelectedOutcome::NoMatch)
         ));
     }
@@ -247,6 +277,7 @@ fn late_transform_error_reclaims_payload_and_overrides_hits() {
                 RuntimeLimits::default(),
                 EvaluationMode::Accelerated
             )
+            .map(|(outcome, _)| outcome)
             .unwrap(),
         SelectedOutcome::TransformError(error)
     );
@@ -1351,14 +1382,16 @@ fn candidate_local_heads_keep_profile_and_outcome_parent_checks_sticky() {
             let foreign = sealed.records.candidates.get(ids[1].0).unwrap().outcomes;
             sealed.records.candidates.get_mut(ids[0].0).unwrap().outcomes = foreign;
             assert!(matches!(
-                sealed.lookup_selected(
-                    &mut budget,
-                    ids[0],
-                    0,
-                    &g,
-                    RuntimeLimits::default(),
-                    EvaluationMode::Accelerated
-                ),
+                sealed
+                    .lookup_selected(
+                        &mut budget,
+                        ids[0],
+                        0,
+                        &g,
+                        RuntimeLimits::default(),
+                        EvaluationMode::Accelerated
+                    )
+                    .map(|(outcome, _)| outcome),
                 Err(StoreError::Identity)
             ));
         }
@@ -1432,6 +1465,7 @@ fn candidate_local_chain_concat_discard_and_multi_object_reuse_preserve_order() 
                     RuntimeLimits::default(),
                     EvaluationMode::Accelerated
                 )
+                .map(|(outcome, _)| outcome)
                 .unwrap(),
             SelectedOutcome::MatchOrError(_)
         ));

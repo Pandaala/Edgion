@@ -799,3 +799,110 @@ fn dynamic_json_fixture_profiles_keep_valid_invalid_and_zero_limit_purposes() {
         }
     }
 }
+
+#[test]
+fn full_xml_admission_is_identical_for_inline_and_resolved_sources() {
+    for source in [
+        "SecRule XML \"@contains %{TX.private_operand}\" \"id:42,phase:2,pass\"\n",
+        "SecRule XML:/root/node \"@contains blocked\" \"id:42,phase:2,pass\"\n",
+    ] {
+        let mut config = WafConfig {
+            rules: source.into(),
+            request_body: WafRequestBodyConfig {
+                inspection: WafRequestBodyInspection::Full,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let error = config.compile_generation().err().unwrap();
+        assert!(error.contains("rule 42"));
+        assert!(!error.contains("private_operand"));
+        assert_eq!(
+            config.inspect_support().failure.unwrap().category,
+            "unsupported_xml_dependency"
+        );
+        let (mut reference, mut bundle) = test_bundle("bundle", 42);
+        bundle.data.rules[0].content = source.into();
+        bundle.data.digest = Some(bundle.data.compute_digest());
+        bundle.digest = bundle.data.compute_digest();
+        reference.expected_digest = Some(bundle.digest.clone());
+        config.rules.clear();
+        config.policy_ref.name = "policy".into();
+        config.resolved_policy = Some(WafPolicyData {
+            default_profile: "default".into(),
+            profiles: BTreeMap::from([(
+                "default".into(),
+                WafProfile {
+                    bundle_refs: vec![reference],
+                },
+            )]),
+        });
+        config.selected_profile = Some("default".into());
+        config.resolved_ref_indices = vec![0];
+        config.resolved_bundles = Some(vec![bundle]);
+        config.owner_namespace = Some("default".into());
+        assert!(config.compile_generation().err().unwrap().contains("rule 42"));
+    }
+    for target in ["XML", "XML:/*", "XML://@*", "&XML:/*"] {
+        let config = WafConfig {
+            rules: format!("SecRule {target} \"@contains blocked\" \"id:42,phase:2,pass\""),
+            request_body: WafRequestBodyConfig {
+                inspection: WafRequestBodyInspection::Full,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(config.compile_generation().is_ok());
+    }
+}
+
+#[test]
+fn xml_dynamic_fixtures_pin_valid_bundles_and_strict_static_xml_demands() {
+    for tree in ["integration", "k8s"] {
+        for phase in ["v1", "v2", "detection"] {
+            let version = if phase == "v2" { "xml-v2" } else { "xml-v1" };
+            let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../edgion-tests/{tree}/conf/EdgionPlugins/Waf/DynamicTest/updates/to_xml_{phase}"
+            ));
+            let bundle: serde_yaml::Value = serde_yaml::from_str(
+                &std::fs::read_to_string(base.join(format!("EdgionConfigData_waf-rules-{version}.yaml"))).unwrap(),
+            )
+            .unwrap();
+            let data: crate::resources::WafRuleBundleData =
+                serde_yaml::from_value(bundle["spec"]["data"]["config"].clone()).unwrap();
+            data.validate().unwrap();
+            let policy: serde_yaml::Value =
+                serde_yaml::from_str(&std::fs::read_to_string(base.join("EdgionConfigData_waf-policy.yaml")).unwrap())
+                    .unwrap();
+            assert_eq!(
+                policy["spec"]["data"]["config"]["profiles"]["baseline"]["bundleRefs"][0]["expectedDigest"].as_str(),
+                Some(data.compute_digest().as_str())
+            );
+            let plugin: serde_yaml::Value =
+                serde_yaml::from_str(&std::fs::read_to_string(base.join("EdgionPlugins_waf-dynamic.yaml")).unwrap())
+                    .unwrap();
+            let mut config: WafConfig = serde_yaml::from_value(plugin["spec"]["waf"].clone()).unwrap();
+            assert_eq!(config.request_body.inspection, WafRequestBodyInspection::Full);
+            assert!(config.request_body.json.is_none());
+            config.rules = data.rules[0].content.clone();
+            config.policy_ref.name.clear();
+            let generation = config.compile_generation().unwrap();
+            assert!(generation.xml_inspection_unsupported().is_empty());
+            for tag in [
+                "attack-protocol",
+                "attack-lfi",
+                "attack-rfi",
+                "attack-rce",
+                "attack-php",
+                "attack-generic",
+                "attack-xss",
+                "attack-sqli",
+                "attack-fixation",
+            ] {
+                assert!(config
+                    .rules
+                    .contains(&format!("ctl:ruleRemoveTargetByTag={tag};XML://@*")));
+            }
+        }
+    }
+}

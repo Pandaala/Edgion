@@ -1,7 +1,56 @@
 use super::*;
 
+// Preserve the historical XML publication oracle and its literal accounting
+// cases. These tests do not verify the incremental XML production parser.
+fn oracle_publication(
+    body: &RequestBody,
+    content_type: Option<&[u8]>,
+    head_args_combined_size: usize,
+    limits: BodyLimits,
+) -> Result<BodyPublication, BodyError> {
+    oracle_publication_with_raw_policy(body, content_type, head_args_combined_size, limits, None)
+}
+
+fn oracle_publication_with_raw_policy(
+    body: &RequestBody,
+    content_type: Option<&[u8]>,
+    head_args_combined_size: usize,
+    limits: BodyLimits,
+    force_raw_body: Option<bool>,
+) -> Result<BodyPublication, BodyError> {
+    let processor = if body.processor == BodyProcessorSelection::Auto {
+        processor_from_content_type(content_type)
+    } else {
+        body.processor
+    };
+    if processor != BodyProcessorSelection::Xml {
+        return super::build_publication_with_raw_policy(
+            body,
+            content_type,
+            head_args_combined_size,
+            limits,
+            force_raw_body,
+        );
+    }
+    check_body_bytes(body.bytes.len(), limits)?;
+    let mut builder = BodyBuilder::new(limits);
+    builder.charge_work(body.bytes.len())?;
+    if force_raw_body.unwrap_or(false) {
+        builder.push(CollectionKind::RequestBody, None, &body.bytes, false)?;
+    }
+    let length = body.bytes.len().to_string();
+    builder.push(CollectionKind::RequestBodyLength, None, length.as_bytes(), false)?;
+    builder.push(CollectionKind::ReqbodyProcessor, None, processor.as_bytes(), false)?;
+    if !body.bytes.is_empty() {
+        parse_xml(&body.bytes, &mut builder)?;
+    }
+    let combined_size = builder.accounting.combined_size(head_args_combined_size)?.to_string();
+    builder.push(CollectionKind::ArgsCombinedSize, None, combined_size.as_bytes(), false)?;
+    builder.finish()
+}
+
 fn publication(bytes: &[u8], processor: BodyProcessorSelection, content_type: Option<&[u8]>) -> BodyPublication {
-    build_publication(
+    oracle_publication(
         &RequestBody::new(bytes::Bytes::copy_from_slice(bytes), processor),
         content_type,
         0,
@@ -195,7 +244,7 @@ fn multipart_long_near_matches_preserve_fields_and_limits() {
         let publication = publication(&body, BodyProcessorSelection::Multipart, Some(&content_type));
         assert_eq!(values(&publication, CollectionKind::Args).len(), 1);
         assert!(matches!(
-            build_publication(
+            oracle_publication(
                 &RequestBody::new(bytes::Bytes::copy_from_slice(&body), BodyProcessorSelection::Multipart),
                 Some(&content_type),
                 0,
@@ -211,7 +260,7 @@ fn multipart_long_near_matches_preserve_fields_and_limits() {
     let mut content_type = b"multipart/form-data; boundary=".to_vec();
     content_type.extend_from_slice(&too_long);
     assert!(matches!(
-        build_publication(
+        oracle_publication(
             &RequestBody::new(
                 bytes::Bytes::copy_from_slice(b"--x--\r\n"),
                 BodyProcessorSelection::Multipart
@@ -223,7 +272,7 @@ fn multipart_long_near_matches_preserve_fields_and_limits() {
         Err(BodyError::MultipartBoundary)
     ));
     assert!(matches!(
-        build_publication(
+        oracle_publication(
             &RequestBody::new(
                 bytes::Bytes::copy_from_slice(b"--x\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nv"),
                 BodyProcessorSelection::Multipart
@@ -273,7 +322,7 @@ fn xml_publishes_text_and_attributes_and_rejects_dtds() {
         ]
     );
     assert!(matches!(
-        build_publication(
+        oracle_publication(
             &RequestBody::new(
                 bytes::Bytes::copy_from_slice(b"<!DOCTYPE x><x/>"),
                 BodyProcessorSelection::Xml
@@ -290,7 +339,7 @@ fn xml_publishes_text_and_attributes_and_rejects_dtds() {
 
 #[test]
 fn body_limits_accept_exact_and_reject_first_excess_without_content() {
-    let exact = build_publication(
+    let exact = oracle_publication(
         &RequestBody::new(bytes::Bytes::copy_from_slice(b"abc"), BodyProcessorSelection::Raw),
         None,
         0,
@@ -301,7 +350,7 @@ fn body_limits_accept_exact_and_reject_first_excess_without_content() {
     )
     .unwrap();
     assert!(!exact.entries.is_empty());
-    let Err(error) = build_publication(
+    let Err(error) = oracle_publication(
         &RequestBody::new(bytes::Bytes::copy_from_slice(b"private"), BodyProcessorSelection::Raw),
         None,
         0,
@@ -319,7 +368,7 @@ fn body_limits_accept_exact_and_reject_first_excess_without_content() {
 #[test]
 fn every_derived_body_limit_rejects_first_excess() {
     let raw = RequestBody::new(bytes::Bytes::copy_from_slice(b"abc"), BodyProcessorSelection::Raw);
-    assert!(build_publication(
+    assert!(oracle_publication(
         &raw,
         None,
         0,
@@ -332,7 +381,7 @@ fn every_derived_body_limit_rejects_first_excess() {
     )
     .is_ok());
     assert!(matches!(
-        build_publication(
+        oracle_publication(
             &raw,
             None,
             0,
@@ -344,7 +393,7 @@ fn every_derived_body_limit_rejects_first_excess() {
         Err(BodyError::EntryLimit { limit: 3 })
     ));
     assert!(matches!(
-        build_publication(
+        oracle_publication(
             &raw,
             None,
             0,
@@ -356,7 +405,7 @@ fn every_derived_body_limit_rejects_first_excess() {
         Err(BodyError::DecodedByteLimit { limit: 7 })
     ));
     assert!(matches!(
-        build_publication(
+        oracle_publication(
             &raw,
             None,
             0,
@@ -368,7 +417,7 @@ fn every_derived_body_limit_rejects_first_excess() {
         Err(BodyError::WorkLimit { limit: 2 })
     ));
     assert!(matches!(
-        build_publication(
+        oracle_publication(
             &RequestBody::new(
                 bytes::Bytes::copy_from_slice(b"name=value"),
                 BodyProcessorSelection::UrlEncoded
@@ -390,7 +439,7 @@ fn every_derived_body_limit_rejects_first_excess() {
         "--x--\r\n"
     );
     assert!(matches!(
-        build_publication(
+        oracle_publication(
             &RequestBody::new(
                 bytes::Bytes::copy_from_slice(multipart.as_bytes()),
                 BodyProcessorSelection::Multipart
@@ -405,7 +454,7 @@ fn every_derived_body_limit_rejects_first_excess() {
         Err(BodyError::MultipartPartLimit { limit: 0 })
     ));
     assert!(matches!(
-        build_publication(
+        oracle_publication(
             &RequestBody::new(
                 bytes::Bytes::copy_from_slice(multipart.as_bytes()),
                 BodyProcessorSelection::Multipart
@@ -429,7 +478,7 @@ fn malformed_xml_nesting_and_unknown_entities_fail_closed() {
         b"text<root/>".as_slice(),
     ] {
         assert!(matches!(
-            build_publication(
+            oracle_publication(
                 &RequestBody::new(bytes::Bytes::copy_from_slice(body), BodyProcessorSelection::Xml),
                 None,
                 0,
@@ -491,7 +540,7 @@ fn publication_accounting_keeps_literal_cross_format_boundaries() {
             if fallback {
                 build_fallback_publication_with_raw_policy(&body, content_type, 17, limits, raw)
             } else {
-                build_publication_with_raw_policy(&body, content_type, 17, limits, raw)
+                oracle_publication_with_raw_policy(&body, content_type, 17, limits, raw)
             }
         };
         let limits = BodyLimits {
@@ -544,4 +593,242 @@ fn publication_accounting_keeps_literal_cross_format_boundaries() {
             );
         }
     }
+}
+
+fn parse_xml(input: &[u8], builder: &mut BodyBuilder) -> Result<(), BodyError> {
+    if input.windows(9).any(|window| window.eq_ignore_ascii_case(b"<!DOCTYPE"))
+        || input.windows(8).any(|window| window.eq_ignore_ascii_case(b"<!ENTITY"))
+    {
+        return Err(BodyError::Malformed {
+            processor: BodyProcessorSelection::Xml,
+        });
+    }
+    let mut cursor = 0_usize;
+    let mut elements: Vec<Vec<u8>> = Vec::new();
+    let mut roots = 0_usize;
+    while cursor < input.len() {
+        let Some(open) = input[cursor..].iter().position(|byte| *byte == b'<') else {
+            let text = trim_ascii(&input[cursor..]);
+            if !text.is_empty() {
+                if elements.is_empty() {
+                    return Err(BodyError::Malformed {
+                        processor: BodyProcessorSelection::Xml,
+                    });
+                }
+                builder.push(CollectionKind::Xml, None, &decode_xml(text)?, false)?;
+            }
+            break;
+        };
+        let text_end = cursor.checked_add(open).ok_or(BodyError::Arithmetic)?;
+        let text = trim_ascii(&input[cursor..text_end]);
+        if !text.is_empty() {
+            if elements.is_empty() {
+                return Err(BodyError::Malformed {
+                    processor: BodyProcessorSelection::Xml,
+                });
+            }
+            builder.push(CollectionKind::Xml, None, &decode_xml(text)?, false)?;
+        }
+        if input.get(text_end..text_end + 4) == Some(b"<!--") {
+            let Some(end) = find_bytes(&input[text_end + 4..], b"-->") else {
+                return Err(BodyError::Malformed {
+                    processor: BodyProcessorSelection::Xml,
+                });
+            };
+            cursor = text_end + 4 + end + 3;
+            continue;
+        }
+        if input.get(text_end..text_end + 9) == Some(b"<![CDATA[") {
+            if elements.is_empty() {
+                return Err(BodyError::Malformed {
+                    processor: BodyProcessorSelection::Xml,
+                });
+            }
+            let Some(end) = find_bytes(&input[text_end + 9..], b"]]>") else {
+                return Err(BodyError::Malformed {
+                    processor: BodyProcessorSelection::Xml,
+                });
+            };
+            builder.push(
+                CollectionKind::Xml,
+                None,
+                &input[text_end + 9..text_end + 9 + end],
+                false,
+            )?;
+            cursor = text_end + 9 + end + 3;
+            continue;
+        }
+        let Some(close) = input[text_end..].iter().position(|byte| *byte == b'>') else {
+            return Err(BodyError::Malformed {
+                processor: BodyProcessorSelection::Xml,
+            });
+        };
+        let tag_end = text_end.checked_add(close).ok_or(BodyError::Arithmetic)?;
+        let tag = trim_ascii(&input[text_end + 1..tag_end]);
+        if tag.starts_with(b"?") {
+            cursor = tag_end + 1;
+            continue;
+        }
+        if tag.starts_with(b"/") {
+            let closing = trim_ascii(&tag[1..]);
+            let opening = elements.pop().ok_or(BodyError::Malformed {
+                processor: BodyProcessorSelection::Xml,
+            })?;
+            if closing != opening {
+                return Err(BodyError::Malformed {
+                    processor: BodyProcessorSelection::Xml,
+                });
+            }
+        } else {
+            let self_closing = tag.ends_with(b"/");
+            let opening = trim_ascii(tag.strip_suffix(b"/").unwrap_or(tag));
+            let name_end = opening
+                .iter()
+                .position(u8::is_ascii_whitespace)
+                .unwrap_or(opening.len());
+            let name = &opening[..name_end];
+            if name.is_empty() || name.iter().copied().any(|byte| b"<>&\"'=/".contains(&byte)) {
+                return Err(BodyError::Malformed {
+                    processor: BodyProcessorSelection::Xml,
+                });
+            }
+            if elements.is_empty() {
+                roots = roots.checked_add(1).ok_or(BodyError::Arithmetic)?;
+                if roots > 1 {
+                    return Err(BodyError::Malformed {
+                        processor: BodyProcessorSelection::Xml,
+                    });
+                }
+            }
+            let depth = elements.len().checked_add(1).ok_or(BodyError::Arithmetic)?;
+            if depth > builder.accounting.limits.max_depth {
+                return Err(BodyError::DepthLimit {
+                    limit: builder.accounting.limits.max_depth,
+                });
+            }
+            parse_xml_attributes(opening, builder)?;
+            if !self_closing {
+                elements.try_reserve(1).map_err(|_| BodyError::Allocation)?;
+                elements.push(try_copy(name)?);
+            }
+        }
+        builder.charge_work(tag.len())?;
+        cursor = tag_end + 1;
+    }
+    if !elements.is_empty() || roots != 1 {
+        return Err(BodyError::Malformed {
+            processor: BodyProcessorSelection::Xml,
+        });
+    }
+    Ok(())
+}
+
+fn parse_xml_attributes(tag: &[u8], builder: &mut BodyBuilder) -> Result<(), BodyError> {
+    let mut cursor = tag.iter().position(u8::is_ascii_whitespace).unwrap_or(tag.len());
+    while cursor < tag.len() {
+        while cursor < tag.len() && tag[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor == tag.len() {
+            break;
+        }
+        let start = cursor;
+        while cursor < tag.len() && !tag[cursor].is_ascii_whitespace() && tag[cursor] != b'=' {
+            cursor += 1;
+        }
+        let name = &tag[start..cursor];
+        while cursor < tag.len() && tag[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if tag.get(cursor) != Some(&b'=') {
+            return Err(BodyError::Malformed {
+                processor: BodyProcessorSelection::Xml,
+            });
+        }
+        cursor += 1;
+        while cursor < tag.len() && tag[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let quote = *tag.get(cursor).ok_or(BodyError::Malformed {
+            processor: BodyProcessorSelection::Xml,
+        })?;
+        if !matches!(quote, b'\'' | b'"') {
+            return Err(BodyError::Malformed {
+                processor: BodyProcessorSelection::Xml,
+            });
+        }
+        cursor += 1;
+        let value_start = cursor;
+        while cursor < tag.len() && tag[cursor] != quote {
+            cursor += 1;
+        }
+        let value = tag.get(value_start..cursor).ok_or(BodyError::Malformed {
+            processor: BodyProcessorSelection::Xml,
+        })?;
+        cursor = cursor.checked_add(1).ok_or(BodyError::Arithmetic)?;
+        builder.push(CollectionKind::Xml, Some(name), &decode_xml(value)?, true)?;
+    }
+    Ok(())
+}
+
+fn decode_xml(value: &[u8]) -> Result<Vec<u8>, BodyError> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(value.len())
+        .map_err(|_| BodyError::Allocation)?;
+    let mut cursor = 0_usize;
+    while cursor < value.len() {
+        if value[cursor] != b'&' {
+            output.push(value[cursor]);
+            cursor += 1;
+            continue;
+        }
+        let Some(relative_end) = value[cursor..].iter().position(|byte| *byte == b';') else {
+            return Err(BodyError::Malformed {
+                processor: BodyProcessorSelection::Xml,
+            });
+        };
+        let end = cursor + relative_end;
+        let entity = &value[cursor + 1..end];
+        match entity {
+            b"amp" => output.push(b'&'),
+            b"lt" => output.push(b'<'),
+            b"gt" => output.push(b'>'),
+            b"quot" => output.push(b'"'),
+            b"apos" => output.push(b'\''),
+            _ => {
+                let (digits, radix) = if let Some(digits) = entity.strip_prefix(b"#x") {
+                    (digits, 16)
+                } else if let Some(digits) = entity.strip_prefix(b"#") {
+                    (digits, 10)
+                } else {
+                    return Err(BodyError::Malformed {
+                        processor: BodyProcessorSelection::Xml,
+                    });
+                };
+                let digits = std::str::from_utf8(digits).map_err(|_| BodyError::Malformed {
+                    processor: BodyProcessorSelection::Xml,
+                })?;
+                let scalar = u32::from_str_radix(digits, radix)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .filter(|value| is_xml_scalar(*value))
+                    .ok_or(BodyError::Malformed {
+                        processor: BodyProcessorSelection::Xml,
+                    })?;
+                let mut encoded = [0_u8; 4];
+                output.extend_from_slice(scalar.encode_utf8(&mut encoded).as_bytes());
+            }
+        }
+        cursor = end + 1;
+    }
+    Ok(output)
+}
+
+fn is_xml_scalar(value: char) -> bool {
+    let value = u32::from(value);
+    matches!(value, 0x09 | 0x0A | 0x0D)
+        || (0x20..=0xD7FF).contains(&value)
+        || (0xE000..=0xFFFD).contains(&value)
+        || (0x10000..=0x10FFFF).contains(&value)
 }

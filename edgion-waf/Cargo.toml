@@ -50,3 +50,13 @@ harness = false
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "xml_execution"
+path = "tests/benches/xml_execution.rs"
+harness = false
+
+[[bench]]
+name = "xml_chunks"
+path = "tests/benches/xml_chunks.rs"
+harness = false

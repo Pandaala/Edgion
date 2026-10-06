@@ -28,3 +28,8 @@ Each phase publishes digest-pinned `WafRuleBundle` resources through one
 policy selects the phase's bundle. An invalid policy references a missing bundle
 and preserves the last valid generation. Deletion removes the policy and all
 rule bundles as well as the plugin.
+
+The XML phases reuse the same H1/H2 transport routes and body storage policy.
+They cover text, attributes with the real 901181 default/opt-in exclusions,
+Phase-1 processor override, split entities, malformed suffixes, safe spill replay,
+and generation/mode pinning while an old capture waits for transport EOF.

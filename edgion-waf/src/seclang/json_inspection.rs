@@ -14,8 +14,9 @@ fn allocate_owner(counter: &AtomicU64) -> Result<u64> {
 }
 
 use super::super::json_inspection_plan::JsonView;
+use super::super::InspectionDomain;
 use super::*;
-use crate::seclang::{JsonScalarKind, JsonSemanticSummary};
+use crate::seclang::{JsonScalarKind, JsonSemanticSummary, XmlSemanticSummary};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResultLimits {
@@ -568,7 +569,27 @@ pub(super) enum ProfileState {
     RecordedComplete,
     SemanticError,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CandidateKind {
+    JsonArgument,
+    XmlText,
+    XmlAttribute,
+}
+#[derive(Clone, Copy)]
+pub(super) enum InspectionSummary {
+    Json(JsonSemanticSummary),
+    Xml(XmlSemanticSummary),
+}
+impl InspectionSummary {
+    fn candidate_count(self) -> usize {
+        match self {
+            Self::Json(s) => s.argument_count,
+            Self::Xml(s) => s.value_count,
+        }
+    }
+}
 struct Candidate {
+    kind: CandidateKind,
     name: Lease,
     semantic_len: usize,
     states: Lease,
@@ -666,6 +687,7 @@ struct QualifiedNamePair {
 }
 
 struct StoreRecords<'generation> {
+    domain: InspectionDomain,
     owner: u64,
     generation: GenerationHandle<'generation>,
     named_first: Vec<Option<CandidateId>>,
@@ -680,35 +702,46 @@ struct StoreRecords<'generation> {
     bytes: BytePool,
 }
 
+impl StoreRecords<'_> {
+    fn plan(&self) -> &super::super::json_inspection_plan::CompiledJsonPlan {
+        self.generation.inspection_plan(self.domain)
+    }
+}
+
 pub(super) struct ResultStore<'generation> {
     records: StoreRecords<'generation>,
     budget: InspectionBudget,
     terminal: Terminal,
     sealed: Option<Receipt>,
-    summary: Option<JsonSemanticSummary>,
+    summary: Option<InspectionSummary>,
     summary_no_hit: bool,
 }
 
 pub(super) struct SealedResults<'generation> {
     records: StoreRecords<'generation>,
     pub(super) receipt: Option<Receipt>,
-    pub(super) summary: JsonSemanticSummary,
+    pub(super) summary: InspectionSummary,
     summary_no_hit: bool,
 }
 
 impl<'generation> ResultStore<'generation> {
+    pub(super) fn domain(&self) -> InspectionDomain {
+        self.records.domain
+    }
     pub(super) fn usage_snapshot(&self) -> StoreUsage {
         self.budget.usage
     }
-    pub(super) fn new(
+    pub(super) fn new_domain(
         generation: GenerationHandle<'generation>,
         runtime: RuntimeLimits,
         mode: EvaluationMode,
         limits: ResultLimits,
+        domain: InspectionDomain,
     ) -> Result<Self> {
         let owner = allocate_owner(&NEXT_STORE)?;
         Ok(Self {
             records: StoreRecords {
+                domain,
                 owner,
                 generation,
                 named_first: Vec::new(),
@@ -755,6 +788,30 @@ impl<'generation> ResultStore<'generation> {
         _kind: JsonScalarKind,
         deferred: Option<&[u8]>,
     ) -> Result<CandidateId> {
+        self.begin_value(name, semantic_len, deferred, CandidateKind::JsonArgument)
+    }
+    pub(super) fn begin_xml_candidate(&mut self, name: Option<&[u8]>, semantic_len: usize) -> Result<CandidateId> {
+        self.begin_value(
+            name.unwrap_or_default(),
+            semantic_len,
+            None,
+            if name.is_some() {
+                CandidateKind::XmlAttribute
+            } else {
+                CandidateKind::XmlText
+            },
+        )
+    }
+    fn begin_value(
+        &mut self,
+        name: &[u8],
+        semantic_len: usize,
+        deferred: Option<&[u8]>,
+        kind: CandidateKind,
+    ) -> Result<CandidateId> {
+        if (kind == CandidateKind::JsonArgument) != (self.records.domain == InspectionDomain::Json) {
+            return Err(StoreError::Identity);
+        }
         self.active(|store| {
             if let Some(value) = deferred {
                 if value.len() != semantic_len {
@@ -769,7 +826,7 @@ impl<'generation> ResultStore<'generation> {
             let name_lease = store.records.bytes.copy(name, &mut store.budget)?;
             #[cfg(test)]
             measurements::record(Event::NameCopyBytes, name.len());
-            let state_len = add(store.records.generation.json_inspection.profiles.len(), 3)? / 4;
+            let state_len = add(store.records.plan().profiles.len(), 3)? / 4;
             let states = store.records.bytes.zero(state_len, &mut store.budget)?;
             let deferred_lease = deferred
                 .map(|value| {
@@ -781,6 +838,7 @@ impl<'generation> ResultStore<'generation> {
                 .transpose()?;
             let id = CandidateId(store.records.candidates.insert(
                 Candidate {
+                    kind,
                     name: name_lease,
                     semantic_len,
                     states,
@@ -807,7 +865,7 @@ impl<'generation> ResultStore<'generation> {
         })
     }
     fn profile_state(&self, id: CandidateId, profile: usize) -> Result<ProfileState> {
-        if profile >= self.records.generation.json_inspection.profiles.len() {
+        if profile >= self.records.plan().profiles.len() {
             return Err(StoreError::Identity);
         }
         let states = self.records.bytes.read(self.records.candidates.get(id.0)?.states)?;
@@ -954,8 +1012,7 @@ impl<'generation> ResultStore<'generation> {
     ) -> Result<OutcomeId> {
         let profile = self
             .records
-            .generation
-            .json_inspection
+            .plan()
             .groups
             .get(group)
             .ok_or(StoreError::Identity)?
@@ -1034,7 +1091,7 @@ impl<'generation> ResultStore<'generation> {
         self.active(|store| {
             store.budget.work(1)?;
             let source = store.records.outcomes.get(token.0 .0)?;
-            let groups = &store.records.generation.json_inspection.groups;
+            let groups = &store.records.plan().groups;
             if source.owner != owner
                 || source.stage != stage
                 || groups.get(source.group).ok_or(StoreError::Identity)?.profile
@@ -1082,8 +1139,7 @@ impl<'generation> ResultStore<'generation> {
             let candidate = outcome.owner;
             let profile = store
                 .records
-                .generation
-                .json_inspection
+                .plan()
                 .groups
                 .get(outcome.group)
                 .ok_or(StoreError::Identity)?
@@ -1210,8 +1266,7 @@ impl<'generation> ResultStore<'generation> {
             next = outcome.next;
             if self
                 .records
-                .generation
-                .json_inspection
+                .plan()
                 .groups
                 .get(outcome.group)
                 .ok_or(StoreError::Identity)?
@@ -1358,13 +1413,29 @@ impl<'generation> ResultStore<'generation> {
         })
     }
     pub(super) fn seal(&mut self, receipt: Option<Receipt>, summary: JsonSemanticSummary) -> Result<()> {
+        if self.records.domain != InspectionDomain::Json {
+            return Err(StoreError::Identity);
+        }
+        self.seal_summary(receipt, InspectionSummary::Json(summary))
+    }
+    pub(super) fn seal_xml(&mut self, receipt: Option<Receipt>, summary: XmlSemanticSummary) -> Result<()> {
+        if self.records.domain != InspectionDomain::Xml {
+            return Err(StoreError::Identity);
+        }
+        self.seal_summary(receipt, InspectionSummary::Xml(summary))
+    }
+    fn seal_summary(&mut self, receipt: Option<Receipt>, summary: InspectionSummary) -> Result<()> {
         self.active(|store| {
-            let sole_profile = store.records.generation.json_inspection.summary_profile();
+            let sole_profile = if store.records.domain == InspectionDomain::Json {
+                store.records.plan().summary_profile()
+            } else {
+                None
+            };
             let mut summary_no_hit = sole_profile.is_some()
                 && store.records.profiles.slots.capacity() == 0
                 && store.records.changes.slots.capacity() == 0
                 && store.records.outcomes.slots.capacity() == 0;
-            let demands = store.records.generation.json_inspection.named_demands.len();
+            let demands = store.records.plan().named_demands.len();
             store
                 .budget
                 .grow(&mut store.records.named_first, demands, false, false)?;
@@ -1389,7 +1460,7 @@ impl<'generation> ResultStore<'generation> {
                     while low < high {
                         store.budget.work(add(name.len(), 1)?)?;
                         let mid = low + (high - low) / 2;
-                        let expected = store.records.generation.json_inspection.named_demands[mid]
+                        let expected = store.records.plan().named_demands[mid]
                             .bytes(&store.records.generation)
                             .map_err(|_| StoreError::Identity)?;
                         match name.cmp(expected) {
@@ -1417,8 +1488,7 @@ impl<'generation> ResultStore<'generation> {
                     if matches!(outcome.result, StoredOutcome::Match { .. }) {
                         let group = store
                             .records
-                            .generation
-                            .json_inspection
+                            .plan()
                             .groups
                             .get(outcome.group)
                             .ok_or(StoreError::Identity)?;
@@ -1443,13 +1513,19 @@ impl<'generation> ResultStore<'generation> {
                     if !required {
                         continue;
                     }
-                    let prefix = collection.as_str().as_bytes();
+                    let prefix = if store.records.domain == InspectionDomain::Xml {
+                        b"XML".as_slice()
+                    } else {
+                        collection.as_str().as_bytes()
+                    };
+                    let named = store.records.candidates.get(id.0)?.kind != CandidateKind::XmlText;
                     store.records.bytes.read(name)?;
-                    let len = add(add(prefix.len(), 1)?, name.len)?;
+                    let separator = usize::from(named);
+                    let len = add(add(prefix.len(), separator)?, name.len)?;
                     let value = store.records.bytes.alloc(len, &mut store.budget)?;
                     store.budget.work(len)?;
                     let start = value.offset;
-                    let name_start = add(start, add(prefix.len(), 1)?)?;
+                    let name_start = add(start, add(prefix.len(), separator)?)?;
                     store
                         .records
                         .bytes
@@ -1457,12 +1533,14 @@ impl<'generation> ResultStore<'generation> {
                         .get_mut(start..add(start, prefix.len())?)
                         .ok_or(StoreError::Identity)?
                         .copy_from_slice(prefix);
-                    *store
-                        .records
-                        .bytes
-                        .bytes
-                        .get_mut(add(start, prefix.len())?)
-                        .ok_or(StoreError::Identity)? = b':';
+                    if named {
+                        *store
+                            .records
+                            .bytes
+                            .bytes
+                            .get_mut(add(start, prefix.len())?)
+                            .ok_or(StoreError::Identity)? = b':';
+                    }
                     store
                         .records
                         .bytes
@@ -1499,7 +1577,7 @@ impl<'generation> ResultStore<'generation> {
             }
             // Mint only after survivor identity/order and sparse name
             // publication have succeeded.
-            store.summary_no_hit = summary_no_hit && count == summary.argument_count;
+            store.summary_no_hit = summary_no_hit && count == summary.candidate_count();
             store.sealed = receipt;
             store.summary = Some(summary);
             store.terminal = Terminal::Sealed;
@@ -1593,6 +1671,7 @@ impl<'generation> ResultStore<'generation> {
 }
 
 pub(super) struct CandidateView<'a> {
+    pub kind: CandidateKind,
     pub name: &'a [u8],
     pub semantic_len: usize,
     pub deferred: Option<&'a [u8]>,
@@ -1631,6 +1710,16 @@ pub(super) struct OutcomeView {
 }
 
 impl SealedResults<'_> {
+    pub(super) fn domain(&self) -> InspectionDomain {
+        self.records.domain
+    }
+    pub(super) fn json_summary(&self) -> Result<JsonSemanticSummary> {
+        match self.summary {
+            InspectionSummary::Json(summary) => Ok(summary),
+            _ => Err(StoreError::Identity),
+        }
+    }
+
     pub(super) fn admits_summary_no_hit(
         &self,
         budget: &InspectionBudget,
@@ -1681,8 +1770,9 @@ impl SealedResults<'_> {
                 .get(index.get() as usize - 1)
                 .ok_or(StoreError::Identity)?;
             let view = match collection {
-                CollectionKind::Args => 0,
-                CollectionKind::ArgsNames => 1,
+                CollectionKind::Args if self.records.domain == InspectionDomain::Json => 0,
+                CollectionKind::ArgsNames if self.records.domain == InspectionDomain::Json => 1,
+                CollectionKind::Xml if self.records.domain == InspectionDomain::Xml => 0,
                 _ => return Err(StoreError::Identity),
             };
             let span = pair.values[view].ok_or(StoreError::Identity)?;
@@ -1723,6 +1813,7 @@ impl SealedResults<'_> {
                 return Err(StoreError::State);
             }
             Ok(CandidateView {
+                kind: candidate.kind,
                 name: self.records.bytes.read(candidate.name)?,
                 semantic_len: candidate.semantic_len,
                 deferred: candidate
@@ -1741,7 +1832,7 @@ impl SealedResults<'_> {
     ) -> Result<ProfileView> {
         budget.checked(self.records.owner, |budget| {
             budget.work(1)?;
-            if compiled >= self.records.generation.json_inspection.profiles.len() {
+            if compiled >= self.records.plan().profiles.len() {
                 return Err(StoreError::Identity);
             }
             let candidate = self.records.candidates.get(owner.0)?;
@@ -1817,7 +1908,7 @@ impl SealedResults<'_> {
         generation: &CompiledGeneration,
         runtime: RuntimeLimits,
         mode: EvaluationMode,
-    ) -> Result<SelectedOutcome> {
+    ) -> Result<(SelectedOutcome, ProfileView)> {
         budget.checked(self.records.owner, |budget| {
             budget.work(1)?;
             if !std::ptr::eq(&*self.records.generation, generation)
@@ -1828,14 +1919,14 @@ impl SealedResults<'_> {
             }
             let compiled = self
                 .records
-                .generation
-                .json_inspection
+                .plan()
                 .groups
                 .get(group)
                 .ok_or(StoreError::Identity)?
                 .profile;
-            if let Some(error) = self.profile(budget, owner, compiled)?.error {
-                return Ok(SelectedOutcome::TransformError(error));
+            let profile = self.profile(budget, owner, compiled)?;
+            if let Some(error) = profile.error {
+                return Ok((SelectedOutcome::TransformError(error), profile));
             }
             let mut next = self
                 .records
@@ -1850,11 +1941,11 @@ impl SealedResults<'_> {
                     return Err(StoreError::Identity);
                 }
                 if outcome.group == group {
-                    return Ok(SelectedOutcome::MatchOrError(id));
+                    return Ok((SelectedOutcome::MatchOrError(id), profile));
                 }
                 next = outcome.next;
             }
-            Ok(SelectedOutcome::NoMatch)
+            Ok((SelectedOutcome::NoMatch, profile))
         })
     }
     pub(super) fn outcome(

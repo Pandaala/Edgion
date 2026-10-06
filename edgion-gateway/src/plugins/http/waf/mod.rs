@@ -9,7 +9,8 @@ use edgion_resources::resources::edgion_plugins::{BodyRequirement, WafConfig, Wa
 use edgion_waf::seclang::{
     BodyError, BodyProcessorSelection, JsonCheckerError, JsonInspectionLimits, JsonStreamError, JsonStreamLimit,
     PhaseOutcome, RequestBody, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead, ResponseHeader,
-    ResponseWindow, RuleEngineMode, RuntimeError, RuntimeLimits, Transaction,
+    ResponseWindow, RuleEngineMode, RuntimeError, RuntimeLimits, Transaction, XmlInspectionLimits, XmlStreamError,
+    XmlStreamLimit,
 };
 
 use crate::ctx::{WafErrorCode, WafLogPhase, WafPhase, WafPhaseClaim};
@@ -124,6 +125,13 @@ impl WafPlugin {
                         kind: JsonStreamLimit::SourceBytes,
                         ..
                     }),
+            }
+            | RuntimeError::XmlStream {
+                kind:
+                    XmlStreamError::Limit {
+                        kind: XmlStreamLimit::SourceBytes,
+                        ..
+                    },
             } => 413,
             _ => 500,
         }
@@ -152,9 +160,21 @@ impl WafPlugin {
                 }
                 _ => WafErrorCode::BodyProcessing,
             },
-            RuntimeError::JsonResultLimit { .. } => WafErrorCode::RuntimeLimit,
-            RuntimeError::JsonUnsupported { .. } => WafErrorCode::Unsupported,
-            RuntimeError::JsonInspectionState => WafErrorCode::RuntimeInvariant,
+            RuntimeError::XmlStream { kind } => match kind {
+                XmlStreamError::Limit {
+                    kind: XmlStreamLimit::SourceBytes,
+                    ..
+                } => WafErrorCode::BodyLimit,
+                XmlStreamError::Limit { .. } => WafErrorCode::RuntimeLimit,
+                XmlStreamError::Allocation => WafErrorCode::Allocation,
+                XmlStreamError::Arithmetic => WafErrorCode::Arithmetic,
+                XmlStreamError::Abandoned | XmlStreamError::AlreadyComplete => WafErrorCode::PhaseState,
+                XmlStreamError::SinkRejected => WafErrorCode::RuntimeInvariant,
+                _ => WafErrorCode::BodyProcessing,
+            },
+            RuntimeError::XmlResultLimit { .. } | RuntimeError::JsonResultLimit { .. } => WafErrorCode::RuntimeLimit,
+            RuntimeError::XmlUnsupported { .. } | RuntimeError::JsonUnsupported { .. } => WafErrorCode::Unsupported,
+            RuntimeError::XmlInspectionState | RuntimeError::JsonInspectionState => WafErrorCode::RuntimeInvariant,
             RuntimeError::InputByteLimit { .. }
             | RuntimeError::DetectorInputLimit { .. }
             | RuntimeError::HeaderLimit { .. }
@@ -368,20 +388,32 @@ impl RequestFilter for WafPlugin {
         let prefix_mode = self.shared.request_body_inspection == WafRequestBodyInspection::Prefix
             && self.shared.requires_request_body;
         let mut prefix_complete = false;
-        let json_published = self.shared.request_body_inspection == WafRequestBodyInspection::Full
-            && processor == BodyProcessorSelection::Json;
-        if json_published {
+        let structured_published = self.shared.request_body_inspection == WafRequestBodyInspection::Full
+            && matches!(processor, BodyProcessorSelection::Json | BodyProcessorSelection::Xml);
+        if structured_published {
             let cap = session.ctx().request_body_config.max_body_size_bytes;
-            match json_capture::inspect(
-                session,
-                &mut transaction,
-                self.shared.json_limits,
-                runtime_limits,
-                cap,
-                self.shared.requires_request_body,
-            )
-            .await
-            {
+            let inspection = if processor == BodyProcessorSelection::Xml {
+                json_capture::inspect_xml(
+                    session,
+                    &mut transaction,
+                    XmlInspectionLimits::default(),
+                    runtime_limits,
+                    cap,
+                    self.shared.requires_request_body,
+                )
+                .await
+            } else {
+                json_capture::inspect(
+                    session,
+                    &mut transaction,
+                    self.shared.json_limits,
+                    runtime_limits,
+                    cap,
+                    self.shared.requires_request_body,
+                )
+                .await
+            };
+            match inspection {
                 Ok(()) => {}
                 Err(json_capture::JsonCaptureError::Body(error)) => {
                     return self.body_read_failure(session, log, &error)
@@ -391,7 +423,7 @@ impl RequestFilter for WafPlugin {
                 }
             }
         }
-        let mut body = if self.shared.requires_request_body && !json_published {
+        let mut body = if self.shared.requires_request_body && !structured_published {
             let result = if prefix_mode {
                 session
                     .read_request_body_prefix(self.shared.request_body_prefix_bytes)
@@ -457,7 +489,7 @@ impl RequestFilter for WafPlugin {
         } else {
             bytes::Bytes::new()
         };
-        if self.shared.request_body_inspection == WafRequestBodyInspection::Full && !json_published {
+        if self.shared.request_body_inspection == WafRequestBodyInspection::Full && !structured_published {
             crate::observe::metrics::record_waf_body_bytes_inspected("request", body.len());
             if let Err(error) = transaction.publish_request_body_with_json_limits(
                 RequestBody::new(std::mem::take(&mut body), processor),

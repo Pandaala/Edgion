@@ -104,7 +104,7 @@ fn no_hit_payloads_are_absent_and_summary_only_has_no_candidates() {
             }
         );
         let (sealed, _) = sink.into_sealed().unwrap();
-        assert_eq!(sealed.summary.argument_count, 2);
+        assert_eq!(sealed.json_summary().unwrap().argument_count, 2);
     }
 }
 
@@ -134,6 +134,7 @@ fn duplicate_errors_and_payloads_are_replaced_at_every_split() {
         assert!(matches!(
             sealed
                 .lookup_selected(&mut budget, first, 0, &generation, runtime, EvaluationMode::Accelerated)
+                .map(|(outcome, _)| outcome)
                 .unwrap(),
             SelectedOutcome::MatchOrError(_)
         ));
@@ -170,6 +171,7 @@ fn changed_topology_and_late_transform_error_override_early_match() {
     assert!(matches!(
         sealed
             .lookup_selected(&mut budget, id, 0, &generation, runtime, EvaluationMode::Accelerated)
+            .map(|(outcome, _)| outcome)
             .unwrap(),
         SelectedOutcome::TransformError(_)
     ));
@@ -263,6 +265,7 @@ fn shared_capture_program_aliases_resolve_identical_ordered_captures_in_both_mod
             };
             let SelectedOutcome::MatchOrError(outcome) = sealed
                 .lookup_selected(&mut budget, id, group, &generation, runtime, mode)
+                .map(|(outcome, _)| outcome)
                 .unwrap()
             else {
                 panic!("expected alias match");
@@ -298,6 +301,7 @@ fn shared_capture_program_aliases_resolve_identical_ordered_captures_in_both_mod
         assert!(matches!(
             sealed
                 .lookup_selected(&mut budget, id, group, &generation, runtime, mode)
+                .map(|(outcome, _)| outcome)
                 .unwrap(),
             SelectedOutcome::NoMatch
         ));
@@ -377,6 +381,7 @@ fn literal_regex_dispatch_named_dependencies_and_negated_captures() {
     let first = sealed.receipt.unwrap().head;
     let SelectedOutcome::MatchOrError(outcome) = sealed
         .lookup_selected(&mut budget, first, 0, &generation, runtime, EvaluationMode::Accelerated)
+        .map(|(outcome, _)| outcome)
         .unwrap()
     else {
         panic!("missing negated match")
@@ -440,6 +445,7 @@ fn positive_captures_and_stored_payload_share_the_peak_capacity_budget() {
     let id = sealed.receipt.unwrap().head;
     let SelectedOutcome::MatchOrError(outcome) = sealed
         .lookup_selected(&mut budget, id, 0, &generation, runtime, EvaluationMode::Accelerated)
+        .map(|(outcome, _)| outcome)
         .unwrap()
     else {
         panic!("missing capture match")
@@ -531,6 +537,7 @@ fn incomplete_stage_failures_are_semantic_but_work_exhaustion_is_physical() {
     let id = sealed.receipt.unwrap().head;
     let SelectedOutcome::MatchOrError(outcome) = sealed
         .lookup_selected(&mut budget, id, 0, &generation, runtime, EvaluationMode::Accelerated)
+        .map(|(outcome, _)| outcome)
         .unwrap()
     else {
         panic!("missing integer error")
@@ -819,6 +826,7 @@ fn range_capture_collection_preserves_aliases_offsets_and_generated_fingerprints
             let id = sealed.receipt.unwrap().head;
             let SelectedOutcome::MatchOrError(outcome) = sealed
                 .lookup_selected(&mut budget, id, 0, &generation, runtime, mode)
+                .map(|(outcome, _)| outcome)
                 .unwrap()
             else {
                 panic!("expected outcome")
@@ -875,6 +883,7 @@ fn range_capture_logical_limits_keep_alias_lengths_and_order() {
         let id = sealed.receipt.unwrap().head;
         let SelectedOutcome::MatchOrError(outcome) = sealed
             .lookup_selected(&mut budget, id, 0, &generation, runtime, EvaluationMode::Accelerated)
+            .map(|(outcome, _)| outcome)
             .unwrap()
         else {
             panic!("expected outcome")
@@ -980,7 +989,7 @@ fn capture_builder_reuses_high_water_capacity_and_releases_on_abandon_and_eos() 
     );
     feed(&mut sink, br#"{"a":"hithithit","b":"hit"}"#, 9);
     assert_eq!(sink.state.captures.bytes().unwrap(), 0);
-    assert_eq!(sink.into_sealed().unwrap().0.summary.argument_count, 2);
+    assert_eq!(sink.into_sealed().unwrap().0.json_summary().unwrap().argument_count, 2);
 }
 
 #[test]

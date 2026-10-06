@@ -268,10 +268,10 @@ this field supplies a complete override profile. Zero is restrictive, and every
 field in an explicit profile is required. Legacy `document`, `plan` and `facts`
 fields are rejected.
 
-The Gateway proves complete bounded capture before one canonical body read.
-Resident contiguous bodies share their existing Bytes allocation. Spilled or
-edited bodies may require canonical BodyStorage materialization. The checker
-scans that stable source once, matches precompiled rules as values complete,
+The Gateway feeds actual capture chunks to the checker and proves bounded
+completion before Phase 2. Cached bodies use bounded immutable snapshot chunks;
+JSON-only spilled bodies need no complete materialization. The checker
+uses one grammar pass, matches precompiled rules as values complete,
 and retains only required names, matching results and explicitly named deferred
 values. It does not build a complete JSON value tree. Raw REQUEST_BODY visibility
 remains controlled by the existing processor and ctl rules.
@@ -336,9 +336,69 @@ Logical publication checks use fixed priority: source/prelude, name length,
 depth, entries, decoded bytes, traversal work, then combined totals. Each limit
 remains independent; competing failures may differ from the former DOM parser.
 Depth is independently configurable; there is no historical 127-container guard.
-WAF runtime-byte metrics represent logical transaction accounting, not physical
-inspection capacity or RSS. Prefix inspected-byte metrics exclude full scans.
+The WAF runtime-byte gauge combines logical transaction accounting with known
+provisional parser/result heap capacities during inspection. It excludes source
+storage and allocator overhead and does not measure RSS.
 
+
+### 有界 XML 检查
+
+`requestBody.inspection: full` 下，实际选择 XML processor 时使用原生检查器。
+自动选择识别 `application/xml`、`text/xml` 和以 `+xml` 结尾的媒体类型，忽略大小写及参数；
+phase 1 的 `ctl:requestBodyProcessor=XML` 可以覆盖选择。HTTP Content-Type 参数（包括
+`charset`）不驱动转码或 XML 编码校验；输入字节必须是 UTF-8，XML 声明的 encoding
+若存在也只能为 UTF-8。下面配置引用已有 policy：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: application-waf
+  namespace: default
+spec:
+  waf:
+    mode: on
+    priority: 100
+    requestBody:
+      inspection: full
+    policyRef:
+      name: application-waf-policy
+```
+
+在引用的 rule bundle 中，`XML` 选择文本及属性值，`XML:/*` 选择文本和 CDATA，
+`XML://@*` 选择属性。例如：
+
+```apache
+SecRule XML:/*|XML://@* "@contains forbidden" "id:100001,phase:2,deny,status:403"
+```
+
+这些选择器按引擎的值投影工作，不支持任意 XPath。普通文本在 markup 之间分别产生候选，
+去除外围的字面 XML 空白；CDATA 独立产生候选且不裁剪。属性按原文的限定名称匹配，
+包括 namespace 声明。命中名称是 `XML` 或 `XML:<attribute>`。注释、PI 和元素名不是值。
+XML 不增加 ARGS 条目，combined-size 元数据只计算 query 参数。
+
+支持范围是 UTF-8/XML 1.0，可带 BOM 和声明。检查结构、字符、namespace 绑定及重复属性，
+规范化换行和属性的字面空白，支持五种预定义实体及合法数值引用。拒绝 DTD、外部或一般实体、
+非 UTF-8 字节或 encoding 声明及未支持的 XML 路径；这不是 schema 校验。动态 XML value operand 在 Full 配置
+校验时拒绝，动态 count operand 仍可用。已有 CRS 属性排除规则按原顺序生效。
+
+| 范围 | 固定默认限制 |
+|---|---|
+| parser | source/raw token 16 MiB；name 16 KiB；decoded bytes 32 MiB；events 262144；depth 64 |
+| structure | 每个 tag 的属性 65536；活动 namespace binding 65536；活动 name/namespace 字节 8 MiB |
+| storage/work | parser heap 32 MiB、work 128 MiB；selected-result 限制与 JSON result 默认值相同 |
+
+没有 `requestBody.xml` 配置项。物理检查限制与逻辑 WAF、Gateway body 限制分别生效。
+连续的普通 value 优先引用原文，跨 chunk 或需要规范化的 value 使用可复用的内联缓冲区，
+按上限扩容；不构建完整 XML 树或字段值映射。匹配、count 所需元数据及 capture 仍会占用
+有界存储。
+
+Full XML 与 JSON 共用 canonical BodyStorage 捕获及转发路径，XML-only spill 不需要
+完整 materialization。raw 可见性和格式错误的 DetectionOnly fallback 保留原策略；
+格式错误丢弃暂存 XML 命中，物理限制失败在 DetectionOnly 下也拒绝。
+空 transport body 可以接受，非空的纯空白或注释文档仍需要 root。
+由 XML 值产生的 phase 2 capture、chain、TX 和 control 效果在完整准入后按规则顺序执行。
+phase 1 的效果在 body 检查前执行。
 
 ### 响应和配置更新
 

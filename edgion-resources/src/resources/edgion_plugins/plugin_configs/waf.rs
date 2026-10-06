@@ -7,7 +7,8 @@ use edgion_waf::seclang::{
     IncludeFailure, IncludeRequest, IncludeSink, IncludeSource, JsonInspectionLimits, JsonInspectionUnsupported,
     JsonResultLimits, JsonStreamLimits, JsonStructureLimits, Phase, PhaseDefaults, RuleBundleMember, RuleBundleSource,
     SemanticError, SemanticLocation, SemanticValidationContext, SemanticValidationError, SourceError, SourcePosition,
-    SyntaxError, UnavailableCapability, DEFAULT_REQUEST_BODY_PREFIX_BYTES, MAX_REQUEST_BODY_PREFIX_BYTES,
+    SyntaxError, UnavailableCapability, XmlInspectionUnsupported, DEFAULT_REQUEST_BODY_PREFIX_BYTES,
+    MAX_REQUEST_BODY_PREFIX_BYTES,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -367,6 +368,7 @@ enum WafCompileFailure {
     Frontend(FrontendError),
     Prefix(&'static str),
     Json(JsonInspectionUnsupported),
+    Xml(XmlInspectionUnsupported),
 }
 
 fn capability_name(capability: UnavailableCapability) -> (&'static str, &'static str) {
@@ -878,6 +880,8 @@ impl WafConfig {
                 .map_err(WafCompileFailure::Prefix)?;
         } else if let Some(finding) = generation.json_inspection_unsupported().first() {
             return Err(WafCompileFailure::Json(*finding));
+        } else if let Some(finding) = generation.xml_inspection_unsupported().first() {
+            return Err(WafCompileFailure::Xml(*finding));
         }
         Ok(())
     }
@@ -1103,6 +1107,12 @@ impl WafConfig {
                     "Use bounded named JSON operands or supported static predicates",
                 ));
             }
+            Err(WafCompileFailure::Xml(_)) => {
+                report.failure = Some(WafSupportFailure::new(
+                    "unsupported_xml_dependency",
+                    "Use supported XML selectors and static XML value predicates",
+                ));
+            }
             Err(WafCompileFailure::Prefix(_)) => {
                 report.failure = Some(WafSupportFailure::new(
                     "unsupported_semantics",
@@ -1119,6 +1129,10 @@ impl WafConfig {
             WafCompileFailure::Config(message) => message,
             WafCompileFailure::Frontend(error) => format!("WAF rules are not executable: {error}"),
             WafCompileFailure::Prefix(message) => message.to_string(),
+            WafCompileFailure::Xml(finding) => format!(
+                "WAF XML dependency is unsupported: rule {}, member {}, reason {:?}",
+                finding.rule_id, finding.member, finding.reason
+            ),
             WafCompileFailure::Json(finding) => format!(
                 "WAF JSON dependency is unsupported: rule {}, member {}, reason {:?}",
                 finding.rule_id, finding.member, finding.reason

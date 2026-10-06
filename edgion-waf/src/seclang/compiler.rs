@@ -17,6 +17,14 @@ use super::{
     ValidatedSemanticDocument,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InspectionDomain {
+    Json,
+    Xml,
+}
+#[path = "xml_inspection_plan.rs"]
+mod xml_inspection_plan;
+pub use xml_inspection_plan::{XmlInspectionUnsupported, XmlInspectionUnsupportedReason};
 #[path = "json_inspection_plan.rs"]
 mod json_inspection_plan;
 pub use json_inspection_plan::{JsonInspectionUnsupported, JsonInspectionUnsupportedReason};
@@ -28,11 +36,12 @@ pub use transaction::{
     EvaluationMode, Intervention, JsonInspectionLimits, JsonInspectionSession, JsonInspectionUsage, JsonResultLimit,
     JsonResultLimits, PhaseOutcome, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead,
     ResponseHeader, ResponseWindow, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits, RuntimeMatcherError,
-    RuntimeTransformError, Transaction, DEFAULT_MAX_RUNTIME_CAPTURE_BYTES, DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES,
-    DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES, DEFAULT_MAX_RUNTIME_COOKIES, DEFAULT_MAX_RUNTIME_FINDINGS,
-    DEFAULT_MAX_RUNTIME_HEADERS, DEFAULT_MAX_RUNTIME_HEADER_BYTES, DEFAULT_MAX_RUNTIME_INPUT_BYTES,
-    DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES, DEFAULT_MAX_RUNTIME_OPERATOR_EVALUATIONS,
-    DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES, DEFAULT_MAX_RUNTIME_QUERY_ARGUMENTS, DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS,
+    RuntimeTransformError, Transaction, XmlInspectionLimits, XmlInspectionSession, XmlInspectionUsage,
+    DEFAULT_MAX_RUNTIME_CAPTURE_BYTES, DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES, DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES,
+    DEFAULT_MAX_RUNTIME_COOKIES, DEFAULT_MAX_RUNTIME_FINDINGS, DEFAULT_MAX_RUNTIME_HEADERS,
+    DEFAULT_MAX_RUNTIME_HEADER_BYTES, DEFAULT_MAX_RUNTIME_INPUT_BYTES, DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES,
+    DEFAULT_MAX_RUNTIME_OPERATOR_EVALUATIONS, DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES,
+    DEFAULT_MAX_RUNTIME_QUERY_ARGUMENTS, DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS,
     DEFAULT_MAX_RUNTIME_RESPONSE_HEADER_BYTES, DEFAULT_MAX_RUNTIME_RESPONSE_WINDOW_BYTES,
     DEFAULT_MAX_RUNTIME_RETAINED_BYTES, DEFAULT_MAX_RUNTIME_SELECTED_VALUES, DEFAULT_MAX_RUNTIME_SETVAR_ACTIONS,
     DEFAULT_MAX_RUNTIME_TRANSFORMATION_OUTPUT_BYTES, DEFAULT_MAX_RUNTIME_TRANSFORMATION_WORK_BYTES,
@@ -787,6 +796,7 @@ struct CompiledMarker {
 #[expect(dead_code, reason = "transaction execution consumes the immutable compiled arenas")]
 pub struct CompiledGeneration {
     json_inspection: json_inspection_plan::CompiledJsonPlan,
+    xml_inspection: json_inspection_plan::CompiledJsonPlan,
     prefix_validation: Result<(), &'static str>,
     requires_complete_request_body: bool,
     bytes: Vec<u8>,
@@ -1224,6 +1234,16 @@ impl CompiledGeneration {
 
     pub const fn compilation_peak_bytes(&self) -> usize {
         self.peak_bytes
+    }
+
+    fn inspection_plan(&self, domain: InspectionDomain) -> &json_inspection_plan::CompiledJsonPlan {
+        match domain {
+            InspectionDomain::Json => &self.json_inspection,
+            InspectionDomain::Xml => &self.xml_inspection,
+        }
+    }
+    pub fn xml_inspection_unsupported(&self) -> &[XmlInspectionUnsupported] {
+        &self.xml_inspection.xml_unsupported
     }
 
     /// JSON-specific capability findings; admission is configuration-aware.
@@ -3783,6 +3803,7 @@ impl CompiledGeneration {
         });
         let mut generation = Self {
             json_inspection: json_inspection_plan::CompiledJsonPlan::default(),
+            xml_inspection: json_inspection_plan::CompiledJsonPlan::default(),
             prefix_validation: Ok(()),
             requires_complete_request_body: false,
             bytes,
@@ -3815,6 +3836,12 @@ impl CompiledGeneration {
         };
         generation.json_inspection =
             json_inspection_plan::CompiledJsonPlan::compile(&generation, &mut work, &mut state.canonical_work)?;
+        generation.xml_inspection = json_inspection_plan::CompiledJsonPlan::compile_domain(
+            &generation,
+            &mut work,
+            &mut state.canonical_work,
+            InspectionDomain::Xml,
+        )?;
         generation.compiler_owned_bytes = work.compiler_owned_bytes;
         generation.peak_bytes = work.peak_bytes;
         generation.prefix_validation = generation.check_request_body_prefix();
