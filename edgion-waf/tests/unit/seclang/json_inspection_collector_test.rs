@@ -607,3 +607,165 @@ fn shared_matches_remain_separate_across_profiles_and_multimatch_stages() {
     assert_eq!(sink.usage().matched_bytes, 9);
     assert_eq!(scope.counts().get(Event::MatchedCopyBytes), 9);
 }
+
+#[test]
+fn range_capture_collection_preserves_aliases_offsets_and_generated_fingerprints() {
+    for (operator, transforms, input, expected) in [
+        (
+            "@rx ^pre(?P<word>hit)(?P<empty>)(x)?$",
+            ",t:lowercase",
+            br#"{"a":"PRE\u0048IT"}"#.as_slice(),
+            vec![
+                (b"0".as_slice(), b"prehit".as_slice(), Some(0)),
+                (b"1", b"hit", Some(3)),
+                (b"word", b"hit", Some(3)),
+                (b"2", b"", Some(6)),
+                (b"empty", b"", Some(6)),
+            ],
+        ),
+        (
+            "@pm token",
+            ",t:lowercase",
+            br#"{"a":"A TOKEN HERE"}"#,
+            vec![(b"0".as_slice(), b"token".as_slice(), Some(2))],
+        ),
+        (
+            "@detectSQLi",
+            "",
+            br#"{"a":"1 OR 1=1"}"#,
+            vec![(b"0".as_slice(), b"1&1".as_slice(), None)],
+        ),
+    ] {
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let generation = compile(&format!(
+                "SecRule ARGS \"{operator}\" \"id:1,phase:2,pass,capture{transforms}\""
+            ));
+            let runtime = RuntimeLimits::default();
+            let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+            let scope = measurements::start();
+            let mut sink = collector(&generation, &mut tx, runtime, mode, ResultLimits::default());
+            feed(&mut sink, input, 5);
+            let logical = expected
+                .iter()
+                .map(|(key, value, _)| key.len() + value.len())
+                .sum::<usize>();
+            let keys = expected.iter().map(|(key, _, _)| key.len()).sum::<usize>();
+            assert_eq!(sink.usage().capture_bytes, logical);
+            assert_eq!(scope.counts().get(Event::TemporaryCaptureCopyBytes), keys);
+            assert_eq!(
+                scope.counts().get(Event::CaptureCopyBytes),
+                keys + if operator == "@detectSQLi" { 3 } else { 0 }
+            );
+            let (sealed, mut budget) = sink.into_sealed().unwrap();
+            let id = sealed.receipt.unwrap().head;
+            let SelectedOutcome::MatchOrError(outcome) = sealed
+                .lookup_selected(&mut budget, id, 0, &generation, runtime, mode)
+                .unwrap()
+            else {
+                panic!("expected outcome")
+            };
+            let OutcomeValue::Match { value, first_capture } = sealed.outcome(&mut budget, id, outcome).unwrap().result
+            else {
+                panic!("expected match")
+            };
+            let parent = sealed.match_value(&mut budget, value).unwrap();
+            let mut next = first_capture;
+            for (key, expected, offset) in &expected {
+                let capture = sealed.capture(&mut budget, id, outcome, next.unwrap()).unwrap();
+                let bytes = sealed.match_value(&mut budget, capture.value).unwrap();
+                assert_eq!(capture.key, *key);
+                assert_eq!(bytes, *expected);
+                if let Some(offset) = offset {
+                    assert_eq!(bytes.as_ptr(), parent[*offset..].as_ptr());
+                } else {
+                    assert_ne!(bytes.as_ptr(), parent.as_ptr());
+                }
+                next = capture.next;
+            }
+            assert!(next.is_none());
+        }
+    }
+}
+
+#[test]
+fn range_capture_logical_limits_keep_alias_lengths_and_order() {
+    let generation = compile("SecRule ARGS \"@rx ^pre(?P<word>hit)(?P<empty>)(x)?$\" \"id:1,phase:2,pass,capture\"");
+    for (entries, bytes, expected) in [
+        (5, 24, None),
+        (4, 24, Some(RuntimeError::CaptureEntryLimit { limit: 4 })),
+        (0, 24, Some(RuntimeError::CaptureEntryLimit { limit: 0 })),
+        (5, 23, Some(RuntimeError::CaptureByteLimit { limit: 23 })),
+        (5, 0, Some(RuntimeError::CaptureByteLimit { limit: 0 })),
+    ] {
+        let runtime = RuntimeLimits {
+            max_capture_entries: entries,
+            max_capture_bytes: bytes,
+            ..RuntimeLimits::default()
+        };
+        let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+        let mut sink = collector(
+            &generation,
+            &mut tx,
+            runtime,
+            EvaluationMode::Accelerated,
+            ResultLimits::default(),
+        );
+        feed(&mut sink, br#"{"a":"prehit"}"#, 4);
+        assert_eq!(sink.usage().live_captures, if expected.is_none() { 5 } else { 0 });
+        let (sealed, mut budget) = sink.into_sealed().unwrap();
+        let id = sealed.receipt.unwrap().head;
+        let SelectedOutcome::MatchOrError(outcome) = sealed
+            .lookup_selected(&mut budget, id, 0, &generation, runtime, EvaluationMode::Accelerated)
+            .unwrap()
+        else {
+            panic!("expected outcome")
+        };
+        match sealed.outcome(&mut budget, id, outcome).unwrap().result {
+            OutcomeValue::Match { .. } => assert_eq!(expected, None),
+            OutcomeValue::Error(error) => {
+                assert_eq!(Some(error.error), expected);
+                assert_eq!(error.checkpoint, StoredCheckpoint::Captures as usize);
+            }
+        }
+    }
+}
+
+#[test]
+fn range_capture_cleanup_discards_replaced_and_late_invalidated_hits() {
+    for (source, input) in [
+        (
+            "SecRule ARGS \"@rx (hit)\" \"id:1,phase:2,pass,capture\"",
+            br#"{"a":{"b":"hit"},"a":{"b":"miss"}}"#.as_slice(),
+        ),
+        (
+            "SecRule ARGS \"@rx (HIT)\" \"id:1,phase:2,pass,capture,multiMatch,t:lowercase,t:hexEncode\"",
+            br#"{"a":"HIT"}"#,
+        ),
+    ] {
+        let generation = compile(source);
+        let runtime = RuntimeLimits {
+            max_transformation_output_bytes: if source.contains("hexEncode") {
+                3
+            } else {
+                RuntimeLimits::default().max_transformation_output_bytes
+            },
+            ..RuntimeLimits::default()
+        };
+        let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+        let scope = measurements::start();
+        let mut sink = collector(
+            &generation,
+            &mut tx,
+            runtime,
+            EvaluationMode::Accelerated,
+            ResultLimits::default(),
+        );
+        feed(&mut sink, input, 5);
+        assert!(scope.counts().get(Event::MatchedCopyBytes) > 0);
+        assert_eq!(scope.counts().get(Event::TemporaryCaptureCopyBytes), 2);
+        assert_eq!(sink.usage().live_captures, 0);
+        assert_eq!(sink.usage().capture_bytes, 0);
+        assert_eq!(sink.usage().matched_bytes, 0);
+        assert!(sink.into_sealed().is_ok());
+    }
+}

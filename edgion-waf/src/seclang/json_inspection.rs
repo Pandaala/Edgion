@@ -3,6 +3,7 @@
 use crate::seclang::measurements::{self, Event};
 
 use std::mem::size_of;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_STORE: AtomicU64 = AtomicU64::new(1);
@@ -552,6 +553,7 @@ struct Candidate {
     profiles: Option<ProfileId>,
     outcomes: Option<OutcomeId>,
     next: Option<CandidateId>,
+    qualified_name_pair: Option<NonZeroU32>,
     complete: bool,
 }
 struct Profile {
@@ -595,8 +597,22 @@ enum StoredOutcome {
 struct Capture {
     owner: OutcomeId,
     key: Lease,
-    value: Lease,
+    value: StoredCaptureValue,
     next: Option<CaptureId>,
+}
+
+#[derive(Clone, Copy)]
+enum StoredCaptureValue {
+    Owned(Lease),
+    MatchRange { start: usize, len: usize },
+}
+impl StoredCaptureValue {
+    fn len(self) -> usize {
+        match self {
+            Self::Owned(value) => value.len,
+            Self::MatchRange { len, .. } => len,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -614,59 +630,23 @@ pub(super) struct CompletionProof {
     candidate: CandidateId,
 }
 
-/// Sparse seal-time rows: no metadata is added to unmatched candidates.
-struct QualifiedName {
-    candidate: CandidateId,
-    collection: CollectionKind,
-    value: Lease,
+/// Sparse seal-time names. Candidate identity is checked before following its
+/// pair index; immutable spans do not repeat owner or allocation-class metadata.
+#[derive(Clone, Copy)]
+struct QualifiedSpan {
+    offset: NonZeroUsize,
+    len: usize,
 }
-impl QualifiedName {
-    fn key(&self) -> (u32, usize) {
-        (self.candidate.0.slot, collection_index(self.collection))
-    }
-}
-
-/// In-place heapsort charges every comparison and moved row and may stop on a
-/// sticky physical limit. No temporary sorting allocation is needed.
-fn sort_qualified_names(rows: &mut [QualifiedName], budget: &mut InspectionBudget) -> Result<()> {
-    fn sift(rows: &mut [QualifiedName], mut root: usize, end: usize, budget: &mut InspectionBudget) -> Result<()> {
-        loop {
-            let child = add(mul(root, 2)?, 1)?;
-            if child >= end {
-                return Ok(());
-            }
-            let mut largest = child;
-            if child + 1 < end {
-                budget.work(1)?;
-                if rows[child].key() < rows[child + 1].key() {
-                    largest = child + 1;
-                }
-            }
-            budget.work(1)?;
-            if rows[root].key() >= rows[largest].key() {
-                return Ok(());
-            }
-            budget.work(mul(2, size_of::<QualifiedName>())?)?;
-            rows.swap(root, largest);
-            root = largest;
-        }
-    }
-    for root in (0..rows.len() / 2).rev() {
-        sift(rows, root, rows.len(), budget)?;
-    }
-    for end in (1..rows.len()).rev() {
-        budget.work(mul(2, size_of::<QualifiedName>())?)?;
-        rows.swap(0, end);
-        sift(rows, 0, end, budget)?;
-    }
-    Ok(())
+#[derive(Default)]
+struct QualifiedNamePair {
+    values: [Option<QualifiedSpan>; 2],
 }
 
 struct StoreRecords<'generation> {
     owner: u64,
     generation: GenerationHandle<'generation>,
     named_first: Vec<Option<CandidateId>>,
-    qualified_names: Vec<QualifiedName>,
+    qualified_names: Vec<QualifiedNamePair>,
     runtime: RuntimeLimits,
     mode: EvaluationMode,
     candidates: Pool<Candidate>,
@@ -782,6 +762,7 @@ impl<'generation> ResultStore<'generation> {
                     profiles: None,
                     outcomes: None,
                     next: None,
+                    qualified_name_pair: None,
                     complete: false,
                 },
                 &mut store.budget,
@@ -1040,27 +1021,61 @@ impl<'generation> ResultStore<'generation> {
         })
     }
     pub(super) fn add_capture(&mut self, owner: OutcomeId, key: &[u8], value: &[u8]) -> Result<()> {
+        self.add_capture_value(owner, key, Some(value), 0, value.len())
+    }
+    pub(super) fn add_capture_range(&mut self, owner: OutcomeId, key: &[u8], start: usize, len: usize) -> Result<()> {
+        self.add_capture_value(owner, key, None, start, len)
+    }
+    fn add_capture_value(
+        &mut self,
+        owner: OutcomeId,
+        key: &[u8],
+        owned: Option<&[u8]>,
+        start: usize,
+        len: usize,
+    ) -> Result<()> {
         self.active(|store| {
             let outcome = store.records.outcomes.get(owner.0)?;
             let candidate = outcome.owner;
-            let profile = store.records.generation.json_inspection.groups[outcome.group].profile;
+            let profile = store
+                .records
+                .generation
+                .json_inspection
+                .groups
+                .get(outcome.group)
+                .ok_or(StoreError::Identity)?
+                .profile;
             if store.profile_state(candidate, profile)? != ProfileState::Unseen {
                 return Err(StoreError::State);
             }
-            let StoredOutcome::Match { tail, .. } = outcome.result else {
+            let StoredOutcome::Match {
+                tail, value: parent, ..
+            } = outcome.result
+            else {
                 return Err(StoreError::State);
             };
+            if owned.is_none() {
+                store.records.bytes.read(parent)?;
+                if add(start, len)? > parent.len {
+                    return Err(StoreError::Identity);
+                }
+            }
             let key_lease = store.records.bytes.copy(key, &mut store.budget)?;
             #[cfg(test)]
             measurements::record(Event::CaptureCopyBytes, key.len());
-            let value_lease = store.records.bytes.copy(value, &mut store.budget)?;
-            #[cfg(test)]
-            measurements::record(Event::CaptureCopyBytes, value.len());
+            let value = if let Some(bytes) = owned {
+                let lease = store.records.bytes.copy(bytes, &mut store.budget)?;
+                #[cfg(test)]
+                measurements::record(Event::CaptureCopyBytes, bytes.len());
+                StoredCaptureValue::Owned(lease)
+            } else {
+                StoredCaptureValue::MatchRange { start, len }
+            };
             let id = CaptureId(store.records.captures.insert(
                 Capture {
                     owner,
                     key: key_lease,
-                    value: value_lease,
+                    value,
                     next: None,
                 },
                 &mut store.budget,
@@ -1082,7 +1097,7 @@ impl<'generation> ResultStore<'generation> {
             }
             *stored_tail = Some(id);
             store.budget.usage.live_captures += 1;
-            store.budget.usage.capture_bytes = add(store.budget.usage.capture_bytes, add(key.len(), value.len())?)?;
+            store.budget.usage.capture_bytes = add(store.budget.usage.capture_bytes, add(key.len(), len)?)?;
             Ok(())
         })
     }
@@ -1122,10 +1137,12 @@ impl<'generation> ResultStore<'generation> {
                 let capture = self.records.captures.remove(capture.0, &mut self.budget)?;
                 next = capture.next;
                 self.records.bytes.free(capture.key, &mut self.budget)?;
-                self.records.bytes.free(capture.value, &mut self.budget)?;
+                if let StoredCaptureValue::Owned(value) = capture.value {
+                    self.records.bytes.free(value, &mut self.budget)?;
+                }
                 self.budget.usage.capture_bytes = sub(
                     self.budget.usage.capture_bytes,
-                    add(capture.key.len, capture.value.len)?,
+                    add(capture.key.len, capture.value.len())?,
                 )?;
                 self.budget.usage.live_captures = sub(self.budget.usage.live_captures, 1)?;
             }
@@ -1361,9 +1378,15 @@ impl<'generation> ResultStore<'generation> {
                     }
                     outcome_next = outcome.next;
                 }
-                for (required, collection) in required
+                let has_name = required.into_iter().any(|required| required);
+                let mut pair = QualifiedNamePair::default();
+                if has_name {
+                    store.budget.grow(&mut store.records.qualified_names, 1, true, false)?;
+                }
+                for (view, (required, collection)) in required
                     .into_iter()
                     .zip([CollectionKind::Args, CollectionKind::ArgsNames])
+                    .enumerate()
                 {
                     if !required {
                         continue;
@@ -1371,7 +1394,6 @@ impl<'generation> ResultStore<'generation> {
                     let prefix = collection.as_str().as_bytes();
                     store.records.bytes.read(name)?;
                     let len = add(add(prefix.len(), 1)?, name.len)?;
-                    store.budget.grow(&mut store.records.qualified_names, 1, true, false)?;
                     let value = store.records.bytes.alloc(len, &mut store.budget)?;
                     store.budget.work(len)?;
                     let start = value.offset;
@@ -1400,13 +1422,19 @@ impl<'generation> ResultStore<'generation> {
                         .bytes
                         .bytes
                         .copy_within(name.offset..add(name.offset, name.len)?, name_start);
-                    store.budget.work(size_of::<QualifiedName>())?;
-                    store.records.qualified_names.push(QualifiedName {
-                        candidate: id,
-                        collection,
-                        value,
+                    pair.values[view] = Some(QualifiedSpan {
+                        offset: NonZeroUsize::new(add(value.offset, 1)?).ok_or(StoreError::Arithmetic)?,
+                        len,
                     });
                     store.budget.usage.name_bytes = add(store.budget.usage.name_bytes, len)?;
+                }
+                if has_name {
+                    let index =
+                        u32::try_from(add(store.records.qualified_names.len(), 1)?).map_err(|_| StoreError::Records)?;
+                    let index = NonZeroU32::new(index).ok_or(StoreError::Arithmetic)?;
+                    store.budget.work(size_of::<QualifiedNamePair>())?;
+                    store.records.qualified_names.push(pair);
+                    store.records.candidates.get_mut(id.0)?.qualified_name_pair = Some(index);
                 }
                 last = Some(id);
                 count = add(count, 1)?;
@@ -1417,9 +1445,8 @@ impl<'generation> ResultStore<'generation> {
             if last != receipt.map(|r| r.tail) || count != store.budget.usage.live_candidates {
                 return Err(StoreError::Identity);
             }
-            sort_qualified_names(&mut store.records.qualified_names, &mut store.budget)?;
-            // Mint only after the ordinary seal invariants, including survivor
-            // identity/order and sorted name publication, have succeeded.
+            // Mint only after survivor identity/order and sparse name
+            // publication have succeeded.
             store.summary_no_hit = summary_no_hit && count == summary.argument_count;
             store.sealed = receipt;
             store.summary = Some(summary);
@@ -1593,26 +1620,31 @@ impl SealedResults<'_> {
         collection: CollectionKind,
     ) -> Result<SealedMatchValue> {
         budget.checked(self.records.owner, |budget| {
-            self.records.candidates.get(owner.0)?;
-            let key = (owner.0.slot, collection_index(collection));
-            let mut low = 0;
-            let mut high = self.records.qualified_names.len();
-            while low < high {
-                budget.work(1)?;
-                let middle = low + (high - low) / 2;
-                let row = &self.records.qualified_names[middle];
-                match row.key().cmp(&key) {
-                    std::cmp::Ordering::Less => low = middle + 1,
-                    std::cmp::Ordering::Greater => high = middle,
-                    std::cmp::Ordering::Equal => {
-                        if row.candidate != owner || row.collection != collection {
-                            return Err(StoreError::Identity);
-                        }
-                        return self.sealed_handle(row.value);
-                    }
-                }
-            }
-            Err(StoreError::Identity)
+            budget.work(1)?;
+            let candidate = self.records.candidates.get(owner.0)?;
+            let index = candidate.qualified_name_pair.ok_or(StoreError::Identity)?;
+            let pair = self
+                .records
+                .qualified_names
+                .get(index.get() as usize - 1)
+                .ok_or(StoreError::Identity)?;
+            let view = match collection {
+                CollectionKind::Args => 0,
+                CollectionKind::ArgsNames => 1,
+                _ => return Err(StoreError::Identity),
+            };
+            let span = pair.values[view].ok_or(StoreError::Identity)?;
+            let offset = span.offset.get() - 1;
+            self.records
+                .bytes
+                .bytes
+                .get(offset..add(offset, span.len)?)
+                .ok_or(StoreError::Identity)?;
+            Ok(SealedMatchValue {
+                owner: self.records.owner,
+                offset,
+                len: span.len,
+            })
         })
     }
 
@@ -1826,7 +1858,23 @@ impl SealedResults<'_> {
             }
             Ok(CaptureView {
                 key: self.records.bytes.read(capture.key)?,
-                value: self.sealed_handle(capture.value)?,
+                value: match capture.value {
+                    StoredCaptureValue::Owned(value) => self.sealed_handle(value)?,
+                    StoredCaptureValue::MatchRange { start, len } => {
+                        let StoredOutcome::Match { value, .. } = self.records.outcomes.get(outcome.0)?.result else {
+                            return Err(StoreError::Identity);
+                        };
+                        self.records.bytes.read(value)?;
+                        if add(start, len)? > value.len {
+                            return Err(StoreError::Identity);
+                        }
+                        SealedMatchValue {
+                            owner: value.owner,
+                            offset: add(value.offset, start)?,
+                            len,
+                        }
+                    }
+                },
                 next: capture.next,
             })
         })

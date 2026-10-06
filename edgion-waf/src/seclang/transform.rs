@@ -147,8 +147,15 @@ pub(super) fn walk_transformations<O: TransformObserver>(
         // input borrowed instead of allocating and copying it into scratch.
         // The step still emits checkpoints and charges its input/output work.
         let lowercase = transformation == TransformationKind::Lowercase;
-        let identity =
-            transformation == TransformationKind::None || (lowercase && !current.iter().any(u8::is_ascii_uppercase));
+        let identity = transformation == TransformationKind::None
+            || (lowercase && !current.iter().any(u8::is_ascii_uppercase))
+            || (current.len() <= limits.max_output_bytes
+                && match transformation {
+                    TransformationKind::RemoveNulls => memchr::memchr(0, current).is_none(),
+                    TransformationKind::HtmlEntityDecode => memchr::memchr(b'&', current).is_none(),
+                    TransformationKind::UrlDecodeUni => memchr::memchr2(b'%', b'+', current).is_none(),
+                    _ => false,
+                });
         if !identity {
             let needed = projected_output(transformation, current.len())?.min(limits.max_output_bytes);
             let existing = output.capacity();

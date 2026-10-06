@@ -794,9 +794,74 @@ struct ActiveTargetExclusion {
     selector: super::CompiledTargetSelector,
 }
 
-struct CaptureEntry {
+struct CaptureEntry<V = MatchValue> {
     key: Vec<u8>,
-    value: MatchValue,
+    value: V,
+}
+
+/// Capture sources never escape canonical extraction or borrow persisted storage.
+#[derive(Clone, Copy)]
+enum CaptureSource<'a> {
+    InputRange { input: &'a [u8], start: usize, len: usize },
+    Fingerprint(crate::injection::Fingerprint),
+}
+impl CaptureSource<'_> {
+    fn bytes(&self) -> Result<&[u8], RuntimeError> {
+        match self {
+            Self::InputRange { input, start, len } => input
+                .get(*start..start.checked_add(*len).ok_or(RuntimeError::Arithmetic)?)
+                .ok_or(RuntimeError::GenerationInvariant),
+            Self::Fingerprint(value) => Ok(value.as_bytes()),
+        }
+    }
+}
+trait StageCapturePayload: Sized {
+    fn allocation_bytes(source: CaptureSource<'_>) -> Result<usize, RuntimeError>;
+    fn from_source(source: CaptureSource<'_>) -> Result<Self, RuntimeError>;
+    fn logical_len(&self) -> usize;
+    fn heap_capacity(&self) -> usize;
+}
+impl StageCapturePayload for MatchValue {
+    fn allocation_bytes(source: CaptureSource<'_>) -> Result<usize, RuntimeError> {
+        Ok(source.bytes()?.len())
+    }
+    fn from_source(source: CaptureSource<'_>) -> Result<Self, RuntimeError> {
+        owned_copy(source.bytes()?).map(Self::Owned)
+    }
+    fn logical_len(&self) -> usize {
+        self.len()
+    }
+    fn heap_capacity(&self) -> usize {
+        self.owned_capacity()
+    }
+}
+/// Relative to the exact transformed stage subsequently copied into its outcome.
+/// Generated SQLi fingerprints remain independent owned bytes, never input ranges.
+enum StageCaptureValue {
+    InputRange { start: usize, len: usize },
+    Fingerprint(crate::injection::Fingerprint),
+}
+impl StageCapturePayload for StageCaptureValue {
+    fn allocation_bytes(source: CaptureSource<'_>) -> Result<usize, RuntimeError> {
+        source.bytes()?;
+        Ok(0)
+    }
+    fn from_source(source: CaptureSource<'_>) -> Result<Self, RuntimeError> {
+        source.bytes()?;
+        Ok(match source {
+            CaptureSource::InputRange { start, len, .. } => Self::InputRange { start, len },
+            CaptureSource::Fingerprint(value) => Self::Fingerprint(value),
+        })
+    }
+    fn logical_len(&self) -> usize {
+        match self {
+            Self::InputRange { len, .. } => *len,
+            Self::Fingerprint(value) => value.as_bytes().len(),
+        }
+    }
+    fn heap_capacity(&self) -> usize {
+        0
+    }
 }
 
 #[derive(Default)]
@@ -814,6 +879,36 @@ struct MatchStorage {
 }
 
 impl MatchStorage {
+    fn growth_target(self, capacity: usize) -> Result<usize, RuntimeError> {
+        Ok(capacity
+            .checked_mul(2)
+            .ok_or(RuntimeError::Arithmetic)?
+            .max(1)
+            .min(self.limit))
+    }
+
+    /// Success-only admission for every possible query hit. Actual growth still
+    /// validates allocator capacity in push; this never mutates runtime counters.
+    fn admits_growth(self, mut capacity: usize, matches: usize) -> bool {
+        while capacity < matches {
+            let Ok(target) = self.growth_target(capacity) else {
+                return false;
+            };
+            let Some(peak) = capacity
+                .checked_add(target)
+                .and_then(|count| count.checked_mul(size_of::<MemberMatch>()))
+                .and_then(|bytes| self.fixed_bytes.checked_add(bytes))
+            else {
+                return false;
+            };
+            if target <= capacity || peak > self.retained_limit {
+                return false;
+            }
+            capacity = target;
+        }
+        true
+    }
+
     fn push(
         self,
         matches: &mut Vec<MemberMatch>,
@@ -822,12 +917,7 @@ impl MatchStorage {
         match_bytes: &mut usize,
     ) -> Result<(), RuntimeError> {
         if matches.len() == matches.capacity() {
-            let target = matches
-                .capacity()
-                .checked_mul(2)
-                .ok_or(RuntimeError::Arithmetic)?
-                .max(1)
-                .min(self.limit);
+            let target = self.growth_target(matches.capacity())?;
             let allocation = target
                 .checked_mul(size_of::<MemberMatch>())
                 .ok_or(RuntimeError::Arithmetic)?;
@@ -1771,15 +1861,17 @@ impl<'generation> Transaction<'generation> {
             .member_start
             .checked_add(unit.member_count)
             .ok_or(RuntimeError::Arithmetic)?;
+        self.evaluate_unit_first_member(
+            unit_id,
+            unit.member_start,
+            if unit.member_count == 1 { prefix_match } else { None },
+            matches,
+        )?;
+        if matches.is_empty() {
+            return Ok(false);
+        }
         let mut initial = self.tx.try_clone_for_unit()?;
         if unit.member_count == 1 {
-            match prefix_match {
-                Some(matched) => self.boolean_member_matches_into(matched, &initial, matches)?,
-                None => self.evaluate_member_matches_into(unit_id, unit.member_start, &initial, false, matches)?,
-            }
-            if matches.is_empty() {
-                return Ok(false);
-            }
             let mut capture_keys = try_clone_byte_vectors(&self.capture_keys)?;
             let mut setvar_actions = 0_usize;
             for matched in matches.drain(..) {
@@ -1801,7 +1893,9 @@ impl<'generation> Transaction<'generation> {
             let mut next = Vec::new();
             let mut next_bytes = 0_usize;
             for branch in &frontier {
-                self.evaluate_member_matches_into(unit_id, member_id, &branch.tx, final_member, matches)?;
+                if member_id != unit.member_start {
+                    self.evaluate_member_matches_into(unit_id, member_id, &branch.tx, final_member, matches)?;
+                }
                 for matched in matches.drain(..) {
                     let mut candidate = ChainBranch {
                         tx: branch.tx.try_clone()?,
@@ -1838,6 +1932,36 @@ impl<'generation> Transaction<'generation> {
             frontier = next;
         }
         Ok(false)
+    }
+
+    /// Loan persistent TX storage while hiding prior-unit match observers.
+    /// The accounting placeholder preserves original retained admission. Restore
+    /// ownership before propagating any evaluation result or staging actions.
+    fn evaluate_unit_first_member(
+        &mut self,
+        unit_id: usize,
+        member_id: usize,
+        prefix_match: Option<bool>,
+        matches: &mut Vec<MemberMatch>,
+    ) -> Result<(), RuntimeError> {
+        let mut base = std::mem::take(&mut self.tx);
+        self.tx.retained_bytes = base.retained_bytes;
+        let previous = (
+            base.matched_var.take(),
+            base.matched_var_name.take(),
+            std::mem::take(&mut base.matched_vars),
+        );
+        base.recount();
+        let result = match prefix_match {
+            Some(matched) => self.boolean_member_matches_into(matched, &base, matches),
+            None => self.evaluate_member_matches_into(unit_id, member_id, &base, false, matches),
+        };
+        base.matched_var = previous.0;
+        base.matched_var_name = previous.1;
+        base.matched_vars = previous.2;
+        base.recount();
+        self.tx = base;
+        result
     }
 
     fn commit_unit_match(
@@ -1967,41 +2091,93 @@ impl<'generation> Transaction<'generation> {
                 limit: self.limits.max_retained_bytes,
             });
         }
-        if self.try_json_summary_no_hit(member_id, tx, capacity_bytes)? {
-            return Ok(());
-        }
+        let mut json_tail = self.json_summary_no_hit_tail(member_id, tx)?;
         let mut selected = std::mem::take(&mut self.selected_scratch);
         selected.clear();
         let result = (|| {
-            let selection_result = select_values(
-                &self.generation,
-                &self.request,
-                tx,
-                self.response.as_ref(),
-                &mut self.boolean_scratch,
-                &mut self.ctl_work_bytes,
-                SelectionParams {
-                    unit_id,
-                    plan_id: target_plan,
-                    limit: self.limits.max_selected_values,
-                    work_limit: self.limits.max_operator_work_bytes,
-                },
-                self.json_budget.as_mut(),
-                &mut selected,
-                SelectionStorage {
-                    capacity_bytes,
-                    retained_limit: self.limits.max_retained_bytes,
-                },
-            );
-            self.scratch_bytes = other_scratch_bytes
-                .checked_add(
-                    selected
-                        .capacity()
-                        .checked_mul(size_of::<SelectedValue>())
-                        .ok_or(RuntimeError::Arithmetic)?,
-                )
-                .ok_or(RuntimeError::Arithmetic)?;
-            selection_result?;
+            let storage = SelectionStorage {
+                capacity_bytes,
+                retained_limit: self.limits.max_retained_bytes,
+            };
+            if json_tail.is_some_and(|tail| {
+                storage
+                    .summary_capacity(
+                        selected.capacity(),
+                        tail.selected_count,
+                        self.limits.max_selected_values,
+                    )
+                    .is_none()
+            }) {
+                json_tail = None;
+            }
+            let mut summary_match_storage = None;
+            loop {
+                let selection_result = select_values(
+                    &self.generation,
+                    &self.request,
+                    tx,
+                    self.response.as_ref(),
+                    &mut self.boolean_scratch,
+                    &mut self.ctl_work_bytes,
+                    SelectionParams {
+                        unit_id,
+                        plan_id: target_plan,
+                        limit: self.limits.max_selected_values,
+                        work_limit: self.limits.max_operator_work_bytes,
+                        include_json: json_tail.is_none(),
+                    },
+                    self.json_budget.as_mut(),
+                    &mut selected,
+                    storage,
+                );
+                let actual_bytes = selected
+                    .capacity()
+                    .checked_mul(size_of::<SelectedValue>())
+                    .ok_or(RuntimeError::Arithmetic)?;
+                self.scratch_bytes = other_scratch_bytes
+                    .checked_add(actual_bytes)
+                    .ok_or(RuntimeError::Arithmetic)?;
+                selection_result?;
+                let Some(tail) = json_tail else {
+                    break;
+                };
+                let hypothetical = storage.summary_capacity(
+                    selected.capacity(),
+                    tail.selected_count,
+                    self.limits.max_selected_values,
+                );
+                if let Some(hypothetical_bytes) = hypothetical.filter(|_| selected.len() == tail.query_count) {
+                    let limit = if stop_after_first { 1 } else { tail.selected_count };
+                    let mut admission = self.match_storage(tx, limit)?;
+                    if let Some(fixed_bytes) = hypothetical_bytes
+                        .checked_sub(actual_bytes)
+                        .and_then(|extra| admission.fixed_bytes.checked_add(extra))
+                    {
+                        admission.fixed_bytes = fixed_bytes;
+                        let query_matches = if stop_after_first {
+                            tail.query_count.min(1)
+                        } else {
+                            tail.query_count
+                        };
+                        if admission.admits_growth(matches.capacity(), query_matches) {
+                            // Only match admission sees the virtual tail capacity.
+                            // Persistent scratch always records actual allocations.
+                            summary_match_storage = Some(admission);
+                            self.json_budget
+                                .as_mut()
+                                .ok_or(RuntimeError::JsonInspectionState)?
+                                .work(tail.selection_work)
+                                .map_err(map_store_error)?;
+                            break;
+                        }
+                    }
+                }
+                // Query-only selection has no physical or control work under
+                // this static singleton proof. Re-select before the first charge
+                // if actual allocation or hypothetical match admission is unsure.
+                json_tail = None;
+                selected.clear();
+            }
             let transformations = member
                 .transformation_plan
                 .and_then(|id| self.generation.transformation_plans.get(id))
@@ -2013,7 +2189,10 @@ impl<'generation> Transaction<'generation> {
             let multi_match = member_has_action(&self.generation, member, super::super::ActionKind::MultiMatch)?;
             let mut work = 0_usize;
             let match_limit = if stop_after_first { 1 } else { selected.len() };
-            let match_storage = self.match_storage(tx, match_limit)?;
+            let match_storage = match summary_match_storage {
+                Some(storage) => storage,
+                None => self.match_storage(tx, match_limit)?,
+            };
             for selected in selected.iter().copied() {
                 let mut context = SingleInputContext {
                     generation: &self.generation,
@@ -2076,6 +2255,16 @@ impl<'generation> Transaction<'generation> {
                     }
                 }
             }
+            if let Some(tail) = json_tail {
+                // Combined logical and physical admission was proven before
+                // selection. Query errors/early stops never reach this replay.
+                charge_operator_work(&mut work, tail.logical_work, self.limits)?;
+                self.json_budget
+                    .as_mut()
+                    .ok_or(RuntimeError::JsonInspectionState)?
+                    .work(tail.replay_work)
+                    .map_err(map_store_error)?;
+            }
             Ok(())
         })();
         selected.clear();
@@ -2098,21 +2287,15 @@ impl<'generation> Transaction<'generation> {
         result
     }
 
-    /// A conservative success-only shortcut. All uncertain or failing budgets
-    /// keep the cursor's selection-before-evaluation error priority and counters.
-    fn try_json_summary_no_hit(
-        &mut self,
-        member_id: usize,
-        tx: &TxState,
-        capacity_bytes: usize,
-    ) -> Result<bool, RuntimeError> {
+    /// Prove a no-hit JSON tail without selecting or evaluating queries. Any
+    /// uncertain bound preserves the cursor's selection-before-evaluation errors.
+    fn json_summary_no_hit_tail(&self, member_id: usize, tx: &TxState) -> Result<Option<JsonNoHitTail>, RuntimeError> {
         #[cfg(test)]
         if self.force_json_cursor {
-            return Ok(false);
+            return Ok(None);
         }
         if self.evaluation_mode != EvaluationMode::Accelerated
             || !tx.target_exclusions.is_empty()
-            || !self.request.collection_records(CollectionKind::Args)?.is_empty()
             || !self
                 .generation
                 .json_inspection
@@ -2120,7 +2303,7 @@ impl<'generation> Transaction<'generation> {
                 .get(member_id)
                 .is_some_and(|member| member.summary_no_hit)
         {
-            return Ok(false);
+            return Ok(None);
         }
         let Some(results) = self
             .request
@@ -2129,26 +2312,52 @@ impl<'generation> Transaction<'generation> {
             .and_then(RequestBodyPublication::json)
             .and_then(|body| body.results.as_ref())
         else {
-            return Ok(false);
+            return Ok(None);
         };
-        let count = results.summary.argument_count;
-        let Some(selection_work) = count.checked_mul(2) else {
-            return Ok(false);
+        let queries = self.request.collection_records(CollectionKind::Args)?;
+        let bounds = (|| {
+            let count = results.summary.argument_count;
+            let selected_count = queries.len().checked_add(count)?;
+            let selection_work = count.checked_mul(2)?;
+            let replay_work = count.checked_mul(5)?;
+            let physical_work = selection_work.checked_add(replay_work)?;
+            let logical_work = results.summary.argument_value_bytes.checked_mul(2)?;
+            let mut combined_work = logical_work;
+            for query in queries {
+                // None/lowercase preserve byte length. Charge a possible hit's
+                // payload, qualified name and descriptor even for query misses.
+                let name_len = CollectionKind::Args.as_str().len().checked_add(match query.name {
+                    Some(name) => name.len.checked_add(1)?,
+                    None => 0,
+                })?;
+                let query_work = query
+                    .value
+                    .len
+                    .checked_mul(3)?
+                    .checked_add(name_len)?
+                    .checked_add(size_of::<MemberMatch>())?;
+                combined_work = combined_work.checked_add(query_work)?;
+            }
+            Some((
+                JsonNoHitTail {
+                    query_count: queries.len(),
+                    selected_count,
+                    selection_work,
+                    replay_work,
+                    logical_work,
+                },
+                combined_work,
+                physical_work,
+            ))
+        })();
+        let Some((tail, combined_work, physical_work)) = bounds else {
+            return Ok(None);
         };
-        let Some(replay_work) = count.checked_mul(5) else {
-            return Ok(false);
+        let Some(budget) = self.json_budget.as_ref() else {
+            return Ok(None);
         };
-        let Some(physical_work) = selection_work.checked_add(replay_work) else {
-            return Ok(false);
-        };
-        let Some(logical_work) = results.summary.argument_value_bytes.checked_mul(2) else {
-            return Ok(false);
-        };
-        let Some(budget) = self.json_budget.as_mut() else {
-            return Ok(false);
-        };
-        if count > self.limits.max_selected_values
-            || logical_work > self.limits.max_operator_work_bytes
+        if tail.selected_count > self.limits.max_selected_values
+            || combined_work > self.limits.max_operator_work_bytes
             || !results.admits_summary_no_hit(
                 budget,
                 &self.generation,
@@ -2157,41 +2366,9 @@ impl<'generation> Transaction<'generation> {
                 physical_work,
             )
         {
-            return Ok(false);
+            return Ok(None);
         }
-        // Simulate the cursor's complete geometric growth, without allocating.
-        // Requiring old + replacement capacity is deliberately conservative:
-        // uncertain overlap/allocator boundaries fall back to real admission.
-        let maximum = self
-            .limits
-            .max_selected_values
-            .min(capacity_bytes / size_of::<SelectedValue>());
-        let mut capacity = self.selected_scratch.capacity();
-        while capacity < count {
-            if capacity >= maximum {
-                return Ok(false);
-            }
-            let Some(target) = capacity.checked_mul(2).map(|value| value.max(4).min(maximum)) else {
-                return Ok(false);
-            };
-            let Some(overlap) = capacity
-                .checked_add(target)
-                .and_then(|value| value.checked_mul(size_of::<SelectedValue>()))
-            else {
-                return Ok(false);
-            };
-            if target <= capacity || overlap > capacity_bytes {
-                return Ok(false);
-            }
-            capacity = target;
-        }
-        // The full preflight above proves both charges and logical accounting
-        // succeed. Never retry the cursor after the first charge.
-        budget.work(selection_work).map_err(map_store_error)?;
-        let mut work = 0;
-        charge_operator_work(&mut work, logical_work, self.limits)?;
-        budget.work(replay_work).map_err(map_store_error)?;
-        Ok(true)
+        Ok(Some(tail))
     }
 
     fn validate_runtime_actions(&mut self, unit: super::CompiledRuleUnit, tx: &TxState) -> Result<(), RuntimeError> {
@@ -2653,6 +2830,7 @@ impl<E> From<RuntimeError> for PredicateStageFailure<E> {
 /// retain their semantic checkpoint so a provisional collector can defer them.
 trait PredicateStageObserver {
     type Error;
+    type CaptureValue: StageCapturePayload;
     fn observes_physical_work(&self) -> bool {
         false
     }
@@ -2661,10 +2839,14 @@ trait PredicateStageObserver {
     }
     fn charge_stage(&mut self, transformed_bytes: usize, detector_work: usize) -> Result<(), Self::Error>;
     fn before_captures(&mut self, transformed_bytes: usize) -> Result<(), Self::Error>;
-    fn captures(&mut self, captures: &[CaptureEntry]) -> Result<(), Self::Error>;
+    fn captures(&mut self, captures: &[CaptureEntry<Self::CaptureValue>]) -> Result<(), Self::Error>;
     fn admit_capture_allocation(&mut self, current_bytes: usize, required_bytes: usize) -> Result<(), Self::Error>;
     fn capture_capacity(&mut self, actual_bytes: usize) -> Result<(), Self::Error>;
 }
+type PredicateStageResult<O> = Result<
+    Option<Vec<CaptureEntry<<O as PredicateStageObserver>::CaptureValue>>>,
+    PredicateStageFailure<<O as PredicateStageObserver>::Error>,
+>;
 
 struct OrderedStageAccounting<'a> {
     original_bytes: usize,
@@ -2675,6 +2857,7 @@ struct OrderedStageAccounting<'a> {
 
 impl PredicateStageObserver for OrderedStageAccounting<'_> {
     type Error = RuntimeError;
+    type CaptureValue = MatchValue;
     fn charge_stage(&mut self, transformed_bytes: usize, detector_work: usize) -> Result<(), RuntimeError> {
         if detector_work != 0 {
             *self.detector_work_bytes = self
@@ -2728,7 +2911,7 @@ fn inspect_predicate_stage<O: PredicateStageObserver>(
     plan: &SingleInputPlan<'_>,
     transformed: &[u8],
     observer: &mut O,
-) -> Result<Option<Vec<CaptureEntry>>, PredicateStageFailure<O::Error>> {
+) -> PredicateStageResult<O> {
     let detector_work = detector_work_for_stage(plan.operator, transformed.len())
         .map_err(|error| PredicateStageFailure::at(PredicateCheckpoint::DetectorInput, error))?;
     observer
@@ -2788,7 +2971,7 @@ fn extract_captures<O: PredicateStageObserver>(
     evaluation_mode: EvaluationMode,
     fingerprint: Option<crate::injection::Fingerprint>,
     observer: &mut O,
-) -> Result<Vec<CaptureEntry>, PredicateStageFailure<O::Error>> {
+) -> Result<Vec<CaptureEntry<O::CaptureValue>>, PredicateStageFailure<O::Error>> {
     if !matches!(
         plan.operand,
         super::CompiledOperatorOperand::Regex(super::RegexPlanRef::Capture(_))
@@ -2812,7 +2995,7 @@ fn extract_captures<O: PredicateStageObserver>(
     let slots = bound.min(limits.max_capture_entries).min(64);
     let mut captures = Vec::new();
     let initial = slots
-        .checked_mul(size_of::<CaptureEntry>())
+        .checked_mul(size_of::<CaptureEntry<O::CaptureValue>>())
         .ok_or(RuntimeError::Arithmetic)?;
     observer
         .admit_capture_allocation(0, initial)
@@ -2835,7 +3018,14 @@ fn extract_captures<O: PredicateStageObserver>(
                 let Some(range) = results.group(index) else {
                     continue;
                 };
-                let value = input.get(range).ok_or(RuntimeError::GenerationInvariant)?;
+                let value = CaptureSource::InputRange {
+                    input,
+                    start: range.start,
+                    len: range
+                        .end
+                        .checked_sub(range.start)
+                        .ok_or(RuntimeError::GenerationInvariant)?,
+                };
                 let (digits, start) = decimal_bytes(index);
                 push_capture(&mut captures, &digits[start..], value, limits, observer)?;
                 if let Some(name) = regex.capture_name(index) {
@@ -2853,14 +3043,25 @@ fn extract_captures<O: PredicateStageObserver>(
                 EvaluationMode::Reference => matcher.find_reference(input),
             }
             .ok_or(RuntimeError::GenerationInvariant)?;
-            let value = input
-                .get(matched.start()..matched.end())
-                .ok_or(RuntimeError::GenerationInvariant)?;
+            let value = CaptureSource::InputRange {
+                input,
+                start: matched.start(),
+                len: matched
+                    .end()
+                    .checked_sub(matched.start())
+                    .ok_or(RuntimeError::GenerationInvariant)?,
+            };
             push_capture(&mut captures, b"0", value, limits, observer)?;
         }
         super::CompiledOperatorOperand::DetectSqli { capture: true } => {
             let fingerprint = fingerprint.ok_or(RuntimeError::GenerationInvariant)?;
-            push_capture(&mut captures, b"0", fingerprint.as_bytes(), limits, observer)?;
+            push_capture(
+                &mut captures,
+                b"0",
+                CaptureSource::Fingerprint(fingerprint),
+                limits,
+                observer,
+            )?;
         }
         _ => {}
     }
@@ -2868,12 +3069,14 @@ fn extract_captures<O: PredicateStageObserver>(
 }
 
 fn push_capture<O: PredicateStageObserver>(
-    captures: &mut Vec<CaptureEntry>,
+    captures: &mut Vec<CaptureEntry<O::CaptureValue>>,
     key: &[u8],
-    value: &[u8],
+    source: CaptureSource<'_>,
     limits: RuntimeLimits,
     observer: &mut O,
 ) -> Result<(), PredicateStageFailure<O::Error>> {
+    let value_len = source.bytes()?.len();
+    let allocation_bytes = O::CaptureValue::allocation_bytes(source)?;
     if captures.len() == limits.max_capture_entries {
         return Err(RuntimeError::CaptureEntryLimit {
             limit: limits.max_capture_entries,
@@ -2883,12 +3086,12 @@ fn push_capture<O: PredicateStageObserver>(
     let current = captures.iter().try_fold(0_usize, |total, capture| {
         total
             .checked_add(capture.key.len())
-            .and_then(|value| value.checked_add(capture.value.len()))
+            .and_then(|value| value.checked_add(capture.value.logical_len()))
             .ok_or(RuntimeError::Arithmetic)
     })?;
     let actual = current
         .checked_add(key.len())
-        .and_then(|total| total.checked_add(value.len()))
+        .and_then(|total| total.checked_add(value_len))
         .ok_or(RuntimeError::Arithmetic)?;
     if actual > limits.max_capture_bytes {
         return Err(RuntimeError::CaptureByteLimit {
@@ -2898,21 +3101,21 @@ fn push_capture<O: PredicateStageObserver>(
     }
     let retained = capture_retained_bytes(captures)?;
     let extra_slot = if captures.len() == captures.capacity() {
-        size_of::<CaptureEntry>()
+        size_of::<CaptureEntry<O::CaptureValue>>()
     } else {
         0
     };
     let required = retained
         .checked_add(extra_slot)
         .and_then(|bytes| bytes.checked_add(key.len()))
-        .and_then(|bytes| bytes.checked_add(value.len()))
+        .and_then(|bytes| bytes.checked_add(allocation_bytes))
         .ok_or(RuntimeError::Arithmetic)?;
     let peak = if extra_slot != 0 {
         required
             .checked_add(
                 captures
                     .capacity()
-                    .checked_mul(size_of::<CaptureEntry>())
+                    .checked_mul(size_of::<CaptureEntry<O::CaptureValue>>())
                     .ok_or(RuntimeError::Arithmetic)?,
             )
             .ok_or(RuntimeError::Arithmetic)?
@@ -2945,32 +3148,33 @@ fn push_capture<O: PredicateStageObserver>(
     observer
         .admit_capture_allocation(
             with_key,
-            with_key.checked_add(value.len()).ok_or(RuntimeError::Arithmetic)?,
+            with_key.checked_add(allocation_bytes).ok_or(RuntimeError::Arithmetic)?,
         )
         .map_err(PredicateStageFailure::Observer)?;
-    let value = owned_copy(value)?;
+    let value = O::CaptureValue::from_source(source)?;
     #[cfg(test)]
-    measurements::record(Event::TemporaryCaptureCopyBytes, value.len());
+    measurements::record(Event::TemporaryCaptureCopyBytes, allocation_bytes);
     observer
-        .capture_capacity(with_key.checked_add(value.capacity()).ok_or(RuntimeError::Arithmetic)?)
+        .capture_capacity(
+            with_key
+                .checked_add(value.heap_capacity())
+                .ok_or(RuntimeError::Arithmetic)?,
+        )
         .map_err(PredicateStageFailure::Observer)?;
-    captures.push(CaptureEntry {
-        key,
-        value: value.into(),
-    });
+    captures.push(CaptureEntry { key, value });
     Ok(())
 }
 
-fn capture_retained_bytes(captures: &Vec<CaptureEntry>) -> Result<usize, RuntimeError> {
+fn capture_retained_bytes<V: StageCapturePayload>(captures: &Vec<CaptureEntry<V>>) -> Result<usize, RuntimeError> {
     captures.iter().try_fold(
         captures
             .capacity()
-            .checked_mul(size_of::<CaptureEntry>())
+            .checked_mul(size_of::<CaptureEntry<V>>())
             .ok_or(RuntimeError::Arithmetic)?,
         |bytes, entry| {
             bytes
                 .checked_add(entry.key.capacity())
-                .and_then(|bytes| bytes.checked_add(entry.value.owned_capacity()))
+                .and_then(|bytes| bytes.checked_add(entry.value.heap_capacity()))
                 .ok_or(RuntimeError::Arithmetic)
         },
     )
@@ -3214,6 +3418,8 @@ impl TxState {
     }
 
     fn try_clone_for_unit(&self) -> Result<Self, RuntimeError> {
+        #[cfg(test)]
+        measurements::record(Event::UnitTxClones, 1);
         self.try_clone_with_matches(false)
     }
 
@@ -3398,11 +3604,21 @@ fn member_has_action(
         .any(|action| action.kind == super::ActionEnvelopeKind::Action(expected)))
 }
 
+#[derive(Clone, Copy)]
+struct JsonNoHitTail {
+    query_count: usize,
+    selected_count: usize,
+    selection_work: usize,
+    replay_work: usize,
+    logical_work: usize,
+}
+
 struct SelectionParams {
     unit_id: usize,
     plan_id: usize,
     limit: usize,
     work_limit: usize,
+    include_json: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3423,6 +3639,7 @@ fn select_values(
         plan_id,
         limit,
         work_limit,
+        include_json,
     } = params;
     let plan = *generation
         .target_plans
@@ -3453,7 +3670,7 @@ fn select_values(
         } else {
             None
         };
-        let mut candidates = CandidateCursor::new(target.collection, json_count.is_none());
+        let mut candidates = CandidateCursor::new(target.collection, include_json && json_count.is_none());
         match target.modifier {
             super::TargetModifier::None => {
                 while let Some(candidate) = candidates.next(request, tx, response, json_budget.as_deref_mut())? {
@@ -3612,6 +3829,25 @@ struct SelectionStorage {
 }
 
 impl SelectionStorage {
+    /// Simulate complete geometric selection growth with conservative realloc
+    /// overlap admission. Near-limit uncertainty falls back to actual selection.
+    fn summary_capacity(self, mut capacity: usize, count: usize, limit: usize) -> Option<usize> {
+        let maximum = limit.min(self.capacity_bytes / size_of::<SelectedValue>());
+        while capacity < count {
+            if capacity >= maximum {
+                return None;
+            }
+            let target = capacity.checked_mul(2)?.max(4).min(maximum);
+            let overlap = capacity.checked_add(target)?.checked_mul(size_of::<SelectedValue>())?;
+            if target <= capacity || overlap > self.capacity_bytes {
+                return None;
+            }
+            capacity = target;
+        }
+        let bytes = capacity.checked_mul(size_of::<SelectedValue>())?;
+        (bytes <= self.capacity_bytes).then_some(bytes)
+    }
+
     fn reserve(self, selected: &mut Vec<SelectedValue>, limit: usize) -> Result<(), RuntimeError> {
         if selected.len() < selected.capacity() {
             return Ok(());

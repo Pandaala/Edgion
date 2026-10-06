@@ -465,7 +465,9 @@ fn shared_stage_payload_bulk_cleanup_is_order_independent() {
             let token = s.stage_match_token(first).unwrap();
             let alias = s.record_shared_match(id, 1, 0, token).unwrap();
             s.add_capture(first, b"0", b"first").unwrap();
+            s.add_capture_range(first, b"1", 0, 7).unwrap();
             s.add_capture(alias, b"0", b"second").unwrap();
+            s.add_capture_range(alias, b"1", 2, 3).unwrap();
             assert_eq!(s.usage().matched_bytes, 7);
             assert_eq!(s.usage().live_outcomes, 2);
             if owner_first {
@@ -866,7 +868,7 @@ fn sparse_qualified_names_seal_only_surviving_hit_views_and_validate_generation(
     let receipt = finish(&mut s, id, &(0..g.json_inspection.profiles.len()).collect::<Vec<_>>());
     s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
     let (sealed, mut budget) = s.into_sealed().unwrap();
-    assert_eq!(sealed.records.qualified_names.len(), 2);
+    assert_eq!(sealed.records.qualified_names.len(), 1);
     for collection in [CollectionKind::Args, CollectionKind::ArgsNames] {
         let handle = sealed.qualified_name(&mut budget, id, collection).unwrap();
         let again = sealed.qualified_name(&mut budget, id, collection).unwrap();
@@ -898,40 +900,62 @@ fn sparse_qualified_names_seal_only_surviving_hit_views_and_validate_generation(
 }
 
 #[test]
-fn qualified_name_sort_is_bounded_metered_and_orders_reused_slots() {
+fn qualified_name_direct_lookup_checks_bounds_and_exact_work() {
     let g = generation();
-    let mut s = store(&g);
-    let ids: Vec<_> = (0..9)
-        .map(|_| s.begin_candidate(b"name", 0, JsonScalarKind::String, None).unwrap())
-        .collect();
-    let lease = s.records.candidates.get(ids[0].0).unwrap().name;
-    let make_rows = || {
-        ids.iter()
-            .rev()
-            .map(|candidate| QualifiedName {
-                candidate: *candidate,
-                collection: CollectionKind::Args,
-                value: lease,
-            })
-            .collect::<Vec<_>>()
+    let make = || {
+        let mut s = store(&g);
+        let id = s.begin_candidate(b"json.x", 3, JsonScalarKind::String, None).unwrap();
+        s.record_match(id, 0, 0, b"hit").unwrap();
+        s.complete_profile(id, 0).unwrap();
+        let receipt = finish(&mut s, id, &[0]);
+        s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+        let (sealed, budget) = s.into_sealed().unwrap();
+        (sealed, budget, id)
     };
-    let mut rows = make_rows();
-    let start = s.budget.usage.work;
-    sort_qualified_names(&mut rows, &mut s.budget).unwrap();
-    let cost = s.budget.usage.work - start;
-    assert!(cost > rows.len());
-    assert!(rows.windows(2).all(|pair| pair[0].key() < pair[1].key()));
-    for limit in [cost - 1, cost] {
-        let mut budget = InspectionBudget::empty_publication(ResultLimits {
-            work: limit,
-            ..ResultLimits::default()
-        })
-        .unwrap();
-        let result = sort_qualified_names(&mut make_rows(), &mut budget);
-        assert_eq!(result.is_ok(), limit == cost);
-        if limit < cost {
+    assert_eq!(size_of::<QualifiedNamePair>(), 2 * size_of::<QualifiedSpan>());
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(
+        (
+            size_of::<Candidate>(),
+            size_of::<Slot<Candidate>>(),
+            size_of::<QualifiedNamePair>()
+        ),
+        (192, 208, 32)
+    );
+    for allowance in [0, 1] {
+        let (sealed, mut budget, id) = make();
+        budget.limits.work = budget.usage.work + allowance;
+        let result = sealed.qualified_name(&mut budget, id, CollectionKind::Args);
+        assert_eq!(result.is_ok(), allowance == 1);
+        if allowance == 0 {
             assert_eq!(budget.failure(), Some(StoreError::Work));
         }
+    }
+    for bad in 0..5 {
+        let (mut sealed, mut budget, id) = make();
+        let candidate = sealed.records.candidates.get_mut(id.0).unwrap();
+        let collection = match bad {
+            0 => {
+                candidate.qualified_name_pair = NonZeroU32::new(u32::MAX);
+                CollectionKind::Args
+            }
+            1 => {
+                sealed.records.qualified_names[0].values[0].as_mut().unwrap().len = usize::MAX;
+                CollectionKind::Args
+            }
+            2 => {
+                sealed.records.qualified_names[0].values[0].as_mut().unwrap().offset =
+                    NonZeroUsize::new(usize::MAX).unwrap();
+                CollectionKind::Args
+            }
+            3 => CollectionKind::ArgsNames,
+            _ => CollectionKind::RequestHeaders,
+        };
+        assert!(matches!(
+            sealed.qualified_name(&mut budget, id, collection),
+            Err(StoreError::Identity | StoreError::Arithmetic)
+        ));
+        assert!(budget.failure().is_some());
     }
 }
 
@@ -1045,4 +1069,112 @@ fn arena_page_hint_falls_back_without_work_or_failure_at_tight_caps() {
         BytePool::arena_reserve_amount(usize::MAX, 0, 1, usize::MAX),
         Err(StoreError::Arithmetic)
     );
+}
+
+#[test]
+fn capture_ranges_share_parent_payload_but_charge_each_alias() {
+    let g = sharing_generation();
+    let mut s = store(&g);
+    let id = s.begin_candidate(b"json.x", 7, JsonScalarKind::String, None).unwrap();
+    let first = s.record_match(id, 0, 0, b"blocked").unwrap();
+    let token = s.stage_match_token(first).unwrap();
+    let alias = s.record_shared_match(id, 1, 0, token).unwrap();
+    for outcome in [first, alias] {
+        s.add_capture_range(outcome, b"1", 1, 3).unwrap();
+        s.add_capture_range(outcome, b"name", 1, 3).unwrap();
+        s.add_capture_range(outcome, b"empty", 7, 0).unwrap();
+    }
+    assert_eq!(s.usage().capture_bytes, 2 * (4 + 7 + 5));
+    s.complete_profile(id, 0).unwrap();
+    let receipt = finish(&mut s, id, &[0]);
+    s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+    let (sealed, mut budget) = s.into_sealed().unwrap();
+    let mut previous = None;
+    for outcome in [first, alias] {
+        let OutcomeValue::Match {
+            value, first_capture, ..
+        } = sealed.outcome(&mut budget, id, outcome).unwrap().result
+        else {
+            panic!("expected match")
+        };
+        let parent = sealed.match_value(&mut budget, value).unwrap();
+        let mut next = first_capture;
+        for (offset, expected) in [(1, b"loc".as_slice()), (1, b"loc"), (7, b"")] {
+            let capture = sealed.capture(&mut budget, id, outcome, next.unwrap()).unwrap();
+            let bytes = sealed.match_value(&mut budget, capture.value).unwrap();
+            assert_eq!(bytes, expected);
+            assert_eq!(bytes.as_ptr(), parent[offset..].as_ptr());
+            if offset == 1 {
+                if let Some(value) = previous {
+                    assert_eq!(capture.value, value);
+                }
+                previous = Some(capture.value);
+            }
+            next = capture.next;
+        }
+        assert!(next.is_none());
+    }
+}
+
+#[test]
+fn capture_range_admission_rejects_foreign_stale_and_invalid_ranges() {
+    let g = sharing_generation();
+    for case in 0..5 {
+        let mut s = store(&g);
+        let id = s.begin_candidate(b"json.x", 3, JsonScalarKind::String, None).unwrap();
+        let outcome = s.record_match(id, 0, 0, b"abc").unwrap();
+        let expected = if case == 2 {
+            StoreError::Arithmetic
+        } else {
+            StoreError::Identity
+        };
+        let result = match case {
+            0 => s.add_capture_range(outcome, b"0", 2, 2),
+            1 => s.add_capture_range(outcome, b"0", 4, 0),
+            2 => s.add_capture_range(outcome, b"0", usize::MAX, 1),
+            3 => {
+                s.complete_profile(id, 0).unwrap();
+                let receipt = finish(&mut s, id, &[0]);
+                s.discard(receipt).unwrap();
+                let replacement = s.begin_candidate(b"json.x", 3, JsonScalarKind::String, None).unwrap();
+                s.record_match(replacement, 0, 0, b"abc").unwrap();
+                s.add_capture_range(outcome, b"0", 0, 1)
+            }
+            _ => {
+                let mut other = store(&g);
+                assert_eq!(other.add_capture_range(outcome, b"0", 0, 1), Err(StoreError::Identity));
+                assert_eq!(other.add_capture_range(outcome, b"0", 0, 0), Err(StoreError::Identity));
+                continue;
+            }
+        };
+        assert_eq!(result, Err(expected));
+        assert_eq!(s.add_capture_range(outcome, b"0", 0, 0), Err(expected));
+        assert_eq!(s.usage().retained_bytes, 0);
+    }
+}
+
+#[test]
+fn sealed_capture_ranges_validate_parent_bounds_at_read_time() {
+    let g = sharing_generation();
+    let mut s = store(&g);
+    let id = s.begin_candidate(b"json.x", 3, JsonScalarKind::String, None).unwrap();
+    let outcome = s.record_match(id, 0, 0, b"abc").unwrap();
+    s.add_capture_range(outcome, b"0", 1, 1).unwrap();
+    let StoredOutcome::Match {
+        captures: Some(capture),
+        ..
+    } = s.records.outcomes.get(outcome.0).unwrap().result
+    else {
+        panic!("missing capture")
+    };
+    s.complete_profile(id, 0).unwrap();
+    let receipt = finish(&mut s, id, &[0]);
+    s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
+    let (mut sealed, mut budget) = s.into_sealed().unwrap();
+    sealed.records.captures.get_mut(capture.0).unwrap().value = StoredCaptureValue::MatchRange { start: 3, len: 1 };
+    assert!(matches!(
+        sealed.capture(&mut budget, id, outcome, capture),
+        Err(StoreError::Identity)
+    ));
+    assert_eq!(budget.failure(), Some(StoreError::Identity));
 }

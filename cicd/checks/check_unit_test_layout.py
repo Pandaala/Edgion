@@ -200,6 +200,8 @@ GATEWAY_SOURCE_LOCAL = {
 # These branches and fields must stay in their owning production items so the
 # test configuration can exercise the same function or preserve struct shape.
 SCOPED_EXCEPTIONS = {
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::UnitTxClones\b")):
+        "test-only accounting of new-unit TX clones after first-member matching",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"sequential_ascii: bool,")):
         "test-only switch for the sequential lexical oracle",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"sequential_ascii: false,")):

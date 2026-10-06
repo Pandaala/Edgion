@@ -66,7 +66,66 @@ fn assert_no_hit_cursor_parity(fast: &mut Transaction<'_>, cursor: &mut Transact
     );
     assert_eq!(fast.detector_work_bytes, cursor.detector_work_bytes);
     assert_eq!(fast.ctl_work_bytes, cursor.ctl_work_bytes);
-    assert_eq!(fast.tx_value(b"later"), cursor.tx_value(b"later"));
+    assert_eq!(fast.next_phase(), cursor.next_phase());
+    assert_eq!(fast.request_body_error(), cursor.request_body_error());
+    assert_eq!(fast.capture_keys, cursor.capture_keys);
+    assert_eq!(
+        fast.tx
+            .entries
+            .iter()
+            .map(|entry| (entry.key.as_slice(), entry.value.observed_bytes(&fast.request).unwrap()))
+            .collect::<Vec<_>>(),
+        cursor
+            .tx
+            .entries
+            .iter()
+            .map(|entry| (
+                entry.key.as_slice(),
+                entry.value.observed_bytes(&cursor.request).unwrap()
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        fast.tx
+            .matched_var
+            .as_ref()
+            .map(|value| value.observed_bytes(&fast.request).unwrap()),
+        cursor
+            .tx
+            .matched_var
+            .as_ref()
+            .map(|value| value.observed_bytes(&cursor.request).unwrap())
+    );
+    assert_eq!(
+        fast.tx
+            .matched_var_name
+            .as_ref()
+            .map(|value| value.observed_bytes(&fast.request).unwrap()),
+        cursor
+            .tx
+            .matched_var_name
+            .as_ref()
+            .map(|value| value.observed_bytes(&cursor.request).unwrap())
+    );
+    assert_eq!(
+        fast.tx
+            .matched_vars
+            .iter()
+            .map(|entry| (
+                entry.key.observed_bytes(&fast.request).unwrap(),
+                entry.value.observed_bytes(&fast.request).unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        cursor
+            .tx
+            .matched_vars
+            .iter()
+            .map(|entry| (
+                entry.key.observed_bytes(&cursor.request).unwrap(),
+                entry.value.observed_bytes(&cursor.request).unwrap()
+            ))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -151,10 +210,9 @@ fn no_hit_summary_exact_and_failing_budgets_match_cursor_counters() {
 }
 
 #[test]
-fn no_hit_summary_falls_back_for_queries_changed_profiles_and_discarded_hits() {
+fn no_hit_summary_falls_back_for_changed_profiles_and_discarded_hits() {
     for (recipe, json, uri) in [
-        ("", br#"{"a":"miss"}"#.as_slice(), b"/?q=miss".as_slice()),
-        (",t:lowercase", br#"{"a":"MISS"}"#, b"/"),
+        (",t:lowercase", br#"{"a":"MISS"}"#.as_slice(), b"/".as_slice()),
         ("", br#"{"a":"hit","a":"miss"}"#, b"/"),
     ] {
         let generation = compile(&format!("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass{recipe}\""));
@@ -300,6 +358,561 @@ fn no_hit_summary_reuses_existing_selected_capacity_without_changing_it() {
     assert_eq!(fast.selected_scratch.capacity(), capacity);
     assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 7);
 }
+fn query_tail_json(count: usize) -> Vec<u8> {
+    format!(
+        "{{{}}}",
+        (0..count)
+            .map(|index| format!("\"k{index}\":\"miss\""))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+    .into_bytes()
+}
+
+#[test]
+fn query_no_hit_tail_preserves_all_matches_actions_names_and_argument_counts() {
+    let json = query_tail_json(16);
+    for (uri, queries, hits) in [
+        (b"/".as_slice(), 0, 0),
+        (b"/?q=miss".as_slice(), 1, 0),
+        (b"/?q=hit".as_slice(), 1, 1),
+        (b"/?a=HIT&b=miss&a=hi%74&empty=&novalue".as_slice(), 5, 2),
+        (b"/?a=hit&a=HIT&a=hit&a=hit&a=hit".as_slice(), 5, 5),
+    ] {
+        let generation = compile(&format!(
+            "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,t:lowercase,setvar:tx.hits=+1\"\nSecRule &ARGS \"@eq {}\" \"id:2,phase:2,pass,setvar:tx.count=1\"\nSecAction \"id:3,phase:2,pass,setvar:tx.later=1\"",
+            queries + 16
+        ));
+        let mut fast = no_hit_transaction(
+            &generation,
+            &json,
+            uri,
+            RuntimeLimits::default(),
+            ResultLimits::default(),
+            false,
+        );
+        let mut cursor = no_hit_transaction(
+            &generation,
+            &json,
+            uri,
+            RuntimeLimits::default(),
+            ResultLimits::default(),
+            true,
+        );
+        let before = fast.json_budget.as_ref().unwrap().usage().work;
+        assert_no_hit_cursor_parity(&mut fast, &mut cursor);
+        assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 7 * 16);
+        assert_eq!(fast.tx_value(b"count"), Some(b"1".as_slice()));
+        assert_eq!(fast.tx.matched_vars.len(), 0); // Final SecAction hides previous observers.
+        let expected = hits.to_string();
+        assert_eq!(fast.tx_value(b"hits"), (hits != 0).then_some(expected.as_bytes()));
+        assert!(fast.selected_scratch.capacity() < cursor.selected_scratch.capacity());
+        assert!(fast.selected_scratch.capacity() >= queries);
+    }
+}
+
+#[test]
+fn query_no_hit_tail_preserves_negation_denial_and_detection_only() {
+    for (operator, json, uri) in [
+        ("@contains hit", query_tail_json(16), b"/?a=hit&b=miss".as_slice()),
+        (
+            "!@contains hit",
+            br#"{"a":"hit","b":"hit"}"#.to_vec(),
+            b"/?q=miss".as_slice(),
+        ),
+    ] {
+        let generation = compile(&format!(
+            "SecRule ARGS \"{operator}\" \"id:1,phase:2,deny,status:418,setvar:tx.hit=1\"\nSecAction \"id:2,phase:2,pass,setvar:tx.later=1\""
+        ));
+        for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+            let mut fast = no_hit_transaction(
+                &generation,
+                &json,
+                uri,
+                RuntimeLimits::default(),
+                ResultLimits::default(),
+                false,
+            );
+            let mut cursor = no_hit_transaction(
+                &generation,
+                &json,
+                uri,
+                RuntimeLimits::default(),
+                ResultLimits::default(),
+                true,
+            );
+            fast.rule_engine_mode = mode;
+            cursor.rule_engine_mode = mode;
+            assert_no_hit_cursor_parity(&mut fast, &mut cursor);
+            assert_eq!(fast.tx_value(b"hit"), Some(b"1".as_slice()));
+            assert_eq!(
+                fast.tx_value(b"later"),
+                (mode == RuleEngineMode::DetectionOnly).then_some(b"1".as_slice())
+            );
+        }
+    }
+}
+
+#[test]
+fn query_no_hit_tail_selection_logical_and_physical_boundaries_match_cursor() {
+    let generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"");
+    let json = query_tail_json(5);
+    let uri = b"/?q=hit&m=miss";
+    let baseline = no_hit_transaction(
+        &generation,
+        &json,
+        uri,
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        true,
+    );
+    let publication = baseline.json_budget.as_ref().unwrap().usage().work;
+    let body_work = 2 * 5 * 4;
+    let combined = body_work + 3 * (3 + 4) + 2 * 6 + 2 * size_of::<MemberMatch>();
+    for selected in [0, 1, 6, 7, 8] {
+        for logical in [0, body_work - 1, body_work, combined - 1, combined, combined + 1] {
+            for physical in [0, 9, 10, 34, 35, 36] {
+                let limits = RuntimeLimits {
+                    max_selected_values: selected,
+                    max_operator_work_bytes: logical,
+                    ..RuntimeLimits::default()
+                };
+                let result_limits = ResultLimits {
+                    work: publication + physical,
+                    ..ResultLimits::default()
+                };
+                let mut fast = no_hit_transaction(&generation, &json, uri, limits, result_limits, false);
+                let mut cursor = no_hit_transaction(&generation, &json, uri, limits, result_limits, true);
+                assert_no_hit_cursor_parity(&mut fast, &mut cursor);
+                if selected >= 7 && logical >= combined && physical >= 35 {
+                    assert_eq!(fast.selected_scratch.capacity(), 4);
+                    assert_eq!(cursor.selected_scratch.capacity(), selected.min(8));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn query_no_hit_tail_retained_match_growth_uses_complete_selection_limit() {
+    let generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"");
+    let json = br#"{"a":"miss"}"#;
+    let uri = b"/?a=hit&b=hit&c=hit&d=hit&e=hit";
+    let baseline = no_hit_transaction(
+        &generation,
+        json,
+        uri,
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        true,
+    );
+    let fixed = baseline.retained_bytes();
+    let selected = size_of::<SelectedValue>();
+    let matched = size_of::<MemberMatch>();
+    let full_peak = (10 * selected).max(6 * selected + 10 * matched);
+    for extra in [
+        6 * selected,
+        10 * selected,
+        6 * selected + 4 * matched,
+        full_peak - 1,
+        full_peak,
+        full_peak + 1,
+    ] {
+        let limits = RuntimeLimits {
+            max_retained_bytes: fixed + extra,
+            max_selected_values: 6,
+            ..RuntimeLimits::default()
+        };
+        let mut fast = no_hit_transaction(&generation, json, uri, limits, ResultLimits::default(), false);
+        let mut cursor = no_hit_transaction(&generation, json, uri, limits, ResultLimits::default(), true);
+        let left = fast.evaluate_member_matches(0, 0, &TxState::default(), false);
+        let right = cursor.evaluate_member_matches(0, 0, &TxState::default(), false);
+        assert_eq!(left.as_ref().err(), right.as_ref().err());
+        assert_eq!(
+            fast.json_budget.as_ref().unwrap().usage().work,
+            cursor.json_budget.as_ref().unwrap().usage().work
+        );
+        if extra >= full_peak {
+            let left = left.unwrap();
+            let right = right.unwrap();
+            assert_eq!(left.len(), 5);
+            assert_eq!(right.len(), 5);
+            assert_eq!(left.capacity(), 6);
+            assert_eq!(right.capacity(), 6);
+        }
+        assert!(fast.selected_scratch.is_empty());
+        assert!(fast.retained_bytes() <= limits.max_retained_bytes);
+    }
+}
+
+#[test]
+fn query_no_hit_tail_virtual_capacity_preserves_query_match_admission() {
+    let generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"");
+    let json = query_tail_json(17);
+    let uri = format!(
+        "/?{}",
+        (0..17)
+            .map(|index| format!("q{index}=hit"))
+            .collect::<Vec<_>>()
+            .join("&")
+    );
+    let baseline = no_hit_transaction(
+        &generation,
+        &json,
+        uri.as_bytes(),
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        true,
+    );
+    let fixed = baseline.retained_bytes();
+    let selected = size_of::<SelectedValue>();
+    let matched = size_of::<MemberMatch>();
+    let actual_peak = (96 * selected).max(32 * selected + 48 * matched);
+    let hypothetical_peak = 64 * selected + 48 * matched;
+    assert!(actual_peak < hypothetical_peak);
+    let limits = RuntimeLimits {
+        max_retained_bytes: fixed + actual_peak,
+        ..RuntimeLimits::default()
+    };
+    let mut fast = no_hit_transaction(
+        &generation,
+        &json,
+        uri.as_bytes(),
+        limits,
+        ResultLimits::default(),
+        false,
+    );
+    let mut cursor = no_hit_transaction(
+        &generation,
+        &json,
+        uri.as_bytes(),
+        limits,
+        ResultLimits::default(),
+        true,
+    );
+    let before = fast.json_budget.as_ref().unwrap().usage().work;
+    let left = fast.evaluate_member_matches(0, 0, &TxState::default(), false);
+    let right = cursor.evaluate_member_matches(0, 0, &TxState::default(), false);
+    assert_eq!(
+        left.as_ref().err(),
+        Some(&RuntimeError::RetainedByteLimit {
+            limit: limits.max_retained_bytes
+        })
+    );
+    assert_eq!(left.as_ref().err(), right.as_ref().err());
+    assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 2 * 17);
+    assert_eq!(
+        fast.json_budget.as_ref().unwrap().usage().work,
+        cursor.json_budget.as_ref().unwrap().usage().work
+    );
+    assert_eq!(fast.selected_scratch.capacity(), cursor.selected_scratch.capacity());
+    assert!(fast.selected_scratch.capacity() >= 34);
+}
+
+#[test]
+fn query_no_hit_tail_reuses_existing_selected_capacity_without_shadow_retention() {
+    let generation = compile(
+        "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\nSecRule ARGS \"@contains hit\" \"id:2,phase:2,pass\"",
+    );
+    let json = query_tail_json(8);
+    let mut tx = no_hit_transaction(
+        &generation,
+        &json,
+        b"/?a=hit&b=miss",
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        true,
+    );
+    assert_eq!(
+        tx.evaluate_member_matches(0, 0, &TxState::default(), false)
+            .unwrap()
+            .len(),
+        1
+    );
+    let capacity = tx.selected_scratch.capacity();
+    let pointer = tx.selected_scratch.as_ptr();
+    let retained = tx.retained_bytes();
+    let before = tx.json_budget.as_ref().unwrap().usage().work;
+    tx.force_json_cursor = false;
+    assert_eq!(
+        tx.evaluate_member_matches(1, 1, &TxState::default(), false)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(tx.selected_scratch.capacity(), capacity);
+    assert_eq!(tx.selected_scratch.as_ptr(), pointer);
+    assert_eq!(tx.retained_bytes(), retained);
+    assert_eq!(tx.json_budget.as_ref().unwrap().usage().work - before, 7 * 8);
+}
+
+#[test]
+fn query_no_hit_tail_stop_first_and_query_errors_charge_selection_only() {
+    let json = query_tail_json(16);
+    let generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,t:lowercase\"");
+    let uri = b"/?a=HIT&b=miss";
+    let mut fast = no_hit_transaction(
+        &generation,
+        &json,
+        uri,
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        false,
+    );
+    let mut cursor = no_hit_transaction(
+        &generation,
+        &json,
+        uri,
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        true,
+    );
+    let fixed = fast.retained_bytes();
+    let before = fast.json_budget.as_ref().unwrap().usage().work;
+    let left = fast.evaluate_member_matches(0, 0, &TxState::default(), true).unwrap();
+    let right = cursor.evaluate_member_matches(0, 0, &TxState::default(), true).unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(right.len(), 1);
+    assert_eq!(
+        left[0]
+            .matched_var
+            .as_ref()
+            .unwrap()
+            .observed_bytes(&fast.request)
+            .unwrap(),
+        b"hit"
+    );
+    assert_eq!(
+        left[0]
+            .matched_var_name
+            .as_ref()
+            .unwrap()
+            .observed_bytes(&fast.request)
+            .unwrap(),
+        b"ARGS:a"
+    );
+    assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 2 * 16);
+    assert_eq!(
+        fast.json_budget.as_ref().unwrap().usage().work,
+        cursor.json_budget.as_ref().unwrap().usage().work
+    );
+    assert_eq!(
+        fast.retained_bytes(),
+        fixed + fast.selected_scratch.capacity() * size_of::<SelectedValue>()
+    );
+    assert!(fast.selected_scratch.capacity() < cursor.selected_scratch.capacity());
+    for selected in [17, 18] {
+        for physical in [31, 32, 112] {
+            let limits = RuntimeLimits {
+                max_selected_values: selected,
+                ..RuntimeLimits::default()
+            };
+            let result_limits = ResultLimits {
+                work: before + physical,
+                ..ResultLimits::default()
+            };
+            let mut fast = no_hit_transaction(&generation, &json, uri, limits, result_limits, false);
+            let mut cursor = no_hit_transaction(&generation, &json, uri, limits, result_limits, true);
+            let left = fast.evaluate_member_matches(0, 0, &TxState::default(), true);
+            let right = cursor.evaluate_member_matches(0, 0, &TxState::default(), true);
+            assert_eq!(left.as_ref().err(), right.as_ref().err());
+            assert_eq!(left.is_ok(), selected == 18 && physical >= 32);
+            assert_eq!(
+                fast.json_budget.as_ref().unwrap().usage().work,
+                cursor.json_budget.as_ref().unwrap().usage().work
+            );
+        }
+    }
+
+    for (operator, recipe, body, limits, error) in [
+        (
+            "@contains hit",
+            ",t:lowercase",
+            br#"{"a":"x","b":"x","c":"x","d":"x","e":"x"}"#.as_slice(),
+            RuntimeLimits {
+                max_transformation_output_bytes: 3,
+                ..RuntimeLimits::default()
+            },
+            None,
+        ),
+        (
+            "@gt 100",
+            "",
+            br#"{"a":0,"b":0,"c":0,"d":0,"e":0}"#.as_slice(),
+            RuntimeLimits::default(),
+            Some(RuntimeError::IntegerConversion),
+        ),
+    ] {
+        let generation = compile(&format!("SecRule ARGS \"{operator}\" \"id:1,phase:2,pass{recipe}\""));
+        let mut fast = no_hit_transaction(
+            &generation,
+            body,
+            b"/?q=TOOLONG",
+            limits,
+            ResultLimits::default(),
+            false,
+        );
+        let mut cursor = no_hit_transaction(&generation, body, b"/?q=TOOLONG", limits, ResultLimits::default(), true);
+        let before = fast.json_budget.as_ref().unwrap().usage().work;
+        let left = fast.evaluate_member_matches(0, 0, &TxState::default(), false);
+        let right = cursor.evaluate_member_matches(0, 0, &TxState::default(), false);
+        assert_eq!(left.as_ref().err(), right.as_ref().err());
+        if let Some(error) = error {
+            assert_eq!(left.as_ref().err(), Some(&error));
+        } else {
+            assert!(matches!(left, Err(RuntimeError::Transformation { .. })));
+        }
+        assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 10);
+        assert_eq!(
+            fast.json_budget.as_ref().unwrap().usage().work,
+            cursor.json_budget.as_ref().unwrap().usage().work
+        );
+        assert_eq!(fast.selected_scratch.capacity(), 4);
+        assert_eq!(cursor.selected_scratch.capacity(), 8);
+        assert_eq!(fast.match_scratch_bytes, 0);
+    }
+}
+
+#[test]
+fn query_no_hit_tail_replacement_malformed_reference_and_exclusions_keep_semantics() {
+    for (source, json) in [
+        ("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,setvar:tx.hit=+1\"", br#"{"same":"old","same":"miss","b":"miss","c":"miss","d":"miss","e":"miss"}"#.as_slice()),
+        ("SecAction \"id:1,phase:1,pass,ctl:ruleRemoveTargetByTag=check;ARGS:q\"\nSecRule ARGS \"@contains hit\" \"id:2,phase:2,pass,tag:check,setvar:tx.hit=+1\"", br#"{"a":"miss","b":"miss","c":"miss","d":"miss","e":"miss"}"#.as_slice()),
+    ] {
+        let generation = compile(source);
+        let mut fast = no_hit_transaction(&generation, json, b"/?q=hit", RuntimeLimits::default(), ResultLimits::default(), false);
+        let mut cursor = no_hit_transaction(&generation, json, b"/?q=hit", RuntimeLimits::default(), ResultLimits::default(), true);
+        assert_no_hit_cursor_parity(&mut fast, &mut cursor);
+        if source.contains("ruleRemoveTarget") {
+            assert_eq!(fast.tx_value(b"hit"), None);
+            assert!(fast.selected_scratch.capacity() >= 5);
+        }
+    }
+    let malformed_generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,setvar:tx.hit=1\"");
+    let mut fast = Transaction::new(&malformed_generation, head(b"/?q=hit"), RuntimeLimits::default()).unwrap();
+    let mut cursor = Transaction::new(&malformed_generation, head(b"/?q=hit"), RuntimeLimits::default()).unwrap();
+    cursor.force_json_cursor = true;
+    fast.execute_request_headers().unwrap();
+    cursor.execute_request_headers().unwrap();
+    let publish = |tx: &mut Transaction<'_>| {
+        tx.publish_request_body(RequestBody::new(
+            Bytes::from_static(br#"{"a":"miss""#),
+            BodyProcessorSelection::Json,
+        ))
+    };
+    assert_eq!(publish(&mut fast), publish(&mut cursor));
+    assert_eq!(fast.request_body_error(), cursor.request_body_error());
+    assert!(matches!(fast.execute_request_body(), Err(RuntimeError::Body { .. })));
+    assert!(matches!(cursor.execute_request_body(), Err(RuntimeError::Body { .. })));
+    assert_eq!(fast.tx_value(b"hit"), None);
+    assert_eq!(fast.selected_scratch.capacity(), 0);
+    let generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"");
+    let json = query_tail_json(16);
+    let mut reference = Transaction::new_with_evaluation(
+        &generation,
+        head(b"/?q=hit"),
+        RuntimeLimits::default(),
+        EvaluationMode::Reference,
+    )
+    .unwrap();
+    reference.execute_request_headers().unwrap();
+    reference
+        .publish_request_body(RequestBody::new(Bytes::from(json), BodyProcessorSelection::Json))
+        .unwrap();
+    assert_eq!(reference.execute_request_body().unwrap().findings().len(), 1);
+    assert!(reference.selected_scratch.capacity() >= 17);
+}
+
+#[test]
+fn query_no_hit_tail_saved_capacity_adds_charged_post_member_headroom() {
+    let payload = "x".repeat(4096);
+    let generation = compile(&format!(
+        "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass,setvar:tx.payload={payload}\""
+    ));
+    let json = query_tail_json(16);
+    let uri = b"/?q=hit";
+    let mut baseline = no_hit_transaction(
+        &generation,
+        &json,
+        uri,
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        false,
+    );
+    baseline.execute_request_body().unwrap();
+    let exact = baseline.retained_bytes();
+    let mut fast = no_hit_transaction(
+        &generation,
+        &json,
+        uri,
+        RuntimeLimits {
+            max_retained_bytes: exact,
+            ..RuntimeLimits::default()
+        },
+        ResultLimits::default(),
+        false,
+    );
+    let mut cursor = no_hit_transaction(
+        &generation,
+        &json,
+        uri,
+        RuntimeLimits {
+            max_retained_bytes: exact,
+            ..RuntimeLimits::default()
+        },
+        ResultLimits::default(),
+        true,
+    );
+    assert!(fast.execute_request_body().is_ok());
+    assert_eq!(
+        cursor.execute_request_body(),
+        Err(RuntimeError::RetainedByteLimit { limit: exact })
+    );
+    assert_eq!(fast.retained_bytes(), exact);
+    assert_eq!(fast.tx_value(b"payload"), Some(payload.as_bytes()));
+    assert_eq!(cursor.tx_value(b"payload"), None);
+    assert_eq!(
+        fast.json_budget.as_ref().unwrap().usage().work,
+        cursor.json_budget.as_ref().unwrap().usage().work
+    );
+    assert_eq!(
+        fast.retained_bytes(),
+        fast.request.retained_bytes + fast.scratch_bytes + fast.tx.retained_bytes
+    );
+    for limits in [
+        RuntimeLimits {
+            max_retained_bytes: exact - 1,
+            ..RuntimeLimits::default()
+        },
+        RuntimeLimits {
+            max_tx_bytes: payload.len() - 1,
+            ..RuntimeLimits::default()
+        },
+        RuntimeLimits {
+            max_tx_variables: 0,
+            ..RuntimeLimits::default()
+        },
+        RuntimeLimits {
+            max_setvar_actions: 0,
+            ..RuntimeLimits::default()
+        },
+    ] {
+        let mut fast = no_hit_transaction(&generation, &json, uri, limits, ResultLimits::default(), false);
+        let result = fast.execute_request_body();
+        assert!(result.is_err());
+        assert_eq!(fast.tx_value(b"payload"), None);
+        assert!(fast.retained_bytes() <= limits.max_retained_bytes);
+        if limits.max_retained_bytes == RuntimeLimits::default().max_retained_bytes {
+            let mut cursor = no_hit_transaction(&generation, &json, uri, limits, ResultLimits::default(), true);
+            assert_eq!(fast.json_budget.as_ref().unwrap().usage().work, {
+                assert_eq!(result, cursor.execute_request_body());
+                cursor.json_budget.as_ref().unwrap().usage().work
+            });
+            assert_eq!(cursor.tx_value(b"payload"), None);
+        }
+    }
+}
+
 fn compare(source: &str, json: &[u8], form: &[u8], uri: &[u8], limits: RuntimeLimits) {
     let generation = compile(source);
     for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
@@ -1542,7 +2155,8 @@ fn json_inspection_measurements() {
             "many_capture_hits" => {
                 assert_eq!(usage.matched_bytes, 128 * 3);
                 assert_eq!(usage.capture_bytes, 128 * 8);
-                assert_eq!(counts.get(E::TemporaryCaptureCopyBytes), 128 * 8);
+                assert_eq!(counts.get(E::TemporaryCaptureCopyBytes), 128 * 2);
+                assert_eq!(counts.get(E::CaptureCopyBytes), 128 * 2);
             }
             "deep_arrays" => assert_eq!(usage.live_candidates, 0),
             "one_named_dependency" => {
@@ -1623,6 +2237,32 @@ fn sealed_names_and_capture_values_share_through_match_tx_and_branch_clones() {
         let captured = &first[0].captures[1].value;
         assert!(matches!(captured, MatchValue::Json(_)));
         let capture_pointer = captured.bytes(&tx.request, tx.json_budget.as_mut()).unwrap().as_ptr();
+        assert_eq!(
+            capture_pointer,
+            first[0]
+                .matched_var
+                .as_ref()
+                .unwrap()
+                .bytes(&tx.request, tx.json_budget.as_mut())
+                .unwrap()
+                .as_ptr()
+        );
+        assert_eq!(
+            capture_pointer,
+            first[0].captures[0]
+                .value
+                .bytes(&tx.request, tx.json_budget.as_mut())
+                .unwrap()
+                .as_ptr()
+        );
+        assert_eq!(
+            capture_pointer,
+            second[0].captures[1]
+                .value
+                .bytes(&tx.request, tx.json_budget.as_mut())
+                .unwrap()
+                .as_ptr()
+        );
         let mut staged = TxState::default();
         let mut keys = Vec::new();
         apply_member_match(&mut staged, &mut keys, first.pop().unwrap(), tx.limits).unwrap();

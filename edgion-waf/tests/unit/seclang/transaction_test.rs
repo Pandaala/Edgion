@@ -68,6 +68,95 @@ fn shared_generation_transaction_outlives_the_callers_handle() {
 }
 
 #[test]
+fn no_hit_first_members_borrow_tx_and_restore_prior_observers() {
+    for source in [
+        "SecRule REQUEST_HEADERS:X-Probe \"@streq hit\" \"id:1,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Probe \"@streq hit\" \"id:1,phase:1,pass,chain\"\nSecRule TX:saved \"@contains a\" \"\"\n",
+        "SecRule MATCHED_VAR|MATCHED_VARS \"@streq previous\" \"id:1,phase:1,pass\"\n",
+    ] {
+        let g = generation(source);
+        let headers = [RequestHeader::new(b"X-Probe", b"miss")];
+        let mut tx = Transaction::new(&g, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        tx.tx.set(b"saved".to_vec(), vec![b'a'; 4096], tx.limits).unwrap();
+        tx.tx.matched_var = Some(b"previous".to_vec().into());
+        tx.tx.matched_var_name = Some(b"ARGS:previous".to_vec().into());
+        tx.tx.matched_vars.push(TxEntry {
+            key: b"ARGS:previous".to_vec().into(),
+            value: b"previous".to_vec().into(),
+        });
+        tx.tx.request_body_processor = Some(super::super::super::BodyProcessorSelection::Json);
+        tx.tx.recount();
+        let retained = tx.tx.retained_bytes;
+        let pointer = tx.tx_value(b"saved").unwrap().as_ptr();
+        let scope = measurements::start();
+        assert!(!tx.evaluate_unit(0, None).unwrap());
+        assert_eq!(scope.counts().get(Event::UnitTxClones), 0);
+        assert_eq!(tx.tx_value(b"saved").unwrap().as_ptr(), pointer);
+        assert_eq!(tx.tx.retained_bytes, retained);
+        assert_eq!(tx.tx.matched_var, Some(b"previous".to_vec().into()));
+        assert_eq!(tx.tx.matched_vars.len(), 1);
+        assert_eq!(tx.tx.request_body_processor, Some(super::super::super::BodyProcessorSelection::Json));
+    }
+}
+
+#[test]
+fn first_member_errors_restore_tx_before_propagation() {
+    let g = generation("SecRule REQUEST_HEADERS:X-Probe \"@eq 1\" \"id:1,phase:1,pass\"\n");
+    let headers = [RequestHeader::new(b"X-Probe", b"not-a-number")];
+    for limited in [false, true] {
+        let mut tx = Transaction::new(&g, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        tx.tx.set(b"saved".to_vec(), b"persistent".to_vec(), tx.limits).unwrap();
+        tx.tx.matched_var = Some(b"previous".to_vec().into());
+        tx.tx.recount();
+        let retained = tx.tx.retained_bytes;
+        let pointer = tx.tx_value(b"saved").unwrap().as_ptr();
+        if limited {
+            tx.limits.max_retained_bytes = tx.retained_bytes();
+        }
+        let scope = measurements::start();
+        let result = tx.evaluate_unit(0, None);
+        assert!(matches!(
+            result,
+            Err(RuntimeError::IntegerConversion | RuntimeError::RetainedByteLimit { .. })
+        ));
+        assert_eq!(scope.counts().get(Event::UnitTxClones), 0);
+        assert_eq!(tx.tx_value(b"saved").unwrap().as_ptr(), pointer);
+        assert_eq!(tx.tx.retained_bytes, retained);
+        assert_eq!(tx.tx.matched_var, Some(b"previous".to_vec().into()));
+    }
+}
+
+#[test]
+fn matched_units_clone_after_first_member_and_failed_chains_roll_back() {
+    for succeeds in [false, true] {
+        let g = generation(&format!(
+            "SecRule REQUEST_HEADERS:X-Probe \"@rx (hit)\" \"id:1,phase:1,pass,capture,chain,setvar:tx.saved=changed\"\nSecRule TX:saved \"@streq {}\" \"\"\n",
+            if succeeds { "changed" } else { "never" }
+        ));
+        let headers = [RequestHeader::new(b"X-Probe", b"hit")];
+        let mut tx = Transaction::new(&g, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        tx.tx.set(b"saved".to_vec(), b"persistent".to_vec(), tx.limits).unwrap();
+        tx.tx.matched_var = Some(b"previous".to_vec().into());
+        tx.tx.recount();
+        let scope = measurements::start();
+        assert_eq!(tx.evaluate_unit(0, None).unwrap(), succeeds);
+        assert_eq!(scope.counts().get(Event::UnitTxClones), 1);
+        assert_eq!(
+            tx.tx_value(b"saved"),
+            Some(if succeeds {
+                b"changed".as_slice()
+            } else {
+                b"persistent".as_slice()
+            })
+        );
+        assert_eq!(tx.tx_value(b"1"), if succeeds { Some(b"hit".as_slice()) } else { None });
+        if !succeeds {
+            assert_eq!(tx.tx.matched_var, Some(b"previous".to_vec().into()));
+        }
+    }
+}
+
+#[test]
 fn finding_storage_is_lazy_and_grows_only_after_matches() {
     let mut clean_source = String::new();
     let mut matching_source = String::new();
@@ -2350,6 +2439,7 @@ struct CaptureProbe {
 }
 impl PredicateStageObserver for CaptureProbe {
     type Error = ();
+    type CaptureValue = MatchValue;
     fn charge_stage(&mut self, _: usize, _: usize) -> Result<(), ()> {
         Ok(())
     }
@@ -2382,7 +2472,17 @@ fn predicate_capture_admission_precedes_allocation_and_preserves_semantic_limits
         actual: 0,
     };
     assert!(matches!(
-        push_capture(&mut captures, b"0", b"secret", RuntimeLimits::default(), &mut observer),
+        push_capture(
+            &mut captures,
+            b"0",
+            CaptureSource::InputRange {
+                input: b"secret",
+                start: 0,
+                len: 6
+            },
+            RuntimeLimits::default(),
+            &mut observer
+        ),
         Err(PredicateStageFailure::Observer(()))
     ));
     assert_eq!(captures.capacity(), 0);
@@ -2393,7 +2493,17 @@ fn predicate_capture_admission_precedes_allocation_and_preserves_semantic_limits
         ..RuntimeLimits::default()
     };
     assert!(matches!(
-        push_capture(&mut captures, b"0", b"secret", limits, &mut observer),
+        push_capture(
+            &mut captures,
+            b"0",
+            CaptureSource::InputRange {
+                input: b"secret",
+                start: 0,
+                len: 6
+            },
+            limits,
+            &mut observer
+        ),
         Err(PredicateStageFailure::Semantic {
             checkpoint: PredicateCheckpoint::Captures,
             error: RuntimeError::CaptureByteLimit { limit: 0 }
@@ -2401,7 +2511,18 @@ fn predicate_capture_admission_precedes_allocation_and_preserves_semantic_limits
     ));
     assert_eq!(observer.admissions, 0);
     observer.reject_admission = false;
-    assert!(push_capture(&mut captures, b"0", b"value", RuntimeLimits::default(), &mut observer).is_ok());
+    assert!(push_capture(
+        &mut captures,
+        b"0",
+        CaptureSource::InputRange {
+            input: b"value",
+            start: 0,
+            len: 5
+        },
+        RuntimeLimits::default(),
+        &mut observer
+    )
+    .is_ok());
     assert_eq!(observer.admissions, 3);
     assert_eq!(observer.actual, capture_retained_bytes(&captures).unwrap());
     assert!(matches!(
@@ -2739,6 +2860,27 @@ fn capture_descriptor_capacity_tracks_operator_bound_and_optional_groups() {
     }
 }
 
+struct RangeCaptureProbe;
+impl PredicateStageObserver for RangeCaptureProbe {
+    type Error = ();
+    type CaptureValue = StageCaptureValue;
+    fn charge_stage(&mut self, _: usize, _: usize) -> Result<(), ()> {
+        Ok(())
+    }
+    fn before_captures(&mut self, _: usize) -> Result<(), ()> {
+        Ok(())
+    }
+    fn captures(&mut self, _: &[CaptureEntry<StageCaptureValue>]) -> Result<(), ()> {
+        Ok(())
+    }
+    fn admit_capture_allocation(&mut self, _: usize, _: usize) -> Result<(), ()> {
+        Ok(())
+    }
+    fn capture_capacity(&mut self, _: usize) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
 #[test]
 fn smaller_capture_reservation_preserves_named_entry_limits_and_large_growth() {
     let compiled = generation("SecRule REQUEST_HEADERS:X-Probe \"@rx ^(?P<word>a)$\" \"id:1,phase:1,pass,capture\"\n");
@@ -2786,6 +2928,41 @@ fn smaller_capture_reservation_preserves_named_entry_limits_and_large_growth() {
             assert_eq!(matches[0].captures.len(), 69);
             assert!(matches[0].captures.capacity() >= 69);
             assert_eq!(matches[0].captures.last().unwrap().key, b"g33");
+            let ranged = extract_captures(
+                &compiled,
+                &mut transaction.capture_scratch,
+                compiled.operator_plans[0].unwrap(),
+                input.as_bytes(),
+                transaction.limits,
+                EvaluationMode::Accelerated,
+                None,
+                &mut RangeCaptureProbe,
+            )
+            .unwrap_or_else(|_| panic!("range extraction failed"));
+            assert_eq!(ranged.len(), 69);
+            assert!(ranged.capacity() >= 69);
+            assert_eq!(ranged.last().unwrap().key, b"g33");
+            assert!(matches!(
+                ranged.last().unwrap().value,
+                StageCaptureValue::InputRange { start: 33, len: 1 }
+            ));
+            assert_eq!(
+                capture_retained_bytes(&ranged).unwrap(),
+                ranged.capacity() * size_of::<CaptureEntry<StageCaptureValue>>()
+                    + ranged.iter().map(|entry| entry.key.capacity()).sum::<usize>()
+            );
+            assert_eq!(
+                member_match_bytes(&matches[0]).unwrap(),
+                size_of::<MemberMatch>()
+                    + 69 * size_of::<CaptureEntry<MatchValue>>()
+                    + matches[0]
+                        .captures
+                        .iter()
+                        .map(|entry| entry.key.len() + entry.value.len())
+                        .sum::<usize>()
+                    + matches[0].matched_var.as_ref().unwrap().len()
+                    + matches[0].matched_var_name.as_ref().unwrap().len()
+            );
         } else {
             assert!(matches!(result, Err(RuntimeError::CaptureEntryLimit { limit: 68 })));
         }

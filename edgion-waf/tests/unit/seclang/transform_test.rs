@@ -349,6 +349,161 @@ fn unchanged_lowercase_borrows_with_zero_scratch_and_preserves_work_limits() {
 }
 
 #[test]
+fn marker_free_decoding_borrows_and_keeps_work_and_output_errors() {
+    let input = vec![b'a'; 4096];
+    for kind in [
+        TransformationKind::RemoveNulls,
+        TransformationKind::HtmlEntityDecode,
+        TransformationKind::UrlDecodeUni,
+    ] {
+        for multi_match in [false, true] {
+            for work in [input.len() * 2 - 1, input.len() * 2] {
+                let mut scratch = TransformScratch::default();
+                let mut probe = WalkProbe::default();
+                let result = walk_transformations(
+                    &input,
+                    &[kind],
+                    multi_match,
+                    TransformLimits {
+                        max_output_bytes: input.len(),
+                        max_work_bytes: work,
+                    },
+                    &mut scratch,
+                    &mut probe,
+                );
+                if work == input.len() * 2 {
+                    assert!(matches!(result, Ok(CurrentTransform::Input)));
+                    assert_eq!(probe.pointers, [input.as_ptr() as usize]);
+                    assert_eq!(probe.work, [work]);
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(TransformWalkError::Transformation(TransformError::WorkLimit { .. }))
+                    ));
+                }
+                assert_eq!(scratch.retained_bytes().unwrap(), 0);
+                assert_eq!(probe.changed, [false]);
+            }
+            let mut probe = WalkProbe {
+                cap: usize::MAX,
+                ..Default::default()
+            };
+            assert!(matches!(
+                walk_transformations(
+                    &input,
+                    &[kind],
+                    multi_match,
+                    TransformLimits {
+                        max_output_bytes: input.len() - 1,
+                        max_work_bytes: usize::MAX,
+                    },
+                    &mut TransformScratch::default(),
+                    &mut probe
+                ),
+                Err(TransformWalkError::Transformation(TransformError::OutputLimit {
+                    limit: 4095
+                }))
+            ));
+            assert!(probe.changed.is_empty());
+        }
+    }
+}
+
+#[test]
+fn decoding_identity_matches_materialization_for_bytes_and_marker_sequences() {
+    for kind in [
+        TransformationKind::RemoveNulls,
+        TransformationKind::HtmlEntityDecode,
+        TransformationKind::UrlDecodeUni,
+    ] {
+        let mut inputs = (0_u8..=255).map(|byte| vec![byte]).collect::<Vec<_>>();
+        inputs.extend([
+            b"a%zz".to_vec(),
+            b"a%20b".to_vec(),
+            b"a+b".to_vec(),
+            b"a&bogus;b".to_vec(),
+            b"a&amp;b".to_vec(),
+            b"a\0b".to_vec(),
+        ]);
+        for input in inputs {
+            let mut expected = Vec::new();
+            apply_one(kind, &input, &mut expected, 4096).unwrap();
+            for multi_match in [false, true] {
+                let mut scratch = TransformScratch::default();
+                let mut probe = WalkProbe {
+                    cap: 4096,
+                    ..Default::default()
+                };
+                let result =
+                    walk_transformations(&input, &[kind], multi_match, walk_limits(), &mut scratch, &mut probe)
+                        .unwrap_or_else(|_| panic!("expected bounded transformation success"));
+                let output = match result {
+                    CurrentTransform::Input => &input,
+                    CurrentTransform::First => &scratch.first,
+                    CurrentTransform::Second => &scratch.second,
+                };
+                assert_eq!(output, &expected);
+                assert_eq!(probe.changed, [expected != input]);
+                let stages = if multi_match && expected != input {
+                    vec![input.clone(), expected.clone()]
+                } else if multi_match {
+                    vec![input.clone()]
+                } else {
+                    vec![expected.clone()]
+                };
+                assert_eq!(probe.stages, stages);
+            }
+        }
+    }
+}
+
+#[test]
+fn identity_decoders_keep_prior_buffer_and_validate_later_steps() {
+    let recipe = [
+        TransformationKind::Lowercase,
+        TransformationKind::UrlDecodeUni,
+        TransformationKind::HtmlEntityDecode,
+        TransformationKind::RemoveNulls,
+    ];
+    for multi_match in [false, true] {
+        let mut scratch = TransformScratch::default();
+        let mut probe = WalkProbe {
+            cap: 3,
+            ..Default::default()
+        };
+        assert!(matches!(
+            walk_transformations(b"ABC", &recipe, multi_match, walk_limits(), &mut scratch, &mut probe),
+            Ok(CurrentTransform::First)
+        ));
+        assert_eq!(scratch.first, b"abc");
+        assert_eq!(scratch.second.capacity(), 0);
+        assert_eq!(probe.changed, [true, false, false, false]);
+        let mut later = recipe.to_vec();
+        later.push(TransformationKind::HexEncode);
+        let mut probe = WalkProbe {
+            cap: usize::MAX,
+            ..Default::default()
+        };
+        assert!(matches!(
+            walk_transformations(
+                b"ABC",
+                &later,
+                multi_match,
+                TransformLimits {
+                    max_output_bytes: 3,
+                    max_work_bytes: 65536
+                },
+                &mut scratch,
+                &mut probe
+            ),
+            Err(TransformWalkError::Transformation(TransformError::OutputLimit {
+                limit: 3
+            }))
+        ));
+    }
+}
+
+#[test]
 fn lowercase_identity_preserves_transformed_storage_and_later_validation() {
     for multi_match in [false, true] {
         let mut scratch = TransformScratch::default();

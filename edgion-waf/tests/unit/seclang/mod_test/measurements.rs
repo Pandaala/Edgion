@@ -15,6 +15,7 @@ pub(crate) enum Event {
     MatchedCopyBytes,
     CaptureCopyBytes,
     TemporaryCaptureCopyBytes,
+    UnitTxClones,
     Candidates,
     DispatchGroups,
     DispatchWork,

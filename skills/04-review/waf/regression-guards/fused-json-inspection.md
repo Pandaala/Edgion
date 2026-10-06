@@ -97,8 +97,8 @@ The configured native CRS profile passed 4,741 admitted stages, including 896
 negative stages, after matching the upstream FTW XML-attribute test opt-in.
 This is not full-CRS compatibility or production throughput evidence. Scoped
 release measurements and their substantial remaining allocation costs were
-recorded in the former `waf-json-checker/13-results.md` task artifact, which is
-absent from the current tree. That historical measurement is not fresh evidence.
+recorded in [the initial results](../../../../tasks/pending/waf-json-checker/13-results.md).
+That historical measurement is not fresh evidence.
 
 Re-evaluate when selector admissibility, duplicate ordering, transformation
 validation, result lifetimes, phase controls, limit precedence or BodyStorage
@@ -106,10 +106,10 @@ materialization changes. Preserve the mirrored checker/collector/runtime tests
 and Gateway completeness, one-read, source-lifetime and error-classification
 regressions.
 
-The unified follow-up design, review gates and measurements were recorded in the
-former `waf-json-checker/15-optimization-spec.md` task artifact, which is absent
-from the current tree. Current allocation follow-up is tracked in
-[the WAF optimization task](../../../../tasks/todo/waf-transformation-and-allocation-optimization.md).
+The unified follow-up design and review gates are recorded in
+[the optimization specification](../../../../tasks/pending/waf-json-checker/15-optimization-spec.md).
+Current allocation follow-up is tracked in
+[the capture/query plan](../../../../tasks/pending/waf-json-checker/21-capture-query-and-transaction-plan.md).
 Re-evaluate physical capacity/work thresholds when inline sizes, retained scratch,
 shared outcome destruction or broad dispatch ordering changes. Preserve successful
 semantic results, strict charged limits and terminal failure behavior; do not infer
@@ -148,12 +148,46 @@ Large BytePool classes use checked page rounding and charged sorted metadata;
 small classes retain fixed heads. Batch ASCII scanning preserves sequential
 special-byte and near-limit errors, verified against a test-only lexical oracle.
 
-Query-empty accelerated no-hit replay requires a sealed completed sole-value-profile
+Accelerated no-hit JSON-tail replay requires a sealed completed sole-value-profile
 proof, never-allocated outcome/profile/change pools, static unmodified Args selection,
 identity checks and successful logical/physical/hypothetical-selection preflight.
 It charges the cursor's 2N selection and 5N replay work without materializing
-selected candidates. Queries, ambiguous shapes, changed/error profiles, discarded
-hits and uncertain limits fall back before counter mutation. Reference always
+body candidates. Queries are selected and evaluated normally: full Q+N selection,
+geometric capacity and possible-query-match admission precede matching; virtual
+body capacity exists only in MatchStorage.fixed_bytes. Persistent scratch retains
+actual capacity. Query errors or early stops do not charge JSON-tail replay. Later
+actions or rules may gain actual retained headroom; logical TX/capture/count/work
+limits stay unchanged. Ambiguous shapes, changed/error profiles, discarded hits
+and uncertain limits fall back before counter mutation. Reference always
 uses the cursor. Re-evaluate when runtime counters, profile completion, selection
 growth or scratch lifetime changes; preserve forced-cursor differential tests and
 source-local test-oracle layout exceptions.
+
+
+The capture/query follow-up is tracked in
+[the approved plan](../../../../tasks/pending/waf-json-checker/21-capture-query-and-transaction-plan.md)
+and [the results](../../../../tasks/pending/waf-json-checker/22-capture-query-and-transaction-results.md).
+Capture extraction uses a shared admission/enumeration helper with an owned
+ordinary policy and a JSON relative-range/fingerprint policy. Stored ranges
+resolve against the owning stored stage match, never a fabricated subrange Lease.
+Numeric and named aliases remain independently charged by semantic length. Only
+Owned payloads are freed; profile/candidate destruction still owns range lifetime.
+
+New-unit execution loans persistent TX entries while hiding previous match
+observers and preserves the original total in an accounting placeholder. Every
+Result exit restores TX before propagation. Stage mutation clones start only
+after first-member hits; chains reuse those results without a second evaluation.
+Sparse qualified names use an optional pair index on the candidate and immutable
+Args/ArgsNames spans. Full candidate owner/slot/generation validation precedes
+index and byte-bound checks. Use actual size_of for physical admission.
+
+Marker-free RemoveNulls, HtmlEntityDecode and UrlDecodeUni borrow unchanged input
+only within the output cap. Marker presence or oversized input follows the old
+materializing path, preserving transformation errors and checkpoints. Re-evaluate
+TX loan self-state reads, capture owner cleanup, virtual capacity, semantic alias
+limits and unchanged-transform output precedence whenever these paths change.
+
+Positive capture execution deliberately retains boolean miss checking followed by
+capture extraction on hits. A measured single-search prototype was rejected because
+all-miss timing regressed across both run orders; semantic correctness alone does
+not justify replacing this path. Capture-program interning remains separate work.

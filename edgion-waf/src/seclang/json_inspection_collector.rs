@@ -587,10 +587,14 @@ impl TransformObserver for ProfileObserver<'_, '_, '_> {
                         outcome
                     };
                     for entry in &captures {
-                        let MatchValue::Owned(value) = &entry.value else {
-                            return Err(CollectorError::State);
-                        };
-                        observer.store.add_capture(outcome, &entry.key, value)?;
+                        match &entry.value {
+                            StageCaptureValue::InputRange { start, len } => {
+                                observer.store.add_capture_range(outcome, &entry.key, *start, *len)?
+                            }
+                            StageCaptureValue::Fingerprint(value) => {
+                                observer.store.add_capture(outcome, &entry.key, value.as_bytes())?
+                            }
+                        }
                     }
                     drop(captures);
                     run.terminal = true;
@@ -626,6 +630,7 @@ struct PredicateObserver<'a, 'generation> {
 }
 impl PredicateStageObserver for PredicateObserver<'_, '_> {
     type Error = CollectorError;
+    type CaptureValue = StageCaptureValue;
     fn observes_physical_work(&self) -> bool {
         true
     }
@@ -645,7 +650,7 @@ impl PredicateStageObserver for PredicateObserver<'_, '_> {
         self.store.charge_work(bytes)?;
         Ok(())
     }
-    fn captures(&mut self, _: &[CaptureEntry]) -> Collected<()> {
+    fn captures(&mut self, _: &[CaptureEntry<Self::CaptureValue>]) -> Collected<()> {
         Ok(())
     }
     fn admit_capture_allocation(&mut self, current: usize, required: usize) -> Collected<()> {
