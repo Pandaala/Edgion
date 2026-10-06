@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn health_check_port_validation_preserves_inheritance_and_checks_all_protocols() {
+    for protocol in ["http", "https", "tcp", "grpc", "grpcs"] {
+        for (fields, expected_port, expected_error) in [
+            (serde_json::json!({}), None, None),
+            (serde_json::json!({"port": null}), None, None),
+            (serde_json::json!({"port": 0}), Some(0), Some("port must be >= 1")),
+            (serde_json::json!({"port": 1}), Some(1), None),
+            (serde_json::json!({"port": 65535}), Some(65535), None),
+        ] {
+            let mut active = fields;
+            active["type"] = serde_json::json!(protocol);
+            let document = serde_json::json!({"active": active});
+            let json: ServiceHealthCheck = serde_json::from_value(document.clone()).unwrap();
+            let yaml: ServiceHealthCheck = serde_yaml::from_str(&serde_yaml::to_string(&document).unwrap()).unwrap();
+            for config in [json, yaml] {
+                assert_eq!(config.active.as_ref().unwrap().port, expected_port, "{document}");
+                assert_eq!(config.get_validation_error(), expected_error, "{document}");
+            }
+        }
+    }
+    assert!(ServiceHealthCheck { active: None }.get_validation_error().is_none());
+}
+
+#[test]
+fn health_check_port_rejects_values_outside_the_unsigned_representation() {
+    for port in [serde_json::json!(-1), serde_json::json!(65536)] {
+        let document = serde_json::json!({"active": {"port": port}});
+        assert!(serde_json::from_value::<ServiceHealthCheck>(document.clone()).is_err());
+        assert!(serde_yaml::from_str::<ServiceHealthCheck>(&serde_yaml::to_string(&document).unwrap()).is_err());
+    }
+}
+
+#[test]
 fn test_deserialize_minimal_config() {
     let yaml = r#"
 active:

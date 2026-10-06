@@ -103,9 +103,9 @@ independent component peaks are not a simultaneous aggregate peak.
 
 ## Verification and re-evaluation
 
-The historical `tasks/pending/waf-json-checker/` records are retained in the
-working tree. Current capture wiring and fresh closure gates are tracked in
-[plan 16](../../../../tasks/waf-todo/16-json-capture-wiring-and-closure.md).
+The historical `tasks/pending/waf-json-checker/` records describe the earlier
+work. The former `16-json-capture-wiring-and-closure.md` plan is no longer in
+the active task tree; consult the current execution queue below for fresh gates.
 Prior test and measurement results below are historical evidence, not proof of
 the new entry. Remaining WAF work is tracked in the
 [current execution queue](../../../../tasks/waf-todo/README.md).

@@ -8,7 +8,7 @@ use edgion_resources::resources::edgion_backend_traffic_policy::EdgionBackendTra
 use edgion_resources::resources::edgion_gateway_config::{
     EdgionGatewayConfigSpec, LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT, MAX_RETRY_ATTEMPTS,
 };
-use edgion_resources::resources::health_check::ActiveHealthCheckConfig;
+use edgion_resources::resources::health_check::{ActiveHealthCheckConfig, ServiceHealthCheck};
 use edgion_resources::resources::outlier_detection::OutlierDetectionConfig;
 use schemars::{schema_for, JsonSchema};
 use serde_json::{json, Map, Value};
@@ -427,15 +427,16 @@ fn health_check_port_schema_uses_canonical_bounds_and_preserves_absence() {
             assert!(admits(port, &json!(value)), "{version}: {value}");
             let config: ActiveHealthCheckConfig = serde_json::from_value(json!({"port": value})).expect("valid port");
             assert_eq!(config.port.map(i64::from), Some(value));
+            assert!(ServiceHealthCheck { active: Some(config) }
+                .get_validation_error()
+                .is_none());
         }
         for value in [json!(0), json!(-1), json!(PORT_MAX + 1), json!("80"), json!(80.5)] {
             assert!(!admits(port, &value), "{version}: {value}");
-            if value != json!(0) {
-                assert!(serde_json::from_value::<ActiveHealthCheckConfig>(json!({"port": value})).is_err());
-            }
+            let runtime_valid = serde_json::from_value::<ServiceHealthCheck>(json!({"active": {"port": value}}))
+                .is_ok_and(|config| config.get_validation_error().is_none());
+            assert!(!runtime_valid, "{version}: direct input port = {value}");
         }
-        // Minimum enforcement on direct file/etcd input remains a separately
-        // tracked gap; the u16 representation alone cannot reject port zero.
     }
 }
 

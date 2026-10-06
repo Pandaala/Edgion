@@ -264,6 +264,10 @@ impl ServiceHealthCheck {
             return None;
         };
 
+        if active.port == Some(0) {
+            return Some("port must be >= 1");
+        }
+
         if active.healthy_threshold == 0 {
             return Some("healthyThreshold must be >= 1");
         }

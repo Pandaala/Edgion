@@ -27,6 +27,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Custom connector request contracts](regression-guards/custom-connector-request-contracts.md)
+
 - [Scripted H2 normal closure drains the response](regression-guards/h2-scripted-close-drains-response.md)
 - [Selected production WAF rules need strict and wire acceptance](regression-guards/waf-production-profile-acceptance.md)
 - [Shared outbound call unit tests are network-free](regression-guards/shared-outbound-call-unit-tests-are-network-free.md)

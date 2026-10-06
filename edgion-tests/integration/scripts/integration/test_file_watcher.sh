@@ -562,6 +562,97 @@ EOF
     return 1
 }
 
+# Direct writes bypass Admin API schema admission. Poll the processed generation
+# and its persisted native status through valid -> zero -> inherited -> repaired.
+test_health_check_port_validation_on_update() {
+    log_section "Health-check port validation on direct file updates"
+
+    cat > "$CONFIG_DIR/Service_default_health-port.yaml" << 'EOF'
+apiVersion: v1
+kind: Service
+metadata: {name: health-port, namespace: default}
+spec:
+  ports: [{port: 8080}]
+EOF
+    cat > "$CONFIG_DIR/HTTPRoute_default_health-port.yaml" << 'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: health-port, namespace: default}
+spec:
+  parentRefs: [{name: test-gateway}]
+  rules:
+    - backendRefs: [{name: health-port, port: 8080}]
+EOF
+
+    local port spec_file generation=0
+    spec_file="$CONFIG_DIR/EdgionBackendTrafficPolicy_default_health-port.yaml"
+    for port in 9090 0 omitted null 65535; do
+        generation=$((generation + 1))
+        cat > "$STAGING_DIR/health-port.yaml" << EOF
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata: {name: health-port, namespace: default, generation: $generation}
+spec:
+  targetRefs: [{kind: Service, name: health-port}]
+  healthCheck:
+    active:
+      type: tcp
+EOF
+        if [ "$port" != omitted ]; then
+            echo "      port: $port" >> "$STAGING_DIR/health-port.yaml"
+        fi
+        mv "$STAGING_DIR/health-port.yaml" "$spec_file"
+        if ! python3 - "$CONTROLLER_ADMIN_PORT" "$spec_file.status" "$port" "$generation" << 'PY'
+import json
+import os
+import pathlib
+import sys
+import time
+import urllib.request
+import yaml
+
+admin_port, status_path, phase, generation = sys.argv[1:]
+generation = int(generation)
+expected_port = None if phase in ("omitted", "null") else int(phase)
+valid = expected_port != 0
+request = urllib.request.Request(
+    f"http://localhost:{admin_port}/configserver/EdgionBackendTrafficPolicy?namespace=default&name=health-port",
+    headers={"Authorization": f"Bearer {os.environ['EDGION_ADMIN_TOKEN']}"},
+)
+deadline = time.monotonic() + 15
+last_error = "phase not observed"
+while time.monotonic() < deadline:
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            resource = json.load(response)["data"]
+        assert resource["metadata"]["generation"] == generation, "stale processed generation"
+        spec = resource["spec"]
+        assert spec["healthCheck"]["active"].get("port") == expected_port, "stale port"
+        assert spec.get("resolvedTargetClass") == ("service" if valid else None), "wrong attachment eligibility"
+        status = yaml.safe_load(pathlib.Path(status_path).read_text())
+        ancestor = next(a for a in status["ancestors"] if a["ancestorRef"]["name"] == "test-gateway")
+        accepted = next(c for c in ancestor["conditions"] if c["type"] == "Accepted")
+        assert accepted["observedGeneration"] == generation, "stale persisted status generation"
+        assert accepted["status"] == ("True" if valid else "False"), "wrong Accepted status"
+        assert accepted["reason"] == ("Accepted" if valid else "Invalid"), "wrong Accepted reason"
+        if not valid:
+            assert "healthCheck: port must be >= 1" in accepted["message"], "missing port diagnostic"
+        print(f"Health-check port phase {phase} converged")
+        break
+    except (AssertionError, KeyError, TypeError, StopIteration, OSError, ValueError, yaml.YAMLError) as error:
+        last_error = str(error)
+        time.sleep(0.2)
+else:
+    sys.exit(f"Health-check port phase {phase} timed out: {last_error}")
+PY
+        then
+            log_error "Health-check port phase $port failed"
+            return 1
+        fi
+    done
+    log_success "Direct file updates reject zero and recover port inheritance and valid overrides"
+}
+
 # Test 11: Same (kind, key) in two subdirs — diagnostics endpoint surfaces conflict
 test_collision_diagnostics() {
     log_section "Test 11: Cross-subdir collision exposed via /diagnostics/conf-conflicts"
@@ -727,6 +818,7 @@ main() {
     test_nested_dir_load                       || failed=1
     test_nested_status_follows_spec            || failed=1
     test_error_status_cleared_after_repair     || failed=1
+    test_health_check_port_validation_on_update || failed=1
     test_collision_diagnostics                 || failed=1
     test_api_create_namespace_subdir           || failed=1
     test_api_create_returns_conflict_for_legacy_flat || failed=1

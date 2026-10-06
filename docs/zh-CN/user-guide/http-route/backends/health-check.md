@@ -61,7 +61,7 @@ spec:
 |------|------|--------|------|
 | `type` | Enum | `http` | 探测类型。允许值：`http` / `https` / `tcp` / `grpc` / `grpcs` |
 | `path` | String | `/` | HTTP 探测路径（`http` 和 `https` 有效） |
-| `port` | Integer | 使用后端端口 | 探测端口覆盖 |
+| `port` | Integer | 使用后端端口 | 探测端口覆盖，范围为 `1` 至 `65535`；省略或设为 `null` 时继承后端端口 |
 | `interval` | Duration | `10s` | 探测周期 |
 | `timeout` | Duration | `3s` | 单次探测超时 |
 | `healthyThreshold` | Integer | `2` | 连续成功多少次恢复健康 |
@@ -236,6 +236,7 @@ spec:
 4. `interval` 和 `timeout` 必须解析为非零的 duration（例如 `10s`、`500ms`）；否则资源会被判定为 `Accepted=False`——按照宽松准入策略，资源仍会同步，网关侧会跳过该无效 spec。
 5. 未配置健康检查段的 Service 不会做探测，默认按“健康”参与负载均衡。
 6. `grpcServiceName` 仅对 `grpc` 模式有效。空字符串（默认）表示检查整个服务器的健康状态。
+7. 显式探测端口 `port` 必须在 `1` 至 `65535` 之间。直接通过文件或 etcd 输入 `port: 0` 会使整个策略无效，网关不会使用该策略。当其 Service 目标可解析到 ancestor Gateway 时，Controller 报告 `Accepted=False/Invalid`。省略 `port` 或设为 `null` 时仍继承后端端口。
 
 ## 当前限制
 

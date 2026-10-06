@@ -282,6 +282,55 @@ fn validate_returns_spec_validation_errors_verbatim() {
     assert!(handler.validate(&valid, &ctx).is_empty());
 }
 
+#[tokio::test]
+async fn health_check_zero_port_withdraws_attachment_and_recovers_on_update() {
+    let (ctx, rt) = make_ctx();
+    let handler = make_handler();
+    wire_service_to_gateway(&rt, "ns", "svc", "route", "gw");
+    let mut policy = make_policy("health-port", "svc", "2026-01-01T00:00:00Z");
+
+    for port in [Some(9090), Some(0), None, Some(65535)] {
+        policy.spec.health_check = Some(serde_json::from_value(json!({"active": {"port": port}})).unwrap());
+        let errors = handler.validate(&policy, &ctx);
+        let valid = port != Some(0);
+        assert_eq!(errors.is_empty(), valid);
+        if !valid {
+            assert_eq!(errors, ["healthCheck: port must be >= 1"]);
+        }
+        policy = match handler.parse(policy, &ctx).await {
+            ProcessResult::Continue(parsed) => parsed,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert_eq!(
+            policy.spec.resolved_target_class,
+            valid.then_some(ResolvedPolicyTargetClass::Service)
+        );
+        let owner = EdgionBackendTrafficPolicyHandler::resource_ref(&policy);
+        assert_eq!(
+            rt.edgion_backend_traffic_policy
+                .target_mgr()
+                .get_dependencies(&owner.key())
+                .len(),
+            usize::from(valid)
+        );
+        assert_eq!(rt.service_ref_mgr.get_dependencies(&owner.key()).len(), 1);
+        handler.update_status(&mut policy, &ctx, &errors);
+        let accepted = ancestor_condition(&policy, "gw", condition_types::ACCEPTED);
+        assert_eq!(accepted.status, if valid { "True" } else { "False" });
+        assert_eq!(
+            accepted.reason,
+            if valid {
+                condition_reasons::ACCEPTED
+            } else {
+                condition_reasons::INVALID
+            }
+        );
+        if !valid {
+            assert!(accepted.message.contains("healthCheck: port must be >= 1"));
+        }
+    }
+}
+
 /// Three policies target the same Service with mixed timestamps: the winner is
 /// the `precedence_key` minimum (oldest); the two losers are flagged
 /// `Accepted=False/Conflicted` on the ancestor the shared Service reaches.

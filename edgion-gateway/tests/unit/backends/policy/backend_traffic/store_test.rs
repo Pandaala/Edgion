@@ -338,6 +338,69 @@ fn invalid_policy_is_skipped() {
 }
 
 #[test]
+fn health_check_zero_port_is_ineligible_and_clears_previous_runtime_config() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = BackendTrafficPolicyStore::new();
+    let service_key = "health-port/svc";
+    let policy_key = "health-port/check".to_string();
+    let mut check = policy(
+        "health-port",
+        "check",
+        "svc",
+        Some(ts("2026-01-01T00:00:00Z")),
+        Some(LoadBalancerType::Ewma),
+        None,
+        true,
+        false,
+    );
+    Arc::make_mut(&mut check)
+        .spec
+        .health_check
+        .as_mut()
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap()
+        .port = Some(0);
+    // Keep a forged valid target marker: the Gateway must independently reject zero.
+    store.full_set_policies(HashMap::from([(policy_key.clone(), check.clone())]));
+    assert!(store.get_effective(&service_target("health-port", "svc")).is_none());
+    assert!(get_hc_config_store().resolve(service_key).is_none());
+
+    for port in [Some(1), Some(0), None, Some(65535)] {
+        Arc::make_mut(&mut check)
+            .spec
+            .health_check
+            .as_mut()
+            .unwrap()
+            .active
+            .as_mut()
+            .unwrap()
+            .port = port;
+        store.partial_update_policies(
+            HashMap::new(),
+            HashMap::from([(policy_key.clone(), check.clone())]),
+            HashSet::new(),
+        );
+        let valid = port != Some(0);
+        assert_eq!(store.get_lb_policy(service_key), valid.then_some(ParsedLBPolicy::Ewma));
+        assert_eq!(
+            store
+                .snapshot()
+                .candidates(&service_target("health-port", "svc"))
+                .is_empty(),
+            !valid
+        );
+        let health = get_hc_config_store().resolve(service_key);
+        assert_eq!(health.is_some(), valid);
+        if let Some(health) = health {
+            assert_eq!(health.port, port);
+        }
+    }
+    store.full_set_policies(HashMap::new());
+}
+
+#[test]
 fn resolved_marker_withdrawal_promotes_sibling_and_restore_reinstates_oldest() {
     let _guard = GLOBAL_STORE_TEST_LOCK.lock();
     let store = BackendTrafficPolicyStore::new();

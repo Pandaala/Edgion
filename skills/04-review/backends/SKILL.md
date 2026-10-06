@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Active health-check port validation](regression-guards/active-health-port-validation.md)
 - [AllEndpointStatus backend TLS and endpoint identity](regression-guards/all-endpoint-status-tls-identity.md)
 
 - [Retry-budget counters retain coherent epochs and monotonic windows](regression-guards/retry-budget-epoch-coherence.md)

@@ -101,8 +101,9 @@ come from lexer-admitted source; Full non-JSON records submitted bytes once and
 prefix retains its current accounting. No replay/per-rule byte multiplication.
 The phase execution timer still excludes body capture and parser publication.
 
-Current validation is tracked in
-[plan 16](../../../../tasks/waf-todo/16-json-capture-wiring-and-closure.md).
+The former `16-json-capture-wiring-and-closure.md` plan is no longer in the
+active task tree. Current validation work is tracked in the
+[WAF execution queue](../../../../tasks/waf-todo/README.md).
 Historical prefix evidence below does not prove current JSON timing or wire gates.
 
 Prefix rules execute lazily in the canonical phase schedule. An enforced deny

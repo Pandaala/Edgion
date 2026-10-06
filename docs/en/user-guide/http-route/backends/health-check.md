@@ -61,7 +61,7 @@ The policy must live in the **same namespace** as the target Service (`spec.targ
 |-----------|------|---------|-------------|
 | `type` | Enum | `http` | Probe type. Allowed values: `http` / `https` / `tcp` / `grpc` / `grpcs` |
 | `path` | String | `/` | HTTP probe path (effective for `http` and `https`) |
-| `port` | Integer | uses backend port | Probe port override |
+| `port` | Integer | uses backend port | Probe port override, from `1` to `65535`; omitted or `null` inherits the backend port |
 | `interval` | Duration | `10s` | Probe interval |
 | `timeout` | Duration | `3s` | Single probe timeout |
 | `healthyThreshold` | Integer | `2` | Number of consecutive successes to recover healthy status |
@@ -248,6 +248,7 @@ The gateway calls the `Health/Check` RPC and marks the backend as healthy only w
 4. `interval` and `timeout` must parse to a non-zero duration (for example `10s`, `500ms`); otherwise the resource is rejected (`Accepted=False`), following the lenient-admission pattern — it still syncs, and the gateway skips the invalid spec.
 5. Services without a health check section are not probed and participate in load balancing as "healthy" by default.
 6. `grpcServiceName` only applies to `grpc` mode. An empty string (default) checks the overall server health.
+7. An explicit probe `port` must be from `1` to `65535`. Direct file or etcd input with `port: 0` makes the whole policy invalid and ineligible for Gateway use. When its Service targets resolve to an ancestor Gateway, the Controller reports `Accepted=False/Invalid`. Omitting `port` or setting it to `null` preserves backend-port inheritance.
 
 ## Current Limitations
 
