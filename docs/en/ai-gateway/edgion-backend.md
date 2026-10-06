@@ -31,7 +31,13 @@ Kubernetes clients using strict field validation reject unknown fields throughou
 including misspellings. Clients using warn/ignore validation may let the API server prune an
 undeclared field. Filesystem and etcd configuration always apply strict deserialization.
 
+`defaults.maxOutputTokens` is used only when the request declares no output-token value. It does
+not clamp an explicit client value or automatically inject one into OpenAI requests. There is no
+dedicated enforced business output-ceiling field yet.
+
 ## HTTPRoute backend contract
+
+HTTPRoute rule fragment; see the [complete example](./quick-start.md#complete-example) for the resource structure.
 
 ```yaml
 backendRefs:
@@ -56,8 +62,8 @@ Rules:
 ## Models and aliases
 
 Clients send a logical model name (for example `chat`). Each backend maps that name independently
-to its provider model through `spec.ai.models[].name` or `spec.ai.models[].aliases`. The logical model stays stable
-for quota and access logs across failover.
+to its provider model through `spec.ai.models[].name` or `spec.ai.models[].aliases`. The effective logical model stays stable
+for quota and access logs across failover; explicit `modelRoutes` rewrites and quota downgrade can change it.
 
 Names and aliases are unique within a backend. Optional `pricing` strings are non-negative, support
 at most six decimal places, and cannot exceed 1,000,000 USD per million tokens.

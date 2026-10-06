@@ -11,18 +11,26 @@ AiProxy must appear exactly once in a rule-level EdgionPlugins ExtensionRef.
 |-----------|------|---------|-------------|
 | `backendSelection.type` | Enum | `Weighted` | `Weighted`, `Priority`, `LowestLatency`, `LowestUsage`, or `CostWeighted` |
 | `injectUsageTracking` | Boolean | `true` | Requests provider usage for streaming passthrough while retaining independent access-log accounting |
-| `onUnknownModel` | Enum | `reject` | `reject` fails unknown models; `passthrough` is limited to OpenAI-compatible candidates with `Weighted` or `Priority` |
+| `onUnknownModel` | Enum | `reject` | `reject` fails unknown models; `passthrough` requires `Weighted` or `Priority` and all valid positive-weight candidates to be `OpenAI` or `OpenAICompatible` |
 | `modelRoutes` | Array | `[]` | Structured model/header matching, canonical rewrite, and typed candidate filter/weight overrides |
 | `tokenQuota` | Object | none | Optional Redis-backed logical-model token quota; omission performs no quota Redis work |
 
 AiProxy uses only the candidates and retry permission declared by HTTPRoute. A model-route action
 may identify existing typed route slots and explicitly override their effective weights.
 
+`injectUsageTracking` defaults to true: streaming OpenAI requests set `stream_options.include_usage: true`,
+and Anthropic conversion can emit Chat usage chunks. False stops automatic injection, without
+suppressing a client's explicit usage request or removing the response observer. `api`, `conversion`,
+and `usageObservation` are not configurable yet.
+
 ## Model routes
 
 `modelRoutes` runs once after model parsing and before the existing scheduler.
 Exact patterns beat trailing wildcards; then longer literal prefixes and more
 header predicates are more specific. Equal-specificity ambiguity is rejected.
+
+This is a fragment inside AiProxy `config`; see the [complete example](./quick-start.md#complete-example)
+for the resource structure.
 
 ```yaml
 modelRoutes:
@@ -46,6 +54,7 @@ modelRoutes:
 Selectors identify one typed backend declaration, including duplicate
 occurrence. Filters never remove a declared missing, denied, or invalid traffic
 share. The existing scheduler still owns retry, failover, and adaptive choice.
+An explicit rewrite changes the effective logical model before quota admission.
 
 `GET /v1/models` on a route that admits GET returns sorted, duplicate-free
 reachable public canonical names and aliases. Header-specific rules use the
@@ -67,7 +76,8 @@ logical model:
 `CostWeighted` requires input/output pricing and an output-token bound for every otherwise eligible
 candidate. The bound comes from the request — `max_completion_tokens`, or legacy `max_tokens` —
 and falls back to `defaults.maxOutputTokens`. Missing values fail closed instead of silently
-removing that candidate.
+removing that candidate. The default is not an enforced ceiling; an explicit client value wins.
+If both request fields are present with unequal values, the request is rejected.
 
 ```yaml
 apiVersion: edgion.io/v1

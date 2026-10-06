@@ -9,13 +9,23 @@
 `onKeyMiss: Deny`、`onRedisFailure: Deny`、`flushTokens: 100`、`flushInterval: 1s`、
 `requestTimeout: 500ms`。
 
-`identityModel` 使用客户端请求中的原始逻辑模型名。即使同一个 EdgionBackend 将 canonical
-名称及其 alias 映射到同一个 provider model，它们仍使用不同的配额桶。一个模型最多可有 32
-个 alias，因此同一身份最多可按 33 个已声明名称分别消耗一次所配置的额度。如需所有名称共享
-一个总额度，请使用 `identity`，或不要为受配额控制的模型配置 alias。`Downgrade` 要求使用
-`identityModel`，因此设置其 limit 时必须计入 alias 集合。
+业务配额检查已累计的消耗，准入时不预留整次请求的输入或最大输出。运行中按输出观测分批刷新，
+终态按所有已派发尝试的可核算输入与输出结算，包括重试消耗；不是只计算最后一次成功尝试。
+并发请求和刷新延迟允许超额，不能承诺严格的零超额预算。凭据 TPM 是独立的最大消耗预留机制，
+见[凭据与限额](./credentials-and-limits.md#预留语义)。
 
-选择一种带标签的 `onExceeded` 动作：
+桶归属由 AiProxy 条目的 Namespace、EdgionPlugins 名称及条目 alias（缺省用条目序号）决定。
+多个 Route 引用同一条目会共享桶；独立条目即使配置相同也不共享。`key: []` 表示该条目内的
+全局身份桶，不表示所有网关条目共享；当前没有独立的共享预算 ID 字段。
+
+`identityModel` 使用准入时的有效逻辑模型名：默认保留客户端名称/别名，显式 `modelRoutes`
+改写则先改变它。不同别名通常拥有独立桶，即使映射到同一 provider model。
+每个模型最多配置 32 个别名模式，但 `prefix*` 可匹配许多不同客户端名称，不能据此推导
+最多 33 个配额桶。需要跨名称总额度时使用同一条目内的 `identity` scope；使用 `Downgrade`
+时只能配置 `identityModel`，因此要把别名及通配符带来的分桶计入策略。
+
+以下是 AiProxy `config.tokenQuota` 内的动作片段。完整资源结构见[快速开始](./quick-start.md#完整示例)；
+启用配额前需配置可用的 LinkSys Redis、`redisRef`、可信身份 `key` 和 `limits`。选择一种动作：
 
 ```yaml
 onExceeded:
@@ -68,6 +78,9 @@ usage 时，Edgion 会保留各 token 分量观察到的最高值；后续较低
 
 ### 当这条流已经无法被计量时
 
+以下解码降级与两次 malformed 容忍策略适用于 OpenAI/OpenAICompatible 被动 usage 观测。
+Anthropic 转换器需要可转换的事件，会在第一次非法事件时按自身规则失败，不享有该容忍策略。
+
 流中途执行依赖于解析上游的 SSE 帧结构：输出单元是从解析出的事件里数出来的。如果某个**未终止**的
 事件超过了解码器 1 MiB 的上限，解码器会对该流的剩余部分放弃解析，此后再没有任何事件能被计数。
 
@@ -77,10 +90,8 @@ usage 时，Edgion 会保留各 token 分量观察到的最高值；后续较低
 `{"error":{"message":"Token quota enforcement is temporarily unavailable.","type":"api_error","code":"token_quota_unavailable"}}`。
 
 适用的门槛与上文相同：仅对配置了 `tokenQuota` 且 `onExceeded: Reject` 的**流式**请求生效。没有配额的
-请求永远不会因为帧结构原因被截断——对它而言，降级一如既往只是把上报用量降级为字符估算而已。
-
-1 MiB 这个上限的取值，是为了让正常的 provider 够不到它。一个正常的流式事件只有几百字节；只有把整个
-回答作为单个事件发出的上游，或者干脆从不发出事件边界的上游，才会达到 1 MiB。
+OpenAI 被动观测请求不会因该帧结构问题被截断；可用的字符估算可能只覆盖已解析前缀，精度会降低。
+若其他观测错误导致用量 unknown，则按未知用量结算。1 MiB 是网关的检查边界，不是提供商协议保证。
 
 无效 UTF-8 只会污染并丢弃包含它的那一条完整 SSE 事件。Edgion 会容忍一个响应中的第一条此类事件，但
 计数会在整个响应内累计：中间出现合法事件不会重置计数；第二条 malformed 事件会在相同的“流式请求 +
@@ -94,7 +105,7 @@ usage 时，Edgion 会保留各 token 分量观察到的最高值；后续较低
 |----------|------|
 | `AiQuotaOverLimitTerminated` | 一个流式 AI 响应因配额执行被中途截断——这是一个明确的执行动作，不是上游故障。 |
 | `AiQuotaErrorEventDropped` | 截断前注入的错误事件未能放入单批次的发送预算，客户端只看到了裸截断，没有看到诊断事件。 |
-| `AiSseDecodeDegraded` | 某个 AI 响应因单个未终止事件超过上限，SSE 解码放弃解析。单独出现时损失的是计量精度而非正确性：上报用量回落为字符估算。 |
+| `AiSseDecodeDegraded` | 某个 AI 响应因单个未终止事件超过上限，SSE 解码放弃解析。可用字符估算可能只覆盖已解析前缀；用量或预算精度不能据此保证。 |
 | `AiSseDegradedQuotaTerminated` | 一个流式 AI 响应因配额已无法被计量而被中途截断。与 `AiQuotaOverLimitTerminated` 的区别：后者意味着确实达到了限制，前者意味着限制已经无法被测量。 |
 | `AiSseDecodeMalformed` | 至少一条完整 SSE 事件包含无效 UTF-8，因而未参与用量解析。无论是否启用配额执行，每个请求只记录一次。 |
 | `AiSseMalformedQuotaTerminated` | 同一响应内累计出现第二条 malformed SSE 事件，触发流式 Reject 执行 fail-close；它既不表示实际超限，也不表示解码器永久降级。 |
@@ -104,6 +115,8 @@ usage 时，Edgion 会保留各 token 分量观察到的最高值；后续较低
 非流式 OpenAI Chat JSON 用量会增量提取，原始分片持续转发。观测器验证并丢弃内容字符串，
 不保存整份响应等待 EOS 解析；仅在完整文档合法后发布上报用量。文档内重复选中字段和整个
 usage/details 父对象的替换遵循最后一个值生效，与 SSE 累计快照的高水位合并分别处理。
+合法完整的 OpenAI JSON 若缺少 usage，当前实现可使用输入估算与原始 JSON 字符数除以四向上取整
+的输出估算；其中可能包含 JSON 包装或元数据，不能当作精确的模型 token 数。
 
 观测采用固定边界：源字节与解码字节各 64 MiB、深度 64、解码 key 256 字节、原始 key
 1,538 字节、数字文本 64 字节、词法事件 131,072、工作量 256 Mi 单位、保留堆容量 8 KiB。

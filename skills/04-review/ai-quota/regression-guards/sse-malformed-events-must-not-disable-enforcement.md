@@ -47,10 +47,12 @@ Malformed handling uses the exact body-mutation gate already described by
 2. the client requested streaming;
 3. `onExceeded` resolved to `Reject`.
 
-Requests without quota, non-streaming requests, and `Throttle`/`Downgrade`
-routes record precision loss but never terminate for malformed SSE. An
-estimation-only processor does not parse the translated SSE and therefore does
-not compete with a provider-specific translator.
+On the passive OpenAI/OpenAICompatible usage-observation path, requests without
+quota, non-streaming requests, and `Throttle`/`Downgrade` routes record precision
+loss without this malformed-SSE termination. This tolerance does not apply to
+Anthropic conversion: the translator has its own first-error fail-close rule. Current Anthropic dispatch installs only the translator, which publishes its
+own usage; no separate following observer parses or estimates translated output.
+See [translator-only ownership](anthropic-usage-observation-is-estimation-only.md).
 
 When several causes become visible in one callback, the terminal cause is
 chosen once in this order:
@@ -60,9 +62,10 @@ chosen once in this order:
 3. repeated malformed events.
 
 All three paths use the shared termination helper, so exactly one error event
-is injected and `AiUsageShared::mark_gateway_terminated()` preserves credential
-reservation reconciliation instead of classifying the response as an upstream
-truncation.
+is injected and `AiUsageShared::mark_gateway_terminated()` records an explicit gateway cut
+instead of upstream truncation. Credential reconciliation still requires
+reported or valid estimated usage; unknown usage retains reservations even
+at EOS or gateway termination. Transport certainty alone is insufficient.
 
 ## Signals and client contract
 
@@ -90,6 +93,19 @@ truncation.
   mutation gate.
 - **Expose malformed UTF-8 to the client or add a metric:** leaks an internal
   provider detail and duplicates request-level access-log observability.
+
+## Current accounting and verification limits
+
+Task 04 statically checked current usage observation, translator ownership and
+settlement on 2026-10-06. Decoder degradation does not automatically make the
+passive usage snapshot unknown: a prior reported snapshot or available
+character estimate can remain, possibly covering only a prefix. This is a
+precision loss, not a guarantee of complete actual usage. Independent invalid
+JSON/encoding/budget/arithmetic paths can still publish unknown usage.
+
+The regression executions below belong to the original correction; they were
+not rerun for the documentation task and do not establish new provider or
+transport acceptance.
 
 ## Regression boundary
 

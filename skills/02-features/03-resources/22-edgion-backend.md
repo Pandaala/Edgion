@@ -41,19 +41,38 @@ explicit `allowInsecureHttp: true` opt-in.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `OpenAI`, `Anthropic`, `Gemini`, or `OpenAICompatible` |
+| `provider` | Yes | `OpenAI`, `OpenAICompatible`, or `Anthropic`; no Gemini/Bedrock enum |
 | `endpoint` | Provider-dependent | HTTPS provider base endpoint |
 | `allowInsecureHttp` | No | Allows an explicit HTTP endpoint |
 | `credentialPool.credentials` | Yes | Bounded weighted credentials backed by Secrets |
 | `credentialPool.redisRef` | When distributed quota is used | LinkSys Redis link |
 | `credentialPool.onRedisFailure` | No | `Deny` or `Allow` |
 | `models` | Yes | Canonical models, aliases, visibility, and optional pricing |
-| `defaults.streaming` | No | Provider streaming default |
-| `defaults.maxOutputTokens` | No | Provider output-token default |
+| `defaults.streaming` | No | Allows client streaming by default; false rejects a streaming request |
+| `defaults.maxOutputTokens` | No | Request-first fallback for conversion, credential TPM reservation and cost estimation; not an enforced ceiling |
 
 The HTTPRoute reference uses `group: edgion.io`, `kind: EdgionBackend`, and no port. The route
 rule must attach `AiProxy`; candidate order and weights come exclusively from
 `HTTPRoute.backendRefs`.
+
+## Current protocol and accounting boundary
+
+Managed ingress currently accepts GET paths ending in `/models` and POST paths ending in
+`/chat/completions`. Anthropic uses Chat-to-Messages conversion for the implemented text/tool
+subset; native Messages and Responses are pending. AiProxy has no `api`, `conversion` or
+`usageObservation` field. `injectUsageTracking` defaults to true; false stops automatic request
+injection without uninstalling the response observer.
+
+OpenAI JSON usage observation is incremental and bounded. Valid complete JSON without usage
+can fall back to a coarse raw-JSON character estimate; invalid/incomplete JSON or observation
+budget failure produces unknown usage. Selected unary Chat-to-Anthropic conversion instead
+retains one bounded document and defers final commitment under the completed
+[Task 03](../../../tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md)
+resource/transport contract. SSE conversion remains event-based.
+
+`defaults.maxOutputTokens` does not clamp an explicit request value or inject an OpenAI default.
+Business token quota is cumulative and entry-scoped; credential TPM uses a separate reservation.
+See [operator quota documentation](../../../docs/en/ai-gateway/quotas-and-cost.md).
 
 ## Status
 

@@ -27,15 +27,19 @@ completion = client.chat.completions.create(
 )
 
 for chunk in completion:
-    print(chunk.choices[0].delta.content or "", end="", flush=True)
+    if chunk.choices:
+        print(chunk.choices[0].delta.content or "", end="", flush=True)
 ```
 
 `api_key` 只是非敏感的 SDK 兼容占位符。Edgion 会移除客户端提供商认证 header，并在每次尝试时
-安装选中的 Secret 凭据。不要把真实提供商密钥放进应用配置。
+安装选中的 Secret 凭据。不要把真实提供商密钥放进应用配置。这个占位符不提供客户端认证；
+需要鉴权时另行配置普通认证插件。流末尾的 usage 分片可以没有 choices，因此示例先检查它。
 
 ## 完整示例
 
-替换两个 Secret 的值，并确保 `main-gateway` 已存在。
+替换两个 Secret 的值及示例 provider model 名称，确保这些模型在对应提供商账户可用。
+`production` Namespace 和 `main-gateway` 必须已存在，Gateway 需为 `ai.example.com` 提供 HTTPS。
+示例使用 Chat 入口，不启用原生 Responses 或 Messages；`maxOutputTokens` 是回退值，不是强制上限。
 
 ```yaml
 apiVersion: v1

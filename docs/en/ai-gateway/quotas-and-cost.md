@@ -10,15 +10,28 @@ quota Redis work.
 `onKeyMiss: Deny`, `onRedisFailure: Deny`, `flushTokens: 100`, `flushInterval: 1s`, and
 `requestTimeout: 500ms`.
 
-`identityModel` uses the exact client-requested logical model name. The
-canonical name and every configured alias therefore have separate buckets,
-even when one EdgionBackend maps them to the same provider model. A model can
-have up to 32 aliases, so one identity can consume the configured limit once
-for each of up to 33 declared names. Use `identity` for one cap shared across
-all names, or avoid aliases on quota-controlled models. `Downgrade` requires
-`identityModel`, so alias sets must be included when sizing its limits.
+Business quota checks accumulated consumption without reserving the whole request's input or maximum
+output at admission. Active requests flush observed output in batches. Terminal settlement charges
+accountable input and output across all dispatched attempts, including retries, rather than only the
+last successful attempt. Concurrent requests and delayed flushes permit overshoot; this is not a
+strict zero-overshoot budget. Credential TPM is a separate maximum-consumption reservation mechanism;
+see [Credentials and Limits](./credentials-and-limits.md#reservation-semantics).
 
-Choose one tagged `onExceeded` action:
+Buckets belong to the AiProxy entry's Namespace, EdgionPlugins name, and entry alias (or entry index
+when no alias is supplied). Routes referencing the same entry share buckets; separate entries do
+not, even with identical configuration. `key: []` means a global identity bucket within that entry,
+not one budget across all gateway entries. There is no separate shared-budget ID field yet.
+
+`identityModel` uses the effective logical model at admission: the client name/alias by default,
+after any explicit `modelRoutes` rewrite. Different aliases normally have separate buckets even
+when mapped to the same provider model. The 32-alias limit counts patterns; `prefix*` can match
+many distinct client names, so it does not imply at most 33 quota buckets. For an aggregate cap
+across names, use `identity` within the same entry. `Downgrade` permits only `identityModel`, so
+account for alias and wildcard bucket expansion when sizing that policy.
+
+The following action fragments belong inside AiProxy `config.tokenQuota`. See the
+[Quick Start](./quick-start.md#complete-example) for resource structure. Before enabling quota,
+configure a working LinkSys Redis, `redisRef`, trusted identity `key`, and `limits`. Choose one action:
 
 ```yaml
 onExceeded:
@@ -81,6 +94,10 @@ stream even though only one of them pushed the bucket over.
 
 ### When the stream can no longer be measured
 
+The decoder degradation and two-malformed-event tolerance below apply to passive OpenAI/OpenAICompatible
+usage observation. Anthropic conversion requires translatable events and fails on the first invalid
+event under its own rules; it does not acquire that tolerance.
+
 Mid-stream enforcement depends on parsing the upstream's SSE framing: output units are counted
 from decoded events. If one **unterminated** event exceeds the decoder's 1 MiB cap, the decoder
 gives up parsing for the rest of that stream, and no further event can be counted.
@@ -92,12 +109,10 @@ the admission path renders when enforcement cannot be performed —
 `{"error":{"message":"Token quota enforcement is temporarily unavailable.","type":"api_error","code":"token_quota_unavailable"}}`.
 
 The same gate as above applies: this only happens for a **streaming** request with `tokenQuota`
-configured and `onExceeded: Reject`. A request without a quota is never cut for a framing reason —
-there, degradation only downgrades reported usage to the character estimate, as it always has.
-
-The 1 MiB cap is sized so a legitimate provider does not reach it. A normal streaming event is a
-few hundred bytes; 1 MiB is reached only by an upstream that emits an entire completion as one
-event, or one that never emits an event boundary at all.
+configured and `onExceeded: Reject`. Passive OpenAI observation without quota does not cut the stream for this framing reason.
+Available character estimates may cover only the parsed prefix, reducing precision; another
+observation error can still make usage unknown and require unknown settlement. The 1 MiB cap is
+a gateway inspection boundary, not a provider protocol guarantee.
 
 Invalid UTF-8 poisons and drops only the completed SSE event that contains it. Edgion tolerates
 the first such event in a response, but the count is cumulative: a valid event does not reset it,
@@ -113,7 +128,7 @@ Alert on:
 |------------------|---------|
 | `AiQuotaOverLimitTerminated` | A streaming AI response was cut short by quota enforcement — a deliberate action, not an upstream failure. |
 | `AiQuotaErrorEventDropped` | The injected error event did not fit the per-batch emit budget before the cut; the client saw a bare truncation instead of the diagnostic event. |
-| `AiSseDecodeDegraded` | SSE decoding gave up on an AI response because one unterminated event exceeded the cap. On its own this costs accounting precision, not correctness: reported usage falls back to the character estimate. |
+| `AiSseDecodeDegraded` | SSE decoding gave up on an AI response because one unterminated event exceeded the cap. Available character estimates may cover only the parsed prefix; usage or budget precision is not guaranteed. |
 | `AiSseDegradedQuotaTerminated` | A streaming AI response was cut short because quota could no longer be evaluated. Distinct from `AiQuotaOverLimitTerminated`: that one means the limit was reached, this one means the limit could no longer be measured. |
 | `AiSseDecodeMalformed` | At least one completed SSE event contained invalid UTF-8 and was excluded from usage parsing. Recorded once per request, whether or not quota enforcement is active. |
 | `AiSseMalformedQuotaTerminated` | The second cumulative malformed SSE event caused streaming Reject enforcement to fail closed. This is neither an actual over-limit result nor permanent decoder degradation. |
@@ -125,7 +140,10 @@ chunks are forwarded. Content strings are validated and discarded by the
 observer; the response is not retained for an EOS parse. Selected values become
 reported usage only after the complete document is valid. Duplicate selected
 keys and replacement of `usage`/details parents use last-wins semantics within
-that document, independently of cumulative SSE snapshot merging.
+that document, independently of cumulative SSE snapshot merging. A valid complete OpenAI JSON
+document without usage can use an input estimate and output estimated from raw JSON characters
+rounded up after division by four. JSON wrappers and metadata may contribute; this is not an
+exact model-token count.
 
 Inspection has fixed bounds: 64 MiB source and decoded bytes, nesting depth 64,
 256-byte decoded keys, 1,538-byte raw keys, 64-byte number spellings, 131,072

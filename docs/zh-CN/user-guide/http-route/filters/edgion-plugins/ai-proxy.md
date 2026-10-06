@@ -3,7 +3,7 @@
 > **🔌 Edgion 扩展**
 >
 > AI Proxy 是 Edgion AI Gateway 的 Rule 级插件入口。完整用户文档已迁至独立的
-> [AI Gateway](../../../../ai-gateway/) 专栏。
+> [AI Gateway](../../../../ai-gateway/README.md) 专栏。
 
 ## 概览
 
@@ -46,6 +46,8 @@ Secret、EdgionBackend 与 HTTPRoute 见
 
 ## 用量观测
 
-当前 Chat JSON 用量使用有界状态增量提取，原始分片立即转发。编码不支持或 JSON 非法/不完整时，
+当前 OpenAI/OpenAICompatible Chat JSON 用量使用有界状态增量提取，原始分片立即转发。编码不支持或 JSON 非法/不完整时，
 用量为 unknown，计数和成本省略。执行与结算规则见[配额与成本](../../../../ai-gateway/quotas-and-cost.md)。
-`injectUsageTracking` 控制请求修改，不控制响应观测器是否安装；本次变更未新增公开的观测关闭配置。
+`injectUsageTracking` 默认 true，控制请求修改，不控制响应观测器是否安装；当前没有公开的观测关闭配置。
+Anthropic JSON 转换复用转换器用量并在提交前完成有界转换，不能概括为立即转发原始分片。
+原生 Responses/Messages 及 `api`、`conversion`、`usageObservation` 配置尚不支持，见[提供商](../../../../ai-gateway/providers.md)。

@@ -17,7 +17,8 @@
 | `spec.ai.credentialPool.onRedisFailure` | Enum | `Deny` | `Deny` fail-close；`Allow` 在 Redis 故障时绕过凭据限额 |
 | `spec.ai.models` | Array | **必填** | 1–256 个提供商模型条目 |
 | `spec.ai.models[].name` | String | **必填** | 提供商模型名，最多 512 UTF-8 字节 |
-| `spec.ai.models[].aliases` | Array | `[]` | 最多 32 个客户端逻辑名 |
+| `spec.ai.models[].aliases` | Array | `[]` | 最多 32 个精确名称或后缀通配符（`prefix*`） |
+| `spec.ai.models[].public` | Boolean | `true` | 在 Route 级 `/v1/models` 中列出 canonical 名称和别名 |
 | `spec.ai.models[].pricing` | Object | 无 | 可选的百万 token 固定小数 USD 价格 |
 | `spec.ai.defaults.streaming` | Boolean | `true` | 为 `false` 时拒绝客户端流式 |
 | `spec.ai.defaults.maxOutputTokens` | Integer | 无 | 转换、TPM 预留与估算成本的输出上限回退值 |
@@ -30,7 +31,12 @@ EdgionBackend 没有 timeout 字段 — 使用 HTTPRoute `timeouts` 与 EBTP
 使用 warn/ignore validation 的客户端可能让 API server 剪除未声明字段。文件系统和 etcd 配置始终使用
 严格反序列化。
 
+`defaults.maxOutputTokens` 仅在请求未声明输出 token 值时回退使用，不会压低客户端显式值，
+也不会自动注入 OpenAI 请求。强制业务输出上限尚无专用字段。
+
 ## HTTPRoute 后端契约
+
+以下是 HTTPRoute Rule 的配置片段；资源结构见[完整示例](./quick-start.md#完整示例)。
 
 ```yaml
 backendRefs:
@@ -55,21 +61,21 @@ backendRefs:
 ## 模型与别名
 
 客户端发送逻辑模型名（例如 `chat`）。每个后端通过 `spec.ai.models[].name` 或 `spec.ai.models[].aliases`
-独立映射到自己的提供商模型。逻辑模型在故障切换时对配额与 access log 保持稳定。
+独立映射到自己的提供商模型。有效逻辑模型在故障切换时对配额与 access log 保持稳定；显式 `modelRoutes` 改写和 quota 降级可改变它。
 
 同一后端内名称与别名唯一。可选 `pricing` 为非负、最多六位小数，且不得超过每百万 token
-1,000,000 USD。
+1,000,000 USD。精确别名优先于通配符，最长匹配前缀优先；单独的 `*` 和嵌入式通配符无效。
 
 ## 状态
 
 | Condition | 含义 |
 |-----------|------|
 | `Accepted=False/Invalid` | Endpoint、池、模型、定价或默认值无效 |
-| `ResolvedRefs=False` | 没有可用凭据 |
+| `ResolvedRefs=False` | 至少一个凭据 Secret 缺失、未授权或无效 |
 | `PartiallyInvalid=True/InvalidCredentials` | 可用子集已激活；被省略的别名出现在有界 reason 中 |
 
-Secret 解析是 partial-good：部分凭据可用时继续服务；全部不可用时服务失活，请求 fail-close 返回
-503。
+Secret 解析是 partial-good：部分凭据可用时继续服务；全部引用解析成功之前 `ResolvedRefs` 仍为 false。
+全部不可用时服务失活，请求 fail-close 返回 503。
 
 ## 相关
 

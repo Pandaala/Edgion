@@ -11,8 +11,8 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-Every consumer of the *client-declared* output-token bound in a canonical OpenAI
-request body must resolve it through `request_output_bound`
+The OpenAI scheduler and credential-accounting consumers of the *client-declared*
+output-token bound resolve it through `request_output_bound`
 (`edgion-gateway/src/ai/runtime/dispatch.rs`), which prefers `max_completion_tokens` and
 falls back to the deprecated `max_tokens`. `request_max_tokens` previously read
 only `max_tokens`, so a body from a current OpenAI SDK looked bound-less to
@@ -21,6 +21,22 @@ only `max_tokens`, so a body from a current OpenAI SDK looked bound-less to
 Fix suggestions of the form "make `defaults.maxOutputTokens` mandatory" or
 "have `pick_cost_weighted` fall back to a synthetic bound when none is declared"
 are **not accepted**.
+
+## Current scope and historical evidence
+
+The original failure and HTML mapping below describe the 2026-08-04 review,
+not a fresh result. The resolved [conflicting-bound client-error guard](conflicting-openai-token-bounds-are-client-errors.md)
+owns the later error-mapping correction. Current `effective_max_output_tokens` rejects unequal
+numeric request fields with `Client(AiProxyError::MalformedBody)`; the old
+conflict-mapping finding is not current evidence. `CostWeighted` selection,
+TPM reservation and conversion use request-first resolution with a backend
+fallback, not a backend ceiling. `defaults.maxOutputTokens` does not clamp
+client values or automatically enter OpenAI provider bodies. Anthropic uses
+strict positive-u32 validation for its required output value; the shared
+OpenAI helper alone is not proof of equivalent vendor validation.
+
+Task 04 statically checked these sources on 2026-10-06. No historical unit
+result below is presented as a newly executed test.
 
 ## Core Rationale
 
@@ -52,7 +68,7 @@ request succeed.
 **3. Even with a service default the ranking was wrong**
 
 When `defaults.maxOutputTokens` was set the request did not 500, but cost
-ranking used the service ceiling instead of the (usually much smaller) client
+ranking used the service fallback instead of the (usually much smaller) client
 bound, skewing `CostWeighted` away from its documented contract: the output
 bound comes from the request first, the service model entry second.
 
@@ -61,7 +77,7 @@ bound comes from the request first, the service model entry second.
 - Make `defaults.maxOutputTokens` mandatory whenever `CostWeighted` is selected — the field is a *fallback*; forcing it hides the parser bug and breaks configurations that legitimately let the client set the bound.
 - Have `pick_cost_weighted` substitute a default bound when none is declared — `MissingCostInput` fail-close is deliberate (a silent default would make cost ranking fiction); the bug was that a declared bound was not being seen.
 - Duplicate the `max_completion_tokens.or(max_tokens)` expression at the third call site instead of extracting a shared helper — a fourth reader would drift the same way.
-- Fold the `max_tokens` / `max_completion_tokens` *conflict* rejection into the shared parser — that check is `effective_max_output_tokens`-local and its `InvalidConfiguration` → HTML 500 mapping is tracked separately as `gw-02`.
+- Move the `max_tokens` / `max_completion_tokens` conflict rejection into the value-only helper without reviewing its callers — the check remains `effective_max_output_tokens`-local. Historically its HTML mapping was tracked as `gw-02`; current code returns a client malformed-body error.
 
 ## Re-evaluation Triggers
 

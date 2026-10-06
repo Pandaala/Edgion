@@ -43,16 +43,18 @@ On a retryable failure:
 3. After every currently eligible destination was scanned and retry capacity remains, a new round
    may start if the previous round contained at least one dispatched retryable failure.
 
-Pre-dispatch skips (no eligible credential, model mismatch, saturation) consume neither an
+Scheduler pre-dispatch skips (no eligible credential, model mismatch, credential/backend saturation) consume neither an
 HTTPRoute retry nor a retry-budget counter. Every actual dispatch charges the selected AI backend's
 retry-budget denominator; a retryable dispatched failure consumes one HTTPRoute retry and that
 source service's retry-budget numerator.
 
 ## SSE / response commitment
 
-Once Edgion commits to streaming a response body to the client, it does **not** fail over to another
-provider or credential for that request. Mid-stream provider failures surface as stream errors
-rather than a silent backend switch.
+Once final response headers commit, Edgion does not switch provider or credential for that request;
+body delivery need not have started. Mid-stream failures follow the existing stream error handling.
+Non-streaming Anthropic conversion closes retry admission at Hold activation, even while headers
+remain uncommitted; conversion failure does not re-execute the model call. Shared conversion-memory
+admission failure is terminal fixed 503 before dispatch, not a scheduler skip followed by retry.
 
 ## HTTPRoute retry gates
 

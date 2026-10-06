@@ -28,16 +28,22 @@ completion = client.chat.completions.create(
 )
 
 for chunk in completion:
-    print(chunk.choices[0].delta.content or "", end="", flush=True)
+    if chunk.choices:
+        print(chunk.choices[0].delta.content or "", end="", flush=True)
 ```
 
 `api_key` is only a non-secret SDK compatibility placeholder. Edgion removes client provider
 authentication headers and installs the selected Secret-backed credential per attempt. Never put
-the real provider key in application configuration.
+the real provider key in application configuration. This placeholder does not authenticate clients;
+configure ordinary authentication plugins when needed. A final usage chunk can have no choices,
+so the example checks before reading one.
 
 ## Complete example
 
-Replace both Secret values and ensure `main-gateway` exists.
+Replace both Secret values and example provider model names with models available to each provider
+account. The `production` Namespace and `main-gateway` must exist, with Gateway HTTPS for
+`ai.example.com`. This example uses the Chat entry, not native Responses or Messages;
+`maxOutputTokens` is a fallback, not an enforced ceiling.
 
 ```yaml
 apiVersion: v1

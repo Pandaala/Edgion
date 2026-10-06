@@ -11,10 +11,47 @@ AiProxy 必须通过 Rule 级 EdgionPlugins ExtensionRef 恰好出现一次。
 |------|------|--------|------|
 | `backendSelection.type` | Enum | `Weighted` | `Weighted`、`Priority`、`LowestLatency`、`LowestUsage` 或 `CostWeighted` |
 | `injectUsageTracking` | Boolean | `true` | 为流式透传请求提供商 usage，同时保留独立的 access log 核算 |
-| `onUnknownModel` | Enum | `reject` | `reject` 拒绝未知模型；`passthrough` 仅可用于采用 `Weighted` 或 `Priority` 的 OpenAI-compatible 候选 |
+| `onUnknownModel` | Enum | `reject` | `reject` 拒绝未知模型；`passthrough` 要求 `Weighted` 或 `Priority`，且所有有效正权重候选均为 `OpenAI` 或 `OpenAICompatible` |
+| `modelRoutes` | Array | `[]` | 结构化模型/header 匹配、canonical 改写、类型化候选过滤与权重覆盖 |
 | `tokenQuota` | Object | 无 | 可选的 Redis 逻辑模型 token 配额；省略时不执行配额 Redis 操作 |
 
-AiProxy 只使用 HTTPRoute 声明的候选和重试许可，不维护另一份后端列表。
+AiProxy 只使用 HTTPRoute 声明的候选和重试许可。模型路由可引用已有的类型化候选槽位并明确覆盖权重。
+
+`injectUsageTracking` 默认为 true：流式 OpenAI 请求会设置 `stream_options.include_usage: true`，
+Anthropic 转换也可输出 Chat usage 分片。false 只停止自动注入，不阻止客户端显式请求 usage，
+也不卸载响应观测器。`api`、`conversion`、`usageObservation` 当前均不可配置。
+
+## 模型路由
+
+`modelRoutes` 在模型解析后、调度前执行一次。精确匹配优先于末尾通配符；随后按更长的字面前缀、
+更多 header 条件排序。同等具体度的歧义配置会被拒绝。
+
+以下是 AiProxy `config` 内的配置片段，资源结构见[完整示例](./quick-start.md#完整示例)。
+
+```yaml
+modelRoutes:
+  - match:
+      model: chat-*
+      headers:
+        - name: x-tier
+          value: premium
+    action:
+      rewrite: provider-chat-v2
+      candidates:
+        - backend:
+            group: edgion.io
+            kind: EdgionBackend
+            namespace: production
+            name: primary-provider
+            occurrence: 0
+          weight: 100
+```
+
+选择器标识具体的类型化后端声明，包括重复出现的序号。过滤不会移除已声明但缺失、未授权或无效的
+流量份额；重试、故障切换与自适应选择仍由原有调度器控制。明确改写在 quota 准入前改变有效逻辑模型。
+
+允许 GET 并匹配该路径的 Route 上，`GET /v1/models` 返回已排序、去重的可达公开 canonical 名称和别名。
+带 header 条件的规则使用目录请求的 header；隐藏或不可用的目标会被省略。
 
 ## 选择算法
 
@@ -30,7 +67,8 @@ AiProxy 只使用 HTTPRoute 声明的候选和重试许可，不维护另一份�
 
 `CostWeighted` 要求每个原本符合条件的候选都有输入/输出价格与输出 token 上限。该上限取自请求的
 `max_completion_tokens` 或旧字段 `max_tokens`，缺失时回退到 `defaults.maxOutputTokens`。缺失值会
-fail-close，而不是静默移除该候选。
+fail-close，而不是静默移除该候选。默认值不构成强制上限；客户端显式值优先。两个请求字段同时
+存在且不相等时会被拒绝。
 
 ```yaml
 apiVersion: edgion.io/v1

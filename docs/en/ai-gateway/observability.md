@@ -8,7 +8,10 @@ requests. See [Access Log](../ops-guide/observability/access-log.md) for the ful
 The final summary includes `provider`, `model`, `streaming`, `usage_source`,
 `usage_estimated`, optional `quota_status` and `ttft_ms`, plus a bounded `attempts`
 array. Token counts and configured estimated cost are present only for known
-reported or valid estimated usage.
+reported or valid estimated usage. Summary numbers describe the final attempt, not total consumption
+across the request; `attempts` records individual attempts. Business quota terminal settlement and
+the optional token metric account for all accountable dispatched attempts, including retries. With
+unknown attempts, the known portion is not an authoritative request total.
 
 `usage_source` is `reported`, `estimated`, `unknown`, or `notObserved`. Unknown
 usage omits token counts and cost; it does not mean zero. `usage_estimated` is
@@ -16,11 +19,11 @@ true only for `estimated`, so false alone does not prove provider-reported usage
 Any unknown attempt, or a mixture of observed and unobserved attempts, makes the
 request summary unknown. All-unobserved attempts yield `notObserved`. Known
 attempt entries remain available even when the request summary is unknown.
-The internal `notObserved` state does not add a public observation-off option;
+The internal `notObserved` state does not provide a public observation-off option;
 `injectUsageTracking: false` only disables request-side usage injection.
 
 `model` is the effective logical model used for upstream dispatch. It normally matches the client's
-declared model name or alias; a quota `Downgrade` action replaces it with the configured fallback.
+declared model name or alias; an explicit `modelRoutes` rewrite or quota `Downgrade` replaces it with the configured target.
 With unknown-model passthrough enabled it can instead be a client-controlled string of up to 512
 UTF-8 bytes. Treat it as a potentially high-cardinality access-log field: do not promote it directly
 to a Prometheus label or assume a fixed catalog in downstream facets. Apply downstream bucketing
@@ -48,7 +51,9 @@ Gateway restarts. When enabled, it aggregates known reported/estimated dispatche
 (`direction`, `provider`, `usage_source`). Use it for rates and trends — not as the durable usage
 or billing source. Unknown/unobserved attempts emit no token sample, including no fabricated zero. Known attempts are still counted once when another attempt is unknown.
 
-Enable in Gateway config:
+Disabling this counter does not disable usage observation or access-log accounting.
+
+Gateway YAML configuration fragment:
 
 ```yaml
 metrics:

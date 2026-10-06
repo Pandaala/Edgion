@@ -13,7 +13,7 @@ Edgion AI Gateway is assembled from four contracts. Keep each concern on the res
 | Connect timeout, outlier, circuit, retry budget | `EdgionBackendTrafficPolicy` targeting that AI backend |
 
 HTTPRoute is the only candidate source and owns backend weights and retry permission. AiProxy owns
-the selection algorithm but never invents backends. EBTP attaches only to an EdgionBackend.
+the selection algorithm but never invents backends. For AI destinations, EBTP attaches to EdgionBackend, not HTTPRoute.
 
 ```mermaid
 flowchart LR
@@ -29,12 +29,12 @@ flowchart LR
 
 ## Request path (high level)
 
-1. The route matches `/v1/chat/completions` (or your configured path) and runs rule-level AiProxy.
-2. AiProxy preserves the exact requested model/alias as the logical model and admits optional token quota.
+1. The route matches POST `/v1/chat/completions` (or a path with the same suffix) and runs rule-level AiProxy.
+2. AiProxy parses the client model/alias, applies explicit `modelRoutes` rewrites, then admits optional token quota using the effective logical model.
 3. `backendSelection` picks an eligible positive-weight EdgionBackend that supports that model.
 4. The selected backend maps the logical name to its provider model, then Edgion picks an eligible
    credential by weight (skipping RPM/TPM/cooldown).
-5. Edgion installs the Secret credential, dials the provider, and streams the response.
+5. Edgion installs the Secret credential and dials the provider. Responses normally stream; non-streaming Anthropic conversion finishes its bounded conversion first.
 6. On a retryable failure before response commitment, Edgion prefers another credential in the
    same service, then another route backend, within one shared attempt ceiling.
 

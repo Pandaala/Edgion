@@ -5,7 +5,7 @@
 > Edgion AI Gateway 把 HTTPRoute hostname 变成兼容 OpenAI 的 LLM 流量入口。它不属于标准
 > Kubernetes Gateway API。
 
-应用通过 OpenAI Chat Completions API 调用 Edgion。Edgion 负责提供商 Endpoint、Secret 凭据、
+当前受管入口通过 OpenAI Chat Completions API 调用 Edgion。Edgion 负责提供商 Endpoint、Secret 凭据、
 模型目录、选择、重试、用量与成本核算。客户端不持有提供商 API Key。
 
 ## 内容导航
@@ -30,6 +30,11 @@
 - **智能选择** — 五种 `backendSelection`，AiProxy 不内嵌提供商列表
 - **有界弹性** — 共享尝试上限、凭据优先轮次、不在流中途切换后端
 - **用量与成本** — 持久化的 per-attempt access log 账本，外加可选进程本地 Prometheus 速率
+
+当前支持 Chat JSON/SSE，以及到 Anthropic 的有限 JSON/SSE 转换。原生 Responses、原生
+Messages、Gemini 与 Bedrock 尚未实现；能力边界见[提供商](./providers.md#当前支持范围)。
+`api`、`conversion`、`usageObservation` 尚不是 AiProxy 配置字段。当前 `injectUsageTracking`
+默认 true；关闭它只关闭请求侧 usage 注入，不关闭用量观测。
 
 ## 相关文档
 

@@ -10,7 +10,7 @@ Secret-backed; only configured aliases appear in status and access logs.
 | `credentials[].name` | String | **Required** | Unique non-secret alias, 1–64 ASCII characters |
 | `credentials[].weight` | Integer | `1` | Weighted rotation share, 1–1,000,000 |
 | `credentials[].secretRef.name` | String | **Required** | Secret containing UTF-8 provider credential data at `api-key` |
-| `credentials[].secretRef.namespace` | String | Service Namespace | Cross-Namespace refs require ReferenceGrant |
+| `credentials[].secretRef.namespace` | String | EdgionBackend Namespace | Cross-Namespace refs require ReferenceGrant |
 | `credentials[].limits.requestsPerMinute` | Integer | none | Optional distributed RPM limit |
 | `credentials[].limits.tokensPerMinute` | Integer | none | Optional distributed TPM limit |
 
@@ -24,18 +24,26 @@ when Redis is unavailable.
 
 ## Reservation semantics
 
+Any credential with TPM configured requires EdgionBackend `defaults.maxOutputTokens`, even if
+clients always supply an output bound. Configuration validation requires this fallback; runtime
+resolution still prefers the request value.
+
 - **RPM** reserves one request immediately before dispatch.
-- **TPM** reserves estimated input plus the explicit request or service maximum-output bound. A
+- **TPM** reserves estimated input plus the request-declared output value, falling back to
+  `defaults.maxOutputTokens` only when absent. A
   TPM-limited credential is invalid when no maximum-output bound can be resolved.
 - Known final usage reconciles the reservation.
 - A pre-dispatch cancellation releases it.
-- A stream the gateway itself ended mid-response — over quota, or quota no longer enforceable —
-  also reconciles. The gateway drops that upstream connection itself, so the outcome is known, not
-  ambiguous; retaining it would hold the unconsumed remainder against every other tenant sharing
-  the credential for the rest of the window.
+- A stream ended by the gateway — over quota, or quota no longer enforceable — reconciles only
+  with reported or valid estimated usage. Closing the upstream removes transport ambiguity, not
+  usage uncertainty; unknown usage retains the reservation even at EOS.
 - A timeout, reset, or other ambiguous result after dispatch retains the full reservation until the
   Redis window expires. That retained reservation protects the rate limit; it is **not** a claim
   that the provider consumed every reserved token. Durable accounting uses the access log.
+
+`defaults.maxOutputTokens` is not an enforced output ceiling; an explicit request value overrides it.
+Credential RPM/TPM protects provider credentials. Business `tokenQuota` uses separate cumulative
+buckets; see [Quotas and Cost](./quotas-and-cost.md).
 
 ## Rotation and 429 cooldown
 
@@ -51,7 +59,8 @@ Outlier / half-open behavior for AI destinations is credential-isolated — see
 
 Selected non-streaming Chat-to-Anthropic conversion validates and serializes one
 bounded provider document before committing the final response. Configure its
-process-wide limits in the Gateway YAML, not in an EdgionBackend or AiProxy entry:
+process-wide limits in the Gateway YAML, not in an EdgionBackend or AiProxy entry.
+The following is a process configuration fragment:
 
 ```yaml
 ai:
@@ -101,8 +110,9 @@ Exhausted admission or an active incompatible Hold claim returns fixed **503**
 before any provider dispatch. Invalid/truncated provider JSON, unsupported success
 media/encoding or conversion/resource overflow returns fixed **502** before final
 headers or body; expiry of the configured absolute Hold ceiling returns fixed
-**504**. Existing shorter absolute deadlines still apply. True provider error
-statuses and explicit plugin denials retain their existing handling.
+**504**. Existing shorter absolute deadlines still apply. For selected unary conversion, upstream failure or timeout before provider headers also uses the
+fixed Chat 502/504 envelope. True provider error statuses and explicit plugin denials retain
+their existing handling.
 
 Fully validated checked provider usage remains known if later serialization or
 delivery fails. Invalid or incomplete JSON has unknown usage; fixed errors never

@@ -10,10 +10,10 @@ Edgion AI Gateway 由四份契约拼装而成。把每项职责放在拥有它�
 | 总超时 / 单次超时；是否允许重试 | HTTPRoute `timeouts` / `retry` |
 | 单个提供商 Endpoint、模型目录、凭据池 | `EdgionBackend` |
 | 请求转换、选择算法、配额、用量 | Rule 级 `AiProxy` |
-| 建连超时、outlier、熔断、重试预算 | 指向该 AI Service 的 `EdgionBackendTrafficPolicy` |
+| 建连超时、outlier、熔断、重试预算 | 指向该 EdgionBackend 的 `EdgionBackendTrafficPolicy` |
 
 HTTPRoute 是唯一候选来源，并拥有后端权重和重试许可。AiProxy 只拥有选择算法，不会自行创建后端。
-EBTP 只挂到 EdgionBackend。
+AI 场景的 EBTP 挂到 EdgionBackend，而不是 HTTPRoute。
 
 ```mermaid
 flowchart LR
@@ -29,11 +29,11 @@ flowchart LR
 
 ## 请求路径（高层）
 
-1. Route 匹配 `/v1/chat/completions`（或你配置的路径）并运行 Rule 级 AiProxy。
-2. AiProxy 保留客户端请求中的原始模型名/别名作为逻辑模型，并做可选的 token 配额准入。
+1. Route 匹配 POST `/v1/chat/completions`（或具有相同后缀的路径）并运行 Rule 级 AiProxy。
+2. AiProxy 解析客户端模型名/别名，先应用明确的 `modelRoutes` 改写，再按有效逻辑模型做可选的 token 配额准入。
 3. `backendSelection` 在支持该模型、权重为正的 EdgionBackend 中选择一个。
 4. 选中的 Service 把逻辑名映射为 provider model，再按权重选择可用凭据（跳过 RPM/TPM/冷却）。
-5. Edgion 安装 Secret 凭据、拨号提供商，并流式返回响应。
+5. Edgion 安装 Secret 凭据并拨号提供商；通常流式返回响应，非流式 Anthropic 转换先完成有界转换。
 6. 在响应承诺之前若发生可重试失败，优先换同 Service 的其他凭据，再换其他 Route 后端，且共用
    一个尝试上限。
 
