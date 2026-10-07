@@ -62,8 +62,9 @@ profile passed Core 20/20 and Extended 2/3. Its only failure was
 `TLSRouteTerminateSimpleSameNamespace` after a separate targeted pass. The TLS
 full-profile follow-up was canceled; `TLSRouteModeTerminate` remains unsupported.
 The TCP and UDP full profiles timed out while probing listener ports created
-after Gateway startup, so neither produced a report. See the
-[dynamic-listener follow-up](../../../tasks/pending/gateway-api-v16-dynamic-stream-listeners.md).
+after Gateway startup, so neither produced a report. Dynamic TCP/UDP listener
+support was declined; port changes require a Gateway process restart. See the
+[accepted listener boundary](../../../skills/04-review/listeners/compatibility-constraints/listener-port-set-frozen-at-startup.md).
 
 ## Historical run commands
 

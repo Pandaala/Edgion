@@ -18,7 +18,7 @@ before applying a decision to current code.
 
 ## Compatibility constraints
 
-- [Listener port set is frozen at startup; runtime rebinding is a Pingora-blocked feature — KNOWN-LIMITATION](compatibility-constraints/listener-port-set-frozen-at-startup.md)
+- [Startup-only listener binding, Pingora constraint, and accepted TCP/UDP scope](compatibility-constraints/listener-port-set-frozen-at-startup.md)
 
 ## Regression guards
 
