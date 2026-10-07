@@ -88,7 +88,7 @@ references. See [ACME service](skills/01-architecture/01-controller/08-acme-serv
 
 BoringSSL is the only supported Gateway TLS backend. Do not implement rustls support
 until Pingora's required TLS capabilities are complete and the user authorizes the
-[pending task](tasks/pending/rustls-gateway-tls-support.md). Do not report or fix
+[blocked task](tasks/block/rustls-gateway-tls-support.md). Do not report or fix
 rustls-only support gaps in ordinary reviews or cleanup. Backend-independent rustls
 clients are unaffected. Details: [TLS backend policy](skills/01-architecture/02-gateway/04-tls/03-ssl-backends.md).
 
