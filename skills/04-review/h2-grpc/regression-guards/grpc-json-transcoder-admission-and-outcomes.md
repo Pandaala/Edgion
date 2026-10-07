@@ -17,8 +17,8 @@ is unchanged. This correction introduces no full-body replay or new response cac
 
 ## Rationale and evidence
 
-The [approved correction plan](../../../../tasks/pending/grpc-json-transcoding/07-astra-correction-plan.md)
-addresses the second Astra review at 4dbcc5495. Canonical context registration and the
+Task 09-grpc-json-transcoding completed its second Astra review against baseline
+4dbcc5495 plus the working-tree corrections on 2026-10-07. Canonical context registration and the
 session adapter reject both installation orders. ExtProc reports effective mode under
 its existing lock; mode overrides cannot expand NONE into STREAMED. Rejected late
 registration leaves a sticky conflict even under fail-open. Response head planning,
@@ -37,8 +37,8 @@ and element Value nulls. Count the protobuf/WKT shape, including Struct entries,
 ListValue/Value expansion and FieldMask paths, before typed/reflected allocation.
 Only the nine exact canonical scalar-wrapper names take the wrapper shortcut;
 similarly named ordinary messages in google.protobuf follow full field traversal.
-The [memory ledger](../../../../tasks/pending/grpc-json-transcoding/03-implementation-plan.md#memory-and-time-ledger)
-includes temporary typed trees, capacities and transcode buffers under existing limits.
+The [reviewed memory and time ledger](#memory-and-time-ledger) includes temporary
+typed trees, capacities and transcode buffers under existing limits.
 
 Integers use exact bounded decimal/exponent scanning for strings and exclusive upper
 bounds for floating values. Finite numeric float strings cannot become infinity.
@@ -49,19 +49,128 @@ collisions. Publication proves same-verb path languages disjoint with one bounde
 All-match automaton per verb, including EOI transitions and one aggregate work budget.
 Exhaustion fails validation; runtime ambiguity defense remains.
 
+## Conversion bounds and source ownership
+
+The explicitly authorized unary exception remains governed by
+[the HTTP body rules](../../../../AGENTS.md#http-body-handling-invariants).
+It receives exactly one uncompressed gRPC response frame and validates original
+terminal status before committing final downstream headers/body. It adds no
+response BodyStorage, disk spool, full-response RawWindow or general whole-body API.
+
+Independent hard maxima are 1 MiB request protobuf/JSON, 512 KiB response protobuf,
+1 MiB serialized JSON including stream envelopes, depth 32 and 16,384 admitted
+protobuf-shape nodes. Query/path input is capped at 64 KiB and bindings at 64.
+Response header templates are capped at 8 KiB/64 fields. Callback output and total
+outstanding output capacity are independently capped at 1 MiB. Configuration may
+select stricter supported limits. Byte caps do not substitute for structural or
+heap admission. Compiled descriptor input has its separate 512 KiB cold-path cap.
+
+Canonical compiler/codec ownership is in `edgion-resources/src/grpc_transcoding/`;
+exchange admission and output credits are in
+`edgion-gateway/src/plugins/http/grpc_json_transcoder/budget.rs`, framing/conversion
+in `response.rs`, and plan/header/deadline ownership in `transport.rs`.
+The [operator guide](../../../../docs/en/user-guide/http-route/filters/edgion-plugins/grpc-json-transcoder.md)
+describes configuration and scope. H1.1/H2 downstream selection is independent of
+mandatory H2 upstream; canonical backend/TLS/egress and pool owners are preserved.
+Unary Hold replacement currently abandons the origin connection.
+
+## Memory and time ledger
+
+Use one process-wide 64 MiB conversion budget, shared across plugin instances and
+hot-reload generations. Initially reserve 32 MiB per admitted exchange before any
+body materialization/reflection allocations. This admits two concurrent conversions;
+configuration does not silently increase this limit. Release on every failure,
+success and cancellation; reservation ownership follows output Bytes through
+Bytes::from_owner until the last writer/reference drops. Compiled generations are
+cold-path bounded by descriptor/compiler counts and are separate from exchange
+admission. Freeze method descriptors by shared Arc rather than copying per request.
+
+The 32 MiB reservation uses the following conservative peak ledger (the request
+and response peaks are alternatives, not concurrent full trees):
+
+- 16 MiB structural allowance: at most 16384 admitted protobuf-shape nodes at
+  1024 bytes each. This covers the bounded JSON tree, reflected message/field and
+  map-entry nodes, temporary prost_types Struct/ListValue/Value trees, BTreeMap
+  occupancy, and Vec spare capacities. The JSON tree is explicitly dropped before
+  reflection. Schema admission counts every WKT container, Value oneof, map entry
+  and key, repeated element, and nonempty FieldMask path before dependency visitors
+  allocate those shapes. This is deliberately more conservative than JSON-node count.
+- 14 MiB variable-buffer allowance at the request peak: original canonical request
+  and materialization/scratch, normalized serialized input (each <=1 MiB), WKT
+  FieldMask text (camel-to-snake expansion <=2 times bounded input; growing String
+  capacities <=4 MiB in aggregate), reflected text, and temporary transcode_from
+  encoded bytes (text plus <=16 bytes per admitted node, below 2.25 MiB).
+  Temporary WKT trees and transcode buffers are released before final framing.
+  Materialized body, serialized input and reflected message can remain live during
+  framing; the same 14 MiB allowance includes this overlap and a frame <=1 MiB
+  plus five bytes. Output encoding rejects oversize payloads before frame allocation.
+- The response buffer peak fits inside the same 14 MiB: canonical request replay,
+  RawWindow backing/resident storage <=2 MiB, coalesced wire <=512 KiB, reflected
+  and temporary transcode_to typed/text/wire representations bounded by that wire
+  plus the admitted nodes, capped JSON writer and callback batch <=1 MiB each,
+  and <=1 MiB outstanding output credits. The borrowed recursive serializer adds
+  no JSON tree and forwards collect_str to the capped streaming formatter.
+- The remaining 2 MiB covers bounded binding selectors, JSON parsing scratch,
+  metadata (header template <=8 KiB/64 fields), driver state, and allocator slack.
+
+Structural limits alone are not a text/heap bound: fixed input/text/wire limits
+remain independent. Request schema admission and response wire admission both run
+before reflection. FieldMask expansions and temporary typed WKT representations
+are explicitly included rather than relying on a post-allocation encoded-size check.
+Revisit this ledger with any dependency container/layout change, new WKT, cap increase
+or new retained representation; do not silently increase the 32 MiB reservation.
+
+Use the existing canonical remaining request/backend deadline. Unary Hold has a
+real absolute timer with a 30 s maximum. Streaming caps each upstream read/write
+timeout at 30 s (and the remaining route/backend budget at dial), and checks a
+30 s owner expiration at every processing/terminal callback. This is not a hard
+wall-clock stream lifetime: waiting for a transport event or downstream write can
+overrun that expiration until the existing I/O bound or next callback fires.
+Do not claim a total streaming deadline or add a new fork cancellation seam.
+Check deadlines at frame conversion, capped serialization and unary replacement
+consumption. Error-terminal credit exhaustion aborts without an uncapped fallback.
+No raw grpc-message or descriptor/payload/error strings enter client errors or logs.
+Use static PluginLog tags and canonical access-log diagnostics; add no metrics.
+
+
 ## Verification and re-evaluation
 
-Five new resource regression groups failed on the original code. The corrected
+Recorded completion evidence from 2026-10-07, against baseline 4dbcc5495 plus its
+corrections: five new resource regression groups failed on the original code. The corrected
 Resources grpc_transcoding tests and Algo regex_disjoint tests passed during development.
 Gateway owner/outcome tests, shared-topology negative cases with upstream-count
-assertions, and terminal access-log cases accompany the correction. Fresh independent runtime, AI/integration and corrected codec review scopes passed.
-Fresh locked workspace check/clippy, 1,058 focused regression tests, eleven guards,
+assertions, and terminal access-log cases accompany the correction. Independent runtime,
+AI/integration, corrected codec and supplemental fixture Astra review scopes passed.
+The codec review found an additional custom-message wrapper-classification P1;
+a private pre-reflection regression failed before the exact-nine-name fix and passed
+afterward. Independent CLI processes used gpt-6-astra because native capacity was exhausted.
+Locked workspace check/clippy, 1,058 focused regression tests (zero failed, two existing ignored), eleven guards,
 40 live transcoder cases, Responses/native protocol regressions, both hot-reload
 scenarios and residue validation passed. The request/response-header-only ExtProc
 companion sends request headers because the existing FakeProcessor requires that
 phase before responding; both body modes stay NONE and fail-close remains enabled.
-Exact fresh commands, first-run failures/corrections and the unchanged advisory
-blocker are in the [final verification record](../../../../tasks/pending/grpc-json-transcoding/09-astra-final-verification.md).
+The first live run failed those two companion cases because the request phase was
+skipped; the fixture correction preserved both body modes and fail-close. Both orders
+then passed, and canonical logs recorded phases=2 and successful completion. The tests
+do not independently assert header markers. Resource codec had 24 passing tests, Algo
+overlap 2 and Gateway transcoder 22; AI, ExtProc, session/context, WAF, Controller and
+resource schema/type regressions supplied broader coverage. Mirrored regressions and
+shared-topology cases remain in their owning crates, including
+`edgion-resources/tests/unit/grpc_transcoding/normalize_test.rs` and
+`edgion-tests/src/client/suites/edgion_plugins/grpc_json_transcoder.rs`.
+
+The shared topology `tmp/integration_testing/testing_20261007_151608` passed
+40 transcoder, nine Responses, three native gRPC and six ordinary HTTP cases, plus
+GrpcJsonTranscoderDynamic and AiResponsesContinuation. Cache residue validation wiped
+111 resources with zero errors. Standard teardown stopped owned services; Gateway
+required the existing five-second SIGKILL escalation, so this is no graceful-shutdown
+claim. These are historical results, not execution rerun during knowledge maintenance.
+
+At completion, licenses/bans/sources passed while the advisory gate remained blocked
+by existing Wasmtime 46.0.3 RUSTSEC-2026-0316/0327. Auditing baseline and corrected
+lockfiles also found existing Hickory-proto 0.24.4 RUSTSEC-2026-0119, already triaged
+in deny.toml. No new package/version or policy ignore was introduced. This evidence
+does not establish a full CI/supply-chain PASS or resolve those advisories.
 
 Re-evaluate when adding body consumers, changing replacement dispatch, introducing
 WKT/container dependencies, changing memory caps, or expanding template syntax.

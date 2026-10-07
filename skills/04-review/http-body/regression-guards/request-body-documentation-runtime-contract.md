@@ -32,7 +32,9 @@ ledger, process admission, outstanding output ownership and absolute Hold timeou
 Streaming RPC responses use canonical per-message RawWindow windows. This exception
 adds no general response-body cache or whole-response plugin API. Implementation and
 the current contract are described in the [gateway architecture](../../../01-architecture/02-gateway/00-overview.md#httproute-grpc-json-transcoding).
-The historical tasks/pending/grpc-json-transcoding/04-verification.md artifact is
+The reviewed bounds and recorded completion evidence are maintained in the
+[transcoder regression boundary and reviewed ledger](../../h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md).
+The historical `tasks/pending/grpc-json-transcoding/04-verification.md` artifact is
 absent from the current tree and cannot serve as fresh verification evidence.
 
 ## Core Rationale
