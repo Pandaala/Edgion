@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: crs-supported-standard
+  namespace: edgion-default
+spec:
+  data:
+    config:
+      digest: 2b0252a6187f7f50a8779ae49229cfd3a7f6ed9df6bd982ab0dd892079ab27ec
+      phraseAssets: []
+      profile: standard
+      provenance: 'Edgion explicit tuning: PL1/PL4, UTF-8 validation, XML attributes; original 901 score/threshold/early-blocking defaults'
+      roots:
+      - tuning.conf
+      rules:
+      - content: |
+          SecAction "id:9900301,phase:1,pass,nolog,t:none,setvar:tx.blocking_paranoia_level=1,setvar:tx.detection_paranoia_level=1,setvar:tx.crs_validate_utf8_encoding=1,setvar:tx.crs_xml_attr_inspect=1"
+        name: tuning.conf
+      version: supported-v1
+    type: WafRuleBundle

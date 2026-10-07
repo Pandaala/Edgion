@@ -1,0 +1,5826 @@
+{
+  "version": "4.25.1",
+  "revision": "3b89d5a05322f448b4b74b9cadc5fb05ac6915ad",
+  "archive_sha256": "0539e66e7627fe71c160a644d8fb7ab6e450d53c9de208be5f95a35c70e1a154",
+  "files": {
+    "LICENSE": "97ea43d779892a3aced6dab9ff4815fff90b09f7d133b538de5e5d6c8e3e9f2f",
+    "crs-setup.conf.example": "6d97ef87bf9e899b5a8c2460ba6513306bf06c9b12088b0ffa3ac30219818c72",
+    "rules/REQUEST-901-INITIALIZATION.conf": "a3c43cb5d427cc81d47cd55e35b303b1cebe3f74d379f6ec477466a9d98f93a2",
+    "rules/REQUEST-905-COMMON-EXCEPTIONS.conf": "8d713fcc9e6390f5aae145309ae24cb12fdcae744af0ab60586846f4a3fdd7a9",
+    "rules/REQUEST-911-METHOD-ENFORCEMENT.conf": "aa280e2b65a38c19d0ef1998a11dd519ca28552ba24a83afb70453caa185411d",
+    "rules/REQUEST-913-SCANNER-DETECTION.conf": "653b2e1bf397f3f533e285df1c3f22d1862e414d4e873d8d5b28a9e1bc90d753",
+    "rules/REQUEST-920-PROTOCOL-ENFORCEMENT.conf": "62743ae2489ec753c9c9238b4030f339d7749aac67b39383be1ea970a9889d52",
+    "rules/REQUEST-921-PROTOCOL-ATTACK.conf": "c1be27d46cd2ea99bfc857f3eaf9ee274192f848c687dff9a8afe0f0b180141b",
+    "rules/REQUEST-922-MULTIPART-ATTACK.conf": "060f5d94b05910f388ee5c177d2af6200a8965152f498f6560f52ded3c95ee58",
+    "rules/REQUEST-930-APPLICATION-ATTACK-LFI.conf": "7aba863b1569737ecc56e227a1bd263412e9c8e052f6f72360b869275891f563",
+    "rules/REQUEST-931-APPLICATION-ATTACK-RFI.conf": "899b380440637f8bd363aed648a2b90a206d98ba0070f3d4de2d5ab22cf9f251",
+    "rules/REQUEST-932-APPLICATION-ATTACK-RCE.conf": "52709f166db799ab4efb0a7b5dcd2eb5dbc59f7a39d7ecc5806a911101d59092",
+    "rules/REQUEST-933-APPLICATION-ATTACK-PHP.conf": "6314fbeef91f02e6a815f2eddb09e32622d84679250248a041bc94b3a2380bfa",
+    "rules/REQUEST-934-APPLICATION-ATTACK-GENERIC.conf": "fe2ed54b65bfbff1cdb503a38839961eddbb6ac4b5b55870f6426801a34fda50",
+    "rules/REQUEST-941-APPLICATION-ATTACK-XSS.conf": "e86b8167000c51e6298a59ef6ee6ae07b5cd413d24d7c13785c4074199b73726",
+    "rules/REQUEST-942-APPLICATION-ATTACK-SQLI.conf": "8c5c6502dd588f354ecb37dc178785892a827a8000a360b2e36a7825c80a0266",
+    "rules/REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf": "b20c05fade5161893a486084a1b63cd76358058ddf0a96076a5c6d4c778f4864",
+    "rules/REQUEST-944-APPLICATION-ATTACK-JAVA.conf": "be3f89401597653ee2ffb6f220c4486ed75e1d53bf0939ed5d7ff03092472e05",
+    "rules/REQUEST-949-BLOCKING-EVALUATION.conf": "e1bfd6badb48a5f223443d06b15e8df7667337045b2a49a03dc74c5f475dba23",
+    "rules/REQUEST-999-COMMON-EXCEPTIONS-AFTER.conf": "cce55d7cefc37ffc89e7e2f6e073a278788cb8d1bdc3cd4dc543058b6ab369e3",
+    "rules/RESPONSE-950-DATA-LEAKAGES.conf": "8a2ecb8cce650701caef620a78abef43924b71ec8d8a6fc25061071cc10c6c2a",
+    "rules/RESPONSE-951-DATA-LEAKAGES-SQL.conf": "5222675bc1ad4a2150bf6d555353f5a53bc7ca9fbf1039ed781d2e15f77f530d",
+    "rules/RESPONSE-952-DATA-LEAKAGES-JAVA.conf": "c2da2acb35167647bf81df23ec2aa14a9d5de4c471c0ae8d109bc2374d5969e5",
+    "rules/RESPONSE-953-DATA-LEAKAGES-PHP.conf": "74ec6050bcc29e152a2aabe13836fc417fabeba2e4ec030e5d17b98a66782160",
+    "rules/RESPONSE-954-DATA-LEAKAGES-IIS.conf": "ecb5c40a88787907f6dce557f2d01b47f40ada288e55223c0cc54a2466c3074f",
+    "rules/RESPONSE-955-WEB-SHELLS.conf": "9e3623b7bba2d5cb73db3a598f220ed4f5dcc5ff7b8d24eb45f9973e99b3413f",
+    "rules/RESPONSE-956-DATA-LEAKAGES-RUBY.conf": "80e985dc282c368aa4d9f313575686aa747d89efcb5ce0c72cef1dec7eba7166",
+    "rules/RESPONSE-959-BLOCKING-EVALUATION.conf": "bd5108932244a097dc211dea4aa1d8d744f9a0fe85f49d05466e996d38d12254",
+    "rules/RESPONSE-980-CORRELATION.conf": "b6211cb3b43074007371170ebc106ad8c800cd587ec861b12a35ab6928c8848a",
+    "rules/ai-critical-artifacts.data": "9352bbfff2c5dd86311dfbefaf76a71597402a2eba9cad33bc736b3d2560311a",
+    "rules/asp-dotnet-errors.data": "a3bb53002692e86fdb06e7045b64bc8f7c74972f824106f566ec48bd528884aa",
+    "rules/iis-errors.data": "3eac5008e5dee373d0b876e92405af04cc4ce0f73625e7510499f708b516aa40",
+    "rules/java-classes.data": "e939e4af2b219a695f84d905cae484698718beabc0efdbe4236ae1d8dc9e2ca3",
+    "rules/lfi-os-files.data": "4aa0dcb478a2b3753905856ab4a4640f3d1c7ef22b6690962dde8f363d46c3a8",
+    "rules/php-errors.data": "7e3824d3cca836dfaa8f69c53a0f7864b1c6667374b8e8e85f6c52cecd2c86e6",
+    "rules/php-function-names-933150.data": "fe65fb6db7efaed650e181a5e4f797d31cdf9ba3103791fe079becb83d72d17d",
+    "rules/php-variables.data": "07ffd3c28d5d79e18e3844352fc3dd122af7e0037dbfebe6ed4dad403e9a95de",
+    "rules/restricted-files.data": "f83e869650c4abad978f8b4ede2ec63b82e53bd2275053369f5488f15e0dc338",
+    "rules/restricted-upload.data": "7b6312e39b1934cc50affad3f37acc0a2e794b3817179fa3c424c20c7e88d733",
+    "rules/ruby-errors.data": "caf826022886052069d54946b3f8f6608b5672225db203a448589bd2bfc195a1",
+    "rules/scanners-user-agents.data": "7be781f39ffb4e15ebcda67dc3fbd650ade11a7f7287c5c668df8b68b1aca69d",
+    "rules/sql-errors.data": "ba9f3f7070f4c2c6c2d6165da06566f18aee19756c510ccde99aeff57fd5ca1a",
+    "rules/ssrf-no-scheme.data": "753805c3b3284a28c2d834c9ce32aab8f3d24257e66c2d64b3308bd8f4aacbd4",
+    "rules/ssrf.data": "6305d2a07d3b7997112358a38986fe30c55faa11f9002c3479a687a718bfc66a",
+    "rules/unix-shell-aliases.data": "7860d692ba74be8465972e1c348d06b9ba41f61243406cfc7fed82db6fc26bee",
+    "rules/unix-shell-builtins.data": "7c7b600b457b06940a440095cf594f0e28de1891020de9840fc9ea7cf1e00e57",
+    "rules/unix-shell.data": "30b49ed5e34d7ef2f5afc74f8ca21baec6a3b44a8c6d15082d2ff1bc6d456fa1",
+    "rules/web-shells-asp.data": "4ebbd5ab8fe4d10f18dd69b56e9e935eb861c1bf327893532221578feaa5c0cc",
+    "rules/web-shells-php.data": "9e67cf50981651658292031edd32fb0a8c2c761de8778a02f8539d6dd61d1341",
+    "rules/windows-powershell-commands.data": "5055ffeb4ce22869dee0f611045991e64365e980bba68649f4468aea86476d93"
+  },
+  "units": [
+    {
+      "id": 901001,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 2096,
+      "end": 2582,
+      "sha256": "94a5da479b4693207025b7ad44eefdd1e1ffe5b0ad32bd17fa96d77b8043bbba",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901100,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 2885,
+      "end": 3095,
+      "sha256": "f7eb4227326b6fb2475c23f116712bef0dfe27ebf4cb3165cdc98599eccca0a1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901110,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 3171,
+      "end": 3383,
+      "sha256": "ec38afbc60fee91270b2fae0edacf751038c49cc12147d8068666bdd2d864a75",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901111,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 3442,
+      "end": 3620,
+      "sha256": "d26928f9b666dc8d47f6a81e01a5595f967144559d398e9239850d9c4a9ddb65",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901115,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 3678,
+      "end": 3854,
+      "sha256": "4064bd19dc618cc7c8acd8c0ebf78eec69a7bbad89ee80f1ddc464052160270f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901120,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 3921,
+      "end": 4115,
+      "sha256": "b22968707b101fbb66371ea06a242fc71d687a32ffac32cda2725eaf79c10a6f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901125,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 4183,
+      "end": 4407,
+      "sha256": "6b2b4704e46e0dfb31792f17fc3153641729d77c0d6f206a7c1d6e9bb2b283f0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901130,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 4470,
+      "end": 4658,
+      "sha256": "43333a8e39aeb764314d85ac11d9d6f7b12003372aa651b1f73d1f7563ddd503",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901140,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 4716,
+      "end": 4908,
+      "sha256": "282fbe2f1f71da9ce09a0f119e4b08e40fc1e5d4bda88035277005d6363936d0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901141,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 4909,
+      "end": 5095,
+      "sha256": "02a4501c02ec7cda054a588f3d907972d0589b414586a33216eb93f4a8968fd7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901142,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 5096,
+      "end": 5286,
+      "sha256": "e9d2813e01cd54a415fe4a28427dc277794cbbd3378e950af9805279935aa357",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901143,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 5287,
+      "end": 5475,
+      "sha256": "f1257a2eaa7ce1faa652a621a501cd961a3a861f6fe177609a5dc5920a75019b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901160,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 5547,
+      "end": 5745,
+      "sha256": "22a829ed10ba29f85b7952f520da0edcb2c011c1187808e7cae2f38ec2a9df0d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901162,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 5830,
+      "end": 6161,
+      "sha256": "d5fefa9c70b62bd6b0f67f573baa30a59e8c3797645fb9be61da6a752f002c5f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901168,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 6254,
+      "end": 6522,
+      "sha256": "504abcc0a817ea37930008c200c44195cecf36fc22a9a514cd4dc06ad912ca0e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901163,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 6600,
+      "end": 6838,
+      "sha256": "225516a9b0329f8f8c5209d142e4ddf01b3cc26671a8e9b6a920fa7e1a1adacb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901164,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 6916,
+      "end": 7752,
+      "sha256": "22a3d9f40d4852b3eebf91223d51074197ee69a7ddc6a296d7ce1f61d91ba244",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901165,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 7833,
+      "end": 8184,
+      "sha256": "c3e7755a2042ae83f189a216350a9da5bd7fd4ebc584cdfc3a413b0e865a41ae",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901171,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 8268,
+      "end": 8485,
+      "sha256": "561920520ce7a3b42ff4f3ba2156ff50c3c18da367dccb9baef409f8ff7a164d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901510,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 8850,
+      "end": 9060,
+      "sha256": "3000064db8aaddf5aa7c29e0ffa461af5594e4f1e5cc9b73d64f735dbe64c5fe",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901167,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 9142,
+      "end": 9344,
+      "sha256": "73bcd5d7df954e361414d3fcbb62259a38f42d2db7bf72abcbc843cd09f6aaad",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901169,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 9422,
+      "end": 9622,
+      "sha256": "75ea5890d70b5cd21982aaa4900973c600fee6a07cb84f22e4ac61da15969626",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901170,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 9702,
+      "end": 9902,
+      "sha256": "61799b733ee1721413fa2b69b32d61ea585672b1345bb7f0edb3c10af4a999a2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901180,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 10731,
+      "end": 10919,
+      "sha256": "6ed9adbbc3f4468c8b3719089da3a890136b08af45a6e2bca0dd23174c16bc96",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901181,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 2,
+      "start": 10920,
+      "end": 11549,
+      "sha256": "10cee548bd2bfde56b32b79eb0269382f39acf3175673bf58c2cacea5c8e5853",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901200,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 11751,
+      "end": 12778,
+      "sha256": "51119f9752f619f7a5cda1badd14b2ecd031ff04e546b49475b40ca069c9aa9d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901320,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 13350,
+      "end": 13821,
+      "sha256": "eddc9b5366c8032cfda29acb9f3b6b6026f1076358890ef6902fb9b628198179",
+      "excluded_capabilities": [
+        "InitCol"
+      ]
+    },
+    {
+      "id": 901340,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 13964,
+      "end": 14229,
+      "sha256": "45df635a0bceb2626e7e1c4a0b65db62a769ad5c4f5e16c151c0166b73a54921",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901350,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 14264,
+      "end": 14655,
+      "sha256": "58e7b6a1e17a220e733ad4bebf1f5793a8001b0d54d9d2b7f1ed3d7ab786a941",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901400,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 15775,
+      "end": 15951,
+      "sha256": "429a61a5135c3aeea7073bad2f2ddc3f19ea655f74849e32d8bf9c21c8698cf3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901410,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 15952,
+      "end": 16198,
+      "sha256": "414d02aa3d47a250f2e0c5cd63432ab4e32451bcb48eaa3610430f9e3a42a426",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901450,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 16608,
+      "end": 16966,
+      "sha256": "6e9209b08862c531ac6fcb600b5b125fa4af1899f6a3157398bdf4bb84707b4f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 901500,
+      "source": "REQUEST-901-INITIALIZATION.conf",
+      "phase": 1,
+      "start": 17105,
+      "end": 17444,
+      "sha256": "a4780c505f2faae61adebdc69fad00e86e888dd1a0c56c0217a696366cf490db",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 905100,
+      "source": "REQUEST-905-COMMON-EXCEPTIONS.conf",
+      "phase": 1,
+      "start": 592,
+      "end": 1009,
+      "sha256": "8f0bec9a54c005d2f7717bdd50387f969ea8f65ae186ec235b0e7f1e1b2738e4",
+      "excluded_capabilities": [
+        "Ctl"
+      ]
+    },
+    {
+      "id": 905110,
+      "source": "REQUEST-905-COMMON-EXCEPTIONS.conf",
+      "phase": 1,
+      "start": 1063,
+      "end": 1640,
+      "sha256": "c1356c79078d6828bf36948f255acb16403ac635c50cbf2bbf41dd48350f3c8c",
+      "excluded_capabilities": [
+        "Ctl"
+      ]
+    },
+    {
+      "id": 911011,
+      "source": "REQUEST-911-METHOD-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 511,
+      "end": 670,
+      "sha256": "af2eef1b9b56fade2b82e3a8c0af3d79567f84c3529f94776ce7a356115b0a51",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 911012,
+      "source": "REQUEST-911-METHOD-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 670,
+      "end": 829,
+      "sha256": "90cc89e8edb78bee496c4cd1020676fcb655fb0fcc122ecc3214c51b423ef902",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 911100,
+      "source": "REQUEST-911-METHOD-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 1048,
+      "end": 1594,
+      "sha256": "2e9a95cb8443e34882b45030a0bc69e80a9b131dfe0f99b488ba21990a208502",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 911013,
+      "source": "REQUEST-911-METHOD-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 1598,
+      "end": 1757,
+      "sha256": "10f5e68312e1cb766408d3ce4d519b1ad4e3e8eeddc5977336dd47ee65fc1ba7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 911014,
+      "source": "REQUEST-911-METHOD-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 1757,
+      "end": 1916,
+      "sha256": "c4102651bfe01e745dbb464a08fd22f6fa72f7181878d8d33c62e698d04f5335",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 911015,
+      "source": "REQUEST-911-METHOD-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 2028,
+      "end": 2187,
+      "sha256": "cc70eab6e15e42b1e04858a1ba0177674cdee804e15a1341e5dabb496582b729",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 911016,
+      "source": "REQUEST-911-METHOD-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 2187,
+      "end": 2346,
+      "sha256": "451a8662f3deb3f8c6b4247c2caafde191fc7983b316404682be75f3cecb49a3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 911017,
+      "source": "REQUEST-911-METHOD-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 2458,
+      "end": 2617,
+      "sha256": "1b555d3461fc689b2b1999f9b8968dc1629d943601fcf638ca58d1d445c8336e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 911018,
+      "source": "REQUEST-911-METHOD-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 2617,
+      "end": 2776,
+      "sha256": "2cae253cd39227278c49f135b10da6d59aba8bcf5cc39c8f54428ac56291c426",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 913011,
+      "source": "REQUEST-913-SCANNER-DETECTION.conf",
+      "phase": 1,
+      "start": 511,
+      "end": 669,
+      "sha256": "2a254961a5799da342fcbf4af1c41a898d101266050cc336ac2e955acb4b9605",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 913012,
+      "source": "REQUEST-913-SCANNER-DETECTION.conf",
+      "phase": 2,
+      "start": 669,
+      "end": 827,
+      "sha256": "15a5225028da42e5f38ff9d925db00def783956e6ff7fbd0ae305e1049dd0fb5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 913100,
+      "source": "REQUEST-913-SCANNER-DETECTION.conf",
+      "phase": 1,
+      "start": 1564,
+      "end": 2240,
+      "sha256": "561fd9f06e08faf6ea6f8d0650ca84d7bb0197cd81786afdbfd32752caa5e2ff",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 913013,
+      "source": "REQUEST-913-SCANNER-DETECTION.conf",
+      "phase": 1,
+      "start": 2242,
+      "end": 2400,
+      "sha256": "648c793fbbf3f2d3952e1137bfe411bfbf996a0d0a302dfb65362d5b93ba89e5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 913014,
+      "source": "REQUEST-913-SCANNER-DETECTION.conf",
+      "phase": 2,
+      "start": 2400,
+      "end": 2558,
+      "sha256": "30f2a6b860b8e83ceeb5a2e5d75bac6526af7f22915e2a5eee4644ab3e6cfeff",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 913015,
+      "source": "REQUEST-913-SCANNER-DETECTION.conf",
+      "phase": 1,
+      "start": 2670,
+      "end": 2828,
+      "sha256": "6e61d374a47b1cf6033a36939dd51ae6c9724bb95cbcc1d79b08cf9f7ef406b6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 913016,
+      "source": "REQUEST-913-SCANNER-DETECTION.conf",
+      "phase": 2,
+      "start": 2828,
+      "end": 2986,
+      "sha256": "498789e7eec54ee11312003a8877a3fb9292ccf14bfab009e8a593563a71fff1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 913017,
+      "source": "REQUEST-913-SCANNER-DETECTION.conf",
+      "phase": 1,
+      "start": 3098,
+      "end": 3256,
+      "sha256": "2c4ac4d17508564e12137c451f1ae94d6373f5857ae113f80edf1b9e9862adf0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 913018,
+      "source": "REQUEST-913-SCANNER-DETECTION.conf",
+      "phase": 2,
+      "start": 3256,
+      "end": 3414,
+      "sha256": "de34e9f48d11429a6bb9bed3cbaeefb24d9fa99da7da43e24ca06eeaa4554de6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920011,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 852,
+      "end": 1013,
+      "sha256": "e41b36475d8bef12a4813242ec1cdbebcb281fee27e2a486c68947512bd06eee",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920012,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 1013,
+      "end": 1174,
+      "sha256": "cfa8e899b432498c49dd0ca2fcf484d6129bf3786cb998b3c949e22b8c673fc6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920100,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 1972,
+      "end": 2729,
+      "sha256": "979f91bc8665c2d454717c6a90390aaef1b471c3eb8147797798d2d6f357d831",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920120,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 4130,
+      "end": 4857,
+      "sha256": "7773b62074407473ce8afcdd5a53147a328156aa3a829e61a1dcee35833542d7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920160,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 5147,
+      "end": 5707,
+      "sha256": "0342daf4ac2afe2796c7136aa79ea77a5f8de283757e7616af86da3c26814f99",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920170,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 6212,
+      "end": 6850,
+      "sha256": "072b10a118c3dfe1456afa349d6324b4923de22a78ea6de26100d2d1004f882f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920171,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 6891,
+      "end": 7535,
+      "sha256": "2e65d2e0a183916455776d6aa36cdea9a9187951a6212ee41f67821dc818cfb7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920180,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 8274,
+      "end": 9090,
+      "sha256": "dbc51e3edd107242dfb11ed0a8f69c19cf84f1dac2c3057fa36229d17f89b210",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920181,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 9281,
+      "end": 9907,
+      "sha256": "6f3c46df843a2532de9971273a688084b3d06f2ac9513d536b8caf53b69b510a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920190,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 10321,
+      "end": 10927,
+      "sha256": "daebcbaf61ca6cc381e819e9539c93710fe254adaf90b86963cffe20ce41c650",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920660,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 12394,
+      "end": 12944,
+      "sha256": "ed95b2e33e241943d559b8119d4d6b1b33796abf868b68c10629de67b552ebbe",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920210,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 13282,
+      "end": 13886,
+      "sha256": "18adcd4e67c8bb0e27e154a2c8d7749c4f22d28d9a15eb27a69e6f787f0d1afa",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920250,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 14200,
+      "end": 14836,
+      "sha256": "040ae42255048b92303aaa07da56aba78bfef16ef0b22cade1f9665411a7d97e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920260,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 15867,
+      "end": 16489,
+      "sha256": "c56a7ce69f08959cc9711e57b55a5a6590a828d687ab4efee055cfb08604f893",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920270,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 17873,
+      "end": 18503,
+      "sha256": "2837ecbddfc858e29113f7d50bf030ba037cb94ec92895a73c3cd034ebd7f916",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920280,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 18883,
+      "end": 19417,
+      "sha256": "aea398b48be709118c304fc54321ce474b8ff81f02e0aa8e978dace7f0fb9b99",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920290,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 19419,
+      "end": 19910,
+      "sha256": "572ec148c661c3360544ff7f3c698b29f766e6046edb1c94b3ad342a0bc4f967",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920310,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 20712,
+      "end": 21424,
+      "sha256": "56387fa20e1c22a2730c5f927a52e2e04c5cdd2b301c219bee389d6916d11ab0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920311,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 21470,
+      "end": 22133,
+      "sha256": "8e2e047edf4e72881c0bf4130f166d71c43647ffada4acbb591231969d8eb028",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920330,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 22364,
+      "end": 22863,
+      "sha256": "a74e377752f4e16cedf57d30677eeb69893e2277e71d29a71713c1a42a485494",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920340,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 23992,
+      "end": 24632,
+      "sha256": "503d5877ecb656bd6974db2aede552fcb9171755f1df8470f832f9952f75f601",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920350,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 25508,
+      "end": 26091,
+      "sha256": "1e18047352a5352a1bb0a91e16c75f984f8b8c0c613c82a84418a575323e2be1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920380,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 26545,
+      "end": 27172,
+      "sha256": "740ca882691cbcfd9c75bb6d61606e73e07cc8e18b216d179aba29a9a0c173b1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920360,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 27232,
+      "end": 27872,
+      "sha256": "bad139f099e5f4e671ff8119386354bad12724a3e26ab1b74443be19fa400503",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920370,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 28098,
+      "end": 28723,
+      "sha256": "5b233a9702e58ae054452db190bcb0a60a8e2277f58747e68541a9f474dd24d9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920390,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 28759,
+      "end": 29407,
+      "sha256": "f20c785a6bc5d6ab7c207238c12f665c6ea09ac9f93af8651c5c49af8a77752c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920400,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 29474,
+      "end": 30155,
+      "sha256": "417a86a10398b990b006d1068d172d503f23fc789cb0ce9ce786893c73951a33",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920410,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 30192,
+      "end": 30853,
+      "sha256": "a98cb0951ee47ac88227c16eae978300f58394388aa59a337a6e01bfa214eb61",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920470,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 31358,
+      "end": 32029,
+      "sha256": "7fa22a04cd6b2e95e0f09497c9cc59da0f2586826e8d2d6561769524b342868b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920420,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 32243,
+      "end": 32976,
+      "sha256": "6a1ef344df840c30488eed0e1d015e16618b9aeb2d100c85c4ca663cb1dbbeb9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920480,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 33042,
+      "end": 33873,
+      "sha256": "78275e269e875aaef8cd7a2e7ea45e22fa4200c33b452fc8e72f8b36756c4ed1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920530,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 33953,
+      "end": 34542,
+      "sha256": "e7d950bdd591fdebc172cdf4891bcdaadfb06d7e9025a2d046333a5eb28a2d36",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920640,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 35550,
+      "end": 36157,
+      "sha256": "df570414deaa803460033f13989788609cb3fdd23461cd2acabf6e82ed1142bf",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920430,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 36192,
+      "end": 36769,
+      "sha256": "4400c85325716df6245b2338e2466a369b003807a458b46cf91a239fc8be691d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920440,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 36800,
+      "end": 37521,
+      "sha256": "4f43216cdca3f62d7a3a3ef9dc40c1b55dfcfb9016740d2506e8cacd6024b1c7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920500,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 37603,
+      "end": 38184,
+      "sha256": "e1f9c29849effa372eeb4b860fcb5e54317ac4722bf251e03dbac021b57b49be",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920450,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 39860,
+      "end": 40626,
+      "sha256": "1d3369c824ea49cf60f55c0f88af4326aed7b99a74b8eddd0a5effa202b3cce2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920520,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 41227,
+      "end": 41812,
+      "sha256": "829d595d176931c15f7c96c1e61bdac2889a199f0e204a32ad9358826849ab14",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920600,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 42403,
+      "end": 43890,
+      "sha256": "875f6761bab2b9bd1e4b599664ca436b216984cb4ba3be8f60b9e0d6c370422e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920539,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 44203,
+      "end": 44418,
+      "sha256": "65ccc5ca9e0609bc3bdd4b4fa46c740c6487c4c38649e2b780f765161fcb4443",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920540,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 44658,
+      "end": 45287,
+      "sha256": "9c8095f32e1cdb9fa04cef46df066ad94f5ea84d1a226bcda75da0f344a73c6b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920610,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 45538,
+      "end": 46051,
+      "sha256": "7eea011c54e8f461567619e50045f7b63a8516cfa49d680bce816a937c0dddca",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920620,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 47050,
+      "end": 47569,
+      "sha256": "28b5005b2fd51b88ec82274a6c6737bb9ab438cf60150117159af5f33b53eccb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920013,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 47571,
+      "end": 47732,
+      "sha256": "5025ebcf3ef8de8ef19d39b38ee7290971b5780be141717eddee291d4262efe3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920014,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 47732,
+      "end": 47893,
+      "sha256": "a452284add387d303e464c510868a0c095e2543bc6c696bf67efbb10614acc20",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920200,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 48720,
+      "end": 49360,
+      "sha256": "2a1954822c418d58022b06c30d2fdcadc931b28d913b0a99707151ed4914933c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920201,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 49401,
+      "end": 50073,
+      "sha256": "b3b79faf4f40304b1bfd29244788e4c96700ce1af91ed93f3add20e15078b917",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920230,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 50075,
+      "end": 50613,
+      "sha256": "48ce36be3b6429ea12b9b8a10ef18ea12fe983ae5db91d69bf68eb766577f3e3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920271,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 50664,
+      "end": 51321,
+      "sha256": "1589175103fc8164c44e9b06a62f99efa2b3cf631ecb94666d0771663a3371c2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920320,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 51451,
+      "end": 51952,
+      "sha256": "e13af20db687ae5ca17e8b2175c486c70267cfe3b98e1d4e3232ef93c30493e8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920121,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 52003,
+      "end": 52565,
+      "sha256": "769ef8c3fa42164bc5383676dcb01cae4d0143cbdc70575a738dd2d8f0be603a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920451,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 52615,
+      "end": 53384,
+      "sha256": "1158265f64d97a3bea73a62dc27d7c50389d639058489044152128e5372a8c1f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920240,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 53473,
+      "end": 54152,
+      "sha256": "4cdca805c339d55f14619ebfe205595d275d98cab026a9a3f4468ad465ca5943",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920650,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 55476,
+      "end": 56291,
+      "sha256": "fe57dc86180f305fab6601c0eb9858db9756b090eac46fa66b5ce870f8127bd3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920015,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 56292,
+      "end": 56453,
+      "sha256": "7cf30a551fb342dd9ec2c9d729bb9969c4cfd26f0ce23ae865ac84bae5fbab09",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920016,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 56453,
+      "end": 56614,
+      "sha256": "76509df6f15563ee095c82b2f98d3ecc9d92107c3eaeb75464e12cf988353aa0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920272,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 56993,
+      "end": 57671,
+      "sha256": "b606b9b8aa75fadf9feea16a7817f1fd45bac24d743ae660477b9b9be84bd6b4",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920300,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 58247,
+      "end": 58938,
+      "sha256": "64ab8423402cc18eebf89861d33e803f1129148c9fad86c4a063869cfa408758",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920490,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 59460,
+      "end": 60162,
+      "sha256": "50363128a8af9f14e28045221aab412f0ffcf61bf44c13d076bde2dd9f4ced2e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920510,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 61269,
+      "end": 62117,
+      "sha256": "cbed8ce24a3f1c32fc01a26a5693474176520e1b907839268d162a5b82f4492a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920521,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 62473,
+      "end": 63121,
+      "sha256": "856ef6675a6acde3883d48c72fb622758761e59d809270a51f1a9ceeeb44f778",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920017,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 63122,
+      "end": 63283,
+      "sha256": "a21ccab3c932fba2f8f0a6c077f23e6c7c7ac342b6891bc599a5ffafe61df5be",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920018,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 63283,
+      "end": 63444,
+      "sha256": "34717f840cef9e675acae2aa47f8aa2b272162219dfd9ee5521ccdef2ee205ab",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920202,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 63603,
+      "end": 64273,
+      "sha256": "589b945b6c3849734d7dc119a867fd128a0ce6fbe7bc07e3858c500a6bb1558a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920273,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 64487,
+      "end": 65138,
+      "sha256": "059b298089aee1f91a6080f09082cc0d22d2cf34cd1bba013fff991dc022d373",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920274,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 65183,
+      "end": 65999,
+      "sha256": "45e39d55ed815270a82033dac13305fb65b976aea9bad7607e793aa43e4fa5bb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920275,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 1,
+      "start": 66437,
+      "end": 67097,
+      "sha256": "95812cc2a001250df1746a33cea2455e849de819ceb01a6ca424e9f26da75dea",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 920460,
+      "source": "REQUEST-920-PROTOCOL-ENFORCEMENT.conf",
+      "phase": 2,
+      "start": 68362,
+      "end": 69139,
+      "sha256": "aea640bb805dcef1235abb08fc04efd883e4f4dc57fff5428bc7a238e7ad9d25",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921011,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 511,
+      "end": 667,
+      "sha256": "22cdfbe4762f862d15f6c6c89a5c2cddc506547aef53f2c5fec50e4027855ef8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921012,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 667,
+      "end": 823,
+      "sha256": "cbdd1425fa2a5306dd5442e50aa321a9dc26373c7c627d96648f53f6caf7ecee",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921110,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 1566,
+      "end": 2446,
+      "sha256": "f5eecf6b269c7ec56387a5c41736f911309723a10a0d17f35a6519cf987d58f3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921120,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 3092,
+      "end": 3917,
+      "sha256": "c4bf76d8e52b3a2fc57edc3c07f86d1da3469bb92a7da964a7113caae95dfc56",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921130,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 3919,
+      "end": 4703,
+      "sha256": "01b0e92e71610cca56fce3c8b2d00b59d07a868418786d8617997cfee74b1c11",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921140,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 5197,
+      "end": 5920,
+      "sha256": "14fb9c6a56738aa05abf5d24c78f595f9b92394b4acccc929ba5bce573a0f7f8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921150,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 6251,
+      "end": 6948,
+      "sha256": "47c1bdc64c6da1bbc6e3635970c70b47d957868c684afdd8aed1016ea90ea3d9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921160,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 7200,
+      "end": 8154,
+      "sha256": "6b308d1cbd47ed4d09593011fa6772791ce68dd4eb5ebc1169a34f3a21395ed2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921190,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 8449,
+      "end": 9161,
+      "sha256": "a716350a36fdf658d347e46c96220ddf86d8b34ef6ef21510c8767b2c9e9ab9d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921200,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 9923,
+      "end": 10754,
+      "sha256": "d041fa0de358a9662623e32f0d9df2a1ebdd26c3c8e77d5a879e03f2fc291abf",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921421,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 11292,
+      "end": 12049,
+      "sha256": "932a223a035412b6a0e9e1e9ddfbe90a0f8a779994d26b6daef5074dd10c3ee0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921240,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 12317,
+      "end": 12960,
+      "sha256": "353afff36593bcc0985bf2d53658522f5f1f1641ce6ff40224892e0c7b6b5e49",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921250,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 13502,
+      "end": 14117,
+      "sha256": "6d9bb40059f408972e39df27f9559fa2554c60c5725b06da798fbcca0c3f769c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921013,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 14119,
+      "end": 14275,
+      "sha256": "a48eb9ecfabcc90d87e237f5c64ee0f56abb6fb25b632830f8864c1c5b0c4671",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921014,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 14275,
+      "end": 14431,
+      "sha256": "0b159edf83eab7fc8c622b7acffb4f227cc1e06d349f9aebad1159b660a04d65",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921151,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 14732,
+      "end": 15427,
+      "sha256": "6e86014029c386078b0687acc07b34d3367c232f5e87a06e9625071bc7aac082",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921422,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 15893,
+      "end": 16774,
+      "sha256": "6b387fea11a4cc94e422ab65a8574c9d97f4445d35cf419ddd3fa55243a911bb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921015,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 16776,
+      "end": 16932,
+      "sha256": "61fd6b8bbfe0370acdf43b01c4aa31a1867fab472b75f43c797d4b58efa7f4c1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921016,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 16932,
+      "end": 17088,
+      "sha256": "384a62e6534c136a42f7e6336b5ddba114ce09fb92b0a1368312ce78eb602221",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921230,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 17657,
+      "end": 18230,
+      "sha256": "044811aa9216f4a9ce982e31d9336c1645d7474fbfe3c8bcccc2b910d96f7e67",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921170,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 19111,
+      "end": 19486,
+      "sha256": "f6bb53a1d33cef5d8fd2cdd914a65f6c570619f31e103f4b9928667b4bc20b34",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921180,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 19487,
+      "end": 20158,
+      "sha256": "35b4824858d91aa67c6cd1c13099bf159414cb5c1ee2886c9b613d329d17c08e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921210,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 21217,
+      "end": 21941,
+      "sha256": "956e6cb91671e72f92e4b4a5b7a8b02cc92387dfdc8d18d58b6a91ce602ad902",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921017,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 1,
+      "start": 21944,
+      "end": 22100,
+      "sha256": "e449fc2f2e5d30971a4a5510e14db3f69e88c563c8a7a62d4f53e0dd5b940515",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921018,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 22100,
+      "end": 22256,
+      "sha256": "7030a1f77174bf20be8bd1745e4f98bd7ef3fa2e2803116bf09a78d879d24600",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 921220,
+      "source": "REQUEST-921-PROTOCOL-ATTACK.conf",
+      "phase": 2,
+      "start": 23234,
+      "end": 23919,
+      "sha256": "f6ca2e51239b4ae50702681ca125b204e7c1955e93ffda4cf5c00090fd0b0df8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 922100,
+      "source": "REQUEST-922-MULTIPART-ATTACK.conf",
+      "phase": 2,
+      "start": 1202,
+      "end": 1993,
+      "sha256": "213e013645e63c80941fe287eb5c2c041965d5e3780314454204c2bd970fbd80",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 922140,
+      "source": "REQUEST-922-MULTIPART-ATTACK.conf",
+      "phase": 2,
+      "start": 2485,
+      "end": 2773,
+      "sha256": "75d80edc2eb376e89f779f46d59c63240cdf765a40769b7158e335d0758aca1b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 922150,
+      "source": "REQUEST-922-MULTIPART-ATTACK.conf",
+      "phase": 2,
+      "start": 2774,
+      "end": 3210,
+      "sha256": "78ffede0a4a12e08ab1ade3c24d33cdba9b893d69a6fa52d4f3d37e4d494d4c8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 922110,
+      "source": "REQUEST-922-MULTIPART-ATTACK.conf",
+      "phase": 2,
+      "start": 3459,
+      "end": 5110,
+      "sha256": "3201b023b30b970f250c4cf87babb82b16f52e561f2ae2abdac1b5d005490dde",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 922120,
+      "source": "REQUEST-922-MULTIPART-ATTACK.conf",
+      "phase": 2,
+      "start": 5329,
+      "end": 6015,
+      "sha256": "cae92561b21e185b197a1518f547da2615969f6416252b311865f1013510b3e8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 922130,
+      "source": "REQUEST-922-MULTIPART-ATTACK.conf",
+      "phase": 2,
+      "start": 6270,
+      "end": 6900,
+      "sha256": "082a8905157c4a6aacb37fdcdab417bc323cb755b7bfbbe90b8c938b082d380e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930011,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 1,
+      "start": 511,
+      "end": 674,
+      "sha256": "1a4118fcbd337148c9d202065585cfc743dce6ada07c593715c06aa295a3e59c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930012,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 2,
+      "start": 674,
+      "end": 837,
+      "sha256": "d9969c67cc158e7172fb2ed16e78c1e88789f67c965e0cc2055923f466455460",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930100,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 2,
+      "start": 1327,
+      "end": 2643,
+      "sha256": "35de9ffe6a9e950c1e66b8d39c686548588ee739b537b6b19975d0d7b010ddc7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930110,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 2,
+      "start": 3136,
+      "end": 3959,
+      "sha256": "5cd7b2bf100588d7ddefc40b3de7856d4998b341c67b20ed480cba997429893f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930120,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 2,
+      "start": 4255,
+      "end": 5021,
+      "sha256": "dc7d81023f97fb76b32f3b70a300d7531e3523876f05c5996801f2d7736c1d92",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930130,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 1,
+      "start": 5203,
+      "end": 5928,
+      "sha256": "42e1531694574e4f9e7a17e649e5747c7bc707a0e215c3485612496e82870692",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930140,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 1,
+      "start": 6250,
+      "end": 7010,
+      "sha256": "399d5d02c979313436bd226b4e9ce314ef0237f8a11dbcb2ea75f909da1051bb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930013,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 1,
+      "start": 7012,
+      "end": 7175,
+      "sha256": "2d29adecf121b0e9615ed92175407998717cffbc955b52224dab72dc10698a74",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930014,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 2,
+      "start": 7175,
+      "end": 7338,
+      "sha256": "99bcf73646bfbb97a07c637ee4e0bfd62b417f5ee817dbebd2ec4cc641cbda3c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930121,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 1,
+      "start": 7762,
+      "end": 8528,
+      "sha256": "c755f47d26c20f8e61d0fcc38351a89347b78ab34c378b3ec10b382486339928",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930015,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 1,
+      "start": 8530,
+      "end": 8693,
+      "sha256": "8cbad4312472ff23db8074129996afc6083028ed4745088aa7409807ad5de68e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930016,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 2,
+      "start": 8693,
+      "end": 8856,
+      "sha256": "c276e0a34cdd0d0d784f1fdea746cc62b6dc2ab8a1cf31c1a11d584ebc874d00",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930017,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 1,
+      "start": 8968,
+      "end": 9131,
+      "sha256": "3b3bdcd037b4eadb252d5f14b43872c8ac5983ee2c9bc3a123f3d86516f0a16a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 930018,
+      "source": "REQUEST-930-APPLICATION-ATTACK-LFI.conf",
+      "phase": 2,
+      "start": 9131,
+      "end": 9294,
+      "sha256": "f6059edfd3161a4606fbe62c56817b57655bb53b3ab4ca83b27a9236a568087f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931011,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 1,
+      "start": 529,
+      "end": 692,
+      "sha256": "755e1d807d1e77313a68473ade5ea6607c03cbce53ca0aa784d84f8d7ac7b809",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931012,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 2,
+      "start": 692,
+      "end": 855,
+      "sha256": "0ed08ede0c7ace9d4aad39d43fcbd8632c4bdc215fab4b4784a79e5e97c93809",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931100,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 2,
+      "start": 1891,
+      "end": 2711,
+      "sha256": "9cba15ab6ebfb31eca95598f14a4b859c24437715f44be1dd2dd49d3cd83f875",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931110,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 2,
+      "start": 2962,
+      "end": 3892,
+      "sha256": "a1c6d020294d9e79e504a0d524b49ef897b9c5f0bb90d6e546d3b35d32cdbff3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931120,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 2,
+      "start": 3893,
+      "end": 4627,
+      "sha256": "29af3aa2e500e9c39b863832479217a988aa35e72dfa8d1c3b5b61e088fb9ca6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931013,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 1,
+      "start": 4630,
+      "end": 4793,
+      "sha256": "9538235b1783a60ceecea5005e0b42113d52320aa091ea344a715e7a5836f38d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931014,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 2,
+      "start": 4793,
+      "end": 4956,
+      "sha256": "d089c4961e12ca9518f84660706418463b8496fb124d6ed7a588e2d3bcf0136d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931130,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 2,
+      "start": 5586,
+      "end": 7151,
+      "sha256": "372af0620a58a1e69ca043a4ec212d420c3b0a50d4fef43699b5a3a0769a47a1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931131,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 1,
+      "start": 7435,
+      "end": 8730,
+      "sha256": "9dde2aed01408b1096af0dffdb51f80033fe997d2230e83e564985bed6551180",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931015,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 1,
+      "start": 8732,
+      "end": 8895,
+      "sha256": "e048446620978a4b656c52187e4255b504574aafa4f6567f3e965617847b79d7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931016,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 2,
+      "start": 8895,
+      "end": 9058,
+      "sha256": "d970582490eed5335d297a3ed61283553986c61041307901ebbc22cd41ba1207",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931017,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 1,
+      "start": 9170,
+      "end": 9333,
+      "sha256": "0a2678a8828d790af5bfbfd38713dc60d7200451394516040f2b6e7ce6603298",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 931018,
+      "source": "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
+      "phase": 2,
+      "start": 9333,
+      "end": 9496,
+      "sha256": "c58e5299637f517f8e8a4cfa01ccd48de305ed2a19e59047242b337cb49cff36",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932011,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 511,
+      "end": 674,
+      "sha256": "d7f5121a8445841bbcef021c483fbaa29d556ff102520ad94f82e30e8d452b47",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932012,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 674,
+      "end": 837,
+      "sha256": "7d0269875ea67bfd4dd03a39ad6069513e85fdafe1f33d237a8b1ec9de9fdeb9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932230,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 4479,
+      "end": 13616,
+      "sha256": "a27b997c5fd97b734aee171d7cd7860ea40e2c394517453255f9db3310c6a555",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932235,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 15373,
+      "end": 25054,
+      "sha256": "3d295d8e8b08c0d5f3035730c855a6a6ea5a6a8ff8793ae9ea9659d77f959c1d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932120,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 25439,
+      "end": 26249,
+      "sha256": "c02dbafcdaaf85a8e2685cd4f145a1d07e5ef04e98411fd1e7f8c1d97a664fc7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932125,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 26810,
+      "end": 29489,
+      "sha256": "cef883c89d5f3a95f165eafa5027b10fddacd3976427f68771d5b279f4ea33c5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932130,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 30320,
+      "end": 31143,
+      "sha256": "9de1405d6f25e13f102bb09192c7f5729fee8673c6d91e7ea6b452d1600d93f8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932140,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 32046,
+      "end": 32954,
+      "sha256": "451a2bd45f192f5cb8d7ae3118d5c34a8617a2652d1bbc2679fbf0ad02ceb4b9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932270,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 33634,
+      "end": 34383,
+      "sha256": "f078d15ab825c2cac3eac6c9a57fddb4afe0f1dabfee320da127392959762183",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932280,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 34846,
+      "end": 35594,
+      "sha256": "83e6745a27743750461610d96f9e11a220198a9a30b3b52118c159b850f70701",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932250,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 38342,
+      "end": 47485,
+      "sha256": "5fa405d312e503f588bb921a7ad318cf705bd0218a8c612bd2bfc171790efbc0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932260,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 49218,
+      "end": 56105,
+      "sha256": "2d6aa664283b3d52da5b52f73a9b604403a662f067fd2ef0d54688cd0b8c7e0f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932340,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 57939,
+      "end": 61814,
+      "sha256": "cc194425fee150d65bea7beb0494417876823f9e86d161e80f39443eed19fe64",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932330,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 62265,
+      "end": 62991,
+      "sha256": "97b8626affb4c8f4e9101585deea602420dd311c9dc1902c7a17fa1b87f3dd26",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932160,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 63853,
+      "end": 64616,
+      "sha256": "050b576f4aeede62d9adf57dcf5372bbcab5f2bb69a9a1ecceeaf81e0fc668cf",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932170,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 64922,
+      "end": 65628,
+      "sha256": "8b5f6e5a2eccf434b11719d6da6f4786626441404dd21f213182a6ecb31c2967",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932171,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 65629,
+      "end": 66345,
+      "sha256": "06f7cfe067259a3761ddd9fb5821251953cc446b12e4c954db6b35332d5e94ac",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932175,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 67184,
+      "end": 68275,
+      "sha256": "62487cb35538817c98d8a53c40423daa54f043826e59c5d2fb19ccfb18013574",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932180,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 68910,
+      "end": 69792,
+      "sha256": "dd0fc68c47b47a1626e94cf68f062f233efce14f5755538660ba2010fbede1ab",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932370,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 71839,
+      "end": 81175,
+      "sha256": "7e617b791b93e121b63d4f1505750cc9d1698483083acf3921e779b3e1103bce",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932380,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 81834,
+      "end": 90320,
+      "sha256": "07f7fcf140eb5d2a60d5fa23b8b9e7af2968518ba769cd775d1041ebe88ed891",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932013,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 90322,
+      "end": 90485,
+      "sha256": "15fb079dc2622dcc0158b0a76f69850e8b6eb6e23ed8c09dfc7a52b6d88f08bf",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932014,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 90485,
+      "end": 90648,
+      "sha256": "31f98bd921f1841e3ee67651da71497a547326be90c8ad2524a8a5f22a228e4d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932371,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 91183,
+      "end": 92128,
+      "sha256": "b7f562edcea4a4eaed3a22e881a064a434520a73614c79aaf57e03fe6de668a0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932231,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 93859,
+      "end": 97514,
+      "sha256": "c3cf272d833487f54ad3d13ea9d2125a763af76fe5db8bc786143f5e961787f0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932131,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 97957,
+      "end": 98761,
+      "sha256": "4b16bb4fc44c162d28a7b0a5fa3f3f66d9cc64e7b18d5411b5e23d75264dbb0a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932200,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 100084,
+      "end": 101096,
+      "sha256": "70533224a54a4121f14ba4b096e355432d0ce94c9c783d748a6c26765e6c717b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932205,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 101527,
+      "end": 102615,
+      "sha256": "ec4550ca13e48c7aa594afb6e40934918ce006b72b05ad798f461acc73ec8796",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932206,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 103032,
+      "end": 104010,
+      "sha256": "57e000b98529711489526387197cc5a6d5ad26612ee75ee0dcdb5b1c6fa1bc6e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932207,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 104506,
+      "end": 105702,
+      "sha256": "b2a2a4f7899282930b8be0b6b55a7febff1cafcd01952ea7bd73683f033b8442",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932220,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 105953,
+      "end": 118939,
+      "sha256": "7627f5e80a74fc31796a07928c63c3a2cab5d1b1138010d6b03af65690d333f6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932240,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 120963,
+      "end": 121996,
+      "sha256": "5694865c0024957d935a6073ac25530586d26b3ca348cd80fb96ae2a501b6a84",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932281,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 122693,
+      "end": 123436,
+      "sha256": "200e6f2ce1c89a182ec20b98e2f2111198964a7d1e7add1b174fdb7e5537095e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932210,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 124007,
+      "end": 125321,
+      "sha256": "fc3b275edc5d95bb65d68858145d3be4f4bf26a309d5d2d9e50abc22dcad93de",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932271,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 125908,
+      "end": 126645,
+      "sha256": "cffc89fb965d34b24e2458f6b8169ab4e4a1b7f3c76ed89a49e5b9ac001feb55",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932300,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 127516,
+      "end": 128613,
+      "sha256": "b1b9611407f82331ace0d33478f17e9a09a324a40a693967d04e163ad5004ef8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932310,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 129157,
+      "end": 130458,
+      "sha256": "357890f45b1c942025a61cb91a3edfa4b39271cdee9ecc618dacfd16b16c299a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932320,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 131061,
+      "end": 131996,
+      "sha256": "71d0c7813b9956332f531270e0ebe246be36e5703fa46b6c1720507a8bced4b6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932236,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 133843,
+      "end": 144505,
+      "sha256": "704f536afdf03d9d7e0a140a107f4fa3641e15df2d0f5ecae9da3a0d01b8f0c1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932239,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 146360,
+      "end": 156967,
+      "sha256": "f9a8b87ec15dd8b445ebe43a4f7667486f09e1771d1437564356e115cdab9843",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932161,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 157440,
+      "end": 158203,
+      "sha256": "2dbd8678c7cf99d8364470ea3d2d2cce35f489e835ac77d3bdb2e2a7e5334ab1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932390,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 158995,
+      "end": 159825,
+      "sha256": "615f3a3300a5661207cbacaf786b9ad30485f4aabd152adb78d3944350649097",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932015,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 159827,
+      "end": 159990,
+      "sha256": "7f415d8a443930d8086005967e6f04cf9028c417d66f3fd07b39420ed5e671e9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932016,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 159990,
+      "end": 160153,
+      "sha256": "ac7031cbd0346cc7becf423e9e2b9cdb082e7e8c23a15ad0861c4246ae2ff999",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932232,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 162009,
+      "end": 167423,
+      "sha256": "d4800dee8829706a5ef7a3e2c324da38a25dfe3c219822c2fa83328b57f94f74",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932237,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 169081,
+      "end": 176865,
+      "sha256": "055f0ba679ae0b98ab8859a8a3c01a1c02c7cafd0ca0e5401a249b93e6d753d2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932238,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 178523,
+      "end": 184047,
+      "sha256": "11a6a06d0ce105185a78f7ed08793765ffe20b6c23fad04f371b6a024a5328ac",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932190,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 184922,
+      "end": 185657,
+      "sha256": "ea2b6802b0d9badf80ec2c6963d8897216198ed92caf4f6bf011e502c63c5153",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932350,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 187433,
+      "end": 191366,
+      "sha256": "e82b93d5d8bc523e1d59f1d0a7cd79f3560c024e17647cde2b5e639e48218bf4",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932301,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 191880,
+      "end": 192620,
+      "sha256": "7f5bda17e1ea89751995fdd1b79ef2233c5e45324f208e0870db75515af4f55a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932311,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 193143,
+      "end": 194913,
+      "sha256": "f8155ae103a9905b85847a243692f5c55573d22bb7c853f4f00f5a18b7a9390c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932321,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 195434,
+      "end": 196172,
+      "sha256": "ebd864f4c1afc01a6d3c8768cab36d48ab49a669978e11784ce9823063923899",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932331,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 196801,
+      "end": 197532,
+      "sha256": "bdb72a9579707033a9f3f937677a51020008a0ecadee11e391130c5969a27372",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932017,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 1,
+      "start": 197534,
+      "end": 197697,
+      "sha256": "32589d895711e45416dd0d6dad69363dd673ae2d2221a644c196cc0aa8807620",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 932018,
+      "source": "REQUEST-932-APPLICATION-ATTACK-RCE.conf",
+      "phase": 2,
+      "start": 197697,
+      "end": 197860,
+      "sha256": "cfea7e069bb1cb9cd84c867586c0543776b488205f56886e2efe1d06d0913bc3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933011,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 1,
+      "start": 511,
+      "end": 674,
+      "sha256": "05f4eeaf16df19c80d482c60596164f49378a71ffbb167823d3015345b84acee",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933012,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 674,
+      "end": 837,
+      "sha256": "7ed833d85027a19d540713b7b5730667c9766ad505137efead9d802dec5b25cc",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933100,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 2045,
+      "end": 2853,
+      "sha256": "db27a311716c4a085c6189f7bc3a0356ea6fe02faaf30e1868280336e1203c6e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933110,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 3778,
+      "end": 4620,
+      "sha256": "11952f86a32ae35f5ff3fc3a9238fc16b3e52ddae8b3c0adeb57ba72cbd828f1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933120,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 4911,
+      "end": 13451,
+      "sha256": "b623c5ea46eabde013be9b6714f7864e36f852227a4b542ef0e7513048b1bc12",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933130,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 13477,
+      "end": 14254,
+      "sha256": "7a5b7915757e517c6e23866191fe7ad613c9ab93493735a86a9d145ce52893d0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933135,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 14449,
+      "end": 15214,
+      "sha256": "e337503c6c4b502988e1d945f3b89751b96195324fd92fde9862f6eb46a46a57",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933140,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 15961,
+      "end": 16752,
+      "sha256": "f3b0fbcca1265a2e909f096b21d68d42890215b6a465f14f4c9d2dfcc4236191",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933200,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 17542,
+      "end": 18399,
+      "sha256": "07d458d92775a3cab41f5c9c0a6cded64610a10191fcd1c1967a8c2d0dde9dcc",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933150,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 20795,
+      "end": 21662,
+      "sha256": "eb968a066d63aa0d60d8e6e8415315b3057b22182f83bd102ffe929538c42ba2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933160,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 23112,
+      "end": 24293,
+      "sha256": "07f0e9a50413ac2c17fd623b0772e3dd7b8f92c60b01042a69b91f939ebe8329",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933170,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 25742,
+      "end": 26518,
+      "sha256": "1d0c17dde4e62c5f936452b7a531c40efb4a14bae458c42345d2d576b62b5d12",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933180,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 27984,
+      "end": 28933,
+      "sha256": "6a6da868a338bbff1eccc4c1bd7db03255b2b53116f93228eea260c7e053692e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933210,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 29952,
+      "end": 30946,
+      "sha256": "6641d36a499c3c7f3caab5e203e076257c56fbb291055ad224c0c30f326b5304",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933220,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 32764,
+      "end": 33607,
+      "sha256": "ed55b8a28b75a9d3bc4fc9f5eaa801152ac595af03445db0e00bea965ad53a9b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933013,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 1,
+      "start": 33608,
+      "end": 33771,
+      "sha256": "f10ec1744c169cc6d03d2ff31ff6aec40a1e47436cb2749cdafd74ca4cbdceb9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933014,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 33771,
+      "end": 33934,
+      "sha256": "71269e770b88d08c15ebde47a1ca3fa32bb169232cb1eafdec8646f229650cab",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933151,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 35177,
+      "end": 44377,
+      "sha256": "eddda51fb6ebd3d87eb30cefda4b56c05e37df7453a614aefa4821197de92df7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933152,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 44671,
+      "end": 53515,
+      "sha256": "88a05ff2e23ae715d20d0668ce20273323fd4d0f16282c8e72a53a618da17bf7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933153,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 53809,
+      "end": 60944,
+      "sha256": "953d97861b108ddbb15a5cd89c9db41ecdb3796ca0cecfd52de8684a43d0c7f6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933015,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 1,
+      "start": 60946,
+      "end": 61109,
+      "sha256": "fb7fff19da72872b77429adfaab15ca85ddc19ed4484ac996839128cde579981",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933016,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 61109,
+      "end": 61272,
+      "sha256": "8911b6fe6b0bde249a9e673e34145d0bc7c59eff9b1b2da7bdb11189ae508c8e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933131,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 62498,
+      "end": 63442,
+      "sha256": "e9033e083adc70d6312e490ac3506706a225e216552aedaa95591dbbfcb388e5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933161,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 64546,
+      "end": 66032,
+      "sha256": "c6136c162d8e4e15f62861c1b56998207ccdb4911d2157ed1a571be6ae401baa",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933111,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 66838,
+      "end": 67681,
+      "sha256": "eefc57d3cc6df7e02ac0a108d53800cc03b5b7b0faa727bb9bf444f392555914",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933190,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 67941,
+      "end": 68684,
+      "sha256": "1f62143723c410bf09f47cb99313c85bf95714aae7efdff398f4801c34d3c9e0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933211,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 69424,
+      "end": 70425,
+      "sha256": "2355c989801f9019b88348edb02af0c07433fac41f09ea40ef6c514ff610e356",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933017,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 1,
+      "start": 70427,
+      "end": 70590,
+      "sha256": "6c63946f017061ead5b9d9fcdebcc1bd7317ce754970fc7d9bdf2a1354ff7127",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 933018,
+      "source": "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
+      "phase": 2,
+      "start": 70590,
+      "end": 70753,
+      "sha256": "0cc8fa77c46f3f3a046026b6ec7870f775d66adf00ab7b0989601f8d64aed6fe",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934011,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 1,
+      "start": 511,
+      "end": 678,
+      "sha256": "59c18d7e3a16e992efdd0323c6f7b6a09f021ec58a5b91d6b6e1af7ac149e96c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934012,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 678,
+      "end": 845,
+      "sha256": "c163a362e4c6c29eb585e4c1d935e044cb0fa0de86a9a9bb08a0dab72db79234",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934100,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 2011,
+      "end": 4443,
+      "sha256": "bca7efd5d049b20349af884f39146b2659a9ba24a099b6539ffd0c9f97962ef8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934110,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 5006,
+      "end": 5802,
+      "sha256": "b30fdee1ea8b765f1a85f46668691a24c822ac9dabad1ea36f7de0511ad3cbbc",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934190,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 6123,
+      "end": 6940,
+      "sha256": "682172acd4a6632832b803d9c9fa9ab2470800763a8113cc12da43b5b72274a3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934130,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 7699,
+      "end": 8539,
+      "sha256": "eed94dfd3582c96142162876e6d12a4ae2acd593802befc2eb7b9250a18b471f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934150,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 8899,
+      "end": 9668,
+      "sha256": "3a583c73bfa8d9961f39ce9484e11fc625facde2f5579967c10d6f7adbc84a2f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934160,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 10103,
+      "end": 11226,
+      "sha256": "b7ab299409f67715d782b1d4225b71468cc4f576464ee428035c439e54a2031f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934170,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 11582,
+      "end": 13279,
+      "sha256": "24546783cf996dacbbc6cb052f53d8ef91024e359b7a95a30c6048e2c83c0d13",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934013,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 1,
+      "start": 13280,
+      "end": 13447,
+      "sha256": "4e2f450058bd549125032df206bd5caf4c1878f3038603e35f098adf564d1378",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934014,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 13447,
+      "end": 13614,
+      "sha256": "de164d8c7a1d41bb291cfdc14d7e89e1452362f65767e9ec2bb6be8c1c03207a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934101,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 14019,
+      "end": 14936,
+      "sha256": "68a4b8708c86587f1ed4e764111bf98377d72ad0780e2318468431d437d168e2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934120,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 17606,
+      "end": 19506,
+      "sha256": "1449807ca843ad06b3e5792a7a6b5e6a46a7bf0446c68778e8c40a6e7c398bf4",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934140,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 19866,
+      "end": 20607,
+      "sha256": "00f0a922955ffedb58e04eafaf6bb319a65f33f62ba61bb03714567378fcae47",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934180,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 20789,
+      "end": 21508,
+      "sha256": "58d36cf98e7b7c289a9eea1db36194bd84f9a3548463b57527dc3bf99d752519",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934015,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 1,
+      "start": 21510,
+      "end": 21677,
+      "sha256": "84fb6a5af6473b3034563cc39fe8994001a9b92982fa229d2b9a5ee29a210b2a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934016,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 21677,
+      "end": 21844,
+      "sha256": "7d2b38edca5224f9309b2ef0e9bbff1370893bc842905386bcc5ac1bcc023a68",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934017,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 1,
+      "start": 21954,
+      "end": 22121,
+      "sha256": "b9226bc32598bf80f118158081b4ee41a06286e71710291fe55196223119140c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 934018,
+      "source": "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf",
+      "phase": 2,
+      "start": 22121,
+      "end": 22288,
+      "sha256": "c83c0ffa3cbbd2707ba9f1166d66ea7735c200af17171543db638cb9b1d6276c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941011,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 1,
+      "start": 511,
+      "end": 674,
+      "sha256": "3d063c83292f7b1f5d88a5d9184837c5d7b276834cb0d220717b83f7d086c676",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941012,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 674,
+      "end": 837,
+      "sha256": "56efb42a4b83eb8089c46fa894af7612d68330cb6c2bdc683743dec52e17a108",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941010,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 1,
+      "start": 2389,
+      "end": 2685,
+      "sha256": "a05db8d8c2f7a8564ee36202a66eade0c8217e5861f810d6b163b6b95ac5a6cb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941100,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 3079,
+      "end": 3916,
+      "sha256": "af0f5dd34c6b81a6809712febedbe10a50b1e2a1ce78aa6cec7e36c78a827174",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941110,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 4070,
+      "end": 4975,
+      "sha256": "8b4e8f726f11ec7718eb8cd48b1a8189fd438bacf1e2b23cf4d7ce1ea97c41ab",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941120,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 6046,
+      "end": 6985,
+      "sha256": "c8bfae177e8ad63619bf391f1f85f105021b9407a305f0480106a5e7893c93d3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941130,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 7276,
+      "end": 8321,
+      "sha256": "2bcc0e37e830e0be6f9bcbb77356f287fea400b669e90723a091d13a898f1ecc",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941140,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 8959,
+      "end": 9925,
+      "sha256": "80c4521707c026c275582271f91cd436d5aac848cc961db921797e1d2a33b274",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941160,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 10287,
+      "end": 15777,
+      "sha256": "d96e999e020995b637b380df9f3f200eb15a2f55babaeadff78564d126bce0fc",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941170,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 15834,
+      "end": 17115,
+      "sha256": "0e1ef1060fd147b0f7feca54bbada30cd5b3c712d0004d48c03bbbe8092f156d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941180,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 17300,
+      "end": 18294,
+      "sha256": "e961e3eb48a06bf484a4a748f8574ba9da135dee2b63c76ad74602aebad76196",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941190,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 18785,
+      "end": 19728,
+      "sha256": "25ab71545b0dff02102b057b0265ded487ebcc2386d1f2d255e1499b37166bc8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941200,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 19730,
+      "end": 20614,
+      "sha256": "5229901ba5367586f24ecf08b6a51fb4e772dd25ab5f859574b452d8db598479",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941210,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 20993,
+      "end": 22844,
+      "sha256": "70636978f58d8ac6553023168e614c08aedee585eaa15746eb7afdadef20fe3b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941220,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 23096,
+      "end": 24760,
+      "sha256": "8c182063bff4c1d6f42d67fc37d7925cb97485a3980665dd99946ac6afa37deb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941230,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 24762,
+      "end": 25639,
+      "sha256": "acccf6cd08741deb88c74e2cd8b3701385aa21fc0b72486f7b70561fbb33646a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941240,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 25641,
+      "end": 26539,
+      "sha256": "5ffb1bb704f1438063098a31979b7c4704882189304fc24e9febb82d30475e16",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941250,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 26791,
+      "end": 27748,
+      "sha256": "273b3968388ed858791f49a7449e23dd4c55b5f2827486c19839452b4adf4a90",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941260,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 27750,
+      "end": 28626,
+      "sha256": "25818a844e94b79866b8b4bdb3c3c6b5ead9a33cdf50af858c7553082b7d9cf4",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941270,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 28628,
+      "end": 29500,
+      "sha256": "786e5d22cc2ff6e5b22ba8ce3c7dd6cb7ea791142f339c907b3c11e2a716c6e1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941280,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 29502,
+      "end": 30374,
+      "sha256": "73407f83b2fefa58bedd37eab0e2ff267309c4fc36ae118f8b5635ddb86f151b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941290,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 30376,
+      "end": 31236,
+      "sha256": "42390daee78925115320ed10760e6c208b63035f6bf9af9e112ff9debb3be012",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941300,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 31488,
+      "end": 32406,
+      "sha256": "ca4b6a9999f8e24bf71865557984e2be6d316e56f976f9c04ee343c9fa3f8ebb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941310,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 34723,
+      "end": 35728,
+      "sha256": "e56a073b9779fe158db575ea1fca012c05b7f7633e4f67bc05a8ecab37e6e284",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941350,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 35867,
+      "end": 36704,
+      "sha256": "7f38827ce220cb011661482cd9085de3d0d9a447ec6746d88c380f56ae9d3429",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941360,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 37359,
+      "end": 38094,
+      "sha256": "bcfebc95c3659470a8a565cdbfb8eabd139f0e62b56311a67baab954baf3a070",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941370,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 38635,
+      "end": 39459,
+      "sha256": "7ec58985b3279ec5cdfab20f93a9167fa5c488c2a550ec8e4608b40f66f8fac3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941390,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 40094,
+      "end": 41008,
+      "sha256": "1535d956c5aeaadb1176f88d3b2041063271e324150576af2fb3957bf7b95422",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941400,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 41582,
+      "end": 42420,
+      "sha256": "3676c7777b70d491909c45f36c7f99bd2d0f0a4f36e3e15ed55a7440502807c6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941013,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 1,
+      "start": 42422,
+      "end": 42585,
+      "sha256": "18b271ae1f1cc7546e2198ad50c46dfd279f021cf2fa3ea8d995e80b499e1ebf",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941014,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 42585,
+      "end": 42748,
+      "sha256": "9920c8e7e15ce1933b325b9b73bc1a92ad311b2ae718ae849983e4a6aae3398c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941101,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 1,
+      "start": 42907,
+      "end": 43701,
+      "sha256": "4870d90f3e3ea9bbaeb75027107fb59296d3bd87845574e5a0ecdab8f0795138",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941150,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 43782,
+      "end": 44696,
+      "sha256": "cdf3e8d517a1d62192cc923789b7cc288befa3787d26731c92bd2c801c5591e5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941181,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 44843,
+      "end": 45695,
+      "sha256": "e8be66e3f3a6abe14aad42478813cfb03212afa29ce17a9fb2c6a74a572dd0b5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941320,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 49064,
+      "end": 50537,
+      "sha256": "74ac74db3cc0c449d34013937210075b0355374f0337600859dbbcbf5d613cd5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941330,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 50788,
+      "end": 52006,
+      "sha256": "7160d17c18dbe4c6fe493c5cfcacfbee78ed9152344bb17d548a18d100765d9e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941340,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 52175,
+      "end": 53004,
+      "sha256": "2d59a4c5eaeec5002bf0814dc957982845c4e6894b59f1a5cb899ef96f8ebfb8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941380,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 53493,
+      "end": 54235,
+      "sha256": "b460f1fd76a3a8b934c3746176392ca1248daedd2a1bad5567ce6b3e86752451",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941015,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 1,
+      "start": 54238,
+      "end": 54401,
+      "sha256": "f1d196bcd0866d3f3fd144f401cf85045a1227f9f20d683193d6a7e2aa3ddcea",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941016,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 54401,
+      "end": 54564,
+      "sha256": "4be2335b320c6869f98f16c7d085e602e2653fca979a4b4d9813f364c8dde668",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941017,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 1,
+      "start": 54676,
+      "end": 54839,
+      "sha256": "4f66333b1b427f0465bf74dd7f4f0845fdd54360e2597b1b044510d241cf8926",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 941018,
+      "source": "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
+      "phase": 2,
+      "start": 54839,
+      "end": 55002,
+      "sha256": "d0f4a3738d71ccb60a0b54a26ffdf7c85101c908b7abd11f35c68cbb71bfaf11",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942011,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 1,
+      "start": 511,
+      "end": 675,
+      "sha256": "a0304926cf29548e744ea1fbc1613a9237b1283f951cfc576f6be89669810c35",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942012,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 675,
+      "end": 839,
+      "sha256": "04e1b3d24d2b68ff1e6996c41376180f63cba931672bbe3988298a1953ecbc7b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942100,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 1549,
+      "end": 2395,
+      "sha256": "55924234fb8feb2ad8f03128f090bd1062476b5a2db27051e44aff2a9a500ca2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942140,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 2677,
+      "end": 3748,
+      "sha256": "88d51b6331eee1d57d41c18856b6db561c3d17dc84239162bbe32d678cd01edb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942151,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 4172,
+      "end": 7356,
+      "sha256": "c6bcb249f7ea76556d3f1ed549c1cf294f225f8131fc8a8f2c66b6c3dd29774f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942160,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 8302,
+      "end": 9132,
+      "sha256": "72a498427ad09e93f577d416519bc04102aaa66206986d68554818ada923a686",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942170,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 9383,
+      "end": 10253,
+      "sha256": "e8d57d81cb7a7cc8b91962fb83e0a35528ff31859fd54977743a88017d726ab4",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942190,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 10504,
+      "end": 11794,
+      "sha256": "732e6ff882b0d614c19d8500c53a91ea15007aeca009973bb4f8a20f56d00c2e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942220,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 12179,
+      "end": 13144,
+      "sha256": "315b925e9931d26fe58d9bd8410cd408912e80ab9e9f17bee3f57407d2efcf1e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942230,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 13395,
+      "end": 14309,
+      "sha256": "b23e8d1f18c6fb198672bf0dc5d5cdb22a48887ac701ac877c2555f2be87d046",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942240,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 14560,
+      "end": 15478,
+      "sha256": "54cce4b941be890f81d0866c04df85aec71e3434ae92f9166b15508cf31d2ae3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942250,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 15729,
+      "end": 16615,
+      "sha256": "1761baad247cac43620a1c221f52bc4e247263086b32b3c658a06ef84e3aac8b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942270,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 16616,
+      "end": 17418,
+      "sha256": "528831c013e3516a20574d1c117850cdbc16b83b1d086297da16d921c2b6bc3d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942280,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 17669,
+      "end": 18632,
+      "sha256": "c77de5b3a3b1db02b8301b28997d009658825b4c4389db728ab074aad21d4983",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942290,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 18883,
+      "end": 21132,
+      "sha256": "08ed652fb7ecba4334fd16b8c9b73f0ddd2f74e8a2cd87f84ec29d1306827fe7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942320,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 21534,
+      "end": 22738,
+      "sha256": "62b8faa322a7ab355a56ea2521ebb8b1967603a3ee88807195f2095bb16a584d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942350,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 22989,
+      "end": 23968,
+      "sha256": "773fb517448d3dff26cb94981d13aa24d24452784c0151f2268c9401ac3eac25",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942360,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 25050,
+      "end": 27265,
+      "sha256": "276eaf57bf0d536eb33d4ff016a3f45f11d35cdaa472bc66ac58c3ecbd96e4a6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942500,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 28118,
+      "end": 28916,
+      "sha256": "a8d02b2e6db7ddcb00e51aecc89357a436c3d317b5b8e0f4dcb0e81a5d12b730",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942540,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 29557,
+      "end": 30346,
+      "sha256": "6e16e78dfdc849cae85464829fc5e507ed9384e2df3d4aceb46b342fe2aa29e9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942560,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 30802,
+      "end": 31593,
+      "sha256": "a44822e943e88ac28013bdaa56543e84b6bbea81edb77d0ebb382c650a650ad9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942550,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 32054,
+      "end": 32986,
+      "sha256": "fad785936160b909fc9c3cdf0244d3d2cf187d9bc7c62d26ac219288494a00ab",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942013,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 1,
+      "start": 32988,
+      "end": 33152,
+      "sha256": "17cc5a5f89e61b7c31fcfd19937c765091b2405300c61cc194692db44febd668",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942014,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 33152,
+      "end": 33316,
+      "sha256": "24c78c0a07be29942e3402497c687ed080b14b24b0f9c680cbba5d71015693cb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942120,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 33873,
+      "end": 35153,
+      "sha256": "6fd73a63397c17da565d343ce6776bbb91b48a285ab7b5bcd1badb4abaef2942",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942130,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 36089,
+      "end": 37112,
+      "sha256": "f67c3696a384773c2779dfd5116358c55b5a520365a1de7eb750ab6c16bd2e6f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942131,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 37634,
+      "end": 38696,
+      "sha256": "17e4bd3f8a8a49333742db9b95af7f393983c7209c48f5db50d2ec668e3c20d9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942150,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 39148,
+      "end": 40674,
+      "sha256": "c3dfeff148335e094a1593f080aa1b1485621518a2480a1c4a1dda3d13ecd5ea",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942180,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 41314,
+      "end": 42642,
+      "sha256": "ae66c121fbcb8eecce7c34bec9df6666e7b7cbadaabb3eba57738d891a9bc97d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942200,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 43075,
+      "end": 44303,
+      "sha256": "8ed37d44f80d47f5b150bea2d4af851a433b2d033eced639d25af23adbc05dd7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942210,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 44722,
+      "end": 45931,
+      "sha256": "b3ef4e8583b9c53eae2631b6910dab922fb4bd6ca143ab12d597567370228e91",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942260,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 46182,
+      "end": 47238,
+      "sha256": "671153da0ead663193910cecdd22ea36224b7701d5881a29bae0f403943ed8a4",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942300,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 47489,
+      "end": 48514,
+      "sha256": "711e6a2a487f0f63ed17ba833e57e6149248a0b821212baaec47c88e3e598176",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942310,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 48765,
+      "end": 49945,
+      "sha256": "fa9d9316fbb198b6b5c2c0a04658a69ffdf2d2028d9fbc494ccf6e156fc53e83",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942330,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 50359,
+      "end": 51744,
+      "sha256": "21a280b50bd8328a637df599f7e35f2a7993cdf84bc302c0643b99e893562a79",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942340,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 52138,
+      "end": 53691,
+      "sha256": "fb165eaeedc23f497e7cacd4a84ae96c1b9d2782ced72b7f12d038e94326904d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942361,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 53882,
+      "end": 54681,
+      "sha256": "4937945bc7341cb89854a11b6d0c53330413a12ff3fcdcc9cb8f6e9820406926",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942362,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 55159,
+      "end": 57337,
+      "sha256": "188e88b732ecedf2453e023ec3fbcfdd7eaf546332d2eb27cbc4d2dc556c85ee",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942370,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 57841,
+      "end": 59010,
+      "sha256": "8fbd5db9c01a19ef2cb7ad0f168a21a77710fb55799bc9b156f3f778286f72b6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942380,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 59261,
+      "end": 60473,
+      "sha256": "69d82e9c8dca9461e4a3f690e6a5b9ebfbcbd1c99f90a148c9fd8214e75962cf",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942390,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 60724,
+      "end": 61679,
+      "sha256": "ea54287ad07d717c27f9f9e03273c3e45c423ea62fd24854e9af5ddf301049cc",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942400,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 61930,
+      "end": 62759,
+      "sha256": "a0b6516833382a8942c452b77964e2668f55d252ca3b0a5fc37080264f329c7e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942410,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 63263,
+      "end": 64476,
+      "sha256": "09fd968f780642b97e9863cf50096a947c957dc8443cf318691140b4820b2129",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942470,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 64813,
+      "end": 66070,
+      "sha256": "55e0ae93e3bbaa1f3114bdf24fc8b57003f8285bdf95035569471addc8ab76e8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942480,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 66407,
+      "end": 67810,
+      "sha256": "533aa3c9a45e71bfa866d9f81d1357bfa06e63c7d4fd498b46af17212ca152f1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942430,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 68848,
+      "end": 69687,
+      "sha256": "2dd7e72b5d287dd7c5d32f7d1ce0cf27080b3bec7e7e6b8df8295d2f4d3c85de",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942440,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 70865,
+      "end": 71787,
+      "sha256": "32c226fde1e66ccf14f5ac1ff3fe47e9e32c9e89b3028a1d2d71fb1564aacde9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942450,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 72249,
+      "end": 73030,
+      "sha256": "b8bddce027898cf8a5973524f4ddfcbee291f4bde0235f1966a258ba145fe8e8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942510,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 74429,
+      "end": 75283,
+      "sha256": "994d395815fc8e0cee52cc6f48693b0b0c761a04c292fd55863078dfdc1d963f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942520,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 75535,
+      "end": 76438,
+      "sha256": "ad509775e1c386ebcf654e3c8f3aa07b639f840b04d02780a8f5067a337fc942",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942521,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 76985,
+      "end": 78018,
+      "sha256": "744a9f7d80a7b69bf16ea89c9c1e74ddef30c3cdd981d9f0ae6f3d65e31f86a5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942522,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 78104,
+      "end": 78858,
+      "sha256": "da4310704a90af4e0b209cecd59ac54a02404cc8612dbb348960a37715c6efb7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942101,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 1,
+      "start": 79708,
+      "end": 80450,
+      "sha256": "475d2a833128692d94f6dd059c2e4d7692ef9699dc431268b126ad576d150fa1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942152,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 1,
+      "start": 80869,
+      "end": 84095,
+      "sha256": "7c91d787a00e90be9745b15cacd45b0f679f9376d96d9486ec7764af10f78a8d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942321,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 1,
+      "start": 84469,
+      "end": 85654,
+      "sha256": "a382be2cf300b403609423ec9d7336e2050163396b85abd057ee187a7c81dc29",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942015,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 1,
+      "start": 85657,
+      "end": 85821,
+      "sha256": "390bb9302ddb1f175ddb19525aae8ee779516c7f5bcaabc225c302bc5392325f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942016,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 85821,
+      "end": 85985,
+      "sha256": "72fc69fa12cee87e386b2acb5b4a8a8f047181b51e191727633f6aa1adf36162",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942251,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 86372,
+      "end": 87128,
+      "sha256": "87ab5f4bb598911f93caea2764f69dba5664a80e7349498e27168909616bc6f8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942490,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 87224,
+      "end": 88003,
+      "sha256": "5b09f86b2c9244c64e5302b774c9a0ea72b03e4b2b93dc955c3533d824f4e60c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942420,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 1,
+      "start": 88966,
+      "end": 89812,
+      "sha256": "32610080de623c6b26f48aa569ffbb4b09bfb97711bd0ee307a7a3070b9fc002",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942431,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 90282,
+      "end": 91220,
+      "sha256": "540b7bd7b78c5ade9584a2a4005fe9351ea755fc944701b104c65c692d608b52",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942460,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 92066,
+      "end": 92754,
+      "sha256": "414ebe524752672bf85fb008481a695c80086ad8221c292108d90444c37e414a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942511,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 94187,
+      "end": 95028,
+      "sha256": "5fbd849344877568b31dfa7b5366ca7d2be05d76c5c4e01be30b085a32c6f9eb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942530,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 95332,
+      "end": 96060,
+      "sha256": "63d8d6c99aff8d666b4f9f39e37b8c615b0635d7919c6c93a9ed82bc85cf8ae8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942017,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 1,
+      "start": 96062,
+      "end": 96226,
+      "sha256": "a6c270da951c343085ab639351d5c0d972684cb0c51666620e2543f16f440e28",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942018,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 96226,
+      "end": 96390,
+      "sha256": "d6630bbbab1ff58690b0c54811d650016a7aaccce026e6be8b1463757636daff",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942421,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 1,
+      "start": 96846,
+      "end": 97692,
+      "sha256": "d92c7480d50216a09ad924453908927cce8f68597ffb4529adb5a745f20719e4",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 942432,
+      "source": "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+      "phase": 2,
+      "start": 98162,
+      "end": 98999,
+      "sha256": "ef60a62e4ea44c3f1a36d0b8747054e6c0b2bdf714120364f56fb1045072cfc9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943011,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 1,
+      "start": 511,
+      "end": 687,
+      "sha256": "151537ee44b3eb90bd2f1ce14d345692206eb70445e2de3fd279ec917f6e162d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943012,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 2,
+      "start": 687,
+      "end": 863,
+      "sha256": "2f523cf3bf61c624c04426ffbd1b04c9de2fd47d582e0a767444c4cae2a7f31f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943100,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 2,
+      "start": 1445,
+      "end": 2331,
+      "sha256": "cfe1dd244067abdb6598fa7d176dda7f0a677056199f9aa26721cb2305d29129",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943110,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 2,
+      "start": 2583,
+      "end": 3989,
+      "sha256": "7ed88152bd836ff081c83ef9d2e9903bf79466062adff3aef91534e5cdc7e7cd",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943120,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 2,
+      "start": 4241,
+      "end": 5314,
+      "sha256": "9f2738483ce72cf9dfbf384d90a9a2947bb71217609cfa99dd0977856cea359c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943013,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 1,
+      "start": 5318,
+      "end": 5494,
+      "sha256": "cba89aeb79bfbe9aaf8017987239706a0ae5c0e9a4e3578e3e10309bcedb9779",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943014,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 2,
+      "start": 5494,
+      "end": 5670,
+      "sha256": "e5758eb70fa557d22eb0ca5f8c2846c84a3d73ce118dcee7e02ef627f55d1ca2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943015,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 1,
+      "start": 5782,
+      "end": 5958,
+      "sha256": "e5c843a79ba10e9cdb3a4844538c80e944421ae573374f4bbcc3d80f77cc1a52",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943016,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 2,
+      "start": 5958,
+      "end": 6134,
+      "sha256": "a063040a072887512f140251f84a8100e3e09198801c7147f9c698163d151692",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943017,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 1,
+      "start": 6246,
+      "end": 6422,
+      "sha256": "5459ae00a6e2661c2f9786698e21acc757d9da512cf1e15970dede3691769170",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 943018,
+      "source": "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
+      "phase": 2,
+      "start": 6422,
+      "end": 6598,
+      "sha256": "b6f8ea637ea5bbfc5293e420cbb6a1e019f32791c013a26e64b35adf10ae6c12",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944011,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 1,
+      "start": 627,
+      "end": 791,
+      "sha256": "f2b46c0582db7e25f8a4a7529605a62e11f144844f94b1ac20e71ea994a08032",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944012,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 791,
+      "end": 955,
+      "sha256": "fbdfb888e8c8e27ab619e2290fc84607b2c3d254f43a6223bae9648947c00302",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944100,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 1821,
+      "end": 2630,
+      "sha256": "9456f17fac60a7f937d02b4d406621b80f0e7373bf29ec5b4704dd60c4c7de36",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944110,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 3558,
+      "end": 4459,
+      "sha256": "1e393ed6f167cc371de264a4ddef4a3132bd615e496b208e42a7b3b647a5fafd",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944120,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 4925,
+      "end": 5956,
+      "sha256": "725cfbce0140c67ad2ac6f3ba6fa647bc32ce9cda0fb8d974fe14d8474b19f5f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944130,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 6773,
+      "end": 7546,
+      "sha256": "df8c01954981dd6ea077d1651c7713130801f346efd41946ba0c141af3fc0678",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944140,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 8299,
+      "end": 9123,
+      "sha256": "50454844ac4a5761adc9babb8e1e4f341065e1ea37fdad478f6ee63689d5cd96",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944150,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 10069,
+      "end": 10904,
+      "sha256": "e6fe5c7f1279dd875c4a64f78f4e751ab19d862ead666cd157c9bcdd69c82ced",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944013,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 1,
+      "start": 10906,
+      "end": 11070,
+      "sha256": "e4390f3bf137d472d2af015116fa5e148faddeedc62cd33faf767b4dbb073ced",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944014,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 11070,
+      "end": 11234,
+      "sha256": "35fc3e508457c28c7a55a1157638c5bea79988808549d986997aa10303b51f5d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944151,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 11969,
+      "end": 12799,
+      "sha256": "8af9ee0b7c8f010e29035ca9b9fcd48c1eeeba92cec93a24c7bc9aa8ab458d37",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944200,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 13381,
+      "end": 14141,
+      "sha256": "a515d276944e9ff9538af4ec6925c5f9638095f93ddc593d67571ab968d623fe",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944210,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 14285,
+      "end": 15068,
+      "sha256": "dd48c206b6e320d2ed696425a39d25ee621cef64ddb066ca5fed1a33f7d36941",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944240,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 15319,
+      "end": 16270,
+      "sha256": "5d42e502d1af149898bd50481f7efdb5ef220cc5fddc84f091300b05029727e0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944250,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 16439,
+      "end": 17236,
+      "sha256": "06bfbab1747d362540cc918cb19e98a2779cde59db076978743c1bea0b0d53d0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944260,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 17654,
+      "end": 18551,
+      "sha256": "aef8954284cdbbd3247c378f77a8b09eb794db81c43587f7c6cd2bd3bcf52ee0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944015,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 1,
+      "start": 18553,
+      "end": 18717,
+      "sha256": "7a303e348fc81ec3d88f62bf3ae0103a6d556cb6e98305fc96c36c8fbe1efbc0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944016,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 18717,
+      "end": 18881,
+      "sha256": "2fdc67e9584a12de61a55932b81de36f15166af58ceb6138cf95f48ddc3c824b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944300,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 20424,
+      "end": 21842,
+      "sha256": "09751887fea8b620f709cc92a437fcbe70b0d33e4ea4166bfa466c9bb8b442e3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944017,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 1,
+      "start": 21844,
+      "end": 22008,
+      "sha256": "df5e35ff4ff736c3e7eab27084d02b8c368bbeba85f9a35c5fe3ff864017b84f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944018,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 22008,
+      "end": 22172,
+      "sha256": "db2c6d895605baab0507d5eb8bed1664620d61884e62fdee9573bf7aa6f76dbb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 944152,
+      "source": "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+      "phase": 2,
+      "start": 22680,
+      "end": 23451,
+      "sha256": "dda8613e6b8d993276709ffa0375ab9beaf039a9c8c42428f5e858fc06f8aaa4",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949052,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 823,
+      "end": 1067,
+      "sha256": "fe55e5e7fda0c3f3157ba6133239572b40b1ddffcc0f85b55cf7b3e5b1b49fb1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949152,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 1068,
+      "end": 1314,
+      "sha256": "bf64db16be3cc4d54d729414888225e830b9260daeb5dd10b4ad9bc491f75bbb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949053,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 1315,
+      "end": 1559,
+      "sha256": "a665d1a422571f203c5389133d4ad7b0492f33a80f10af84b6e75be482ed7fe2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949153,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 1560,
+      "end": 1806,
+      "sha256": "634ac833c9912154c5abdb422212d8f97d59651294871a318d9eab14e09dfcc9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949054,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 1807,
+      "end": 2051,
+      "sha256": "3602fd15bac0d2454a84f1d43a345de8f4a90e9d862958c5a4f8c987fd030228",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949154,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 2052,
+      "end": 2298,
+      "sha256": "b1db99ac1643c25bec5d9607a03b16385146b923e87333e3b55dc4b25200a7c0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949055,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 2299,
+      "end": 2543,
+      "sha256": "eadc2cbcee4f74782d39a796a04133d43fd4da240ec4b3b68212988c207a739d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949155,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 2544,
+      "end": 2790,
+      "sha256": "b1db6d94c76ca90d5290d779c676d27d4a9e46aa3b148da77f65a22828a542b7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949059,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 2968,
+      "end": 3148,
+      "sha256": "f950327e1956a92200f6e9f4b2537485eada7f98b8fbc93d9033a21255e6a0c5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949159,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 3149,
+      "end": 3330,
+      "sha256": "070eb5369496b403a22390dadee889a930755c408ea98e33ec73bdeab84e6aae",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949060,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 3398,
+      "end": 3642,
+      "sha256": "17e65c546f5656cac1742152e90c75ef85d6caf40700e2fd19bf05794f58492d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949160,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 3643,
+      "end": 3889,
+      "sha256": "c70368a3abdd01324b3668c7a5851ec48f7828f8816539395d0ec870a2db66b9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949061,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 3890,
+      "end": 4134,
+      "sha256": "84329ec85ad4ad55c24f2d0501ac091b62e969cb528f856cd9535ff679a37ba9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949161,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 4135,
+      "end": 4381,
+      "sha256": "6ce3a826d52869f3a8401c421c1f53121005e7270ec06ea2ea7bf54dbff07ee9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949062,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 4382,
+      "end": 4626,
+      "sha256": "0950a2f09c59a7a88c7f80d9831eeb0f40ca2f32b3c6c8b31af2c665311b81ff",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949162,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 4627,
+      "end": 4873,
+      "sha256": "0c19d7bcac482d8522e3cdb3a8be19dcaaee6fc18ae39887e7443ef75ef14c19",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949063,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 4874,
+      "end": 5118,
+      "sha256": "0c73cf71fbe6325b54970686ad1121bb45cdb3b2102f423f38a3ffe23bfb41d1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949163,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 5119,
+      "end": 5365,
+      "sha256": "364cc0cc1f8df85ab0c03dba11da8827a71b4cf1a48a8ad5e6c56633c8d9241f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949111,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 5529,
+      "end": 5909,
+      "sha256": "f7361db2cd874cf950b2a5ca07d61acac32bc4d93a26d5f3209e6b512886b0b8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949110,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 5946,
+      "end": 6265,
+      "sha256": "47a48caaabeea30d4a7e40a893e986042b4e512fefa6d44e1c51d0b32f0533f6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949011,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 6266,
+      "end": 6426,
+      "sha256": "777275203b18d418e2d5867a862471d29a7d39f5349e269307e923a2150a47ab",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949012,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 6426,
+      "end": 6586,
+      "sha256": "38b6d92dd3d130bd02b72a070d704058dc0a92a47bd2b0026b9962c5c22d82ae",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949013,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 6708,
+      "end": 6868,
+      "sha256": "7446592571df850e1b6673b0aa1462dd3621f9995edf31536bb56bf0ee9a9150",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949014,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 6868,
+      "end": 7028,
+      "sha256": "3c1e1a53571c4acdf033617863766244b516fce872cdd81351a57528a7a6cab9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949015,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 7140,
+      "end": 7300,
+      "sha256": "58c13a4712c1b593feb686bb9b2f2d9271d0fb17a8c8c3fc497cae4f0151dff5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949016,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 7300,
+      "end": 7460,
+      "sha256": "1481ada824141669758182e455ad87d4a86d19af473af60bc938ea22e6e7dd4a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949017,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 1,
+      "start": 7572,
+      "end": 7732,
+      "sha256": "aab0483682903bbe7c7ecb0d2fc1d9da61d2623d0db33ea8a3e194293b83f3a9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 949018,
+      "source": "REQUEST-949-BLOCKING-EVALUATION.conf",
+      "phase": 2,
+      "start": 7732,
+      "end": 7892,
+      "sha256": "4a44b967f5835db178091f7b584146ac5ee34e35ba98a651d210c565a078c800",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950021,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 3,
+      "start": 1037,
+      "end": 1278,
+      "sha256": "4f819b60bca006f1bc8de1feb4ea596eff1822138dd53024f6b9df44d1bb9a3f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950010,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 4,
+      "start": 1328,
+      "end": 1595,
+      "sha256": "ccffd5c588ead8a21f5e39e7a6d4b031aa9e7bc66a9524fc8b4c40dbbe49f1e5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950011,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 3,
+      "start": 1596,
+      "end": 1751,
+      "sha256": "f7d03b497433f625c50e110e3fa465bea187ad9431812f3d9132a99fabf03dd3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950012,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 4,
+      "start": 1751,
+      "end": 1906,
+      "sha256": "189e2f9ecc38f8f77a1b7a068fc2915d3a51f06482bdf425578f6e083e9155f0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950130,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 4,
+      "start": 2058,
+      "end": 2716,
+      "sha256": "524d0262f3d43d5a9f274d6be1908a15feb58643bd7ce87c94c1dd09d750ca41",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 950140,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 4,
+      "start": 3034,
+      "end": 3605,
+      "sha256": "5eeeedf9eb2f9b812e142c6a0d2a00a71432545aa0e6f463ec293c3ff4971744",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 950150,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 4,
+      "start": 3635,
+      "end": 4238,
+      "sha256": "578daee577cb1db8106ef6fb776bbbeb3942749717d2e17ac36efb1f25032084",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 950013,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 3,
+      "start": 4240,
+      "end": 4395,
+      "sha256": "82134eb28db8dcb59b3b749dc160d2b19d511c874bcc7ebddb74fd4d5097cec9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950014,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 4,
+      "start": 4395,
+      "end": 4550,
+      "sha256": "3e45880ccb2965206f67e9562ff95326764590f5925feb884e2fc45d02c4fac1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950100,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 3,
+      "start": 4731,
+      "end": 5325,
+      "sha256": "5ca6e2d96a3ac059b2e765cdef3321b6e5279367965fdff2a4fa60f6da78adb3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950015,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 3,
+      "start": 5328,
+      "end": 5483,
+      "sha256": "b9a62db3f71adb5da7c25f013cbc43bf97ab0b0c8ee2521f49345149ffc16510",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950016,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 4,
+      "start": 5483,
+      "end": 5638,
+      "sha256": "f9fea6226f1a613e6c74483d9bdadd35fddf7a146817d2c20756eb6ae3857a73",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950017,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 3,
+      "start": 5750,
+      "end": 5905,
+      "sha256": "e5a59f7f9d46062620bb542b13a9112802ac84767f7f8f4647f2234539827fb9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 950018,
+      "source": "RESPONSE-950-DATA-LEAKAGES.conf",
+      "phase": 4,
+      "start": 5905,
+      "end": 6060,
+      "sha256": "e9a8f2a9bed80d3e281b1692b9e4e6775592a21df884068b6639347f6e968c2f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 951010,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 558,
+      "end": 833,
+      "sha256": "104a970c5737b42ae04e79c0721de8664cf69f95fe6754b6b85f2583ec6789f5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 951011,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 3,
+      "start": 834,
+      "end": 993,
+      "sha256": "3528b30c64b434107ff1aaee672e61aca3fbc8e16a77284204e1b9d17ba40de7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 951012,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 993,
+      "end": 1152,
+      "sha256": "baa21a1678e6c2f9669fc7a46de87c5e76ae04b40b91a4fb43e2cd46e5d67130",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 951100,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 1455,
+      "end": 1855,
+      "sha256": "a6ce0c3e4d36cd98e6f62d4783b0aac0d6df5d53fecb87f6a302b500394be844",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951110,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 2106,
+      "end": 2850,
+      "sha256": "a521c2fac043d24c8479e764ed4883f0feb1a10d21d29ba4feb1f576d3bc8e2c",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951120,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 3101,
+      "end": 3890,
+      "sha256": "adf381b94265d44c8008f996ea415b5a239a2786737729a22d0c7560f1cc3e40",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951130,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 4141,
+      "end": 4876,
+      "sha256": "2bd1c6003d59d5de9fd27975471c5b22256aa1aea76adc591cb0950eafbc8f8a",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951140,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 5127,
+      "end": 5831,
+      "sha256": "a08eed7b0907c1700bd8f88aa216edaf46810692098bfd491237a9c16f994856",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951150,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 5832,
+      "end": 6509,
+      "sha256": "2400d9fd7e517625195390c950ea4973c7173aed0ade9a60a68f59bdbd8fde1d",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951160,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 6510,
+      "end": 7225,
+      "sha256": "d7da0a01c621eabd2a4f932cc7ff66bc155c60070bfb8b6b87d6a707136454ab",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951170,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 7226,
+      "end": 7899,
+      "sha256": "3523c6df5039dbc9d7e2eb75d55c80b502b2d0584e409e94ef94b5a192042582",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951180,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 8150,
+      "end": 8902,
+      "sha256": "f1aaaca85e78ed29240a2b7250f0267816a9ff105a762c0dfb46e0b39cedec44",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951190,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 9153,
+      "end": 9867,
+      "sha256": "f47f9140c6c2e731a722abc10a5cfefa097ffa00ccffca2b0e4969916fe32581",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951200,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 10118,
+      "end": 10841,
+      "sha256": "f57ffca82cb65ef960a84efdd4f9246e0436970196a209f27d1205aac7a26c8f",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951210,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 11092,
+      "end": 11783,
+      "sha256": "168a8a26287c1539c610151ee8021d52879478cb3be0f4ef0c8b3f3a86e4db37",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951220,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 12034,
+      "end": 13461,
+      "sha256": "730896a2fff37e354761b373df859636437294d06595f4bc6aa38ae30fa17b0e",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951230,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 13712,
+      "end": 14791,
+      "sha256": "a50c74c179e45a4dedd5fdc9ea7370a2b85ce15efef05783f5f3b807e73cfd0f",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951240,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 15042,
+      "end": 16012,
+      "sha256": "af855415148ff6640d7192087fe0ea3e26036586e00a9142abdb5366d755ed5d",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951250,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 16263,
+      "end": 17024,
+      "sha256": "4d3032de21df3c4dc0ea96a10530c945803cd42ce2e2207194735f4f47189f47",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951260,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 17275,
+      "end": 17988,
+      "sha256": "8403f2e5104d926e949e3871dc70845069cfa1a9c696031757903184d3e507fc",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 951013,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 3,
+      "start": 18027,
+      "end": 18186,
+      "sha256": "d001873d1ac874d3fe990596efa2da4f06649f99a1796e5ca25e39263c730bc9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 951014,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 18186,
+      "end": 18345,
+      "sha256": "4804b892bec4014ba933288aa6589bdee3fb7f1d911ecada2d508f697e71c3c6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 951015,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 3,
+      "start": 18457,
+      "end": 18616,
+      "sha256": "c99d3b79749f9e32ef699ce5630df63cf3c34d45294b7923f43a81a7a49d46aa",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 951016,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 18616,
+      "end": 18775,
+      "sha256": "34d4875e2f24486b2d333e6751a9a425b4d1dc4b1ebfda7c407f9cdfd043358c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 951017,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 3,
+      "start": 18887,
+      "end": 19046,
+      "sha256": "3698c792762672bd6c93d447b1e43d234efca1da55519499d815fd282c736ea9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 951018,
+      "source": "RESPONSE-951-DATA-LEAKAGES-SQL.conf",
+      "phase": 4,
+      "start": 19046,
+      "end": 19205,
+      "sha256": "efc4e804b995ae26d04825a7ee7796820e110023af231da1388d40578d2cdcb0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 952010,
+      "source": "RESPONSE-952-DATA-LEAKAGES-JAVA.conf",
+      "phase": 4,
+      "start": 558,
+      "end": 835,
+      "sha256": "7e06a609aee688ca0d6ea974b5b71e56695ce4f97e40cef42964540e803ad14c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 952011,
+      "source": "RESPONSE-952-DATA-LEAKAGES-JAVA.conf",
+      "phase": 3,
+      "start": 836,
+      "end": 996,
+      "sha256": "ca95302cc002469d5ba2c2b1de3cb59391ac22204d901f25a984107495406ea7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 952012,
+      "source": "RESPONSE-952-DATA-LEAKAGES-JAVA.conf",
+      "phase": 4,
+      "start": 996,
+      "end": 1156,
+      "sha256": "0b691985b1ba6239f69f7b967ea4edf26fbf12c863badb36187a98e8591f9877",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 952110,
+      "source": "RESPONSE-952-DATA-LEAKAGES-JAVA.conf",
+      "phase": 4,
+      "start": 1644,
+      "end": 2343,
+      "sha256": "fc2a3a4fe98136fe06cbdd97b7bcfb10a5cf3d0fe1c85ac67224baca3aa34ef6",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 952013,
+      "source": "RESPONSE-952-DATA-LEAKAGES-JAVA.conf",
+      "phase": 3,
+      "start": 2346,
+      "end": 2506,
+      "sha256": "f8ef350ba71ccf91c401cb234740981e0d1f9e5ce6a96bbbec19b77d1f9de298",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 952014,
+      "source": "RESPONSE-952-DATA-LEAKAGES-JAVA.conf",
+      "phase": 4,
+      "start": 2506,
+      "end": 2666,
+      "sha256": "ac9b95e6f87f7201ed687892b463d1c2624cfcb570dde2aaa9838cbedbba51e1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 952015,
+      "source": "RESPONSE-952-DATA-LEAKAGES-JAVA.conf",
+      "phase": 3,
+      "start": 2778,
+      "end": 2938,
+      "sha256": "d3024af6e1919a3572970cc87a1fbd5b6169130eb633198b70977b74af345f66",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 952016,
+      "source": "RESPONSE-952-DATA-LEAKAGES-JAVA.conf",
+      "phase": 4,
+      "start": 2938,
+      "end": 3098,
+      "sha256": "560e3b12ee1083c7895f815a2c3d7deb731035d77ab2411e72c9f7268aa5fbf6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 952017,
+      "source": "RESPONSE-952-DATA-LEAKAGES-JAVA.conf",
+      "phase": 3,
+      "start": 3210,
+      "end": 3370,
+      "sha256": "6ef387bc1fac9bb96ebf78b05dc66da391584e7487aa607eb645851ec068155e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 952018,
+      "source": "RESPONSE-952-DATA-LEAKAGES-JAVA.conf",
+      "phase": 4,
+      "start": 3370,
+      "end": 3530,
+      "sha256": "ac1347baf918fe4ef859751e3602350cbad608d1c52fd0439708921fb66a2011",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 953010,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 4,
+      "start": 558,
+      "end": 833,
+      "sha256": "03ac265f55b0b1449c74461a34557a3da1b434b1d5a4d3193a4f82d1b429bf79",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 953011,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 3,
+      "start": 834,
+      "end": 993,
+      "sha256": "976058666e141ee10fda9e1ff1429148698192e6e67d67dc1f2baaf3f76dff1c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 953012,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 4,
+      "start": 993,
+      "end": 1152,
+      "sha256": "8405143ef8d9184730d655fcfc6564c13b1807e402950a4c5e04cad676f5dd0a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 953100,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 4,
+      "start": 1312,
+      "end": 1900,
+      "sha256": "ce500d6e6ab3238fe8984714474de371896523e40a12229d22eaa7f996d1530c",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 953110,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 4,
+      "start": 1986,
+      "end": 2794,
+      "sha256": "67040b7965b9ed07cd744b4e68cb92858e7af589bc54b30a25575c4119bbcfb4",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 953120,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 4,
+      "start": 3062,
+      "end": 3647,
+      "sha256": "74025ee852f31e97a7e0dca3ac5fbddf65be4aa5ea39366cadf7063e8c0232c6",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 953013,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 3,
+      "start": 3649,
+      "end": 3808,
+      "sha256": "d50de6594a14ced850b66c42cf122845b9e1bf1714f1dcb5fbb40cc62ab94c0a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 953014,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 4,
+      "start": 3808,
+      "end": 3967,
+      "sha256": "ddce236da71cee6d59f81356470e1d9d0b603a2032a8c8ad9bedea482515f856",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 953101,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 4,
+      "start": 4603,
+      "end": 5497,
+      "sha256": "3d64c2f1dbbbabbfb31b1d01a4d8cee9f0526f360f9b8e6002b52ff7ba131cb4",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 953015,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 3,
+      "start": 5499,
+      "end": 5658,
+      "sha256": "1951275b3660086317f29ae422179adacb15d8e5ab23317d2ab5f5785411e655",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 953016,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 4,
+      "start": 5658,
+      "end": 5817,
+      "sha256": "c9797eef889e17dba5216d6da3a17feea57ca83716a7f2d448eb9d5e652ac9e6",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 953017,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 3,
+      "start": 5929,
+      "end": 6088,
+      "sha256": "a2ab5a5b2689d908e291f69eb9984cd15d194ead40cf3bf7f18a8db93e0a22c5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 953018,
+      "source": "RESPONSE-953-DATA-LEAKAGES-PHP.conf",
+      "phase": 4,
+      "start": 6088,
+      "end": 6247,
+      "sha256": "659fcb25c61840b2b3df5f9cb39ec7403bf8f539b48a5153144c3bc5774f1012",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 954010,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 4,
+      "start": 558,
+      "end": 833,
+      "sha256": "4e7415d162a03d6555a7287b8ba3428ca5e086c7568811377285bbf62dd55620",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 954011,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 3,
+      "start": 834,
+      "end": 993,
+      "sha256": "e6169a41152c01246a3b5f34b3b945581e02b6bd5db1ee6268eeb69b0f305c86",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 954012,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 4,
+      "start": 993,
+      "end": 1152,
+      "sha256": "51138f4725564bd7e6d29767887f9c84cda3b1a8c54783f6edbd4626dbea14ba",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 954100,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 4,
+      "start": 1397,
+      "end": 2028,
+      "sha256": "c4a4c249bd26fdd9d0752cbfd150846b1c3d04d994a79ea03c2fcde6c27d237f",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 954110,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 4,
+      "start": 2029,
+      "end": 2928,
+      "sha256": "6da1fb78adad28aeaa39628a37b43e9ee88d46dc9d6124f2163920b4ae3e5d48",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 954120,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 4,
+      "start": 2954,
+      "end": 3571,
+      "sha256": "18635d8bd4deeec30f54166ee628142287f178ae2bd8d0d57f9ca2881164c27c",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 954130,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 4,
+      "start": 3573,
+      "end": 4301,
+      "sha256": "64a651185d3da56d73ad03a99827a711de9228a20fa765d3fe6ee0d2b86bec9c",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 954013,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 3,
+      "start": 4304,
+      "end": 4463,
+      "sha256": "1c303173792744d4ec193642f1b324a0b92dfff068a777691dba5d53acfa39fc",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 954014,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 4,
+      "start": 4463,
+      "end": 4622,
+      "sha256": "ea2f0b9533851978fd814d31a889c259b45b86cf3ae37382e1a1cc4bf5ce6410",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 954101,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 4,
+      "start": 4871,
+      "end": 5496,
+      "sha256": "181cf5a0754179dbe07638995335a3e80734705d43765b2f955166c1bde1583a",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 954015,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 3,
+      "start": 5498,
+      "end": 5657,
+      "sha256": "4749471122fc3f195d6b32d593cb03ec551b5af16810b422be244a064451628d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 954016,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 4,
+      "start": 5657,
+      "end": 5816,
+      "sha256": "c3714bc9e49766152254f1dade28f1ef683e2d168ca361d827bf9270bfad83f9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 954017,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 3,
+      "start": 5928,
+      "end": 6087,
+      "sha256": "bc207dca61d1983005f5cbe11d00c2983f5328a30099a6aec07c3d5b280c9db7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 954018,
+      "source": "RESPONSE-954-DATA-LEAKAGES-IIS.conf",
+      "phase": 4,
+      "start": 6087,
+      "end": 6246,
+      "sha256": "8913c7379d4213b80441c8d592bab11744b42153fb7d11f6b882288d55ac0843",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 955010,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 564,
+      "end": 825,
+      "sha256": "f6f852b782a1fa0554051695eecd73724435799b63a10843272dcd38016d9276",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 955011,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 3,
+      "start": 826,
+      "end": 978,
+      "sha256": "b075bf5d73814dbc363baa8001bd147f4ef67f5f35b230f6ddd0f37ca9ad2279",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 955012,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 978,
+      "end": 1130,
+      "sha256": "a703a9591ed01b75f474ce3ae6eee368856af9ec001d6328f111fa81892abb96",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 955100,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 1369,
+      "end": 1929,
+      "sha256": "9c048cd2d181689f208391abdc66cfe35fc4a55005c86789e4f4d7b054dd64dc",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955110,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 1946,
+      "end": 2535,
+      "sha256": "f1c94257cf745fa60b45c7f533eb4a39e63e8904220e90b6f3762b9525391568",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955120,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 2552,
+      "end": 3217,
+      "sha256": "25262167851d65d63b7e9c20b95d44c61fe9c37046ca2a2dffdfad02319802f0",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955130,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 3273,
+      "end": 3864,
+      "sha256": "cad137ceeb963572577f06f418f6407cd95505e2f3fab4160d90b1898eb4df27",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955140,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 3888,
+      "end": 4472,
+      "sha256": "71183c4192e9b5252e29c4d6b64d6a1a956fdf584145313ca7ea82a20e562fd7",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955150,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 4494,
+      "end": 5073,
+      "sha256": "0d33b8e4791ce263aee0057941083b123d3d9bcb431064d2c6316d72ddb8e162",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955160,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 5097,
+      "end": 5661,
+      "sha256": "41f63642d717584fbfba375723a19ee1612945c3518354709bf38620920d3253",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955170,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 5680,
+      "end": 6246,
+      "sha256": "e0e8751d574c9a8794e763567409447194b01f00d164421b539374b9c041395e",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955180,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 6262,
+      "end": 6834,
+      "sha256": "a9b6aa36628253dc2016d691f5066eecc5b8ce9c275b17902f4f796c02e4162f",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955190,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 6856,
+      "end": 7434,
+      "sha256": "3f6c7a244dd6e0bf3745943cfe979886533a6baa4a63261f2ca84ec007c0a9c6",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955200,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 7459,
+      "end": 8043,
+      "sha256": "a4809495ebf74f3559b4f1bc2db107d630023b222ee677cfb22abcd96968fbb0",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955210,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 8064,
+      "end": 8662,
+      "sha256": "b184c1990eabea66f7abccf2b2627b369d9404793336b8c41059ac569996ff96",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955220,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 8687,
+      "end": 9258,
+      "sha256": "791ad40650c7294b65c365d3f981cb62867d048ebb0b95c57c9102d274ec7d8a",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955230,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 9278,
+      "end": 9848,
+      "sha256": "21f154adc48bc2607d10446f910a77af21f4cda1fd0edc30276374352eb25a2b",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955240,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 9869,
+      "end": 10504,
+      "sha256": "8dc7b1ec7937633fd7728a8c5c15786297aa8069b285269bf63cf1140cb3592d",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955250,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 10525,
+      "end": 11204,
+      "sha256": "ddb2564c21796c7fbd320e800655d84ab58805ef3b022151d01fb9e705466888",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955260,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 11343,
+      "end": 11921,
+      "sha256": "aee09a5e064ccad8bf5b51e2c360866918310e644f2550f09a6bc417a2778070",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955270,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 11944,
+      "end": 12528,
+      "sha256": "a9b1600825abdd27a56b92e769e1c08ad17fbebeb74f5dfacf5b9896cc57a20c",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955280,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 12548,
+      "end": 13204,
+      "sha256": "31c1df6c2656f8511b5598da7c9b77d5d47e00f7ec68f554e14c83aa3f57b9ea",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955290,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 13227,
+      "end": 13805,
+      "sha256": "cc29ab835278d8f87909c3df982ac4fee3178686b9eb235dc791eeee52342c90",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955300,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 13949,
+      "end": 14551,
+      "sha256": "4700b9cc1567f78cf19ad5ca6ae770624b59ed256c6b86e1a22e9d8e5b1ec9bc",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955310,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 14571,
+      "end": 15172,
+      "sha256": "e9db5f3f3c55c2a92c4604f017ddb6c271d55993e1237fb691fe3fbbec0ffc4c",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955320,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 15204,
+      "end": 15788,
+      "sha256": "74ac44da7e07f5fd0ab6e3c98a518e0f11c9a2816416a7dfc87837a8f116afeb",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955330,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 15809,
+      "end": 16392,
+      "sha256": "4dcb9aa84705ae418873769e18a41193f30deb529c02cce8d468a76c6097cc3c",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955340,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 16416,
+      "end": 17000,
+      "sha256": "394d67d265d3bb27027f02dac0032111343ebbb4a5ccbd10901e3f10b6713d3b",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955400,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 17045,
+      "end": 17605,
+      "sha256": "f70901bccc19c81ac34f5077d97fa08f95cb9c8eb287755ffbe8b2174ed9557a",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955013,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 3,
+      "start": 17608,
+      "end": 17760,
+      "sha256": "f693b5d2ef594bbd6ea0c33054528d15893125de6ac3704054438823e3a00d43",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 955014,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 17760,
+      "end": 17912,
+      "sha256": "29694484a9a78a7cb6a79d44c2a8b2ceeac9500432a15bd78cc5b22e1e37288b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 955350,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 18106,
+      "end": 18696,
+      "sha256": "63a6b5d836c9067d6922b42ac3b306b859513d9b3c60aa96af603b3e970b01ae",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 955015,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 3,
+      "start": 18698,
+      "end": 18850,
+      "sha256": "9ec05a288040d8f88b3843e065bf47f894bc4a1a97a6997b14654151bb210ec7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 955016,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 18850,
+      "end": 19002,
+      "sha256": "290eef186938e61c8dc227a34dac207c4c1e24200cfafa6767d396855b4d4a99",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 955017,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 3,
+      "start": 19115,
+      "end": 19267,
+      "sha256": "75140bad7efede45bc2a3463cd0112aecd1c45093d9864d8738a5d321736336e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 955018,
+      "source": "RESPONSE-955-WEB-SHELLS.conf",
+      "phase": 4,
+      "start": 19267,
+      "end": 19419,
+      "sha256": "3a0c411a377c139376ca216add0f982e1942d4b1083542f0b3350071554bd3cf",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 956010,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 4,
+      "start": 558,
+      "end": 835,
+      "sha256": "25bd128ca99c5b0bbb90846b92647ce3827632aac66efed2ae75e23a73b4939e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 956011,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 3,
+      "start": 836,
+      "end": 996,
+      "sha256": "1cc7f1273b80b02d817ff947b7b6f1c10ca6a08ac7649a2ef84f780886be759d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 956012,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 4,
+      "start": 996,
+      "end": 1156,
+      "sha256": "1121f0094845c25ccfe7167e1ab600785bdb8a4486ab31757ce11cdeefe87753",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 956100,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 4,
+      "start": 1317,
+      "end": 1909,
+      "sha256": "901dc74192aef95b9882a2647d6f084c609c8f05aac5f114849c86bf5669bf64",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 956013,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 3,
+      "start": 1911,
+      "end": 2071,
+      "sha256": "5e86364976a7697ef30b31f97d402e142fcbdcfc53737d497b7090bdfd4dd579",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 956014,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 4,
+      "start": 2071,
+      "end": 2231,
+      "sha256": "cb512f6d07d55dc08f4a86617e662ba98154ea1a637a46bed3b9d832d7304a1a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 956110,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 4,
+      "start": 2572,
+      "end": 3167,
+      "sha256": "1bf291e93f02d8da03fe304220f825986a58a57d32df2edfefe8b958b8689e20",
+      "excluded_capabilities": [
+        "FullResponseBody"
+      ]
+    },
+    {
+      "id": 956015,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 3,
+      "start": 3168,
+      "end": 3328,
+      "sha256": "13fa940da034fc7fb2f7dd461bae92187545a1c469ea622398a19c318afca72b",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 956016,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 4,
+      "start": 3328,
+      "end": 3488,
+      "sha256": "85b697af04cfd3db8567bfd0d537a07d165dd958e2457e8d5d3249c46d4ea3a9",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 956017,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 3,
+      "start": 3600,
+      "end": 3760,
+      "sha256": "4ef05a1bbd8b7151449632bf81e09a5e826fcbccc98f6970c8d603d18fbf99fc",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 956018,
+      "source": "RESPONSE-956-DATA-LEAKAGES-RUBY.conf",
+      "phase": 4,
+      "start": 3760,
+      "end": 3920,
+      "sha256": "637aea97baf922140de9dbbc5b658def12735be56419620c42db49f8c7f38cab",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959052,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 1444,
+      "end": 1690,
+      "sha256": "309350e2cd83a9710fa221d484b699556923d8865b51f8728f51c0c7d763650f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959152,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 1691,
+      "end": 1939,
+      "sha256": "dfce9b7fff90d7644d12f7fc8ee0b17aba41b7331667f8f1889b351e2a66b940",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959053,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 1940,
+      "end": 2186,
+      "sha256": "a9a71546c4f09088981ee651544c61ca9f94ce99dd501a39d12ff38e29c9802d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959153,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 2187,
+      "end": 2435,
+      "sha256": "ca27b1949348631f313053fee40e235f58f1da42ecf23c7539ceb7c8bce76db0",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959054,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 2436,
+      "end": 2682,
+      "sha256": "a5399e8da25b2d336109499437a2c544941c2c78f65de9e3c8b2ca21a623ea0c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959154,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 2683,
+      "end": 2931,
+      "sha256": "407635d0677bf8187fd89d0ee75642cc4985c6b0fc3ee56fb2fe48970fe6641f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959055,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 2932,
+      "end": 3178,
+      "sha256": "8db9f59a52c9659960605862f8a08e52a0343972dff4c6de2290474912969463",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959155,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 3179,
+      "end": 3427,
+      "sha256": "828c354840f95679b745b65f1f07ea20f0d45f50be5397e3e4faa4e3cc71b2f2",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959059,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 3605,
+      "end": 3786,
+      "sha256": "24b376818b30bdf0f9f68681af68d7304470f547aed84d8f2e9c4eb7bfbcab45",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959159,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 3787,
+      "end": 3969,
+      "sha256": "9106f42869bae9b9d492396774b94d213801b85ec2a6740206786e4f1a36cde4",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959060,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 4081,
+      "end": 4327,
+      "sha256": "b7ee181e6c83f84fcd9c7449c8f93d3bdcadd81f1ac2ba78dfd2fbcbdba2f8c3",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959160,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 4328,
+      "end": 4576,
+      "sha256": "42c3ef5e99224a98637172c90861f70925bffb90f5ba165680fd7dd83b33ae16",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959061,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 4577,
+      "end": 4823,
+      "sha256": "507df063ee1f8d1f18c5b00f89bb4becb18bf83efc0fc92dff6b49b7ddc265f7",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959161,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 4824,
+      "end": 5072,
+      "sha256": "d80ad3ae1241936dc2a08c10780cd3bc82efcc200d55ec3e31ffc46220f6b00e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959062,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 5073,
+      "end": 5319,
+      "sha256": "5989e3606201852fbfe0ae3e116d666b8ad79091866fd3a36634e6c2931fb7fa",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959162,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 5320,
+      "end": 5568,
+      "sha256": "1761e6fbb6d7804a5ee472786f2f2e4a566d185da64bc3221582592ce878a398",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959063,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 5569,
+      "end": 5815,
+      "sha256": "acf4fe0d84a02af6cc79afefcda046e321d370f4fad33d2efc3d839e0eb92590",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959163,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 5816,
+      "end": 6064,
+      "sha256": "c847d924b47109ea148d3fd38b74eaaff81d8a84e06ca23ca2bbcccb9a35f35a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959101,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 6186,
+      "end": 6570,
+      "sha256": "6af07e3644a5a7cdc47498ff390637c3bf2a44250f43be7df7ef199823290884",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959100,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 6607,
+      "end": 6930,
+      "sha256": "ab76d164049f1a56f15fd61b0b664889b55a229baa4fee137830ffabb111f268",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959011,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 6931,
+      "end": 7092,
+      "sha256": "53e145149aee85b4d46acc11d4280ff4289990c26b28b86331026735efc8b95c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959012,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 7092,
+      "end": 7253,
+      "sha256": "23e4af1b755aeb926bff21e274b4ee28a575afd21b2712deea99a9ab81e4da3d",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959013,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 7375,
+      "end": 7536,
+      "sha256": "9c49184925266f42a4a15d2a9197c9f5c8827a192571ffc0e717ac7d8216b14a",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959014,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 7536,
+      "end": 7697,
+      "sha256": "047c2fc2359c72db7f118fb86544c74f3e61472485b36af1f7d98ea1d52f566f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959015,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 7809,
+      "end": 7970,
+      "sha256": "11e477213cbdabde2aa1f882bc04d35479875bfb5b554cd36df38390e194a32e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959016,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 7970,
+      "end": 8131,
+      "sha256": "b73e38aa2c770504a86a46228dd33d2aa718336bcec11754c298c0d9f2ad81c5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959017,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 3,
+      "start": 8243,
+      "end": 8404,
+      "sha256": "dad05733d826a1e22671f7a585314f2cc9c3c49081b288d97b8415431d944ddb",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 959018,
+      "source": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+      "phase": 4,
+      "start": 8404,
+      "end": 8565,
+      "sha256": "6679073f22bdf6b141566195644bb74ad525712cb2684b0c4468d0a0cc1e96b1",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980099,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 864,
+      "end": 1470,
+      "sha256": "cc07aa61431134a7bd943423fcdfd88fb62b42de87308ac872e432c48f910590",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980041,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 1587,
+      "end": 1716,
+      "sha256": "9225ec08319fab6644898d92b089f6e8a2694f622779623da003ab947578f94f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980042,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 1820,
+      "end": 1949,
+      "sha256": "d4b475226c17e804502ddeb0898d1c19004d98d718faa5b83820627961999f4c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980043,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 2064,
+      "end": 2201,
+      "sha256": "6dbb0c34931e3ae9c544736d1b3aa922b6bd5099a58e4517b6df09c1a8049b06",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980044,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 2320,
+      "end": 2500,
+      "sha256": "82c8eba6df1cb87c0de337d3b0566a6dd8e504e642bcee147bbeef7f3783082e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980045,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 2500,
+      "end": 2682,
+      "sha256": "de4e5905f6fea1e9311e23a123e2e82384f171878f0f2ea16320a89bfd6fa7b5",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980046,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 2770,
+      "end": 2899,
+      "sha256": "17a3e62b70c9d90fcb92ef92560e4d13a26a756f8f44878445c13a9c870ab39e",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980047,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 3020,
+      "end": 3201,
+      "sha256": "d985b531f55804259cb1c2e77353c812616317c9d675387b8c3a64339528c07c",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980048,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 3201,
+      "end": 3384,
+      "sha256": "749980cc3217dcf83a83d8a0d96664702fbac2db50b20b0e1fa247f5b2e596e8",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980049,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 3472,
+      "end": 3601,
+      "sha256": "bb5ce0d6cb10773c50e08b5a4a23f44e244b86418c372994be889ca722c9b2ca",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980050,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 3749,
+      "end": 3885,
+      "sha256": "34169c00795218a298bd7dfedefd90776c8980e1014379397e09b70960845f16",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980051,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 3973,
+      "end": 4102,
+      "sha256": "774f47ee08a8d3be84ed8c17dcae02cd725d31beb63d455f4e7e058c862c3177",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980170,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 5,
+      "start": 4728,
+      "end": 5779,
+      "sha256": "2f40e865708ef27d5f36f99370202494dac6b33785aa4537a14931a40063665f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980011,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 1,
+      "start": 5808,
+      "end": 5961,
+      "sha256": "2ab7a6e1ad0ad571550188f31393391427b3fc168257f5c79925163e6f849029",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980012,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 2,
+      "start": 5961,
+      "end": 6114,
+      "sha256": "4506fe62bd31cb48e25be748b58cfa182dd34eabd6687465211ee2a8ae604a73",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980013,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 1,
+      "start": 6236,
+      "end": 6389,
+      "sha256": "17a88c382c5be33b9bb71724dbf375570d30932280bd19f240e4c8f00a38c674",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980014,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 2,
+      "start": 6389,
+      "end": 6542,
+      "sha256": "1de09e739fff41d264a0dca6fa82a3a7e1dda332dd05e758123fa6c49177a134",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980015,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 1,
+      "start": 6654,
+      "end": 6807,
+      "sha256": "d48c443cba835241795c0c25fe19de381a463dffaae8f42b1536e5636d68a21f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980016,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 2,
+      "start": 6807,
+      "end": 6960,
+      "sha256": "2e731b3968b766f7bc8551ca12d06ba866f947c550864b2b694d571165514f4f",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980017,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 1,
+      "start": 7072,
+      "end": 7225,
+      "sha256": "f4036cf63993273675739a9670742cd85937de4eb352363dbd6c6465608d5128",
+      "excluded_capabilities": []
+    },
+    {
+      "id": 980018,
+      "source": "RESPONSE-980-CORRELATION.conf",
+      "phase": 2,
+      "start": 7225,
+      "end": 7378,
+      "sha256": "0ebd711ee1d6f9cfdf668006156de2dc116e50d306fc90391c218534a6b3ffb6",
+      "excluded_capabilities": []
+    }
+  ]
+}

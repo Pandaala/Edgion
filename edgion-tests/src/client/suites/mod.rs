@@ -115,9 +115,10 @@ pub use edgion_plugins::{
     WafDynamicDetectionTestSuite, WafDynamicInitialTestSuite, WafDynamicInjectionTestSuite,
     WafDynamicJsonDetectionTestSuite, WafDynamicJsonV1TestSuite, WafDynamicJsonV2TestSuite,
     WafDynamicJsonZeroSourceTestSuite, WafDynamicOriginalDetectionTestSuite, WafDynamicOriginalOnTestSuite,
-    WafDynamicRecoveredTestSuite, WafDynamicSelectorHighTestSuite, WafDynamicUpdatedTestSuite,
-    WafDynamicXmlDetectionTestSuite, WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite, WasmPluginTestSuite,
-    WebhookKeyGetTestSuite,
+    WafDynamicRecoveredTestSuite, WafDynamicSelectorHighTestSuite, WafDynamicSupportedDetectionTestSuite,
+    WafDynamicSupportedOnTestSuite, WafDynamicSupportedRetainedTestSuite, WafDynamicSupportedStandardTestSuite,
+    WafDynamicUpdatedTestSuite, WafDynamicXmlDetectionTestSuite, WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite,
+    WasmPluginTestSuite, WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests

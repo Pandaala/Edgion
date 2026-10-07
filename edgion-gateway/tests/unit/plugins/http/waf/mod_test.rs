@@ -1043,3 +1043,87 @@ fn json_error_categories_preserve_status_without_exposing_payloads() {
         );
     }
 }
+
+#[test]
+fn h2_authority_host_projection_preserves_exact_borrowed_bytes_and_semantics() {
+    for authority in ["MiXeD.example.com:8443", "[2001:db8::1]:443"] {
+        let uri: http::Uri = format!("https://{authority}/echo").parse().unwrap();
+        let mut map = http::HeaderMap::new();
+        map.insert("x-test", http::HeaderValue::from_static("safe"));
+        let views = request_header_views(&map, "HTTP/2.0", Some(&uri));
+        assert_eq!(views.len(), 2);
+        let host = views.iter().find(|h| h.name() == b"host").unwrap();
+        assert_eq!(host.value(), authority.as_bytes());
+        assert_eq!(
+            host.value().as_ptr(),
+            uri.authority().unwrap().as_str().as_ptr(),
+            "borrow the original authority storage"
+        );
+        assert!(
+            !map.contains_key("host"),
+            "projection never changes the live header map"
+        );
+        let config=super::fixture::config(&format!(
+            "SecRule &REQUEST_HEADERS:Host \"@eq 1\" \"id:1,phase:1,pass,log,t:none\"\nSecRule REQUEST_HEADERS_NAMES \"@streq host\" \"id:2,phase:1,pass,log,t:none\"\nSecRule REQUEST_HEADERS:Host \"@streq {authority}\" \"id:3,phase:1,pass,log,t:none\"\n"));
+        let generation = config.compile_generation().unwrap();
+        let head = RequestHead::new(
+            b"GET /echo HTTP/2.0",
+            b"GET",
+            b"/echo",
+            b"/echo",
+            b"HTTP/2.0",
+            b"192.0.2.1",
+            b"authority-test",
+            &views,
+        );
+        let mut tx = Transaction::new(&generation, head, RuntimeLimits::default()).unwrap();
+        assert_eq!(
+            tx.execute_request_headers()
+                .unwrap()
+                .findings()
+                .iter()
+                .map(|f| f.rule_id())
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+    }
+}
+
+#[test]
+fn host_projection_never_replaces_explicit_empty_invalid_or_duplicate_hosts() {
+    let uri: http::Uri = "https://authority.example.com:8443/".parse().unwrap();
+    for values in [
+        vec![b"".as_slice()],
+        vec![b"\xff".as_slice()],
+        vec![b"first.example.com".as_slice(), b"second.example.com".as_slice()],
+    ] {
+        let mut map = http::HeaderMap::new();
+        for value in &values {
+            map.append(http::header::HOST, http::HeaderValue::from_bytes(value).unwrap());
+        }
+        let views = request_header_views(&map, "HTTP/2.0", Some(&uri));
+        assert_eq!(views.iter().map(|h| h.value()).collect::<Vec<_>>(), values);
+        assert_eq!(views.len(), map.len());
+    }
+}
+
+#[test]
+fn h1_and_missing_h2_authority_do_not_manufacture_host() {
+    let map = http::HeaderMap::new();
+    let absolute: http::Uri = "http://authority.example.com:8080/echo".parse().unwrap();
+    let relative: http::Uri = "/echo".parse().unwrap();
+    for (protocol, uri) in [
+        ("HTTP/1.1", Some(&absolute)),
+        ("HTTP/1.0", Some(&absolute)),
+        ("HTTP/2.0", Some(&relative)),
+        ("HTTP/2.0", None),
+    ] {
+        assert!(request_header_views(&map, protocol, uri).is_empty());
+    }
+    let mut empty = http::HeaderMap::new();
+    empty.insert(http::header::HOST, http::HeaderValue::from_static(""));
+    assert_eq!(
+        request_header_views(&empty, "HTTP/1.1", Some(&absolute))[0].value(),
+        b""
+    );
+}

@@ -403,7 +403,8 @@ phase 1 的效果在 body 检查前执行。
 ### 响应和配置更新
 
 Phase 3 在响应头发送给客户端前执行。主上游响应始终流式处理，配置不允许完整
-`RESPONSE_BODY` 聚合；phase 4 使用有界响应语义，phase 5 对正常完成的事务执行一次。
+`RESPONSE_BODY` 聚合；当前 phase 4 在响应头提交前按逻辑结束执行，
+不读取上游响应体；phase 5 对正常完成的事务执行一次。
 日志只记录有界规则 ID 和计数，不记录命中值或正文。
 
 新配置先完整编译再原子发布；进行中的请求保留原规则版本。无效更新报告
@@ -414,3 +415,28 @@ Phase 3 在响应头发送给客户端前执行。主上游响应始终流式处
 
 编译器严格拒绝未实现的指令、操作符、动作、无法解析的外部资源及完整响应体要求，
 不能据此宣称兼容所有 ModSecurity 或 CRS 配置。
+
+## 仓库提供的 CRS 4.25.1 支持集
+
+导入 `config/waf/crs-4.25.1-supported-v1/generated/` 中的完整 YAML 资源到
+`edgion-default`，再通过 HTTPRoute 的 ExtensionRef 关联
+`EdgionPlugins/crs-supported`。示例默认选择 `standard`（PL1），`strict`
+选择 PL4；两档都显式启用 UTF-8 校验和 XML 属性检查。建议先使用
+`mode: detectionOnly` 校验业务正常流量，再启用 `on`。策略对必需的调优包
+和核心包固定 digest；改动规则内容时需要重新生成并明确更新 pin。
+
+该包保留 627 条原始核心规则中的 565 条，加上原始初始化 900990 和一条
+单独的 Edgion 调优规则，共 567 条。明确排除 59 条响应体规则以及
+901320/905100/905110：持久集合初始化、Apache 探测请求的审计关闭及豁免控制
+仍不受支持。带相应 User-Agent 的 loopback 请求继续正常检查。
+保留规则的原文字节及全部 21 个 phrase asset 都有固定来源和哈希，
+这是一套明确的支持集，不代表完整 CRS 兼容。
+
+原始初始化采用阈值 5/4 和 `early_blocking=0`，没有隐式增加参数长度限制。
+strict PL4 可在响应头提交前通过响应状态规则拦截后端 500；standard PL1
+不会启用该 PL2 检测。上游响应体不参与扫描。运行预算保持默认，
+大 body 仍可能触发工作量或内存上限；DetectionOnly 不会忽略致命运行错误。
+
+使用 `cargo run -p edgion-resources --example generate_supported_crs -- --check`
+从仓库内的来源复核生成结果。规则包 README 和 `generated/acceptance.json`
+记录排除项、来源 pin、profile 设置及输出 digest。

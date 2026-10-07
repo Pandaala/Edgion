@@ -23,6 +23,31 @@ use crate::plugins::runtime::traits::{
 
 mod json_capture;
 
+/// The transport validates authority; WAF exposes its H2 Host-equivalent bytes
+/// without changing live headers or losing explicit Host values.
+fn request_header_views<'input>(
+    headers: &'input http::HeaderMap,
+    protocol: &str,
+    uri: Option<&'input http::Uri>,
+) -> Vec<RequestHeader<'input>> {
+    let authority = if protocol == "HTTP/2.0" && !headers.contains_key(http::header::HOST) {
+        uri.and_then(|uri| uri.authority())
+            .map(|authority| authority.as_str().as_bytes())
+    } else {
+        None
+    };
+    let mut views = Vec::with_capacity(headers.len() + usize::from(authority.is_some()));
+    views.extend(
+        headers
+            .iter()
+            .map(|(name, value)| RequestHeader::new(name.as_str().as_bytes(), value.as_bytes())),
+    );
+    if let Some(authority) = authority {
+        views.push(RequestHeader::new(b"host", authority));
+    }
+    views
+}
+
 const NAME: &str = "Waf";
 
 struct WafGenerationMetricLease {
@@ -331,13 +356,11 @@ impl RequestFilter for WafPlugin {
         // borrow ends when `RequestHead` is consumed by the constructor below
         // (`Transaction` stores an owned `RequestState`), before any `&mut
         // session` use.
-        let headers: Vec<_> = session
-            .iter_headers()
-            .map(|(name, value)| RequestHeader::new(name.as_bytes(), value))
-            .collect();
+        let protocol = session.get_http_protocol();
+        let request_uri = (protocol == "HTTP/2.0").then(|| session.request_uri());
+        let headers = request_header_views(session.request_header_map(), &protocol, request_uri);
         let uri = session.get_uri();
         let raw_uri = session.get_request_uri();
-        let protocol = session.get_http_protocol();
         let request_id = session.get_request_id();
         let method = session.get_method();
         let remote_addr = session.remote_ip();

@@ -63,7 +63,7 @@ or prove a credential disclosure or cross-namespace bypass. It also does not
 change Gateway token serving: active challenge status remains governed by the
 existing listener-proof and expiry rules, while the Controller denies new work.
 The shared core-group alias contract remains a separate
-[investigation](../../../../tasks/todo/core-api-group-alias-contract.md); its
+investigation (historical task `tasks/todo/core-api-group-alias-contract.md`; not present in the current tree); its
 current `core` alias is not evidence of the Gateway API Secret reference default.
 
 ## Verification and re-evaluation

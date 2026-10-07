@@ -170,6 +170,11 @@ pub trait PluginSession: Send + Sync {
     /// and are invisible to both.
     fn request_header_map(&self) -> &http::HeaderMap;
 
+    /// Borrow the live typed request URI, including native HTTP/2 authority.
+    /// This is the same URI owned by the transport; no parsing or normalization.
+    /// Unlike get_request_uri(), it is not the frozen origin-form entry string.
+    fn request_uri(&self) -> &http::Uri;
+
     /// Get a request header value by name, as an owned `String`.
     ///
     /// Prefer the borrowed accessors on

@@ -45,6 +45,9 @@ struct ResultSession {
 }
 #[async_trait]
 impl PluginSession for ResultSession {
+    fn request_uri(&self) -> &http::Uri {
+        panic!("unexpected session operation")
+    }
     fn request_header_map(&self) -> &http::HeaderMap {
         panic!("unexpected session operation")
     }

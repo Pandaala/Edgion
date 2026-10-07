@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: waf-dynamic
+  namespace: edgion-default
+spec:
+  waf:
+    activeProfile: standard
+    mode: on
+    policyRef:
+      name: waf-policy
+    requestBody:
+      inspection: full

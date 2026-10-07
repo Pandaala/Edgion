@@ -57,6 +57,31 @@ pub(super) async fn verify_structured(
     body: StructuredBody<'_>,
     expected_status: u16,
 ) -> Result<(), String> {
+    verify_structured_with_user_agent(
+        ctx,
+        upstream_h2,
+        downstream_h2,
+        version,
+        path,
+        body,
+        expected_status,
+        None,
+    )
+    .await
+}
+
+/// Optional request context for full-profile tests; legacy callers retain their exact headers.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn verify_structured_with_user_agent(
+    ctx: &TestContext,
+    upstream_h2: bool,
+    downstream_h2: bool,
+    version: &str,
+    path: &str,
+    body: StructuredBody<'_>,
+    expected_status: u16,
+    user_agent: Option<&str>,
+) -> Result<(), String> {
     let StructuredBody {
         content_type,
         bytes: body,
@@ -78,6 +103,9 @@ pub(super) async fn verify_structured(
     } else {
         builder.http1_only()
     };
+    if let Some(agent) = user_agent {
+        builder = builder.user_agent(agent);
+    }
     let response = builder
         .build()
         .map_err(|error| error.to_string())?

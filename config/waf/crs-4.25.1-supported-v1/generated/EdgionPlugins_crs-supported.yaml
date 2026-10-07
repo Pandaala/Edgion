@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: crs-supported
+  namespace: edgion-default
+spec:
+  waf:
+    activeProfile: standard
+    mode: on
+    policyRef:
+      name: crs-supported-policy
+    requestBody:
+      inspection: full

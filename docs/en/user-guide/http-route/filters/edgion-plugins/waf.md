@@ -517,3 +517,33 @@ unresolved external includes/assets, and full-response-body requirements instead
 silently ignoring them. Compatibility is therefore an explicit per-ruleset
 compile result, not a claim that every historical ModSecurity configuration is
 accepted.
+
+## Repository-supported CRS 4.25.1
+
+You can import the complete YAML resources in
+`config/waf/crs-4.25.1-supported-v1/generated/` into `edgion-default`, then
+attach `EdgionPlugins/crs-supported` with a route ExtensionRef. The example
+selects `standard` (PL1); `strict` selects PL4. Both explicitly inspect XML
+attributes and validate UTF-8. Start with `mode: detectionOnly` to assess valid
+application traffic before enabling `on`. The policy pins required tuning and
+core bundles; regenerate and deliberately update pins when changing content.
+
+The package keeps 565 of 627 original CRS core units, original setup 900990
+and one separate Edgion tuning unit (567 total). It excludes 59 response-body
+units and original 901320/905100/905110: persistent collection initialization
+and Apache probe audit/bypass controls remain unsupported. Loopback probe
+User-Agents receive ordinary inspection. Retained original rule bytes and all
+21 phrase assets are pinned with upstream attribution. This is an explicit
+supported source set, not full CRS compatibility.
+
+Original initialization provides thresholds 5/4 and early_blocking=0; no
+implicit argument-length cap is added. Strict PL4 can block a backend 500
+through response-status rules before response headers are committed; standard
+PL1 does not enable that PL2 predicate. No upstream response body is inspected.
+Runtime budgets remain unchanged, so large bodies may still fail a work or
+memory limit. DetectionOnly does not suppress fatal runtime failures.
+
+Reproduce the package from repository sources with
+`cargo run -p edgion-resources --example generate_supported_crs -- --check`.
+The package README and `generated/acceptance.json` describe exact exclusions,
+source pins, profile settings and output digests.

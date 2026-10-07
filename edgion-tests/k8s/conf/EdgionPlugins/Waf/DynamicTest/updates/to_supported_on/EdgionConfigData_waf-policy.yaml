@@ -1,0 +1,33 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-policy
+  namespace: edgion-default
+spec:
+  data:
+    config:
+      defaultProfile: standard
+      profiles:
+        standard:
+          bundleRefs:
+          - expectedDigest: 499ac2ffc53b7e611952de7a086b4ec43a7218a29d28c437292915ac78b579c7
+            name: crs-supported-wire-guard
+            optional: false
+          - expectedDigest: 2b0252a6187f7f50a8779ae49229cfd3a7f6ed9df6bd982ab0dd892079ab27ec
+            name: crs-supported-standard
+            optional: false
+          - expectedDigest: eaccaa84c1126f3cc0a12c4fcdad31b98a4a592b2716f11038774f73279242b7
+            name: crs-supported-core
+            optional: false
+        strict:
+          bundleRefs:
+          - expectedDigest: 499ac2ffc53b7e611952de7a086b4ec43a7218a29d28c437292915ac78b579c7
+            name: crs-supported-wire-guard
+            optional: false
+          - expectedDigest: 8fb13c2168a4907362643656b8b60bda770642dc807f251a46553b00199cf411
+            name: crs-supported-strict
+            optional: false
+          - expectedDigest: eaccaa84c1126f3cc0a12c4fcdad31b98a4a592b2716f11038774f73279242b7
+            name: crs-supported-core
+            optional: false
+    type: WafPolicy

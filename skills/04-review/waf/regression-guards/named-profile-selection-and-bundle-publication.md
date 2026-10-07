@@ -74,13 +74,24 @@ for a request.
 ## Limits and re-evaluation
 
 Profile names such as `low`, `mid`, and `high` are operator-defined. They do
-not imply that Edgion ships or validates an OWASP CRS release. The actual rule
+not imply full OWASP CRS compatibility. The explicit repository package
+`config/waf/crs-4.25.1-supported-v1` pins a selected 565-unit original core
+projection, original setup and separate product tuning; its 62 declared
+exclusions remain unsupported by strict admission. Acceptance claims apply
+only to that fixed source set and its recorded validation. The actual rule
 content, version, profile metadata, and optional self-check digest live in `WafRuleBundle` data;
 production acceptance must verify a selected source set before claiming CRS
 coverage. Cross-bundle `Include` and phrase-asset lookup remain forbidden, so
 optional bundles must be self-contained. Re-evaluate if ConfigData snapshot
 semantics, Selector requeue, profile bounds, compiler ordering, publication
 retention, or request WAF arbitration changes.
+
+The Gateway WAF request-header view maps the transport-validated H2 Uri
+:authority to one borrowed Host view only when the actual HeaderMap lacks Host.
+It preserves raw authority bytes (including ports/IPv6), existing Host values
+and H1 absence. This projection does not mutate the forwarded header map, parse
+another authority or bypass the canonical hostname/Pingora ambiguity guards.
+Full-profile wire tests use ordinary authority-only H2 requests.
 
 ## Verification
 

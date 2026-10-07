@@ -1,0 +1,5 @@
+HTTPRoute/edgion-default/waf-supported
+EdgionConfigData/edgion-default/crs-supported-core
+EdgionConfigData/edgion-default/crs-supported-standard
+EdgionConfigData/edgion-default/crs-supported-strict
+EdgionConfigData/edgion-default/crs-supported-wire-guard

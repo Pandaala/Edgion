@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: crs-supported-wire-guard
+  namespace: edgion-default
+spec:
+  data:
+    config:
+      phraseAssets: []
+      profile: test-owned-version-guard
+      provenance: Integration-only publication witness; not an original CRS rule
+      roots:
+      - guard.conf
+      rules:
+      - content: |
+          SecRule REQUEST_HEADERS:x-waf-version "!@streq supported-crs" "id:9900302,phase:1,deny,status:403,log,t:none"
+        name: guard.conf
+      version: wire-v1
+    type: WafRuleBundle

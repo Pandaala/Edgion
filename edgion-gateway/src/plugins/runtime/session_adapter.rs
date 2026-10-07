@@ -838,6 +838,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &self.inner.req_header().headers
     }
 
+    fn request_uri(&self) -> &http::Uri {
+        &self.inner.req_header().uri
+    }
+
     fn header_value(&self, name: &str) -> Option<String> {
         self.inner
             .req_header()

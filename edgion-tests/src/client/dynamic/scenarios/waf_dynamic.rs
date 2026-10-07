@@ -60,6 +60,122 @@ fn original_detection() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicOriginalDetectionTestSuite)
 }
 
+fn supported_on() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicSupportedOnTestSuite)
+}
+fn supported_detection() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicSupportedDetectionTestSuite)
+}
+fn supported_standard() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicSupportedStandardTestSuite)
+}
+fn supported_retained() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicSupportedRetainedTestSuite)
+}
+
+async fn assert_supported_publication(ctx: &ScenarioCtx, profile: &str, detection: bool) -> Result<()> {
+    let path = ctx.resolve("updates/to_supported_on/EdgionConfigData_waf-policy.yaml");
+    let expected: Value = serde_yaml::from_str(&tokio::fs::read_to_string(path).await?)?;
+    let expected_refs = &expected["spec"]["data"]["config"]["profiles"][profile]["bundleRefs"];
+    for gateway in [false, true] {
+        let resource = plugin_resource(ctx, gateway).await?;
+        let waf = &resource["spec"]["waf"];
+        ensure!(
+            waf["selectedProfile"] == profile && waf["mode"] == if detection { "detectionOnly" } else { "on" },
+            "supported profile/mode not published"
+        );
+        ensure!(
+            &waf["resolvedPolicy"]["profiles"][profile]["bundleRefs"] == expected_refs,
+            "supported required digest pins differ"
+        );
+        ensure!(
+            waf["resolvedRefIndices"] == serde_json::json!([0, 1, 2]),
+            "supported references not all resolved"
+        );
+        ensure!(
+            crate::dynamic::status::conditions(&resource)?
+                .iter()
+                .any(|c| c["type"] == "Accepted" && c["status"] == "True"),
+            "supported profile not Accepted"
+        );
+    }
+    Ok(())
+}
+async fn delete_supported_resources(ctx: &ScenarioCtx) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(10),async {
+        let identities=tokio::fs::read_to_string(ctx.resolve("delete/supported_resources.txt")).await?;
+        ensure!(identities=="HTTPRoute/edgion-default/waf-supported\nEdgionConfigData/edgion-default/crs-supported-core\nEdgionConfigData/edgion-default/crs-supported-standard\nEdgionConfigData/edgion-default/crs-supported-strict\nEdgionConfigData/edgion-default/crs-supported-wire-guard\n","supported cleanup must only target its declared resources");
+        let client=crate::dynamic::apply::build_client(&ctx.controller_url)?;
+        let mut errors=Vec::new();
+        for identity in identities.lines(){let parts=identity.split('/').collect::<Vec<_>>();
+            match client.delete(parts[0],Some(parts[1]),parts[2]).await {
+                Ok(response) if response.status()==reqwest::StatusCode::NOT_FOUND=>{},
+                Ok(response)=>if let Err(error)=edgion_cli::cli::client::handle_response(response).await {errors.push(error.to_string());},
+                Err(error)=>errors.push(error.to_string()),
+            }
+        }
+        ensure!(errors.is_empty(),"supported cleanup errors: {errors:?}"); Ok::<(),anyhow::Error>(())
+    }).await.context("supported cleanup timed out")?
+}
+async fn run_supported_segment(ctx: &ScenarioCtx) -> Result<()> {
+    let result = async {
+        for (dir, phase, profile, detection) in [
+            ("to_supported_on", "supported-on", "strict", false),
+            ("to_supported_detection", "supported-detection", "strict", true),
+            ("to_supported_on", "supported-restored", "strict", false),
+            ("to_supported_standard", "supported-standard", "standard", false),
+            ("to_supported_on", "supported-recovered", "strict", false),
+        ] {
+            ctx.apply_dir(&format!("updates/{dir}")).await?;
+            ctx.wait_phase(SCENARIO, phase, Duration::from_secs(60)).await?;
+            assert_supported_publication(ctx, profile, detection).await?;
+        }
+        let before = publication_generations(ctx).await?;
+        ctx.apply_dir("updates/to_supported_invalid").await?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let mut invalid = true;
+            for gateway in [false, true] {
+                let resource = plugin_resource(ctx, gateway).await?;
+                invalid &= crate::dynamic::status::conditions(&resource)?
+                    .iter()
+                    .any(|c| c["type"] == "Accepted" && c["status"] == "False");
+                invalid &= resource["spec"]["waf"]["resolutionErrors"]
+                    .as_array()
+                    .is_some_and(|errors| errors.iter().any(|e| e["name"] == "crs-supported-core"));
+            }
+            if invalid && publication_generations(ctx).await?.iter().any(|g| !before.contains(g)) {
+                break;
+            }
+            ensure!(
+                tokio::time::Instant::now() < deadline,
+                "invalid supported bundle did not reach Controller/Gateway"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        ctx.wait_phase(SCENARIO, "supported-invalid-retained", Duration::from_secs(60))
+            .await?;
+        ctx.apply_dir("updates/to_supported_on").await?;
+        ctx.wait_phase(SCENARIO, "supported-recovered", Duration::from_secs(60))
+            .await?;
+        assert_supported_publication(ctx, "strict", false).await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    let restored = tokio::time::timeout(Duration::from_secs(30), async {
+        ctx.apply_dir("updates/to_recovered").await?;
+        ctx.wait_phase(SCENARIO, "recovered", Duration::from_secs(15)).await
+    })
+    .await
+    .context("supported restoration timed out")
+    .and_then(|r| r);
+    let deleted = delete_supported_resources(ctx).await;
+    match (result, restored, deleted) {
+        (Ok(()), Ok(()), Ok(())) => Ok(()),
+        (r, s, d) => anyhow::bail!("supported segment: result={r:?}; restoration={s:?}; cleanup={d:?}"),
+    }
+}
+
 async fn assert_original_publication(ctx: &ScenarioCtx, detection: bool) -> Result<()> {
     for gateway in [false, true] {
         let resource = plugin_resource(ctx, gateway).await?;
@@ -319,6 +435,30 @@ async fn wait_invalid_json_processed(ctx: &ScenarioCtx) -> Result<()> {
 
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
+        name: "supported-on",
+        factory: supported_on,
+    },
+    PhaseSuite {
+        name: "supported-detection",
+        factory: supported_detection,
+    },
+    PhaseSuite {
+        name: "supported-restored",
+        factory: supported_retained,
+    },
+    PhaseSuite {
+        name: "supported-standard",
+        factory: supported_standard,
+    },
+    PhaseSuite {
+        name: "supported-invalid-retained",
+        factory: supported_retained,
+    },
+    PhaseSuite {
+        name: "supported-recovered",
+        factory: supported_retained,
+    },
+    PhaseSuite {
         name: "original-on",
         factory: original_on,
     },
@@ -436,6 +576,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
         let scenario = SCENARIO;
         delete_original_bundle(&ctx).await?;
+        delete_supported_resources(&ctx).await?;
         ctx.assert_phase(scenario, "initial").await?;
         ctx.apply_dir("updates/to_v2").await?;
         ctx.wait_phase(scenario, "updated", Duration::from_secs(15)).await?;
@@ -510,6 +651,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         ctx.apply_dir("updates/to_recovered").await?;
         ctx.wait_phase(scenario, "recovered", Duration::from_secs(15)).await?;
         run_original_segment(&ctx).await?;
+        run_supported_segment(&ctx).await?;
         ctx.delete_resources("delete/xml_bundles.txt").await?;
         ctx.delete_resources("delete/json_bundles.txt").await?;
         ctx.apply_dir("updates/to_bundle_v1").await?;

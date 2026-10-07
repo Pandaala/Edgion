@@ -9,6 +9,9 @@ mod wire;
 #[path = "waf_xml_wire.rs"]
 pub(crate) mod xml_wire;
 
+#[path = "waf_supported_wire.rs"]
+mod supported_wire;
+
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
 
@@ -631,4 +634,46 @@ original_phase_suite!(
     WafDynamicOriginalDetectionTestSuite,
     "Waf Original CRS DetectionOnly",
     true
+);
+
+macro_rules! supported_phase_suite {
+    ($type:ident, $title:literal, $strict:literal, $detection:literal, $measure:literal) => {
+        pub struct $type;
+        impl TestSuite for $type {
+            fn name(&self) -> &str {
+                $title
+            }
+            fn test_cases(&self) -> Vec<TestCase> {
+                vec![supported_wire::matrix($strict, $detection, $measure)]
+            }
+        }
+    };
+}
+supported_phase_suite!(
+    WafDynamicSupportedOnTestSuite,
+    "Waf Supported Strict On",
+    true,
+    false,
+    true
+);
+supported_phase_suite!(
+    WafDynamicSupportedDetectionTestSuite,
+    "Waf Supported Strict DetectionOnly",
+    true,
+    true,
+    true
+);
+supported_phase_suite!(
+    WafDynamicSupportedStandardTestSuite,
+    "Waf Supported Standard On",
+    false,
+    false,
+    true
+);
+supported_phase_suite!(
+    WafDynamicSupportedRetainedTestSuite,
+    "Waf Supported Strict Retained/Recovered",
+    true,
+    false,
+    false
 );

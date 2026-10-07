@@ -217,3 +217,8 @@ harness = false
 name = "waf_body_snapshot"
 path = "tests/benches/waf_body_snapshot.rs"
 harness = false
+
+[[bench]]
+name = "waf_supported_profile"
+path = "tests/benches/waf_supported_profile.rs"
+harness = false
