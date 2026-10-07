@@ -2331,3 +2331,25 @@ fn request_local_reply_status_validation_matches_controller_and_gateway() {
         }
     }
 }
+
+#[test]
+fn responses_guard_capability_rejection_has_shared_validation_and_policy_parity() {
+    for order in [vec!["AiGuard", "AiProxy"], vec!["AiProxy", "AiGuard"]] {
+        let mut resource = ai_ordering_resource(&order);
+        for entry in resource.spec.request_plugins.as_mut().unwrap() {
+            if let EdgionPlugin::AiProxy(config) = &mut entry.plugin {
+                config.api = edgion_resources::resources::edgion_plugins::AiApi::OpenaiResponses;
+            }
+        }
+        let compiled = compile_plugins(&resource);
+        assert_eq!(compiled.preparse_errors, resource.validate_plugins());
+        assert!(compiled
+            .preparse_errors
+            .iter()
+            .any(|error| error.contains("native Responses does not support")));
+        assert!(!compiled.is_activatable);
+        let bypassed = compile_with_policy(&resource, "AiGuard", Some(PluginPolicyAction::Bypass));
+        assert!(bypassed.preparse_errors.is_empty());
+        assert!(bypassed.is_activatable);
+    }
+}

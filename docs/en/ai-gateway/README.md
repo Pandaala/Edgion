@@ -5,7 +5,7 @@
 > Edgion AI Gateway turns an HTTPRoute hostname into an OpenAI-compatible base URL for LLM
 > traffic. It is not part of the standard Kubernetes Gateway API.
 
-The current managed entry accepts OpenAI Chat Completions requests. Edgion owns provider endpoints,
+Managed entries accept OpenAI Chat Completions or native Responses creation requests. Edgion owns provider endpoints,
 Secret-backed credentials, model catalogs, selection, retries, usage, and cost accounting.
 Clients never hold provider API keys.
 
@@ -32,9 +32,9 @@ Clients never hold provider API keys.
 - **Bounded resilience** — shared attempt ceiling, credential-first rounds, no mid-stream failover
 - **Usage and cost** — durable per-attempt access-log ledger plus optional process-local Prometheus rates
 
-Current support covers Chat JSON/SSE and limited JSON/SSE conversion to Anthropic. Native
-Responses, native Messages, Gemini, and Bedrock are not implemented; see
-[Providers](./providers.md#current-support) for the capability boundary. `api: openaiChat` is required. Native forwarding is the default; Anthropic conversion requires
+Current support covers Chat JSON/SSE, limited JSON/SSE conversion to Anthropic, and native
+Responses creation for OpenAI. Native Messages, Gemini and Bedrock remain pending; see
+[Providers](./providers.md#current-support) for the capability boundary. `api` is required: choose `openaiChat` or `openaiResponses`. Native forwarding is the default; Anthropic conversion requires
 `conversion: chatToAnthropic`. `usageObservation` defaults to `off`, and `injectUsageTracking`
 defaults to false. Provider observation is explicit and independent of request injection.
 

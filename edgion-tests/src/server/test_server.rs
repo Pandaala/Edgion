@@ -1455,7 +1455,7 @@ fn ai_provider_observation(
             .get(axum::http::header::HOST)
             .and_then(|value| value.to_str().ok())
             .is_some_and(|host| AI_PROVIDER_EXPECTED_HOSTS.contains(&host)),
-        path_has_prefix: path == "prefix/v1/chat/completions",
+        path_has_prefix: path == "prefix/v1/chat/completions" || path == "responses/v1/responses",
         query_is_preserved: query.fixture_query.as_deref() == Some("preserved"),
         model_is_canonical: model == Some("fixture-model"),
         model_is_economy: model == Some("economy-model"),
@@ -1889,6 +1889,153 @@ fn incremental_json_usage_fixture(mode: Option<&str>, fixture_id: Option<&str>) 
     )
 }
 
+/// Native Responses fixture uses the same bounded channel and observation owner as Chat.
+fn responses_provider_response(
+    body: &[u8],
+    mode: &str,
+    observation: &AiProviderObservation,
+    headers: &axum::http::HeaderMap,
+) -> axum::response::Response {
+    use serde_json::json;
+    let request: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+    let stream = request["stream"] == true;
+    let status = match mode {
+        "incomplete" => "incomplete",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        _ => "completed",
+    };
+    let text = if mode == "large" {
+        "x".repeat(256 * 1024)
+    } else {
+        let mut native_observation = serde_json::to_value(observation).unwrap();
+        native_observation["principal_selectors_absent"] =
+            json!(!headers.contains_key("openai-organization") && !headers.contains_key("openai-project"));
+        native_observation.to_string()
+    };
+    let mut response = json!({"id":"resp_fixture", "object":"response", "created_at":1, "status":status,
+        "error":null,"incomplete_details":null,"model":"fixture-model","output":[{"id":"msg_fixture","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":text,"annotations":[]}]}],
+        "parallel_tool_calls":true,"tool_choice":"auto","tools":[],"temperature":1.0,"top_p":1.0,
+        "usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":4}},
+        "native_extension":{"preserved":true,"request":request}});
+    if mode == "missing_usage" {
+        response.as_object_mut().unwrap().remove("usage");
+    }
+    if !stream {
+        let mut wire = response.to_string();
+        if mode == "malformed" {
+            wire.push_str("invalid-tail");
+        }
+        return axum::response::Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(Body::from(wire))
+            .unwrap();
+    }
+    let event = |value: serde_json::Value| {
+        Bytes::from(format!(
+            "event: {}\ndata: {}\n\n",
+            value["type"].as_str().unwrap(),
+            value
+        ))
+    };
+    let mut frames = vec![
+        event(
+            json!({"type":"response.created","sequence_number":0,"response":{"id":"resp_fixture","status":"in_progress"}}),
+        ),
+        event(
+            json!({"type":"response.output_text.delta","sequence_number":1,"item_id":"msg_fixture","output_index":0,"content_index":0,"delta":"hello"}),
+        ),
+        event(
+            json!({"type":"response.output_text.done","sequence_number":2,"item_id":"msg_fixture","output_index":0,"content_index":0,"text":"hello"}),
+        ),
+    ];
+    if mode == "long" {
+        frames.extend((3..1000).map(|seq| event(json!({"type":"response.output_text.delta","sequence_number":seq,"item_id":"msg_fixture","output_index":0,"content_index":0,"delta":"fixed streamed text"}))));
+    }
+    let terminal = match status {
+        "failed" => "response.failed",
+        "incomplete" => "response.incomplete",
+        _ => "response.completed",
+    };
+    frames.push(event(
+        json!({"type":terminal,"sequence_number":1001,"response":response}),
+    ));
+    if mode == "malformed" {
+        frames.push(Bytes::from_static(b"data: {"));
+    }
+    if mode == "oversized" {
+        frames.insert(
+            1,
+            event(json!({"type":"response.output_text.delta","sequence_number":1,"delta":"x".repeat(1024 * 1024)})),
+        );
+    }
+    if mode == "abort" {
+        frames.truncate(2);
+    }
+    let chunks = if mode == "split" {
+        frames
+            .into_iter()
+            .flat_map(|frame| frame.chunks(7).map(Bytes::copy_from_slice).collect::<Vec<_>>())
+            .collect()
+    } else {
+        frames
+    };
+    let trace = if mode == "long" {
+        headers
+            .get("x-trace-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    } else {
+        None
+    };
+    if let Some(trace) = &trace {
+        AI_LONG_STREAM_OBSERVATIONS
+            .lock()
+            .insert(trace.clone(), AiLongStreamObservation::default());
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    let abort = mode == "abort";
+    tokio::spawn(async move {
+        for chunk in chunks {
+            if tx.send(Ok(chunk)).await.is_err() {
+                if let Some(trace) = &trace {
+                    if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace) {
+                        state.upstream_cancelled = true;
+                    }
+                }
+                return;
+            }
+            if let Some(trace) = &trace {
+                if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace) {
+                    state.chunks_queued += 1;
+                }
+            }
+            if trace.is_some() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+        if abort {
+            let _ = tx
+                .send(Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "intentional Responses fixture abort",
+                )))
+                .await;
+        }
+        if let Some(trace) = &trace {
+            if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace) {
+                state.provider_completed = true;
+            }
+        }
+    });
+    axum::response::Response::builder()
+        .status(200)
+        .header("content-type", "text/event-stream")
+        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        .unwrap()
+}
+
 async fn ai_provider_handler(
     Path(path): Path<String>,
     Query(query): Query<AiProviderQuery>,
@@ -1906,6 +2053,14 @@ async fn ai_provider_handler(
             .unwrap();
     };
     let observation = ai_provider_observation(&path, &query, &parts.headers, &body);
+    if path == "responses/v1/responses" {
+        return responses_provider_response(
+            &body,
+            query.mock_mode.as_deref().unwrap_or("completed"),
+            &observation,
+            &parts.headers,
+        );
+    }
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
     let trace_id = parts
         .headers

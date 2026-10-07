@@ -78,6 +78,7 @@ impl fmt::Debug for AiPlanCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiOperation {
     ChatCompletions,
+    Responses,
 }
 
 /// Request data captured once across provider and credential retries.
@@ -95,6 +96,8 @@ pub struct ReadyAiAttemptPlan {
     pub canonical_query: Option<String>,
     pub logical_model: String,
     pub requested_streaming: bool,
+    /// Provider-owned continuation forbids retry and model/principal changes.
+    pub continuation: bool,
     pub inject_usage_tracking: bool,
     pub input_chars: u64,
     pub selection: AiBackendSelection,

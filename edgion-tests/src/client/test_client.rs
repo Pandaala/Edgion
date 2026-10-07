@@ -39,6 +39,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "AiBackendLifecycle",
     "AiBackendPolicyIntegration",
     "AiBackendSecretRotation",
+    "AiResponsesContinuation",
     "AiBackendWeighted",
     "AiGuardOrderingDynamic",
     "GatewayDynamic",
@@ -1280,6 +1281,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
 fn suite_to_port_key(suite: &str) -> &str {
     match suite {
         "all" => "HTTPRoute/Basic",
+        "EdgionBackend/Responses" => "EdgionBackend/Responses",
         "EdgionBackend/AnthropicProvider" => "EdgionBackend/AnthropicProvider",
         "EdgionBackend/CredentialExhaustion" => "EdgionBackend/CredentialExhaustion",
         "EdgionBackend/Resilience" => "EdgionBackend/Resilience",
@@ -1559,6 +1561,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "SpBackendChange" => Some(("HTTPRoute/Backend/SessionPersistenceBackendChange", PortKind::Http)),
         "SpWeighted" => Some(("HTTPRoute/Backend/SessionPersistenceWeighted", PortKind::Http)),
         "DnsResolutionFlap" => Some(("HTTPRoute/Backend/DnsResolutionFlap", PortKind::Http)),
+        "AiResponsesContinuation" => Some(("EdgionBackend/Responses", PortKind::Http)),
         "TlsRouteAttachments" => Some(("TLSRoute/Attachments", PortKind::Tls)),
         "TcpEspReload" => Some(("TCPRoute/StreamPlugins/Dynamic", PortKind::Tcp)),
         "L4TimeoutHotReload" => Some(("TCPRoute/L4TimeoutHotReload", PortKind::Tcp)),
@@ -1583,6 +1586,9 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
 /// Register test suites matching the given suite name into the runner.
 fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>, full_test: bool) {
     match suite {
+        "EdgionBackend/Responses" => {
+            runner.add_suite(Box::new(suites::ResponsesTestSuite));
+        }
         "EdgionBackend/AnthropicProvider" => {
             if !gateway {
                 eprintln!("Error: EdgionBackend/AnthropicProvider tests require --gateway flag");
@@ -3276,6 +3282,11 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 Udp,
             ));
             if gateway {
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::ResponsesTestSuite),
+                    "EdgionBackend/Responses",
+                    Http,
+                ));
                 runner.add_suite(framework::with_listener(
                     Box::new(suites::SingleProviderTestSuite),
                     "EdgionBackend/SingleProvider",

@@ -10,7 +10,7 @@ AiProxy 必须通过 Rule 级 EdgionPlugins ExtensionRef 恰好出现一次。
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `backendSelection.type` | Enum | `Weighted` | `Weighted`、`Priority`、`LowestLatency`、`LowestUsage` 或 `CostWeighted` |
-| `api` | Enum | 必填 | 当前仅实现 `openaiChat`；Responses/Messages 值在实现前校验失败 |
+| `api` | Enum | 必填 | `openaiChat` 或 `openaiResponses`；原生 Messages 尚待实现 |
 | `conversion` | Enum | 无 | `chatToAnthropic` 显式选择现有有界转换器；所有正权重或提升的候选均须为 Anthropic |
 | `usageObservation` | Enum | `off` | `provider` 启用有界观测；off 不安装响应用量观测器 |
 | `injectUsageTracking` | Boolean | `false` | 显式修改 Chat SSE usage 参数；要求 provider 观测或声明转换 |

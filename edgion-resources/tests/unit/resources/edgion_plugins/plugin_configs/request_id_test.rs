@@ -28,6 +28,9 @@ fn renamed_sensitive_sources_and_reserved_destinations_are_rejected() {
     }
     for header in [
         "Host",
+        "OpenAI-Organization",
+        "OPENAI-PROJECT",
+        "openai-project",
         "traceparent",
         "tracestate",
         "x-trace-id",

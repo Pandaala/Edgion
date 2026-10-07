@@ -159,6 +159,16 @@ impl RequestFilter for AiGuard {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        // Record actual invocation before applicability: an earlier scoped guard
+        // can precede URLRewrite and must not silently skip native Responses.
+        session
+            .ctx()
+            .ai_request_guard_invoked
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if session.ctx().has_responses_plan() {
+            log.push_err("responses-guard-unsupported");
+            return openai_error_response(session, AiProxyError::UnsupportedParameter);
+        }
         // Re-entry latch. The backendRef-scoped chain re-runs on every upstream
         // attempt, and a published mask is not rolled back by rewind, so a
         // second pass would mask its own output.

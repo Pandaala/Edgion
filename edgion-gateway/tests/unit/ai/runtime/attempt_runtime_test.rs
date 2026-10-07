@@ -645,3 +645,36 @@ async fn successful_ttft_is_recorded_without_numeric_usage() {
     assert!(state.attempts()[0].input_tokens.is_none());
     assert!(state.metric_totals().unwrap().is_empty());
 }
+
+#[test]
+fn responses_health_verdict_requires_observed_model_completion_and_actual_eos() {
+    use crate::ai::protocols::openai::json_usage::ResponseOutcome;
+    use edgion_resources::resources::edgion_plugins::AiUsageObservation;
+    for outcome in [
+        ResponseOutcome::Completed,
+        ResponseOutcome::Failed,
+        ResponseOutcome::Incomplete,
+        ResponseOutcome::Cancelled,
+        ResponseOutcome::Unknown,
+    ] {
+        let mut active = attempt(3, 0, true);
+        active.usage = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        active.usage.observe_response_outcome(outcome);
+        active.usage.observe_reported_usage(11, 7, 0, 0);
+        active.record_response(200, None);
+        let mut state = AiAttemptRuntimeState::default();
+        assert!(matches!(
+            state.settlement_for(&mut active, true, true),
+            SettlementOperation::Reconcile(18)
+        ));
+        assert_eq!(active.verdict_recorded, outcome == ResponseOutcome::Completed);
+        let mut truncated = attempt(3, 0, false);
+        truncated.usage = active.usage.clone();
+        truncated.record_response(200, None);
+        assert!(matches!(
+            state.settlement_for(&mut truncated, false, false),
+            SettlementOperation::Retain
+        ));
+        assert!(!truncated.verdict_recorded);
+    }
+}

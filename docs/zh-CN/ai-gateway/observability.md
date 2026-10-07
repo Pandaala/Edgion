@@ -66,3 +66,15 @@ metrics:
 | EdgionBackend `Accepted=False/Invalid` | Endpoint、池、模型或默认值无效 |
 | EdgionBackend `ResolvedRefs=False` | 至少一个凭据 Secret 缺失、未授权或无效；另有可用凭据时继续服务 |
 | EdgionBackend `PartiallyInvalid=True` | 可用子集已激活；检查有界的无效凭据别名 |
+
+## Responses 的账单与终态
+
+provider 观察读取 input_tokens、output_tokens 和 input_tokens_details.cached_tokens；reasoning 已包含在
+output_tokens 中，不重复相加。JSON 要求文档完整有效且 status 为终态；SSE 仅从 response.completed、
+response.incomplete、response.failed 的对应终态读取 usage，delta/done 和重复输出不重复计费。
+JSON cancelled 可识别；不假定存在 response.cancelled SSE 事件。通用 error 事件仅记录固定失败类别。
+
+usage 缺失、事件超限/损坏、编码不支持或文档截断时为 unknown，不以字符数补实际账单或成本。
+status=completed 且 usage 缺失时可以确认模型成功，但没有数字账单。HTTP200 failed/incomplete/cancelled
+不会成为凭据健康或自适应 TTFT 的成功样本。off 不安装 body parser，只保留传输 TTFT，不推断模型成功。
+attempt 失败类别增加 provider_failed、provider_incomplete、provider_cancelled；后续传输截断优先，保守保留凭据预留。

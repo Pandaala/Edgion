@@ -47,6 +47,7 @@ fn candidate_plan() -> ReadyAiAttemptPlan {
         usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
         body_generation: None,
         body_is_current: false,
+        continuation: false,
         request_max_output_tokens: None,
         request_body: Bytes::from_static(br#"{"model":"logical"}"#),
         canonical_path: "/v1/chat/completions".to_string(),
@@ -116,6 +117,7 @@ fn selectable_plan(credentials: Vec<RuntimeAiCredential>) -> ReadyAiAttemptPlan 
     let credential_outliers = aliases.iter().map(|alias| outlier_service.capture(alias)).collect();
     let backend = Arc::new(RuntimeAiBackend {
         has_credential_tpm: false,
+        declared_credential_count: 1,
         uid: "backend-uid".to_string(),
         provider: AiProvider::OpenAICompatible,
         endpoint: RuntimeAiEndpoint {
@@ -1177,4 +1179,94 @@ async fn dispatcher_owned_retry_rewrite_restores_the_original_extension_bytes() 
     assert_eq!(ctx.request_body.read_all().await.unwrap().unwrap(), body);
     assert!(plan.body_is_current);
     assert_eq!(plan.body_generation, ctx.request_body.generation());
+}
+
+#[test]
+fn responses_continuation_retry_cap_cannot_be_reinitialized_from_global_policy() {
+    let credential = RuntimeAiCredential {
+        name: "primary".into(),
+        weight: 1,
+        credential: "fixed-test-key".into(),
+        limits: None,
+    };
+    let mut plan = selectable_plan(vec![credential]);
+    plan.api = AiApi::OpenaiResponses;
+    plan.operation = AiOperation::Responses;
+    plan.continuation = true;
+    plan.retry_cap_initialized = false;
+    initialize_retry_cap(&mut plan, 7).unwrap();
+    assert_eq!(plan.scheduler.max_dispatches(), 1);
+    initialize_retry_cap(&mut plan, 7).unwrap();
+    assert_eq!(plan.scheduler.max_dispatches(), 1);
+}
+
+#[tokio::test]
+async fn native_responses_dispatch_strips_client_and_backend_principal_selectors() {
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let rule:HTTPRouteRule=serde_json::from_value(serde_json::json!({"backendRefs":[{"group":"edgion.io","kind":"EdgionBackend","name":"provider","filters":[{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"OpenAI-Organization","value":"org-backend-selector"},{"name":"openai-project","value":"proj-backend-selector"},{"name":"x-native-extension","value":"preserved"}]}}]}]})).unwrap();
+    let compiled = HttpRouteRuleUnit::compile_http_rule(&rule, "default").unwrap();
+    for continuation in [false, true] {
+        let mut session = test_session().await;
+        session
+            .req_header_mut()
+            .insert_header("OpenAI-Organization", "org-client-selector")
+            .unwrap();
+        session
+            .req_header_mut()
+            .insert_header("OPENAI-PROJECT", "proj-client-selector")
+            .unwrap();
+        let mut ctx = EdgionHttpContext::new();
+        for (header, value) in [
+            ("authorization", "Bearer deferred-selector-key"),
+            ("openai-organization", "org-deferred-selector"),
+            ("openai-project", "proj-deferred-selector"),
+        ] {
+            ctx.upsert_deferred_credential_mutation(
+                http::HeaderName::from_static(header),
+                Arc::new(http::HeaderValue::from_static(value)),
+                None,
+            );
+        }
+        let body=Bytes::from_static(br#" { "model":"logical", "input":"hello", "stream_options":{"include_obfuscation":false}, "extension":1e99999 } "#);
+        let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
+        storage.write(&body).await.unwrap();
+        storage.finish().await.unwrap();
+        ctx.request_body.install(view);
+        let mut plan = selectable_plan(vec![RuntimeAiCredential {
+            name: "primary".into(),
+            weight: 1,
+            credential: "fixed-test-key".into(),
+            limits: None,
+        }]);
+        plan.api = AiApi::OpenaiResponses;
+        plan.operation = AiOperation::Responses;
+        plan.continuation = continuation;
+        plan.inject_usage_tracking = false;
+        plan.usage_observation = AiUsageObservation::Off;
+        plan.request_body = body.clone();
+        plan.body_generation = ctx.request_body.generation();
+        plan.body_is_current = true;
+        plan.canonical_path = "/v1/responses".into();
+        plan.candidates[0].logical = crate::backends::LogicalBackendHandle::new(compiled.backends.clone(), 0).unwrap();
+        Arc::get_mut(plan.candidates[0].backend.as_mut().unwrap())
+            .expect("single test backend owner")
+            .provider = AiProvider::OpenAI;
+        plan.candidates[0].model.as_mut().unwrap().provider_model = "logical".into();
+        let prepared = prepare_ready_attempt(&mut session, &mut ctx, &mut plan, 0).unwrap();
+        assert!(prepared.unary_owner.is_none());
+        for header in ["openai-organization", "openai-project"] {
+            assert!(!session.req_header().headers.contains_key(header));
+        }
+        assert_eq!(session.req_header().headers["authorization"], "Bearer fixed-test-key");
+        let mut upstream = session.req_header().clone();
+        ctx.apply_deferred_credentials(&mut upstream).unwrap();
+        for header in ["openai-organization", "openai-project"] {
+            assert!(!upstream.headers.contains_key(header));
+        }
+        assert_eq!(upstream.headers["authorization"], "Bearer fixed-test-key");
+        assert_eq!(upstream.headers["x-native-extension"], "preserved");
+        assert_eq!(session.req_header().headers["x-native-extension"], "preserved");
+        assert_eq!(session.req_header().uri.to_string(), "/v1/responses?trace=1");
+        assert_eq!(ctx.request_body.read_all().await.unwrap().unwrap(), body);
+    }
 }

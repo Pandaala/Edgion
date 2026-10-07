@@ -24,7 +24,7 @@ use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -2190,6 +2190,8 @@ pub struct EdgionHttpContext {
     /// Lazily allocated AI-only request, attempt, response, and accounting
     /// state. Ordinary HTTP requests retain only this nullable pointer.
     pub(crate) ai_state: Option<Box<AiHttpState>>,
+    /// Set only when an effective AiGuard executes, including before URLRewrite.
+    pub(crate) ai_request_guard_invoked: AtomicBool,
 
     // --- Response-stream processors and terminal arbitration ---
     /// First-wins request-local terminal and close ownership.
@@ -3094,6 +3096,7 @@ impl EdgionHttpContext {
             waf_prefix_inspected: false,
             request_body_plugins: None,
             ai_state: None,
+            ai_request_guard_invoked: AtomicBool::new(false),
             response_terminal_state: ResponseTerminalState::Open,
             pre_plugin_response_status: None,
             candidate_downstream_status: None,

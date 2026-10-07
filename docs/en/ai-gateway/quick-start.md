@@ -42,7 +42,7 @@ so the example checks before reading one.
 
 Replace both Secret values and example provider model names with models available to each provider
 account. The `production` Namespace and `main-gateway` must exist, with Gateway HTTPS for
-`ai.example.com`. This example uses the Chat entry, not native Responses or Messages;
+`ai.example.com`. This example uses the Chat entry; native Responses uses the separate configuration below, and native Messages remains pending;
 `maxOutputTokens` is a fallback, not an enforced ceiling.
 
 ```yaml
@@ -178,3 +178,20 @@ usageObservation: off
 
 This fragment selects the existing bounded JSON/event SSE converter. It keeps client-visible
 usage fields while omitting numerical accounting. Use provider observation for token quotas or TPM.
+
+## Native Responses entry
+
+Use the same OpenAI EdgionBackend and Secret with this plugin configuration fragment, and make
+HTTPRoute admit POST `/v1/responses`:
+
+```yaml
+requestPlugins:
+  - type: AiProxy
+    config:
+      api: openaiResponses
+      usageObservation: provider
+```
+
+Omit usageObservation for default-off observation. Send an explicit `model` and native `input`;
+use `stream: true` for native typed SSE. Do not set conversion or injectUsageTracking.
+See [Providers](./providers.md#native-responses-subset) for continuation and operation restrictions.

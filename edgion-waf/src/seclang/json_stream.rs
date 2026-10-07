@@ -265,6 +265,14 @@ pub trait JsonStreamSelectiveSink {
     fn on_token(&mut self, token: JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>;
     fn on_number(&mut self, raw: &str) -> Result<(), JsonStreamSinkError>;
     fn on_discarded_string(&mut self, summary: JsonDiscardedStringSummary) -> Result<(), JsonStreamSinkError>;
+    /// Called before a value string starts. None preserves allocation-free discard.
+    /// Captured values share the tokenizer's retained/source/work budgets.
+    fn string_capture_limit(&mut self) -> Option<usize> {
+        None
+    }
+    fn on_captured_string(&mut self, _value: &str) -> Result<(), JsonStreamSinkError> {
+        Err(JsonStreamSinkError)
+    }
 }
 
 /// Opt-in selective capture over the same grammar as `JsonStream`.
@@ -297,6 +305,12 @@ trait InternalSink {
     fn token(&mut self, token: JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError>;
     fn number(&mut self, raw: &str) -> Result<(), JsonStreamSinkError>;
     fn discarded(&mut self, summary: JsonDiscardedStringSummary) -> Result<(), JsonStreamSinkError>;
+    fn string_capture_limit(&mut self) -> Option<usize> {
+        None
+    }
+    fn captured_string(&mut self, _value: &str) -> Result<(), JsonStreamSinkError> {
+        Err(JsonStreamSinkError)
+    }
 }
 
 struct CaptureAll<F>(F);
@@ -322,6 +336,12 @@ impl<S: JsonStreamSelectiveSink> InternalSink for SelectiveSink<'_, S> {
     fn discarded(&mut self, summary: JsonDiscardedStringSummary) -> Result<(), JsonStreamSinkError> {
         self.0.on_discarded_string(summary)
     }
+    fn string_capture_limit(&mut self) -> Option<usize> {
+        self.0.string_capture_limit()
+    }
+    fn captured_string(&mut self, value: &str) -> Result<(), JsonStreamSinkError> {
+        self.0.on_captured_string(value)
+    }
 }
 
 /// One bounded token buffer and a grammar stack. No document or token list is retained.
@@ -329,6 +349,7 @@ pub struct JsonStream {
     limits: JsonStreamLimits,
     selective: Option<JsonStreamSelectiveLimits>,
     discarded: JsonDiscardedStringSummary,
+    selected_string_limit: Option<usize>,
     usage: JsonStreamUsage,
     terminal: Terminal,
     lexical: Lexical,
@@ -362,6 +383,7 @@ impl JsonStream {
             limits,
             selective: None,
             discarded: JsonDiscardedStringSummary::default(),
+            selected_string_limit: None,
             usage: JsonStreamUsage::default(),
             terminal: Terminal::Active,
             lexical: Lexical::Idle,
@@ -702,6 +724,11 @@ impl JsonStream {
                 }
                 self.token.clear();
                 self.discarded = JsonDiscardedStringSummary::default();
+                self.selected_string_limit = if !key && self.selective.is_some() {
+                    sink.string_capture_limit()
+                } else {
+                    None
+                };
                 self.utf8_remaining = 0;
                 self.lexical = Lexical::String {
                     key,
@@ -770,8 +797,13 @@ impl JsonStream {
                             self.work(self.token.len())?;
                             self.event()?;
                             if self.selective.is_some() && !key {
-                                sink.discarded(self.discarded)
-                                    .map_err(|_| JsonStreamError::SinkRejected)?;
+                                if self.selected_string_limit.is_some() {
+                                    let value = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Utf8)?;
+                                    sink.captured_string(value).map_err(|_| JsonStreamError::SinkRejected)?;
+                                } else {
+                                    sink.discarded(self.discarded)
+                                        .map_err(|_| JsonStreamError::SinkRejected)?;
+                                }
                             } else {
                                 let value = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Utf8)?;
                                 sink.token(if key {
@@ -996,6 +1028,12 @@ impl JsonStream {
                         .decoded_chars
                         .checked_add(1)
                         .ok_or(JsonStreamError::Arithmetic)?;
+                }
+                if let Some(limit) = self.selected_string_limit {
+                    if self.discarded.decoded_bytes > limit {
+                        return Err(limit_error(JsonStreamLimit::DecodedBytes, limit));
+                    }
+                    return self.retain_token_bytes(bytes);
                 }
                 return Ok(());
             }

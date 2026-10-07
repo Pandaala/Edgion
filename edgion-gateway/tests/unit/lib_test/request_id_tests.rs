@@ -134,7 +134,13 @@ async fn inherited_target_wins_and_duplicates_fall_back_to_standard_source() {
 
 #[test]
 fn reserved_default_is_rejected_by_schema_and_gateway_runtime() {
-    for header in ["x-trace-id", "X-Trace-ID"] {
+    for header in [
+        "x-trace-id",
+        "X-Trace-ID",
+        "OpenAI-Organization",
+        "OPENAI-PROJECT",
+        "openai-project",
+    ] {
         let plugin = EdgionPlugin::RequestId(serde_json::from_value(json!({"ids":[{"header":header}]})).unwrap());
         let resource = EdgionPlugins::new(
             "reserved-id",

@@ -21,7 +21,7 @@ incremental retry, final timeout, and cancellation on request drop.
 
 ## Single JSON document versus streaming snapshots
 
-Within one non-streaming Chat JSON document, decoded duplicate selected keys
+Within one non-streaming Chat or Responses JSON document, decoded duplicate selected keys
 and replacement of whole `usage`/details parents use JSON last-wins semantics.
 The bounded selective observer keeps values provisional until valid EOS;
 malformed tails and incomplete documents cannot publish reported usage. This
@@ -33,3 +33,11 @@ prevent overflow from becoming an apparently valid smaller usage/cost result.
 ## Resolution references
 
 - `test-05` — 2026-08-09.
+
+## Native Responses distinction
+
+Responses advances the watermark only with reliable typed-terminal provider output totals.
+Native delta/done/output repetitions do not add character estimates or duplicate charges.
+The Chat semantic-delta estimator remains Chat-specific. Missing terminal usage or invalid
+framing yields unknown actual billing; provisional admission estimates do not substitute for it.
+Heartbeat/comment/id-only dataless blocks remain transparent, including under active Reject.

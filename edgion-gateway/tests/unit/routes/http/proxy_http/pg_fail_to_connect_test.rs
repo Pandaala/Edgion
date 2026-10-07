@@ -71,6 +71,7 @@ fn ctx_with_selected_ai_target() -> EdgionHttpContext {
         usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
         body_generation: None,
         body_is_current: false,
+        continuation: false,
         request_max_output_tokens: None,
         request_body: Bytes::from_static(br#"{"model":"logical"}"#),
         canonical_path: "/v1/chat/completions".to_string(),

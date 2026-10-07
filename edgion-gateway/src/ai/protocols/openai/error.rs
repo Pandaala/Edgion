@@ -29,7 +29,7 @@ pub enum AiProxyError {
 }
 
 impl AiProxyError {
-    const fn fields(self) -> (u16, &'static str, &'static str, &'static str) {
+    pub(crate) const fn fields(self) -> (u16, &'static str, &'static str, &'static str) {
         match self {
             Self::UpstreamResponseInvalid => (
                 502,
@@ -81,7 +81,7 @@ impl AiProxyError {
             ),
             Self::UnsupportedEndpoint => (
                 404,
-                "This AI backend supports only the Chat Completions endpoint.",
+                "The requested operation is not supported.",
                 "invalid_request_error",
                 "unsupported_endpoint",
             ),

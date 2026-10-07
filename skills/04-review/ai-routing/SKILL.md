@@ -24,3 +24,5 @@ before applying a decision to current code.
 - [Conflicting OpenAI output bounds are client errors](regression-guards/conflicting-openai-token-bounds-are-client-errors.md)
 - [Identity-model quota uses the requested logical name](regression-guards/identity-model-quota-uses-requested-logical-name.md)
 - [Streaming usage is a monotonic cumulative snapshot](regression-guards/streaming-usage-is-a-monotonic-cumulative-snapshot.md)
+
+- [Native Responses observation and continuation](regression-guards/native-responses-observation-and-continuation.md): native reported-only accounting, semantic outcomes, raw declaration fences and guard capabilities.

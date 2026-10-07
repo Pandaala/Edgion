@@ -1,5 +1,5 @@
 {
-  "current_max": 31980,
+  "current_max": 31989,
   "suites": {
     "PluginPolicy": {
       "udp": 58338,
@@ -441,6 +441,9 @@
       "http": 31986,
       "grpc": 31987,
       "tcp": 31988
+    },
+    "EdgionBackend/Responses": {
+      "http": 31989
     }
   }
 }

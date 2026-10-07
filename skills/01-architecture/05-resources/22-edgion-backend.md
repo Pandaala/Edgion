@@ -13,7 +13,7 @@ and provider defaults. The `AiProxy` plugin activates AI protocol handling for a
 
 The Controller validates the AI configuration, resolves every credential Secret through
 `AiApiKeyResolver`, and publishes the resource through conf_sync. Credential resolution is
-partial-good: unresolved credentials are omitted, while zero usable credentials deactivates the
+partial-good: Controller preserves all declared credential slots for conf_sync; Gateway filters unresolved credentials from the usable pool, while zero usable credentials deactivates the
 Gateway runtime entry. Apply and delete events requeue referencing HTTPRoutes and
 EdgionBackendTrafficPolicies through the shared typed backend dependency index.
 

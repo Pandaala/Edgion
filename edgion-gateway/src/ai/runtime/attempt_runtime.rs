@@ -456,7 +456,9 @@ impl AiAttemptRuntimeState {
             // Usage quality is independent: even EOS or a gateway cut retains
             // the credential reservation when accounting is unavailable.
             let settled = eos || active.usage.gateway_terminated();
-            let successful_final = eos && active.status.is_some_and(|status| (200..300).contains(&status));
+            let successful_final = eos
+                && active.status.is_some_and(|status| (200..300).contains(&status))
+                && active.usage.permits_latency_sample();
             let successful_ttft_ms = successful_final.then_some(ttft_ms).flatten();
             if active
                 .usage
@@ -468,7 +470,11 @@ impl AiAttemptRuntimeState {
             }
             let operation = self.settlement_for(&mut active, settled, eos);
             let entry = if dispatched {
-                let failure = (!settled).then_some(GenAiAttemptFailure::IncompleteResponse);
+                let failure = if !settled {
+                    Some(GenAiAttemptFailure::IncompleteResponse)
+                } else {
+                    active.usage.provider_failure()
+                };
                 let number = self.next_attempt_number();
                 active.ledger_entry(number, failure, successful_ttft_ms, true)
             } else {
@@ -511,7 +517,10 @@ impl AiAttemptRuntimeState {
         if !settled {
             return SettlementOperation::Retain;
         }
-        if eos {
+        if eos
+            && active.status.is_some_and(|status| (200..300).contains(&status))
+            && active.usage.permits_provider_success()
+        {
             // The outlier-detection verdict still requires a real upstream EOS:
             // a gateway-initiated cut says nothing about the credential's
             // health, so it must not be committed as a success sample.

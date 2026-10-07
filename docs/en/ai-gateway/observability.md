@@ -76,3 +76,20 @@ Details: [Metrics](../ops-guide/observability/metrics.md) ·
 | EdgionBackend `Accepted=False/Invalid` | Invalid endpoint, pool, model, or default |
 | EdgionBackend `ResolvedRefs=False` | At least one credential Secret is missing, denied, or invalid; the service stays active if another credential is usable |
 | EdgionBackend `PartiallyInvalid=True` | Usable subset is active; check bounded invalid credential aliases |
+
+## Responses accounting and outcomes
+
+Provider observation selects native input_tokens, output_tokens and input_tokens_details.cached_tokens.
+Reasoning tokens are already included in output_tokens and are not added again. JSON requires a
+validated complete document with terminal status. SSE observes response.completed, response.incomplete
+and response.failed with matching response.status; output_text.delta/done and repeated full output
+are not billed again. A generic error event records only a fixed failure fact. JSON cancelled is
+supported; no response.cancelled SSE event is assumed.
+
+Missing terminal usage, malformed/oversized events, unsupported encoding and truncated JSON produce
+unknown, with no character-based actual usage or cost. A completed response with missing usage can
+still be a model-success fact, but has no numeric billing. HTTP200 failed/incomplete/cancelled outcomes
+are excluded from successful credential-health and adaptive TTFT samples. With observation off,
+transport TTFT remains available while model outcome is unobserved and no body parser is installed.
+Attempt failures may include provider_failed, provider_incomplete or provider_cancelled. A later
+transport truncation takes precedence and conservatively retains credential reservation.

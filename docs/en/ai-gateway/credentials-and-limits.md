@@ -122,3 +122,12 @@ Fully validated checked provider usage remains known if later serialization or
 delivery fails. Invalid or incomplete JSON has unknown usage; fixed errors never
 produce output-character estimates. Accounting reuses the translator's usage and
 keeps provider status separate from the final client outcome.
+
+## Responses credential reservations
+
+Credential TPM requires provider observation. Responses final settlement uses reliable provider
+terminal usage only, including reported consumption on failed/incomplete/cancelled outcomes.
+Missing usage or a later upstream/downstream interruption retains the conservative reservation.
+Request character estimates and defaults.maxOutputTokens are provisional reservation inputs,
+not a guarantee of complete remote-history or reasoning consumption. Continuation permits one
+raw credential binding only; unresolved bindings still count. See [Providers](./providers.md#native-responses-subset).

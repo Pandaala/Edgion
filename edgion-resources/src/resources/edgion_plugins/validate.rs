@@ -133,6 +133,17 @@ pub const AI_GUARD_AFTER_AI_PROXY_ERROR: &str =
 /// not attempt to detect a body-mutating plugin between the two. The exact,
 /// scope-independent guarantee is the runtime body-generation check, not this.
 pub fn collect_ai_guard_ordering_errors(entries: &[RequestFilterEntry], errors: &mut Vec<String>) {
+    let responses = entries.iter().any(|entry| {
+        entry.is_enabled()
+            && matches!(&entry.plugin, EdgionPlugin::AiProxy(config) if config.api == super::AiApi::OpenaiResponses)
+    });
+    if responses
+        && entries.iter().any(|entry| {
+            entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::AiGuard(_) | EdgionPlugin::Guardrail(_))
+        })
+    {
+        errors.push("requestPlugins: native Responses does not support AiGuard or Guardrail".to_string());
+    }
     let active = |entry: &RequestFilterEntry| entry.is_enabled();
     // The LAST guard against the FIRST proxy: `[AiGuard, AiProxy, AiGuard]`
     // still has a genuinely misordered third entry.

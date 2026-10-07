@@ -10,3 +10,6 @@ pub use resilience::ResilienceTestSuite;
 pub use single_provider::{
     AiBackendSecretRotationInitialTestSuite, AiBackendSecretRotationUpdatedTestSuite, SingleProviderTestSuite,
 };
+
+mod responses;
+pub use responses::{ResponsesContinuationAllowedSuite, ResponsesContinuationRejectedSuite, ResponsesTestSuite};

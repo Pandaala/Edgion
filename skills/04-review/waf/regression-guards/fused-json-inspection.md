@@ -343,7 +343,10 @@ grammar. It captures bounded decoded keys and raw number spellings; unselected
 strings are UTF-8/escape/surrogate-validated and reported as discarded metadata.
 Skipped content is subject to source/decoded/work limits without inheriting the
 key-capture cap. No frame-sized continuation copy or provider-specific logic is
-introduced into the WAF crate. The AI caller owns its profile and selected paths.
+introduced into the WAF crate. The AI caller owns its profile and selected paths. Task 06 adds optional selected
+string capture with a caller-declared decoded-byte cap. Its default remains discard;
+selected strings use the same UTF-8/escape/grammar and retained budgets before capture.
+Native Responses captures only short status/type metadata, never complete output.
 
 Default `JsonStream` token borrowing, capture, counters, errors, limits and WAF
 verdicts remain unchanged. Selective coverage is additive: preserve the existing

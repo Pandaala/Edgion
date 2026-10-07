@@ -33,7 +33,7 @@ fn every_provider_requests_identity_encoding_after_removing_client_values() {
         session
             .expect_remove_request_header()
             .withf(|name| name != "accept-encoding")
-            .times(5)
+            .times(7)
             .returning(|_| Ok(()));
         session
             .expect_set_request_header()

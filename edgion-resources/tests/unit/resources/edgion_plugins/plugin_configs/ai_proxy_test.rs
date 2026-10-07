@@ -290,10 +290,8 @@ fn api_is_required_and_observation_is_an_independent_explicit_contract() {
         .unwrap()
         .iter()
         .any(|field| field == "api"));
-    for api in ["openaiResponses", "anthropicMessages"] {
-        let config: AiProxyConfig = serde_json::from_value(serde_json::json!({"api":api})).unwrap();
-        assert!(config.validation_error().unwrap().contains("not implemented"));
-    }
+    let unsupported: AiProxyConfig = serde_json::from_value(serde_json::json!({"api":"anthropicMessages"})).unwrap();
+    assert!(unsupported.validation_error().unwrap().contains("not implemented"));
     let mut native: AiProxyConfig = serde_json::from_str(r#"{"api":"openaiChat"}"#).unwrap();
     assert!(native.validation_error().is_none());
     native.inject_usage_tracking = true;
@@ -321,4 +319,21 @@ fn api_is_required_and_observation_is_an_independent_explicit_contract() {
     assert!(native.validation_error().is_some());
     native.usage_observation = AiUsageObservation::Provider;
     assert!(native.validation_error().is_none());
+}
+
+#[test]
+fn native_responses_has_an_explicit_openai_only_matrix() {
+    let mut config: AiProxyConfig = serde_json::from_str(r#"{"api":"openaiResponses"}"#).unwrap();
+    assert!(config.validation_error().is_none());
+    assert!(config.accepts_provider(AiProvider::OpenAI));
+    assert!(!config.accepts_provider(AiProvider::OpenAICompatible));
+    assert!(!config.accepts_provider(AiProvider::Anthropic));
+    config.usage_observation = AiUsageObservation::Provider;
+    assert!(config.validation_error().is_none());
+    config.inject_usage_tracking = true;
+    assert!(config.validation_error().is_some());
+    config.inject_usage_tracking = false;
+    config.conversion = Some(AiConversion::ChatToAnthropic);
+    assert!(config.validation_error().is_some());
+    assert!(!config.accepts_provider(AiProvider::Anthropic));
 }

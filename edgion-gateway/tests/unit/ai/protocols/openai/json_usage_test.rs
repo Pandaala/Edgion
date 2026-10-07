@@ -148,3 +148,51 @@ fn capture_limits_apply_to_contiguous_and_split_tokens() {
         assert_eq!(outcome(body.as_bytes(), 7), expected);
     }
 }
+
+#[test]
+fn responses_json_selects_exact_terminal_status_and_preserves_large_output_discard() {
+    for status in ["completed", "incomplete", "failed", "cancelled"] {
+        let body = format!(
+            r#"{{"output":[{{"content":[{{"text":"{}"}}]}}],"status":"{status}","usage":{{"input_tokens":13,"output_tokens":7,"input_tokens_details":{{"cached_tokens":3}},"output_tokens_details":{{"reasoning_tokens":5}}}}}}"#,
+            "x".repeat(131_072)
+        );
+        for width in [1, 17, body.len()] {
+            let mut observer = JsonUsageObserver::responses(false);
+            for chunk in body.as_bytes().chunks(width) {
+                observer.feed(chunk);
+            }
+            assert_eq!(
+                observer.finish(),
+                JsonUsageOutcome::Reported(ReportedAiUsage {
+                    input_tokens: 13,
+                    output_tokens: 7,
+                    cache_read_input_tokens: 3,
+                    cache_write_input_tokens: 0,
+                })
+            );
+            assert_eq!(observer.response_outcome(), ResponseOutcome::from_status(status));
+            assert!(observer.parser_usage().peak_retained_bytes < 8192);
+        }
+    }
+}
+
+#[test]
+fn responses_usage_parent_replacement_and_status_never_guess_strings_by_length() {
+    let cases: &[(&[u8], ResponseOutcome, bool)] = &[
+        (br#"{"status":"completed","status":"cancelled","usage":{"input_tokens":4,"output_tokens":5}}"#, ResponseOutcome::Cancelled, true),
+        (br#"{"status":"failed","status":"queued","usage":null}"#, ResponseOutcome::Unknown, false),
+        (br#"{"status":"completed","usage":{"input_tokens":4,"output_tokens":5},"usage":{}}"#, ResponseOutcome::Completed, false),
+        (br#"{"status":"completed","usage":{"input_tokens":4,"output_tokens":5,"input_tokens_details":{"cached_tokens":9}}}"#, ResponseOutcome::Completed, false),
+        (br#"{"status":"completed","usage":{"input_tokens":18446744073709551615,"output_tokens":1}}"#, ResponseOutcome::Completed, false),
+    ];
+    for (body, status, reported) in cases {
+        for width in 1..=body.len() {
+            let mut observer = JsonUsageObserver::responses(false);
+            for chunk in body.chunks(width) {
+                observer.feed(chunk);
+            }
+            assert_eq!(matches!(observer.finish(), JsonUsageOutcome::Reported(_)), *reported);
+            assert_eq!(observer.response_outcome(), *status);
+        }
+    }
+}

@@ -10,7 +10,7 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_backend::AiProvider;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::{
-    AiBackendSelection, AiProxyConfig, AiUsageObservation, OnUnknownModel, PluginValidation,
+    AiApi, AiBackendSelection, AiProxyConfig, AiUsageObservation, OnUnknownModel, PluginValidation,
 };
 use pingora_http::ResponseHeader;
 
@@ -292,11 +292,35 @@ impl AiProxy {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         }
 
-        if session.get_method() == "GET" && session.get_path() == "/v1/models" {
+        if self.config.api == AiApi::OpenaiChat && session.get_method() == "GET" && session.get_path() == "/v1/models" {
             return self.write_model_list(&snapshot, &backends, session, log).await;
         }
 
-        if session.get_method() != "POST" || session.get_path() != "/v1/chat/completions" {
+        let (operation, path) = match self.config.api {
+            AiApi::OpenaiChat => (AiOperation::ChatCompletions, "/v1/chat/completions"),
+            AiApi::OpenaiResponses => (AiOperation::Responses, "/v1/responses"),
+            AiApi::AnthropicMessages => {
+                return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration)
+            }
+        };
+        if self.config.api == AiApi::OpenaiResponses
+            && (session
+                .ctx()
+                .ai_request_guard_invoked
+                .load(std::sync::atomic::Ordering::Relaxed)
+                || session
+                    .ctx()
+                    .ai_state()
+                    .is_some_and(|state| state.semantic_guard_claimed))
+        {
+            return Self::reject(
+                session,
+                log,
+                "responses-guard-unsupported",
+                AiProxyError::UnsupportedParameter,
+            );
+        }
+        if session.get_method() != "POST" || session.get_path() != path {
             return Self::reject(session, log, "endpoint-unsupported", AiProxyError::UnsupportedEndpoint);
         }
         if session.declares_body() == Some(false) {
@@ -334,7 +358,11 @@ impl AiProxy {
             }
         }
 
-        let mut canonical = match canonical_openai_request(body, self.config.inject_usage_tracking) {
+        let mut canonical = match if self.config.api == AiApi::OpenaiResponses {
+            canonical_responses_request(body)
+        } else {
+            canonical_openai_request(body, self.config.inject_usage_tracking)
+        } {
             Ok(canonical) => canonical,
             Err(error) => return Self::reject(session, log, "request-invalid", error),
         };
@@ -348,6 +376,11 @@ impl AiProxy {
             };
         }
 
+        if canonical.continuation {
+            if let Err(error) = validate_continuation(&self.config, &backends, &snapshot, &canonical.logical_model) {
+                return Self::reject(session, log, "continuation-unsupported", error);
+            }
+        }
         let Ok(decision) =
             self.model_routes
                 .decide(&canonical.requested_model, session.request_header_map(), &backends)
@@ -523,7 +556,11 @@ impl AiProxy {
             .iter()
             .map(|weights| BackendCredentials { weights })
             .collect();
-        let route_retries = session.ctx().retry_attempts().unwrap_or(0);
+        let route_retries = if canonical.continuation {
+            0
+        } else {
+            session.ctx().retry_attempts().unwrap_or(0)
+        };
         let Ok(route_retries) = u8::try_from(route_retries) else {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         };
@@ -654,7 +691,7 @@ impl AiProxy {
         let plan = AiAttemptPlan::Ready(ReadyAiAttemptPlan {
             request_body: canonical.body,
             api: self.config.api,
-            operation: AiOperation::ChatCompletions,
+            operation,
             conversion: self.config.conversion,
             usage_observation: self.config.usage_observation,
             body_generation,
@@ -664,6 +701,7 @@ impl AiProxy {
             canonical_query: session.get_query(),
             logical_model: canonical.logical_model,
             requested_streaming: canonical.requested_streaming,
+            continuation: canonical.continuation,
             inject_usage_tracking: self.config.inject_usage_tracking,
             input_chars: canonical.input_chars,
             selection: self.config.backend_selection.selection_type,
@@ -707,6 +745,7 @@ struct CanonicalOpenAiRequest {
     requested_model: String,
     logical_model: String,
     requested_streaming: bool,
+    continuation: bool,
     input_chars: u64,
     output_bound: Option<u64>,
     mutated: bool,
@@ -838,10 +877,57 @@ fn canonical_openai_request(body: Bytes, inject_usage_tracking: bool) -> Result<
         requested_model: metadata.model.clone(),
         logical_model: metadata.model,
         requested_streaming: metadata.streaming,
+        continuation: false,
         input_chars: 0,
         output_bound: metadata.output_bound,
         mutated,
     })
+}
+
+fn canonical_responses_request(body: Bytes) -> Result<CanonicalOpenAiRequest, AiProxyError> {
+    let metadata = request::responses_metadata(&body)?;
+    Ok(CanonicalOpenAiRequest {
+        body,
+        requested_model: metadata.model.clone(),
+        logical_model: metadata.model,
+        requested_streaming: metadata.streaming,
+        continuation: metadata.continuation,
+        input_chars: 0,
+        output_bound: metadata.output_bound,
+        mutated: false,
+    })
+}
+
+fn validate_continuation(
+    config: &AiProxyConfig,
+    backends: &[crate::routes::http::match_unit::CompiledBackend],
+    snapshot: &crate::ai::AiBackendSnapshot,
+    model: &str,
+) -> Result<(), AiProxyError> {
+    // Declaration counts are evaluated before any availability/weight/model filtering.
+    // Model-route policy is intentionally excluded from this first continuation subset.
+    if backends.len() != 1
+        || !config.model_routes.is_empty()
+        || config.token_quota.as_ref().is_some_and(|quota| {
+            matches!(
+                quota.on_exceeded,
+                edgion_resources::resources::edgion_plugins::AiTokenQuotaOnExceeded::Downgrade { .. }
+            )
+        })
+    {
+        return Err(AiProxyError::UnsupportedParameter);
+    }
+    let (_, _, key) = ai_candidate_spec(&backends[0]).ok_or(AiProxyError::UnsupportedParameter)?;
+    let backend = snapshot.get_by_key(&key).ok_or(AiProxyError::BackendUnavailable)?;
+    if backend.provider != AiProvider::OpenAI
+        || backend.declared_credential_count != 1
+        || backend
+            .resolve_model(model)
+            .is_some_and(|resolved| resolved.canonical_name != model)
+    {
+        return Err(AiProxyError::UnsupportedParameter);
+    }
+    Ok(())
 }
 
 fn checked_utf8_chars(body: &[u8]) -> Result<u64, AiProxyError> {

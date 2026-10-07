@@ -1,6 +1,6 @@
 //! Bounded OpenAI usage extraction for streaming and non-streaming responses.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use arc_swap::ArcSwapOption;
@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use crate::ai::protocols::openai::canonical_sse::{observe_canonical_event, CanonicalRecordBatch};
 use crate::ai::protocols::openai::error::render_openai_error;
-use crate::ai::protocols::openai::json_usage::{JsonUsageObserver, JsonUsageOutcome};
+use crate::ai::protocols::openai::json_usage::{JsonUsageObserver, JsonUsageOutcome, ResponseOutcome};
 use crate::ai::quota::{AiQuotaRequest, QuotaAccumulator};
 use crate::response::terminal::{ResponseTerminalCause, TerminalEmission};
 
@@ -25,7 +25,7 @@ use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
 use crate::plugins::runtime::PluginSession;
 use crate::sse::window::WindowRecord;
-use crate::sse::{SseDecoder, SseRecordRef};
+use crate::sse::{SseBlockStatus, SseDecoder, SseRecordRef};
 
 #[cfg(test)]
 include!("../../../tests/support/ai/accounting/usage_test/27_macro_definition.rs");
@@ -129,7 +129,7 @@ pub(crate) fn terminate_over_quota(
         sink,
         session,
         inject,
-        &QUOTA_EXCEEDED_SSE_EVENT,
+        Some(&QUOTA_EXCEEDED_SSE_EVENT),
         EdgionErrorCode::AiQuotaOverLimitTerminated,
     );
 }
@@ -154,7 +154,7 @@ pub(crate) fn terminate_quota_unenforceable(
         sink,
         session,
         inject,
-        &QUOTA_UNENFORCEABLE_SSE_EVENT,
+        Some(&QUOTA_UNENFORCEABLE_SSE_EVENT),
         EdgionErrorCode::AiSseDegradedQuotaTerminated,
     );
 }
@@ -170,7 +170,7 @@ fn terminate_malformed_quota_unenforceable(
         sink,
         session,
         inject,
-        &QUOTA_UNENFORCEABLE_SSE_EVENT,
+        Some(&QUOTA_UNENFORCEABLE_SSE_EVENT),
         EdgionErrorCode::AiSseMalformedQuotaTerminated,
     );
 }
@@ -188,7 +188,7 @@ fn terminate_ai_stream(
     sink: &mut ResponseBodySink,
     session: &mut dyn PluginSession,
     inject: bool,
-    event: &LazyLock<Bytes>,
+    event: Option<&Bytes>,
     terminal_status: EdgionErrorCode,
 ) {
     let cause = match terminal_status {
@@ -199,7 +199,7 @@ fn terminate_ai_stream(
         return;
     }
     let emission = if inject {
-        if sink.push((*event).clone()).is_err() {
+        if event.is_none_or(|event| sink.push(event.clone()).is_err()) {
             session.record_error(EdgionErrorCode::AiQuotaErrorEventDropped);
             TerminalEmission::NoEvent
         } else {
@@ -320,6 +320,9 @@ pub enum GenAiAttemptFailure {
     AmbiguousTransport,
     BackendRequestTimeout,
     IncompleteResponse,
+    ProviderFailed,
+    ProviderIncomplete,
+    ProviderCancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -336,6 +339,7 @@ pub enum GenAiAttemptUsageSource {
 pub(crate) enum AiUsageUnavailableReason {
     ObservationUnavailable,
     IncompleteJson,
+    MissingProviderUsage,
     ArithmeticOverflow,
 }
 
@@ -374,6 +378,8 @@ pub struct AiUsageShared {
     encoding_unavailable: AtomicBool,
     observation_diagnostic_recorded: AtomicBool,
     observation_off: AtomicBool,
+    responses: bool,
+    response_outcome: AtomicU8,
     json_started: AtomicBool,
     json_complete: AtomicBool,
     gateway_terminated: AtomicBool,
@@ -384,6 +390,43 @@ impl AiUsageShared {
         Self {
             observation_off: AtomicBool::new(observation == AiUsageObservation::Off),
             ..Self::default()
+        }
+    }
+
+    pub(crate) fn with_responses(observation: AiUsageObservation) -> Self {
+        Self {
+            responses: true,
+            ..Self::with_observation(observation)
+        }
+    }
+
+    pub(crate) fn observe_response_outcome(&self, outcome: ResponseOutcome) {
+        self.response_outcome.store(outcome as u8, Ordering::Release);
+    }
+    pub(crate) fn response_outcome(&self) -> ResponseOutcome {
+        match self.response_outcome.load(Ordering::Acquire) {
+            1 => ResponseOutcome::Completed,
+            2 => ResponseOutcome::Incomplete,
+            3 => ResponseOutcome::Failed,
+            4 => ResponseOutcome::Cancelled,
+            _ => ResponseOutcome::Unknown,
+        }
+    }
+    pub(crate) fn permits_provider_success(&self) -> bool {
+        !self.responses || (!self.observation_unavailable() && self.response_outcome() == ResponseOutcome::Completed)
+    }
+    pub(crate) fn permits_latency_sample(&self) -> bool {
+        !self.responses || self.observation_is_off() || self.permits_provider_success()
+    }
+    pub(crate) fn provider_failure(&self) -> Option<GenAiAttemptFailure> {
+        if !self.responses || self.observation_is_off() {
+            return None;
+        }
+        match self.response_outcome() {
+            ResponseOutcome::Failed => Some(GenAiAttemptFailure::ProviderFailed),
+            ResponseOutcome::Incomplete => Some(GenAiAttemptFailure::ProviderIncomplete),
+            ResponseOutcome::Cancelled => Some(GenAiAttemptFailure::ProviderCancelled),
+            _ => None,
         }
     }
 
@@ -466,6 +509,13 @@ impl AiUsageShared {
                 source: GenAiAttemptUsageSource::Unknown,
                 usage: None,
                 unavailable,
+            };
+        }
+        if self.responses && self.reported_usage().is_none() {
+            return AiUsageSnapshot {
+                source: GenAiAttemptUsageSource::Unknown,
+                usage: None,
+                unavailable: Some(AiUsageUnavailableReason::MissingProviderUsage),
             };
         }
         let (usage, source) = self.reported_usage().map_or_else(
@@ -683,6 +733,9 @@ pub struct UsageExtractionProcessor {
     /// the observation status again.
     sse_malformed_reported: bool,
     semantic_source_overflowed: bool,
+    responses: bool,
+    response_terminal_seen: bool,
+    response_sequence: Option<u64>,
 }
 
 impl UsageExtractionProcessor {
@@ -711,7 +764,24 @@ impl UsageExtractionProcessor {
             sse_degraded_reported: false,
             sse_malformed_reported: false,
             semantic_source_overflowed: false,
+            responses: false,
+            response_terminal_seen: false,
+            response_sequence: None,
         }
+    }
+
+    pub(crate) fn new_responses(
+        shared: Arc<AiUsageShared>,
+        quota: Option<Arc<QuotaAccumulator>>,
+        requested_streaming: bool,
+        terminate_on_over_limit: bool,
+    ) -> Self {
+        let mut processor = Self::new_with_quota(shared, quota, requested_streaming, terminate_on_over_limit);
+        // Responses output text/done/full-output repeats and hidden reasoning cannot
+        // constitute a complete billing estimate. Count only provider usage totals.
+        processor.sse = SseDecoder::with_default_limit();
+        processor.responses = true;
+        processor
     }
 
     fn observe_chunk(
@@ -726,8 +796,47 @@ impl UsageExtractionProcessor {
                 let quota = self.quota.as_ref();
                 let mut batch = semantic_guard_active.then(CanonicalRecordBatch::new);
                 let mut batch_overflowed = false;
+                let responses = self.responses;
+                let terminal_seen = &mut self.response_terminal_seen;
+                let sequence = &mut self.response_sequence;
                 self.sse.feed_records(chunk, |record| match record {
                     SseRecordRef::Block { status, event } => {
+                        if responses {
+                            match status {
+                                SseBlockStatus::Dataless => return,
+                                SseBlockStatus::Poisoned => {
+                                    shared.mark_observation_unavailable();
+                                    return;
+                                }
+                                SseBlockStatus::Data => {}
+                            }
+                            let observed = crate::ai::protocols::openai::responses::observe_event(&event);
+                            if let Some(value) = observed.sequence {
+                                *sequence = Some(sequence.map_or(value, |previous| previous.max(value)));
+                            }
+                            if observed.unavailable {
+                                shared.mark_observation_unavailable();
+                            }
+                            if let Some(outcome) = observed.outcome {
+                                if *terminal_seen && outcome != shared.response_outcome() {
+                                    shared.mark_observation_unavailable();
+                                }
+                                *terminal_seen = true;
+                                shared.observe_response_outcome(outcome);
+                                if let Some(usage) = observed.usage {
+                                    shared.observe_reported_usage(
+                                        usage.input_tokens,
+                                        usage.output_tokens,
+                                        usage.cache_read_input_tokens,
+                                        usage.cache_write_input_tokens,
+                                    );
+                                    if let Some(quota) = quota {
+                                        quota.observe_output_total(usage.output_tokens);
+                                    }
+                                }
+                            }
+                            return;
+                        }
                         let observation = observe_canonical_event(&event);
                         if let Some(quota) = quota {
                             quota.add_output_units(observation.output_units);
@@ -761,6 +870,9 @@ impl UsageExtractionProcessor {
                     }
                 });
                 self.shared.add_output_chars(self.sse.take_data_chars());
+                if self.responses && (self.sse.degraded() || self.sse.malformed_events() != 0) {
+                    self.shared.mark_observation_unavailable();
+                }
                 if self.sse.degraded() {
                     self.shared.sse_degraded.store(true, Ordering::Release);
                     if let Some(batch) = &mut batch {
@@ -775,7 +887,9 @@ impl UsageExtractionProcessor {
                 }
             }
             ResponseStreamKind::None => {
-                self.shared.add_output_chars(self.non_streaming_chars.feed(&chunk));
+                if !self.responses {
+                    self.shared.add_output_chars(self.non_streaming_chars.feed(&chunk));
+                }
                 self.observe_non_streaming(&chunk);
                 None
             }
@@ -787,7 +901,13 @@ impl UsageExtractionProcessor {
             return;
         }
         self.shared.json_started.store(true, Ordering::Release);
-        let observer = self.json.get_or_insert_with(|| Box::new(JsonUsageObserver::new()));
+        let observer = self.json.get_or_insert_with(|| {
+            Box::new(if self.responses {
+                JsonUsageObserver::responses(false)
+            } else {
+                JsonUsageObserver::new()
+            })
+        });
         observer.feed(chunk);
         if observer.failed() {
             self.shared.mark_observation_unavailable();
@@ -804,21 +924,47 @@ impl UsageExtractionProcessor {
             self.chars_finished = true;
         }
         if stream_kind == ResponseStreamKind::None && !self.shared.observation_unavailable() {
-            let observer = self.json.get_or_insert_with(|| Box::new(JsonUsageObserver::new()));
-            match observer.finish() {
-                JsonUsageOutcome::Reported(usage) => {
+            let observer = self.json.get_or_insert_with(|| {
+                Box::new(if self.responses {
+                    JsonUsageObserver::responses(false)
+                } else {
+                    JsonUsageObserver::new()
+                })
+            });
+            let result = observer.finish();
+            if self.responses {
+                let outcome = if matches!(result, JsonUsageOutcome::Unavailable(_)) {
+                    ResponseOutcome::Unknown
+                } else {
+                    observer.response_outcome()
+                };
+                self.response_terminal_seen = outcome != ResponseOutcome::Unknown;
+                self.shared.observe_response_outcome(outcome);
+                if !self.response_terminal_seen {
+                    self.shared.mark_observation_unavailable();
+                }
+            }
+            match result {
+                JsonUsageOutcome::Reported(usage) if !self.shared.observation_unavailable() => {
                     self.shared.observe_reported_usage(
                         usage.input_tokens,
                         usage.output_tokens,
                         usage.cache_read_input_tokens,
                         usage.cache_write_input_tokens,
                     );
+                    if self.responses {
+                        if let Some(quota) = &self.quota {
+                            quota.observe_output_total(usage.output_tokens);
+                        }
+                    }
                     self.shared.json_complete.store(true, Ordering::Release);
                 }
                 JsonUsageOutcome::Missing => {
                     self.shared.json_complete.store(true, Ordering::Release);
                 }
-                JsonUsageOutcome::Unavailable(_) => self.shared.mark_observation_unavailable(),
+                JsonUsageOutcome::Unavailable(_) | JsonUsageOutcome::Reported(_) => {
+                    self.shared.mark_observation_unavailable()
+                }
             }
         }
     }
@@ -912,6 +1058,21 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
             session.record_error(EdgionErrorCode::AiSseDecodeMalformed);
         }
         if end_of_stream {
+            if self.responses && stream_kind == ResponseStreamKind::Sse {
+                let mut incomplete_tail = false;
+                self.sse.finish_records(|record| {
+                    if matches!(record, SseRecordRef::EosTail(_)) {
+                        incomplete_tail = true;
+                    }
+                });
+                if incomplete_tail
+                    || !self.response_terminal_seen
+                    || self.sse.degraded()
+                    || self.sse.malformed_events() != 0
+                {
+                    self.shared.mark_observation_unavailable();
+                }
+            }
             if semantic_guard_active {
                 let mut batch = canonical_batch.take().unwrap_or_else(CanonicalRecordBatch::new);
                 let mut finish_overflowed = false;
@@ -975,6 +1136,30 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         // below share these three gates exactly, so `changes_body_length`
         // continues to describe every possible mutation by this processor.
         if !(self.requested_streaming && self.terminate_on_over_limit && self.quota.is_some()) {
+            return;
+        }
+        if self.responses {
+            let error = if self.quota.as_ref().is_some_and(|quota| quota.over_limit()) {
+                Some((AiProxyError::QuotaExceeded, EdgionErrorCode::AiQuotaOverLimitTerminated))
+            } else if self.sse.degraded() || self.shared.observation_unavailable() {
+                Some((
+                    AiProxyError::QuotaUnavailable,
+                    EdgionErrorCode::AiSseDegradedQuotaTerminated,
+                ))
+            } else {
+                None
+            };
+            if let Some((error, code)) = error {
+                let event = crate::ai::protocols::openai::responses::local_error(error, self.response_sequence);
+                terminate_ai_stream(
+                    &self.shared,
+                    sink,
+                    session,
+                    stream_kind == ResponseStreamKind::Sse,
+                    event.as_ref(),
+                    code,
+                );
+            }
             return;
         }
         if self.quota.as_ref().is_some_and(|quota| quota.over_limit()) {

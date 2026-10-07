@@ -194,3 +194,22 @@ otherwise eligible candidate.
 
 Durable billing and usage attribution belong in the access log — see
 [Observability](./observability.md).
+
+## Responses measurement limits
+
+Responses reuses the existing cumulative quota accumulator and Redis worker. Provider terminal output
+totals advance a monotonic watermark; deltas and repeated output do not add separate charges.
+Native Responses may report usable totals only at termination. This cannot guarantee per-token
+immediate cuts or zero concurrent overshoot. Missing/invalid terminal usage stays unknown, preserves
+already charged quota and conservative credential reservation, and is never refunded as zero.
+Admission input estimates are provisional capacity estimates, not actual billing: remote history,
+hosted resources and hidden reasoning cannot be measured from the submitted input's character count.
+
+Passive observation forwards original malformed or oversized bytes while marking accounting unknown.
+With active Reject, broken/oversized SSE framing terminates under the existing failure policy.
+A local Responses error uses native type=error, code, message, param and sequence_number, rather
+than a Chat error chunk or [DONE]. Its sequence is the checked successor of the highest validated
+provider sequence, or zero before one was observed. Overflow suppresses the diagnostic event; this
+local marker does not guarantee provider replay/order lineage after a malformed partial event.
+For Chat's character-estimation and two-malformed-event tolerance described above, keep the Chat
+dialect distinction; those fallback rules do not apply to Responses.

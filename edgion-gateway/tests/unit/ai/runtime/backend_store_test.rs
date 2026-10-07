@@ -600,3 +600,48 @@ fn unresolved_tpm_is_retained_in_the_same_backend_generation() {
     assert!(after.generation() > before.generation());
     assert!(!before.get_by_key("default/provider").unwrap().has_credential_tpm);
 }
+
+#[test]
+fn unresolved_binding_changes_backend_generation_without_replacing_usable_limiter() {
+    let store = AiBackendStore::new();
+    let mut configured = (*resource("provider", "https://provider.example.com", Some(b"key"))).clone();
+    store.full_set(&HashMap::from([(
+        "default/provider".to_string(),
+        Arc::new(configured.clone()),
+    )]));
+    let before = store.snapshot();
+    let first = before.get_by_key("default/provider").unwrap();
+    assert_eq!(first.declared_credential_count, 1);
+    let mut missing = configured.spec.ai.credential_pool.credentials[0].clone();
+    missing.name = "missing".to_string();
+    missing.weight = 1;
+    missing.credential.secret = None;
+    configured.spec.ai.credential_pool.credentials.push(missing);
+    store.partial_update(
+        HashMap::new(),
+        HashMap::from([("default/provider".to_string(), Arc::new(configured.clone()))]),
+        HashSet::new(),
+    );
+    let second = store.get_by_key("default/provider").unwrap();
+    assert_eq!(second.declared_credential_count, 2);
+    assert_eq!(second.credential_pool.credentials.len(), 1);
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert!(Arc::ptr_eq(
+        &first.credential_pool.limiter_core,
+        &second.credential_pool.limiter_core
+    ));
+    assert_eq!(
+        before.get_by_key("default/provider").unwrap().declared_credential_count,
+        1
+    );
+    configured.spec.ai.credential_pool.credentials.pop();
+    store.partial_update(
+        HashMap::new(),
+        HashMap::from([("default/provider".to_string(), Arc::new(configured))]),
+        HashSet::new(),
+    );
+    assert_eq!(
+        store.get_by_key("default/provider").unwrap().declared_credential_count,
+        1
+    );
+}

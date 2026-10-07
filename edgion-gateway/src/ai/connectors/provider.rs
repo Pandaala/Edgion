@@ -23,6 +23,8 @@ pub(crate) fn prepare_provider_request(
         "api-key",
         "anthropic-version",
         "anthropic-beta",
+        "openai-organization",
+        "openai-project",
     ] {
         adapter
             .remove_request_header(header)

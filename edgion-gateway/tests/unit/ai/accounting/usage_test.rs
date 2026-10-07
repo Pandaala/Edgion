@@ -1094,3 +1094,142 @@ fn public_off_initialization_suppresses_converter_numeric_publication() {
     assert_eq!(snapshot.source, GenAiAttemptUsageSource::NotObserved);
     assert_eq!(snapshot.usage, None);
 }
+
+#[tokio::test]
+async fn responses_reports_consumption_for_all_native_json_terminal_statuses() {
+    for status in ["completed", "incomplete", "failed", "cancelled"] {
+        let shared = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        let quota = Arc::new(QuotaAccumulator::new_for_test(1));
+        let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), Some(quota.clone()), false, false);
+        let body = format!(
+            r#"{{"output":[{{"text":"repeated output"}}],"status":"{status}","usage":{{"input_tokens":11,"output_tokens":7}}}}"#
+        );
+        let chunks: Vec<_> = body
+            .as_bytes()
+            .iter()
+            .enumerate()
+            .map(|(i, _)| (&body.as_bytes()[i..i + 1], i + 1 == body.len()))
+            .collect();
+        feed(&mut processor, &chunks, ResponseStreamKind::None).await;
+        assert_eq!(
+            shared.accounting_snapshot(99999, true).source,
+            GenAiAttemptUsageSource::Reported
+        );
+        assert_eq!(shared.reported_tokens(), Some((11, 7)));
+        assert_eq!(quota.observed_output_for_test(), 7);
+        assert_eq!(shared.permits_provider_success(), status == "completed");
+        assert_eq!(shared.output_chars(), 0);
+    }
+}
+
+#[tokio::test]
+async fn responses_missing_invalid_or_partial_json_usage_never_becomes_an_estimate() {
+    for (body, eos) in [
+        (
+            br#"{"status":"completed","output":[{"text":"some output"}]}"#.as_slice(),
+            true,
+        ),
+        (br#"{"status":"completed","usage":null}"#, true),
+        (
+            br#"{"status":"completed","usage":{"input_tokens":11,"output_tokens":7}}garbage"#,
+            true,
+        ),
+        (
+            br#"{"status":"in_progress","usage":{"input_tokens":11,"output_tokens":7}}"#,
+            true,
+        ),
+        (
+            br#"{"status":"completed","usage":{"input_tokens":11,"output_tokens":7}}"#,
+            false,
+        ),
+    ] {
+        let shared = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        shared.set_input_chars(4000);
+        let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), None, false, false);
+        feed(&mut processor, &[(body, eos)], ResponseStreamKind::None).await;
+        let snapshot = shared.accounting_snapshot(1000, true);
+        assert_eq!(snapshot.source, GenAiAttemptUsageSource::Unknown);
+        assert!(snapshot.usage.is_none());
+        assert_eq!(
+            shared.permits_provider_success(),
+            eos && !shared.observation_unavailable()
+                && shared.response_outcome() == crate::ai::protocols::openai::json_usage::ResponseOutcome::Completed
+        );
+    }
+}
+
+#[tokio::test]
+async fn responses_sse_deltas_and_done_repeats_only_charge_one_terminal_usage_total() {
+    let shared = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+    let quota = Arc::new(QuotaAccumulator::new_for_test(1));
+    let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), Some(quota.clone()), true, false);
+    let body = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"text\",\"sequence_number\":1}\n\ndata: {\"type\":\"response.output_text.done\",\"text\":\"text\",\"sequence_number\":2}\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"status\":\"completed\",\"output\":[{\"text\":\"text\"}],\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}}\n\n";
+    let chunks: Vec<_> = body
+        .iter()
+        .enumerate()
+        .map(|(i, _)| (&body[i..i + 1], i + 1 == body.len()))
+        .collect();
+    feed(&mut processor, &chunks, ResponseStreamKind::Sse).await;
+    assert_eq!(shared.reported_tokens(), Some((11, 7)));
+    assert_eq!(quota.observed_output_for_test(), 7);
+    assert_eq!(shared.output_chars(), 0);
+    assert!(shared.permits_provider_success());
+    assert_eq!(processor.response_sequence, Some(3));
+}
+
+#[tokio::test]
+async fn responses_sse_requires_matching_terminal_and_valid_framing() {
+    for body in [
+        b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"text\"}\n\n".as_slice(),
+        b"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"failed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
+        b"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\ndata: unfinished",
+    ] {
+        let shared = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), None, true, false);
+        feed(&mut processor, &[(body,true)], ResponseStreamKind::Sse).await;
+        assert_eq!(shared.accounting_snapshot(42,true).source, GenAiAttemptUsageSource::Unknown);
+        assert!(!shared.permits_provider_success());
+    }
+}
+
+#[test]
+fn responses_off_preserves_transport_latency_but_does_not_claim_model_success_or_usage() {
+    let shared = AiUsageShared::with_responses(AiUsageObservation::Off);
+    shared.observe_reported_usage(1, 2, 0, 0);
+    assert_eq!(
+        shared.accounting_snapshot(42, true).source,
+        GenAiAttemptUsageSource::NotObserved
+    );
+    assert!(shared.permits_latency_sample());
+    assert!(!shared.permits_provider_success());
+}
+
+#[tokio::test]
+async fn responses_heartbeat_blocks_do_not_invalidate_usage_or_trigger_active_reject() {
+    let body=b": ping\n\nid: transport-id\n\nevent: heartbeat\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}}\n\n: final ping\n\n";
+    for active in [false, true] {
+        let shared = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        let quota = Arc::new(QuotaAccumulator::new_for_test(100));
+        let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), Some(quota.clone()), true, active);
+        let mut session = mock_session();
+        let mut sink = ResponseBodySink::new();
+        for (index, byte) in body.iter().enumerate() {
+            let mut chunk = Some(Bytes::copy_from_slice(std::slice::from_ref(byte)));
+            processor
+                .on_chunk(
+                    &mut chunk,
+                    index + 1 == body.len(),
+                    ResponseStreamKind::Sse,
+                    &mut sink,
+                    &mut session,
+                )
+                .await;
+            assert!(!sink.is_terminated());
+            assert!(sink.peek_extra().is_empty());
+        }
+        assert_eq!(shared.reported_tokens(), Some((11, 7)));
+        assert_eq!(quota.observed_output_for_test(), 7);
+        assert!(!shared.observation_unavailable());
+        assert!(shared.permits_provider_success());
+    }
+}

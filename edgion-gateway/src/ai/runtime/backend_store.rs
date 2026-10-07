@@ -116,6 +116,8 @@ pub struct RuntimeAiBackend {
     pub uid: String,
     pub provider: AiProvider,
     pub has_credential_tpm: bool,
+    /// Raw declarations, including unresolved and zero-weight bindings.
+    pub declared_credential_count: usize,
     pub endpoint: RuntimeAiEndpoint,
     pub streaming: bool,
     pub max_output_tokens: Option<u32>,
@@ -612,6 +614,7 @@ fn try_compile_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeAiB
         uid,
         provider: ai.provider,
         has_credential_tpm: ai.has_credential_tpm(),
+        declared_credential_count: ai.credential_pool.credentials.len(),
         endpoint,
         streaming: ai.defaults.streaming,
         max_output_tokens: ai.defaults.max_output_tokens,

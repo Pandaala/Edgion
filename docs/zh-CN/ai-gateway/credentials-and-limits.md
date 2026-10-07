@@ -103,3 +103,9 @@ ai:
 完整验证且算术检查通过的提供商用量，在之后的序列化或交付失败时仍然有效。无效或不完整
 JSON 的用量为 unknown；固定错误响应不会产生输出字符估算。核算复用转换器发布的用量，
 并区分提供商状态与最终客户端结果。
+
+## Responses 的凭据预留
+
+凭据 TPM 要求 provider 观察；只用可靠终态 usage 结算实际用量，也包括 failed/incomplete/cancelled 中已消耗的量。
+usage 缺失或后续上下游中断时保守保留预留。请求字符估计和 defaults.maxOutputTokens 只是暂时容量依据，
+不能完整预测远端历史或 reasoning。续接只能声明一个凭据绑定，未解析的绑定也计入数量。

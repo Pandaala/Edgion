@@ -58,6 +58,11 @@ pub(crate) struct AiHttpState {
 }
 
 impl EdgionHttpContext {
+    pub(crate) fn has_responses_plan(&self) -> bool {
+        matches!(self.ai_state().and_then(|state| state.attempt_plan.as_ref()),
+            Some(AiAttemptPlan::Ready(plan)) if plan.api == edgion_resources::resources::edgion_plugins::AiApi::OpenaiResponses)
+    }
+
     pub(crate) fn try_set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
         let state = self.ensure_ai_state();
         if state.request.is_some() {

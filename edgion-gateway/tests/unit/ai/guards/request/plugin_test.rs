@@ -54,6 +54,11 @@ async fn a_request_that_is_not_a_chat_completion_passes_through_untouched() {
         guard.run_request(&mut session, &mut log).await,
         PluginRunningResult::GoodNext
     );
+    assert!(session
+        .ctx()
+        .ai_request_guard_invoked
+        .load(std::sync::atomic::Ordering::Relaxed));
+    assert!(session.ctx().ai_state.is_none());
 }
 
 #[tokio::test]

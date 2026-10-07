@@ -8,6 +8,48 @@ use edgion_waf::seclang::{
 pub(crate) const MAX_USAGE_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DEPTH: usize = 64;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum ResponseOutcome {
+    #[default]
+    Unknown,
+    Completed,
+    Incomplete,
+    Failed,
+    Cancelled,
+}
+impl ResponseOutcome {
+    fn from_status(status: &str) -> Self {
+        match status {
+            "completed" => Self::Completed,
+            "incomplete" => Self::Incomplete,
+            "failed" => Self::Failed,
+            "cancelled" => Self::Cancelled,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ResponsesEventKind {
+    #[default]
+    Other,
+    Completed,
+    Incomplete,
+    Failed,
+    Error,
+}
+impl ResponsesEventKind {
+    pub(crate) fn outcome(self) -> Option<ResponseOutcome> {
+        match self {
+            Self::Completed => Some(ResponseOutcome::Completed),
+            Self::Incomplete => Some(ResponseOutcome::Incomplete),
+            Self::Failed | Self::Error => Some(ResponseOutcome::Failed),
+            Self::Other => None,
+        }
+    }
+}
+
 fn limits() -> JsonStreamSelectiveLimits {
     JsonStreamSelectiveLimits {
         lexical: JsonStreamLimits {
@@ -44,6 +86,21 @@ impl JsonUsageObserver {
             outcome: None,
         }
     }
+    pub(crate) fn responses(event: bool) -> Self {
+        let mut observer = Self::new();
+        observer.selector.responses = true;
+        observer.selector.event = event;
+        observer
+    }
+    pub(crate) fn response_outcome(&self) -> ResponseOutcome {
+        self.selector.status
+    }
+    pub(crate) fn event_kind(&self) -> ResponsesEventKind {
+        self.selector.event_kind
+    }
+    pub(crate) fn sequence_number(&self) -> Option<u64> {
+        self.selector.sequence
+    }
     pub(crate) fn feed(&mut self, bytes: &[u8]) {
         if self.outcome.is_none() {
             if let Err(error) = self.parser.feed(JsonStreamInput::Data(bytes), &mut self.selector) {
@@ -73,6 +130,7 @@ impl JsonUsageObserver {
 #[derive(Clone, Copy, Default)]
 enum Role {
     Root,
+    Response,
     Usage,
     Details,
     #[default]
@@ -81,6 +139,10 @@ enum Role {
 #[derive(Clone, Copy, Default)]
 enum Key {
     Usage,
+    Response,
+    Status,
+    Type,
+    Sequence,
     Details,
     Input,
     Output,
@@ -107,6 +169,11 @@ struct Selector {
     frames: [Frame; MAX_DEPTH + 1],
     depth: usize,
     candidate: Candidate,
+    responses: bool,
+    event: bool,
+    status: ResponseOutcome,
+    event_kind: ResponsesEventKind,
+    sequence: Option<u64>,
 }
 impl Default for Selector {
     fn default() -> Self {
@@ -114,6 +181,11 @@ impl Default for Selector {
             frames: [Frame::default(); MAX_DEPTH + 1],
             depth: 0,
             candidate: Candidate::default(),
+            responses: false,
+            event: false,
+            status: ResponseOutcome::Unknown,
+            event_kind: ResponsesEventKind::Other,
+            sequence: None,
         }
     }
 }
@@ -125,6 +197,13 @@ impl Selector {
         let key = std::mem::take(&mut frame.pending);
         match key {
             Key::Usage => self.candidate = Candidate::default(),
+            Key::Response => {
+                self.candidate = Candidate::default();
+                self.status = ResponseOutcome::Unknown;
+            }
+            Key::Status => self.status = ResponseOutcome::Unknown,
+            Key::Type => self.event_kind = ResponsesEventKind::Other,
+            Key::Sequence => self.sequence = None,
             Key::Details | Key::Cached => self.candidate.cached = None,
             Key::Input => self.candidate.input = None,
             Key::Output => self.candidate.output = None,
@@ -135,9 +214,17 @@ impl Selector {
         key
     }
     fn usage(&self) -> Option<ReportedAiUsage> {
+        let input_tokens = self.candidate.input?;
+        let output_tokens = self.candidate.output?;
+        if self.responses
+            && (input_tokens.checked_add(output_tokens).is_none()
+                || self.candidate.cached.is_some_and(|cached| cached > input_tokens))
+        {
+            return None;
+        }
         Some(ReportedAiUsage {
-            input_tokens: self.candidate.input?,
-            output_tokens: self.candidate.output?,
+            input_tokens,
+            output_tokens,
             cache_read_input_tokens: self.candidate.cached.or(self.candidate.read).unwrap_or(0),
             cache_write_input_tokens: self.candidate.write.unwrap_or(0),
         })
@@ -152,10 +239,19 @@ impl JsonStreamSelectiveSink for Selector {
                     .get_mut(self.depth.checked_sub(1).ok_or(JsonStreamSinkError)?)
                     .ok_or(JsonStreamSinkError)?;
                 frame.pending = match (frame.role, key) {
-                    (Role::Root, "usage") => Key::Usage,
-                    (Role::Usage, "prompt_tokens") => Key::Input,
-                    (Role::Usage, "completion_tokens") => Key::Output,
-                    (Role::Usage, "prompt_tokens_details") => Key::Details,
+                    (Role::Root, "response") if self.responses && self.event => Key::Response,
+                    (Role::Root, "type") if self.responses && self.event => Key::Type,
+                    (Role::Root, "sequence_number") if self.responses && self.event => Key::Sequence,
+                    (Role::Root, "status") if self.responses && !self.event => Key::Status,
+                    (Role::Response, "status") => Key::Status,
+                    (Role::Root, "usage") if !self.event => Key::Usage,
+                    (Role::Response, "usage") => Key::Usage,
+                    (Role::Usage, "input_tokens") if self.responses => Key::Input,
+                    (Role::Usage, "output_tokens") if self.responses => Key::Output,
+                    (Role::Usage, "input_tokens_details") if self.responses => Key::Details,
+                    (Role::Usage, "prompt_tokens") if !self.responses => Key::Input,
+                    (Role::Usage, "completion_tokens") if !self.responses => Key::Output,
+                    (Role::Usage, "prompt_tokens_details") if !self.responses => Key::Details,
                     (Role::Usage, "cache_read_input_tokens") => Key::Read,
                     (Role::Usage, "cache_creation_input_tokens") => Key::Write,
                     (Role::Details, "cached_tokens") => Key::Cached,
@@ -171,6 +267,7 @@ impl JsonStreamSelectiveSink for Selector {
                     Role::Root
                 } else {
                     match (self.target(), object) {
+                        (Key::Response, true) => Role::Response,
                         (Key::Usage, true) => Role::Usage,
                         (Key::Details, true) => Role::Details,
                         _ => Role::Other,
@@ -207,12 +304,36 @@ impl JsonStreamSelectiveSink for Selector {
             .then(|| raw.parse::<u64>().ok())
             .flatten();
         match target {
+            Key::Sequence => self.sequence = value,
             Key::Input => self.candidate.input = value,
             Key::Output => self.candidate.output = value,
             Key::Cached => self.candidate.cached = value,
             Key::Read => self.candidate.read = value,
             Key::Write => self.candidate.write = value,
             _ => {}
+        }
+        Ok(())
+    }
+    fn string_capture_limit(&mut self) -> Option<usize> {
+        self.depth
+            .checked_sub(1)
+            .and_then(|index| self.frames.get(index))
+            .filter(|frame| matches!(frame.pending, Key::Status | Key::Type))
+            .map(|_| 64)
+    }
+    fn on_captured_string(&mut self, value: &str) -> Result<(), JsonStreamSinkError> {
+        match self.target() {
+            Key::Status => self.status = ResponseOutcome::from_status(value),
+            Key::Type => {
+                self.event_kind = match value {
+                    "response.completed" => ResponsesEventKind::Completed,
+                    "response.incomplete" => ResponsesEventKind::Incomplete,
+                    "response.failed" => ResponsesEventKind::Failed,
+                    "error" => ResponsesEventKind::Error,
+                    _ => ResponsesEventKind::Other,
+                }
+            }
+            _ => return Err(JsonStreamSinkError),
         }
         Ok(())
     }

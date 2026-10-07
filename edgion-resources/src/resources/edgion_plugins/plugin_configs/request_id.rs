@@ -110,6 +110,8 @@ pub fn valid_request_id_header(name: &str) -> bool {
             | "te"
             | "trailer"
             | "upgrade"
+            | "openai-organization"
+            | "openai-project"
             | "traceparent"
             | "tracestate"
             | "x-trace-id"

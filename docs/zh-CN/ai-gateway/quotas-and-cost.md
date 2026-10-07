@@ -154,3 +154,15 @@ unresolved 结束；Redis 失败或期限耗尽仍可能为 failed 或 timed_out
 未知/未观测用量省略成本。`CostWeighted` 选择还要求每个原本符合条件的候选都有定价与输出 token 上限。
 
 持久计费与用量归属以 access log 为准 — 见 [可观测性](./observability.md)。
+
+## Responses 的测量边界
+
+Responses 复用累计配额与 Redis worker，只用厂商终态的 output 总量推进单调水位；delta 和重复输出不另计。
+厂商可能只在结束时报告总量，因此不能保证逐 token 立即中止或并发零超卖。
+终态 usage 不可靠时为 unknown，保留已收费配额与保守的凭据预留，不按零用量退款。
+准入字符估计仅用于暂时容量判断，不是实际账单；远端历史、托管资源和隐藏 reasoning 无法从请求字符数测准。
+
+被动观察保持损坏/超限原始字节透传并标记 unknown；主动 Reject 遇到损坏/超限 SSE framing 会按现有失败策略中止。
+本地事件使用 Responses 的 type=error、code、message、param、sequence_number，不发送 Chat chunk 或 [DONE]。
+序号取已验证厂商最大序号的安全后继，无有效序号时为零，溢出时不注入诊断事件。
+该本地终止标记不承诺损坏/半个事件后的厂商重放顺序。上文 Chat 的字符估计和双坏事件容忍不适用于 Responses。

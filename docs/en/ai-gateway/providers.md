@@ -1,6 +1,6 @@
 # Providers
 
-The current managed AiProxy entry uses OpenAI Chat Completions. Edgion maps the logical model to
+Managed AiProxy entries support OpenAI Chat Completions and native OpenAI Responses. Edgion maps the logical model to
 the selected backend's provider model. Clients choose the model; an explicit model rewrite or
 quota downgrade policy can change that choice.
 
@@ -10,25 +10,26 @@ quota downgrade policy can change that choice.
 |------------------|---------|------------------|
 | `POST /v1/chat/completions` | `OpenAI` / `OpenAICompatible` | Chat JSON or SSE; provider fields remain, subject to explicitly configured request mutation |
 | `POST /v1/chat/completions` | `Anthropic` | Chat-to-Messages requests; JSON or SSE translated back to Chat, limited to the subset below |
-| `GET /v1/models` | Route-reachable model catalog | Locally generated catalog; HTTPRoute must admit GET and match this path |
-| `POST /v1/responses`, native `POST /v1/messages` | Any managed backend | Not yet supported |
+| `GET /v1/models` | Chat API route-reachable model catalog | Locally generated catalog; HTTPRoute must admit GET and match this path |
+| `POST /v1/responses` | `OpenAI` | Native Responses JSON or SSE; explicit model required |
+| Native `POST /v1/messages` | Any managed backend | Not yet supported |
 | Gemini native, Bedrock | Any managed backend | Not yet supported; deferred scope |
 
 The configured `api: openaiChat` is authoritative. Ingress accepts exact effective POST
 `/v1/chat/completions` and local GET `/v1/models`; custom paths need an earlier URLRewrite.
-Other managed operations return fixed `404 unsupported_endpoint`. Responses/Messages API values
-are recognized but fail configuration validation until their native handlers are implemented.
+Other managed operations return fixed `404 unsupported_endpoint`. `api: openaiResponses` instead admits exact POST `/v1/responses` for `OpenAI` only.
+Native Messages remains rejected during configuration validation.
 An ordinary HTTPRoute to a Service can separately proxy opaque HTTP traffic without managed AI semantics.
 
 ## Supported providers
 
 | `provider` | Protocol behavior | Default endpoint |
 |------------|-------------------|------------------|
-| `OpenAI` | Chat requests and responses | `https://api.openai.com` |
+| `OpenAI` | Native Chat or Responses requests and responses | `https://api.openai.com` |
 | `OpenAICompatible` | Chat requests and responses | **Required** `endpoint` |
 | `Anthropic` | Chat-to-Messages conversion; JSON and SSE responses translated back to Chat | `https://api.anthropic.com` |
 
-Gemini, Bedrock, Vertex, and other non-Chat APIs are outside current managed support.
+Native Messages, Gemini, Bedrock and Vertex remain outside current managed support.
 
 ## OpenAI and OpenAI-compatible
 
@@ -73,3 +74,36 @@ retain their existing error handling.
 Edgion removes client provider-authentication headers and installs the selected Secret-backed
 credential for each attempt. Applications do not need provider keys; configure ordinary
 authentication plugins separately for client authentication.
+
+## Native Responses subset
+
+Set `api: openaiResponses`; omit `conversion` and leave `injectUsageTracking: false`.
+Observation defaults off. Set `usageObservation: provider` to observe native usage without
+injecting Chat's `stream_options.include_usage`. Native `stream_options` and provider extensions
+pass through unchanged. The model must be explicit for managed routing, even where the provider
+would accept omission. Only POST `/v1/responses` is managed; GET/list/retrieve/delete/cancel,
+background creation (`background: true`), WebSocket and Responses-to-other-provider conversion
+are excluded. Hosted tools run at the provider. Edgion preserves input/output items, tool fields,
+reasoning and opaque identifiers; it does not normalize them into a conversation representation.
+
+A non-null `previous_response_id` or `conversation` requires exactly one declared backend slot
+and one declared credential binding. Unresolved credentials and zero-weight backend slots still
+count. Credential weight zero is invalid configuration. The two continuation fields are mutually
+exclusive. Continuation rejects aliases that change the provider model, any configured `modelRoutes`,
+quota Downgrade and retries; no automatic principal/backend fallback or affinity registry is added.
+Stateless requests retain normal selection. Rotating a Secret across provider principals is an
+operator responsibility; retaining the binding name does not prove account affinity.
+
+AiGuard and Guardrail currently understand Chat semantics. Enabled combinations with Responses
+are rejected in the same resource; actual invocation across scopes is fenced at runtime, including
+an AiGuard invoked before URLRewrite. Disabled, condition-skipped and policy-bypassed guards do
+not latch the runtime fence. Native guard capabilities are a separate future task.
+
+See [Responses API](https://developers.openai.com/api/reference/resources/responses/) and
+[typed streaming events](https://developers.openai.com/api/reference/resources/responses/streaming-events).
+
+Managed credential installation also removes OpenAI-Organization and OpenAI-Project, including
+backend header modifier values. RequestId cannot target these reserved headers and later restore
+them. These are provider principal selectors, not arbitrary native extension headers. Use a
+project-scoped key and maintain a fixed operator-controlled principal; selector overrides are not
+supported by the current managed contract. Ordinary opaque HTTP proxying is unaffected.

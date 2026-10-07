@@ -1583,3 +1583,45 @@ fn ai_proxy_is_constructed_only_for_request_stage() {
     ));
     assert_eq!(PluginRuntime::get_plugin_name(&plugin), "AiProxy");
 }
+
+#[tokio::test]
+async fn native_guard_invocation_marker_respects_disable_condition_and_policy_bypass() {
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    use std::sync::atomic::Ordering;
+    for variant in ["invoked", "disabled", "condition", "bypass"] {
+        let mut entry:RequestFilterEntry=serde_json::from_value(serde_json::json!({"type":"AiGuard","config":{"rules":[{"name":"tripwire","match":{"type":"regex","pattern":"never-present"},"action":"reject"}]}})).unwrap();
+        if variant == "disabled" {
+            entry.enable = false;
+        }
+        if variant == "condition" {
+            entry.conditions = Some(
+                serde_json::from_value(
+                    serde_json::json!({"skip":{"allOf":[{"type":"keyExist","key":{"type":"header","name":"host"}}]}}),
+                )
+                .unwrap(),
+            );
+        }
+        let deny = if variant == "bypass" {
+            serde_json::json!([{"name":"http/AiGuard","action":"bypass"}])
+        } else {
+            serde_json::json!([])
+        };
+        let compiled = compile_scoped_request_entries(vec![entry], deny);
+        assert!(compiled.preparse_errors.is_empty());
+        let mut session = session_from_request(b"GET /custom/responses HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.in_request_body_stage = true;
+        let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
+        storage.finish().await.unwrap();
+        ctx.request_body.install(view);
+        compiled
+            .plugin_runtime
+            .run_request_plugins(&mut session, &mut ctx)
+            .await;
+        assert_eq!(
+            ctx.ai_request_guard_invoked.load(Ordering::Relaxed),
+            variant == "invoked"
+        );
+        assert!(ctx.ai_state.is_none(), "ordinary traffic must not allocate an AI box");
+    }
+}

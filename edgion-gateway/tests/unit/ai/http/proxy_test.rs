@@ -132,6 +132,7 @@ fn model_list_is_deterministic_public_and_requires_symbolic_wildcard_owner() {
     };
     let runtime = Arc::new(RuntimeAiBackend {
         has_credential_tpm: false,
+        declared_credential_count: 1,
         uid: "backend-uid".to_string(),
         provider: AiProvider::OpenAI,
         endpoint: RuntimeAiEndpoint {
@@ -331,6 +332,7 @@ fn initial_candidate_errors_preserve_model_streaming_and_availability_semantics(
 fn downgrade_re_resolves_models_from_captured_candidates_without_passthrough() {
     let backend = Arc::new(RuntimeAiBackend {
         has_credential_tpm: false,
+        declared_credential_count: 1,
         uid: "backend-uid".to_string(),
         provider: AiProvider::OpenAI,
         endpoint: RuntimeAiEndpoint {
@@ -476,6 +478,7 @@ fn plan_debug_never_renders_canonical_body() {
         usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
         body_generation: None,
         body_is_current: false,
+        continuation: false,
         request_max_output_tokens: None,
         request_body: Bytes::from_static(br#"{"prompt":"must-not-render"}"#),
         canonical_path: "/v1/chat/completions".to_string(),
@@ -574,4 +577,69 @@ fn captured_backend_skew_cannot_hide_unresolved_tpm_or_provider_changes() {
     assert!(captured_backend_contract_valid(&config, &[zero.clone()], &current));
     config.model_routes = serde_json::from_value(serde_json::json!([{"match":{"model":"virtual"},"action":{"candidates":[{"backend":{"group":"edgion.io","kind":"EdgionBackend","namespace":"tenant-b","name":"provider","occurrence":0},"weight":1}]}}])).unwrap();
     assert!(!captured_backend_contract_valid(&config, &[zero], &current));
+}
+
+#[test]
+fn responses_continuation_uses_raw_slots_and_bindings_before_filtering() {
+    use edgion_resources::resources::edgion_backend::EdgionBackend;
+    let mut declared: EdgionBackend = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"provider","namespace":"tenant-b"},
+        "spec":{"ai":{"provider":"OpenAI","endpoint":"https://provider.example.com","credentialPool":{"credentials":[{"name":"usable","secretRef":{"name":"key"}}]},"models":[{"name":"model","aliases":["alias"]}]}}
+    })).unwrap();
+    declared.spec.ai.credential_pool.credentials[0].credential.secret = Some(k8s_openapi::api::core::v1::Secret {
+        data: Some(std::collections::BTreeMap::from([(
+            "api-key".into(),
+            k8s_openapi::ByteString(b"fixed-test-key".to_vec()),
+        )])),
+        ..Default::default()
+    });
+    let store = AiBackendStore::new();
+    let publish =
+        |resource: EdgionBackend| store.full_set(&HashMap::from([("tenant-b/provider".into(), Arc::new(resource))]));
+    publish(declared.clone());
+    let mut cfg = config();
+    cfg.api = AiApi::OpenaiResponses;
+    cfg.inject_usage_tracking = false;
+    let backend = compiled_ai_backend(None);
+    assert_eq!(
+        validate_continuation(&cfg, std::slice::from_ref(&backend), &store.snapshot(), "model"),
+        Ok(())
+    );
+    assert_eq!(
+        validate_continuation(&cfg, std::slice::from_ref(&backend), &store.snapshot(), "alias"),
+        Err(AiProxyError::UnsupportedParameter)
+    );
+    assert_eq!(
+        validate_continuation(
+            &cfg,
+            &[backend.clone(), compiled_service_backend(0)],
+            &store.snapshot(),
+            "model"
+        ),
+        Err(AiProxyError::UnsupportedParameter)
+    );
+    let mut duplicate = backend.clone();
+    duplicate.schema.weight = Some(0);
+    assert_eq!(
+        validate_continuation(&cfg, &[backend.clone(), duplicate], &store.snapshot(), "model"),
+        Err(AiProxyError::UnsupportedParameter)
+    );
+    let mut missing = declared.spec.ai.credential_pool.credentials[0].clone();
+    missing.name = "unresolved".into();
+    missing.credential.secret_ref.name = "missing".into();
+    missing.credential.secret = None;
+    declared.spec.ai.credential_pool.credentials.push(missing);
+    publish(declared);
+    assert_eq!(
+        store
+            .snapshot()
+            .get_by_key("tenant-b/provider")
+            .unwrap()
+            .declared_credential_count,
+        2
+    );
+    assert_eq!(
+        validate_continuation(&cfg, &[backend], &store.snapshot(), "model"),
+        Err(AiProxyError::UnsupportedParameter)
+    );
 }

@@ -174,3 +174,18 @@ usageObservation: off
 
 该片段选择现有的有界 JSON／事件 SSE 转换器，保留客户端 usage 字段但不发布数值核算。
 tokenQuota 或 TPM 场景需改为 provider 观测。
+
+## 原生 Responses 入口
+
+复用同一个 OpenAI EdgionBackend 和 Secret，插件配置如下；HTTPRoute 接受 POST `/v1/responses`：
+
+```yaml
+requestPlugins:
+  - type: AiProxy
+    config:
+      api: openaiResponses
+      usageObservation: provider
+```
+
+省略 usageObservation 时默认关闭观察。客户端提交显式 model 和原生 input，stream=true 返回原生 typed SSE。
+不要设置 conversion 或 injectUsageTracking。续接限制见[提供商](./providers.md#原生-responses-的边界)。

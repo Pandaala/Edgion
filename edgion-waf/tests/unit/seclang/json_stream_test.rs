@@ -1399,3 +1399,83 @@ fn selective_syntax_failures_stay_sticky_and_release_state() {
     assert_eq!(stream.feed(JsonStreamInput::Complete, &mut events), first);
     assert!(events.0.is_empty());
 }
+
+#[derive(Default)]
+struct SelectedStrings {
+    selected: bool,
+    values: Vec<String>,
+    discarded: usize,
+    cap: usize,
+}
+impl JsonStreamSelectiveSink for SelectedStrings {
+    fn on_token(&mut self, token: JsonStreamToken<'_>) -> Result<(), JsonStreamSinkError> {
+        if let JsonStreamToken::Key(key) = token {
+            self.selected = key == "status";
+        }
+        Ok(())
+    }
+    fn on_number(&mut self, _: &str) -> Result<(), JsonStreamSinkError> {
+        Ok(())
+    }
+    fn on_discarded_string(&mut self, _: JsonDiscardedStringSummary) -> Result<(), JsonStreamSinkError> {
+        self.discarded += 1;
+        Ok(())
+    }
+    fn string_capture_limit(&mut self) -> Option<usize> {
+        self.selected.then_some(self.cap)
+    }
+    fn on_captured_string(&mut self, value: &str) -> Result<(), JsonStreamSinkError> {
+        self.values.push(value.to_owned());
+        self.selected = false;
+        Ok(())
+    }
+}
+
+#[test]
+fn selected_strings_share_grammar_and_caps_while_large_unselected_values_are_discarded() {
+    let document = format!(
+        r#"{{"output":"{}","status":"compl\u0065ted","other":"é€","status":"cancelled"}}"#,
+        "x".repeat(100_000)
+    );
+    for width in [1, 7, 65536, document.len()] {
+        let mut parser = JsonStreamSelective::new(selective_limits());
+        let mut sink = SelectedStrings {
+            cap: 9,
+            ..Default::default()
+        };
+        for part in document.as_bytes().chunks(width) {
+            parser.feed(JsonStreamInput::Data(part), &mut sink).unwrap();
+        }
+        parser.feed(JsonStreamInput::Complete, &mut sink).unwrap();
+        assert_eq!(sink.values, ["completed", "cancelled"]);
+        assert_eq!(sink.discarded, 2);
+        assert!(parser.usage().peak_retained_bytes < 4096);
+    }
+    for raw in [
+        br#"{"status":"completed"}"#.as_slice(),
+        br#"{"status":"\u0063ompleted"}"#,
+    ] {
+        for width in 1..=raw.len() {
+            let mut parser = JsonStreamSelective::new(selective_limits());
+            let mut sink = SelectedStrings {
+                cap: 8,
+                ..Default::default()
+            };
+            let mut error = None;
+            for part in raw.chunks(width) {
+                if let Err(value) = parser.feed(JsonStreamInput::Data(part), &mut sink) {
+                    error = Some(value);
+                    break;
+                }
+            }
+            assert!(matches!(
+                error,
+                Some(JsonStreamError::Limit {
+                    kind: JsonStreamLimit::DecodedBytes,
+                    ..
+                })
+            ));
+            assert!(sink.values.is_empty());
+        }
+    }
+}

@@ -345,9 +345,10 @@ fn prepare_ready_attempt(
     plan: &mut ReadyAiAttemptPlan,
     entropy: u128,
 ) -> Result<PreparedAiAttempt, AiDispatchError> {
-    if plan.api != AiApi::OpenaiChat
-        || plan.operation != AiOperation::ChatCompletions
-        || plan.body_generation != ctx.request_body.generation()
+    if !matches!(
+        (plan.api, plan.operation),
+        (AiApi::OpenaiChat, AiOperation::ChatCompletions) | (AiApi::OpenaiResponses, AiOperation::Responses)
+    ) || plan.body_generation != ctx.request_body.generation()
     {
         ctx.record_error(edgion_resources::EdgionErrorCode::BodyMutationConflict);
         return Err(AiDispatchError::Client(AiProxyError::BackendUnavailable));
@@ -420,7 +421,9 @@ fn prepare_ready_attempt(
         None
     };
     let (body, requested_streaming, anthropic_usage_chunk) = match plan.conversion {
-        None if matches!(ai_backend.provider, AiProvider::OpenAI | AiProvider::OpenAICompatible) => {
+        None if matches!(ai_backend.provider, AiProvider::OpenAI | AiProvider::OpenAICompatible)
+            && (plan.api != AiApi::OpenaiResponses || ai_backend.provider == AiProvider::OpenAI) =>
+        {
             let body = if model.provider_model == plan.logical_model {
                 plan.request_body.clone()
             } else {
@@ -475,7 +478,11 @@ fn prepare_ready_attempt(
         )?;
     }
 
-    let usage = Arc::new(AiUsageShared::with_observation(plan.usage_observation));
+    let usage = Arc::new(if plan.api == AiApi::OpenaiResponses {
+        AiUsageShared::with_responses(plan.usage_observation)
+    } else {
+        AiUsageShared::with_observation(plan.usage_observation)
+    });
     usage.set_input_chars(plan.input_chars);
     let eos = crate::ai::runtime::attempt_runtime::new_eos_latch();
     let quota_accumulator = plan.quota.as_ref().map(|quota| quota.accumulator()).or_else(|| {
@@ -519,12 +526,22 @@ fn prepare_ready_attempt(
         )));
     }
     if plan.conversion.is_none() && plan.usage_observation == AiUsageObservation::Provider {
-        response_processors.push(Box::new(UsageExtractionProcessor::new_with_quota(
-            Arc::clone(&usage),
-            quota_accumulator,
-            requested_streaming,
-            plan.terminate_on_over_limit,
-        )));
+        let processor = if plan.api == AiApi::OpenaiResponses {
+            UsageExtractionProcessor::new_responses(
+                Arc::clone(&usage),
+                quota_accumulator,
+                requested_streaming,
+                plan.terminate_on_over_limit,
+            )
+        } else {
+            UsageExtractionProcessor::new_with_quota(
+                Arc::clone(&usage),
+                quota_accumulator,
+                requested_streaming,
+                plan.terminate_on_over_limit,
+            )
+        };
+        response_processors.push(Box::new(processor));
     }
     if plan.conversion.is_none()
         && plan.usage_observation == AiUsageObservation::Off
@@ -584,7 +601,8 @@ fn initialize_retry_cap(plan: &mut ReadyAiAttemptPlan, retry_cap: u8) -> Result<
         })
         .collect();
     let backends: Vec<_> = weights.iter().map(|weights| BackendCredentials { weights }).collect();
-    plan.scheduler = AttemptScheduler::new(&backends, retry_cap).map_err(|_| AiDispatchError::InvalidConfiguration)?;
+    plan.scheduler = AttemptScheduler::new(&backends, if plan.continuation { 0 } else { retry_cap })
+        .map_err(|_| AiDispatchError::InvalidConfiguration)?;
     plan.retry_cap_initialized = true;
     Ok(())
 }

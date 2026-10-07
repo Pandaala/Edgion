@@ -114,3 +114,7 @@ A lot of "YAML is there but the test didn't run" issues end up at one of these t
 # Replay directly after preserving the scene
 ./target/debug/test_client -g -r Gateway -i StreamPlugins
 ```
+
+## Native Responses
+
+`EdgionBackend/Responses` uses HTTP listener 31989 and the shared test_server AI provider. Load LinkSys/Redis for its quota fixture. `AiResponsesContinuation` adds/restores one unresolved declaration using the same Controller/Gateway topology and business-phase readiness.
