@@ -193,7 +193,7 @@ fn compiled_policy_target_key_accepts_only_authorized_service_refs() {
             kind: None,
             namespace: None,
             denied: false,
-            expected_namespace: Some("route-ns"),
+            expected_namespace: None,
         },
         Case {
             label: "default-group-service-kind",
@@ -217,6 +217,14 @@ fn compiled_policy_target_key_accepts_only_authorized_service_refs() {
             kind: Some("Service"),
             namespace: Some("backend-ns"),
             denied: false,
+            expected_namespace: None,
+        },
+        Case {
+            label: "empty-group-service-explicit-namespace",
+            group: Some(""),
+            kind: Some("Service"),
+            namespace: Some("backend-ns"),
+            denied: false,
             expected_namespace: Some("backend-ns"),
         },
         Case {
@@ -229,7 +237,7 @@ fn compiled_policy_target_key_accepts_only_authorized_service_refs() {
         },
         Case {
             label: "kind-is-case-sensitive",
-            group: Some("core"),
+            group: Some(""),
             kind: Some("service"),
             namespace: None,
             denied: false,

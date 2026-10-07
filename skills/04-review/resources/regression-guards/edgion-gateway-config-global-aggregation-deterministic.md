@@ -28,14 +28,16 @@ as CA candidates. Multiple CA candidates preserve the existing System fallback;
 multiple declared client refs fail closed. Invalid declarations are counted before
 proof. Full/partial/delete retain original input Arcs and restore process defaults.
 Other min/max globals above and listener publication scope are unchanged. The
-reference-contract scoped review passed with 37 fresh Gateway publication tests,
+reference-contract scoped review recorded 37 Gateway publication tests,
 344 Common library tests and four compile-fail boundaries; remaining local TLS
-transport/replay migrations are still open. See the owning
+transport/replay migrations were still open at that checkpoint. These are historical
+results, not fresh verification of the current tree. See the owning
 [fingerprint contract](../../link-sys/regression-guards/shared-tls-fingerprint-encoding.md).
 
-Re-reports of the form "per-resource apply is order-dependent" / "delete never
-resets the global" / "two cluster-scoped configs flip the value across relist"
-are **not accepted** against the current code.
+Claims that per-resource apply is order-dependent, delete does not reset the
+global, or multiple cluster-scoped configs change values across relists must be
+checked against the current recomputation and publication paths. This historical
+fix does not rule out a regression supported by new code or evidence.
 
 ## Core Rationale
 
@@ -69,7 +71,7 @@ and the schema `default_webhook_max_response_bytes`; `DEFAULT_LINK_SYS_MAX_INSTA
 0` mirrors `GLOBAL_DEFAULT` (panic disabled / opt-in). A comment on each constant
 records the cross-file invariant.
 
-## Fix Suggestions Not Accepted
+## Alternatives considered
 
 - "Make `EdgionGatewayConfig` singleton-only / validate at most one in the controller" — heavier and unnecessary; deterministic aggregation handles multiple instances correctly without an admission constraint.
 - "Re-apply per resource but pick the last by name" — still arbitrary operator-intent guessing; `min`/`max` aggregation is the safety-correct, order-independent rule.
@@ -77,10 +79,19 @@ records the cross-file invariant.
 
 ## Re-evaluation Triggers
 
-Re-open only if:
+Re-evaluate when the current implementation or its assumptions change, including:
 
 - A new `LinkSysGlobalConfig` / `LoadBalancingConfig` field is added whose correct multi-instance aggregate is neither `min` nor `max` (e.g. a value that should be summed or last-writer) — it must still route through `recompute_global_config`, not a per-resource apply.
 - `EdgionGatewayConfig` becomes namespaced or singleton-enforced, making multi-instance input impossible (then the aggregation is harmless but redundant).
+- Actual TLS source ownership or either administrative material-selection field
+  changes (`outboundTls.validation.caCertificateRefs[]` or
+  `outboundTls.clientCertificateRef`). Recheck the cluster authority boundary and
+  explicit target namespaces against the [EGC architecture](../../../01-architecture/05-resources/03-edgion-gateway-config.md).
+- Verify, validation/CA, or client proof selection changes, including malformed
+  declarations, conflicts, local overrides and which inherited axes are consumed.
+- Aggregation, immutable snapshot publication, or dependent-client refresh changes
+  could combine generations or retain revoked material. Recheck full/partial/delete
+  behavior and fresh tests rather than relying on the historical counts above.
 
 ## Reference Cases
 
