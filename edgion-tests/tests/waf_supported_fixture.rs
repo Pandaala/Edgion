@@ -96,5 +96,52 @@ fn supported_wire_keeps_product_digests_and_only_adds_declared_guard() {
         assert_eq!(generation.rule_units().next().unwrap().id(), 9900302);
         assert!(generation.json_inspection_unsupported().is_empty());
         assert!(generation.xml_inspection_unsupported().is_empty());
+        use edgion_waf::seclang::{
+            BodyProcessorSelection, EvaluationMode, RequestBody, RequestHead, RequestHeader, RuleCheckPolicy,
+            RuleEngineMode, RuntimeLimits, Transaction,
+        };
+        let headers = [
+            RequestHeader::new(b"host", b"example.com"),
+            RequestHeader::new(b"user-agent", b"edgion-test"),
+            RequestHeader::new(b"accept", b"*/*"),
+        ];
+        for enabled in [false, true] {
+            let head = RequestHead::new(
+                b"GET /?a=one&a=two HTTP/1.1",
+                b"GET",
+                b"/?a=one&a=two",
+                b"/?a=one&a=two",
+                b"HTTP/1.1",
+                b"192.0.2.1",
+                b"fixture",
+                &headers,
+            );
+            let mut tx = Transaction::new_with_policy(
+                &generation,
+                head,
+                RuntimeLimits::default(),
+                EvaluationMode::Accelerated,
+                RuleEngineMode::DetectionOnly,
+                RuleCheckPolicy {
+                    expensive_checks: enabled,
+                },
+            )
+            .unwrap();
+            tx.execute_request_headers().unwrap();
+            tx.publish_request_body(RequestBody::new(bytes::Bytes::new(), BodyProcessorSelection::Auto))
+                .unwrap();
+            let outcome = tx.execute_request_body().unwrap();
+            let active = enabled && p == "strict";
+            assert_eq!(
+                tx.tx_value(b"paramcounter_ARGS_NAMES:a"),
+                active.then_some(b"2".as_slice()),
+                "{phase} policy={enabled}"
+            );
+            assert_eq!(
+                outcome.findings().iter().any(|finding| finding.rule_id() == 921180),
+                active,
+                "{phase} policy={enabled}"
+            );
+        }
     }
 }

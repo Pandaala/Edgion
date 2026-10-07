@@ -3869,3 +3869,36 @@ fn unpruned_oracle_survives_both_explicit_clone_policies() {
     assert!(tx.try_clone().unwrap().force_unpruned_inspection);
     assert!(tx.try_clone_for_unit().unwrap().force_unpruned_inspection);
 }
+
+#[test]
+fn optional_check_policy_survives_unpruned_inspection_and_chain_clones() {
+    let original = include_str!("../../fixtures/expensive-checks-crs-4.25.1.conf");
+    let g = generation(&format!("{original}SecRule ARGS_NAMES \"@rx .\" \"id:20,phase:2,pass,chain\"\nSecRule ARGS \"@contains attack\" \"setvar:tx.chain=matched\"\n"));
+    assert!(g.has_expensive_checks);
+    let headers = [RequestHeader::new(b"content-type", b"application/json")];
+    for unpruned in [false, true] {
+        let mut tx = Transaction::new_with_policy(
+            &g,
+            request(&headers, b"/"),
+            RuntimeLimits::default(),
+            EvaluationMode::Accelerated,
+            RuleEngineMode::On,
+            RuleCheckPolicy {
+                expensive_checks: false,
+            },
+        )
+        .unwrap();
+        tx.tx.force_unpruned_inspection = unpruned;
+        assert!(!tx.tx.try_clone().unwrap().check_policy.expensive_checks);
+        assert!(!tx.tx.try_clone_for_unit().unwrap().check_policy.expensive_checks);
+        tx.execute_request_headers().unwrap();
+        tx.publish_request_body(RequestBody::new(
+            bytes::Bytes::from_static(br#"{"probe":"attack"}"#),
+            crate::seclang::BodyProcessorSelection::Auto,
+        ))
+        .unwrap();
+        tx.execute_request_body().unwrap();
+        assert_eq!(tx.tx_value(b"chain"), Some(b"matched".as_slice()));
+        assert_eq!(tx.tx_value(b"paramcounter_ARGS_NAMES:json.probe"), None);
+    }
+}

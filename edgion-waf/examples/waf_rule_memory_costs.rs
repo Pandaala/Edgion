@@ -498,6 +498,7 @@ fn inventory(tuning: &Bundle, core: &Bundle, manifest: &Value) -> Fallible<Value
 struct Fixture {
     name: String,
     xml: bool,
+    multipart: bool,
     body: Bytes,
     length: String,
     uri: String,
@@ -509,6 +510,7 @@ impl Fixture {
         Self {
             name: name.into(),
             xml,
+            multipart: false,
             length: body.len().to_string(),
             body: Bytes::from(body),
             uri: "/".into(),
@@ -649,13 +651,19 @@ struct Run {
     inspection: InspectionObservation,
     tx_values: [[u8; 32]; 4],
     tx_lengths: [usize; 4],
+    multipart_counter: Option<usize>,
 }
 fn execute(generation: &CompiledGeneration, fixture: &Fixture) -> Run {
+    execute_with_policy(generation, fixture, RuleCheckPolicy::default())
+}
+fn execute_with_policy(generation: &CompiledGeneration, fixture: &Fixture, policy: RuleCheckPolicy) -> Run {
     let headers = [
         RequestHeader::new(b"host", b"example.test"),
         RequestHeader::new(
             b"content-type",
-            if fixture.xml {
+            if fixture.multipart {
+                b"multipart/form-data; boundary=boundary"
+            } else if fixture.xml {
                 b"application/xml"
             } else {
                 b"application/json"
@@ -681,9 +689,10 @@ fn execute(generation: &CompiledGeneration, fixture: &Fixture) -> Run {
     let mut logical_retained = 0;
     let mut tx_values = [[0; 32]; 4];
     let mut tx_lengths = [0; 4];
+    let mut multipart_counter = None;
     let stage = Stage::start();
     let execution = (|| -> Result<(), RuntimeError> {
-        let mut tx = Transaction::new_with_modes(
+        let mut tx = Transaction::new_with_policy(
             generation,
             head,
             RuntimeLimits::default(),
@@ -693,13 +702,16 @@ fn execute(generation: &CompiledGeneration, fixture: &Fixture) -> Run {
             } else {
                 RuleEngineMode::On
             },
+            policy,
         )?;
         let result = (|| -> Result<(), RuntimeError> {
             phases[0] = Some(tx.execute_request_headers()?);
             if tx.next_phase() != Some(Phase::RequestBody) {
                 return Ok(());
             }
-            if fixture.xml {
+            if fixture.multipart {
+                tx.publish_request_body(RequestBody::new(fixture.body.clone(), BodyProcessorSelection::Auto))?;
+            } else if fixture.xml {
                 let mut session = tx.start_xml_inspection(XmlInspectionLimits::default(), Some(fixture.body.len()))?;
                 for chunk in fixture.body.chunks(fixture.chunk) {
                     session.feed(chunk)?;
@@ -740,6 +752,9 @@ fn execute(generation: &CompiledGeneration, fixture: &Fixture) -> Run {
         })();
         body_error = tx.request_body_error();
         logical_retained = tx.retained_bytes();
+        multipart_counter = tx
+            .tx_value(b"multipart_headers_content_counter")
+            .map(|value| std::str::from_utf8(value).unwrap().parse::<usize>().unwrap());
         for (i, key) in [
             b"paramcounter_ARGS_NAMES:a".as_slice(),
             b"inbound_anomaly_score_pl3",
@@ -768,6 +783,7 @@ fn execute(generation: &CompiledGeneration, fixture: &Fixture) -> Run {
         inspection,
         tx_values,
         tx_lengths,
+        multipart_counter,
     }
 }
 fn snapshot(run: &Run) -> Value {
@@ -836,7 +852,7 @@ fn main() -> Fallible<()> {
     let mut args = std::env::args().skip(1);
     let mode = args
         .next()
-        .ok_or("usage: waf_rule_memory_costs inventory|measure output-path [reverse]")?;
+        .ok_or("usage: waf_rule_memory_costs inventory|measure|policy output-path [reverse]")?;
     let output = args.next().ok_or("missing output path")?;
     let manifest = verify_provenance()?;
     let core = load("core")?;
@@ -900,6 +916,61 @@ fn main() -> Fallible<()> {
             serde_json::to_vec_pretty(&json!({"full":full,"projection":reduced,
             "capability_exclusions":manifest["units"].as_array().ok_or("missing units")?.iter().filter(|unit|unit["excluded_capabilities"].as_array().is_some_and(|v|!v.is_empty())).collect::<Vec<_>>(),
             "projection_binding":projection.digest}))?,
+        )?;
+    } else if mode == "policy" {
+        let mut rows = Vec::new();
+        let mut cases = fixtures();
+        for width in [1, 32] {
+            let body = (0..width).map(|i| format!("--boundary\r\nContent-Disposition: form-data; name=\"part{i}\"\r\nContent-Type: text/plain\r\n\r\nsafe\r\n")).collect::<String>() + "--boundary--\r\n";
+            let mut fixture = Fixture::new(&format!("multipart-width-{width}"), false, body);
+            fixture.multipart = true;
+            cases.push(fixture);
+        }
+        for (profile, tuning) in [("standard", &standard), ("strict", &strict)] {
+            let generation = compile(tuning, &core)?;
+            for fixture in cases.iter().filter(|f| {
+                matches!(
+                    f.name.as_str(),
+                    "json-small"
+                        | "json-width-64"
+                        | "json-width-256"
+                        | "query-hpp"
+                        | "xml-small"
+                        | "multipart-width-1"
+                        | "multipart-width-32"
+                )
+            }) {
+                for enabled in [true, false] {
+                    let policy = RuleCheckPolicy {
+                        expensive_checks: enabled,
+                    };
+                    let first = execute_with_policy(&generation, fixture, policy);
+                    assert!(first.error.is_none(), "{}", fixture.name);
+                    if fixture.name == "query-hpp" {
+                        assert_eq!(first.tx_lengths[0] != 0, enabled && profile == "strict");
+                    }
+                    if fixture.multipart {
+                        assert_eq!(first.multipart_counter.is_some(), enabled);
+                    }
+                    let expected = snapshot(&first);
+                    for _ in 0..3 {
+                        assert_eq!(snapshot(&execute_with_policy(&generation, fixture, policy)), expected);
+                    }
+                    let mut samples = Vec::new();
+                    for _ in 0..31 {
+                        let run = execute_with_policy(&generation, fixture, policy);
+                        assert_eq!(snapshot(&run), expected);
+                        assert_eq!(run.multipart_counter, first.multipart_counter);
+                        samples.push(run.allocation);
+                    }
+                    rows.push(json!({"profile":profile,"fixture":fixture.name,"expensive_checks":enabled,"samples":samples,
+                        "outcome":expected,"inspection":first.inspection,"logical_retained_bytes":first.logical_retained,"multipart_counter":first.multipart_counter}));
+                }
+            }
+        }
+        fs::write(
+            output,
+            serde_json::to_vec_pretty(&json!({"kind":"explicit-policy","rows":rows}))?,
         )?;
     } else if mode == "measure" {
         measure(

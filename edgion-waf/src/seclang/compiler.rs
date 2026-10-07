@@ -25,6 +25,8 @@ pub(super) enum InspectionDomain {
 #[path = "xml_inspection_plan.rs"]
 mod xml_inspection_plan;
 pub use xml_inspection_plan::{XmlInspectionUnsupported, XmlInspectionUnsupportedReason};
+#[path = "expensive_checks.rs"]
+mod expensive_checks;
 #[path = "inspection_activation.rs"]
 mod inspection_activation;
 #[path = "json_inspection_plan.rs"]
@@ -37,13 +39,13 @@ mod transaction;
 pub use transaction::{
     EvaluationMode, Intervention, JsonInspectionLimits, JsonInspectionSession, JsonInspectionUsage, JsonResultLimit,
     JsonResultLimits, PhaseOutcome, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead,
-    ResponseHeader, ResponseWindow, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits, RuntimeMatcherError,
-    RuntimeTransformError, Transaction, XmlInspectionLimits, XmlInspectionSession, XmlInspectionUsage,
-    DEFAULT_MAX_RUNTIME_CAPTURE_BYTES, DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES, DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES,
-    DEFAULT_MAX_RUNTIME_COOKIES, DEFAULT_MAX_RUNTIME_FINDINGS, DEFAULT_MAX_RUNTIME_HEADERS,
-    DEFAULT_MAX_RUNTIME_HEADER_BYTES, DEFAULT_MAX_RUNTIME_INPUT_BYTES, DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES,
-    DEFAULT_MAX_RUNTIME_OPERATOR_EVALUATIONS, DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES,
-    DEFAULT_MAX_RUNTIME_QUERY_ARGUMENTS, DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS,
+    ResponseHeader, ResponseWindow, RuleCheckPolicy, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits,
+    RuntimeMatcherError, RuntimeTransformError, Transaction, XmlInspectionLimits, XmlInspectionSession,
+    XmlInspectionUsage, DEFAULT_MAX_RUNTIME_CAPTURE_BYTES, DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES,
+    DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES, DEFAULT_MAX_RUNTIME_COOKIES, DEFAULT_MAX_RUNTIME_FINDINGS,
+    DEFAULT_MAX_RUNTIME_HEADERS, DEFAULT_MAX_RUNTIME_HEADER_BYTES, DEFAULT_MAX_RUNTIME_INPUT_BYTES,
+    DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES, DEFAULT_MAX_RUNTIME_OPERATOR_EVALUATIONS,
+    DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES, DEFAULT_MAX_RUNTIME_QUERY_ARGUMENTS, DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS,
     DEFAULT_MAX_RUNTIME_RESPONSE_HEADER_BYTES, DEFAULT_MAX_RUNTIME_RESPONSE_WINDOW_BYTES,
     DEFAULT_MAX_RUNTIME_RETAINED_BYTES, DEFAULT_MAX_RUNTIME_SELECTED_VALUES, DEFAULT_MAX_RUNTIME_SETVAR_ACTIONS,
     DEFAULT_MAX_RUNTIME_TRANSFORMATION_OUTPUT_BYTES, DEFAULT_MAX_RUNTIME_TRANSFORMATION_WORK_BYTES,
@@ -506,6 +508,7 @@ struct CompiledActionPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompiledMemberPlan {
     active: bool,
+    expensive_aggregate_actions: bool,
     operator_template: Option<usize>,
     target_plan: Option<usize>,
     transformation_plan: Option<usize>,
@@ -777,6 +780,7 @@ enum CompiledScheduleEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompiledRuleUnit {
+    expensive_check: bool,
     id: u64,
     phase: Phase,
     disruptive: ResolvedDisruptive,
@@ -797,6 +801,7 @@ struct CompiledMarker {
 #[derive(Debug)]
 #[expect(dead_code, reason = "transaction execution consumes the immutable compiled arenas")]
 pub struct CompiledGeneration {
+    has_expensive_checks: bool,
     inspection_activation: inspection_activation::CompiledActivation,
     json_inspection: json_inspection_plan::CompiledJsonPlan,
     xml_inspection: json_inspection_plan::CompiledJsonPlan,
@@ -3537,6 +3542,12 @@ impl CompiledGeneration {
             reserve_exact(&mut schedules[index], phase_entries[index], "compiled phase schedule")?;
         }
 
+        let optional_checks = expensive_checks::classify(
+            &state.matchers.asset_templates.validated,
+            &state.matchers.capture_regexes,
+            &mut state.canonical_work,
+            limits,
+        )?;
         let mut member_start = 0_usize;
         for unit in state.matchers.asset_templates.validated.rule_units() {
             let member_count = unit.members().len();
@@ -3545,6 +3556,7 @@ impl CompiledGeneration {
                 let resolved = root.resolved_state();
                 unit_locations.push(root.rule().location());
                 units.push(CompiledRuleUnit {
+                    expensive_check: optional_checks.skips_unit(unit.id()),
                     id: unit.id(),
                     phase: resolved.phase(),
                     disruptive: resolved.disruptive(),
@@ -3615,6 +3627,7 @@ impl CompiledGeneration {
                     kind: CompilerInvariant::ScheduleOrder,
                 })?
             {
+                member.expensive_aggregate_actions = optional_checks.multipart && unit.id == 922150;
                 let Some(marker) = member.skip_after_marker else {
                     continue;
                 };
@@ -3808,6 +3821,7 @@ impl CompiledGeneration {
             inspection_activation: inspection_activation::CompiledActivation::default(),
             json_inspection: json_inspection_plan::CompiledJsonPlan::default(),
             xml_inspection: json_inspection_plan::CompiledJsonPlan::default(),
+            has_expensive_checks: optional_checks.hpp || optional_checks.multipart,
             prefix_validation: Ok(()),
             requires_complete_request_body: false,
             bytes,
@@ -4854,6 +4868,7 @@ impl CompileWork {
             self.push_record_charge::<CompiledMemberPlan>(member_location)?;
             self.members.push(CompiledMemberPlan {
                 active: false,
+                expensive_aggregate_actions: false,
                 operator_template: None,
                 target_plan: None,
                 transformation_plan: None,
@@ -4926,6 +4941,7 @@ impl CompileWork {
         self.push_record_charge::<CompiledMemberPlan>(member_location)?;
         self.members.push(CompiledMemberPlan {
             active,
+            expensive_aggregate_actions: false,
             operator_template,
             target_plan: None,
             transformation_plan: None,

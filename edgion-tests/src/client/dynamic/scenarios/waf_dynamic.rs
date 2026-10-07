@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
-use crate::framework::TestSuite;
+use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites;
 
 fn initial() -> Box<dyn TestSuite> {
@@ -130,6 +130,7 @@ async fn run_supported_segment(ctx: &ScenarioCtx) -> Result<()> {
             ctx.wait_phase(SCENARIO, phase, Duration::from_secs(60)).await?;
             assert_supported_publication(ctx, profile, detection).await?;
         }
+        run_expensive_policy_updates(ctx, SCENARIO).await?;
         let before = publication_generations(ctx).await?;
         ctx.apply_dir("updates/to_supported_invalid").await?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -435,6 +436,22 @@ async fn wait_invalid_json_processed(ctx: &ScenarioCtx) -> Result<()> {
 
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
+        name: "expensive-on",
+        factory: expensive_on,
+    },
+    PhaseSuite {
+        name: "expensive-off",
+        factory: expensive_off,
+    },
+    PhaseSuite {
+        name: "expensive-default",
+        factory: expensive_off,
+    },
+    PhaseSuite {
+        name: "expensive-restored",
+        factory: expensive_on,
+    },
+    PhaseSuite {
         name: "supported-on",
         factory: supported_on,
     },
@@ -705,4 +722,190 @@ pub static SCENARIO: &Scenario = &Scenario {
     conf_path: "EdgionPlugins/Waf/DynamicTest",
     run,
     phases: PHASES,
+};
+
+struct ExpensiveChecksSuite(bool);
+impl TestSuite for ExpensiveChecksSuite {
+    fn name(&self) -> &str {
+        "Waf expensive-check configuration"
+    }
+    fn test_cases(&self) -> Vec<TestCase> {
+        let enabled = self.0;
+        vec![TestCase::new(
+            "hpp_policy",
+            "pinned EGC optional HPP policy and ordinary attack coverage",
+            move |ctx: TestContext| {
+                Box::pin(async move {
+                    let started = std::time::Instant::now();
+                    let run = async {
+                        for (query, attack, multipart) in [
+                            ("a=one&a=two", false, false),
+                            ("probe=phar%3A%2F%2Fpayload", true, false),
+                            ("", false, true),
+                            ("", true, true),
+                        ] {
+                            let trace = format!("waf-policy-{}", uuid::Uuid::new_v4());
+                            let response = ctx
+                                .http_client
+                                .post(format!("http://{}:{}/echo?{query}", ctx.target_host, ctx.http_port))
+                                .timeout(Duration::from_secs(10))
+                                .header("host", "waf-supported.example.com")
+                                .header("x-waf-version", "supported-crs")
+                                .header("content-type", if multipart { "multipart/form-data; boundary=boundary" } else { "application/json" })
+                                .header("user-agent", "edgion-profile-test")
+                                .header("access_log", "test_store")
+                                .header("traceparent", crate::access_log_client::traceparent_for_marker(&trace))
+                                .body(if multipart && attack {
+                                    "--boundary\r\nContent-Disposition: form-data; name=\"part\"\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\nsafe\r\n--boundary--\r\n"
+                                } else if multipart {
+                                    "--boundary\r\nContent-Disposition: form-data; name=\"part\"\r\nContent-Type: invalid\r\n\r\nsafe\r\n--boundary--\r\n"
+                                } else { "{}" })
+                                .send()
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            let status = response.status().as_u16();
+                            response.bytes().await.map_err(|e| e.to_string())?;
+                            let log = ctx
+                                .access_log_client()
+                                .get_access_log_with_retry(&trace, 15, 200)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            let expected = if attack || enabled { 403 } else { 200 };
+                            if status != expected || log.status_code() != Some(u64::from(expected)) {
+                                return Err(format!("WAF policy status: actual={status}, expected={expected}"));
+                            }
+                            let findings = log.data["waf"]["findings"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+                            let id = if multipart && attack { 922120 } else if attack { 933200 } else if multipart { 922110 } else { 921180 };
+                            if findings.iter().any(|f| f["rule_id"] == id) != (attack || enabled) {
+                                return Err(format!("WAF policy finding {id} mismatch: {}", log.data["waf"]));
+                            }
+                        }
+                        Ok::<(), String>(())
+                    }
+                    .await;
+                    match run {
+                        Ok(()) => TestResult::passed(started.elapsed()),
+                        Err(error) => TestResult::failed(started.elapsed(), error),
+                    }
+                })
+            },
+        )
+        .with_timeout(Duration::from_secs(45))]
+    }
+}
+fn expensive_on() -> Box<dyn TestSuite> {
+    Box::new(ExpensiveChecksSuite(true))
+}
+fn expensive_off() -> Box<dyn TestSuite> {
+    Box::new(ExpensiveChecksSuite(false))
+}
+
+async fn run_expensive_policy_updates(ctx: &ScenarioCtx, scenario: &'static Scenario) -> Result<()> {
+    let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
+    let mut baseline: Value = client
+        .get("EdgionGatewayConfig", None, "example-gateway")
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    ensure!(
+        baseline["kind"] == "EdgionGatewayConfig",
+        "baseline EGC resource missing"
+    );
+    baseline
+        .as_object_mut()
+        .context("EGC must be an object")?
+        .remove("status");
+    if let Some(metadata) = baseline["metadata"].as_object_mut() {
+        metadata.remove("resourceVersion");
+        metadata.remove("managedFields");
+    }
+    baseline["spec"]
+        .as_object_mut()
+        .context("EGC spec must be an object")?
+        .remove("currentStatus");
+    let apply = |resource: Value| {
+        let client = &client;
+        async move {
+            crate::dynamic::apply::apply_yaml_documents(
+                client,
+                &ctx.resolve("expensive-check-policy"),
+                &serde_yaml::to_string(&resource)?,
+            )
+            .await
+        }
+    };
+    let result = async {
+        for (flag, phase) in [
+            (Some(true), "expensive-on"),
+            (Some(false), "expensive-off"),
+            (None, "expensive-default"),
+            (Some(true), "expensive-restored"),
+        ] {
+            let mut candidate = baseline.clone();
+            if let Some(flag) = flag {
+                candidate["spec"]["waf"] = serde_json::json!({"expensiveChecks": flag});
+            } else {
+                candidate["spec"].as_object_mut().unwrap().remove("waf");
+            }
+            apply(candidate).await?;
+            ctx.wait_phase(scenario, phase, Duration::from_secs(30)).await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    // Restore the captured resource even when a phase fails.
+    let restoration = apply(baseline).await;
+    match (result, restoration) {
+        (Ok(()), Ok(())) => Ok(()),
+        (result, restoration) => anyhow::bail!("WAF EGC update: result={result:?}; restoration={restoration:?}"),
+    }
+}
+
+fn run_expensive(ctx: ScenarioCtx) -> ScenarioRunFuture {
+    Box::pin(async move {
+        let result = async {
+            ctx.apply_dir("updates/to_supported_on").await?;
+            ctx.wait_phase(EXPENSIVE_SCENARIO, "supported-recovered", Duration::from_secs(60))
+                .await?;
+            run_expensive_policy_updates(&ctx, EXPENSIVE_SCENARIO).await
+        }
+        .await;
+        let restored = ctx.apply_dir("updates/to_recovered").await;
+        let deleted = delete_supported_resources(&ctx).await;
+        match (result, restored, deleted) {
+            (Ok(()), Ok(()), Ok(())) => Ok(()),
+            (result, restored, deleted) => {
+                anyhow::bail!("WAF optional checks: result={result:?}; restore={restored:?}; cleanup={deleted:?}")
+            }
+        }
+    })
+}
+
+pub static EXPENSIVE_SCENARIO: &Scenario = &Scenario {
+    id: "WafExpensiveChecks",
+    conf_path: "EdgionPlugins/Waf/DynamicTest",
+    run: run_expensive,
+    phases: &[
+        PhaseSuite {
+            name: "supported-recovered",
+            factory: supported_retained,
+        },
+        PhaseSuite {
+            name: "expensive-on",
+            factory: expensive_on,
+        },
+        PhaseSuite {
+            name: "expensive-off",
+            factory: expensive_off,
+        },
+        PhaseSuite {
+            name: "expensive-default",
+            factory: expensive_off,
+        },
+        PhaseSuite {
+            name: "expensive-restored",
+            factory: expensive_on,
+        },
+    ],
 };

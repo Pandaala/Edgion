@@ -45,6 +45,16 @@ fn expect_request_head(session: &mut MockPluginSession, uri: &str) {
 }
 
 fn expect_request_head_with_headers(session: &mut MockPluginSession, uri: &str, headers: Vec<(Vec<u8>, Vec<u8>)>) {
+    expect_request_head_with_context(session, uri, headers, EdgionHttpContext::default());
+}
+
+fn expect_request_head_with_context(
+    session: &mut MockPluginSession,
+    uri: &str,
+    headers: Vec<(Vec<u8>, Vec<u8>)>,
+    ctx: EdgionHttpContext,
+) {
+    session.expect_ctx().times(1).return_const(ctx);
     session
         .expect_claim_waf_phase()
         .returning(|_, _| WafPhaseClaim::Execute);
@@ -1126,4 +1136,45 @@ fn h1_and_missing_h2_authority_do_not_manufacture_host() {
         request_header_views(&empty, "HTTP/1.1", Some(&absolute))[0].value(),
         b""
     );
+}
+
+#[tokio::test]
+async fn waf_expensive_checks_use_the_request_gateway_snapshot() {
+    let rules = concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.critical_anomaly_score=5\"\n",
+        include_str!("../../../../../../edgion-waf/tests/fixtures/expensive-checks-crs-4.25.1.conf")
+    );
+    let plugin = plugin(rules, WafMode::On);
+    for enabled in [false, true] {
+        let mut session = MockPluginSession::new();
+        let runtime = crate::config::ResolvedGatewayConfig {
+            waf_expensive_checks: enabled,
+            ..Default::default()
+        };
+        expect_request_head_with_context(
+            &mut session,
+            "/?a=one&a=two",
+            vec![],
+            EdgionHttpContext::with_gateway_config(Arc::new(runtime)),
+        );
+        session.expect_ctx().return_const(EdgionHttpContext::default());
+        session.expect_ensure_request_body().return_once(|_| Ok(0));
+        session.expect_request_body_available_len().return_once(|_| Ok(0));
+        session.expect_read_request_body().return_once(|_| Ok(Bytes::new()));
+        session.expect_install_waf_transaction().return_once(move |_, tx| {
+            assert_eq!(
+                tx.tx_value(b"paramcounter_ARGS_NAMES:a"),
+                enabled.then_some(b"2".as_slice())
+            );
+            assert_eq!(
+                tx.tx_value(b"inbound_anomaly_score_pl3"),
+                enabled.then_some(b"5".as_slice())
+            );
+            true
+        });
+        assert_eq!(
+            RequestFilter::run_request(&plugin, &mut session, &mut PluginLog::new(NAME)).await,
+            PluginRunningResult::GoodNext
+        );
+    }
 }

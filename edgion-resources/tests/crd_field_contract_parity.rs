@@ -113,6 +113,7 @@ fn selected_field_types_match_every_served_crd_version() {
                 "retry.attempts",
                 "linkSys.webhookMaxResponseBytes",
                 "linkSys.maxInstancesPerKind",
+                "waf.expensiveChecks",
                 "requestBody.enabled",
                 "requestBody.defaultMemoryBufferSize",
                 "requestBody.maxMemoryBufferSize",
@@ -144,7 +145,7 @@ fn selected_field_types_match_every_served_crd_version() {
 fn gateway_scalar_defaults_match_deserialization_and_preserve_overrides() {
     let omitted: EdgionGatewayConfigSpec = serde_json::from_value(json!({})).expect("omitted sections are valid");
     let empty: EdgionGatewayConfigSpec = serde_json::from_value(json!({
-        "retry": {}, "requestBody": {}, "linkSys": {}
+        "retry": {}, "requestBody": {}, "linkSys": {}, "waf": {}
     }))
     .expect("empty sections are valid");
     assert_eq!(omitted.retry.attempts, empty.retry.attempts);
@@ -162,6 +163,7 @@ fn gateway_scalar_defaults_match_deserialization_and_preserve_overrides() {
                 "retry.attempts",
                 "linkSys.webhookMaxResponseBytes",
                 "linkSys.maxInstancesPerKind",
+                "waf.expensiveChecks",
                 "requestBody.enabled",
                 "requestBody.defaultMemoryBufferSize",
                 "requestBody.defaultMaxBodySize",
@@ -179,6 +181,7 @@ fn gateway_scalar_defaults_match_deserialization_and_preserve_overrides() {
             );
         }
         let explicit: EdgionGatewayConfigSpec = serde_json::from_value(json!({
+            "waf": explicit_defaults(field(&spec, "waf")),
             "retry": explicit_defaults(field(&spec, "retry")),
             "requestBody": explicit_defaults(field(&spec, "requestBody")),
             "linkSys": explicit_defaults(field(&spec, "linkSys"))
@@ -476,5 +479,26 @@ fn explicit_null_is_distinct_from_serde_omission() {
         ] {
             assert!(!admits(field(&spec, path), &Value::Null), "raw schema at {path}");
         }
+    }
+}
+
+#[test]
+fn waf_expensive_checks_default_false_and_transport_explicit_true() {
+    for specimen in [
+        json!({}),
+        json!({"waf": {}}),
+        json!({"waf": {"expensiveChecks": false}}),
+    ] {
+        let config: EdgionGatewayConfigSpec = serde_json::from_value(specimen).unwrap();
+        assert!(!config.waf.expensive_checks);
+    }
+    let config: EdgionGatewayConfigSpec = serde_json::from_value(json!({"waf": {"expensiveChecks": true}})).unwrap();
+    let transported: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+    assert!(transported.waf.expensive_checks);
+    for specimen in [
+        json!({"waf": {"expensiveChecks": "false"}}),
+        json!({"waf": {"expensiveChecks": null}}),
+    ] {
+        assert!(serde_json::from_value::<EdgionGatewayConfigSpec>(specimen).is_err());
     }
 }

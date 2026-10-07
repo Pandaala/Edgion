@@ -64,6 +64,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::edgion_tls_last_known_good::SCENARIO,
         crate::dynamic::scenarios::allowed_san_regex_ignore_case::SCENARIO,
         crate::dynamic::scenarios::waf_dynamic::SCENARIO,
+        crate::dynamic::scenarios::waf_dynamic::EXPENSIVE_SCENARIO,
         crate::dynamic::scenarios::wasm_runtime_ownership::SCENARIO,
         crate::dynamic::scenarios::l4_timeout_hot_reload::SCENARIO,
         crate::dynamic::scenarios::retained_listener_handles::SCENARIO,

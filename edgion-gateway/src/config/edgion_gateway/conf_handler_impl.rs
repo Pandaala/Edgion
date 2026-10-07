@@ -54,6 +54,7 @@ impl Default for ResolvedL4Timeouts {
 /// in-flight requests retain their captured values across hot reloads.
 #[derive(Clone)]
 pub struct ResolvedGatewayConfig {
+    pub waf_expensive_checks: bool,
     pub request_body: ResolvedRequestBodyConfig,
     pub remote_ip_header: http::HeaderName,
     pub(crate) preflight_policy: ResolvedPreflightPolicy,
@@ -141,6 +142,7 @@ impl ResolvedGatewayConfig {
         };
         Self {
             request_body: ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
+            waf_expensive_checks: config.spec.waf.expensive_checks,
             remote_ip_header,
             preflight_policy: ResolvedPreflightPolicy::resolve(config.spec.preflight_policy.as_ref()),
             x_forwarded_for_limit: security.map(|s| s.x_forwarded_for_limit),
@@ -167,6 +169,7 @@ impl Default for ResolvedGatewayConfig {
     fn default() -> Self {
         Self {
             request_body: ResolvedRequestBodyConfig::default(),
+            waf_expensive_checks: false,
             remote_ip_header: default_remote_ip_header(),
             preflight_policy: ResolvedPreflightPolicy::default(),
             x_forwarded_for_limit: None,

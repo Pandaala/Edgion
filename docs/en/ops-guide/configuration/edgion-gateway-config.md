@@ -2,6 +2,39 @@
 
 EdgionGatewayConfig is a cluster-scoped CRD (`edgion.io/v1alpha1`) that configures behavior at the GatewayClass level. It is referenced via `GatewayClass.spec.parametersRef`. Updates propagate to existing Gateways without restarting the process; the field determines which new request, connection, or operation adopts the update.
 
+## Optional expensive WAF checks
+
+`spec.waf.expensiveChecks` defaults to `false`. Set it to `true` to enable
+compiler-classified checks that retain broad cross-field aggregate state:
+
+```yaml
+spec:
+  waf:
+    expensiveChecks: true
+```
+
+The current CRS 4.25.1 classes are the name histogram/HPP pair (921170/921180)
+and the Multipart Content-Type list (922140/922150/922110). OFF omits eligible
+aggregate initialization, retained list/counter writes and checking. The Multipart
+collector still performs its ordinary matching and capture updates, preserving
+numeric slots and earlier named-capture cleanup for other rules.
+
+The policy applies to new requests across query, form, multipart and JSON inputs.
+Existing requests keep their captured policy. Cheap count/length checks, normal
+attack matching, mandatory JSON key identity and XML grammar/duplicate attributes
+remain enabled. The current supported XML corpus has no independently removable
+aggregate-record class. Strict source validation always runs. Changed or partial
+families and unknown/custom namespace dependencies conservatively retain their
+required computation; IDs alone never determine eligibility.
+
+Exact canonical restricted-header and RFI checks remain active. Removing aggregate
+state/checks also removes incidental inputs through the original unanchored TX
+selectors, including their possible errors. This is an explicit optional-check
+coverage tradeoff, not universal equivalence to all-original rules. Standard PL1
+already skips HPP; actual savings depend on profile and input. The switch does not
+remove mandatory parser arenas, part-header publication or all temporary values.
+Deleting a referenced EGC still follows existing plugin-scope admission denial.
+
 ## Difference from Gateway YAML
 
 | Layer | Gateway YAML | EdgionGatewayConfig |

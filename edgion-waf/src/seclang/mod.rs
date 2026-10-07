@@ -61,7 +61,7 @@ pub use compiler::{
     JsonResultLimit, JsonResultLimits, PhaseOutcome, PhraseAssetFailure, PhraseAssetRequest, PhraseAssetSink,
     PhraseAssetSinkError, PhraseAssetSource, PhraseMatcherErrorKind, RequestBodyExecutionClass,
     RequestBodyExecutionSummary, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead, ResponseHeader,
-    ResponseWindow, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits, RuntimeMatcherError,
+    ResponseWindow, RuleCheckPolicy, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits, RuntimeMatcherError,
     RuntimeTransformError, Transaction, XmlInspectionLimits, XmlInspectionSession, XmlInspectionUnsupported,
     XmlInspectionUnsupportedReason, XmlInspectionUsage, DEFAULT_MAX_RUNTIME_CAPTURE_BYTES,
     DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES, DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES, DEFAULT_MAX_RUNTIME_COOKIES,

@@ -86,6 +86,15 @@ See [EGC publication regression boundaries](../../04-review/listeners/regression
 
 ### Existing subsystem publishers
 
+WAF captures `spec.waf.expensiveChecks` (default false) from this same runtime
+snapshot. It gates compiler-classified canonical HPP and Multipart Content-Type
+aggregate state/checks; ordinary JSON/XML parsing and other attacks remain active.
+The Multipart collector keeps its capture/observer path. The leaf
+engine's direct constructors default to original all-checks-on behavior, while
+Gateway always supplies its pinned explicit policy. Unknown custom dependencies
+conservatively keep the required family. See the user configuration reference for the
+canonical TX namespace overlap boundary.
+
 LinkSys, load-balancing defaults, outbound TLS and DNS keep their existing global
 dynamic consumers. Plugin policy, global references and access-log masking keep
 their scoped publisher. These publications are not an atomic transaction with

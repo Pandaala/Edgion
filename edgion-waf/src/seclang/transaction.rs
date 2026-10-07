@@ -52,6 +52,19 @@ pub const DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS: usize = 1_024;
 pub const DEFAULT_MAX_RUNTIME_RESPONSE_HEADER_BYTES: usize = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_RUNTIME_RESPONSE_WINDOW_BYTES: usize = 256 * 1024;
 
+/// Optional rule computations for one transaction. Gateway supplies its pinned policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuleCheckPolicy {
+    pub expensive_checks: bool,
+}
+
+impl Default for RuleCheckPolicy {
+    /// Direct engine callers execute the original complete rules by default.
+    fn default() -> Self {
+        Self { expensive_checks: true }
+    }
+}
+
 /// Select the matcher execution path used by one transaction.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EvaluationMode {
@@ -828,6 +841,7 @@ impl MatchValue {
 
 #[derive(Default)]
 struct TxState {
+    check_policy: RuleCheckPolicy,
     #[cfg(test)]
     force_unpruned_inspection: bool,
     entries: Vec<TxEntry>,
@@ -1239,12 +1253,32 @@ impl Transaction<'static> {
         evaluation_mode: EvaluationMode,
         rule_engine_mode: RuleEngineMode,
     ) -> Result<Self, RuntimeError> {
+        Self::new_shared_with_policy(
+            generation,
+            request,
+            limits,
+            evaluation_mode,
+            rule_engine_mode,
+            RuleCheckPolicy::default(),
+        )
+    }
+
+    /// Create a shared transaction with immutable optional-check policy.
+    pub fn new_shared_with_policy(
+        generation: Arc<CompiledGeneration>,
+        request: RequestHead<'_>,
+        limits: RuntimeLimits,
+        evaluation_mode: EvaluationMode,
+        rule_engine_mode: RuleEngineMode,
+        check_policy: RuleCheckPolicy,
+    ) -> Result<Self, RuntimeError> {
         Self::new_with_handle(
             GenerationHandle::Shared(generation),
             request,
             limits,
             evaluation_mode,
             rule_engine_mode,
+            check_policy,
         )
     }
 }
@@ -1276,12 +1310,32 @@ impl<'generation> Transaction<'generation> {
         evaluation_mode: EvaluationMode,
         rule_engine_mode: RuleEngineMode,
     ) -> Result<Self, RuntimeError> {
+        Self::new_with_policy(
+            generation,
+            request,
+            limits,
+            evaluation_mode,
+            rule_engine_mode,
+            RuleCheckPolicy::default(),
+        )
+    }
+
+    /// Create a borrowed transaction with immutable optional-check policy.
+    pub fn new_with_policy(
+        generation: &'generation CompiledGeneration,
+        request: RequestHead<'_>,
+        limits: RuntimeLimits,
+        evaluation_mode: EvaluationMode,
+        rule_engine_mode: RuleEngineMode,
+        check_policy: RuleCheckPolicy,
+    ) -> Result<Self, RuntimeError> {
         Self::new_with_handle(
             GenerationHandle::Borrowed(generation),
             request,
             limits,
             evaluation_mode,
             rule_engine_mode,
+            check_policy,
         )
     }
 
@@ -1291,6 +1345,7 @@ impl<'generation> Transaction<'generation> {
         limits: RuntimeLimits,
         evaluation_mode: EvaluationMode,
         rule_engine_mode: RuleEngineMode,
+        check_policy: RuleCheckPolicy,
     ) -> Result<Self, RuntimeError> {
         let request = RequestState::build(request, limits)?;
         let scratch_bytes = matcher_scratch_bytes(&generation)?;
@@ -1361,7 +1416,10 @@ impl<'generation> Transaction<'generation> {
             match_scratch_bytes: 0,
             detector_work_bytes: 0,
             ctl_work_bytes: 0,
-            tx: TxState::default(),
+            tx: TxState {
+                check_policy,
+                ..TxState::default()
+            },
             capture_keys: Vec::new(),
             response: None,
             request_body_error: None,
@@ -1924,6 +1982,7 @@ impl<'generation> Transaction<'generation> {
         };
         let schedule_index = phase_index(phase);
         let schedule_len = self.generation.schedules[schedule_index].len();
+        let policy_prunes = self.generation.has_expensive_checks && !self.tx.check_policy.expensive_checks;
         let mut schedule_ordinal = 0_usize;
         while schedule_ordinal < schedule_len {
             let entry = self.generation.schedules[schedule_index][schedule_ordinal];
@@ -1931,7 +1990,9 @@ impl<'generation> Transaction<'generation> {
             let super::CompiledScheduleEntry::RuleUnit(unit_id) = entry else {
                 continue;
             };
-            if self.tx.removed_units.binary_search(&unit_id).is_ok() {
+            if self.tx.removed_units.binary_search(&unit_id).is_ok()
+                || (policy_prunes && self.generation.units[unit_id].expensive_check)
+            {
                 continue;
             }
             outcome.evaluated_units = outcome.evaluated_units.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
@@ -2723,6 +2784,11 @@ impl<'generation> Transaction<'generation> {
             .members
             .get(member_id)
             .ok_or(RuntimeError::GenerationInvariant)?;
+        // The exact collector keeps its capture/observer path; only its two
+        // aggregate setvar actions are optional, before expansion or allocation.
+        if member.expensive_aggregate_actions && !staged.check_policy.expensive_checks {
+            return Ok(());
+        }
         let action_end = member
             .action_start
             .checked_add(member.action_count)
@@ -3771,6 +3837,7 @@ impl TxState {
             .map_err(|_| RuntimeError::Allocation)?;
         target_exclusions.extend_from_slice(&self.target_exclusions);
         let mut cloned = Self {
+            check_policy: self.check_policy,
             #[cfg(test)]
             force_unpruned_inspection: self.force_unpruned_inspection,
             entries,

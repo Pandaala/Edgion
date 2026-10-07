@@ -184,6 +184,15 @@ spec:
                       type: boolean
                       description: "Allow loopback upstream addresses for this Gateway (default false)"
                       default: false
+                waf:
+                  type: object
+                  description: "Policy for optional expensive WAF checks; normal inspection remains enabled"
+                  properties:
+                    expensiveChecks:
+                      type: boolean
+                      default: false
+                      description: "Enable classified checks that retain cross-field aggregate records"
+
                 requestBody:
                   type: object
                   description: "GatewayClass-wide request-body buffering policy."

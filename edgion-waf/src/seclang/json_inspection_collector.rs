@@ -559,13 +559,23 @@ fn build_activation(
     store: &mut ResultStore<'_>,
     domain: InspectionDomain,
 ) -> Collected<()> {
+    let generation = context.generation;
+    let policy_prunes = !context.tx.check_policy.expensive_checks && generation.has_expensive_checks;
     #[cfg(test)]
     if context.tx.force_unpruned_inspection {
+        if policy_prunes {
+            store.initialize_activation(generation.inspection_plan(domain).groups.len())?;
+            for (unit_id, unit) in generation.units.iter().enumerate() {
+                store.charge_work(1)?;
+                if !unit.expensive_check {
+                    activate_consumers(generation, unit_id, domain, store)?;
+                }
+            }
+        }
         return Ok(());
     }
-    let generation = context.generation;
     let proof = &generation.inspection_activation;
-    if !proof.has_gate && context.tx.removed_units.is_empty() {
+    if !proof.has_gate && context.tx.removed_units.is_empty() && !policy_prunes {
         return Ok(());
     }
     let mut reachable = Vec::new();
@@ -590,7 +600,9 @@ fn build_activation(
             continue;
         };
         store.charge_work((usize::BITS - context.tx.removed_units.len().leading_zeros()) as usize + 1)?;
-        if context.tx.removed_units.binary_search(&unit_id).is_ok() {
+        if context.tx.removed_units.binary_search(&unit_id).is_ok()
+            || (policy_prunes && generation.units[unit_id].expensive_check)
+        {
             if let Some(slot) = reachable.get_mut(next) {
                 *slot = true;
             }

@@ -1943,6 +1943,7 @@ dependencies = [
  "edgion-controller",
  "edgion-gateway",
  "edgion-resources",
+ "edgion-waf",
  "futures",
  "h2",
  "hex",

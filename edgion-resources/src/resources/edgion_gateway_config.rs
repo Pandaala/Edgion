@@ -63,6 +63,10 @@ pub struct EdgionGatewayConfigSpec {
     #[serde(default)]
     pub request_body: RequestBodyConfig,
 
+    /// GatewayClass-wide policy for optional expensive WAF checks.
+    #[serde(default)]
+    pub waf: GatewayWafConfig,
+
     /// GatewayClass-scoped plugin execution policy. Absence permits all plugins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_policy: Option<PluginPolicyConfig>,
@@ -104,6 +108,16 @@ pub struct EdgionGatewayConfigSpec {
     /// use this (it uses Service annotation → Controller YAML default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dns_resolver: Option<DnsResolverConfig>,
+}
+
+/// Optional expensive checks, independent of normal JSON/XML inspection.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayWafConfig {
+    /// Execute classified checks that retain cross-field aggregate records.
+    /// Default false; mandatory parsing and ordinary attack rules remain active.
+    #[serde(default)]
+    pub expensive_checks: bool,
 }
 
 /// Data-plane default DNS resolver configuration (EdgionGatewayConfig).
