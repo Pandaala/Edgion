@@ -205,20 +205,24 @@ fn insert(root: &mut Json, fields: &[FieldDescriptor], value: Json) -> Result<()
     let (field, rest) = fields.split_first().ok_or(TranscodingError::Invalid)?;
     let object = root.as_object_mut().ok_or(TranscodingError::Invalid)?;
     // Accept either ProtoJSON spelling, but never two spellings of one field.
-    if object.contains_key(field.name()) && field.name() != field.json_name() {
+    if field.name() != field.json_name() && object.contains_key(field.name()) && object.contains_key(field.json_name())
+    {
         return Err(TranscodingError::Invalid);
     }
+    let key = if object.contains_key(field.name()) {
+        field.name()
+    } else {
+        field.json_name()
+    };
     if rest.is_empty() {
-        if object.contains_key(field.json_name()) {
+        if object.contains_key(key) {
             return Err(TranscodingError::Invalid);
         }
         object.insert(field.json_name().to_owned(), value);
         Ok(())
     } else {
         insert(
-            object
-                .entry(field.json_name())
-                .or_insert_with(|| Json::Object(Map::new())),
+            object.entry(key).or_insert_with(|| Json::Object(Map::new())),
             rest,
             value,
         )

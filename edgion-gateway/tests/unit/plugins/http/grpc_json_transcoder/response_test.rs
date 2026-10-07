@@ -189,3 +189,121 @@ async fn mutable_companions_cannot_manufacture_transport_success() {
         }
     }
 }
+
+#[tokio::test]
+async fn correction_late_conflict_cannot_publish_ready_unary_output() {
+    let mut p = processor(false, GrpcJsonStreamFormat::Ndjson);
+    p.feed(frame(&[10, 2, b'o', b'k'])).unwrap();
+    p.on_actual_upstream_trailers(Some(&trailers("0")), false)
+        .await
+        .unwrap();
+    assert!(p.plan.ready.lock().is_some());
+    p.plan.reject_mutation();
+    assert!(matches!(
+        p.plan.boundary(ResponseHeadBoundary::CleanTerminalWithoutDecision),
+        ResponseHeadBoundaryAction::Fail(_)
+    ));
+    assert!(p.plan.ready.lock().is_none());
+    p.finalize_incomplete("cancelled", "cleanup");
+    let mut ctx = crate::EdgionHttpContext::default();
+    ctx.stage_logs_mut().push(crate::plugins::runtime::log::StageLogs {
+        stage: "request",
+        filters: vec![crate::plugins::runtime::PluginLog::new("GrpcJsonTranscoder")],
+        edgion_plugins: vec![],
+    });
+    p.plan.finalize_log(&mut ctx);
+    p.plan.finalize_log(&mut ctx);
+    let log = serde_json::to_string(ctx.stage_logs_mut()).unwrap();
+    assert_eq!(log.matches("conversion owner conflict").count(), 1);
+    assert_eq!(ctx.request_info.grpc_status(), Some(0));
+}
+
+#[tokio::test]
+async fn correction_terminal_outcome_survives_unconditional_cleanup() {
+    for (code, expected) in [
+        (Some("0"), "exchange completed"),
+        (Some("7"), "upstream status failed"),
+        (None, "terminal status invalid"),
+    ] {
+        let mut p = processor(true, GrpcJsonStreamFormat::Ndjson);
+        p.feed(frame(&[8, 1])).unwrap();
+        let evidence = code.map(trailers);
+        p.on_actual_upstream_trailers(evidence.as_ref(), false).await.unwrap();
+        p.finalize_incomplete("cancelled", "cleanup");
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.stage_logs_mut().push(crate::plugins::runtime::log::StageLogs {
+            stage: "request",
+            filters: vec![crate::plugins::runtime::PluginLog::new("GrpcJsonTranscoder")],
+            edgion_plugins: vec![],
+        });
+        p.plan.finalize_log(&mut ctx);
+        let log = serde_json::to_string(ctx.stage_logs_mut()).unwrap();
+        assert!(log.contains(expected), "{log}");
+        assert!(!log.contains("interrupted"));
+        assert_eq!(ctx.request_info.grpc_status(), code.map(|v| v.parse().unwrap()));
+    }
+}
+
+#[test]
+fn correction_response_header_conflict_rejects_commit_and_processing() {
+    for streaming in [false, true] {
+        let mut p = processor(streaming, GrpcJsonStreamFormat::Ndjson);
+        p.plan.reject_mutation();
+        let mut header = ResponseHeader::build(200, None).unwrap();
+        header
+            .insert_header("content-type", media(GrpcJsonStreamFormat::Ndjson, streaming))
+            .unwrap();
+        assert!(p.plan.head_plan(ResponseHeadSource::Origin, &header).is_err());
+        assert!(p.feed(frame(&[])).is_err());
+    }
+}
+
+#[tokio::test]
+async fn correction_stream_failures_keep_the_first_bounded_diagnostic() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    for (mode, expected) in [
+        (0, "response framing invalid"),
+        (1, "exchange deadline expired"),
+        (2, "output budget exhausted"),
+        (3, "conversion owner conflict"),
+    ] {
+        let mut p = processor(true, GrpcJsonStreamFormat::Ndjson);
+        let queued = if mode == 2 {
+            Some(p.plan.output(vec![0; 1024 * 1024]).unwrap())
+        } else {
+            None
+        };
+        if mode == 1 {
+            Arc::get_mut(&mut p.plan).unwrap().deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        }
+        if mode == 3 {
+            p.plan.reject_mutation();
+        }
+        let mut chunk = Some(if mode == 0 {
+            Bytes::from_static(&[1, 0, 0, 0, 0])
+        } else {
+            frame(&[8, 1])
+        });
+        let mut sink = ResponseBodySink::new();
+        p.on_event(
+            &mut chunk,
+            StreamingResponseEvent::Data { end_of_stream: false },
+            ResponseStreamKind::None,
+            &mut sink,
+            &mut MockPluginSession::new(),
+        )
+        .await;
+        assert!(sink.is_terminated());
+        p.finalize_incomplete("cancelled", "cleanup");
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.stage_logs_mut().push(crate::plugins::runtime::log::StageLogs {
+            stage: "request",
+            filters: vec![crate::plugins::runtime::PluginLog::new("GrpcJsonTranscoder")],
+            edgion_plugins: vec![],
+        });
+        p.plan.finalize_log(&mut ctx);
+        let log = serde_json::to_string(ctx.stage_logs_mut()).unwrap();
+        assert_eq!(log.matches(expected).count(), 1, "{log}");
+        drop(queued);
+    }
+}

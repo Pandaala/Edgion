@@ -1,7 +1,7 @@
 use super::{mapping::BoundRequest, wire, CompiledBinding, GrpcJsonStreamFormat, TranscodingError, TranscodingLimits};
 use crate::resources::edgion_plugins::plugin_configs::{parse_json_instance_with_limits, profile_json_value};
 use prost::Message;
-use prost_reflect::{DynamicMessage, Kind, MessageDescriptor};
+use prost_reflect::DynamicMessage;
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -54,7 +54,7 @@ impl BoundRequest {
                     .into_value(),
             )
         };
-        let (binding, value) = self.merge(parsed)?;
+        let (binding, mut value) = self.merge(parsed)?;
         let profile = profile_json_value(&value).map_err(|_| TranscodingError::Invalid)?;
         if profile.max_depth > limits.depth
             || profile.node_count > limits.nodes
@@ -62,7 +62,7 @@ impl BoundRequest {
         {
             return Err(TranscodingError::Invalid);
         }
-        validate_field_names(&binding.method.input(), &value)?;
+        super::normalize::normalize(&binding.method.input(), &mut value, limits)?;
         let mut writer = CappedWriter::new(super::MAX_JSON_BYTES);
         serde_json::to_writer(&mut writer, &value).map_err(|_| TranscodingError::Invalid)?;
         drop(value);
@@ -83,63 +83,6 @@ impl BoundRequest {
     }
 }
 
-// Reflection accepts both JSON and proto field spellings, but silently replaces
-// aliases of an ordinary field. Detect those collisions before deserialization.
-fn validate_field_names(desc: &MessageDescriptor, value: &serde_json::Value) -> Result<(), TranscodingError> {
-    if matches!(
-        desc.full_name(),
-        "google.protobuf.Timestamp"
-            | "google.protobuf.Duration"
-            | "google.protobuf.FieldMask"
-            | "google.protobuf.Struct"
-            | "google.protobuf.Value"
-            | "google.protobuf.ListValue"
-            | "google.protobuf.DoubleValue"
-            | "google.protobuf.FloatValue"
-            | "google.protobuf.Int64Value"
-            | "google.protobuf.UInt64Value"
-            | "google.protobuf.Int32Value"
-            | "google.protobuf.UInt32Value"
-            | "google.protobuf.BoolValue"
-            | "google.protobuf.StringValue"
-            | "google.protobuf.BytesValue"
-    ) {
-        return Ok(());
-    }
-    let Some(object) = value.as_object() else {
-        return Ok(());
-    };
-    let mut fields = std::collections::BTreeSet::new();
-    for (name, value) in object {
-        let field = desc
-            .get_field_by_json_name(name)
-            .or_else(|| desc.get_field_by_name(name))
-            .ok_or(TranscodingError::Invalid)?;
-        if !fields.insert(field.number()) {
-            return Err(TranscodingError::Invalid);
-        }
-        if let Kind::Message(child) = field.kind() {
-            if field.is_map() {
-                if let Kind::Message(element) = child.map_entry_value_field().kind() {
-                    if let Some(map) = value.as_object() {
-                        for value in map.values() {
-                            validate_field_names(&element, value)?;
-                        }
-                    }
-                }
-            } else if field.is_list() {
-                if let Some(list) = value.as_array() {
-                    for value in list {
-                        validate_field_names(&child, value)?;
-                    }
-                }
-            } else {
-                validate_field_names(&child, value)?;
-            }
-        }
-    }
-    Ok(())
-}
 impl CompiledBinding {
     pub fn decode(
         &self,
@@ -170,7 +113,8 @@ impl CompiledBinding {
             Some(GrpcJsonStreamFormat::Sse) => (b"event: rpc_message\ndata: ", b"\n\n"),
         };
         writer.write_all(prefix).map_err(|_| TranscodingError::Invalid)?;
-        serde_json::to_writer(&mut writer, &message).map_err(|_| TranscodingError::Invalid)?;
+        serde_json::to_writer(&mut writer, &super::serialize::ProtoJson(&message))
+            .map_err(|_| TranscodingError::Invalid)?;
         writer.write_all(suffix).map_err(|_| TranscodingError::Invalid)?;
         Ok(writer.into_bytes())
     }

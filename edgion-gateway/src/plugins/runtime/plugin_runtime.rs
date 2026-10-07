@@ -115,6 +115,7 @@ pub struct PluginRuntime {
     rate_limit_local_outcome_slots: usize,
     has_upstream_jump_plugin: bool,
     has_grpc_transcoder: bool,
+    backend_ext_ref_keys: Vec<String>,
     /// Plugins for request stage (async)
     request_plugins: Vec<Arc<dyn RequestFilter>>,
     /// The same native HTTP backend modifier held by `request_plugins`.
@@ -269,6 +270,7 @@ impl PluginRuntime {
         Self {
             has_upstream_jump_plugin: false,
             has_grpc_transcoder: false,
+            backend_ext_ref_keys: Vec::new(),
             request_plugins: vec![],
             backend_request_header_modifier: None,
             upstream_response_plugins: vec![],
@@ -417,6 +419,39 @@ impl PluginRuntime {
 
     pub(crate) fn has_grpc_transcoder(&self) -> bool {
         self.has_grpc_transcoder
+    }
+
+    pub(crate) fn has_unary_body_consumer(&self) -> bool {
+        self.upstream_response_body_plugins
+            .iter()
+            .any(|plugin| matches!(plugin.name(), "BandwidthLimit" | "Wasm"))
+    }
+
+    /// Inspect the same pinned target that ExtensionRef executes, before any
+    /// selected-backend plugin or origin can observe this RPC request.
+    pub(crate) fn grpc_backend_compatible(&self, ctx: &mut EdgionHttpContext) -> bool {
+        let Some(plan) = ctx.grpc_transcoding.clone() else {
+            return true;
+        };
+        let incompatible = |runtime: &Self| {
+            runtime.has_ai_conversion_owner()
+                || runtime.has_grpc_transcoder()
+                || (!plan.streaming() && runtime.has_unary_body_consumer())
+        };
+        if incompatible(self) {
+            plan.reject_mutation();
+            return false;
+        }
+        for key in &self.backend_ext_ref_keys {
+            if ctx
+                .resolve_pinned_backend_ext_ref(key)
+                .is_some_and(|runtime| incompatible(&runtime))
+            {
+                plan.reject_mutation();
+                return false;
+            }
+        }
+        true
     }
 
     pub(crate) fn has_ai_conversion_owner(&self) -> bool {
@@ -676,6 +711,9 @@ impl PluginRuntime {
                             self.ext_ref_keys
                                 .push((extension_namespace.to_string(), ext_ref.name.clone()));
                             ext_filter.set_index(idx);
+                        } else {
+                            self.backend_ext_ref_keys
+                                .push(format!("{extension_namespace}/{}", ext_ref.name));
                         }
                         self.add_request_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_filter(Box::new(ext_filter.clone()));

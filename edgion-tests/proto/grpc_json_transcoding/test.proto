@@ -2,6 +2,9 @@ syntax = "proto3";
 package test;
 import "google/api/annotations.proto";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/field_mask.proto";
 service TestService {
   rpc SayHello(HelloRequest) returns (HelloResponse) {
     option (google.api.http) = { get: "/v1/hello/{name}" additional_bindings { post: "/v1/hello" body: "*" } };
@@ -16,6 +19,15 @@ message NumberRequest { int32 count = 1; }
 message NumberResponse { int32 number = 1; }
 service CodecTest {
   rpc Echo(Complex) returns (Complex);
+  rpc Scalars(NumericFields) returns (NumericFields);
+  rpc Double(google.protobuf.DoubleValue) returns (google.protobuf.DoubleValue);
+  rpc Float(google.protobuf.FloatValue) returns (google.protobuf.FloatValue);
+  rpc Signed(google.protobuf.Int64Value) returns (google.protobuf.Int64Value);
+  rpc Unsigned(google.protobuf.UInt64Value) returns (google.protobuf.UInt64Value);
+  rpc Mask(google.protobuf.FieldMask) returns (google.protobuf.FieldMask);
+  rpc Object(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc List(google.protobuf.ListValue) returns (google.protobuf.ListValue);
+  rpc Value(google.protobuf.Value) returns (google.protobuf.Value);
   rpc Time(google.protobuf.Timestamp) returns (google.protobuf.Timestamp);
 }
 message Complex {
@@ -25,4 +37,41 @@ message Complex {
   map<string, int32> labels = 4;
   Complex nested = 5;
   string display_name = 6;
+}
+
+message NumericFields {
+  optional int32 optional_count = 1;
+  oneof choice { int32 count = 2; string text = 3; }
+  int64 signed = 4;
+  uint64 unsigned = 5;
+  repeated int64 signed_list = 6;
+  map<string, uint64> unsigned_map = 7;
+  google.protobuf.DoubleValue double_value = 8;
+  repeated google.protobuf.FloatValue float_list = 9;
+  map<string, google.protobuf.DoubleValue> double_map = 10;
+  google.protobuf.Value value = 11;
+  repeated google.protobuf.Value values = 12;
+  map<string, google.protobuf.Value> value_map = 13;
+  NumericFields parent_message = 14;
+  float float_number = 15;
+  double double_number = 16;
+  sint64 signed_zigzag = 17;
+  sfixed64 signed_fixed = 18;
+  fixed64 unsigned_fixed = 19;
+  int32 int32_number = 20;
+  uint32 uint32_number = 21;
+  sint32 sint32_number = 22;
+  sfixed32 sfixed32_number = 23;
+  fixed32 fixed32_number = 24;
+  repeated float floats = 25;
+  map<string, double> doubles = 26;
+  google.protobuf.NullValue null_value = 27;
+}
+service OverlapTest {
+  rpc Wildcard(HelloRequest) returns (HelloResponse) {
+    option (google.api.http) = { get: "/overlap/{name}" };
+  }
+  rpc Literal(HelloRequest) returns (HelloResponse) {
+    option (google.api.http) = { get: "/overlap/special" };
+  }
 }

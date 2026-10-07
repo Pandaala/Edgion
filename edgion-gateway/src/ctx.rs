@@ -2570,6 +2570,16 @@ impl EdgionHttpContext {
             .map(Arc::clone)
     }
 
+    pub(crate) fn resolve_pinned_backend_ext_ref(&mut self, key: &str) -> Option<Arc<PluginRuntime>> {
+        let scope = self.plugin_scope().cloned();
+        self.pinned_backend_ext_ref(key, || {
+            scope?
+                .scope
+                .http(key)
+                .map(|compiled| Arc::clone(&compiled.plugin_runtime))
+        })
+    }
+
     pub(crate) fn pinned_backend_ext_ref(
         &mut self,
         key: &str,
@@ -2721,6 +2731,12 @@ impl EdgionHttpContext {
 
     #[inline]
     pub(crate) fn push_response_stream_processor(&mut self, processor: Box<dyn StreamingResponseProcessor>) -> bool {
+        if let Some(plan) = &self.grpc_transcoding {
+            if !plan.streaming() {
+                plan.reject_mutation();
+                return false;
+            }
+        }
         if self.response_body_processing_started {
             return false;
         }
@@ -2728,7 +2744,6 @@ impl EdgionHttpContext {
         true
     }
 
-    #[cfg(test)]
     #[inline]
     pub(crate) fn has_response_stream_processors(&self) -> bool {
         self.response_processing().is_some_and(|state| {
@@ -2819,12 +2834,47 @@ impl EdgionHttpContext {
             .is_some_and(|state| state.framing_reservations > 0)
     }
 
+    pub(crate) fn grpc_response_owner_compatible(&self, streaming: bool) -> bool {
+        streaming
+            || !(self.has_response_stream_processors()
+                || self.has_ext_proc_response_body_consumer()
+                || self.unary_body_consumers_incompatible())
+    }
+
+    pub(crate) fn has_ext_proc_response_body_consumer(&self) -> bool {
+        self.response_processing().is_some_and(|state| {
+            state
+                .attached_ext_proc
+                .values()
+                .any(|owner| owner.consumes_response_body())
+        })
+    }
+
+    pub(crate) fn unary_body_consumers_incompatible(&self) -> bool {
+        self.resolved_global_plugins()
+            .iter()
+            .chain(self.resolved_gateway_plugins().iter())
+            .flat_map(|runtimes| runtimes.iter())
+            .any(|runtime| runtime.has_unary_body_consumer())
+            || self
+                .resolved_route_ext_refs()
+                .iter()
+                .flat_map(|runtimes| runtimes.iter().flatten())
+                .any(|runtime| runtime.has_unary_body_consumer())
+    }
+
     pub(crate) fn install_attached_ext_proc(
         &mut self,
         identity: String,
         owner: Arc<crate::plugins::http::ext_proc::AttachedExtProc>,
         reserve_framing: bool,
     ) -> bool {
+        if let Some(plan) = &self.grpc_transcoding {
+            if !plan.streaming() && owner.consumes_response_body() {
+                plan.reject_mutation();
+                return false;
+            }
+        }
         if self
             .response_processing()
             .is_some_and(|state| state.attached_ext_proc.contains_key(&identity))

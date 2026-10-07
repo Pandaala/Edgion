@@ -643,3 +643,16 @@ fn responses_continuation_uses_raw_slots_and_bindings_before_filtering() {
         Err(AiProxyError::UnsupportedParameter)
     );
 }
+
+#[test]
+fn canonical_responses_invalid_utf8_is_a_client_error_before_model_or_observation() {
+    for body in [
+        b"{\"model\":\"m\",\"input\":\"\xff\"}".as_slice(),
+        b"{\"model\":\"alias\",\"extension\":{\"nested\":[\"\xff\"]}}",
+    ] {
+        assert!(matches!(
+            canonical_responses_request(Bytes::copy_from_slice(body)),
+            Err(AiProxyError::MalformedBody)
+        ));
+    }
+}

@@ -105,3 +105,19 @@ Descriptor 冷加载仅支持标准 protobuf options 和已解析的 `google.api
 字段会被拒绝。HTTP 注解使用可信 schema 在进入反射库前检查深度及节点数量，
 并验证声明不会替换既有字段类型。ExtProc STREAMED 等可修改流式请求 body 的
 处理器不能与转码共用请求；两种插件顺序都会拒绝，即使处理器配置为 fail-open。
+
+一元转换会拒绝最终替换无法执行其正文处理的组合：有效响应正文模式为 STREAMED 的
+ExtProc、BandwidthLimit、响应正文阶段 Wasm，以及其他已安装的流式响应处理器。
+检查覆盖全局、Gateway、规则和实际选中的 backendRef；两种插件顺序和 fail-open
+均不能绕过所有权冲突。仅处理头或 trailer 的兼容插件仍可使用。选中 backendRef
+中的 AI 所有者会在插件执行和访问源站之前拒绝。响应头阶段忽略的 DSL 受保护修改
+错误也不能发布已准备好的一元响应。WAF 的既有空响应检查窗口保持原有语义。
+
+最终访问日志保留一次转换结果摘要，以及经过验证的 `request_info.grpc_status`。
+流已经提交 HTTP 200 后发生的失败也会留下结果；不记录正文或源站 grpc-message。
+
+ProtoJSON 的普通字段 null 表示未设置，包括 optional、oneof 和整个集合；
+Value/NullValue 保留其 null 哨兵语义。未知字段和重复别名即使为 null 仍然拒绝。
+带引号的整数小数或指数格式使用精确转换；非整数、整数越界和浮点有限数值溢出均拒绝。
+NaN、Infinity、-Infinity 使用标准字符串，包括列表或映射中的包装类型。
+同一 HTTP 方法的路径模板发生交集或超过有界分析限制时，配置发布失败；不同方法独立。

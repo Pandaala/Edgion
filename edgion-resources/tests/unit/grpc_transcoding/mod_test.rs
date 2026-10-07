@@ -525,3 +525,370 @@ fn descriptor_reserved_option_shapes_cannot_shadow_admitted_wire() {
         .unwrap_err()
         .contains("shadows a reserved field"));
 }
+
+#[test]
+fn correction_null_presence_and_collection_sentinels() {
+    let c = config().compile().unwrap();
+    let encode = |body: &[u8]| {
+        c.bind("POST", "/test.CodecTest/Scalars", None)
+            .unwrap()
+            .encode(body, c.limits)
+    };
+    for body in [
+        br#"{"optional_count":null}"#.as_slice(),
+        br#"{"values":null,"valueMap":null}"#,
+    ] {
+        assert_eq!(&encode(body).unwrap().1[5..], b"");
+    }
+    let (b, f) = encode(br#"{"count":null,"text":"x"}"#).unwrap();
+    let m = prost_reflect::DynamicMessage::decode(b.method.input(), &f[5..]).unwrap();
+    assert!(!m.has_field_by_name("count"));
+    assert!(m.has_field_by_name("text"));
+    let (b, f) = encode(br#"{"value":null,"values":[null],"valueMap":{"x":null}}"#).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&b.decode(&f[5..], c.limits, None).unwrap()).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"value":null,"values":[null],"valueMap":{"x":null}})
+    );
+    for body in [
+        br#"{"unknown":null}"#.as_slice(),
+        br#"{"optional_count":null,"optionalCount":null}"#,
+        br#"{"parentMessage":{"unknown":null}}"#,
+    ] {
+        assert!(encode(body).is_err());
+    }
+}
+
+#[test]
+fn correction_numeric_ranges_exact_exponents_and_wrappers() {
+    let c = config().compile().unwrap();
+    for (field, good, bad) in [
+        ("signed", "9.223372036854775807e18", "9223372036854775808"),
+        ("unsigned", "184467440737095516150e-1", "18446744073709551616"),
+        ("int32Number", "2147483647.0", "2147483648"),
+        ("uint32Number", "4294967295e0", "4294967296"),
+        ("signedZigzag", "-9223372036854775808.0", "-9223372036854775809"),
+        ("signedFixed", "1e2", "1.1"),
+        ("unsignedFixed", "100e-2", "-1"),
+        ("sint32Number", "1.00", "1e-1"),
+        ("sfixed32Number", "-2147483648e0", "-2147483649"),
+        ("fixed32Number", "1e2", "4294967296"),
+    ] {
+        for (value, valid) in [(good, true), (bad, false)] {
+            let body = serde_json::to_vec(&serde_json::json!({field:value})).unwrap();
+            assert_eq!(
+                c.bind("POST", "/test.CodecTest/Scalars", None)
+                    .unwrap()
+                    .encode(&body, c.limits)
+                    .is_ok(),
+                valid,
+                "{field} {value}"
+            );
+        }
+    }
+    for body in [
+        br#"{"signed":9223372036854775808.0}"#.as_slice(),
+        br#"{"unsigned":18446744073709551616.0}"#,
+        br#"{"signedList":[9223372036854775808.0]}"#,
+        br#"{"unsignedMap":{"x":18446744073709551616.0}}"#,
+    ] {
+        assert!(c
+            .bind("POST", "/test.CodecTest/Scalars", None)
+            .unwrap()
+            .encode(body, c.limits)
+            .is_err());
+    }
+    for (method, value, valid) in [
+        ("Signed", "9223372036854775808.0", false),
+        ("Unsigned", "18446744073709551616.0", false),
+        ("Signed", "\"1e2\"", true),
+        ("Unsigned", "\"18446744073709551615.0\"", true),
+    ] {
+        assert_eq!(
+            c.bind("POST", &format!("/test.CodecTest/{method}"), None)
+                .unwrap()
+                .encode(value.as_bytes(), c.limits)
+                .is_ok(),
+            valid
+        );
+    }
+}
+
+#[test]
+fn correction_float_overflow_and_nonfinite_output_all_envelopes() {
+    let c = config().compile().unwrap();
+    for method in ["Double", "Float"] {
+        let b = c
+            .bind("POST", &format!("/test.CodecTest/{method}"), None)
+            .unwrap()
+            .binding;
+        for special in ["NaN", "Infinity", "-Infinity"] {
+            let body = serde_json::to_vec(special).unwrap();
+            let (_, f) = c
+                .bind("POST", &b.rpc_path, None)
+                .unwrap()
+                .encode(&body, c.limits)
+                .unwrap();
+            for format in [
+                None,
+                Some(GrpcJsonStreamFormat::Ndjson),
+                Some(GrpcJsonStreamFormat::Sse),
+            ] {
+                let out = String::from_utf8(b.decode(&f[5..], c.limits, format).unwrap()).unwrap();
+                assert!(out.contains(&format!("\"{special}\"")), "{out}");
+            }
+        }
+        for value in ["1e999", "-1e999"] {
+            assert!(c
+                .bind("POST", &b.rpc_path, None)
+                .unwrap()
+                .encode(&serde_json::to_vec(value).unwrap(), c.limits)
+                .is_err());
+        }
+    }
+    for body in [
+        br#"{"floatNumber":"3.502823e38"}"#.as_slice(),
+        br#"{"doubleNumber":"-1e999"}"#,
+        br#"{"floatList":["-3.502823e38"]}"#,
+        br#"{"doubleMap":{"x":"1e999"}}"#,
+        br#"{"floats":["3.502823e38"]}"#,
+        br#"{"doubles":{"x":"-1e999"}}"#,
+    ] {
+        assert!(c
+            .bind("POST", "/test.CodecTest/Scalars", None)
+            .unwrap()
+            .encode(body, c.limits)
+            .is_err());
+    }
+    let body = br#"{"doubleValue":"Infinity","floatList":["NaN","-Infinity"],"doubleMap":{"x":"Infinity"},"parentMessage":{"doubleValue":"-Infinity","floatList":["Infinity"],"doubleMap":{"x":"NaN"}}}"#;
+    let (b, f) = c
+        .bind("POST", "/test.CodecTest/Scalars", None)
+        .unwrap()
+        .encode(body, c.limits)
+        .unwrap();
+    for format in [
+        None,
+        Some(GrpcJsonStreamFormat::Ndjson),
+        Some(GrpcJsonStreamFormat::Sse),
+    ] {
+        let out = b.decode(&f[5..], c.limits, format).unwrap();
+        let text = std::str::from_utf8(&out).unwrap().trim();
+        let text = text.strip_prefix("event: rpc_message\ndata: ").unwrap_or(text);
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        let parsed = if format == Some(GrpcJsonStreamFormat::Ndjson) {
+            &parsed["data"]
+        } else {
+            &parsed
+        };
+        assert_eq!(parsed, &serde_json::from_slice::<serde_json::Value>(body).unwrap());
+        let mut tight = c.limits;
+        tight.json = 5;
+        assert!(b.decode(&f[5..], tight, format).is_err());
+    }
+    for (method, finite, overflow) in [
+        ("Float", "3.4028234663852886e38", "3.502823e38"),
+        ("Double", "1.7976931348623157e308", "1.8e308"),
+    ] {
+        for sign in ["", "-"] {
+            for (number, accepted) in [(finite, true), (overflow, false)] {
+                let text = format!("{sign}{number}");
+                assert_eq!(
+                    c.bind("POST", &format!("/test.CodecTest/{method}"), None)
+                        .unwrap()
+                        .encode(&serde_json::to_vec(&text).unwrap(), c.limits)
+                        .is_ok(),
+                    accepted
+                );
+                let value = if method == "Float" {
+                    serde_json::json!({"floatNumber":text,"floats":[text],"floatList":[text]})
+                } else {
+                    serde_json::json!({"doubleNumber":text,"doubles":{"x":text},"doubleValue":text,"doubleMap":{"x":text}})
+                };
+                assert_eq!(
+                    c.bind("POST", "/test.CodecTest/Scalars", None)
+                        .unwrap()
+                        .encode(&serde_json::to_vec(&value).unwrap(), c.limits)
+                        .is_ok(),
+                    accepted
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn correction_wkt_expansion_admitted_before_reflection() {
+    let c = config().compile().unwrap();
+    for (method, body, nodes) in [
+        ("Mask", br#""a,b,c""#.as_slice(), 2),
+        ("Object", br#"{"a":1}"#, 3),
+        ("List", br#"[1,2]"#, 3),
+        ("Value", br#"{"a":[1]}"#, 6),
+    ] {
+        let mut tight = c.limits;
+        tight.nodes = nodes;
+        assert!(
+            c.bind("POST", &format!("/test.CodecTest/{method}"), None)
+                .unwrap()
+                .encode(body, tight)
+                .is_err(),
+            "{method}"
+        );
+        assert!(c
+            .bind("POST", &format!("/test.CodecTest/{method}"), None)
+            .unwrap()
+            .encode(body, c.limits)
+            .is_ok());
+    }
+}
+
+#[test]
+fn correction_nested_binding_accepts_both_parent_spellings() {
+    let c = config().compile().unwrap();
+    let method = c
+        .bind("POST", "/test.CodecTest/Scalars", None)
+        .unwrap()
+        .binding
+        .method
+        .clone();
+    let b = Arc::new(CompiledBinding::compile(method, "POST", "/parent/{parent_message.signed}", "*").unwrap());
+    let mut frames = Vec::new();
+    for body in [
+        br#"{"parent_message":{"text":"x"}}"#.as_slice(),
+        br#"{"parentMessage":{"text":"x"}}"#,
+    ] {
+        frames.push(
+            b.bind("/parent/100", None, false)
+                .unwrap()
+                .encode(body, c.limits)
+                .unwrap()
+                .1,
+        );
+    }
+    assert_eq!(frames[0], frames[1]);
+    for body in [
+        br#"{"parent_message":{"signed":"1"}}"#.as_slice(),
+        br#"{"parent_message":{},"parentMessage":{}}"#,
+    ] {
+        assert!(b
+            .bind("/parent/100", None, false)
+            .unwrap()
+            .encode(body, c.limits)
+            .is_err());
+    }
+}
+
+#[test]
+fn correction_publication_rejects_intersecting_http_templates() {
+    let mut c = config();
+    c.services = vec!["test.OverlapTest".into()];
+    assert!(c.compile().unwrap_err().contains("Overlap"));
+    assert!(c.validation_error().unwrap().contains("Overlap"));
+}
+
+#[test]
+fn correction_owner_fixture_plugins_pass_shared_validation() {
+    use crate::resources::edgion_plugins::EdgionPlugins;
+    use serde::Deserialize;
+    let fixture = include_str!(
+        "../../../../edgion-tests/integration/conf/EdgionPlugins/GrpcJsonTranscoder/60_correction_owners.yaml"
+    );
+    for doc in serde_yaml::Deserializer::from_str(fixture) {
+        let value = serde_yaml::Value::deserialize(doc).unwrap();
+        if value["kind"].as_str() == Some("EdgionPlugins") {
+            let resource: EdgionPlugins = serde_yaml::from_value(value).unwrap();
+            assert!(
+                resource.validate_plugins().is_empty(),
+                "{:?}",
+                resource.validate_plugins()
+            );
+        }
+    }
+}
+
+#[test]
+fn correction_scalar_presence_proto2_and_integer_wire_boundaries() {
+    use prost_types::{
+        DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto,
+        ServiceDescriptorProto,
+    };
+    let set = FileDescriptorSet {
+        file: vec![FileDescriptorProto {
+            name: Some("presence.proto".into()),
+            package: Some("presence".into()),
+            syntax: Some("proto2".into()),
+            message_type: vec![DescriptorProto {
+                name: Some("Request".into()),
+                field: vec![FieldDescriptorProto {
+                    name: Some("count".into()),
+                    number: Some(1),
+                    label: Some(1),
+                    r#type: Some(5),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            service: vec![ServiceDescriptorProto {
+                name: Some("Service".into()),
+                method: vec![MethodDescriptorProto {
+                    name: Some("Echo".into()),
+                    input_type: Some(".presence.Request".into()),
+                    output_type: Some(".presence.Request".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    };
+    let mut cfg = config();
+    cfg.descriptor = GrpcDescriptorSource::Inline {
+        base64: STANDARD.encode(set.encode_to_vec()),
+    };
+    cfg.services = vec!["presence.Service".into()];
+    let c = cfg.compile().unwrap();
+    let (b, f) = c
+        .bind("POST", "/presence.Service/Echo", None)
+        .unwrap()
+        .encode(br#"{"count":null}"#, c.limits)
+        .unwrap();
+    assert_eq!(&f[5..], b"");
+    assert!(!prost_reflect::DynamicMessage::decode(b.method.input(), &f[5..])
+        .unwrap()
+        .has_field_by_name("count"));
+    let c = config().compile().unwrap();
+    for (method, text, expected) in [
+        (
+            "Signed",
+            "\"9.223372036854775807e18\"",
+            prost_reflect::Value::I64(i64::MAX),
+        ),
+        (
+            "Unsigned",
+            "\"184467440737095516150e-1\"",
+            prost_reflect::Value::U64(u64::MAX),
+        ),
+        (
+            "Signed",
+            "9223372036854774784.0",
+            prost_reflect::Value::I64(9223372036854774784),
+        ),
+        (
+            "Unsigned",
+            "18446744073709549568.0",
+            prost_reflect::Value::U64(18446744073709549568),
+        ),
+    ] {
+        let (b, f) = c
+            .bind("POST", &format!("/test.CodecTest/{method}"), None)
+            .unwrap()
+            .encode(text.as_bytes(), c.limits)
+            .unwrap();
+        let message = prost_reflect::DynamicMessage::decode(b.method.input(), &f[5..]).unwrap();
+        assert_eq!(*message.get_field_by_name("value").unwrap(), expected);
+    }
+    let b = c.bind("POST", "/test.CodecTest/Value", None).unwrap().binding;
+    let mut wire = vec![17];
+    wire.extend_from_slice(&f64::INFINITY.to_le_bytes());
+    assert!(b.decode(&wire, c.limits, None).is_err());
+}

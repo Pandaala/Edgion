@@ -97,6 +97,11 @@ impl AttachedExtProc {
         (summary.outcome, summary.reason, finished)
     }
 
+    /// Overrides can only reduce this capability, never grant it from NONE.
+    pub(crate) fn consumes_response_body(&self) -> bool {
+        self.effective_mode.lock().response_body_mode != BodySendMode::None
+    }
+
     pub(super) fn effective_mode(&self) -> Result<ConfigProcessingMode, &'static str> {
         Ok(self.effective_mode.lock().clone())
     }
@@ -492,3 +497,6 @@ fn response_payload_len(response: &ProcessingResponse) -> usize {
 #[cfg(test)]
 #[path = "../../../../tests/unit/plugins/http/ext_proc/attached_test.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::test_body_owner;

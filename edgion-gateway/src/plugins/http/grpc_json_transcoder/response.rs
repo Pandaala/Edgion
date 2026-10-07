@@ -1,3 +1,4 @@
+use super::transport::Outcome;
 use super::{failure, GrpcTranscodingPlan};
 use crate::{
     ctx::ResponseStreamKind,
@@ -142,7 +143,7 @@ impl GrpcResponseProcessor {
         let mut pos = 0;
         let mut records = 0usize;
         while pos < chunk.len() {
-            if self.plan.expired() {
+            if !self.plan.response_valid() {
                 return Err(());
             }
             if self.prefix_len < 5 {
@@ -212,7 +213,20 @@ impl GrpcResponseProcessor {
             return Err(failure());
         }
         self.finished = true;
-        let valid = !self.plan.expired() && self.prefix_len == 0 && !self.plan.invalid_response.load(Ordering::Acquire);
+        let valid = self.plan.response_valid() && self.prefix_len == 0;
+        if let Some(code) = code {
+            self.plan.record_status(code);
+        }
+        if self.prefix_len != 0 {
+            self.plan.record(Outcome::InvalidFraming);
+        }
+        if valid {
+            self.plan.record(match code {
+                Some(0) => Outcome::Success,
+                Some(_) => Outcome::RpcStatus,
+                None => Outcome::MissingStatus,
+            });
+        }
         if self.plan.streaming() {
             let _ = self.window.finish(WindowDecision::Discard);
             let code = if valid { code } else { None };
@@ -225,6 +239,9 @@ impl GrpcResponseProcessor {
             return Ok(());
         }
         if !valid || code.is_none() || code == Some(0) && self.messages != 1 {
+            if code == Some(0) && self.messages != 1 {
+                self.plan.record(Outcome::InvalidFraming);
+            }
             self.unary.clear();
             return Err(failure());
         }
@@ -233,12 +250,15 @@ impl GrpcResponseProcessor {
             self.plan
                 .binding
                 .decode(&self.unary, self.plan.compiled.limits, None)
-                .map_err(|_| failure())?
+                .map_err(|_| {
+                    self.plan.record(Outcome::InvalidFraming);
+                    failure()
+                })?
         } else {
             ERROR_JSON.to_vec()
         };
         self.unary = Vec::new();
-        if self.plan.expired() || output.len() > self.plan.compiled.limits.json {
+        if !self.plan.response_valid() || output.len() > self.plan.compiled.limits.json {
             return Err(failure());
         }
         let body = self.plan.output(output).map_err(|_| failure())?;
@@ -263,6 +283,7 @@ impl GrpcResponseProcessor {
         }
     }
     fn release(&mut self) {
+        self.plan.interrupted();
         self.finished = true;
         self.unary = Vec::new();
         let _ = self.window.finish(WindowDecision::Discard);
@@ -286,6 +307,9 @@ impl StreamingResponseProcessor for GrpcResponseProcessor {
                 .iter()
                 .all(|n| response.headers.get(*n).is_none_or(|v| v == "identity"));
         self.plan.invalid_response.store(!valid, Ordering::Release);
+        if !valid {
+            self.plan.record(Outcome::InvalidMedia);
+        }
         for name in [
             "content-length",
             "content-encoding",
@@ -341,9 +365,13 @@ impl StreamingResponseProcessor for GrpcResponseProcessor {
             return;
         }
         let input = chunk.take();
-        let output = match input {
-            Some(input) => self.feed(input),
-            None => Ok(Vec::new()),
+        let output = if !self.plan.response_valid() {
+            Err(())
+        } else {
+            match input {
+                Some(input) => self.feed(input),
+                None => Ok(Vec::new()),
+            }
         };
         match output {
             Ok(output) if !output.is_empty() => match self.plan.output(output) {
@@ -354,6 +382,7 @@ impl StreamingResponseProcessor for GrpcResponseProcessor {
             },
             Ok(_) => {}
             Err(_) => {
+                self.plan.record(Outcome::InvalidFraming);
                 if self.plan.streaming() {
                     match self
                         .settle(None)

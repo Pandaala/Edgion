@@ -125,3 +125,28 @@ schema admits HTTP option payloads under the same depth/node caps before reflect
 raw reserved message/extension checks prevent schema shadowing. Mutable streamed
 request-body handlers (including ExtProc STREAMED) cannot coexist with the RPC owner
 in either plugin order, including when the processor's failure policy allows errors.
+
+Unary conversion rejects response-body consumers whose verdicts would be bypassed
+by final replacement: ExtProc with an effective STREAMED response body, BandwidthLimit,
+response-body Wasm, and other installed streaming response processors. This applies
+across global, Gateway, rule and selected backendRef scopes and both plugin orders;
+fail-open does not override ownership conflicts. Header/trailer-only companions remain
+supported. Selected backendRef AI owners are rejected before their plugins and the
+origin run. A later protected mutation, including an ignored DSL error in a response
+header stage, cannot publish a prepared unary replacement. WAF's intentional empty
+response inspection window is unchanged.
+
+The final access log retains one aggregate conversion outcome and, when validated,
+`request_info.grpc_status`. Stream failures remain visible even after HTTP 200 has
+committed. No payload or upstream grpc-message is recorded.
+
+ProtoJSON null leaves ordinary fields unset, including optional/oneof fields and whole
+collections. Value/NullValue sentinels retain their null representation. Unknown fields
+and duplicate proto/JSON aliases remain errors even when null. Quoted integral decimal
+and exponent forms retain exact 64-bit values; fractional or out-of-range integer
+values and finite float spellings that overflow are rejected. Explicit NaN/Infinity/
+-Infinity use canonical strings, including wrappers inside lists and maps.
+
+Same-method path templates must be disjoint, including literal/wildcard intersections
+and optional multi-segment tails. Publication rejects overlap and bounded-analysis
+exhaustion instead of inventing precedence. Different HTTP methods remain independent.

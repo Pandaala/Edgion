@@ -62,6 +62,13 @@ Execution flow notes:
 - After each phase completes, plugin logs are recorded into `ctx.stage_logs`, including plugin name, elapsed time, and conditional-skip information.
 - **Exception**: the UpstreamResponseBodyFilter phase **does not** write to `ctx.stage_logs` and does not push entries into `ctx.pending_edgion_plugins_logs`. This phase runs on data callbacks and no-trailers terminal completion; per-callback logging would blow up log volume on long streams. See the "no PluginLog in body phase" constraint below.
 
+Unary GrpcJsonTranscoder replacement is a separate bounded owner: its final JSON
+bypasses upstream body filters, so incompatible body consumers are rejected using
+actual request-pinned runtimes. Header/trailer-only companions remain valid. Sticky
+registration/mutation conflicts are checked through replacement consumption, and
+one final PluginLog outcome is added at universal logging. See the
+[transcoder regression boundary](../../04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md).
+
 ### Response body and trailer completion
 
 The typed driver keeps these events distinct:

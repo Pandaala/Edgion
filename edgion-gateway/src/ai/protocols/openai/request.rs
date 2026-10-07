@@ -201,6 +201,7 @@ fn optional_bool(raw: Option<&RawValue>) -> Result<bool, AiProxyError> {
 }
 
 pub(crate) fn responses_metadata(body: &[u8]) -> Result<ResponsesMetadata, AiProxyError> {
+    std::str::from_utf8(body).map_err(|_| AiProxyError::MalformedBody)?;
     if body.iter().find(|byte| !byte.is_ascii_whitespace()) != Some(&b'{') {
         return Err(AiProxyError::MalformedBody);
     }

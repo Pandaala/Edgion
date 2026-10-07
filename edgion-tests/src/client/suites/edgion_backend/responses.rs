@@ -98,6 +98,57 @@ async fn ledger(ctx: &TestContext, marker: &str, source: &str, failure: Option<&
     Ok(())
 }
 
+fn malformed_utf8(ctx: TestContext) -> TestFuture {
+    Box::pin(async move {
+        let start = Instant::now();
+        let result = async {
+            for observation in ["off", "provider"] {
+                for model in ["fixture-model", "fixture-alias"] {
+                    for nested in [false, true] {
+                        let marker = format!("responses-utf8-{observation}-{model}-{nested}");
+                        let mut body = format!("{{\"model\":\"{model}\",").into_bytes();
+                        body.extend_from_slice(if nested {
+                            b"\"extension\":{\"items\":[\"\xff\"]}}"
+                        } else {
+                            b"\"input\":\"\xff\"}"
+                        });
+                        let response = ctx
+                            .http_client
+                            .post(format!("http://{}:{}/v1/responses", ctx.target_host, ctx.http_port))
+                            .header("host", format!("responses-{observation}.example.com"))
+                            .header("content-type", "application/json")
+                            .header("traceparent", crate::access_log_client::traceparent_for_marker(&marker))
+                            .header("access_log", "test_store")
+                            .body(body)
+                            .send()
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let status = response.status().as_u16();
+                        let body = response.text().await.map_err(|e| e.to_string())?;
+                        if status != 400 || !body.contains("invalid_request_body") {
+                            return Err(format!("invalid UTF-8 outcome: {status} {body}"));
+                        }
+                        let entry = ctx
+                            .access_log_client()
+                            .get_access_log_with_retry(&marker, 15, 200)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        if entry.upstream_count() != 0 {
+                            return Err(format!("invalid body reached origin: {}", entry.data));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => TestResult::passed(start.elapsed()),
+            Err(e) => TestResult::failed(start.elapsed(), e),
+        }
+    })
+}
+
 fn nullable_controls(ctx: TestContext) -> TestFuture {
     Box::pin(async move {
         let start = Instant::now();
@@ -530,6 +581,11 @@ impl TestSuite for ResponsesTestSuite {
     }
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
+            TestCase::new(
+                "malformed_utf8",
+                "Invalid ignored strings fail before provider dispatch in every observation/model mode",
+                malformed_utf8,
+            ),
             TestCase::new(
                 "quota",
                 "Reported terminal settlement and typed active framing cut",

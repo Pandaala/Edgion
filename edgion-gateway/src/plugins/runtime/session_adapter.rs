@@ -1556,7 +1556,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         mut plan: crate::plugins::http::grpc_json_transcoder::GrpcTranscodingPlan,
     ) -> bool {
-        if !self.grpc_transcoding_allowed() {
+        if let Some(existing) = &self.ctx.grpc_transcoding {
+            existing.reject_mutation();
+            return false;
+        }
+        if !self.grpc_transcoding_allowed() || !self.ctx.grpc_response_owner_compatible(plan.streaming()) {
             return false;
         }
         plan.generation = self.ctx.request_body.generation();
@@ -1565,9 +1569,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         }
         self.ctx.request_body.freeze_mutation();
         let plan = Arc::new(plan);
-        self.ctx.push_response_stream_processor(Box::new(
+        if !self.ctx.push_response_stream_processor(Box::new(
             crate::plugins::http::grpc_json_transcoder::GrpcResponseProcessor::new(plan.clone()),
-        ));
+        )) {
+            return false;
+        }
         self.ctx.grpc_transcoding = Some(plan);
         true
     }
@@ -1640,6 +1646,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
     ) -> bool {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return false;
+        }
         if self.ctx.response_processors_frozen()
             || self
                 .ctx
@@ -1680,6 +1690,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         owner: std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>,
         head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
     ) -> bool {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return false;
+        }
         if self.ctx.ai_state().is_some_and(|state| {
             state.attached_guardrail.is_some()
                 || state.semantic_guard_claimed
@@ -1717,11 +1731,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
     ) -> bool {
-        if self.ctx.response_processors_frozen() {
-            return false;
-        }
-        self.ctx.push_response_stream_processor(processor);
-        true
+        self.ctx.push_response_stream_processor(processor)
     }
 
     fn install_upstream_response_trailer(
@@ -2166,13 +2176,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn pinned_backend_ext_ref(&mut self, key: &str) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
-        let scope = self.ctx.plugin_scope().cloned();
-        self.ctx.pinned_backend_ext_ref(key, || {
-            scope?
-                .scope
-                .http(key)
-                .map(|compiled| Arc::clone(&compiled.plugin_runtime))
-        })
+        self.ctx.resolve_pinned_backend_ext_ref(key)
     }
 
     fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken {

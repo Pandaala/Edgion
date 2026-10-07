@@ -14,3 +14,6 @@ include!("../../../../tests/support/plugins/http/ext_proc/mod_test/12_function_i
 
 #[cfg(test)]
 include!("../../../../tests/support/plugins/http/ext_proc/mod_test/25_const_item.rs");
+
+#[cfg(test)]
+pub(crate) use attached::test_body_owner;

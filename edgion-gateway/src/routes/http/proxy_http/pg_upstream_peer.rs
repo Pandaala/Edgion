@@ -790,6 +790,9 @@ pub async fn select_http_backend(
     let backend_tls_policy = crate::backends::query_backend_tls_policy_for_logical_backend(&backend_ref, service_port);
 
     let backend_plugin_runtime = Arc::clone(&backend_ref.compiled().plugin_runtime);
+    if !backend_plugin_runtime.grpc_backend_compatible(ctx) {
+        return Err(crate::plugins::http::grpc_json_transcoder::failure());
+    }
     backend_plugin_runtime.run_backend_request_plugins(session, ctx).await;
     if ctx.plugin_terminated() {
         let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
