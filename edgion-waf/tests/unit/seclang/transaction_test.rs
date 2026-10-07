@@ -1232,6 +1232,92 @@ fn tx_regex_selectors_are_case_insensitive_like_literal_tx_selectors() {
 }
 
 #[test]
+fn shared_selector_programs_preserve_include_exclude_count_and_tx_case() {
+    let generation = generation(concat!(
+        "SecAction \"id:1,phase:2,pass,nolog,setvar:tx.name=value\"\n",
+        "SecRule ARGS:/^NAME$/ \"@streq value\" \"id:2,phase:2,pass\"\n",
+        "SecRule ARGS|!ARGS:/^NAME$/ \"@streq value\" \"id:3,phase:2,pass\"\n",
+        "SecRule &ARGS:/^NAME$/ \"@eq 1\" \"id:4,phase:2,pass\"\n",
+        "SecRule TX:/^NAME$/ \"@streq value\" \"id:5,phase:2,pass\"\n",
+    ));
+    for (uri, expected) in [
+        (b"/?NAME=value".as_slice(), &[1, 2, 4, 5][..]),
+        (b"/?name=value".as_slice(), &[1, 3, 5][..]),
+    ] {
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let mut tx = Transaction::new_with_modes(
+                &generation,
+                request(&[], uri),
+                RuntimeLimits::default(),
+                mode,
+                RuleEngineMode::On,
+            )
+            .unwrap();
+            tx.execute_request_headers().unwrap();
+            tx.publish_request_body(RequestBody::new(
+                bytes::Bytes::new(),
+                crate::seclang::BodyProcessorSelection::Auto,
+            ))
+            .unwrap();
+            assert_eq!(
+                tx.execute_request_body()
+                    .unwrap()
+                    .findings()
+                    .iter()
+                    .map(|finding| finding.rule_id())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn duplicate_boolean_regexes_keep_ordered_effects_negation_and_chain_results() {
+    let generation = generation(concat!(
+        "SecRule ARGS:x \"@rx ^a$\" \"id:1,phase:2,pass,setvar:tx.first=%{MATCHED_VAR}\"\n",
+        "SecRule ARGS:x \"@rx ^a$\" \"id:2,phase:2,pass,setvar:tx.second=%{tx.first},chain\"\n",
+        "SecRule TX:second \"@streq a\" \"setvar:tx.chain=ok\"\n",
+        "SecRule ARGS:x \"!@rx ^a$\" \"id:3,phase:2,pass,setvar:tx.negated=ok\"\n",
+        "SecRule ARGS:x \"@rx ^b$\" \"id:4,phase:2,pass,setvar:tx.fourth=ok\"\n",
+    ));
+    for (uri, expected, hit) in [
+        (b"/?x=a".as_slice(), &[1, 2][..], true),
+        (b"/?x=b".as_slice(), &[3, 4][..], false),
+    ] {
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let mut tx = Transaction::new_with_modes(
+                &generation,
+                request(&[], uri),
+                RuntimeLimits::default(),
+                mode,
+                RuleEngineMode::On,
+            )
+            .unwrap();
+            tx.execute_request_headers().unwrap();
+            tx.publish_request_body(RequestBody::new(
+                bytes::Bytes::new(),
+                crate::seclang::BodyProcessorSelection::Auto,
+            ))
+            .unwrap();
+            let outcome = tx.execute_request_body().unwrap();
+            assert_eq!(
+                outcome
+                    .findings()
+                    .iter()
+                    .map(|finding| finding.rule_id())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(tx.tx_value(b"first"), hit.then_some(b"a".as_slice()));
+            assert_eq!(tx.tx_value(b"second"), hit.then_some(b"a".as_slice()));
+            assert_eq!(tx.tx_value(b"chain"), hit.then_some(b"ok".as_slice()));
+            assert_eq!(tx.tx_value(b"negated"), (!hit).then_some(b"ok".as_slice()));
+        }
+    }
+}
+
+#[test]
 fn seclang_regex_hex_escapes_match_raw_bytes_without_unicode_reencoding() {
     let generation = generation(concat!(
         "SecRule REQUEST_HEADERS:X-Braced \"@rx \\x{bc}[^\\x{be}]*\\x{be}\" \"id:1,phase:1,pass\"\n",
@@ -3816,7 +3902,7 @@ fn cached_group_scan_requires_an_initialized_slot_and_reuses_first_use() {
     let g = generation("SecRule REQUEST_URI \"@pm hit one\" \"id:905,phase:1,pass\"\n");
     let mut slots = vec![None];
     let mut cache = StageScanCache {
-        scanned: vec![0],
+        storage: ScanCacheStorage::Overflow(vec![0]),
         ..StageScanCache::default()
     };
     assert_eq!(
@@ -3833,7 +3919,7 @@ fn cached_group_scan_requires_an_initialized_slot_and_reuses_first_use() {
         Err(RuntimeError::GenerationInvariant)
     );
     assert!(slots[0].is_none());
-    cache.scanned.clear();
+    cache.clear();
     let scope = measurements::start();
     assert!(evaluate_matcher_operand_cached(
         &g,
@@ -3859,6 +3945,222 @@ fn cached_group_scan_requires_an_initialized_slot_and_reuses_first_use() {
     .unwrap());
     assert_eq!(scope.counts().get(Event::GroupScratchInitializations), 1);
     assert_eq!(scope.counts().get(Event::FullScans), 1);
+}
+
+#[test]
+fn stage_scan_cache_storage_has_checked_ids_capacity_and_reuse() {
+    assert_eq!(std::mem::size_of::<ScanCacheStorage>(), 24);
+    assert_eq!(std::mem::size_of::<StageScanCache>(), 32); // Includes the test-only counter.
+    let mut cache = StageScanCache {
+        storage: ScanCacheStorage::Inline { bits: 0, capacity: 2 },
+        ..StageScanCache::default()
+    };
+    assert_eq!(cache.heap_capacity(), 0);
+    for bad in [64, usize::MAX] {
+        assert!(!cache.contains(bad));
+        assert_eq!(cache.insert(bad), Err(RuntimeError::GenerationInvariant));
+        assert_eq!(cache.len(), 0);
+    }
+    cache.insert(0).unwrap();
+    cache.insert(63).unwrap();
+    cache.insert(63).unwrap();
+    assert_eq!(cache.len(), 2);
+    assert!(cache.contains(0) && cache.contains(63) && cache.full());
+    assert_eq!(cache.insert(1), Err(RuntimeError::GenerationInvariant));
+    assert!(!cache.contains(1));
+    cache.clear();
+    assert_eq!(cache.len(), 0);
+    assert!(!cache.contains(0) && !cache.contains(63));
+    cache.insert(1).unwrap();
+    assert!(cache.contains(1));
+
+    let mut empty = StageScanCache::default();
+    assert!(empty.full());
+    assert_eq!(empty.insert(0), Err(RuntimeError::GenerationInvariant));
+    let mut single = StageScanCache {
+        storage: ScanCacheStorage::Single(None),
+        ..StageScanCache::default()
+    };
+    for group in [0, 63, 64, usize::MAX] {
+        single.insert(group).unwrap();
+        assert!(single.contains(group));
+        assert_eq!(single.len(), 1);
+        assert_eq!(single.heap_capacity(), 0);
+        assert!(!single.full());
+    }
+    assert!(!single.contains(64));
+    single.clear();
+    assert_eq!(single.len(), 0);
+
+    let mut overflow = StageScanCache {
+        storage: ScanCacheStorage::Overflow(Vec::with_capacity(2)),
+        ..StageScanCache::default()
+    };
+    let capacity = overflow.heap_capacity();
+    for id in 0..capacity {
+        overflow.insert(64 + id).unwrap();
+    }
+    assert!(overflow.full());
+    overflow.insert(64).unwrap();
+    assert_eq!(overflow.insert(usize::MAX), Err(RuntimeError::GenerationInvariant));
+    assert_eq!(overflow.heap_capacity(), capacity);
+    overflow.clear();
+    overflow.insert(usize::MAX).unwrap();
+    assert!(overflow.contains(usize::MAX) && !overflow.contains(0));
+    assert_eq!(overflow.heap_capacity(), capacity);
+}
+
+#[test]
+fn ordinary_current_input_reuses_group_bits_and_preserves_ordered_effects() {
+    let g = generation(concat!(
+        "SecRule REQUEST_URI \"@rx alpha[0-9]\" \"id:910,phase:1,pass,setvar:tx.first=hit\"\n",
+        "SecRule REQUEST_URI \"!@rx beta[0-9]\" \"id:911,phase:1,pass,setvar:tx.second=%{tx.first}\"\n",
+        "SecRule REQUEST_URI \"@pm alpha gamma\" \"id:912,phase:1,pass,setvar:tx.last=hit\"\n",
+    ));
+    for uri in [b"/alpha1".as_slice(), b"/beta2", b"/none"] {
+        let mut outcomes = Vec::new();
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let scope = measurements::start();
+            let mut tx =
+                Transaction::new_with_evaluation(&g, request(&[], uri), RuntimeLimits::default(), mode).unwrap();
+            let outcome = tx.execute_request_headers().unwrap();
+            assert_eq!(
+                scope.counts().get(Event::FullScans),
+                if mode == EvaluationMode::Accelerated { 1 } else { 3 }
+            );
+            assert_eq!(tx.ordinary_scan_cache.cache.heap_capacity(), 0);
+            outcomes.push((
+                outcome,
+                tx.tx_value(b"first").map(Vec::from),
+                tx.tx_value(b"second").map(Vec::from),
+                tx.tx_value(b"last").map(Vec::from),
+            ));
+        }
+        assert_eq!(outcomes[0], outcomes[1]);
+    }
+}
+
+#[test]
+fn ordinary_current_input_switches_fields_profiles_and_uncacheable_operands() {
+    let g = generation(concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx alpha[0-9]\" \"id:920,phase:1,pass,setvar:tx.value=alpha1\"\n",
+        "SecRule REQUEST_HEADERS:X-Probe \"!@rx beta[0-9]\" \"id:921,phase:1,pass\"\n",
+        "SecRule TX:value \"@rx alpha[0-9]\" \"id:922,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx alpha[0-9]\" \"id:923,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx alpha[0-9]\" \"id:924,phase:1,pass,t:lowercase\"\n",
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx alpha[0-9]\" \"id:925,phase:1,pass,multiMatch,t:lowercase\"\n",
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx (?P<saved>alpha[0-9])\" \"id:926,phase:1,pass,capture\"\n",
+    ));
+    let headers = [
+        RequestHeader::new(b"X-Probe", b"beta2"),
+        RequestHeader::new(b"X-Probe", b"alpha1"),
+    ];
+    let mut outcomes = Vec::new();
+    for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+        let mut tx =
+            Transaction::new_with_evaluation(&g, request(&headers, b"/"), RuntimeLimits::default(), mode).unwrap();
+        outcomes.push((
+            tx.execute_request_headers().unwrap(),
+            tx.tx_value(b"saved").map(Vec::from),
+        ));
+        assert_eq!(tx.ordinary_scan_cache.cache.heap_capacity(), 0);
+    }
+    assert_eq!(outcomes[0], outcomes[1]);
+    assert_eq!(outcomes[0].1.as_deref(), Some(b"alpha1".as_slice()));
+}
+
+#[test]
+fn ordinary_current_input_signature_is_inline_and_invalidates_all_mutable_sources() {
+    let mut cache = OrdinaryScanCache::new();
+    let first = SelectedBytes::Request(ByteRange { start: 1, len: 3 });
+    let second = SelectedBytes::Request(ByteRange { start: 5, len: 3 });
+    cache.prepare(first, None, true).unwrap().insert(2).unwrap();
+    assert!(cache.prepare(first, None, true).unwrap().contains(2));
+    assert!(!cache.prepare(second, None, true).unwrap().contains(2));
+    cache.cache.insert(3).unwrap();
+    assert!(!cache.prepare(second, Some(1), true).unwrap().contains(3));
+    cache.cache.insert(4).unwrap();
+    cache.cache.insert(5).unwrap();
+    assert!(!cache.cache.contains(4));
+    assert!(cache.cache.contains(5));
+    assert!(cache.prepare(SelectedBytes::Body(0), None, true).is_none());
+    cache.prepare(first, None, true).unwrap().insert(2).unwrap();
+    assert!(cache.prepare(first, None, false).is_none());
+    assert_eq!(cache.cache.heap_capacity(), 0);
+    assert_eq!(cache.key, None);
+}
+
+#[test]
+fn ordinary_current_input_phase_and_direct_prefix_writers_invalidate_saved_bits() {
+    let g = generation(concat!(
+        "SecRule REQUEST_URI \"@rx hit[0-9]\" \"id:930,phase:1,pass\"\n",
+        "SecRule REQUEST_BODY \"@rx body[0-9]\" \"id:931,phase:2,pass\"\n",
+    ));
+    let mut tx = Transaction::new(&g, request(&[], b"/hit1"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    assert!(tx.ordinary_scan_cache.key.is_some());
+    assert!(tx.evaluate_prefix_member(1, b"body1", &mut 0).unwrap());
+    assert_eq!(tx.ordinary_scan_cache.key, None);
+    tx.ordinary_scan_cache
+        .prepare(SelectedBytes::Request(ByteRange { start: 0, len: 1 }), None, true)
+        .unwrap()
+        .insert(0)
+        .unwrap();
+    tx.publish_request_body(RequestBody::new(
+        bytes::Bytes::from_static(b"body1"),
+        crate::seclang::BodyProcessorSelection::Auto,
+    ))
+    .unwrap();
+    tx.execute_request_body().unwrap();
+    assert_eq!(tx.ordinary_scan_cache.key, None);
+}
+
+#[test]
+fn ordinary_current_group_marker_publishes_only_valid_scans_and_ranges() {
+    let g = generation("SecRule REQUEST_URI \"@rx hit[0-9]\" \"id:932,phase:1,pass\"\n");
+    let mut slots = vec![None];
+    let mut cache = OrdinaryScanCache::new();
+    assert_eq!(
+        evaluate_matcher_operand_cached(
+            &g,
+            &mut slots,
+            0,
+            1,
+            1,
+            b"hit1",
+            EvaluationMode::Accelerated,
+            Some(&mut cache.cache)
+        ),
+        Err(RuntimeError::GenerationInvariant)
+    );
+    assert!(!cache.cache.contains(0));
+    assert!(evaluate_matcher_operand_cached(
+        &g,
+        &mut slots,
+        0,
+        0,
+        1,
+        b"hit1",
+        EvaluationMode::Accelerated,
+        Some(&mut cache.cache)
+    )
+    .unwrap());
+    assert!(cache.cache.contains(0));
+    assert_eq!(
+        evaluate_matcher_operand_cached(
+            &g,
+            &mut slots,
+            0,
+            0,
+            2,
+            b"hit1",
+            EvaluationMode::Accelerated,
+            Some(&mut cache.cache)
+        ),
+        Err(RuntimeError::GenerationInvariant)
+    );
+    assert!(cache.cache.contains(0));
+    assert_eq!(cache.cache.heap_capacity(), 0);
 }
 #[test]
 fn unpruned_oracle_survives_both_explicit_clone_policies() {

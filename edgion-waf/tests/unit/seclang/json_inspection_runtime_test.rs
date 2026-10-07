@@ -3606,3 +3606,133 @@ fn phase_one_removed_body_units_do_not_initialize_program_caches() {
     let mut oracle = activation_transaction(&g, br#"{"a":"attack"}"#, true, 4);
     assert_activation_parity(&mut fast, &mut oracle);
 }
+
+#[test]
+fn capture_hit_batches_preserve_exact_captures_negation_chains_and_bounds() {
+    let rules = concat!(
+        "SecRule ARGS \"@rx ^(?P<word>a|aa)(?P<empty>)\" \"id:1,phase:2,pass,capture,setvar:tx.saved_word=%{TX.word},chain\"\n",
+        "SecRule TX:saved_word \"@streq a\" \"setvar:tx.chain=done\"\n",
+        "SecRule ARGS \"@rx (?P<second>aa)\" \"id:2,phase:2,pass,capture,setvar:tx.saved_second=%{TX.second}\"\n",
+        "SecRule ARGS \"!@rx (forbidden)\" \"id:3,phase:2,pass,capture,setvar:tx.safe=yes\"\n",
+        "SecRule ARGS \"@rx ^(?P<word>a|aa)(?P<empty>)\" \"id:4,phase:2,pass,capture,setvar:tx.duplicate=%{TX.1}\"\n",
+    );
+    for (json, form) in [
+        (br#"{"x":"aa"}"#.as_slice(), b"json.x=aa".as_slice()),
+        (br#"{"x":"safe"}"#, b"json.x=safe"),
+        (br#"{"x":"forbidden"}"#, b"json.x=forbidden"),
+    ] {
+        for (entries, bytes) in [(0, 0), (1, 1), (8, 64)] {
+            compare(
+                rules,
+                json,
+                form,
+                b"/",
+                RuntimeLimits {
+                    max_capture_entries: entries,
+                    max_capture_bytes: bytes,
+                    ..RuntimeLimits::default()
+                },
+            );
+        }
+    }
+    let generation = compile(rules);
+    assert_eq!(generation.capture_hits.matchers.len(), 1);
+    let mut tx = no_hit_transaction(
+        &generation,
+        br#"{"x":"aa"}"#,
+        b"/",
+        RuntimeLimits::default(),
+        ResultLimits::default(),
+        false,
+    );
+    tx.execute_request_body().unwrap();
+    assert_eq!(tx.tx_value(b"saved_word"), Some(b"a".as_slice()));
+    assert_eq!(tx.tx_value(b"chain"), Some(b"done".as_slice()));
+    assert_eq!(tx.tx_value(b"saved_second"), Some(b"aa".as_slice()));
+    assert_eq!(tx.tx_value(b"duplicate"), Some(b"a".as_slice()));
+    assert_eq!(tx.tx_value(b"safe"), Some(b"yes".as_slice()));
+}
+
+#[test]
+fn capture_hit_incomplete_active_batch_keeps_individual_detection() {
+    let generation = compile(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1\"\n",
+        "SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,skipAfter:END\"\n",
+        "SecRule ARGS \"@rx (attack)\" \"id:3,phase:2,pass,capture,setvar:tx.skipped=yes\"\n",
+        "SecMarker END\n",
+        "SecRule ARGS \"@rx (safe)\" \"id:4,phase:2,pass,capture,setvar:tx.active=%{TX.1}\"\n",
+    ));
+    assert_eq!(generation.capture_hits.matchers.len(), 1);
+    let scope = measurements::start();
+    let mut fast = activation_transaction(&generation, br#"{"a":"safe"}"#, false, 1);
+    assert_eq!(scope.counts().get(Event::FullScans), 0);
+    assert_eq!(scope.counts().get(Event::CaptureBooleanSearches), 1);
+    assert!(fast.group_scratch.iter().all(Option::is_none));
+    let mut oracle = activation_transaction(&generation, br#"{"a":"safe"}"#, true, 12);
+    assert_activation_parity(&mut fast, &mut oracle);
+    assert_eq!(fast.tx_value(b"skipped"), None);
+    assert_eq!(fast.tx_value(b"active"), Some(b"safe".as_slice()));
+}
+
+#[test]
+fn capture_hit_selector_scopes_and_empty_byte_expressions_match_exact_path() {
+    let rules = concat!(
+        "SecRule ARGS:/^json\\.a$/ \"@rx (?P<any>.*)\" \"id:1,phase:2,pass,capture,multiMatch,t:lowercase,setvar:tx.any=%{TX.any}\"\n",
+        "SecRule ARGS:/^json\\.a$/ \"@rx (?P<empty>)\" \"id:2,phase:2,pass,capture,multiMatch,t:lowercase,setvar:tx.empty=%{TX.empty}\"\n",
+        "SecRule ARGS \"@rx (?P<any>.*)\" \"id:3,phase:2,pass,capture,multiMatch,t:lowercase,setvar:tx.broad=%{TX.any}\"\n",
+        "SecRule ARGS \"@rx (?P<empty>)\" \"id:4,phase:2,pass,capture,multiMatch,t:lowercase\"\n",
+    );
+    for (json, form) in [
+        (br#"{"a":"","b":"SAFE"}"#.as_slice(), b"json.a=&json.b=SAFE".as_slice()),
+        (br#"{"b":"SAFE"}"#, b"json.b=SAFE"),
+        (br#"{"a":"\u00e9"}"#, b"json.a=%C3%A9"),
+    ] {
+        compare(rules, json, form, b"/", RuntimeLimits::default());
+    }
+    let generation = compile(rules);
+    // Canonical predicates can alias across target plans. Only one pool owns them.
+    assert_eq!(generation.capture_hits.matchers.len(), 1);
+}
+
+#[test]
+fn split_capture_batch_does_not_scan_inactive_half_and_admits_exact_scratch() {
+    let prefix = "x".repeat(700);
+    let rules = format!(
+        concat!(
+            "SecAction \"id:10,phase:1,pass,setvar:tx.level=1\"\n",
+            "SecRule TX:level \"@lt 2\" \"id:11,phase:2,pass,skipAfter:END\"\n",
+            "SecRule ARGS \"@rx ({0}a)\" \"id:1,phase:2,pass,capture\"\n",
+            "SecRule ARGS \"@rx ({0}b)\" \"id:2,phase:2,pass,capture\"\n",
+            "SecMarker END\n",
+            "SecRule ARGS \"@rx ({0}c)\" \"id:3,phase:2,pass,capture\"\n",
+            "SecRule ARGS \"@rx ({0}d)\" \"id:4,phase:2,pass,capture\"\n"
+        ),
+        prefix
+    );
+    let g = compile(&rules);
+    assert_eq!(g.capture_hits.matchers.len(), 2);
+    let scope = measurements::start();
+    let mut fast = activation_transaction(&g, br#"{"a":"safe"}"#, false, 1);
+    assert_eq!(scope.counts().get(Event::FullScans), 1);
+    assert_eq!(scope.counts().get(Event::CaptureBooleanSearches), 0);
+    assert_eq!(scope.counts().get(Event::CaptureScratchInitializations), 0);
+    assert_eq!(fast.group_scratch.iter().filter(|v| v.is_some()).count(), 1);
+    let mut oracle = activation_transaction(&g, br#"{"a":"safe"}"#, true, 12);
+    assert_activation_parity(&mut fast, &mut oracle);
+    let exact = RuntimeLimits {
+        max_matcher_scratch_bytes: matcher_scratch_bytes(&g).unwrap(),
+        ..RuntimeLimits::default()
+    };
+    assert!(Transaction::new(&g, head(b"/"), exact).is_ok());
+    assert!(matches!(
+        Transaction::new(
+            &g,
+            head(b"/"),
+            RuntimeLimits {
+                max_matcher_scratch_bytes: matcher_scratch_bytes(&g).unwrap() - 1,
+                ..exact
+            }
+        ),
+        Err(RuntimeError::MatcherScratchByteLimit { .. })
+    ));
+}

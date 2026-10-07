@@ -1145,9 +1145,135 @@ impl RegexCore {
 #[derive(Debug)]
 pub struct CompiledRegexProgram {
     core: RegexCore,
+    execution_hint: RegexExecutionHint,
+}
+
+#[derive(Debug, Default)]
+enum RegexExecutionHint {
+    #[default]
+    None,
+    Guard(Vec<AhoCorasick>),
+    Simple(SimpleRegex),
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SimpleRegex {
+    literal: [u8; 16],
+    len: u8,
+    anchors: u8,
+}
+const REGEX_SIMPLE_PROOF_BYTES: usize = 256;
+
+pub(crate) const REGEX_GUARD_PROOF_BYTES: usize = 64 * (256 + size_of::<usize>() + size_of::<&[u8]>()) + 256;
+// Bounds the current native prefilter's 64 KiB two-gram table, packed buffers,
+// growth overlap and small profile state. Recheck when that builder changes.
+const REGEX_GUARD_ACCELERATION_BUILD_BYTES: usize = 128 * 1024;
+
+#[derive(Clone, Copy)]
+pub(crate) struct RegexGuardBudget {
+    pub owned: usize,
+    pub peak: usize,
+    pub work: usize,
+}
+
+#[derive(Default)]
+pub(crate) struct RegexGuardOutcome {
+    pub work: usize,
+    pub peak: usize,
+    pub owned: usize,
 }
 
 impl CompiledRegexProgram {
+    fn exact_match(&self, input: &[u8]) -> Option<bool> {
+        let RegexExecutionHint::Simple(simple) = &self.execution_hint else {
+            return None;
+        };
+        let literal = &simple.literal[..usize::from(simple.len)];
+        Some(match simple.anchors {
+            3 => input == literal,
+            1 => input.starts_with(literal),
+            2 => input.ends_with(literal),
+            _ => memchr::memmem::find(input, literal).is_some(),
+        })
+    }
+
+    pub(crate) fn lower_simple(
+        &mut self,
+        budget: RegexGuardBudget,
+    ) -> Result<(RegexGuardOutcome, bool), RegexProgramError> {
+        if !matches!(self.execution_hint, RegexExecutionHint::None) {
+            return Err(RegexProgramError::ProjectionInvariant);
+        }
+        if self.core.vm.pattern_len() != 1 || budget.peak < REGEX_SIMPLE_PROOF_BYTES || budget.work == 0 {
+            return Ok((RegexGuardOutcome::default(), false));
+        }
+        self.prove_simple(budget.work)
+    }
+
+    #[inline(never)]
+    fn prove_simple(&mut self, work: usize) -> Result<(RegexGuardOutcome, bool), RegexProgramError> {
+        use regex_automata::nfa::thompson::State;
+        use regex_automata::util::look::Look;
+        let mut outcome = RegexGuardOutcome {
+            peak: REGEX_SIMPLE_PROOF_BYTES,
+            ..RegexGuardOutcome::default()
+        };
+        let mut simple = SimpleRegex::default();
+        let nfa = self.core.vm.get_nfa();
+        let mut state = nfa
+            .start_pattern(regex_automata::PatternID::ZERO)
+            .ok_or(RegexProgramError::ProjectionInvariant)?;
+        let available = work.min(64);
+        while outcome.work < available {
+            outcome.work += 1;
+            let trans = match nfa
+                .states()
+                .get(state.as_usize())
+                .ok_or(RegexProgramError::ProjectionInvariant)?
+            {
+                State::Look {
+                    look: Look::Start,
+                    next,
+                } if simple.len == 0 && simple.anchors & 2 == 0 => {
+                    simple.anchors |= 1;
+                    state = *next;
+                    continue;
+                }
+                State::Look { look: Look::End, next } => {
+                    simple.anchors |= 2;
+                    state = *next;
+                    continue;
+                }
+                State::Capture { next, .. } => {
+                    state = *next;
+                    continue;
+                }
+                State::Union { alternates } if alternates.len() == 1 => {
+                    state = alternates[0];
+                    continue;
+                }
+                State::Match { pattern_id } if *pattern_id == regex_automata::PatternID::ZERO => {
+                    self.execution_hint = RegexExecutionHint::Simple(simple);
+                    return Ok((outcome, true));
+                }
+                State::ByteRange { trans } if trans.start == trans.end => trans,
+                State::Sparse(trans)
+                    if trans.transitions.len() == 1 && trans.transitions[0].start == trans.transitions[0].end =>
+                {
+                    &trans.transitions[0]
+                }
+                _ => return Ok((outcome, false)),
+            };
+            if simple.anchors & 2 != 0 || usize::from(simple.len) == simple.literal.len() || outcome.work == available {
+                return Ok((outcome, false));
+            }
+            outcome.work += 1;
+            simple.literal[usize::from(simple.len)] = trans.start;
+            simple.len += 1;
+            state = trans.next;
+        }
+        Ok((outcome, false))
+    }
     pub fn prebuild_peak(limits: RegexProgramLimits) -> Result<usize, RegexProgramError> {
         regex_peak(limits)
     }
@@ -1177,7 +1303,10 @@ impl CompiledRegexProgram {
                 limit: limits.max_program_bytes,
             });
         }
-        Ok(Self { core })
+        Ok(Self {
+            core,
+            execution_hint: RegexExecutionHint::None,
+        })
     }
 
     pub(crate) fn compile_one_pcre_bytes_with_peak_budget(
@@ -1201,7 +1330,10 @@ impl CompiledRegexProgram {
                 limit: limits.max_program_bytes,
             });
         }
-        Ok(Self { core })
+        Ok(Self {
+            core,
+            execution_hint: RegexExecutionHint::None,
+        })
     }
 
     pub(crate) fn compile_one_ascii_case_insensitive_with_peak_budget(
@@ -1225,7 +1357,10 @@ impl CompiledRegexProgram {
                 limit: limits.max_program_bytes,
             });
         }
-        Ok(Self { core })
+        Ok(Self {
+            core,
+            execution_hint: RegexExecutionHint::None,
+        })
     }
 
     pub fn create_scratch(&self) -> RegexBooleanScratch {
@@ -1240,7 +1375,168 @@ impl CompiledRegexProgram {
         if !Arc::ptr_eq(&scratch.token, &self.core.token) {
             return Err(RegexScratchError::ScratchShape);
         }
-        Ok(self.core.vm.is_match(&mut scratch.cache, haystack))
+        Ok(self
+            .exact_match(haystack)
+            .unwrap_or_else(|| self.may_match(haystack) && self.core.vm.is_match(&mut scratch.cache, haystack)))
+    }
+
+    fn may_match(&self, input: &[u8]) -> bool {
+        input.len() < 64
+            || match &self.execution_hint {
+                RegexExecutionHint::Guard(guards) => guards.first().is_none_or(|guard| guard.is_match(input)),
+                _ => true,
+            }
+    }
+
+    /// Attach an optional guard only after its owner has admitted all required programs.
+    pub(crate) fn add_literal_guard(
+        &mut self,
+        budget: RegexGuardBudget,
+    ) -> Result<RegexGuardOutcome, RegexProgramError> {
+        if !matches!(self.execution_hint, RegexExecutionHint::None) {
+            return Err(RegexProgramError::ProjectionInvariant);
+        }
+        if budget.peak < REGEX_GUARD_PROOF_BYTES
+            || budget.work == 0
+            || self.core.vm.pattern_len() == 0
+            || self.core.vm.pattern_len() > 64
+        {
+            return Ok(RegexGuardOutcome::default());
+        }
+        self.build_literal_guard(budget)
+    }
+
+    // Keep the proof frame out of callers that did not admit its fixed storage.
+    #[inline(never)]
+    fn build_literal_guard(&mut self, budget: RegexGuardBudget) -> Result<RegexGuardOutcome, RegexProgramError> {
+        use regex_automata::nfa::thompson::State;
+        let mut outcome = RegexGuardOutcome {
+            peak: REGEX_GUARD_PROOF_BYTES,
+            ..RegexGuardOutcome::default()
+        };
+        let mut literals = [[0_u8; 256]; 64];
+        let mut lengths = [0_usize; 64];
+        let nfa = self.core.vm.get_nfa();
+        let count = nfa.pattern_len();
+        let available = budget.work.min(8192);
+        for pattern in 0..count {
+            let mut state = nfa
+                .start_pattern(regex_automata::PatternID::must(pattern))
+                .ok_or(RegexProgramError::ProjectionInvariant)?;
+            while lengths[pattern] < 256 {
+                if outcome.work == available {
+                    return Ok(outcome);
+                }
+                outcome.work += 1;
+                let transition = match nfa
+                    .states()
+                    .get(state.as_usize())
+                    .ok_or(RegexProgramError::ProjectionInvariant)?
+                {
+                    State::Look {
+                        look: regex_automata::util::look::Look::Start,
+                        ..
+                    } if lengths[pattern] == 0 => return Ok(outcome),
+                    State::Look { next, .. } | State::Capture { next, .. } => {
+                        state = *next;
+                        continue;
+                    }
+                    State::Union { alternates } if alternates.len() == 1 => {
+                        state = alternates[0];
+                        continue;
+                    }
+                    State::ByteRange { trans } if trans.start == trans.end => trans,
+                    State::Sparse(trans)
+                        if trans.transitions.len() == 1 && trans.transitions[0].start == trans.transitions[0].end =>
+                    {
+                        &trans.transitions[0]
+                    }
+                    _ => break,
+                };
+                if outcome.work == available {
+                    return Ok(outcome);
+                }
+                outcome.work += 1;
+                literals[pattern][lengths[pattern]] = transition.start;
+                lengths[pattern] += 1;
+                state = transition.next;
+            }
+            if lengths[pattern] < 3 {
+                return Ok(outcome);
+            }
+        }
+        let bytes = lengths[..count].iter().sum::<usize>();
+        let wrapper = size_of::<AhoCorasick>();
+        let Some(room) = budget.owned.checked_sub(wrapper) else {
+            return Ok(outcome);
+        };
+        let limits = AcBuildLimits {
+            max_patterns: count,
+            max_pattern_bytes: bytes,
+            max_states: bytes + 1,
+            max_transitions: bytes,
+            max_outputs: count,
+            max_compiled_bytes: room.min(256 * 1024),
+            max_dfa_cells: 0,
+        };
+        let projection = crate::aho_corasick::phrase_build_projection(count, bytes, limits)
+            .and_then(|value| value.checked_add(wrapper))
+            .and_then(|value| value.checked_add(REGEX_GUARD_PROOF_BYTES))
+            .and_then(|value| value.checked_add(REGEX_GUARD_ACCELERATION_BUILD_BYTES))
+            .ok_or(RegexProgramError::Arithmetic)?;
+        if projection > budget.peak {
+            return Ok(outcome);
+        }
+        outcome.peak = projection;
+        let mut storage = Vec::new();
+        if storage.try_reserve_exact(1).is_err() {
+            return Ok(outcome);
+        }
+        let actual_wrapper = storage
+            .capacity()
+            .checked_mul(wrapper)
+            .ok_or(RegexProgramError::Arithmetic)?;
+        if actual_wrapper != wrapper {
+            return Err(RegexProgramError::ProjectionInvariant);
+        }
+        let built = AcBuilder::new()
+            .limits(limits)
+            .automaton_kind(crate::aho_corasick::AutomatonKind::SparseNfa)
+            .match_kind(AcMatchKind::Standard)
+            .prefilter(true)
+            .build((0..count).map(|i| &literals[i][..lengths[i]]));
+        let guard = match built {
+            Ok(guard) => guard,
+            Err(AcBuildError::SizeOverflow { .. } | AcBuildError::IndexOverflow { .. }) => {
+                return Err(RegexProgramError::Arithmetic)
+            }
+            Err(_) => return Ok(outcome),
+        };
+        let owned = guard
+            .memory_usage()
+            .checked_add(actual_wrapper)
+            .ok_or(RegexProgramError::Arithmetic)?;
+        if owned > budget.owned
+            || guard.estimated_peak_build_memory_usage() > projection - REGEX_GUARD_PROOF_BYTES - wrapper
+        {
+            return Err(RegexProgramError::ProjectionInvariant);
+        }
+        let retained = self
+            .core
+            .retained_bytes
+            .checked_add(owned)
+            .ok_or(RegexProgramError::Arithmetic)?;
+        let program_bound = self
+            .core
+            .program_peak_bound
+            .checked_add(owned)
+            .ok_or(RegexProgramError::Arithmetic)?;
+        storage.push(guard);
+        self.execution_hint = RegexExecutionHint::Guard(storage);
+        self.core.retained_bytes = retained;
+        self.core.program_peak_bound = program_bound;
+        outcome.owned = owned;
+        Ok(outcome)
     }
 
     pub fn memory_usage(&self) -> usize {
@@ -1708,12 +2004,18 @@ impl MatcherBuildProjection {
             .and_then(|value| {
                 counts
                     .regexes
-                    .checked_mul(size_of::<&str>())
+                    .checked_mul(size_of::<RegexPatternEntry>() + size_of::<&str>())
                     .and_then(|regex| value.checked_add(regex))
             })
             .ok_or(MatcherCompileError::PeakArithmetic)?;
         let retained_map_bytes = patterns
             .checked_mul(size_of::<PatternId>())
+            .and_then(|value| {
+                counts
+                    .regexes
+                    .checked_mul(size_of::<usize>())
+                    .and_then(|ends| value.checked_add(ends))
+            })
             .ok_or(MatcherCompileError::PeakArithmetic)?;
         let ac_limits = AcBuildLimits {
             max_patterns: limits.max_patterns,
@@ -2143,6 +2445,46 @@ fn set_match(words: &mut [u64], pattern_id: PatternId) -> Result<(), MatcherScan
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct RegexPatternEntry<'source> {
+    logical: PatternId,
+    source: &'source str,
+    physical: usize,
+}
+
+fn compare_regex_sources(a: &str, b: &str, remaining: &mut usize) -> Result<std::cmp::Ordering, ()> {
+    *remaining = remaining.checked_sub(1).ok_or(())?;
+    for (&a, &b) in a.as_bytes().iter().zip(b.as_bytes()) {
+        *remaining = remaining.checked_sub(1).ok_or(())?;
+        if a != b {
+            return Ok(a.cmp(&b));
+        }
+    }
+    Ok(a.len().cmp(&b.len()))
+}
+
+// Failure leaves entries permuted. The caller must rebuild from the original
+// specs before compiling the unshared fallback; partial IDs are never published.
+fn canonicalize_regex_entries(entries: &mut [RegexPatternEntry<'_>], mut remaining: usize) -> Result<usize, ()> {
+    crate::bounded_sort::heapsort_by(entries, |a, b| {
+        Ok(compare_regex_sources(a.source, b.source, &mut remaining)?.then(a.logical.cmp(&b.logical)))
+    })?;
+    let Some(first) = entries.first_mut() else {
+        return Ok(0);
+    };
+    first.physical = 0;
+    let mut previous = first.source;
+    let mut physical = 0_usize;
+    for entry in &mut entries[1..] {
+        if compare_regex_sources(previous, entry.source, &mut remaining)? != std::cmp::Ordering::Equal {
+            physical = physical.checked_add(1).ok_or(())?;
+            previous = entry.source;
+        }
+        entry.physical = physical;
+    }
+    physical.checked_add(1).ok_or(())
+}
+
 /// Immutable compiled matcher for one semantically equivalent input group.
 #[derive(Debug)]
 pub struct CompiledMatcher {
@@ -2151,9 +2493,15 @@ pub struct CompiledMatcher {
     insensitive_phrases: Option<PhraseGroup>,
     regex: Option<CompiledRegexProgram>,
     regex_pattern_ids: Vec<PatternId>,
+    // Empty for one-to-one mapping; otherwise each physical pattern owns a slice
+    // ending here in the flat logical-ID vector.
+    regex_fanout_ends: Vec<usize>,
 }
 
 impl CompiledMatcher {
+    pub(crate) fn regex_program_mut(&mut self) -> Option<&mut CompiledRegexProgram> {
+        self.regex.as_mut()
+    }
     /// Compile a bounded group and assign stable IDs in source order.
     pub fn compile(patterns: &[PatternSpec<'_>], limits: MatcherLimits) -> Result<Self, MatcherCompileError> {
         Self::compile_with_regex_unicode(patterns, limits, true)
@@ -2170,6 +2518,15 @@ impl CompiledMatcher {
         patterns: &[PatternSpec<'_>],
         limits: MatcherLimits,
         regex_unicode: bool,
+    ) -> Result<Self, MatcherCompileError> {
+        Self::compile_with_regex_unicode_and_work_limit(patterns, limits, regex_unicode, usize::MAX)
+    }
+
+    fn compile_with_regex_unicode_and_work_limit(
+        patterns: &[PatternSpec<'_>],
+        limits: MatcherLimits,
+        regex_unicode: bool,
+        canonical_work_limit: usize,
     ) -> Result<Self, MatcherCompileError> {
         if patterns.len() > limits.max_patterns {
             return Err(MatcherCompileError::PatternLimit {
@@ -2243,9 +2600,11 @@ impl CompiledMatcher {
         let mut sensitive_phrases = Vec::new();
         let mut insensitive_phrases = Vec::new();
         let mut regex_sources = Vec::new();
+        let mut regex_entries = Vec::new();
         let mut sensitive_pattern_ids = Vec::new();
         let mut insensitive_pattern_ids = Vec::new();
         let mut regex_pattern_ids = Vec::new();
+        let mut regex_fanout_ends = Vec::new();
         reserve_matcher(
             &mut sensitive_phrases,
             counts.sensitive_phrases,
@@ -2257,6 +2616,7 @@ impl CompiledMatcher {
             "insensitive phrase references",
         )?;
         reserve_matcher(&mut regex_sources, counts.regexes, "regex references")?;
+        reserve_matcher(&mut regex_entries, counts.regexes, "regex source entries")?;
         reserve_matcher(
             &mut sensitive_pattern_ids,
             counts.sensitive_phrases,
@@ -2287,15 +2647,65 @@ impl CompiledMatcher {
                     }
                 }
                 PatternSpec::Regex(source) => {
-                    regex_sources.push(*source);
-                    regex_pattern_ids.push(pattern_id);
+                    regex_entries.push(RegexPatternEntry {
+                        logical: pattern_id,
+                        source,
+                        physical: 0,
+                    });
                 }
             }
         }
 
+        let first_regex_id = regex_entries.first().map(|entry| entry.logical);
+        let logarithm = if counts.regexes <= 1 {
+            0
+        } else {
+            usize::BITS as usize - (counts.regexes - 1).leading_zeros() as usize
+        };
+        let canonical_budget = regex_source_bytes
+            .checked_add(counts.regexes)
+            .and_then(|value| value.checked_mul(2 * logarithm + 4))
+            .ok_or(MatcherCompileError::PeakArithmetic)?;
+        let physical_count =
+            match canonicalize_regex_entries(&mut regex_entries, canonical_budget.min(canonical_work_limit)) {
+                Ok(count) => count,
+                Err(()) => {
+                    regex_entries.clear();
+                    for (index, pattern) in patterns.iter().enumerate() {
+                        if let PatternSpec::Regex(source) = pattern {
+                            let physical = regex_entries.len();
+                            regex_entries.push(RegexPatternEntry {
+                                logical: PatternId(index),
+                                source,
+                                physical,
+                            });
+                        }
+                    }
+                    counts.regexes
+                }
+            };
+        let fanout = physical_count < counts.regexes;
+        if fanout {
+            reserve_matcher(&mut regex_fanout_ends, counts.regexes, "regex fanout offsets")?;
+        }
+        let mut previous = None;
+        for entry in &regex_entries {
+            if previous != Some(entry.physical) {
+                if fanout && previous.is_some() {
+                    regex_fanout_ends.push(regex_pattern_ids.len());
+                }
+                regex_sources.push(entry.source);
+                previous = Some(entry.physical);
+            }
+            regex_pattern_ids.push(entry.logical);
+        }
+        if fanout {
+            regex_fanout_ends.push(regex_pattern_ids.len());
+        }
+
         let sensitive_phrases = PhraseGroup::compile(&sensitive_phrases, sensitive_pattern_ids, false, limits)?;
         let insensitive_phrases = PhraseGroup::compile(&insensitive_phrases, insensitive_pattern_ids, true, limits)?;
-        let regex = compile_regex(&regex_sources, &regex_pattern_ids, limits, regex_unicode)?;
+        let regex = compile_regex(&regex_sources, first_regex_id, limits, regex_unicode)?;
 
         Ok(Self {
             pattern_count: patterns.len(),
@@ -2303,6 +2713,7 @@ impl CompiledMatcher {
             insensitive_phrases,
             regex,
             regex_pattern_ids,
+            regex_fanout_ends,
         })
     }
 
@@ -2360,6 +2771,14 @@ impl CompiledMatcher {
         self.pattern_count
     }
 
+    fn regex_physical_pattern_count(&self) -> usize {
+        if self.regex_fanout_ends.is_empty() {
+            self.regex_pattern_ids.len()
+        } else {
+            self.regex_fanout_ends.len()
+        }
+    }
+
     /// Return stable retained matcher and pattern-map bytes.
     pub fn memory_usage(&self) -> usize {
         self.sensitive_phrases
@@ -2367,7 +2786,8 @@ impl CompiledMatcher {
             .map_or(0, PhraseGroup::memory_usage)
             .saturating_add(self.insensitive_phrases.as_ref().map_or(0, PhraseGroup::memory_usage))
             .saturating_add(self.regex.as_ref().map_or(0, CompiledRegexProgram::memory_usage))
-            .saturating_add(self.regex_pattern_ids.len().saturating_mul(size_of::<PatternId>()))
+            .saturating_add(self.regex_pattern_ids.capacity().saturating_mul(size_of::<PatternId>()))
+            .saturating_add(self.regex_fanout_ends.capacity().saturating_mul(size_of::<usize>()))
     }
 
     /// Return the logical bytes allocated by one reusable scan scratch.
@@ -2397,7 +2817,7 @@ impl CompiledMatcher {
         let regex_bytes = self.regex.as_ref().map_or(0, |regex| {
             regex
                 .required_scratch_bytes()
-                .saturating_add(self.regex_pattern_ids.len())
+                .saturating_add(self.regex_physical_pattern_count())
         });
         size_of::<MatchScratch>()
             .saturating_add(word_bytes)
@@ -2417,7 +2837,8 @@ impl CompiledMatcher {
                     .map_or(0, PhraseGroup::estimated_peak_build_memory_usage),
             )
             .saturating_add(self.regex.as_ref().map_or(0, CompiledRegexProgram::memory_usage))
-            .saturating_add(self.regex_pattern_ids.len().saturating_mul(size_of::<PatternId>()))
+            .saturating_add(self.regex_pattern_ids.capacity().saturating_mul(size_of::<PatternId>()))
+            .saturating_add(self.regex_fanout_ends.capacity().saturating_mul(size_of::<usize>()))
     }
 
     /// Allocate reusable scratch sized for this compiled generation.
@@ -2428,7 +2849,7 @@ impl CompiledMatcher {
             sensitive_phrase_matches: self.sensitive_phrases.as_ref().map(PhraseGroup::create_pattern_set),
             insensitive_phrase_matches: self.insensitive_phrases.as_ref().map(PhraseGroup::create_pattern_set),
             regex_scratch: self.regex.as_ref().map(CompiledRegexProgram::create_scratch),
-            regex_matches: RegexPatternSet::new(self.regex_pattern_ids.len()),
+            regex_matches: RegexPatternSet::new(self.regex_physical_pattern_count()),
         }
     }
 
@@ -2463,7 +2884,7 @@ impl CompiledMatcher {
         accelerated: bool,
     ) -> Result<MatchResults<'a>, MatcherScanError> {
         if scratch.pattern_count != self.pattern_count
-            || scratch.regex_matches.capacity() != self.regex_pattern_ids.len()
+            || scratch.regex_matches.capacity() != self.regex_physical_pattern_count()
         {
             return Err(MatcherScanError::ScratchShape);
         }
@@ -2488,16 +2909,46 @@ impl CompiledMatcher {
             if !Arc::ptr_eq(&regex_scratch.token, &regex.core.token) {
                 return Err(MatcherScanError::ScratchShape);
             }
-            regex.core.vm.which_overlapping_matches(
-                &mut regex_scratch.cache,
-                &Input::new(haystack),
-                &mut scratch.regex_matches,
-            );
+            if let Some(matched) = accelerated.then(|| regex.exact_match(haystack)).flatten() {
+                if matched {
+                    scratch
+                        .regex_matches
+                        .try_insert(regex_automata::PatternID::ZERO)
+                        .map_err(|_| MatcherScanError::ScratchShape)?;
+                }
+            } else if !accelerated || regex.may_match(haystack) {
+                regex.core.vm.which_overlapping_matches(
+                    &mut regex_scratch.cache,
+                    &Input::new(haystack),
+                    &mut scratch.regex_matches,
+                );
+            }
             for local_id in scratch.regex_matches.iter() {
-                let Some(pattern_id) = self.regex_pattern_ids.get(local_id.as_usize()) else {
-                    return Err(MatcherScanError::InvalidPatternId);
+                let physical = local_id.as_usize();
+                let range = if self.regex_fanout_ends.is_empty() {
+                    physical..physical + 1
+                } else {
+                    let start = if physical == 0 {
+                        0
+                    } else {
+                        *self
+                            .regex_fanout_ends
+                            .get(physical - 1)
+                            .ok_or(MatcherScanError::InvalidPatternId)?
+                    };
+                    let end = *self
+                        .regex_fanout_ends
+                        .get(physical)
+                        .ok_or(MatcherScanError::InvalidPatternId)?;
+                    start..end
                 };
-                set_match(&mut scratch.matched_words, *pattern_id)?;
+                for &pattern_id in self
+                    .regex_pattern_ids
+                    .get(range)
+                    .ok_or(MatcherScanError::InvalidPatternId)?
+                {
+                    set_match(&mut scratch.matched_words, pattern_id)?;
+                }
             }
         }
 
@@ -2525,7 +2976,7 @@ fn scan_phrase_group(
 
 fn compile_regex(
     patterns: &[&str],
-    pattern_ids: &[PatternId],
+    first_pattern_id: Option<PatternId>,
     limits: MatcherLimits,
     unicode: bool,
 ) -> Result<Option<CompiledRegexProgram>, MatcherCompileError> {
@@ -2546,7 +2997,7 @@ fn compile_regex(
             MatcherCompileError::RegexProgramByteLimit { actual, limit }
         }
         _ => MatcherCompileError::Regex {
-            pattern_id: pattern_ids.first().map(|id| id.as_usize()),
+            pattern_id: first_pattern_id.map(PatternId::as_usize),
         },
     })?;
     let actual = core.retained_bytes;
@@ -2556,7 +3007,10 @@ fn compile_regex(
             limit: limits.max_regex_program_bytes,
         });
     }
-    Ok(Some(CompiledRegexProgram { core }))
+    Ok(Some(CompiledRegexProgram {
+        core,
+        execution_hint: RegexExecutionHint::None,
+    }))
 }
 
 fn reserve_matcher<T>(

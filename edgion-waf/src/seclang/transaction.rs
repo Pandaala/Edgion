@@ -1177,6 +1177,7 @@ pub enum RequestBodyPrefixCompletion {
 }
 
 pub struct Transaction<'generation> {
+    ordinary_scan_cache: OrdinaryScanCache,
     generation: GenerationHandle<'generation>,
     request: RequestState<'generation>,
     json_budget: Option<InspectionBudget>,
@@ -1365,9 +1366,9 @@ impl<'generation> Transaction<'generation> {
         }
         let mut group_scratch = Vec::new();
         group_scratch
-            .try_reserve_exact(generation.groups.len())
+            .try_reserve_exact(generation.matcher_count())
             .map_err(|_| RuntimeError::Allocation)?;
-        group_scratch.resize_with(generation.groups.len(), || None);
+        group_scratch.resize_with(generation.matcher_count(), || None);
         let mut boolean_scratch = Vec::new();
         boolean_scratch
             .try_reserve_exact(generation.boolean_regexes.len())
@@ -1401,6 +1402,7 @@ impl<'generation> Transaction<'generation> {
         }
         let scratch_bytes = actual_scratch;
         Ok(Self {
+            ordinary_scan_cache: OrdinaryScanCache::new(),
             generation,
             request,
             json_budget: None,
@@ -1634,6 +1636,7 @@ impl<'generation> Transaction<'generation> {
     }
 
     fn evaluate_prefix_member(&mut self, id: usize, prefix: &[u8], work: &mut usize) -> Result<bool, RuntimeError> {
+        self.ordinary_scan_cache.clear();
         let member = self.generation.members[id];
         let transformations = member
             .transformation_plan
@@ -1964,6 +1967,7 @@ impl<'generation> Transaction<'generation> {
         advance: bool,
         prefix: Option<&[u8]>,
     ) -> Result<PhaseOutcome, RuntimeError> {
+        self.ordinary_scan_cache.clear();
         self.ensure_json_healthy()?;
         let mut prefix_work = 0_usize;
         let expected = self.next_phase();
@@ -2465,6 +2469,13 @@ impl<'generation> Transaction<'generation> {
                 None => self.match_storage(tx, match_limit)?,
             };
             for selected in selected.iter().copied() {
+                let scan_cache = self.ordinary_scan_cache.prepare(
+                    selected.value,
+                    member.transformation_plan,
+                    !multi_match
+                        && self.evaluation_mode == EvaluationMode::Accelerated
+                        && matches!(operator.operand, super::CompiledOperatorOperand::Matcher { .. }),
+                );
                 let mut context = SingleInputContext {
                     generation: &self.generation,
                     request: &self.request,
@@ -2472,7 +2483,7 @@ impl<'generation> Transaction<'generation> {
                     group_scratch: &mut self.group_scratch,
                     boolean_scratch: &mut self.boolean_scratch,
                     capture_scratch: &mut self.capture_scratch,
-                    scan_cache: None,
+                    scan_cache,
                     json_budget: self.json_budget.as_mut(),
                 };
                 let matched = if let SelectedBytes::Json(id)
@@ -3211,17 +3222,40 @@ fn inspect_predicate_stage_into<O: PredicateStageObserver>(
     observer: &mut O,
     captures: &mut CaptureBuilder<O::CaptureValue, O::CaptureKey>,
 ) -> Result<bool, PredicateStageFailure<O::Error>> {
+    inspect_predicate_stage_with_hit_matcher(context, plan, transformed, observer, captures, None)
+}
+
+fn inspect_predicate_stage_with_hit_matcher<O: PredicateStageObserver>(
+    context: &mut SingleInputContext<'_>,
+    plan: &SingleInputPlan<'_>,
+    transformed: &[u8],
+    observer: &mut O,
+    captures: &mut CaptureBuilder<O::CaptureValue, O::CaptureKey>,
+    hit_matcher: Option<super::CompiledOperatorPlan>,
+) -> Result<bool, PredicateStageFailure<O::Error>> {
     if !captures.entries.is_empty() || captures.semantic_bytes != 0 || captures.heap_bytes != 0 {
         return Err(RuntimeError::GenerationInvariant.into());
     }
+    if hit_matcher.is_some()
+        && (!matches!(
+            plan.operator.operand,
+            super::CompiledOperatorOperand::Regex(super::RegexPlanRef::Capture(_))
+        ) || !matches!(
+            hit_matcher.map(|p| p.operand),
+            Some(super::CompiledOperatorOperand::Matcher { pattern_count: 1, .. })
+        ))
+    {
+        return Err(RuntimeError::GenerationInvariant.into());
+    }
+    let detection = hit_matcher.unwrap_or(plan.operator);
     let detector_work = detector_work_for_stage(plan.operator, transformed.len())
         .map_err(|error| PredicateStageFailure::at(PredicateCheckpoint::DetectorInput, error))?;
     observer
         .charge_stage(transformed.len(), detector_work)
         .map_err(PredicateStageFailure::Observer)?;
     if observer.observes_physical_work() {
-        let work = physical_operator_work(context, plan.operator, transformed.len())
-            .map_err(PredicateStageFailure::Physical)?;
+        let work =
+            physical_operator_work(context, detection, transformed.len()).map_err(PredicateStageFailure::Physical)?;
         observer.operator_work(work).map_err(PredicateStageFailure::Observer)?;
     }
     let (positive, fingerprint) = evaluate_operator(
@@ -3231,7 +3265,7 @@ fn inspect_predicate_stage_into<O: PredicateStageObserver>(
         context.group_scratch,
         context.boolean_scratch,
         context.capture_scratch,
-        plan.operator,
+        detection,
         transformed,
         plan.runtime_expansion_byte_limit,
         plan.evaluation_mode,
@@ -3967,7 +4001,7 @@ fn signed_decimal_bytes(value: i64) -> ([u8; 40], usize) {
 fn matcher_scratch_bytes(generation: &CompiledGeneration) -> Result<usize, RuntimeError> {
     matcher_scratch_capacity(
         generation,
-        generation.groups.len(),
+        generation.matcher_count(),
         generation.boolean_regexes.len(),
         generation.capture_regexes.len(),
     )
@@ -3980,11 +4014,10 @@ fn matcher_scratch_capacity(
     captures: usize,
 ) -> Result<usize, RuntimeError> {
     let mut total = 0_usize;
-    for group in &generation.groups {
+    for matcher in generation.all_matchers() {
         total = total
             .checked_add(
-                group
-                    .matcher
+                matcher
                     .required_scratch_bytes()
                     .checked_sub(size_of::<MatchScratch>())
                     .ok_or(RuntimeError::Arithmetic)?,
@@ -4616,9 +4649,114 @@ fn charge_operator_work(work: &mut usize, added: usize, limits: RuntimeLimits) -
 /// Valid only during one borrowed operator stage; never keyed by buffer address.
 #[derive(Default)]
 struct StageScanCache {
-    scanned: Vec<usize>,
+    storage: ScanCacheStorage,
     #[cfg(test)]
     scans: usize,
+}
+
+/// Dense small namespaces avoid heap storage; larger namespaces keep the
+/// existing per-domain admitted capacity instead of a global bitmap.
+enum ScanCacheStorage {
+    Single(Option<usize>),
+    Inline { bits: u64, capacity: usize },
+    Overflow(Vec<usize>),
+}
+impl Default for ScanCacheStorage {
+    fn default() -> Self {
+        Self::Inline { bits: 0, capacity: 0 }
+    }
+}
+impl StageScanCache {
+    fn with_storage(mut self, storage: ScanCacheStorage) -> Self {
+        self.storage = storage;
+        self
+    }
+    fn bit(group: usize) -> Option<u64> {
+        u32::try_from(group).ok().and_then(|shift| 1_u64.checked_shl(shift))
+    }
+    fn contains(&self, group: usize) -> bool {
+        match &self.storage {
+            ScanCacheStorage::Single(last) => *last == Some(group),
+            ScanCacheStorage::Inline { bits, .. } => Self::bit(group).is_some_and(|bit| bits & bit != 0),
+            ScanCacheStorage::Overflow(scanned) => scanned.contains(&group),
+        }
+    }
+    fn len(&self) -> usize {
+        match &self.storage {
+            ScanCacheStorage::Single(last) => usize::from(last.is_some()),
+            ScanCacheStorage::Inline { bits, .. } => bits.count_ones() as usize,
+            ScanCacheStorage::Overflow(scanned) => scanned.len(),
+        }
+    }
+    fn heap_capacity(&self) -> usize {
+        match &self.storage {
+            ScanCacheStorage::Overflow(scanned) => scanned.capacity(),
+            _ => 0,
+        }
+    }
+    fn full(&self) -> bool {
+        match &self.storage {
+            ScanCacheStorage::Single(_) => false,
+            ScanCacheStorage::Inline { capacity, .. } => self.len() == *capacity,
+            ScanCacheStorage::Overflow(scanned) => scanned.len() == scanned.capacity(),
+        }
+    }
+    fn insert(&mut self, group: usize) -> Result<(), RuntimeError> {
+        if self.contains(group) {
+            return Ok(());
+        }
+        if self.full() {
+            return Err(RuntimeError::GenerationInvariant);
+        }
+        match &mut self.storage {
+            ScanCacheStorage::Single(last) => *last = Some(group),
+            ScanCacheStorage::Inline { bits, .. } => {
+                *bits |= Self::bit(group).ok_or(RuntimeError::GenerationInvariant)?;
+            }
+            ScanCacheStorage::Overflow(scanned) => scanned.push(group),
+        }
+        Ok(())
+    }
+    fn clear(&mut self) {
+        match &mut self.storage {
+            ScanCacheStorage::Single(last) => *last = None,
+            ScanCacheStorage::Inline { bits, .. } => *bits = 0,
+            ScanCacheStorage::Overflow(scanned) => scanned.clear(),
+        }
+    }
+}
+
+/// One immutable request range/profile and one group's existing result bits.
+/// This retains no input bytes and never allocates cache storage.
+struct OrdinaryScanCache {
+    key: Option<(ByteRange, Option<usize>)>,
+    cache: StageScanCache,
+}
+impl OrdinaryScanCache {
+    fn new() -> Self {
+        Self {
+            key: None,
+            cache: StageScanCache::default().with_storage(ScanCacheStorage::Single(None)),
+        }
+    }
+    fn clear(&mut self) {
+        self.key = None;
+        self.cache.clear();
+    }
+    fn prepare(&mut self, value: SelectedBytes, profile: Option<usize>, eligible: bool) -> Option<&mut StageScanCache> {
+        if let SelectedBytes::Request(range) = value {
+            if eligible {
+                let key = Some((range, profile));
+                if self.key != key {
+                    self.cache.clear();
+                    self.key = key;
+                }
+                return Some(&mut self.cache);
+            }
+        }
+        self.clear();
+        None
+    }
 }
 
 fn physical_operator_work(
@@ -4633,19 +4771,16 @@ fn physical_operator_work(
         } => {
             let cache = context.scan_cache.as_deref().ok_or(RuntimeError::GenerationInvariant)?;
             work = cache
-                .scanned
                 .len()
                 .checked_mul(2)
                 .and_then(|v| v.checked_add(pattern_count))
                 .and_then(|v| v.checked_add(1))
                 .ok_or(RuntimeError::Arithmetic)?;
-            if !cache.scanned.contains(&group) {
+            if !cache.contains(group) {
                 let count = context
                     .generation
-                    .groups
-                    .get(group)
+                    .matcher_at(group)
                     .ok_or(RuntimeError::GenerationInvariant)?
-                    .matcher
                     .pattern_count();
                 work = work
                     .checked_add(
@@ -4706,14 +4841,14 @@ fn evaluate_matcher_operand_cached(
     evaluation_mode: EvaluationMode,
     cache: Option<&mut StageScanCache>,
 ) -> Result<bool, RuntimeError> {
-    let matcher = generation.groups.get(group).ok_or(RuntimeError::GenerationInvariant)?;
+    let matcher = generation.matcher_at(group).ok_or(RuntimeError::GenerationInvariant)?;
     let scratch = group_scratch.get_mut(group).ok_or(RuntimeError::GenerationInvariant)?;
     let end = pattern_start
         .checked_add(pattern_count)
         .ok_or(RuntimeError::Arithmetic)?;
-    if cache.as_ref().is_some_and(|cache| cache.scanned.contains(&group)) {
+    if cache.as_ref().is_some_and(|cache| cache.contains(group)) {
         let scratch = scratch.as_mut().ok_or(RuntimeError::GenerationInvariant)?;
-        let result = scratch.contains_any_in_range(matcher.matcher.pattern_count(), pattern_start..end);
+        let result = scratch.contains_any_in_range(matcher.pattern_count(), pattern_start..end);
         #[cfg(test)]
         measurements::record(Event::RangeQueries, 1);
         #[cfg(test)]
@@ -4722,16 +4857,13 @@ fn evaluate_matcher_operand_cached(
     }
     // Capacity was admitted by the collector before this callback. No hidden
     // growth is permitted in the canonical matcher seam.
-    if cache
-        .as_ref()
-        .is_some_and(|cache| cache.scanned.len() == cache.scanned.capacity())
-    {
+    if cache.as_ref().is_some_and(|cache| cache.full()) {
         return Err(RuntimeError::GenerationInvariant);
     }
-    let scratch = lazy_group_scratch(scratch, &matcher.matcher);
+    let scratch = lazy_group_scratch(scratch, matcher);
     let matches = match evaluation_mode {
-        EvaluationMode::Accelerated => matcher.matcher.scan(input, scratch),
-        EvaluationMode::Reference => matcher.matcher.scan_reference(input, scratch),
+        EvaluationMode::Accelerated => matcher.scan(input, scratch),
+        EvaluationMode::Reference => matcher.scan_reference(input, scratch),
     }
     .map_err(map_matcher_error)?;
     #[cfg(test)]
@@ -4743,7 +4875,7 @@ fn evaluate_matcher_operand_cached(
     measurements::record(Event::RangeQueryFailures, usize::from(result.is_none()));
     let result = result.ok_or(RuntimeError::GenerationInvariant)?;
     if let Some(cache) = cache {
-        cache.scanned.push(group);
+        cache.insert(group)?;
         #[cfg(test)]
         {
             cache.scans += 1;
@@ -4835,6 +4967,8 @@ fn evaluate_operator(
                     .map_err(map_regex_scratch_error)
             }
             super::RegexPlanRef::Capture(program) => {
+                #[cfg(test)]
+                measurements::record(Event::CaptureBooleanSearches, 1);
                 let regex = generation
                     .capture_regexes
                     .get(program)

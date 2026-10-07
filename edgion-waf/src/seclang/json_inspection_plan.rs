@@ -1,4 +1,5 @@
 //! Immutable fused JSON dispatch. Owns no request values or runtime fact matrix.
+use crate::bounded_sort::heapsort_by as sort;
 use std::cmp::Ordering;
 
 use super::*;
@@ -91,6 +92,7 @@ pub(super) struct JsonRegexRow {
 
 #[derive(Debug, Default)]
 pub(super) struct CompiledJsonPlan {
+    pub capture_hits: capture_hit_plan::DomainHits,
     pub members: Vec<JsonMemberPlan>,
     pub xml_text: Vec<usize>,
     pub xml_attributes: Vec<usize>,
@@ -162,44 +164,6 @@ fn compare_names(
         }
     }
     Ok(a.len().cmp(&b.len()))
-}
-
-// Fallible heapsort keeps comparison budgets exact without allocating an index
-// copy or hiding an error inside a standard-library comparator.
-fn sort<T: Copy>(
-    values: &mut [T],
-    mut compare: impl FnMut(T, T) -> Result<Ordering, CompilerError>,
-) -> Result<(), CompilerError> {
-    fn sift<T: Copy>(
-        values: &mut [T],
-        mut root: usize,
-        compare: &mut impl FnMut(T, T) -> Result<Ordering, CompilerError>,
-    ) -> Result<(), CompilerError> {
-        while let Some(left) = root
-            .checked_mul(2)
-            .and_then(|v| v.checked_add(1))
-            .filter(|v| *v < values.len())
-        {
-            let mut child = left;
-            if left + 1 < values.len() && compare(values[left], values[left + 1])? == Ordering::Less {
-                child += 1;
-            }
-            if compare(values[root], values[child])? != Ordering::Less {
-                break;
-            }
-            values.swap(root, child);
-            root = child;
-        }
-        Ok(())
-    }
-    for root in (0..values.len() / 2).rev() {
-        sift(values, root, &mut compare)?;
-    }
-    for end in (1..values.len()).rev() {
-        values.swap(0, end);
-        sift(&mut values[..end], 0, &mut compare)?;
-    }
-    Ok(())
 }
 
 fn transforms(generation: &CompiledGeneration, member: usize) -> Result<&[TransformationKind], CompilerError> {

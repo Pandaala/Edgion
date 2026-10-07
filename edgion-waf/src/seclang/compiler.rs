@@ -25,6 +25,8 @@ pub(super) enum InspectionDomain {
 #[path = "xml_inspection_plan.rs"]
 mod xml_inspection_plan;
 pub use xml_inspection_plan::{XmlInspectionUnsupported, XmlInspectionUnsupportedReason};
+#[path = "capture_hit_plan.rs"]
+mod capture_hit_plan;
 #[path = "expensive_checks.rs"]
 mod expensive_checks;
 #[path = "inspection_activation.rs"]
@@ -757,6 +759,7 @@ struct CompiledMatcherGroup {
 
 #[derive(Debug)]
 struct GroupedMatcherState<'source> {
+    pattern_preflight: GroupPatternPreflight,
     canonical_work: CanonicalWork,
     matchers: MatcherState<'source>,
     target_bytes: Vec<u8>,
@@ -801,6 +804,7 @@ struct CompiledMarker {
 #[derive(Debug)]
 #[expect(dead_code, reason = "transaction execution consumes the immutable compiled arenas")]
 pub struct CompiledGeneration {
+    capture_hits: capture_hit_plan::CaptureHitPlan,
     has_expensive_checks: bool,
     inspection_activation: inspection_activation::CompiledActivation,
     json_inspection: json_inspection_plan::CompiledJsonPlan,
@@ -1582,20 +1586,26 @@ impl CanonicalSlot {
     }
 }
 
-/// Compilation-local identity for capture-bearing PCRE byte programs only.
-/// Sources borrow the validated arena; no source copy survives publication.
-struct CaptureRegexInterner<'source> {
-    slots: Vec<CanonicalSlot>,
-    sources: Vec<&'source str>,
+#[derive(Clone, Copy)]
+struct RegexProgramSource<'source> {
+    source: &'source str,
+    ascii_case_insensitive: bool,
 }
-impl<'source> CaptureRegexInterner<'source> {
+
+/// Compilation-local identity for exact source and byte compilation profile.
+/// Sources borrow the validated arena; no source copy survives publication.
+struct RegexProgramInterner<'source> {
+    slots: Vec<CanonicalSlot>,
+    sources: Vec<RegexProgramSource<'source>>,
+}
+impl<'source> RegexProgramInterner<'source> {
     fn new(occurrences: usize, memory: &mut MatcherCompileWork) -> Result<Self, CompilerError> {
         // A single occurrence cannot share a program, so it needs no index.
         let references = if occurrences > 1 { occurrences } else { 0 };
         let count = canonical_table_slots(references)?;
         memory.retain_working_records::<CanonicalSlot>(count)?;
         let mut slots = Vec::new();
-        reserve_exact(&mut slots, count, "capture regex canonical table")?;
+        reserve_exact(&mut slots, count, "regex canonical table")?;
         memory.retain_working_records::<CanonicalSlot>(
             slots
                 .capacity()
@@ -1603,10 +1613,10 @@ impl<'source> CaptureRegexInterner<'source> {
                 .ok_or(CompilerError::PreflightArithmetic)?,
         )?;
         slots.resize(count, CanonicalSlot::EMPTY);
-        memory.retain_working_records::<&str>(references)?;
+        memory.retain_working_records::<RegexProgramSource<'_>>(references)?;
         let mut sources = Vec::new();
-        reserve_exact(&mut sources, references, "capture regex source references")?;
-        memory.retain_working_records::<&str>(
+        reserve_exact(&mut sources, references, "regex source references")?;
+        memory.retain_working_records::<RegexProgramSource<'_>>(
             sources
                 .capacity()
                 .checked_sub(references)
@@ -1623,10 +1633,25 @@ impl<'source> CaptureRegexInterner<'source> {
         memory: &mut MatcherCompileWork,
         work: &mut CanonicalWork,
     ) -> Result<usize, CompilerError> {
+        self.compile_with(source, false, programs, memory, work, |memory| {
+            memory.compile_capture_regex(source, location, true)
+        })
+    }
+
+    fn compile_with<P>(
+        &mut self,
+        source: &'source str,
+        ascii_case_insensitive: bool,
+        programs: &mut Vec<P>,
+        memory: &mut MatcherCompileWork,
+        work: &mut CanonicalWork,
+        build: impl FnOnce(&mut MatcherCompileWork) -> Result<P, CompilerError>,
+    ) -> Result<usize, CompilerError> {
         let mut hash = FNV1A_OFFSET_BASIS;
         let position = if self.slots.is_empty() {
             None
         } else {
+            work.hash_u64(&mut hash, u64::from(ascii_case_insensitive), memory.limits)?;
             work.hash_bytes(&mut hash, source.as_bytes(), memory.limits)?;
             let mask = self
                 .slots
@@ -1645,9 +1670,10 @@ impl<'source> CaptureRegexInterner<'source> {
                     let previous = self.sources.get(slot.id).ok_or(CompilerError::PrivateInvariant {
                         kind: CompilerInvariant::InvalidByteRange,
                     })?;
-                    let mut equal = previous.len() == source.len();
+                    let mut equal = previous.ascii_case_insensitive == ascii_case_insensitive
+                        && previous.source.len() == source.len();
                     if equal {
-                        for (&a, &b) in previous.as_bytes().iter().zip(source.as_bytes()) {
+                        for (&a, &b) in previous.source.as_bytes().iter().zip(source.as_bytes()) {
                             work.charge_comparison_bytes(1, memory.limits)?;
                             if a != b {
                                 equal = false;
@@ -1669,11 +1695,14 @@ impl<'source> CaptureRegexInterner<'source> {
                 kind: CompilerInvariant::InvalidByteRange,
             });
         }
-        let program = memory.compile_capture_regex(source, location, true)?;
+        let program = build(memory)?;
         let id = programs.len();
         programs.push(program);
         if let Some(position) = position {
-            self.sources.push(source);
+            self.sources.push(RegexProgramSource {
+                source,
+                ascii_case_insensitive,
+            });
             self.slots[position] = CanonicalSlot { hash, id };
         }
         Ok(id)
@@ -1684,7 +1713,7 @@ impl<'source> CaptureRegexInterner<'source> {
         let sources = self.sources.capacity();
         drop(self);
         memory.drop_working_records::<CanonicalSlot>(slots);
-        memory.drop_working_records::<&str>(sources);
+        memory.drop_working_records::<RegexProgramSource<'_>>(sources);
     }
 }
 
@@ -2738,6 +2767,8 @@ impl<'source> MatcherState<'source> {
         debug_assert_eq!(regex_candidates.len(), candidate_count);
         target_ids.fill(usize::MAX);
 
+        let mut canonical_work = CanonicalWork::default();
+        let mut selector_interner = RegexProgramInterner::new(target_regex_count, &mut work)?;
         for unit in state.validated.active_rule_units() {
             for member in unit.members() {
                 for target in member.final_targets() {
@@ -2748,13 +2779,21 @@ impl<'source> MatcherState<'source> {
                     if target_ids[identity] != usize::MAX {
                         continue;
                     }
-                    let program = if target.collection() == CollectionKind::Tx {
-                        work.compile_ascii_case_insensitive_boolean_regex(body.text(), target.location(), true)?
-                    } else {
-                        work.compile_boolean_regex(body.text(), target.location(), true)?
-                    };
-                    let program_id = boolean_regexes.len();
-                    boolean_regexes.push(program);
+                    let ascii_case_insensitive = target.collection() == CollectionKind::Tx;
+                    let program_id = selector_interner.compile_with(
+                        body.text(),
+                        ascii_case_insensitive,
+                        &mut boolean_regexes,
+                        &mut work,
+                        &mut canonical_work,
+                        |work| {
+                            if ascii_case_insensitive {
+                                work.compile_ascii_case_insensitive_boolean_regex(body.text(), target.location(), true)
+                            } else {
+                                work.compile_boolean_regex(body.text(), target.location(), true)
+                            }
+                        },
+                    )?;
                     let plan_id = target_regexes.len();
                     target_regexes.push(CompiledTargetRegexPlan {
                         identity: target.location(),
@@ -2771,8 +2810,8 @@ impl<'source> MatcherState<'source> {
             }
         }
 
-        let mut capture_interner = CaptureRegexInterner::new(regex_counts.active_capture, &mut work)?;
-        let mut canonical_work = CanonicalWork::default();
+        selector_interner.release(&mut work);
+        let mut capture_interner = RegexProgramInterner::new(regex_counts.active_capture, &mut work)?;
         let mut member_index = 0_usize;
         for unit in state.validated.rule_units() {
             for member in unit.members() {
@@ -3328,9 +3367,17 @@ impl<'source> GroupedMatcherState<'source> {
             });
         }
 
-        let final_regex_programs = state
+        // Selector identity records can share a program. Programs are inserted as
+        // a contiguous prefix before any operator-only boolean programs.
+        let target_boolean_programs = state
             .target_regexes
-            .len()
+            .iter()
+            .map(|selector| selector.program)
+            .max()
+            .map(checked_inc)
+            .transpose()?
+            .unwrap_or(0);
+        let final_regex_programs = target_boolean_programs
             .checked_add(state.capture_regexes.len())
             .and_then(|count| count.checked_add(group_has_regex.iter().filter(|present| **present).count()))
             .ok_or(CompilerError::PreflightArithmetic)?;
@@ -3421,8 +3468,12 @@ impl<'source> GroupedMatcherState<'source> {
                 },
             });
         }
-        let target_boolean_programs = state.target_regexes.len();
-        let dropped_boolean_bytes = state.boolean_regexes[target_boolean_programs..]
+        let dropped_boolean_bytes = state
+            .boolean_regexes
+            .get(target_boolean_programs..)
+            .ok_or(CompilerError::PrivateInvariant {
+                kind: CompilerInvariant::InvalidByteRange,
+            })?
             .iter()
             .try_fold(0_usize, |total, program| total.checked_add(program.memory_usage()))
             .ok_or(CompilerError::PreflightArithmetic)?;
@@ -3461,6 +3512,7 @@ impl<'source> GroupedMatcherState<'source> {
         compile_work.drop_working_records::<usize>(active_members);
 
         Ok(Self {
+            pattern_preflight,
             matchers: state,
             canonical_work,
             target_bytes,
@@ -3653,6 +3705,7 @@ impl CompiledGeneration {
                 .ok_or(CompilerError::PreflightArithmetic)?,
         );
         let GroupedMatcherState {
+            pattern_preflight,
             matchers,
             target_bytes,
             target_records,
@@ -3674,6 +3727,7 @@ impl CompiledGeneration {
             ..
         } = matchers;
         let AssetTemplateState {
+            validated,
             bytes,
             templates,
             segments,
@@ -3818,6 +3872,7 @@ impl CompiledGeneration {
                 .then(left.unit.cmp(&right.unit))
         });
         let mut generation = Self {
+            capture_hits: capture_hit_plan::CaptureHitPlan::default(),
             inspection_activation: inspection_activation::CompiledActivation::default(),
             json_inspection: json_inspection_plan::CompiledJsonPlan::default(),
             xml_inspection: json_inspection_plan::CompiledJsonPlan::default(),
@@ -3862,7 +3917,38 @@ impl CompiledGeneration {
             &mut state.canonical_work,
             InspectionDomain::Xml,
         )?;
+        capture_hit_plan::compile_optional(
+            &mut generation,
+            &validated,
+            pattern_preflight,
+            &mut work,
+            &mut state.canonical_work,
+        )?;
+        for program in &mut generation.boolean_regexes {
+            install_optional_regex_hint(
+                program,
+                limits.regex.max_program_bytes,
+                &mut work,
+                &mut state.canonical_work,
+            )?;
+        }
+        for matcher in generation
+            .groups
+            .iter_mut()
+            .map(|group| &mut group.matcher)
+            .chain(generation.capture_hits.matchers.iter_mut())
+        {
+            if let Some(program) = matcher.regex_program_mut() {
+                install_optional_regex_hint(
+                    program,
+                    limits.matcher.max_regex_program_bytes,
+                    &mut work,
+                    &mut state.canonical_work,
+                )?;
+            }
+        }
         generation.compiler_owned_bytes = work.compiler_owned_bytes;
+        generation.matcher_charged_bytes = work.matcher_charged_bytes;
         generation.peak_bytes = work.peak_bytes;
         generation.prefix_validation = generation.check_request_body_prefix();
         generation.requires_complete_request_body = generation.has_complete_request_body_dependency();
@@ -3882,6 +3968,7 @@ pub fn compile_validated(
     CompiledGeneration::publish(grouped, limits)
 }
 
+#[derive(Clone, Copy)]
 struct MatcherCompileWork {
     limits: CompilerLimits,
     validated_bytes: usize,
@@ -3890,6 +3977,62 @@ struct MatcherCompileWork {
     matcher_charged_bytes: usize,
     peak_bytes: usize,
     requirement_cursors: [usize; 8],
+}
+
+fn install_optional_regex_hint(
+    program: &mut CompiledRegexProgram,
+    program_cap: usize,
+    work: &mut MatcherCompileWork,
+    canonical: &mut CanonicalWork,
+) -> Result<(), CompilerError> {
+    let base = work.matcher_peak_base()?;
+    let generation_bytes = work
+        .compiler_owned_bytes
+        .checked_add(work.matcher_charged_bytes)
+        .ok_or(CompilerError::PreflightArithmetic)?;
+    let owned = work
+        .limits
+        .max_compiled_matcher_bytes
+        .saturating_sub(work.matcher_charged_bytes)
+        .min(work.limits.max_generation_bytes.saturating_sub(generation_bytes))
+        .min(program_cap.saturating_sub(program.memory_usage().max(program.conservative_program_memory_bound())));
+    let mut budget = crate::matcher::RegexGuardBudget {
+        owned,
+        peak: work.limits.max_compilation_peak_bytes.saturating_sub(base),
+        work: work
+            .limits
+            .max_group_key_record_comparisons
+            .saturating_sub(canonical.record_comparisons),
+    };
+    let (simple, installed) = program.lower_simple(budget).map_err(|error| match error {
+        RegexProgramError::Arithmetic => CompilerError::PreflightArithmetic,
+        _ => CompilerError::PrivateInvariant {
+            kind: CompilerInvariant::InvalidByteRange,
+        },
+    })?;
+    canonical.charge_records(simple.work, work.limits)?;
+    if simple.peak != 0 {
+        work.record_matcher_peak(simple.peak)?;
+    }
+    if installed {
+        return Ok(());
+    }
+    budget.work = budget
+        .work
+        .checked_sub(simple.work)
+        .ok_or(CompilerError::PreflightArithmetic)?;
+    let outcome = program.add_literal_guard(budget).map_err(|error| match error {
+        RegexProgramError::Arithmetic => CompilerError::PreflightArithmetic,
+        _ => CompilerError::PrivateInvariant {
+            kind: CompilerInvariant::InvalidByteRange,
+        },
+    })?;
+    canonical.charge_records(outcome.work, work.limits)?;
+    if outcome.peak != 0 {
+        work.record_matcher_peak(outcome.peak)?;
+    }
+    work.retain_matcher(outcome.owned)?;
+    Ok(())
 }
 
 impl MatcherCompileWork {
@@ -4197,7 +4340,7 @@ fn compile_operator_plan<'view, 'source>(
     ip_networks: &mut Vec<CompiledIpNetwork>,
     boolean_regexes: &mut Vec<CompiledRegexProgram>,
     capture_regexes: &mut Vec<CompiledCaptureRegexProgram>,
-    capture_interner: &mut CaptureRegexInterner<'view>,
+    capture_interner: &mut RegexProgramInterner<'view>,
     canonical_work: &mut CanonicalWork,
     requirements: &mut [RequirementState],
     work: &mut MatcherCompileWork,

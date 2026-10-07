@@ -7,6 +7,8 @@ pub(crate) enum Event {
     GroupScratchInitializations,
     BooleanScratchInitializations,
     CaptureScratchInitializations,
+    CaptureBooleanSearches,
+    NameSelectorSearches,
     AvoidedPredicateGroups,
     GrammarInstances,
     SourceBytes,

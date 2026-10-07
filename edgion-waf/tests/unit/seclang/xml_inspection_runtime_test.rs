@@ -669,3 +669,42 @@ fn activation_xml_with_no_static_dispatch_keeps_syntax_namespace_and_utf8_failur
         assert!(fast.json_failure.is_some());
     }
 }
+
+#[test]
+fn xml_capture_hit_batches_share_detection_and_preserve_aliases_and_negation() {
+    let g = compile(concat!(
+        "SecRule XML:/*|XML://@* \"@rx (?P<word>a|aa)\" \"id:1,phase:2,pass,capture,setvar:tx.saved_word=%{TX.word},chain\"\n",
+        "SecRule TX:saved_word \"@streq a\" \"setvar:tx.chain=done\"\n",
+        "SecRule XML:/*|XML://@* \"@rx (?P<second>aa)\" \"id:2,phase:2,pass,capture,setvar:tx.saved_second=%{TX.second}\"\n",
+        "SecRule XML:/*|XML://@* \"!@rx forbidden\" \"id:3,phase:2,pass,capture,setvar:tx.safe=yes\"\n",
+    ));
+    assert_eq!(g.capture_hits.matchers.len(), 1);
+    assert!(!g.xml_inspection.capture_hits.batches.is_empty());
+    let xml = b"<r a='aa'>aa</r>";
+    let mut results = Vec::new();
+    for evaluation in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+        let scope = measurements::start();
+        let mut tx = transaction(&g, RuleEngineMode::On, RuntimeLimits::default());
+        tx.evaluation_mode = evaluation;
+        let mut session = tx
+            .start_xml_inspection(XmlInspectionLimits::default(), Some(xml.len()))
+            .unwrap();
+        for chunk in xml.chunks(1) {
+            session.feed(chunk).unwrap();
+        }
+        session.complete(xml.len()).unwrap();
+        session.finish(None).unwrap();
+        if evaluation == EvaluationMode::Accelerated {
+            assert_eq!(scope.counts().get(Event::FullScans), 2);
+            assert_eq!(scope.counts().get(Event::CaptureBooleanSearches), 0);
+        } else {
+            assert_eq!(scope.counts().get(Event::FullScans), 0);
+        }
+        results.push(tx.execute_request_body().unwrap());
+        assert_eq!(tx.tx_value(b"saved_word"), Some(b"a".as_slice()));
+        assert_eq!(tx.tx_value(b"saved_second"), Some(b"aa".as_slice()));
+        assert_eq!(tx.tx_value(b"chain"), Some(b"done".as_slice()));
+        assert_eq!(tx.tx_value(b"safe"), Some(b"yes".as_slice()));
+    }
+    assert_eq!(results[0], results[1]);
+}

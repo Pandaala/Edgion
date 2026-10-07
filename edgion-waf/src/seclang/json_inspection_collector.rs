@@ -59,6 +59,7 @@ struct GroupRun {
 }
 #[derive(Default)]
 struct DispatchScratch {
+    hit_eligible: Vec<bool>,
     groups: Vec<GroupRun>,
     profiles: Vec<usize>,
     stamps: Vec<usize>,
@@ -91,7 +92,8 @@ impl DispatchScratch {
             .checked_mul(size_of::<GroupRun>())
             .and_then(|v| v.checked_add(self.profiles.capacity().checked_mul(size_of::<usize>())?))
             .and_then(|v| v.checked_add(self.stamps.capacity().checked_mul(size_of::<usize>())?))
-            .and_then(|v| v.checked_add(self.cache.scanned.capacity().checked_mul(size_of::<usize>())?))
+            .and_then(|v| v.checked_add(self.hit_eligible.capacity()))
+            .and_then(|v| v.checked_add(self.cache.heap_capacity().checked_mul(size_of::<usize>())?))
             .ok_or(CollectorError::Store(StoreError::Arithmetic))
     }
     fn add(&mut self, id: usize, store: &mut ResultStore<'_>) -> Collected<()> {
@@ -163,14 +165,42 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         }
         let group_count = generation.inspection_plan(domain).groups.len();
         let profile_count = generation.inspection_plan(domain).profiles.len();
-        let scan_capacity = generation.inspection_plan(domain).matcher_scan_capacity;
+        let hit_plan = &generation.inspection_plan(domain).capture_hits;
+        let hit_count = hit_plan.batches.len();
+        let mut last = None;
+        let mut hit_matchers = 0;
+        for batch in &hit_plan.batches {
+            if last != Some(batch.matcher) {
+                hit_matchers += 1;
+                last = Some(batch.matcher);
+            }
+        }
+        let scan_capacity = generation
+            .inspection_plan(domain)
+            .matcher_scan_capacity
+            .checked_add(hit_matchers)
+            .ok_or(StoreError::Arithmetic)?;
+        if scan_capacity > generation.matcher_count() {
+            return Err(CollectorError::State);
+        }
+        let cache_storage = if generation.matcher_count() <= 64 {
+            ScanCacheStorage::Inline {
+                bits: 0,
+                capacity: scan_capacity,
+            }
+        } else {
+            ScanCacheStorage::Overflow(Vec::new())
+        };
         let capture_generation = generation.clone();
         let mut state = JsonCollectorState {
             store: ResultStore::new_domain(generation, runtime, mode, limits, domain)?,
             runtime,
             mode,
             transform: TransformScratch::default(),
-            dispatch: DispatchScratch::default(),
+            dispatch: DispatchScratch {
+                cache: StageScanCache::default().with_storage(cache_storage),
+                ..DispatchScratch::default()
+            },
             captures: JsonCaptureScratch {
                 generation: capture_generation,
                 builder: CaptureBuilder::default(),
@@ -189,14 +219,26 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
             &mut state.store,
         )?;
         reserve_scratch(&mut state.dispatch.stamps, group_count, &mut total, &mut state.store)?;
+        if let ScanCacheStorage::Overflow(scanned) = &mut state.dispatch.cache.storage {
+            reserve_scratch(scanned, scan_capacity, &mut total, &mut state.store)?;
+        } else {
+            // Preserve the existing reservation work limit while avoiding its heap.
+            state.store.charge_work(
+                scan_capacity
+                    .checked_mul(size_of::<usize>())
+                    .ok_or(StoreError::Arithmetic)?,
+            )?;
+        }
+        state.store.charge_work(group_count)?;
+        state.dispatch.stamps.resize(group_count, 0);
         reserve_scratch(
-            &mut state.dispatch.cache.scanned,
-            scan_capacity,
+            &mut state.dispatch.hit_eligible,
+            hit_count,
             &mut total,
             &mut state.store,
         )?;
-        state.store.charge_work(group_count)?;
-        state.dispatch.stamps.resize(group_count, 0);
+        state.store.charge_work(hit_count)?;
+        state.dispatch.hit_eligible.resize(hit_count, false);
         Ok(Self { state, context })
     }
     pub(super) fn resume(
@@ -241,6 +283,7 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         let dispatch_work_before = self.store.usage().work;
         let generation = self.context.generation;
         let plan = generation.inspection_plan(self.state.store.domain());
+        let mut name_cache = NameSelectorCache::default();
         let deferred = exact_name_match(generation, &plan.named_demands, name, &mut self.state.store)?;
         let mut retain = deferred
             || plan.needs_all_candidate_names
@@ -260,6 +303,8 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
                     selector,
                     name,
                     &mut self.state.store,
+                    &mut name_cache,
+                    self.state.mode,
                 )? {
                     retain = true;
                     break;
@@ -325,6 +370,8 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
                         row.selector,
                         name,
                         &mut self.state.store,
+                        &mut name_cache,
+                        self.state.mode,
                     )?
                 {
                     self.state.dispatch.add(row.group, &mut self.state.store)?;
@@ -370,6 +417,9 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
                 context: &mut self.context,
                 groups: &mut self.state.dispatch.groups[start..end],
                 cache: &mut self.state.dispatch.cache,
+                hit_eligible: &mut self.state.dispatch.hit_eligible,
+                stamps: &mut self.state.dispatch.stamps,
+                epoch: &mut self.state.dispatch.epoch,
                 captures: &mut self.state.captures,
                 candidate,
                 profile: profile_id,
@@ -735,23 +785,57 @@ fn exact_name_match(
     }
     Ok(false)
 }
+/// Successful raw-name selector results for this semantic field only.
+#[derive(Default)]
+struct NameSelectorCache {
+    seen: u64,
+    matched: u64,
+}
+impl NameSelectorCache {
+    fn get(&self, program: usize) -> Option<bool> {
+        let bit = 1_u64.checked_shl(u32::try_from(program).ok()?)?;
+        (self.seen & bit != 0).then_some(self.matched & bit != 0)
+    }
+    fn insert(&mut self, program: usize, matched: bool) {
+        let Some(bit) = u32::try_from(program).ok().and_then(|id| 1_u64.checked_shl(id)) else {
+            return;
+        };
+        self.seen |= bit;
+        if matched {
+            self.matched |= bit;
+        }
+    }
+}
 fn match_name(
     generation: &CompiledGeneration,
     scratch: &mut [Option<RegexBooleanScratch>],
     selector: super::super::CompiledTargetSelector,
     name: &[u8],
     store: &mut ResultStore<'_>,
+    cache: &mut NameSelectorCache,
+    mode: EvaluationMode,
 ) -> Collected<bool> {
     store.charge_work(name.len().checked_add(1).ok_or(StoreError::Arithmetic)?)?;
     match selector {
         super::super::CompiledTargetSelector::Regex { program, .. } => {
             let regex = generation.boolean_regexes.get(program).ok_or(CollectorError::State)?;
             let slot = scratch.get_mut(program).ok_or(CollectorError::State)?;
+            if mode == EvaluationMode::Accelerated {
+                if let Some(matched) = cache.get(program) {
+                    return Ok(matched);
+                }
+            }
             let scratch = lazy_boolean_scratch(slot, regex);
-            regex
+            #[cfg(test)]
+            measurements::record(Event::NameSelectorSearches, 1);
+            let matched = regex
                 .is_match(name, scratch)
                 .map_err(map_regex_scratch_error)
-                .map_err(Into::into)
+                .map_err(CollectorError::from)?;
+            if mode == EvaluationMode::Accelerated {
+                cache.insert(program, matched);
+            }
+            Ok(matched)
         }
         _ => Err(CollectorError::State),
     }
@@ -779,6 +863,9 @@ struct ProfileObserver<'a, 'call, 'generation> {
     context: &'a mut SingleInputContext<'call>,
     groups: &'a mut [GroupRun],
     cache: &'a mut StageScanCache,
+    hit_eligible: &'a mut [bool],
+    stamps: &'a mut [usize],
+    epoch: &'a mut usize,
     captures: &'a mut JsonCaptureScratch<'generation>,
     candidate: CandidateId,
     profile: usize,
@@ -854,9 +941,36 @@ impl TransformObserver for ProfileObserver<'_, '_, '_> {
         Ok(())
     }
     fn stage(&mut self, ordinal: usize, value: &[u8]) -> Collected<()> {
-        self.store.charge_work(self.cache.scanned.len())?;
-        self.cache.scanned.clear();
+        self.store.charge_work(self.cache.len())?;
+        self.cache.clear();
         let generation = self.context.generation;
+        let hits = &generation.inspection_plan(self.store.domain()).capture_hits;
+        if self.mode == EvaluationMode::Accelerated && !hits.batches.is_empty() {
+            if *self.epoch == usize::MAX {
+                self.store.charge_work(self.stamps.len())?;
+                self.stamps.fill(0);
+                *self.epoch = 1;
+            } else {
+                *self.epoch += 1;
+            }
+            self.store.charge_work(self.groups.len())?;
+            for run in &*self.groups {
+                if !run.terminal {
+                    *self.stamps.get_mut(run.id).ok_or(CollectorError::State)? = *self.epoch;
+                }
+            }
+            for (id, batch) in hits.batches.iter().enumerate() {
+                self.store.charge_work(1)?;
+                if batch.profile != self.profile {
+                    continue;
+                }
+                let end = batch.start.checked_add(batch.count).ok_or(StoreError::Arithmetic)?;
+                let peers = hits.peers.get(batch.start..end).ok_or(CollectorError::State)?;
+                self.store.charge_work(peers.len())?;
+                *self.hit_eligible.get_mut(id).ok_or(CollectorError::State)? =
+                    peers.iter().all(|&id| self.stamps.get(id) == Some(&*self.epoch));
+            }
+        }
         let share_stage = self.groups.len() > 1;
         let mut stage_match = None;
         for run in &mut *self.groups {
@@ -884,6 +998,28 @@ impl TransformObserver for ProfileObserver<'_, '_, '_> {
                 limits: self.runtime,
                 evaluation_mode: self.mode,
             };
+            let hit_matcher = if self.mode == EvaluationMode::Accelerated {
+                hits.bindings
+                    .get(run.id)
+                    .copied()
+                    .flatten()
+                    .filter(|binding| self.hit_eligible.get(binding.batch) == Some(&true))
+                    .map(|binding| {
+                        let batch = hits.batches.get(binding.batch).ok_or(CollectorError::State)?;
+                        Ok::<_, CollectorError>(super::super::CompiledOperatorPlan {
+                            kind: operator.kind,
+                            negated: false,
+                            operand: super::super::CompiledOperatorOperand::Matcher {
+                                group: batch.matcher,
+                                pattern_start: binding.pattern,
+                                pattern_count: 1,
+                            },
+                        })
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
             let mut context = SingleInputContext {
                 generation,
                 request: self.context.request,
@@ -906,8 +1042,14 @@ impl TransformObserver for ProfileObserver<'_, '_, '_> {
             measurements::record(Event::OperatorStages, 1);
             let result = (|| {
                 self.captures.validate_generation(generation)?;
-                let result =
-                    inspect_predicate_stage_into(&mut context, &plan, value, &mut observer, &mut self.captures.builder);
+                let result = inspect_predicate_stage_with_hit_matcher(
+                    &mut context,
+                    &plan,
+                    value,
+                    &mut observer,
+                    &mut self.captures.builder,
+                    hit_matcher,
+                );
                 match result {
                     Ok(true) => {
                         let outcome = if let Some(token) = stage_match {

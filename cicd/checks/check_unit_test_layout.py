@@ -210,6 +210,10 @@ SCOPED_EXCEPTIONS = {
         "test-only boolean cache first-use measurement at the owning operation",
     ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::CaptureScratchInitializations\b")):
         "test-only capture cache first-use measurement at the owning operation",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::CaptureBooleanSearches\b")):
+        "test-only original capture hit-search count at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::NameSelectorSearches\b")):
+        "test-only raw-name selector search count at the owning operation",
     ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"if context\.tx\.force_unpruned_inspection \{")):
         "test-only branch bypassing optional static activation proof",
     ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::AvoidedPredicateGroups\b")):

@@ -4,6 +4,703 @@ fn ids(results: MatchResults<'_>) -> Vec<usize> {
     results.iter().map(PatternId::as_usize).collect()
 }
 
+impl CompiledMatcher {
+    pub(crate) fn test_regex_counts(&self) -> (usize, usize) {
+        (self.regex_pattern_ids.len(), self.regex_physical_pattern_count())
+    }
+    pub(crate) fn test_guard_stats(&self) -> (usize, usize) {
+        self.regex
+            .as_ref()
+            .map_or((0, 0), CompiledRegexProgram::test_guard_stats)
+    }
+    pub(crate) fn test_simple_count(&self) -> usize {
+        self.regex.as_ref().map_or(0, CompiledRegexProgram::test_simple_count)
+    }
+}
+
+impl CompiledRegexProgram {
+    pub(crate) fn test_simple_count(&self) -> usize {
+        usize::from(matches!(self.execution_hint, RegexExecutionHint::Simple(_)))
+    }
+    pub(crate) fn test_guard_stats(&self) -> (usize, usize) {
+        let RegexExecutionHint::Guard(guards) = &self.execution_hint else {
+            return (0, 0);
+        };
+        (
+            guards.len(),
+            guards.iter().map(AhoCorasick::memory_usage).sum::<usize>() + guards.capacity() * size_of::<AhoCorasick>(),
+        )
+    }
+}
+
+#[test]
+fn exact_simple_regex_matches_original_vm_for_anchors_empty_and_raw_bytes() {
+    assert_eq!(size_of::<RegexExecutionHint>(), 32);
+    for source in [
+        "alpha",
+        "^alpha",
+        "alpha$",
+        "^alpha$",
+        "",
+        "^",
+        "$",
+        "^$",
+        "\\Aalpha\\z",
+        "abc\\x00",
+        "\\xFFabc",
+        "écho",
+        "(?s:alpha)",
+        "1234567890123456",
+    ] {
+        let mut program = CompiledRegexProgram::compile_one_pcre_bytes_with_peak_budget(
+            source,
+            RegexProgramLimits::default(),
+            usize::MAX,
+        )
+        .unwrap();
+        let before = program.memory_usage();
+        let (proof, installed) = program.lower_simple(guard_budget()).unwrap();
+        assert!(installed, "source={source}");
+        assert_eq!(proof.owned, 0);
+        assert_eq!(program.memory_usage(), before);
+        assert!(proof.work <= 64);
+        let mut scratch = program.create_scratch();
+        let mut oracle = program.core.vm.create_cache();
+        let mut seed = 57_u64;
+        for length in 0..128 {
+            let mut input = (0..length)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    (seed >> 32) as u8
+                })
+                .collect::<Vec<_>>();
+            for tail in [
+                b"".as_slice(),
+                b"alpha",
+                b"alpha\n",
+                b"ALPHA",
+                b"abc\0",
+                b"\xffabc",
+                "écho".as_bytes(),
+                b"1234567890123456",
+            ] {
+                let base = input.len();
+                input.extend_from_slice(tail);
+                assert_eq!(
+                    program.is_match(&input, &mut scratch).unwrap(),
+                    program.core.vm.is_match(&mut oracle, &input),
+                    "source={source} length={length}"
+                );
+                input.truncate(base);
+            }
+        }
+    }
+}
+
+#[test]
+fn exact_simple_regex_declines_unsupported_shapes_and_admits_bounded_proof() {
+    for source in [
+        "(?m:^alpha)",
+        "(?m:alpha$)",
+        "\\balpha\\b",
+        "alpha|beta",
+        "alpha?",
+        "alpha+",
+        "[a-z]",
+        "(?i:alpha)",
+        "12345678901234567",
+        "a$z",
+    ] {
+        let mut program = CompiledRegexProgram::compile_one_pcre_bytes_with_peak_budget(
+            source,
+            RegexProgramLimits::default(),
+            usize::MAX,
+        )
+        .unwrap();
+        let (proof, installed) = program.lower_simple(guard_budget()).unwrap();
+        assert!(!installed, "source={source}");
+        assert!(proof.work <= 64);
+        assert!(matches!(program.execution_hint, RegexExecutionHint::None));
+    }
+    for budget in [
+        RegexGuardBudget {
+            work: 1,
+            ..guard_budget()
+        },
+        RegexGuardBudget {
+            peak: REGEX_SIMPLE_PROOF_BYTES - 1,
+            ..guard_budget()
+        },
+    ] {
+        let mut program = CompiledRegexProgram::compile_one("alpha", RegexProgramLimits::default()).unwrap();
+        let (proof, installed) = program.lower_simple(budget).unwrap();
+        assert!(!installed);
+        assert!(proof.work <= budget.work);
+        assert!(proof.peak <= budget.peak);
+    }
+}
+
+#[test]
+fn exact_simple_regex_preserves_physical_bit_fanout_and_foreign_owner_checks() {
+    let patterns = [
+        PatternSpec::Regex("^alpha$"),
+        PatternSpec::Phrase {
+            value: "alpha",
+            ascii_case_insensitive: false,
+        },
+        PatternSpec::Regex("^alpha$"),
+    ];
+    let mut matcher = CompiledMatcher::compile_pcre_bytes(&patterns, MatcherLimits::default()).unwrap();
+    assert!(
+        matcher
+            .regex_program_mut()
+            .unwrap()
+            .lower_simple(guard_budget())
+            .unwrap()
+            .1
+    );
+    let mut scratch = matcher.create_scratch();
+    for input in [b"alpha".as_slice(), b"alpha\n", b"otheralpha", b"", b"alpha"] {
+        let expected = ids(matcher.scan_reference(input, &mut scratch).unwrap());
+        assert_eq!(ids(matcher.scan(input, &mut scratch).unwrap()), expected);
+    }
+    let foreign = CompiledRegexProgram::compile_one("other", RegexProgramLimits::default()).unwrap();
+    let program = matcher.regex.as_ref().unwrap();
+    assert_eq!(
+        program.is_match(b"alpha", &mut foreign.create_scratch()),
+        Err(RegexScratchError::ScratchShape)
+    );
+}
+
+#[test]
+fn exact_simple_regex_has_exact_work_and_peak_admission() {
+    let compile = || CompiledRegexProgram::compile_one("alpha", RegexProgramLimits::default()).unwrap();
+    let exact_work = compile().lower_simple(guard_budget()).unwrap().0.work;
+    for (work, peak, installs) in [
+        (exact_work, REGEX_SIMPLE_PROOF_BYTES, true),
+        (exact_work - 1, REGEX_SIMPLE_PROOF_BYTES, false),
+        (exact_work, REGEX_SIMPLE_PROOF_BYTES - 1, false),
+    ] {
+        let mut program = compile();
+        let (proof, installed) = program
+            .lower_simple(RegexGuardBudget {
+                work,
+                peak,
+                ..guard_budget()
+            })
+            .unwrap();
+        assert_eq!(installed, installs);
+        assert!(proof.work <= work && proof.peak <= peak);
+    }
+}
+
+#[test]
+#[ignore = "explicit release timing witness"]
+fn exact_simple_regex_release_witness() {
+    for source in ["alpha", "^alpha", "alpha$", "^alpha$"] {
+        let mut matcher =
+            CompiledMatcher::compile_pcre_bytes(&[PatternSpec::Regex(source)], MatcherLimits::default()).unwrap();
+        assert!(
+            matcher
+                .regex_program_mut()
+                .unwrap()
+                .lower_simple(guard_budget())
+                .unwrap()
+                .1
+        );
+        for bytes in [16, 1024, 8192] {
+            for hit in [false, true] {
+                let mut input = vec![b'z'; bytes];
+                if hit {
+                    if source == "^alpha$" {
+                        input = b"alpha".to_vec();
+                    } else if source.starts_with('^') {
+                        input[..5].copy_from_slice(b"alpha");
+                    } else {
+                        input.extend_from_slice(b"alpha");
+                    }
+                }
+                for reverse in [false, true] {
+                    for accelerated in if reverse { [true, false] } else { [false, true] } {
+                        let mut scratch = matcher.create_scratch();
+                        let mut samples = Vec::new();
+                        for sample in 0..24 {
+                            let start = std::time::Instant::now();
+                            for _ in 0..100 {
+                                let results = if accelerated {
+                                    matcher.scan(&input, &mut scratch)
+                                } else {
+                                    matcher.scan_reference(&input, &mut scratch)
+                                }
+                                .unwrap();
+                                assert_eq!(results.contains_any_in_range(0..1), Some(hit));
+                                std::hint::black_box(results);
+                            }
+                            if sample >= 3 {
+                                samples.push(start.elapsed().as_nanos() / 100);
+                            }
+                        }
+                        samples.sort_unstable();
+                        println!("Simple timing source={source} input_bytes={} hit={hit} reverse={reverse} accelerated={accelerated} p50_ns={}", input.len(), samples[10]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn guard_budget() -> RegexGuardBudget {
+    RegexGuardBudget {
+        owned: 512 * 1024,
+        peak: 8 * 1024 * 1024,
+        work: 8192,
+    }
+}
+
+#[test]
+fn necessary_prefix_guard_preserves_original_vm_over_bytes_flags_and_branches() {
+    for source in [
+        "alpha[0-9]",
+        "^alpha.*beta$",
+        "alpha(?:x|y)",
+        "(?:alpha)?beta",
+        "alpha+",
+        "(?i:alpha)",
+        "écho.*",
+        "\\xFFabc[0-9]",
+        "\\x00abc",
+        "",
+        "a*",
+        "alpha|beta",
+        "abc{1000}",
+    ] {
+        let mut program = CompiledRegexProgram::compile_one_pcre_bytes_with_peak_budget(
+            source,
+            RegexProgramLimits::default(),
+            usize::MAX,
+        )
+        .unwrap();
+        let before = program.memory_usage();
+        let outcome = program.add_literal_guard(guard_budget()).unwrap();
+        assert_eq!(program.memory_usage(), before + outcome.owned);
+        assert!(outcome.work <= 8192);
+        assert!(outcome.peak <= guard_budget().peak);
+        let mut scratch = program.create_scratch();
+        let mut reference = program.core.vm.create_cache();
+        let mut seed = 31_u64;
+        for length in 0..256 {
+            let mut input = (0..length)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    (seed >> 32) as u8
+                })
+                .collect::<Vec<_>>();
+            for tail in [
+                b"".as_slice(),
+                b"alpha1",
+                b"alpha!",
+                b"ALPHA2",
+                b"beta",
+                b"alpha\n\nbeta",
+                "écho!".as_bytes(),
+                b"\xffabc3",
+                b"\x00abc",
+            ] {
+                let base = input.len();
+                input.extend_from_slice(tail);
+                assert_eq!(
+                    program.is_match(&input, &mut scratch).unwrap(),
+                    program.core.vm.is_match(&mut reference, &input),
+                    "source={source} length={length}"
+                );
+                input.truncate(base);
+            }
+        }
+    }
+}
+
+#[test]
+fn necessary_prefix_guard_admits_proof_peak_and_preserves_optional_fallback() {
+    let mut program = CompiledRegexProgram::compile_one("alpha[0-9]", RegexProgramLimits::default()).unwrap();
+    for budget in [
+        RegexGuardBudget {
+            peak: REGEX_GUARD_PROOF_BYTES - 1,
+            ..guard_budget()
+        },
+        RegexGuardBudget {
+            work: 1,
+            ..guard_budget()
+        },
+        RegexGuardBudget {
+            owned: 0,
+            ..guard_budget()
+        },
+        RegexGuardBudget {
+            peak: REGEX_GUARD_PROOF_BYTES,
+            ..guard_budget()
+        },
+    ] {
+        let before = program.memory_usage();
+        let outcome = program.add_literal_guard(budget).unwrap();
+        assert_eq!(outcome.owned, 0);
+        assert_eq!(program.memory_usage(), before);
+        assert!(matches!(program.execution_hint, RegexExecutionHint::None));
+        assert!(outcome.peak <= budget.peak);
+        assert!(outcome.work <= budget.work);
+        if budget.work != 0 && budget.peak >= REGEX_GUARD_PROOF_BYTES {
+            assert_eq!(outcome.peak, REGEX_GUARD_PROOF_BYTES);
+        }
+    }
+    assert!(program.add_literal_guard(guard_budget()).unwrap().owned > 0);
+    let foreign = CompiledRegexProgram::compile_one("other[0-9]", RegexProgramLimits::default()).unwrap();
+    assert_eq!(
+        program.is_match(&vec![b'z'; 1024], &mut foreign.create_scratch()),
+        Err(RegexScratchError::ScratchShape)
+    );
+}
+
+#[test]
+fn necessary_prefix_union_guard_keeps_duplicate_fanout_and_full_input_confirmation() {
+    let patterns = [
+        PatternSpec::Regex("alpha[0-9]"),
+        PatternSpec::Regex("beta[0-9]"),
+        PatternSpec::Regex("alpha[0-9]"),
+    ];
+    let mut matcher = CompiledMatcher::compile_pcre_bytes(&patterns, MatcherLimits::default()).unwrap();
+    assert!(
+        matcher
+            .regex_program_mut()
+            .unwrap()
+            .add_literal_guard(guard_budget())
+            .unwrap()
+            .owned
+            > 0
+    );
+    let mut scratch = matcher.create_scratch();
+    for suffix in [b"alpha1".as_slice(), b"none", b"alpha!", b"beta2 alpha3"] {
+        let mut input = vec![b'z'; 1024];
+        input.extend_from_slice(suffix);
+        let reference = ids(matcher.scan_reference(&input, &mut scratch).unwrap());
+        assert_eq!(ids(matcher.scan(&input, &mut scratch).unwrap()), reference);
+        if suffix == b"alpha!" {
+            assert!(reference.is_empty());
+        }
+    }
+    let guarded = matcher.regex.as_ref().unwrap();
+    assert!(!guarded.may_match(&vec![b'z'; 1024]));
+    assert!(guarded.may_match(b"small"));
+}
+
+#[test]
+fn necessary_prefix_guard_declines_absolute_anchored_single_and_mixed_groups() {
+    for sources in [vec!["^alpha[0-9]"], vec!["^alpha[0-9]", "beta[0-9]"]] {
+        let patterns = sources
+            .iter()
+            .map(|source| PatternSpec::Regex(source))
+            .collect::<Vec<_>>();
+        let mut matcher = CompiledMatcher::compile_pcre_bytes(&patterns, MatcherLimits::default()).unwrap();
+        let outcome = matcher
+            .regex_program_mut()
+            .unwrap()
+            .add_literal_guard(guard_budget())
+            .unwrap();
+        assert_eq!(outcome.owned, 0);
+        assert_eq!(matcher.test_guard_stats(), (0, 0));
+        assert!(outcome.work > 0);
+        assert_eq!(outcome.peak, REGEX_GUARD_PROOF_BYTES);
+    }
+    let mut multiline = CompiledRegexProgram::compile_one("(?m:^alpha[0-9])", RegexProgramLimits::default()).unwrap();
+    assert!(multiline.add_literal_guard(guard_budget()).unwrap().owned > 0);
+}
+
+#[test]
+fn necessary_prefix_guard_has_exact_optional_build_peak_admission() {
+    let compile = || CompiledRegexProgram::compile_one("alpha[0-9]", RegexProgramLimits::default()).unwrap();
+    let required = compile().add_literal_guard(guard_budget()).unwrap().peak;
+    assert!(required >= REGEX_GUARD_PROOF_BYTES + REGEX_GUARD_ACCELERATION_BUILD_BYTES);
+    for (peak, installs) in [(required, true), (required - 1, false)] {
+        let mut program = compile();
+        let outcome = program
+            .add_literal_guard(RegexGuardBudget { peak, ..guard_budget() })
+            .unwrap();
+        assert_eq!(outcome.owned > 0, installs);
+        assert!(outcome.peak <= peak);
+        if !installs {
+            assert_eq!(outcome.peak, REGEX_GUARD_PROOF_BYTES);
+        }
+    }
+}
+
+#[test]
+fn necessary_prefix_guard_has_exact_optional_owned_admission() {
+    let compile = || CompiledRegexProgram::compile_one("alpha[0-9]", RegexProgramLimits::default()).unwrap();
+    let owned = compile().add_literal_guard(guard_budget()).unwrap().owned;
+    assert!(owned > 0);
+    for (limit, installs) in [(owned, true), (owned - 1, false)] {
+        let mut program = compile();
+        let before = program.memory_usage();
+        let outcome = program
+            .add_literal_guard(RegexGuardBudget {
+                owned: limit,
+                ..guard_budget()
+            })
+            .unwrap();
+        assert_eq!(outcome.owned > 0, installs);
+        assert_eq!(program.memory_usage(), before + outcome.owned);
+        assert!(outcome.owned <= limit);
+        if installs {
+            assert_eq!(outcome.owned, owned);
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit release timing witness"]
+fn necessary_prefix_guard_release_witness() {
+    let sources = ["alpha[0-9].*omega", "beta[0-9].*theta", "gamma[0-9].*delta"];
+    let patterns = sources.map(PatternSpec::Regex);
+    let mut matcher = CompiledMatcher::compile_pcre_bytes(&patterns, MatcherLimits::default()).unwrap();
+    let cost = matcher
+        .regex_program_mut()
+        .unwrap()
+        .add_literal_guard(guard_budget())
+        .unwrap()
+        .owned;
+    assert!(cost > 0);
+    for bytes in [64, 1024, 8192] {
+        for case in ["miss", "late_hit", "late_false_positive", "dense_false_positive"] {
+            let mut input = if case == "dense_false_positive" {
+                b"alpha!beta!gamma!"
+                    .iter()
+                    .copied()
+                    .cycle()
+                    .take(bytes)
+                    .collect::<Vec<_>>()
+            } else {
+                vec![b'z'; bytes]
+            };
+            match case {
+                "late_hit" => input.extend_from_slice(b"alpha1 omega"),
+                "late_false_positive" => input.extend_from_slice(b"alpha!beta!gamma!"),
+                _ => {}
+            }
+            for reverse in [false, true] {
+                for accelerated in if reverse { [true, false] } else { [false, true] } {
+                    let mut scratch = matcher.create_scratch();
+                    let mut samples = Vec::new();
+                    for sample in 0..24 {
+                        let start = std::time::Instant::now();
+                        for _ in 0..100 {
+                            let result = if accelerated {
+                                matcher.scan(&input, &mut scratch)
+                            } else {
+                                matcher.scan_reference(&input, &mut scratch)
+                            }
+                            .unwrap();
+                            std::hint::black_box(result);
+                        }
+                        if sample >= 3 {
+                            samples.push(start.elapsed().as_nanos() / 100);
+                        }
+                    }
+                    samples.sort_unstable();
+                    println!("Guard timing bytes={bytes} case={case} reverse={reverse} accelerated={accelerated} p50_ns={} owned={cost}", samples[10]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn deduplicated_regexes_match_independent_programs_in_both_byte_modes() {
+    let sources = ["a", "", "(?i:a)", "^a$", "a|ba", "(?-u:\\xFF)", "a", "a|ba", "", "é"];
+    let mut patterns = sources
+        .iter()
+        .map(|source| PatternSpec::Regex(source))
+        .collect::<Vec<_>>();
+    patterns.insert(
+        3,
+        PatternSpec::Phrase {
+            value: "ph",
+            ascii_case_insensitive: false,
+        },
+    );
+    for unicode in [true, false] {
+        let matcher =
+            CompiledMatcher::compile_with_regex_unicode(&patterns, MatcherLimits::default(), unicode).unwrap();
+        assert_eq!(matcher.test_regex_counts(), (10, 7));
+        assert_eq!(matcher.regex.as_ref().unwrap().core.vm.pattern_len(), 7);
+        let programs = sources
+            .iter()
+            .map(|source| {
+                if unicode {
+                    CompiledRegexProgram::compile_one(source, RegexProgramLimits::default())
+                } else {
+                    CompiledRegexProgram::compile_one_pcre_bytes_with_peak_budget(
+                        source,
+                        RegexProgramLimits::default(),
+                        usize::MAX,
+                    )
+                }
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut single_scratch = programs
+            .iter()
+            .map(CompiledRegexProgram::create_scratch)
+            .collect::<Vec<_>>();
+        let mut inputs = vec![
+            vec![],
+            b"a".to_vec(),
+            b"A".to_vec(),
+            b"ba\nph".to_vec(),
+            vec![255, b'a'],
+            "é".as_bytes().to_vec(),
+        ];
+        let mut seed = 42_u64;
+        for length in 0..128 {
+            inputs.push(
+                (0..length % 31)
+                    .map(|_| {
+                        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        (seed >> 32) as u8
+                    })
+                    .collect(),
+            );
+        }
+        let mut scratch = matcher.create_scratch();
+        for input in inputs {
+            let mut expected = Vec::new();
+            for (index, (program, cache)) in programs.iter().zip(&mut single_scratch).enumerate() {
+                if program.is_match(&input, cache).unwrap() {
+                    expected.push(if index < 3 { index } else { index + 1 });
+                }
+            }
+            if input.windows(2).any(|bytes| bytes == b"ph") {
+                expected.push(3);
+            }
+            expected.sort_unstable();
+            let results = matcher.scan(&input, &mut scratch).unwrap();
+            assert_eq!(ids(results), expected, "unicode={unicode} input={input:?}");
+            for index in 0..patterns.len() {
+                assert_eq!(
+                    results.contains_any_in_range(index..index + 1),
+                    Some(expected.contains(&index))
+                );
+            }
+            assert_eq!(ids(matcher.scan_reference(&input, &mut scratch).unwrap()), expected);
+        }
+    }
+}
+
+#[test]
+fn regex_dedup_work_exhaustion_rebuilds_original_mapping_and_keeps_source_gates() {
+    let patterns = [
+        PatternSpec::Regex("z+"),
+        PatternSpec::Regex("a"),
+        PatternSpec::Regex("z+"),
+    ];
+    for budget in [0, 1, 5] {
+        let matcher = CompiledMatcher::compile_with_regex_unicode_and_work_limit(
+            &patterns,
+            MatcherLimits::default(),
+            false,
+            budget,
+        )
+        .unwrap();
+        assert_eq!(matcher.test_regex_counts(), (3, 3));
+        assert!(matcher.regex_fanout_ends.is_empty());
+        assert_eq!(matcher.regex_fanout_ends.capacity(), 0);
+        assert_eq!(
+            ids(matcher.scan(b"zzz", &mut matcher.create_scratch()).unwrap()),
+            [0, 2]
+        );
+        assert_eq!(ids(matcher.scan(b"a", &mut matcher.create_scratch()).unwrap()), [1]);
+    }
+    for limits in [
+        MatcherLimits {
+            max_patterns: 2,
+            ..MatcherLimits::default()
+        },
+        MatcherLimits {
+            max_regex_source_bytes_per_group: 4,
+            ..MatcherLimits::default()
+        },
+        MatcherLimits {
+            max_pattern_bytes: 4,
+            ..MatcherLimits::default()
+        },
+    ] {
+        assert!(CompiledMatcher::compile(&patterns, limits).is_err());
+    }
+    let duplicate = [PatternSpec::Regex("a"), PatternSpec::Regex("a")];
+    // Syntax-work limits apply to the unique compiled sources; logical count and
+    // source-byte gates above still apply to every occurrence.
+    let limits = MatcherLimits {
+        max_regex_ast_nodes: 1,
+        ..MatcherLimits::default()
+    };
+    assert!(CompiledMatcher::compile(&duplicate, limits).is_ok());
+    assert!(CompiledMatcher::compile(&[PatternSpec::Regex("a"), PatternSpec::Regex("b")], limits).is_err());
+    assert!(matches!(
+        CompiledMatcher::compile(
+            &[PatternSpec::Regex("z"), PatternSpec::Regex("(")],
+            MatcherLimits::default()
+        ),
+        Err(MatcherCompileError::Regex { pattern_id: Some(0) })
+    ));
+}
+
+#[test]
+fn regex_fanout_capacity_scratch_shape_and_physical_savings_are_accounted() {
+    let patterns = [
+        PatternSpec::Regex("(?i)attack[0-9]+"),
+        PatternSpec::Regex("(?i)attack[0-9]+"),
+        PatternSpec::Regex("safe"),
+        PatternSpec::Regex("(?i)attack[0-9]+"),
+    ];
+    let shared = CompiledMatcher::compile_pcre_bytes(&patterns, MatcherLimits::default()).unwrap();
+    let unshared =
+        CompiledMatcher::compile_with_regex_unicode_and_work_limit(&patterns, MatcherLimits::default(), false, 0)
+            .unwrap();
+    assert_eq!(shared.test_regex_counts(), (4, 2));
+    assert_eq!(shared.regex_fanout_ends.capacity(), 4);
+    assert_eq!(
+        shared.memory_usage(),
+        shared.regex.as_ref().unwrap().memory_usage()
+            + shared.regex_pattern_ids.capacity() * size_of::<PatternId>()
+            + shared.regex_fanout_ends.capacity() * size_of::<usize>()
+    );
+    assert_eq!(shared.create_scratch().regex_matches.capacity(), 2);
+    assert!(shared.memory_usage() < unshared.memory_usage());
+    assert!(shared.required_scratch_bytes() < unshared.required_scratch_bytes());
+    assert!(matches!(
+        shared.scan(b"ATTACK1", &mut unshared.create_scratch()),
+        Err(MatcherScanError::ScratchShape)
+    ));
+    let foreign = CompiledMatcher::compile_pcre_bytes(
+        &[
+            PatternSpec::Regex("x"),
+            PatternSpec::Regex("x"),
+            PatternSpec::Regex("y"),
+            PatternSpec::Regex("y"),
+        ],
+        MatcherLimits::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        shared.scan(b"ATTACK1", &mut foreign.create_scratch()),
+        Err(MatcherScanError::ScratchShape)
+    ));
+    println!(
+        "Regex fanout witness: physical=4->2 retained={}->{} scratch={}->{}",
+        unshared.memory_usage(),
+        shared.memory_usage(),
+        unshared.required_scratch_bytes(),
+        shared.required_scratch_bytes()
+    );
+}
+
 #[test]
 fn overlapping_phrases_all_match() {
     let patterns = [
@@ -393,9 +1090,12 @@ fn prebuild_projection_has_exact_partition_and_map_charges() {
     let projection = MatcherBuildProjection::for_counts(counts, bytes, MatcherLimits::default()).unwrap();
     assert_eq!(
         projection.working_partition_bytes(),
-        3 * size_of::<(PatternId, &str)>() + 3 * size_of::<&str>()
+        3 * size_of::<(PatternId, &str)>() + 3 * (size_of::<RegexPatternEntry<'_>>() + size_of::<&str>())
     );
-    assert_eq!(projection.retained_map_bytes(), 6 * size_of::<PatternId>());
+    assert_eq!(
+        projection.retained_map_bytes(),
+        6 * size_of::<PatternId>() + 3 * size_of::<usize>()
+    );
     assert!(projection.sensitive_phrase_peak() > 0);
     assert!(projection.insensitive_phrase_peak() > 0);
     assert!(projection.regex_peak() > 0);
