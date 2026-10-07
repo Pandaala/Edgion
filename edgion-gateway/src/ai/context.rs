@@ -2,10 +2,15 @@
 
 use crate::ai::protocols::openai::terminal::AiClientStreamDialect;
 use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
-use crate::ctx::{EdgionHttpContext, ResponseHeadHoldClaim};
+use crate::ctx::{DeferredCredentialMutations, EdgionHttpContext, ResponseHeadHoldClaim};
 use crate::plugins::runtime::traits::StreamingResponseProcessor;
 use crate::response::terminal::FinalResponseEligibility;
 use std::sync::Arc;
+
+pub(crate) struct AiRequestBaseline {
+    header: pingora_http::RequestHeader,
+    deferred: Option<DeferredCredentialMutations>,
+}
 
 /// AI-only state allocated on first effective AI plugin action.
 ///
@@ -33,7 +38,7 @@ pub(crate) struct AiHttpState {
     /// Request-captured typed destination policy for the selected AI backend.
     pub(crate) effective_policy: Option<Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>>,
     /// Pristine post-rule request used to rebuild later AI attempts.
-    pub(crate) request_baseline: Option<pingora_http::RequestHeader>,
+    pub(crate) request_baseline: Option<AiRequestBaseline>,
     /// Replaceable provider-aware response processor for the active attempt.
     pub(crate) stream_processor: Option<Box<dyn StreamingResponseProcessor>>,
     /// Client-facing stream dialect selected at canonical AI ingress.
@@ -60,6 +65,26 @@ pub(crate) struct AiHttpState {
 }
 
 impl EdgionHttpContext {
+    pub(crate) fn capture_ai_request_baseline(&mut self, request: &pingora_http::RequestHeader) {
+        if self.ai_state().is_none_or(|state| state.request_baseline.is_none()) {
+            let deferred = self.deferred_credential_mutations().cloned();
+            self.ensure_ai_state().request_baseline = Some(AiRequestBaseline {
+                header: request.clone(),
+                deferred,
+            });
+        }
+    }
+
+    pub(crate) fn restore_ai_request_baseline(&mut self, request: &mut pingora_http::RequestHeader) -> bool {
+        let Some(baseline) = self.ai_state().and_then(|state| state.request_baseline.as_ref()) else {
+            return false;
+        };
+        *request = baseline.header.clone();
+        let deferred = baseline.deferred.clone();
+        self.restore_deferred_credential_mutations(deferred);
+        true
+    }
+
     pub(crate) fn capture_ai_client_api(&mut self, api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
         *self.ensure_ai_state().client_api.get_or_insert(api) == api
     }

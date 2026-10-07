@@ -416,6 +416,10 @@ impl AiUsageShared {
         !self.reported_only
             || (!self.observation_unavailable() && self.response_outcome() == ResponseOutcome::Completed)
     }
+    /// Credential transport recovery does not assert model completion when observation is off.
+    pub(crate) fn permits_credential_success(&self) -> bool {
+        !self.gateway_terminated() && (self.observation_is_off() || self.permits_provider_success())
+    }
     pub(crate) fn permits_latency_sample(&self) -> bool {
         !self.reported_only || self.observation_is_off() || self.permits_provider_success()
     }

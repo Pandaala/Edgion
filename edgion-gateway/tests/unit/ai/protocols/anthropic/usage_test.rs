@@ -129,6 +129,26 @@ fn usage_and_iteration_model_duplicates_replace_their_owned_state() {
 }
 
 #[test]
+fn every_message_iteration_requires_its_own_model_attribution() {
+    for iterations in [
+        r#"[{"type":"message"}]"#,
+        r#"[{"type":"message","model":"m"},{"type":"message"}]"#,
+        r#"[{"type":"message"},{"type":"message","model":"m"}]"#,
+    ] {
+        let body = format!(
+            r#"{{"type":"message","model":"m","usage":{{"input_tokens":5,"output_tokens":7,"iterations":{iterations}}}}}"#
+        );
+        assert!(observe(body.as_bytes()).composite, "{iterations}");
+    }
+    for iterations in ["null", "[]", r#"[{"type":"message","model":null,"model":"m"}]"#] {
+        let body = format!(
+            r#"{{"type":"message","model":"m","usage":{{"input_tokens":5,"output_tokens":7,"iterations":{iterations}}}}}"#
+        );
+        assert!(!observe(body.as_bytes()).composite, "{iterations}");
+    }
+}
+
+#[test]
 fn required_native_nulls_are_invalid_but_duplicates_remain_last_wins() {
     let o = observe(br#"{"type":"message","stop_reason":"end_turn","usage":{"input_tokens":null,"output_tokens":7}}"#);
     assert!(o.invalid);

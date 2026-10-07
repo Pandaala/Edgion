@@ -194,7 +194,7 @@ impl StreamingResponseProcessor for MessagesProcessor {
                     let stopped = &mut self.stopped;
                     let stop = &mut self.stop_metadata;
                     let output = &mut self.delta_output;
-                    let model = &self.model;
+                    let model = &mut self.model;
                     self.sse.feed_records(bytes.clone(), |record| {
                         if let SseRecordRef::Block { status, event } = record {
                             match status {
@@ -228,6 +228,17 @@ impl StreamingResponseProcessor for MessagesProcessor {
                             }
                             if envelope == Kind::Error {
                                 observed.kind = Kind::Error;
+                            }
+                            if envelope == Kind::Start
+                                && !*started
+                                && !observed.invalid
+                                && !observed.composite
+                                && !shared.observation_unavailable()
+                            {
+                                // Transfer the bounded selected model; later deltas may omit it.
+                                if let Some(actual_model) = observed.model.take() {
+                                    *model = actual_model;
+                                }
                             }
                             Self::event(shared, quota, components, started, stopped, stop, output, observed);
                         }

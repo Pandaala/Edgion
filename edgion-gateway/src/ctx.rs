@@ -2406,6 +2406,17 @@ impl EdgionHttpContext {
         self.plugin_aux().map(|state| &state.deferred_credential_mutations)
     }
 
+    pub(crate) fn restore_deferred_credential_mutations(&mut self, mutations: Option<DeferredCredentialMutations>) {
+        match mutations {
+            Some(mutations) => self.ensure_plugin_aux().deferred_credential_mutations = mutations,
+            None => {
+                if let Some(state) = self.plugin_aux_mut() {
+                    state.deferred_credential_mutations = DeferredCredentialMutations::default();
+                }
+            }
+        }
+    }
+
     #[inline]
     pub(crate) fn deferred_credentials_all_unexpired(&self, now: std::time::Instant) -> bool {
         self.deferred_credential_mutations()

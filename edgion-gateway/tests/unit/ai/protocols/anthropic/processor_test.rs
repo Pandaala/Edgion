@@ -71,6 +71,123 @@ async fn native_sse_late_input_and_cache_are_cumulative_without_character_billin
     );
     assert!(shared.permits_provider_success());
 }
+
+fn iteration_stream(start_model: &str, iterations: &str) -> String {
+    let start = format!(
+        r#"{{"type":"message_start","message":{{"type":"message",{start_model},"usage":{{"input_tokens":5,"output_tokens":0,"cache_creation_input_tokens":3}}}}}}"#
+    );
+    let delta = format!(
+        r#"{{"type":"message_delta","usage":{{"input_tokens":8,"cache_read_input_tokens":2,"output_tokens":7,"iterations":{iterations}}},"delta":{{"stop_reason":"end_turn"}}}}"#
+    );
+    frame("message_start", &start)
+        + &frame("message_delta", &delta)
+        + &frame("message_stop", r#"{"type":"message_stop"}"#)
+}
+
+#[tokio::test]
+async fn native_iteration_attribution_uses_the_actual_message_model_in_json_and_sse() {
+    for (iterations, reported) in [
+        (r#"[{"type":"message","model":"m-v1"}]"#, true),
+        (r#"[{"type":"message","model":"m"}]"#, false),
+        (r#"[{"type":"message"}]"#, false),
+        (r#"[{"type":"message","model":"m-v1"},{"type":"message"}]"#, false),
+        (r#"[{"type":"message"},{"type":"message","model":"m-v1"}]"#, false),
+    ] {
+        let json = format!(
+            r#"{{"type":"message","model":"m-v1","stop_reason":"end_turn","usage":{{"input_tokens":8,"cache_creation_input_tokens":3,"cache_read_input_tokens":2,"output_tokens":7,"iterations":{iterations}}}}}"#
+        );
+        for (body, sse) in [(json, false), (iteration_stream(r#""model":"m-v1""#, iterations), true)] {
+            let shared = run(&body, sse, false).await;
+            let snapshot = shared.accounting_snapshot(999, true);
+            assert_eq!(
+                snapshot.source,
+                if reported {
+                    GenAiAttemptUsageSource::Reported
+                } else {
+                    GenAiAttemptUsageSource::Unknown
+                },
+                "{body}"
+            );
+            assert_eq!(shared.permits_provider_success(), reported);
+            if reported {
+                assert_eq!(shared.reported_tokens(), Some((13, 7)));
+            } else {
+                assert!(snapshot.usage.is_none());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_iteration_attribution_rejects_only_invalid_active_streams() {
+    for (iterations, terminate) in [
+        (r#"[{"type":"message","model":"m-v1"}]"#, false),
+        (r#"[{"type":"message","model":"m"}]"#, true),
+        (r#"[{"type":"message"}]"#, true),
+    ] {
+        let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
+        let quota = Arc::new(QuotaAccumulator::new_for_test(100));
+        let mut processor = MessagesProcessor::new(shared.clone(), Some(quota), true, true, "m".into());
+        let body = iteration_stream(r#""model":"wrong","model":"m-v1""#, iterations);
+        let mut session = MockPluginSession::new();
+        session.expect_record_error().returning(|_| {});
+        session.expect_try_claim_response_terminal().return_const(true);
+        session.expect_mark_response_terminal_emission().returning(|_| {});
+        let mut sink = ResponseBodySink::new();
+        let mut chunk = Some(Bytes::from(body.clone()));
+        processor
+            .on_chunk(&mut chunk, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+        assert_eq!(sink.is_terminated(), terminate, "{iterations}");
+        if terminate {
+            let wire = String::from_utf8(sink.peek_extra()[0].to_vec()).unwrap();
+            assert!(wire.contains("event: error\ndata: {"));
+            assert!(!wire.contains("[DONE]"));
+        } else {
+            assert_eq!(chunk, Some(Bytes::from(body)));
+            assert!(sink.peek_extra().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_start_model_fallback_and_invalid_replacements_remain_conservative() {
+    let matching = r#"[{"type":"message","model":"m"}]"#;
+    let fallback = iteration_stream(r#""id":"message-without-model""#, matching);
+    let shared = run(&fallback, true, false).await;
+    assert_eq!(shared.reported_tokens(), Some((13, 7)));
+    assert!(shared.permits_provider_success());
+
+    let actual = iteration_stream(r#""model":"m-v1""#, r#"[{"type":"message","model":"m-v1"}]"#);
+    let duplicate = frame(
+        "message_start",
+        r#"{"type":"message_start","message":{"type":"message","model":"m","usage":{"input_tokens":5,"output_tokens":0}}}"#,
+    );
+    for body in [
+        duplicate + &actual,
+        frame(
+            "message_start",
+            r#"{"type":"message_delta","message":{"type":"message","model":"m-v1","usage":{"input_tokens":5,"output_tokens":0}}}"#,
+        ) + &actual,
+        frame(
+            "message_start",
+            r#"{"type":"message_start","message":{"type":"message","model":"m-v1","usage":{"input_tokens":-1,"output_tokens":0}}}"#,
+        ) + &actual,
+    ] {
+        let shared = run(&body, true, false).await;
+        assert_eq!(
+            shared.accounting_snapshot(999, true).source,
+            GenAiAttemptUsageSource::Unknown
+        );
+        assert!(!shared.permits_provider_success());
+    }
+    let sticky = run(&actual, true, true).await;
+    assert_eq!(
+        sticky.accounting_snapshot(999, true).source,
+        GenAiAttemptUsageSource::Unknown
+    );
+    assert!(!sticky.permits_provider_success());
+}
 #[tokio::test]
 async fn unknown_usage_is_sticky_and_invalid_streams_do_not_teach_success() {
     for body in [

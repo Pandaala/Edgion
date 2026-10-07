@@ -19,7 +19,11 @@ SSE terminal type/status must agree; partial EOS tails, oversized events or malf
 invalidate numeric accounting. JSON cancelled is terminal; no response.cancelled SSE is assumed.
 Completed without usage can provide a success fact while billing stays unknown; failed/incomplete/
 cancelled never teach credential health or adaptive TTFT success. Off installs no parser and permits
-transport latency only. Later transport truncation retains reservation regardless of an earlier total.
+transport latency without asserting model completion or numeric usage. Credential transport health
+is separate: a dispatched 2xx exchange with real EOS, no failure verdict and no gateway termination
+resets consecutive transport failures and completes a generation-valid half-open probe, including
+config-free Retry-After cooldowns. Ordinary concurrent success must not clear an explicit cooldown.
+Later transport truncation retains reservation regardless of an earlier total.
 
 Continuation checks raw backend slots and raw credential bindings before eligibility filters.
 Controller preserves declarations; Gateway records declared_credential_count independently of the

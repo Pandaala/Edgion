@@ -16,6 +16,14 @@ production seam:
   progress when called again;
 - credential success resets failure counters, completes half-open probes only
   after successful EOS, and releases max-ejection capacity;
+- native observation off still restores credential transport health after a
+  dispatched 2xx and real EOS, without claiming model completion or usage;
+  cancellation, gateway termination, failure verdicts and stale probe generations
+  cannot restore health or erase a newer provider cooldown;
+- each AI candidate restores the same post-rule live and deferred header baseline
+  before its backend modifiers and canonical credential isolation; predispatch
+  backend/credential skips and retries cannot consume another candidate's
+  deferred protocol values, sensitivity or credential validity deadline;
 - admission rejects missing outlier state, an already-active attempt,
   accounting overflow, and fail-close Redis dependency failure;
 - every attempt outcome chooses an explicit `Release`, `Reconcile`, or `Retain`

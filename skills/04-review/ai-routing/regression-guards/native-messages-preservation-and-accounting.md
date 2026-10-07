@@ -17,6 +17,10 @@ service is permitted. The converter remains the sole parser of converted traffic
 
 The canonical connector installs the Secret key after backend modifiers, clears
 authentication and workspace selectors, and rejects effective profile attribution.
+AI attempt rebuilding restores both live headers and deferred mutations from one
+post-rule baseline before each candidate's modifiers and credential isolation.
+Skipped candidates cannot delete the deferred version/beta values of a successor;
+sensitive HeaderValue ownership, expiry and final Connection checks remain shared.
 RequestId reserves Anthropic protocol/identity targets; native RemoteIp collisions
 are rejected through the existing session interface. Deferred version mutations
 are resolved before observation admission. Only version 2023-06-01 is certified;
@@ -36,6 +40,16 @@ message/delta cannot replace usage. Selected duplicates replace all state owned
 by that value, including iterations attribution. Malformed iteration models and
 unsupported inference yield unknown, never an authoritative top-level subtotal.
 Same-model message iterations are summaries and are not added again.
+Every nonempty iteration item requires its own valid final model attribution;
+an earlier item's model cannot fill a missing field. SSE carries the first valid
+message_start actual model into later delta comparisons, rather than comparing
+against a request alias. Same-document duplicate models retain last-wins semantics,
+while malformed or duplicate starts cannot repair sticky unknown observation.
+
+Observation off retains NotObserved and unknown model completion. A dispatched
+2xx exchange with real EOS can still restore credential transport health through
+the shared attempt settlement gate, subject to failure, termination and probe
+generation checks. It adds no response parser, numeric usage or model-success claim.
 
 Explicit null required counters/object parents invalidate observation; nullable
 delta input/cache patches and stop_reason remain permitted. Duplicate keys retain

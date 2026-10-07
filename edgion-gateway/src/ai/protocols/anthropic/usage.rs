@@ -59,6 +59,7 @@ impl Components {
 #[derive(Default)]
 pub(crate) struct Observation {
     pub kind: Kind,
+    pub model: Option<String>,
     pub components: Components,
     pub stop: bool,
     pub composite: bool,
@@ -107,7 +108,7 @@ impl Observer {
         if !self.failed {
             self.failed = self.parser.feed(JsonStreamInput::Complete, &mut self.selector).is_err();
         }
-        let s = &self.selector;
+        let s = &mut self.selector;
         Observation {
             kind: s.kind,
             components: s.components,
@@ -120,6 +121,7 @@ impl Observer {
                 || !s.components.valid()
                 || s.stop_invalid
                 || (s.envelope == Kind::Start && !s.message_typed),
+            model: s.model.take(),
         }
     }
     pub(crate) fn failed(&self) -> bool {
@@ -349,8 +351,9 @@ impl JsonStreamSelectiveSink for Selector {
             JsonStreamToken::ObjectEnd | JsonStreamToken::ArrayEnd => {
                 self.depth = self.depth.checked_sub(1).ok_or(JsonStreamSinkError)?;
                 if self.frames[self.depth].role == Role::Iteration {
-                    self.composite |=
-                        !self.frames[self.depth].iteration_message || self.current_iteration_model_invalid;
+                    self.composite |= !self.frames[self.depth].iteration_message
+                        || self.current_iteration_model_invalid
+                        || self.current_iteration_model.is_none();
                     if let Some(model) = self.current_iteration_model.take() {
                         self.composite |= self.iteration_model.as_ref().is_some_and(|m| m != &model);
                         self.iteration_model = Some(model);

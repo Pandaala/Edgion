@@ -17,3 +17,16 @@ fn native_json_and_named_sse_share_fixed_sdk_error_shape() {
         assert!(!String::from_utf8(wire.to_vec()).unwrap().contains("[DONE]"));
     }
 }
+
+#[test]
+fn native_local_503_distinguishes_backend_and_quota_dependencies() {
+    for (error, expected) in [
+        (AiProxyError::BackendUnavailable, "overloaded_error"),
+        (AiProxyError::QuotaUnavailable, "api_error"),
+    ] {
+        let (status, body) = render(error);
+        assert_eq!(status, 503);
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(value["error"]["type"], expected);
+    }
+}

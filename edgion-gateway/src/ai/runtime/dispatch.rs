@@ -355,8 +355,7 @@ fn prepare_ready_attempt(
         ctx.record_error(edgion_resources::EdgionErrorCode::BodyMutationConflict);
         return Err(AiDispatchError::Client(AiProxyError::BackendUnavailable));
     }
-    if let Some(baseline) = ctx.ai_state().and_then(|state| state.request_baseline.clone()) {
-        *session.req_header_mut() = baseline;
+    if ctx.restore_ai_request_baseline(session.req_header_mut()) {
         let config = edgion_resources::path_normalization::get_path_normalization_config();
         ctx.refresh_normalized_path(session.req_header(), config);
     }
@@ -473,9 +472,7 @@ fn prepare_ready_attempt(
         plan.body_is_current = is_plan;
     }
 
-    if ctx.ai_state().is_none_or(|state| state.request_baseline.is_none()) {
-        ctx.ensure_ai_state().request_baseline = Some(session.req_header().clone());
-    }
+    ctx.capture_ai_request_baseline(session.req_header());
     apply_backend_request_headers(session, ctx, selected_route_backend)?;
     let observation_supported = {
         let mut adapter = PingoraSessionAdapter::new(session, ctx);
