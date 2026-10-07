@@ -209,7 +209,7 @@ async fn h2_unfinished_over_limit_request(target_host: &str) -> Result<(), Strin
     Ok(())
 }
 
-async fn poll_mirrored_body(ctx: &TestContext, trace_id: &str) -> Result<String, String> {
+pub(super) async fn poll_mirrored_body(ctx: &TestContext, trace_id: &str) -> Result<String, String> {
     let k8s_mode = std::env::var("EDGION_TEST_K8S_MODE")
         .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);

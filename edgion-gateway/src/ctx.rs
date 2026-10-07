@@ -1821,6 +1821,8 @@ struct RequestBodyPluginState {
     handlers: RequestBodyStreamHandlers,
     observers: Option<Box<crate::request_body::observer::RequestBodyObservers>>,
     active_sources: u8,
+    streamed_input_bytes: u64,
+    streamed_output_bytes: u64,
 }
 
 impl RequestBodyPluginState {
@@ -2634,6 +2636,36 @@ impl EdgionHttpContext {
         self.request_body_plugins
             .as_deref()
             .is_some_and(RequestBodyPluginState::is_non_replayable)
+    }
+
+    /// Handler selection survives fail-open deactivation and cancelled callbacks.
+    #[inline]
+    pub(crate) fn request_body_handlers_selected(&self) -> bool {
+        self.request_body_plugins
+            .as_deref()
+            .is_some_and(|state| state.active_sources & REQUEST_BODY_SOURCE_HANDLER != 0)
+    }
+
+    /// Admit bytes at the shared streaming boundary, independently in each direction.
+    /// Rejected additions leave the account unchanged and never wrap.
+    pub(crate) fn admit_streamed_request_body_bytes(&mut self, bytes: usize, output: bool) -> bool {
+        let cap = self.request_body_config.max_body_size_bytes;
+        let Some(state) = self.request_body_plugins.as_deref_mut() else {
+            return false;
+        };
+        let account = if output {
+            &mut state.streamed_output_bytes
+        } else {
+            &mut state.streamed_input_bytes
+        };
+        let Some(next) = u64::try_from(bytes).ok().and_then(|bytes| account.checked_add(bytes)) else {
+            return false;
+        };
+        if next > cap {
+            return false;
+        }
+        *account = next;
+        true
     }
 
     #[inline]

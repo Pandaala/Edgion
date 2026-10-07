@@ -266,8 +266,11 @@ pub enum EdgionErrorCode {
     /// matching nginx `client_body_timeout` and Envoy (HTTP 408).
     BodyReadTimeout,
 
-    /// Body exceeded the configured buffer cap (HTTP 413).
+    /// Captured or streamed request input/output exceeded the physical cap (HTTP 413).
     BodyReadTooLarge,
+
+    /// A streamed request processor cannot inspect request trailers (HTTP 400).
+    BodyStreamTrailersUnsupported,
 
     /// Body buffering is not built on this binary. Fires on every buffered
     /// request until the P0 buffering runtime lands, which is accurate: body
@@ -438,6 +441,7 @@ impl EdgionErrorCode {
             Self::BodyReadAborted => "BodyReadAborted",
             Self::BodyReadTimeout => "BodyReadTimeout",
             Self::BodyReadTooLarge => "BodyReadTooLarge",
+            Self::BodyStreamTrailersUnsupported => "BodyStreamTrailersUnsupported",
             Self::BodyReadUnimplemented => "BodyReadUnimplemented",
             Self::BodyRefusedNoSnapshot => "BodyRefusedNoSnapshot",
             Self::BodyReplayFailed => "BodyReplayFailed",

@@ -67,6 +67,9 @@ async fn capture_request_body_core_with_consumer(
     max_bytes: Option<u64>,
     mut consumer: Option<&mut dyn RequestBodyChunkConsumer>,
 ) -> Result<u64, BodyReadError> {
+    if ctx.request_body_handlers_selected() {
+        return Err(BodyReadError::NotBuffered);
+    }
     if let Some(len) = ctx.request_body.cached_len()? {
         return Ok(len);
     }
@@ -418,7 +421,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     }
 
     async fn ensure_bodyless_request_replay_owner(&mut self) -> Result<(), BodyReadError> {
-        if self.ctx.waf_prefix_inspected {
+        if self.ctx.waf_prefix_inspected || self.ctx.request_body_handlers_selected() {
             return Err(BodyReadError::NotBuffered);
         }
         if !self.ctx.request_body_config.enabled {
@@ -1793,6 +1796,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn ensure_request_body(&mut self, max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
+        if self.ctx.request_body_handlers_selected() {
+            return Err(BodyReadError::NotBuffered);
+        }
         // A response-stage consumer may read a body that an earlier request
         // plugin explicitly buffered. The stage boundary forbids starting a
         // new capture; it does not invalidate the request-scoped shared cache.
@@ -1833,7 +1839,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         max_bytes: Option<u64>,
         consumer: &'consumer mut (dyn RequestBodyChunkConsumer + 'consumer),
     ) -> Result<u64, BodyReadError> {
-        if !self.ctx.request_info.in_request_body_stage || self.inner.request_body_prefix_active() {
+        if self.ctx.request_body_handlers_selected()
+            || !self.ctx.request_info.in_request_body_stage
+            || self.inner.request_body_prefix_active()
+        {
             return Err(BodyReadError::NotBuffered);
         }
         let cap = resolve_cap(max_bytes, self.ctx.request_body_config.max_body_size_bytes);
@@ -2363,7 +2372,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             plan.reject_mutation();
             return false;
         }
-        if self.ctx.waf_prefix_inspected {
+        if self.ctx.waf_prefix_inspected || self.ctx.request_body.has_cached_body() || self.inner.body_bytes_read() != 0
+        {
             return false;
         }
         // The transport fact answers `None` for session types that cannot be

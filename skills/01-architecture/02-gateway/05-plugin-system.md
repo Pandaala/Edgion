@@ -69,6 +69,25 @@ registration/mutation conflicts are checked through replacement consumption, and
 one final PluginLog outcome is added at universal logging. See the
 [transcoder regression boundary](../../04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md).
 
+### Streamed request admission
+
+Installed request-body handlers own a monotonic source bit in the optional
+request-body plugin state. The common body hook checks independent cumulative
+input and final-output accounts against the request-pinned physical body cap,
+before handlers and before WAF/observer/mirror/upstream publication respectively.
+Checked overflow and cap rejection are fixed 413 outcomes, independent of
+processor failure policy. Actual request trailers are fixed 400 outcomes for
+handler-selected requests; ordinary requests retain the transport discard policy.
+Terminal cleanup cancels incomplete handlers and the mirror without sending a
+successful EOS, while preserving completed/initiating processor outcomes and
+selected response ownership.
+
+Complete-body capture/mutation and streamed handlers are incompatible in either
+order. Session adapter guards reject installation after a cache or pre-read and
+reject capture/replay-owner creation after handler selection. This is runtime
+protection across plugin scopes, not a claim of whole-chain static validation.
+See [the maintained regression contract](../../04-review/http-body/regression-guards/streamed-request-body-admission.md).
+
 ### Response body and trailer completion
 
 The typed driver keeps these events distinct:

@@ -13,6 +13,7 @@ use crate::ctx::{MirrorAbandonReason, WafErrorCode, WafLogPhase};
 use crate::plugins::runtime::{ChunkVerdict, PingoraSessionAdapter, PluginSession, StageLogs};
 use crate::EdgionHttpContext;
 use bytes::Bytes;
+use edgion_resources::EdgionErrorCode;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{RequestBodyAction, RequestBodyEvent, Session};
 use std::time::Instant;
@@ -52,6 +53,13 @@ pub async fn request_body_filter_action(
         return Ok(RequestBodyAction::Continue);
     }
 
+    if event != RequestBodyEvent::Abandoned
+        && ctx.request_body_handlers_selected()
+        && !ctx.admit_streamed_request_body_bytes(body.as_ref().map_or(0, Bytes::len), false)
+    {
+        return reject_streamed_request(session, ctx, 413, EdgionErrorCode::BodyReadTooLarge).await;
+    }
+
     if ctx.has_request_body_stream_handlers() {
         // Handlers are moved out for the duration of the loop so the session
         // adapter (which borrows the whole ctx) can be built on the terminate
@@ -81,6 +89,7 @@ pub async fn request_body_filter_action(
                     body: reply,
                     header_ops,
                 } => {
+                    abandon_handlers(&mut handlers).await;
                     pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
                     if request_body_should_write_terminate_reply(session.response_head_selected_by_pipeline()) {
                         // Contract obligation: finish the downstream response
@@ -97,6 +106,13 @@ pub async fn request_body_filter_action(
             drain_handler_logs(&mut handlers, ctx);
         }
         ctx.restore_request_body_stream_handlers(handlers);
+    }
+
+    if event != RequestBodyEvent::Abandoned
+        && ctx.request_body_handlers_selected()
+        && !ctx.admit_streamed_request_body_bytes(body.as_ref().map_or(0, Bytes::len), true)
+    {
+        return reject_streamed_request(session, ctx, 413, EdgionErrorCode::BodyReadTooLarge).await;
     }
 
     // Native WAF observes the post-mutation bytes that are about to be sent
@@ -129,6 +145,44 @@ pub async fn request_body_filter_action(
 
     pg_request_body_filter::request_body_filter(edgion_http, session, body, event, ctx).await?;
     Ok(RequestBodyAction::Continue)
+}
+
+/// Pingora calls this only for actual trailers, before a synthetic clean EOF.
+pub async fn request_trailer_filter(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<RequestBodyAction> {
+    if !ctx.request_body_handlers_selected() {
+        return Ok(RequestBodyAction::Continue);
+    }
+    reject_streamed_request(session, ctx, 400, EdgionErrorCode::BodyStreamTrailersUnsupported).await
+}
+
+async fn abandon_handlers(handlers: &mut Handlers) {
+    for handler in handlers.iter_mut() {
+        // Abandonment releases incomplete exchanges without sending protocol EOS.
+        // Completed handlers preserve their already-selected terminal outcome.
+        let _ = handler.get_mut().on_chunk(&mut None, RequestBodyEvent::Abandoned).await;
+    }
+}
+
+async fn reject_streamed_request(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    status: u16,
+    code: EdgionErrorCode,
+) -> pingora_core::Result<RequestBodyAction> {
+    ctx.record_error(code);
+    session.set_keepalive(None);
+    let mut handlers = ctx.take_request_body_stream_handlers();
+    abandon_handlers(&mut handlers).await;
+    drain_handler_logs(&mut handlers, ctx);
+    ctx.restore_request_body_stream_handlers(handlers);
+    pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
+    if request_body_should_write_terminate_reply(session.response_head_selected_by_pipeline()) {
+        write_terminate_reply(session, ctx, status, None, None, Vec::new()).await;
+    }
+    Ok(RequestBodyAction::Terminate)
 }
 
 /// A selected pipeline response owns downstream delivery, so a terminal WAF or

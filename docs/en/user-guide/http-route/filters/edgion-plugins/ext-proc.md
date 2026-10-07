@@ -166,8 +166,9 @@ request-side `Process` stream. It does not send an `HttpBody` with
 `end_of_stream=true`, because the chunks already delivered to the processor
 are only an incomplete prefix.
 
-Because chunk mutation can change the total length, the upstream request is
-sent with chunked framing (`Content-Length` removed), and the request becomes
+Because chunk mutation can change the total length, the upstream request uses
+unknown-length framing: chunked HTTP/1.1 or HTTP/2 DATA without
+`Content-Length` or `Transfer-Encoding`, and the request becomes
 **non-retryable** the moment the streamed plugin is selected. A mid-body
 `ImmediateResponse` terminates the request with the given status; its header
 mutations are applied to the reply (protected headers rejected, as in the
@@ -180,6 +181,28 @@ mid-body — is rejected as a bad verdict in streamed mode: there is no buffered
 body to replace, and "replace and stop" semantics are not implemented.
 Upgrade/CONNECT requests and pre-HTTP/1.1 clients cannot be streamed-inspected
 and follow the failure policy.
+
+The gateway checks cumulative original input and cumulative final output
+independently against `EdgionGatewayConfig.spec.requestBody`'s resolved physical
+body cap. Input is checked before processing; output is checked after all
+streamed processors and before RequestMirror or upstream publication. The cap
+is inclusive. Overflow or exceeding either account terminates with HTTP 413,
+even when `failureModeAllow: true` or a processor has deactivated fail-open.
+Intermediate chunks remain bounded by the processor transport message limits.
+
+Actual request trailers terminate an installed streamed chain with HTTP 400,
+before a clean end-of-stream verdict can be synthesized. Both rejections cancel
+incomplete processor and mirror exchanges. A response already selected by the
+proxy pipeline is never replaced with a second response.
+
+Multiple streamed processors run in configured execution order. Each waits for
+its matching verdict before the next processor runs; RequestMirror receives
+only the resulting final bytes. Complete-body capture/mutation and streamed
+request processing cannot be combined in either order. The gateway rejects this
+composition at runtime across plugin scopes: installing a streamed handler after
+capture follows the processor failure policy, and subsequent capture/mutation
+fails through the existing body-access policy without reading or publishing bytes.
+Request-streaming policy does not enable full response buffering.
 
 ### ImmediateResponse (short-circuit)
 
@@ -288,7 +311,7 @@ or aggregates the response body.
   transport window at a time and does not treat a transport chunk as a semantic
   SSE event.
 - **No request trailer processing**: `responseTrailerMode` does not enable a
-  request-trailer phase; ordinary proxied request trailers are not connected to
+  request-trailer phase; streamed requests reject trailers, while ordinary proxied request trailers are not connected to
   ExtProc.
 - **No response `CONTINUE_AND_REPLACE`**: ordinary body mutation is supported,
   but the terminal stop-sending status follows `failureModeAllow`.

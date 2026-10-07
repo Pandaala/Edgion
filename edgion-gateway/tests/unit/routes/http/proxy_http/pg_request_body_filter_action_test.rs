@@ -279,3 +279,410 @@ async fn grpc_route_only_terminate_writes_exact_status_and_local_header() {
     assert_eq!(written.headers.get("x-local").unwrap(), "reply");
     assert_eq!(ctx.request_info.grpc_status(), Some(8));
 }
+
+use crate::ctx::MirrorCancellation;
+use crate::plugins::http::ext_proc::{BodyExchange, ExtProcStreamedBodyHandler};
+use edgion_common::ext_proc::proto::{
+    body_mutation, processing_response, BodyMutation, BodyResponse, CommonResponse, HttpBody, ProcessingResponse,
+};
+use parking_lot::Mutex;
+use tokio::sync::{mpsc, oneshot};
+
+#[derive(Default)]
+struct ExchangeFacts {
+    chunks: Vec<Vec<u8>>,
+    eos: usize,
+    cancelled: usize,
+    terminal: Vec<&'static str>,
+}
+
+struct TestExchange {
+    facts: Arc<Mutex<ExchangeFacts>>,
+    mutation: Option<body_mutation::Mutation>,
+    fail: bool,
+    gate: Option<oneshot::Receiver<()>>,
+}
+
+#[async_trait::async_trait]
+impl BodyExchange for TestExchange {
+    async fn exchange_body(&mut self, body: HttpBody, _last: bool) -> Result<ProcessingResponse, tonic::Status> {
+        {
+            let mut facts = self.facts.lock();
+            facts.chunks.push(body.body);
+            facts.eos += usize::from(body.end_of_stream);
+        }
+        if let Some(gate) = self.gate.take() {
+            gate.await.unwrap();
+        }
+        if self.fail {
+            return Err(tonic::Status::unavailable("test dependency failed"));
+        }
+        Ok(ProcessingResponse {
+            response: Some(processing_response::Response::RequestBody(BodyResponse {
+                response: Some(CommonResponse {
+                    body_mutation: self.mutation.clone().map(|mutation| BodyMutation {
+                        mutation: Some(mutation),
+                    }),
+                    ..Default::default()
+                }),
+            })),
+            mode_override: None,
+        })
+    }
+    fn cancel(&mut self) {
+        self.facts.lock().cancelled += 1;
+    }
+    fn terminal(&mut self, outcome: &'static str, _reason: &'static str) {
+        self.facts.lock().terminal.push(outcome);
+    }
+}
+
+fn install_exchange(
+    ctx: &mut EdgionHttpContext,
+    mutation: Option<body_mutation::Mutation>,
+    fail_open: bool,
+    fail: bool,
+    gate: Option<oneshot::Receiver<()>>,
+) -> Arc<Mutex<ExchangeFacts>> {
+    let facts = Arc::new(Mutex::new(ExchangeFacts::default()));
+    assert!(
+        ctx.push_request_body_stream_handler(Box::new(ExtProcStreamedBodyHandler::new(
+            Box::new(TestExchange {
+                facts: facts.clone(),
+                mutation,
+                fail,
+                gate
+            }),
+            fail_open,
+            false,
+            None,
+            true,
+        )))
+    );
+    facts
+}
+
+fn install_mirror(
+    ctx: &mut EdgionHttpContext,
+) -> (mpsc::Receiver<Result<Bytes, std::io::Error>>, oneshot::Receiver<()>) {
+    let (body_tx, body_rx) = mpsc::channel(8);
+    let (cancellation, cancel_rx) = MirrorCancellation::new();
+    ctx.set_mirror_state(crate::MirrorState::Streaming {
+        body_tx,
+        body_budget: crate::plugins::http::request_mirror::MirrorBodyBudget::for_test(1024),
+        writer_handle: tokio::spawn(async {}),
+        cancellation,
+        channel_full_timeout_ms: 0,
+    });
+    (body_rx, cancel_rx)
+}
+
+fn body_proxy() -> EdgionHttpProxy {
+    EdgionHttpProxy {
+        listener_port: 80,
+        is_https_listener: false,
+        listener_key: edgion_resources::ListenerKey("127.0.0.1:80/HTTP".to_string()),
+        server_header_opts: Default::default(),
+        access_logger: Arc::new(crate::observe::AccessLogger::default()),
+        egc: crate::config::bind_gateway_config(None),
+        enable_http2: false,
+        preflight_handler: super::super::PreflightHandler,
+        http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::default()),
+        grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::default()),
+    }
+}
+
+async fn body_session() -> (tokio::io::DuplexStream, Session) {
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    (client, session)
+}
+
+#[tokio::test]
+async fn streamed_chain_waits_for_verdicts_and_mirrors_only_final_bytes() {
+    let (_client, mut session) = body_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_body_config.max_body_size_bytes = 6;
+    let (release, gate) = oneshot::channel();
+    let first = install_exchange(
+        &mut ctx,
+        Some(body_mutation::Mutation::Body(b"expanded-intermediate".to_vec())),
+        false,
+        false,
+        Some(gate),
+    );
+    let second = install_exchange(
+        &mut ctx,
+        Some(body_mutation::Mutation::Body(b"end".to_vec())),
+        false,
+        false,
+        None,
+    );
+    let (mut mirror, cancelled) = install_mirror(&mut ctx);
+    let proxy = body_proxy();
+    let mut body = Some(Bytes::from_static(b"abc"));
+    {
+        let future = request_body_filter_action(&proxy, &mut session, &mut body, RequestBodyEvent::Data, &mut ctx);
+        tokio::pin!(future);
+        assert!(futures::poll!(future.as_mut()).is_pending());
+        assert_eq!(first.lock().chunks, vec![b"abc".to_vec()]);
+        assert!(second.lock().chunks.is_empty());
+        assert!(mirror.try_recv().is_err());
+        release.send(()).unwrap();
+        assert_eq!(future.await.unwrap(), RequestBodyAction::Continue);
+    }
+    assert_eq!(body.as_deref(), Some(b"end".as_slice()));
+    assert_eq!(mirror.recv().await.unwrap().unwrap(), "end");
+    assert_eq!(second.lock().chunks, vec![b"expanded-intermediate".to_vec()]);
+    body = Some(Bytes::from_static(b"def"));
+    assert_eq!(
+        request_body_filter_action(&proxy, &mut session, &mut body, RequestBodyEvent::Complete, &mut ctx)
+            .await
+            .unwrap(),
+        RequestBodyAction::Continue
+    );
+    assert_eq!(mirror.recv().await.unwrap().unwrap(), "end");
+    assert!(mirror.recv().await.is_none());
+    assert!(cancelled.await.is_err());
+    assert_eq!(first.lock().eos, 1);
+    assert_eq!(second.lock().eos, 1);
+    assert!(!ctx.request_body.has_cached_body());
+}
+
+#[tokio::test]
+async fn streamed_caps_are_cumulative_independent_and_fail_closed() {
+    for (mutation, input, output_limit) in [
+        (Some(body_mutation::Mutation::ClearBody(true)), b"ab".as_slice(), false),
+        (
+            Some(body_mutation::Mutation::Body(b"abc".to_vec())),
+            b"a".as_slice(),
+            true,
+        ),
+    ] {
+        let (_client, mut session) = body_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_body_config.max_body_size_bytes = 3;
+        let facts = install_exchange(&mut ctx, mutation, true, false, None);
+        let (mut mirror, cancelled) = install_mirror(&mut ctx);
+        let proxy = body_proxy();
+        let mut first = Some(Bytes::copy_from_slice(input));
+        assert_eq!(
+            request_body_filter_action(&proxy, &mut session, &mut first, RequestBodyEvent::Data, &mut ctx)
+                .await
+                .unwrap(),
+            RequestBodyAction::Continue
+        );
+        let forwarded = mirror.recv().await.unwrap().unwrap();
+        assert_eq!(forwarded.len(), if output_limit { 3 } else { 0 });
+        let mut second = Some(Bytes::copy_from_slice(input));
+        assert_eq!(
+            request_body_filter_action(&proxy, &mut session, &mut second, RequestBodyEvent::Data, &mut ctx)
+                .await
+                .unwrap(),
+            RequestBodyAction::Terminate
+        );
+        assert_eq!(session.response_written().unwrap().status.as_u16(), 413);
+        assert!(cancelled.await.is_ok());
+        assert!(mirror.recv().await.is_none());
+        assert_eq!(facts.lock().chunks.len(), if output_limit { 2 } else { 1 });
+        assert_eq!(facts.lock().cancelled, 1);
+        assert_eq!(facts.lock().eos, 0);
+        assert!(ctx
+            .diagnostics
+            .entries()
+            .contains(&RequestDiagnostic::Error(EdgionErrorCode::BodyReadTooLarge)));
+    }
+}
+
+#[tokio::test]
+async fn fail_open_deactivation_keeps_caps_and_passes_pre_processor_bytes() {
+    let (_client, mut session) = body_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_body_config.max_body_size_bytes = 3;
+    let facts = install_exchange(&mut ctx, None, true, true, None);
+    let (mut mirror, cancelled) = install_mirror(&mut ctx);
+    let proxy = body_proxy();
+    let mut body = Some(Bytes::from_static(b"abc"));
+    assert_eq!(
+        request_body_filter_action(&proxy, &mut session, &mut body, RequestBodyEvent::Data, &mut ctx)
+            .await
+            .unwrap(),
+        RequestBodyAction::Continue
+    );
+    assert_eq!(mirror.recv().await.unwrap().unwrap(), "abc");
+    assert!(ctx.request_body_handlers_selected());
+    let mut body = Some(Bytes::from_static(b"d"));
+    assert_eq!(
+        request_body_filter_action(&proxy, &mut session, &mut body, RequestBodyEvent::Data, &mut ctx)
+            .await
+            .unwrap(),
+        RequestBodyAction::Terminate
+    );
+    assert_eq!(session.response_written().unwrap().status.as_u16(), 413);
+    assert!(cancelled.await.is_ok());
+    assert_eq!(facts.lock().terminal, vec!["fail-open"]);
+}
+
+#[tokio::test]
+async fn fail_close_chain_cancels_later_processors_without_rewriting_initiator() {
+    let (_client, mut session) = body_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    let first = install_exchange(&mut ctx, None, false, true, None);
+    let later = install_exchange(&mut ctx, None, false, false, None);
+    let (mut mirror, cancelled) = install_mirror(&mut ctx);
+    let mut body = Some(Bytes::from_static(b"abc"));
+    assert_eq!(
+        request_body_filter_action(&body_proxy(), &mut session, &mut body, RequestBodyEvent::Data, &mut ctx)
+            .await
+            .unwrap(),
+        RequestBodyAction::Terminate
+    );
+    assert_eq!(first.lock().terminal, vec!["fail-close"]);
+    assert!(later.lock().chunks.is_empty());
+    assert_eq!(later.lock().cancelled, 1);
+    assert!(cancelled.await.is_ok());
+    assert!(mirror.recv().await.is_none());
+}
+
+#[tokio::test]
+async fn final_output_overflow_preserves_completed_processor_outcome() {
+    let (_client, mut session) = body_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_body_config.max_body_size_bytes = 1;
+    let facts = install_exchange(
+        &mut ctx,
+        Some(body_mutation::Mutation::Body(b"ab".to_vec())),
+        false,
+        false,
+        None,
+    );
+    let mut body = None;
+    assert_eq!(
+        request_body_filter_action(
+            &body_proxy(),
+            &mut session,
+            &mut body,
+            RequestBodyEvent::Complete,
+            &mut ctx
+        )
+        .await
+        .unwrap(),
+        RequestBodyAction::Terminate
+    );
+    assert_eq!(session.response_written().unwrap().status.as_u16(), 413);
+    assert_eq!(facts.lock().eos, 1);
+    assert_eq!(facts.lock().cancelled, 0);
+    assert!(facts.lock().terminal.is_empty());
+}
+
+#[tokio::test]
+async fn trailers_reject_streamed_handlers_before_clean_eos_and_preserve_ordinary_requests() {
+    let (_client, mut session) = body_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    assert_eq!(
+        request_trailer_filter(&mut session, &mut ctx).await.unwrap(),
+        RequestBodyAction::Continue
+    );
+    let facts = install_exchange(&mut ctx, None, true, false, None);
+    let (mut mirror, cancelled) = install_mirror(&mut ctx);
+    assert_eq!(
+        request_trailer_filter(&mut session, &mut ctx).await.unwrap(),
+        RequestBodyAction::Terminate
+    );
+    assert_eq!(session.response_written().unwrap().status.as_u16(), 400);
+    assert_eq!(facts.lock().cancelled, 1);
+    assert_eq!(facts.lock().eos, 0);
+    assert!(cancelled.await.is_ok());
+    assert!(mirror.recv().await.is_none());
+    assert!(ctx.diagnostics.entries().contains(&RequestDiagnostic::Error(
+        EdgionErrorCode::BodyStreamTrailersUnsupported
+    )));
+}
+
+#[tokio::test]
+async fn streamed_rejection_preserves_already_committed_final_response() {
+    let (_client, mut session) = body_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    install_exchange(&mut ctx, None, false, false, None);
+    session
+        .write_response_header(Box::new(ResponseHeader::build(200, None).unwrap()), true)
+        .await
+        .unwrap();
+    assert_eq!(
+        request_trailer_filter(&mut session, &mut ctx).await.unwrap(),
+        RequestBodyAction::Terminate
+    );
+    assert_eq!(session.response_written().unwrap().status.as_u16(), 200);
+    assert_eq!(ctx.final_downstream_status(), None);
+}
+
+#[tokio::test]
+async fn abandoned_event_skips_accounts_and_never_sends_processor_eos() {
+    let (_client, mut session) = body_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_body_config.max_body_size_bytes = 0;
+    let facts = install_exchange(&mut ctx, None, false, false, None);
+    let (mut mirror, cancelled) = install_mirror(&mut ctx);
+    let mut body = Some(Bytes::from_static(b"incomplete"));
+    assert_eq!(
+        request_body_filter_action(
+            &body_proxy(),
+            &mut session,
+            &mut body,
+            RequestBodyEvent::Abandoned,
+            &mut ctx
+        )
+        .await
+        .unwrap(),
+        RequestBodyAction::Continue
+    );
+    assert!(session.response_written().is_none());
+    assert!(facts.lock().chunks.is_empty());
+    assert_eq!(facts.lock().cancelled, 1);
+    assert!(cancelled.await.is_ok());
+    assert!(mirror.recv().await.is_none());
+}
+
+#[tokio::test]
+async fn eos_output_rejection_closes_future_response_transaction_before_reply() {
+    let (_client, mut session) = body_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_body_config.max_body_size_bytes = 1;
+    let facts = Arc::new(Mutex::new(ExchangeFacts::default()));
+    assert!(
+        ctx.push_request_body_stream_handler(Box::new(ExtProcStreamedBodyHandler::new(
+            Box::new(TestExchange {
+                facts: facts.clone(),
+                mutation: Some(body_mutation::Mutation::Body(b"ab".to_vec())),
+                fail: false,
+                gate: None,
+            }),
+            false,
+            false,
+            None,
+            false,
+        )))
+    );
+    let mut body = None;
+    assert_eq!(
+        request_body_filter_action(
+            &body_proxy(),
+            &mut session,
+            &mut body,
+            RequestBodyEvent::Complete,
+            &mut ctx
+        )
+        .await
+        .unwrap(),
+        RequestBodyAction::Terminate
+    );
+    assert_eq!(facts.lock().eos, 1);
+    assert_eq!(facts.lock().cancelled, 1);
+    assert!(facts.lock().terminal.is_empty());
+    assert_eq!(session.response_written().unwrap().status.as_u16(), 413);
+}

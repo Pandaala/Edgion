@@ -25,7 +25,7 @@ impl crate::plugins::runtime::traits::RequestBodyStreamHandler for NoopStreamHan
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn request_body_plugin_state_has_one_small_outer_box() {
-    assert_eq!(std::mem::size_of::<RequestBodyPluginState>(), 40);
+    assert_eq!(std::mem::size_of::<RequestBodyPluginState>(), 56);
     assert_eq!(std::mem::size_of::<Option<Box<RequestBodyPluginState>>>(), 8);
 }
 
@@ -116,4 +116,20 @@ fn retiring_mirror_preserves_observer_state_without_disabling_replay() {
     assert!(ctx.has_request_body_plugins());
     assert!(ctx.has_request_body_observers());
     assert!(!ctx.request_body_stream_active());
+}
+
+#[test]
+fn streamed_accounting_accepts_inclusive_cap_and_rejects_overflow_without_publication() {
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_body_config.max_body_size_bytes = u64::MAX;
+    assert!(ctx.push_request_body_stream_handler(Box::new(NoopStreamHandler)));
+    ctx.request_body_plugins.as_deref_mut().unwrap().streamed_input_bytes = u64::MAX - 1;
+    assert!(ctx.admit_streamed_request_body_bytes(1, false));
+    assert!(!ctx.admit_streamed_request_body_bytes(1, false));
+    assert_eq!(
+        ctx.request_body_plugins.as_deref().unwrap().streamed_input_bytes,
+        u64::MAX
+    );
+    assert!(ctx.admit_streamed_request_body_bytes(3, true));
+    assert_eq!(ctx.request_body_plugins.as_deref().unwrap().streamed_output_bytes, 3);
 }

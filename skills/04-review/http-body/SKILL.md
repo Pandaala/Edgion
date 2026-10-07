@@ -22,6 +22,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Streamed request cap, trailer rejection, and ordered mirror publication](regression-guards/streamed-request-body-admission.md)
+
 - [WAF prefix admission before backend dispatch](regression-guards/waf-prefix-before-dispatch.md)
 
 - [The silent admission disposition requires unanimous facts — FIXED](regression-guards/body-admission-reads-pre-plugin-snapshots.md)

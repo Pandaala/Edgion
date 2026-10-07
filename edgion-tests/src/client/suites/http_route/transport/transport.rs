@@ -447,6 +447,15 @@ static SHAPES: &[ShapeDef] = &[
         run: shape_fn!(shape_client_sends_trailers),
     },
     ShapeDef {
+        name: "streamed_client_sends_trailers",
+        description: "Streamed request trailers cause 400 without forwarding trailers or clean body EOF",
+        combos: &Combo::STREAMED,
+        skips: &[],
+        absent_kinds: &[KIND_REQ_TRAILERS],
+        asserted_kinds: kinds_head_data,
+        run: shape_fn!(shape_client_sends_trailers),
+    },
+    ShapeDef {
         name: "client_pipelines_second_request",
         description: "A pipelined second HTTP/1 request is never forwarded; request one is answered, the \
                       connection closes, and the client can resend",
@@ -496,7 +505,7 @@ static SHAPES: &[ShapeDef] = &[
 ///
 /// The runner rejects a completely empty selection, while this exact count also
 /// detects a non-empty matrix that silently loses only some combinations.
-const EXPECTED_TRANSPORT_CASES: usize = 165;
+const EXPECTED_TRANSPORT_CASES: usize = 169;
 
 // ===========================================================================
 // The case wrapper
@@ -2339,6 +2348,41 @@ async fn shape_client_sends_trailers(
         Duration::from_secs(10),
     )
     .await?;
+    if combo.streamed {
+        if out.status != Some(400) {
+            return Err(format!(
+                "streamed request trailers must be rejected with 400: {}",
+                out.describe()
+            ));
+        }
+        let _ = head_for(&probe, &trace, combo).await?;
+        let snapshot = probe.snapshot().await?;
+        if snapshot.req_body_total(&trace) == 0 {
+            return Err(format!(
+                "streamed trailer rejection did not exercise a partial upstream upload\n{snapshot}"
+            ));
+        }
+        let forbidden = |event: &TransportEvent| {
+            event.tagged(&trace)
+                && (event.is(KIND_REQ_TRAILERS) || (event.is(KIND_REQ_DATA) && event.end_stream == Some(true)))
+        };
+        if snapshot.count_matching(forbidden) != 0 {
+            return Err(format!(
+                "streamed rejection forwarded trailers or a clean body EOF\n{snapshot}"
+            ));
+        }
+        probe
+            .expect_none(
+                "a clean upload completion after streamed trailer rejection",
+                Duration::from_millis(400),
+                forbidden,
+            )
+            .await?;
+        require_single_attempt(&snapshot, &trace)?;
+        return Ok(
+            "streamed trailers rejected with 400; partial upload never received clean EOF or trailers".to_string(),
+        );
+    }
     if out.status != Some(200) {
         return Err(format!(
             "a trailer-bearing request must still complete, {}",

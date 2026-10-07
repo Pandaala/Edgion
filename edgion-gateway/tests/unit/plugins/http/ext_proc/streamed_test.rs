@@ -455,3 +455,25 @@ async fn take_log_is_none_without_entries() {
     ));
     assert!(handler.take_log().is_none(), "mid-stream success logs nothing");
 }
+
+#[tokio::test]
+async fn completed_request_abandonment_closes_pending_response_owner_without_overwriting_terminal_results() {
+    for prior in [None, Some("success"), Some("immediate-response"), Some("fail-close")] {
+        let owner = Arc::new(AttachedExtProc::test_lazy());
+        if let Some(outcome) = prior {
+            owner.mark_terminal(outcome, "test-terminal");
+        }
+        let mut handler = ExtProcStreamedBodyHandler::new(Box::new(owner.clone()), false, false, None, false);
+        // The request direction is done, but the shared response transaction
+        // can still be pending. No network exchange is needed to test close.
+        handler.done = true;
+        assert!(matches!(
+            handler.on_chunk(&mut None, RequestBodyEvent::Abandoned).await,
+            ChunkVerdict::Continue
+        ));
+        assert!(handler.exchange.is_none());
+        let text = owner.take_summary_line().unwrap();
+        assert!(text.contains(prior.unwrap_or("cancelled")), "{text}");
+        assert!(!text.contains("logging-fallback"));
+    }
+}

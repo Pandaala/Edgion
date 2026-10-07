@@ -3833,7 +3833,7 @@ mod ext_proc_server {
         }
     }
 
-    fn request_body_verdict_with(body: &'static [u8]) -> ProcessingResponse {
+    fn request_body_verdict_with(body: &[u8]) -> ProcessingResponse {
         ProcessingResponse {
             response: Some(processing_response::Response::RequestBody(BodyResponse {
                 response: Some(CommonResponse {
@@ -3913,6 +3913,28 @@ mod ext_proc_server {
                     .headers
                     .as_ref()
                     .and_then(|headers| header_value(headers, TEST_MODE_HEADER));
+                if mode.as_deref() == Some("chain") {
+                    let second = h
+                        .headers
+                        .as_ref()
+                        .and_then(|headers| header_value(headers, "x-ext-proc-chain"))
+                        .as_deref()
+                        == Some("first");
+                    *mode = Some(if second { "chain-second" } else { "chain-first" }.to_string());
+                    let mut verdict = headers_verdict(true, "x-ext-proc-req");
+                    if let Some(processing_response::Response::RequestHeaders(ref mut response)) = verdict.response {
+                        response
+                            .response
+                            .as_mut()
+                            .unwrap()
+                            .header_mutation
+                            .as_mut()
+                            .unwrap()
+                            .set_headers
+                            .push(set_opt("x-ext-proc-chain", if second { "second" } else { "first" }));
+                    }
+                    return (Some(verdict), false);
+                }
                 let has = |name: &str| {
                     h.headers
                         .as_ref()
@@ -3954,8 +3976,23 @@ mod ext_proc_server {
                 Some("close-on-response-headers") => (None, true),
                 _ => (Some(headers_verdict(false, "x-ext-proc-resp")), false),
             },
-            processing_request::Request::RequestBody(_) => {
+            processing_request::Request::RequestBody(body) => {
                 let response = match mode.as_deref() {
+                    Some("chain-first") | Some("chain-second") => {
+                        // Noncommutative byte mapping proves processor order independently
+                        // of transport chunk boundaries; an empty EOS emits no extra bytes.
+                        let (from, to) = if mode.as_deref() == Some("chain-first") {
+                            (b'a', b'b')
+                        } else {
+                            (b'b', b'c')
+                        };
+                        let transformed: Vec<u8> = body
+                            .body
+                            .into_iter()
+                            .map(|byte| if byte == from { to } else { byte })
+                            .collect();
+                        request_body_verdict_with(&transformed)
+                    }
                     Some("duplicate-header") | Some("wrong-order") => headers_verdict(true, "x-duplicate-phase"),
                     Some("bodyless-create") => request_body_verdict_with(b"created-by-ext-proc"),
                     // Streamed mid-body rejection: the first body chunk draws an

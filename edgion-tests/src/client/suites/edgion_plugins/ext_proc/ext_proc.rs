@@ -3381,6 +3381,144 @@ impl ExtProcTestSuite {
         )
     }
 
+    /// Complete-body capture cannot compose with request streaming.
+    fn test_streamed_after_capture_follows_failure_policy() -> TestCase {
+        TestCase::new(
+            "streamed_after_capture_follows_failure_policy",
+            "complete capture refuses STREAMED install; fail-open preserves captured bytes and fail-close denies",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let original = "captured-original";
+                    for (mode, expected_status) in [("close", 500), ("open", 200)] {
+                        let response = match ctx
+                            .http_client
+                            .post(format!("{}/mirror/capture", ctx.http_url()))
+                            .header("host", format!("ext-proc-streamed-after-capture-{mode}.example.com"))
+                            .body(original)
+                            .send()
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(error) => {
+                                return TestResult::failed(start.elapsed(), format!("{mode} request: {error}"))
+                            }
+                        };
+                        let digest = hex::encode(Sha256::digest(original.as_bytes()));
+                        if response.status().as_u16() != expected_status
+                            || (mode == "open"
+                                && response
+                                    .headers()
+                                    .get("x-captured-body-sha256")
+                                    .and_then(|v| v.to_str().ok())
+                                    != Some(digest.as_str()))
+                        {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!(
+                                    "{mode} incompatible composition status/body mismatch: {}",
+                                    response.status()
+                                ),
+                            );
+                        }
+                        if let Err(error) = response.bytes().await {
+                            return TestResult::failed(start.elapsed(), format!("{mode} incomplete response: {error}"));
+                        }
+                    }
+                    TestResult::passed(start.elapsed())
+                })
+            },
+        )
+    }
+
+    fn test_streamed_chain_and_mirror() -> TestCase {
+        TestCase::new(
+            "streamed_chain_and_mirror",
+            "two request processors compose in order and mirror the exact upstream body over H1 and H2",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let host = "ext-proc-streamed-chain.example.com";
+                    let address = match tokio::net::lookup_host((ctx.target_host.as_str(), ctx.http_port)).await {
+                        Ok(mut addresses) => match addresses.next() {
+                            Some(address) => address,
+                            None => return TestResult::failed(start.elapsed(), "gateway address is empty".to_string()),
+                        },
+                        Err(error) => return TestResult::failed(start.elapsed(), format!("gateway address: {error}")),
+                    };
+                    for h2 in [false, true] {
+                        let marker = format!("ext-proc-chain-{}", uuid::Uuid::new_v4());
+                        let mut builder = reqwest::Client::builder().no_proxy().resolve(host, address);
+                        if h2 {
+                            builder = builder.http2_prior_knowledge();
+                        } else {
+                            builder = builder.http1_only();
+                        }
+                        let client = match builder.build() {
+                            Ok(client) => client,
+                            Err(error) => return TestResult::failed(start.elapsed(), format!("client build: {error}")),
+                        };
+                        let original = "a".repeat(128);
+                        let expected = "c".repeat(128);
+                        let response = match client
+                            .post(format!("http://{host}:{}/mirror/capture", ctx.http_port))
+                            .header("x-ext-proc-test-mode", "chain")
+                            .header("traceparent", crate::access_log_client::traceparent_for_marker(&marker))
+                            .body(original)
+                            .send()
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(error) => {
+                                return TestResult::failed(start.elapsed(), format!("H2={h2} request: {error}"))
+                            }
+                        };
+                        let digest = hex::encode(Sha256::digest(expected.as_bytes()));
+                        if response.status().as_u16() != 200
+                            || response
+                                .headers()
+                                .get("x-captured-body-sha256")
+                                .and_then(|v| v.to_str().ok())
+                                != Some(digest.as_str())
+                        {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!(
+                                    "H2={h2} upstream received incorrect processor order/body: status={} digest={:?}",
+                                    response.status(),
+                                    response.headers().get("x-captured-body-sha256")
+                                ),
+                            );
+                        }
+                        if h2 && response.version() != reqwest::Version::HTTP_2 {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                "H2 chain test did not negotiate H2".to_string(),
+                            );
+                        }
+                        if let Err(error) = response.bytes().await {
+                            return TestResult::failed(start.elapsed(), format!("chain response incomplete: {error}"));
+                        }
+                        match super::super::body_plugins::poll_mirrored_body(&ctx, &marker).await {
+                            Ok(body) if body == expected => {}
+                            Ok(_) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("H2={h2} mirror body differs from final upstream body"),
+                                )
+                            }
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        }
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "H1/H2: two ordered processors and mirror produced identical final bytes".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
     /// Coexistence: ForwardAuth + ExtProc on the same request chain both apply.
     fn test_coexist_with_forward_auth() -> TestCase {
         TestCase::new(
@@ -3451,6 +3589,8 @@ impl TestSuite for ExtProcTestSuite {
             Self::test_fail_open_passes(),
             Self::test_bad_verdict_fail_closes(),
             Self::test_streamed_body_mutation(),
+            Self::test_streamed_chain_and_mirror(),
+            Self::test_streamed_after_capture_follows_failure_policy(),
             Self::test_streamed_immediate_response_mid_body(),
             Self::test_streamed_multi_chunk_mutation(),
             Self::test_streamed_degenerate_continue_and_replace_fail_closes(),

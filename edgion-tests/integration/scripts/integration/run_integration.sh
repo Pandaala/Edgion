@@ -2855,7 +2855,7 @@ main() {
     # macOS-only aliases that belong to unrelated LB and GeoIP suites.
     if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || { [ "$G_ITEM" = "Responses" ] || [ "$G_ITEM" = "Messages" ]; }; }; } \
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
-        || { [ "$G_RESOURCE" = "HTTPRoute" ] && [ "$G_ITEM" = "Backend/InformationalRetry" ]; } \
+        || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ]; }; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
         || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ]; }; }; then
         log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"

@@ -1,0 +1,71 @@
+# Two independent processors apply a -> b -> c in order, then mirror final bytes.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-streamed-chain
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService: {target: "127.0.0.1:30041", timeoutMs: 2000}
+        processingMode: {requestHeaderMode: SEND, requestBodyMode: STREAMED}
+        failureModeAllow: false
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService: {target: "127.0.0.1:30041", timeoutMs: 2000}
+        processingMode: {requestHeaderMode: SEND, requestBodyMode: STREAMED}
+        failureModeAllow: false
+    - enable: true
+      type: RequestMirror
+      config:
+        backendRef: {name: test-http, namespace: edgion-test, port: 30001}
+        connectTimeoutMs: 500
+        writeTimeoutMs: 1000
+        maxBufferedChunks: 10
+        mirrorLog: true
+        maxConcurrent: 100
+---
+# Complete capture followed by STREAMED must refuse handler installation.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-streamed-after-capture-close
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: capture-before-streamed
+        source: 'let size = req.body.byte_len()'
+        errorPolicy: deny
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService: {target: "127.0.0.1:30041", timeoutMs: 2000}
+        processingMode: {requestHeaderMode: SEND, requestBodyMode: STREAMED}
+        failureModeAllow: false
+---
+# Complete capture followed by STREAMED must refuse handler installation.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-streamed-after-capture-open
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: capture-before-streamed
+        source: 'let size = req.body.byte_len()'
+        errorPolicy: deny
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService: {target: "127.0.0.1:30041", timeoutMs: 2000}
+        processingMode: {requestHeaderMode: SEND, requestBodyMode: STREAMED}
+        failureModeAllow: true

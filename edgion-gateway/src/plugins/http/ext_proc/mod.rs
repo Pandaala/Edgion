@@ -5,6 +5,8 @@ mod plugin;
 mod response_streamed;
 mod response_trailer;
 mod streamed;
+#[cfg(test)]
+pub(crate) use streamed::{BodyExchange, ExtProcStreamedBodyHandler};
 
 pub(crate) use attached::AttachedExtProc;
 pub use plugin::ExtProc;
