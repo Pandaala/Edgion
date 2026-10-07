@@ -593,3 +593,79 @@ fn preordered_shared_and_distinct_xml_profiles_preserve_target_effect_order() {
         assert_eq!(tx.tx_value(b"capture"), Some(b"safe".as_slice()));
     }
 }
+
+fn activation_xml_transaction<'g>(g: &'g CompiledGeneration, xml: &[u8], force: bool, chunk: usize) -> Transaction<'g> {
+    let mut tx = transaction(g, RuleEngineMode::On, RuntimeLimits::default());
+    tx.tx.force_unpruned_inspection = force;
+    let mut session = tx
+        .start_xml_inspection(XmlInspectionLimits::default(), Some(xml.len()))
+        .unwrap();
+    for bytes in xml.chunks(chunk) {
+        session.feed(bytes).unwrap();
+    }
+    session.complete(xml.len()).unwrap();
+    session.finish(None).unwrap();
+    tx
+}
+#[test]
+fn activation_xml_preserves_namespaces_counts_and_unpruned_outcomes() {
+    let g = compile(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1,setvar:tx.needle=attack\"\n",
+        "SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,skipAfter:END\"\n",
+        "SecRule XML:/*|XML://@* \"@rx (?P<word>attack)\" \"id:3,phase:2,pass,capture,setvar:tx.hidden=hit\"\n",
+        "SecMarker END\n",
+        "SecRule &XML \"@ge 1\" \"id:4,phase:2,pass,setvar:tx.count=%{MATCHED_VAR}\"\n",
+        "SecAction \"id:5,phase:2,pass,setvar:tx.dynamic=%{TX.needle}\"\n",
+    ));
+    let input = b"<p:r xmlns:p='urn:test' a='attack'><p:v>attack</p:v><p:v>clean</p:v></p:r>";
+    for chunk in [1, 7, input.len()] {
+        let scope = measurements::start();
+        let mut fast = activation_xml_transaction(&g, input, false, chunk);
+        assert!(scope.counts().get(Event::AvoidedPredicateGroups) > 0);
+        assert_eq!(scope.counts().get(Event::CaptureScratchInitializations), 0);
+        let mut oracle = activation_xml_transaction(&g, input, true, chunk);
+        assert_eq!(fast.execute_request_body(), oracle.execute_request_body());
+        for key in [b"hidden".as_slice(), b"count", b"dynamic", b"word"] {
+            assert_eq!(fast.tx_value(key), oracle.tx_value(key));
+        }
+        assert_eq!(fast.tx_value(b"dynamic"), Some(b"attack".as_slice()));
+        assert_eq!(fast.tx_value(b"hidden"), None);
+    }
+}
+#[test]
+fn activation_xml_removed_gate_and_prior_landing_keep_body_consumers() {
+    for prefix in [
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1,ctl:ruleRemoveByTag=gate\"\n",
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1,ctl:ruleRemoveTargetByTag=gate;TX:level\"\n",
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1\"\nSecAction \"id:5,phase:2,pass,skipAfter:LAND\"\n",
+    ] {
+        let g = compile(&format!("{prefix}SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,tag:gate,skipAfter:END\"\nSecMarker LAND\nSecRule XML:/*|XML://@* \"@rx (attack)\" \"id:3,phase:2,pass,capture,setvar:tx.result=%{{TX.1}}\"\nSecMarker END\n"));
+        let input = b"<r a='attack'>attack</r>";
+        let mut fast = activation_xml_transaction(&g, input, false, 1);
+        let mut oracle = activation_xml_transaction(&g, input, true, input.len());
+        assert_eq!(fast.execute_request_body(), oracle.execute_request_body());
+        assert_eq!(fast.tx_value(b"result"), Some(b"attack".as_slice()));
+        assert_eq!(fast.tx_value(b"result"), oracle.tx_value(b"result"));
+    }
+}
+#[test]
+fn activation_xml_with_no_static_dispatch_keeps_syntax_namespace_and_utf8_failures() {
+    let g = compile(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1\"\n",
+        "SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,skipAfter:END\"\n",
+        "SecRule XML:/*|XML://@* \"@rx attack\" \"id:3,phase:2,pass\"\n",
+        "SecMarker END\n",
+    ));
+    for input in [
+        b"<r>clean</wrong>".as_slice(),
+        b"<p:r/>",
+        b"<r a='1' a='2'/>",
+        b"<r>\xff</r>",
+    ] {
+        let mut fast = transaction(&g, RuleEngineMode::On, RuntimeLimits::default());
+        let mut oracle = transaction(&g, RuleEngineMode::On, RuntimeLimits::default());
+        oracle.tx.force_unpruned_inspection = true;
+        assert_eq!(publish(&mut fast, input), publish(&mut oracle, input));
+        assert!(fast.json_failure.is_some());
+    }
+}

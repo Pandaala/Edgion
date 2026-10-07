@@ -690,6 +690,7 @@ struct StoreRecords<'generation> {
     domain: InspectionDomain,
     owner: u64,
     generation: GenerationHandle<'generation>,
+    active_groups: Vec<bool>,
     named_first: Vec<Option<CandidateId>>,
     qualified_names: Vec<QualifiedNamePair>,
     runtime: RuntimeLimits,
@@ -703,6 +704,14 @@ struct StoreRecords<'generation> {
 }
 
 impl StoreRecords<'_> {
+    fn group_active(&self, group: usize) -> Result<bool> {
+        self.plan().groups.get(group).ok_or(StoreError::Identity)?;
+        if self.active_groups.is_empty() {
+            Ok(true)
+        } else {
+            self.active_groups.get(group).copied().ok_or(StoreError::Identity)
+        }
+    }
     fn plan(&self) -> &super::super::json_inspection_plan::CompiledJsonPlan {
         self.generation.inspection_plan(self.domain)
     }
@@ -744,6 +753,7 @@ impl<'generation> ResultStore<'generation> {
                 domain,
                 owner,
                 generation,
+                active_groups: Vec::new(),
                 named_first: Vec::new(),
                 qualified_names: Vec::new(),
                 runtime,
@@ -780,6 +790,35 @@ impl<'generation> ResultStore<'generation> {
             self.terminal = Terminal::Failed(error);
         }
         result
+    }
+    /// Empty storage means all groups active. Otherwise retain one exact mask
+    /// owner through sealing; absent facts must never become ordinary misses.
+    pub(super) fn initialize_activation(&mut self, count: usize) -> Result<()> {
+        self.active(|store| {
+            if count != store.records.plan().groups.len() {
+                return Err(StoreError::Identity);
+            }
+            store
+                .budget
+                .reserve_publication(&mut store.records.active_groups, count)?;
+            store.budget.work(count)?;
+            store.records.active_groups.resize(count, false);
+            Ok(())
+        })
+    }
+    pub(super) fn activate_group(&mut self, group: usize) -> Result<()> {
+        self.active(|store| {
+            store.budget.work(1)?;
+            *store.records.active_groups.get_mut(group).ok_or(StoreError::Identity)? = true;
+            Ok(())
+        })
+    }
+    /// Collector filtering is allowed to observe false; canonical lookup is not.
+    pub(super) fn is_group_active(&mut self, group: usize) -> Result<bool> {
+        self.active(|store| {
+            store.budget.work(1)?;
+            store.records.group_active(group)
+        })
     }
     pub(super) fn begin_candidate(
         &mut self,
@@ -1431,7 +1470,9 @@ impl<'generation> ResultStore<'generation> {
             } else {
                 None
             };
-            let mut summary_no_hit = sole_profile.is_some()
+            store.budget.work(store.records.active_groups.len())?;
+            let mut summary_no_hit = !store.records.active_groups.contains(&false)
+                && sole_profile.is_some()
                 && store.records.profiles.slots.capacity() == 0
                 && store.records.changes.slots.capacity() == 0
                 && store.records.outcomes.slots.capacity() == 0;
@@ -1654,6 +1695,7 @@ impl<'generation> ResultStore<'generation> {
         self.records.outcomes = Pool::new(owner);
         self.records.captures = Pool::new(owner);
         self.records.bytes = BytePool::new(owner);
+        self.records.active_groups = Vec::new();
         self.records.named_first = Vec::new();
         self.records.qualified_names = Vec::new();
         let previous = self.budget.usage;
@@ -1720,6 +1762,15 @@ impl SealedResults<'_> {
         }
     }
 
+    pub(super) fn guard_group(&self, budget: &mut InspectionBudget, group: usize) -> Result<()> {
+        budget.checked(self.records.owner, |_| {
+            if self.records.group_active(group)? {
+                Ok(())
+            } else {
+                Err(StoreError::State)
+            }
+        })
+    }
     pub(super) fn admits_summary_no_hit(
         &self,
         budget: &InspectionBudget,
@@ -1916,6 +1967,9 @@ impl SealedResults<'_> {
                 || self.records.mode != mode
             {
                 return Err(StoreError::Identity);
+            }
+            if !self.records.group_active(group)? {
+                return Err(StoreError::State);
             }
             let compiled = self
                 .records

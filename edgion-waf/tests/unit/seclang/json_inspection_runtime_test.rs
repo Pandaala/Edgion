@@ -2876,3 +2876,733 @@ fn shared_capture_payload_lengths_still_count_toward_tx_admission() {
     assert_eq!(tx.tx_value(b"1"), None);
     assert!(tx.tx.matched_var.is_none());
 }
+
+fn activation_transaction<'g>(g: &'g CompiledGeneration, body: &[u8], force: bool, chunk: usize) -> Transaction<'g> {
+    let mut tx = Transaction::new(g, head(b"/?q=2"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    tx.tx.force_unpruned_inspection = force;
+    tx.force_json_cursor = true;
+    let mut session = tx
+        .start_json_inspection(JsonInspectionLimits::default(), Some(body.len()))
+        .unwrap();
+    for part in body.chunks(chunk) {
+        session.feed(part).unwrap();
+    }
+    session.complete(body.len()).unwrap();
+    let raw = session.requires_raw_source().then(|| Bytes::copy_from_slice(body));
+    session.finish(raw).unwrap();
+    tx
+}
+fn activation_tx_snapshot(tx: &Transaction<'_>) -> Vec<(Vec<u8>, Vec<u8>)> {
+    tx.tx
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.key.observed_bytes(&tx.request).unwrap().to_vec(),
+                entry.value.observed_bytes(&tx.request).unwrap().to_vec(),
+            )
+        })
+        .collect()
+}
+fn assert_activation_parity(fast: &mut Transaction<'_>, oracle: &mut Transaction<'_>) {
+    assert_eq!(fast.execute_request_body(), oracle.execute_request_body());
+    assert_eq!(activation_tx_snapshot(fast), activation_tx_snapshot(oracle));
+    assert_eq!(
+        fast.capture_keys
+            .iter()
+            .map(|key| key.observed_bytes(&fast.request).unwrap())
+            .collect::<Vec<_>>(),
+        oracle
+            .capture_keys
+            .iter()
+            .map(|key| key.observed_bytes(&oracle.request).unwrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(fast.next_phase(), oracle.next_phase());
+    assert_eq!(fast.request_body_error(), oracle.request_body_error());
+}
+#[test]
+fn activation_prunes_only_unreachable_groups_and_is_independent_of_chunk_schedule() {
+    let g = compile(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.Level=1\"\n",
+        "SecRule TX:level \"!@ge 2\" \"id:2,phase:2,pass,skipAfter:END\"\n",
+        "SecRule ARGS \"@rx (?P<word>attack)\" \"id:3,phase:2,pass,capture,setvar:tx.result=blocked\"\n",
+        "SecMarker END\n",
+        "SecAction \"id:4,phase:2,pass,setvar:tx.after=done\"\n",
+    ));
+    let input = br#"{"a":"attack","a":"clean","b":["attack","clean"]}"#;
+    for chunk in [1, 3, input.len()] {
+        let scope = measurements::start();
+        let mut fast = activation_transaction(&g, input, false, chunk);
+        let fast_counts = scope.counts();
+        assert!(fast_counts.get(Event::AvoidedPredicateGroups) > 0);
+        assert_eq!(fast_counts.get(Event::CaptureScratchInitializations), 0);
+        assert!(fast.capture_scratch.iter().all(Option::is_none));
+        let mut oracle = activation_transaction(&g, input, true, chunk);
+        assert_activation_parity(&mut fast, &mut oracle);
+        assert_eq!(fast.tx_value(b"result"), None);
+        assert_eq!(fast.tx_value(b"after"), Some(b"done".as_slice()));
+    }
+}
+#[test]
+fn activation_unknown_edges_prior_landing_removed_gate_and_target_exclusion_preserve_results() {
+    let prefixes = [
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1\"\nSecAction \"id:5,phase:2,pass,skipAfter:LAND\"\n",
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1,ctl:ruleRemoveByTag=gate\"\n",
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1,ctl:ruleRemoveTargetByTag=gate;TX:LEVEL\"\n",
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=invalid\"\n",
+        "",
+    ];
+    for prefix in prefixes {
+        let g = compile(&format!("{prefix}SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,tag:gate,skipAfter:END\"\nSecMarker LAND\nSecRule ARGS \"@rx (?P<word>attack)\" \"id:3,phase:2,pass,capture,setvar:tx.result=%{{TX.word}}\"\nSecMarker END\n"));
+        let mut fast = activation_transaction(&g, br#"{"a":"attack"}"#, false, 1);
+        let mut oracle = activation_transaction(&g, br#"{"a":"attack"}"#, true, 3);
+        assert_activation_parity(&mut fast, &mut oracle);
+        // Invalid seed must defer the same canonical conversion failure.
+        if !prefix.contains("invalid") {
+            assert_eq!(fast.tx_value(b"result"), Some(b"attack".as_slice()), "{prefix}");
+        }
+    }
+}
+#[test]
+fn activation_stability_counterexamples_use_the_unpruned_oracle() {
+    for (key, prelude, mutation) in [
+        ("level", "setvar:tx.level=3", "setvar:tx.LEVEL=1"),
+        ("level", "setvar:tx.level=3", "setvar:!tx.LEVEL"),
+        ("level", "setvar:tx.level=3", "setvar:tx.LEVEL=-2"),
+        ("level", "setvar:tx.level=1", "setvar:tx.LEVEL=+2"),
+        (
+            "level",
+            "setvar:tx.level=3,setvar:tx.key=level",
+            "setvar:tx.%{TX.key}=1",
+        ),
+        (
+            "level",
+            "setvar:tx.level=3,setvar:tx.key=vel",
+            "setvar:tx.le%{TX.key}=1",
+        ),
+    ] {
+        let g = compile(&format!("SecAction \"id:1,phase:1,pass,{prelude}\"\nSecAction \"id:2,phase:2,pass,{mutation}\"\nSecRule TX:{key} \"@lt 2\" \"id:3,phase:2,pass,skipAfter:END\"\nSecRule ARGS \"@contains attack\" \"id:4,phase:2,pass,setvar:tx.result=hit\"\nSecMarker END\n"));
+        assert!(!g.inspection_activation.has_gate);
+        let mut fast = activation_transaction(&g, br#"{"a":"attack"}"#, false, 1);
+        let mut oracle = activation_transaction(&g, br#"{"a":"attack"}"#, true, 7);
+        assert_activation_parity(&mut fast, &mut oracle);
+    }
+    // Phase1 capture alias is deleted by the Phase2 capture before the gate.
+    let g = compile(concat!(
+        "SecRule REQUEST_URI \"@rx (?P<level>2)\" \"id:1,phase:1,pass,capture\"\n",
+        "SecRule ARGS:json.a \"@rx (attack)\" \"id:2,phase:2,pass,capture\"\n",
+        "SecRule TX:level \"@ge 2\" \"id:3,phase:2,pass,skipAfter:END\"\n",
+        "SecRule ARGS \"@contains attack\" \"id:4,phase:2,pass,setvar:tx.result=hit\"\n",
+        "SecMarker END\n",
+    ));
+    assert!(!g.inspection_activation.has_gate);
+    let mut fast = activation_transaction(&g, br#"{"a":"attack"}"#, false, 1);
+    let mut oracle = activation_transaction(&g, br#"{"a":"attack"}"#, true, 7);
+    assert_activation_parity(&mut fast, &mut oracle);
+    assert_eq!(fast.tx_value(b"level"), None);
+    assert_eq!(fast.tx_value(b"result"), Some(b"hit".as_slice()));
+}
+#[test]
+fn activation_preserves_shared_fact_chain_children_and_later_phase_consumers() {
+    for tail in [
+        "SecRule ARGS \"@ge 1\" \"id:4,phase:2,pass,setvar:tx.tail=hit\"\n",
+        "SecRule REQUEST_METHOD \"@streq POST\" \"id:4,phase:2,pass,chain\"\nSecRule ARGS \"@ge 1\" \"setvar:tx.tail=hit\"\n",
+        "SecRule ARGS \"@ge 1\" \"id:4,phase:3,pass,setvar:tx.tail=hit\"\n",
+    ] {
+        let g = compile(&format!("SecAction \"id:1,phase:1,pass,setvar:tx.level=1\"\nSecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,skipAfter:END\"\nSecRule ARGS \"@ge 1\" \"id:3,phase:2,pass,setvar:tx.skipped=hit\"\nSecMarker END\n{tail}"));
+        let mut fast = activation_transaction(&g, br#"{"a":"2"}"#, false, 1);
+        let mut oracle = activation_transaction(&g, br#"{"a":"2"}"#, true, 4);
+        assert_activation_parity(&mut fast, &mut oracle);
+        assert_eq!(fast.tx_value(b"skipped"), None);
+        fast.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+        oracle.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+        assert_eq!(fast.execute_response_headers(), oracle.execute_response_headers());
+        assert_eq!(activation_tx_snapshot(&fast), activation_tx_snapshot(&oracle));
+        assert_eq!(fast.tx_value(b"tail"), Some(b"hit".as_slice()));
+    }
+}
+#[test]
+fn activation_shared_profile_does_not_synthesize_an_inactive_no_hit_or_summary() {
+    let g = compile(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1\"\n",
+        "SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,skipAfter:END\"\n",
+        "SecRule ARGS \"@contains hidden\" \"id:3,phase:2,t:none,t:lowercase,pass\"\n",
+        "SecMarker END\n",
+        "SecRule ARGS \"@contains visible\" \"id:4,phase:2,t:none,t:lowercase,pass,setvar:tx.result=hit\"\n",
+    ));
+    let mut fast = activation_transaction(&g, br#"{"a":"CLEAN"}"#, false, 1);
+    fast.force_json_cursor = false;
+    // A stale/incorrect canonical path into the pruned region must fail even
+    // when its shared profile was completed by the active sibling.
+    assert!(matches!(
+        fast.json_summary_no_hit_tail(2, &TxState::default()),
+        Err(RuntimeError::JsonInspectionState)
+    ));
+    assert_eq!(fast.json_budget.as_ref().unwrap().failure(), Some(StoreError::State));
+    assert_eq!(fast.execute_request_body(), Err(RuntimeError::JsonInspectionState));
+}
+#[test]
+fn activation_with_no_predicates_still_rejects_malformed_json_and_charges_work() {
+    let g = compile(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1\"\n",
+        "SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,skipAfter:END\"\n",
+        "SecRule ARGS \"@rx attack\" \"id:3,phase:2,pass\"\n",
+        "SecMarker END\n",
+    ));
+    for input in [
+        b"{\"a\":\"x\",}".as_slice(),
+        b"{\"a\":\"\\uD800\"}",
+        b"{\"a\":\"x\"}",
+        b"{\"a\":\"\xff\"}",
+    ] {
+        let mut tx = Transaction::new(&g, head(b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        let result = tx.publish_request_body(RequestBody::new(
+            Bytes::copy_from_slice(input),
+            BodyProcessorSelection::Json,
+        ));
+        if input == b"{\"a\":\"x\"}" {
+            assert!(result.is_ok());
+        } else {
+            assert!(result.is_err(), "{input:?}");
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SupportedOracleBundle {
+    roots: Vec<String>,
+    rules: Vec<SupportedOracleMember>,
+    #[serde(default)]
+    phrase_assets: Vec<SupportedOracleMember>,
+}
+#[derive(serde::Deserialize)]
+struct SupportedOracleMember {
+    name: String,
+    content: String,
+}
+fn supported_oracle_bundle(profile: &str) -> SupportedOracleBundle {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../config/waf/crs-4.25.1-supported-v1/generated/EdgionConfigData_crs-supported-{profile}.yaml"
+    ));
+    let value: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    serde_yaml::from_value(value["spec"]["data"]["config"].clone()).unwrap()
+}
+fn supported_oracle_generation(profile: &str) -> CompiledGeneration {
+    use crate::seclang::{compile_rule_bundles, FrontendLimits, RuleBundleMember, RuleBundleSource};
+    let tuning = supported_oracle_bundle(profile);
+    let core = supported_oracle_bundle("core");
+    let bundles = [&tuning, &core];
+    let roots = bundles.map(|b| b.roots.iter().map(String::as_str).collect::<Vec<_>>());
+    let rules = bundles.map(|b| {
+        b.rules
+            .iter()
+            .map(|m| RuleBundleMember {
+                path: &m.name,
+                bytes: m.content.as_bytes(),
+            })
+            .collect::<Vec<_>>()
+    });
+    let assets = bundles.map(|b| {
+        b.phrase_assets
+            .iter()
+            .map(|m| RuleBundleMember {
+                path: &m.name,
+                bytes: m.content.as_bytes(),
+            })
+            .collect::<Vec<_>>()
+    });
+    let identity = format!("edgion-default/crs-supported-{profile}");
+    let sources = [
+        RuleBundleSource {
+            identity: &identity,
+            entrypoints: &roots[0],
+            rules: &rules[0],
+            phrase_assets: &assets[0],
+        },
+        RuleBundleSource {
+            identity: "edgion-default/crs-supported-core",
+            entrypoints: &roots[1],
+            rules: &rules[1],
+            phrase_assets: &assets[1],
+        },
+    ];
+    let phases = [
+        Phase::RequestHeaders,
+        Phase::RequestBody,
+        Phase::ResponseHeaders,
+        Phase::ResponseBody,
+        Phase::Logging,
+    ]
+    .map(|p| PhaseDefaults::pass(p, true, true));
+    let g = compile_rule_bundles(
+        &sources,
+        "",
+        SemanticValidationContext::try_new(Some(Phase::RequestBody), &phases).unwrap(),
+        FrontendLimits::default(),
+    )
+    .unwrap()
+    .into_parts()
+    .0;
+    assert_eq!(g.rule_units().count(), 567);
+    assert_eq!(
+        g.inspection_activation
+            .steps
+            .iter()
+            .filter(|step| step.gate.is_some())
+            .count(),
+        60
+    );
+    g
+}
+fn supported_oracle_transaction<'g>(
+    g: &'g CompiledGeneration,
+    body: &[u8],
+    xml: bool,
+    mode: RuleEngineMode,
+    force: bool,
+    work: usize,
+    chunk: Option<usize>,
+) -> (Transaction<'g>, Result<PhaseOutcome, RuntimeError>) {
+    let length = body.len().to_string();
+    let headers = [
+        RequestHeader::new(b"host", b"profile.example.com"),
+        RequestHeader::new(b"user-agent", b"edgion-profile-benchmark"),
+        RequestHeader::new(b"accept", b"*/*"),
+        RequestHeader::new(
+            b"content-type",
+            if xml { b"application/xml" } else { b"application/json" },
+        ),
+        RequestHeader::new(b"content-length", length.as_bytes()),
+    ];
+    let head = RequestHead::new(
+        b"POST /echo HTTP/1.1",
+        b"POST",
+        b"/echo",
+        b"/echo",
+        b"HTTP/1.1",
+        b"192.0.2.1",
+        b"profile.example.com",
+        &headers,
+    );
+    let mut tx =
+        Transaction::new_with_modes(g, head, RuntimeLimits::default(), EvaluationMode::Accelerated, mode).unwrap();
+    let outcome = (|| {
+        tx.execute_request_headers()?;
+        tx.tx.force_unpruned_inspection = force;
+        let json_limits = JsonInspectionLimits {
+            results: ResultLimits {
+                work,
+                ..ResultLimits::default()
+            },
+            ..JsonInspectionLimits::default()
+        };
+        let xml_limits = XmlInspectionLimits {
+            results: ResultLimits {
+                work,
+                ..ResultLimits::default()
+            },
+            ..XmlInspectionLimits::default()
+        };
+        match (xml, chunk) {
+            (false, None) => tx.publish_request_body_with_json_limits(
+                RequestBody::new(Bytes::copy_from_slice(body), BodyProcessorSelection::Json),
+                json_limits,
+            )?,
+            (true, None) => tx.publish_request_body_with_xml_limits(
+                RequestBody::new(Bytes::copy_from_slice(body), BodyProcessorSelection::Xml),
+                xml_limits,
+            )?,
+            (false, Some(chunk)) => {
+                let mut session = tx.start_json_inspection(json_limits, Some(body.len()))?;
+                for bytes in body.chunks(chunk) {
+                    session.feed(bytes)?;
+                }
+                session.complete(body.len())?;
+                let raw = session.requires_raw_source().then(|| Bytes::copy_from_slice(body));
+                session.finish(raw)?;
+            }
+            (true, Some(chunk)) => {
+                let mut session = tx.start_xml_inspection(xml_limits, Some(body.len()))?;
+                for bytes in body.chunks(chunk) {
+                    session.feed(bytes)?;
+                }
+                session.complete(body.len())?;
+                let raw = session.requires_raw_source().then(|| Bytes::copy_from_slice(body));
+                session.finish(raw)?;
+            }
+        }
+        tx.execute_request_body()
+    })();
+    (tx, outcome)
+}
+
+#[test]
+#[ignore = "formal supported-profile oracle; compiles both product profiles and executes large reference predicates"]
+fn supported_profile_default_successes_match_raised_work_unpruned_oracle() {
+    let wide_json = format!(
+        "{{{}}}",
+        (0..1024)
+            .map(|i| format!("\"k{i:04}\":\"{}\"", "x".repeat(240)))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+    .into_bytes();
+    let wide_xml = format!(
+        "<r>{}</r>",
+        (0..1024)
+            .map(|_| format!("<v>{}</v>", "x".repeat(240)))
+            .collect::<String>()
+    )
+    .into_bytes();
+    let fixtures = [
+        ("json-small-clean", false, br#"{"probe":"safe"}"#.to_vec()),
+        ("json-small-attack", false, br#"{"probe":"phar://payload"}"#.to_vec()),
+        ("xml-small-clean", true, b"<r a='safe'>safe</r>".to_vec()),
+        ("xml-small-attack", true, b"<r a='phar://payload'/>".to_vec()),
+        ("json-wide-1024", false, wide_json),
+        ("xml-wide-1024", true, wide_xml),
+        (
+            "json-large-scalar",
+            false,
+            format!("{{\"probe\":\"{}\"}}", "x".repeat(256 * 1024)).into_bytes(),
+        ),
+        (
+            "xml-large-text",
+            true,
+            format!("<r>{}</r>", "x".repeat(256 * 1024)).into_bytes(),
+        ),
+        (
+            "json-token-boundary",
+            false,
+            format!("{{\"probe\":\"{}\"}}", "x".repeat(1024 * 1024)).into_bytes(),
+        ),
+        (
+            "xml-resource-boundary",
+            true,
+            format!("<r>{}</r>", "x".repeat(1024 * 1024)).into_bytes(),
+        ),
+    ];
+    let mut successes = 0;
+    let mut transitions = 0;
+    for profile in ["standard", "strict"] {
+        let g = supported_oracle_generation(profile);
+        for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+            for (name, xml, body) in &fixtures {
+                for chunk in [None, Some(64 * 1024)] {
+                    let (mut optimized, outcome) =
+                        supported_oracle_transaction(&g, body, *xml, mode, false, ResultLimits::default().work, chunk);
+                    if let Err(error) = outcome {
+                        eprintln!("supported-oracle profile={profile} mode={mode:?} fixture={name} chunk={chunk:?} default_error={error:?}");
+                        continue;
+                    }
+                    let (_, bounded) =
+                        supported_oracle_transaction(&g, body, *xml, mode, true, ResultLimits::default().work, chunk);
+                    let transition = matches!(
+                        bounded,
+                        Err(RuntimeError::JsonResultLimit {
+                            kind: JsonResultLimit::Work
+                        }) | Err(RuntimeError::XmlResultLimit {
+                            kind: JsonResultLimit::Work
+                        })
+                    );
+                    // Only this private test reference receives a larger result
+                    // work cap; all product/operator/parser limits stay default.
+                    let (mut oracle, reference) = supported_oracle_transaction(
+                        &g,
+                        body,
+                        *xml,
+                        mode,
+                        true,
+                        ResultLimits::default().work.saturating_mul(32),
+                        chunk,
+                    );
+                    assert!(
+                        reference.is_ok(),
+                        "successful reference required: {profile} {mode:?} {name} {chunk:?}: {reference:?}"
+                    );
+                    assert_eq!(outcome, reference, "{profile} {mode:?} {name} {chunk:?}");
+                    assert_eq!(activation_tx_snapshot(&optimized), activation_tx_snapshot(&oracle));
+                    assert_eq!(
+                        optimized
+                            .capture_keys
+                            .iter()
+                            .map(|key| key.observed_bytes(&optimized.request).unwrap())
+                            .collect::<Vec<_>>(),
+                        oracle
+                            .capture_keys
+                            .iter()
+                            .map(|key| key.observed_bytes(&oracle.request).unwrap())
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(optimized.next_phase(), oracle.next_phase());
+                    assert_eq!(optimized.request_body_error(), oracle.request_body_error());
+                    optimized.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+                    oracle.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+                    assert_eq!(optimized.execute_response_headers(), oracle.execute_response_headers());
+                    assert_eq!(activation_tx_snapshot(&optimized), activation_tx_snapshot(&oracle));
+                    assert_eq!(
+                        optimized.execute_response_window(ResponseWindow::new(b"", true)),
+                        oracle.execute_response_window(ResponseWindow::new(b"", true))
+                    );
+                    assert_eq!(activation_tx_snapshot(&optimized), activation_tx_snapshot(&oracle));
+                    assert_eq!(optimized.execute_logging(), oracle.execute_logging());
+                    assert_eq!(activation_tx_snapshot(&optimized), activation_tx_snapshot(&oracle));
+                    assert_eq!(optimized.next_phase(), oracle.next_phase());
+                    successes += 1;
+                    transitions += usize::from(transition);
+                    eprintln!("supported-oracle profile={profile} mode={mode:?} fixture={name} chunk={chunk:?} success=true work_to_success={transition}");
+                }
+            }
+        }
+    }
+    assert!(successes >= 32, "all small fixtures must finish successfully");
+    assert!(
+        transitions > 0,
+        "formal default Work-to-success fixture must be compared with a successful oracle"
+    );
+    eprintln!("supported-oracle successful_pairs={successes} work_to_success_pairs={transitions}");
+}
+
+#[test]
+fn activation_non_tx_controls_preserve_ordered_exclusions_before_and_after_gate() {
+    for ctl in [
+        "ctl:ruleRemoveTargetByTag=gate;XML://@*",
+        "ctl:ruleRemoveTargetByTag=gate;ARGS:ignored",
+    ] {
+        for before in [false, true] {
+            let control = format!("SecAction \"id:8,phase:2,pass,{ctl}\"\n");
+            let gate = "SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,tag:gate,skipAfter:END\"\n";
+            let skipped =
+                "SecRule ARGS \"@contains attack\" \"id:3,phase:2,pass,setvar:tx.hidden=hit\"\nSecMarker END\n";
+            let source = format!(
+                "SecAction \"id:1,phase:1,pass,setvar:tx.level=1\"\n{}",
+                if before {
+                    format!("{control}{gate}{skipped}")
+                } else {
+                    format!("{gate}{skipped}{control}")
+                }
+            );
+            let g = compile(&source);
+            assert!(g.inspection_activation.has_gate);
+            let mut fast = activation_transaction(&g, br#"{"a":"attack"}"#, false, 1);
+            let mut oracle = activation_transaction(&g, br#"{"a":"attack"}"#, true, 7);
+            assert_activation_parity(&mut fast, &mut oracle);
+            assert_eq!(fast.tx.target_exclusions, oracle.tx.target_exclusions);
+            assert_eq!(fast.tx.removed_units, oracle.tx.removed_units);
+            assert_eq!(fast.ctl_work_bytes, oracle.ctl_work_bytes);
+            assert_eq!(fast.tx_value(b"hidden"), None);
+            assert_eq!(fast.tx.target_exclusions.len(), 1);
+        }
+    }
+}
+fn activation_constructor_usage(
+    g: &CompiledGeneration,
+    domain: InspectionDomain,
+    limits: ResultLimits,
+) -> Result<super::super::json_inspection::StoreUsage, RuntimeError> {
+    let mut tx = Transaction::new(g, head(b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    let context = SingleInputContext {
+        generation: g,
+        request: &tx.request,
+        tx: &tx.tx,
+        group_scratch: &mut tx.group_scratch,
+        boolean_scratch: &mut tx.boolean_scratch,
+        capture_scratch: &mut tx.capture_scratch,
+        scan_cache: None,
+        json_budget: None,
+    };
+    let mut collector = JsonCollector::new_domain(
+        GenerationHandle::Borrowed(g),
+        context,
+        tx.limits,
+        EvaluationMode::Accelerated,
+        limits,
+        domain,
+    )
+    .map_err(map_collector_error)?;
+    let usage = collector.usage();
+    crate::seclang::JsonCheckerSink::abandon(&mut collector);
+    let budget = collector.into_abandoned_budget().map_err(map_collector_error)?;
+    assert_eq!(budget.usage().retained_bytes, 0);
+    Ok(usage)
+}
+#[test]
+fn activation_constructor_charges_reachability_seed_controls_and_overlap_exactly() {
+    let g = compile(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.first=padding,setvar:tx.LEVEL=1,ctl:ruleRemoveByTag=gone,ctl:ruleRemoveTargetByTag=gate;ARGS:ignored\"\n",
+        "SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,tag:gate,skipAfter:END\"\n",
+        "SecRule ARGS|XML:/* \"@contains attack\" \"id:3,phase:2,pass,tag:gone\"\n",
+        "SecMarker END\n",
+        "SecRule ARGS|XML://@* \"@contains visible\" \"id:4,phase:2,pass\"\n",
+    ));
+    assert!(g.inspection_activation.has_gate);
+    for domain in [InspectionDomain::Json, InspectionDomain::Xml] {
+        let exact = activation_constructor_usage(&g, domain, ResultLimits::default()).unwrap();
+        assert!(exact.peak_retained_bytes > 0);
+        assert!(exact.work > g.inspection_activation.steps.len());
+        let limits = ResultLimits {
+            work: exact.work,
+            retained_bytes: exact.peak_retained_bytes,
+            ..ResultLimits::default()
+        };
+        let checked = activation_constructor_usage(&g, domain, limits).unwrap();
+        assert_eq!(checked.work, exact.work);
+        assert_eq!(checked.retained_bytes, exact.retained_bytes);
+        for (limits, kind) in [
+            (
+                ResultLimits {
+                    work: exact.work - 1,
+                    ..limits
+                },
+                JsonResultLimit::Work,
+            ),
+            (
+                ResultLimits {
+                    retained_bytes: exact.peak_retained_bytes - 1,
+                    ..limits
+                },
+                JsonResultLimit::RetainedBytes,
+            ),
+        ] {
+            let expected = if domain == InspectionDomain::Json {
+                RuntimeError::JsonResultLimit { kind }
+            } else {
+                RuntimeError::XmlResultLimit { kind }
+            };
+            let mut tx = Transaction::new(&g, head(b"/"), RuntimeLimits::default()).unwrap();
+            tx.execute_request_headers().unwrap();
+            let error = match domain {
+                InspectionDomain::Json => {
+                    let mut session = tx
+                        .start_json_inspection(
+                            JsonInspectionLimits {
+                                results: limits,
+                                ..JsonInspectionLimits::default()
+                            },
+                            None,
+                        )
+                        .unwrap();
+                    let error = session.feed(b" ").unwrap_err();
+                    assert_eq!(session.feed(b""), Err(error));
+                    assert_eq!(session.complete(1), Err(error));
+                    error
+                }
+                InspectionDomain::Xml => {
+                    let mut session = tx
+                        .start_xml_inspection(
+                            XmlInspectionLimits {
+                                results: limits,
+                                ..XmlInspectionLimits::default()
+                            },
+                            None,
+                        )
+                        .unwrap();
+                    let error = session.feed(b" ").unwrap_err();
+                    assert_eq!(session.feed(b""), Err(error));
+                    assert_eq!(session.complete(1), Err(error));
+                    error
+                }
+            };
+            assert_eq!(error, expected);
+            assert_eq!(tx.execute_request_body(), Err(expected));
+            assert!(tx.request.body.is_none());
+        }
+    }
+}
+#[test]
+fn active_proof_unfinished_drop_and_failed_completion_poison_publication() {
+    let g = compile(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1\"\n",
+        "SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,skipAfter:END\"\n",
+        "SecRule ARGS|XML:/* \"@rx attack\" \"id:3,phase:2,pass\"\n",
+        "SecMarker END\n",
+    ));
+    assert!(g.inspection_activation.has_gate);
+    for domain in [InspectionDomain::Json, InspectionDomain::Xml] {
+        for finish in [false, true] {
+            let mut tx = Transaction::new(&g, head(b"/"), RuntimeLimits::default()).unwrap();
+            tx.execute_request_headers().unwrap();
+            let saved;
+            match domain {
+                InspectionDomain::Json => {
+                    let mut session = tx.start_json_inspection(JsonInspectionLimits::default(), None).unwrap();
+                    session.feed(br#"{"a":"safe"}"#).unwrap();
+                    saved = if finish {
+                        session.complete(0).unwrap_err()
+                    } else {
+                        RuntimeError::JsonChecker {
+                            kind: JsonCheckerError::Lexical(JsonStreamError::Abandoned),
+                        }
+                    };
+                    if finish {
+                        assert_eq!(session.complete(12), Err(saved));
+                    }
+                }
+                InspectionDomain::Xml => {
+                    let mut session = tx.start_xml_inspection(XmlInspectionLimits::default(), None).unwrap();
+                    session.feed(b"<r>safe</r>").unwrap();
+                    saved = if finish {
+                        session.complete(0).unwrap_err()
+                    } else {
+                        RuntimeError::XmlStream {
+                            kind: crate::seclang::XmlStreamError::Abandoned,
+                        }
+                    };
+                    if finish {
+                        assert_eq!(session.complete(11), Err(saved));
+                    }
+                }
+            }
+            assert_eq!(tx.execute_request_body(), Err(saved));
+            assert!(tx.request.body.is_none());
+            assert!(tx.group_scratch.iter().all(Option::is_none));
+        }
+    }
+}
+#[test]
+fn activation_preserves_named_deferred_macros_counts_and_raw_visibility() {
+    let g = compile(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.level=1,setvar:tx.needle=attack,ctl:forceRequestBodyVariable=On\"\n",
+        "SecRule TX:level \"@lt 2\" \"id:2,phase:2,pass,skipAfter:END\"\n",
+        "SecRule ARGS \"@rx (?P<word>attack)\" \"id:3,phase:2,pass,capture\"\n",
+        "SecMarker END\n",
+        "SecRule ARGS:json.a \"@contains %{TX.needle}\" \"id:4,phase:2,pass,setvar:tx.dynamic=%{ARGS.json.a}\"\n",
+        "SecRule &ARGS \"@ge 1\" \"id:5,phase:2,pass,setvar:tx.count=%{MATCHED_VAR}\"\n",
+        "SecRule REQUEST_BODY \"@contains attack\" \"id:6,phase:2,pass,setvar:tx.raw=hit\"\n",
+    ));
+    let input = br#"{"a":"wrong","a":"attack","b":2}"#;
+    let mut fast = activation_transaction(&g, input, false, 1);
+    let mut oracle = activation_transaction(&g, input, true, input.len());
+    assert_activation_parity(&mut fast, &mut oracle);
+    assert_eq!(fast.tx_value(b"dynamic"), Some(b"attack".as_slice()));
+    assert_eq!(fast.tx_value(b"count"), Some(b"3".as_slice()));
+    assert_eq!(fast.tx_value(b"raw"), Some(b"hit".as_slice()));
+}
+
+#[test]
+fn lazy_provisional_selector_and_capture_slots_reuse_across_feeds_and_replay() {
+    let g = compile("SecRule ARGS:/^json\\.a$/ \"@rx (?P<word>attack)\" \"id:1,phase:2,pass,capture,setvar:tx.result=%{TX.word}\"\n");
+    let scope = measurements::start();
+    let mut tx = activation_transaction(&g, br#"{"a":"attack","a":"attack","b":"ignored"}"#, false, 1);
+    assert_eq!(scope.counts().get(Event::BooleanScratchInitializations), 1);
+    assert_eq!(scope.counts().get(Event::CaptureScratchInitializations), 1);
+    tx.execute_request_body().unwrap();
+    assert_eq!(scope.counts().get(Event::BooleanScratchInitializations), 1);
+    assert_eq!(scope.counts().get(Event::CaptureScratchInitializations), 1);
+    assert_eq!(tx.tx_value(b"result"), Some(b"attack".as_slice()));
+}
+#[test]
+fn phase_one_removed_body_units_do_not_initialize_program_caches() {
+    let g = compile("SecAction \"id:1,phase:1,pass,ctl:ruleRemoveByTag=gone\"\nSecRule ARGS \"@rx (?P<word>attack)\" \"id:2,phase:2,pass,capture,tag:gone\"\n");
+    let scope = measurements::start();
+    let mut fast = activation_transaction(&g, br#"{"a":"attack"}"#, false, 1);
+    assert_eq!(scope.counts().get(Event::CaptureScratchInitializations), 0);
+    assert!(scope.counts().get(Event::AvoidedPredicateGroups) > 0);
+    let mut oracle = activation_transaction(&g, br#"{"a":"attack"}"#, true, 4);
+    assert_activation_parity(&mut fast, &mut oracle);
+}

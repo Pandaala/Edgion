@@ -25,6 +25,8 @@ pub(super) enum InspectionDomain {
 #[path = "xml_inspection_plan.rs"]
 mod xml_inspection_plan;
 pub use xml_inspection_plan::{XmlInspectionUnsupported, XmlInspectionUnsupportedReason};
+#[path = "inspection_activation.rs"]
+mod inspection_activation;
 #[path = "json_inspection_plan.rs"]
 mod json_inspection_plan;
 pub use json_inspection_plan::{JsonInspectionUnsupported, JsonInspectionUnsupportedReason};
@@ -795,6 +797,7 @@ struct CompiledMarker {
 #[derive(Debug)]
 #[expect(dead_code, reason = "transaction execution consumes the immutable compiled arenas")]
 pub struct CompiledGeneration {
+    inspection_activation: inspection_activation::CompiledActivation,
     json_inspection: json_inspection_plan::CompiledJsonPlan,
     xml_inspection: json_inspection_plan::CompiledJsonPlan,
     prefix_validation: Result<(), &'static str>,
@@ -3802,6 +3805,7 @@ impl CompiledGeneration {
                 .then(left.unit.cmp(&right.unit))
         });
         let mut generation = Self {
+            inspection_activation: inspection_activation::CompiledActivation::default(),
             json_inspection: json_inspection_plan::CompiledJsonPlan::default(),
             xml_inspection: json_inspection_plan::CompiledJsonPlan::default(),
             prefix_validation: Ok(()),
@@ -3834,6 +3838,8 @@ impl CompiledGeneration {
             matcher_charged_bytes: work.matcher_charged_bytes,
             peak_bytes: work.peak_bytes,
         };
+        generation.inspection_activation =
+            inspection_activation::CompiledActivation::compile(&generation, &mut work, &mut state.canonical_work)?;
         generation.json_inspection =
             json_inspection_plan::CompiledJsonPlan::compile(&generation, &mut work, &mut state.canonical_work)?;
         generation.xml_inspection = json_inspection_plan::CompiledJsonPlan::compile_domain(

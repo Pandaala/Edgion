@@ -3758,3 +3758,114 @@ fn frozen_clone_unit_into(
     }
     Ok(false)
 }
+
+#[test]
+fn lazy_program_slots_initialize_once_and_preserve_generation_wide_admission() {
+    let g = generation(concat!(
+        "SecRule REQUEST_URI \"@pm hit one\" \"id:901,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:/^x-/ \"@rx hit\" \"id:902,phase:1,pass\"\n",
+        "SecRule REQUEST_URI \"@rx (?P<word>hit)\" \"id:903,phase:1,pass,capture\"\n",
+        "SecRule ARGS \"@rx unused\" \"id:904,phase:2,pass\"\n",
+    ));
+    let scope = measurements::start();
+    let headers = [
+        RequestHeader::new(b"x-one", b"hit"),
+        RequestHeader::new(b"x-two", b"hit"),
+    ];
+    let mut tx = Transaction::new(&g, request(&headers, b"/hit"), RuntimeLimits::default()).unwrap();
+    assert!(tx.group_scratch.iter().all(Option::is_none));
+    assert!(tx.boolean_scratch.iter().all(Option::is_none));
+    assert!(tx.capture_scratch.iter().all(Option::is_none));
+    assert_eq!(scope.counts().get(Event::GroupScratchInitializations), 0);
+    assert_eq!(scope.counts().get(Event::BooleanScratchInitializations), 0);
+    assert_eq!(scope.counts().get(Event::CaptureScratchInitializations), 0);
+    let program_reservation = tx.scratch_bytes;
+    tx.execute_request_headers().unwrap();
+    assert_eq!(scope.counts().get(Event::GroupScratchInitializations), 2);
+    assert_eq!(scope.counts().get(Event::BooleanScratchInitializations), 1);
+    assert_eq!(scope.counts().get(Event::CaptureScratchInitializations), 1);
+    assert_eq!(tx.tx_value(b"word"), Some(b"hit".as_slice()));
+    assert!(tx.group_scratch.iter().any(Option::is_none));
+    let expected = matcher_scratch_capacity(
+        &g,
+        tx.group_scratch.capacity(),
+        tx.boolean_scratch.capacity(),
+        tx.capture_scratch.capacity(),
+    )
+    .unwrap();
+    assert_eq!(program_reservation, expected);
+    let exact = RuntimeLimits {
+        max_matcher_scratch_bytes: expected,
+        ..RuntimeLimits::default()
+    };
+    assert!(Transaction::new(&g, request(&headers, b"/hit"), exact).is_ok());
+    assert!(matches!(
+        Transaction::new(
+            &g,
+            request(&headers, b"/hit"),
+            RuntimeLimits {
+                max_matcher_scratch_bytes: expected - 1,
+                ..exact
+            }
+        ),
+        Err(RuntimeError::MatcherScratchByteLimit { .. })
+    ));
+}
+#[test]
+fn cached_group_scan_requires_an_initialized_slot_and_reuses_first_use() {
+    let g = generation("SecRule REQUEST_URI \"@pm hit one\" \"id:905,phase:1,pass\"\n");
+    let mut slots = vec![None];
+    let mut cache = StageScanCache {
+        scanned: vec![0],
+        ..StageScanCache::default()
+    };
+    assert_eq!(
+        evaluate_matcher_operand_cached(
+            &g,
+            &mut slots,
+            0,
+            0,
+            1,
+            b"hit",
+            EvaluationMode::Accelerated,
+            Some(&mut cache)
+        ),
+        Err(RuntimeError::GenerationInvariant)
+    );
+    assert!(slots[0].is_none());
+    cache.scanned.clear();
+    let scope = measurements::start();
+    assert!(evaluate_matcher_operand_cached(
+        &g,
+        &mut slots,
+        0,
+        0,
+        1,
+        b"hit",
+        EvaluationMode::Accelerated,
+        Some(&mut cache)
+    )
+    .unwrap());
+    assert!(evaluate_matcher_operand_cached(
+        &g,
+        &mut slots,
+        0,
+        0,
+        1,
+        b"hit",
+        EvaluationMode::Accelerated,
+        Some(&mut cache)
+    )
+    .unwrap());
+    assert_eq!(scope.counts().get(Event::GroupScratchInitializations), 1);
+    assert_eq!(scope.counts().get(Event::FullScans), 1);
+}
+#[test]
+fn unpruned_oracle_survives_both_explicit_clone_policies() {
+    let tx = TxState {
+        force_unpruned_inspection: true,
+        ..TxState::default()
+    };
+    assert!(tx.try_clone().unwrap().force_unpruned_inspection);
+    assert!(tx.try_clone_for_unit().unwrap().force_unpruned_inspection);
+}

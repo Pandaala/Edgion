@@ -634,6 +634,7 @@ fn invalid_matcher_range_never_publishes_scan_completion() {
     .is_err());
     let incompatible = compile(r#"SecRule ARGS "@pm one two" "id:1,phase:2,pass""#);
     let mut other = Transaction::new(&incompatible, request(), runtime).unwrap();
+    other.group_scratch[0] = Some(incompatible.groups[0].matcher.create_scratch());
     assert!(evaluate_matcher_operand_cached(
         &generation,
         &mut other.group_scratch,

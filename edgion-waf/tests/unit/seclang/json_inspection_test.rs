@@ -1525,3 +1525,155 @@ fn candidate_local_slot_growth_uses_actual_size_at_physical_and_work_boundaries(
         }
     }
 }
+
+fn activation_store_generation() -> CompiledGeneration {
+    compile("SecAction \"id:9,phase:1,pass,setvar:tx.level=1\"\nSecRule TX:level \"@lt 2\" \"id:10,phase:2,pass,skipAfter:END\"\nSecRule ARGS \"@contains blocked\" \"id:1,phase:2,pass\"\nSecMarker END\n", CompilerLimits::default()).unwrap()
+}
+
+#[test]
+fn inactive_group_is_sticky_state_even_when_shared_profile_is_complete() {
+    let g = compile("SecRule ARGS \"@contains hidden\" \"id:1,phase:2,pass,t:none,t:lowercase\"\nSecRule ARGS \"@contains visible\" \"id:2,phase:2,pass,t:none,t:lowercase\"\n", CompilerLimits::default()).unwrap();
+    assert_eq!(g.json_inspection.groups.len(), 2);
+    assert_eq!(g.json_inspection.groups[0].profile, g.json_inspection.groups[1].profile);
+    let mut s = store(&g);
+    s.initialize_activation(2).unwrap();
+    s.activate_group(1).unwrap();
+    assert!(!s.is_group_active(0).unwrap());
+    let id = s.begin_candidate(b"json.a", 5, JsonScalarKind::String, None).unwrap();
+    s.complete_profile(id, 0).unwrap();
+    let receipt = finish(&mut s, id, &[0]);
+    s.seal(
+        Some(receipt),
+        JsonSemanticSummary {
+            argument_count: 1,
+            ..JsonSemanticSummary::default()
+        },
+    )
+    .unwrap();
+    let (sealed, mut budget) = s.into_sealed().unwrap();
+    assert!(!sealed.admits_summary_no_hit(&budget, &g, RuntimeLimits::default(), EvaluationMode::Accelerated, 0));
+    assert_eq!(
+        sealed
+            .lookup_selected(
+                &mut budget,
+                id,
+                1,
+                &g,
+                RuntimeLimits::default(),
+                EvaluationMode::Accelerated
+            )
+            .unwrap()
+            .0,
+        SelectedOutcome::NoMatch
+    );
+    assert!(matches!(
+        sealed.lookup_selected(
+            &mut budget,
+            id,
+            0,
+            &g,
+            RuntimeLimits::default(),
+            EvaluationMode::Accelerated
+        ),
+        Err(StoreError::State)
+    ));
+    assert_eq!(budget.failure(), Some(StoreError::State));
+    assert_eq!(sealed.guard_group(&mut budget, 1), Err(StoreError::State));
+}
+#[test]
+fn summary_guard_and_invalid_group_ids_use_checked_sticky_errors() {
+    let g = activation_store_generation();
+    for (mask, group, error) in [
+        (false, 1, StoreError::Identity),
+        (true, 0, StoreError::State),
+        (true, 1, StoreError::Identity),
+    ] {
+        let mut s = store(&g);
+        if mask {
+            s.initialize_activation(1).unwrap();
+        }
+        s.seal(None, JsonSemanticSummary::default()).unwrap();
+        let (sealed, mut budget) = s.into_sealed().unwrap();
+        assert_eq!(sealed.guard_group(&mut budget, group), Err(error));
+        assert_eq!(budget.failure(), Some(error));
+        assert_eq!(sealed.guard_group(&mut budget, 0), Err(error));
+        assert_eq!(budget.work(0), Err(error));
+    }
+}
+#[test]
+fn persistent_activation_capacity_is_owned_once_and_released_on_abandon_and_failed_seal() {
+    let g = activation_store_generation();
+    let mut s = store(&g);
+    s.initialize_activation(1).unwrap();
+    assert!(g.inspection_activation.has_gate);
+    let capacity = s.records.active_groups.capacity() * size_of::<bool>();
+    assert_eq!(s.budget.usage.retained_bytes, capacity);
+    assert_eq!(s.budget.scratch, 0);
+    s.abandon();
+    assert_eq!(s.records.active_groups.capacity(), 0);
+    assert_eq!(s.budget.usage.retained_bytes, 0);
+    assert_eq!(s.budget.usage.abandoned, 1);
+    let mut s = store(&g);
+    s.initialize_activation(1).unwrap();
+    let id = s.begin_candidate(b"a", 1, JsonScalarKind::String, None).unwrap();
+    let receipt = Receipt { head: id, tail: id };
+    assert_eq!(
+        s.seal(Some(receipt), JsonSemanticSummary::default()),
+        Err(StoreError::State)
+    );
+    assert_eq!(s.records.active_groups.capacity(), 0);
+    assert_eq!(s.budget.usage.retained_bytes, 0);
+    assert!(matches!(s.into_sealed(), Err(StoreError::State)));
+}
+#[test]
+fn activation_mask_exact_capacity_work_and_one_less_are_sticky() {
+    let g = activation_store_generation();
+    let mut baseline = store(&g);
+    baseline.initialize_activation(1).unwrap();
+    let exact = baseline.budget.usage;
+    for (capacity, work, expected) in [
+        (exact.peak_retained_bytes, exact.work, None),
+        (exact.peak_retained_bytes - 1, exact.work, Some(StoreError::Capacity)),
+        (exact.peak_retained_bytes, exact.work - 1, Some(StoreError::Work)),
+    ] {
+        let mut s = ResultStore::new_domain(
+            GenerationHandle::Borrowed(&g),
+            RuntimeLimits::default(),
+            EvaluationMode::Accelerated,
+            ResultLimits {
+                retained_bytes: capacity,
+                work,
+                ..ResultLimits::default()
+            },
+            InspectionDomain::Json,
+        )
+        .unwrap();
+        let result = s.initialize_activation(1);
+        match expected {
+            None => {
+                result.unwrap();
+                assert_eq!(s.budget.usage.retained_bytes, exact.retained_bytes);
+            }
+            Some(error) => {
+                assert_eq!(result, Err(error));
+                assert_eq!(s.records.active_groups.capacity(), 0);
+                assert_eq!(s.initialize_activation(1), Err(error));
+            }
+        }
+    }
+}
+
+#[test]
+fn active_proof_seal_transfers_mask_owner_without_reallocation() {
+    let g = activation_store_generation();
+    let mut s = store(&g);
+    s.initialize_activation(1).unwrap();
+    let pointer = s.records.active_groups.as_ptr();
+    let capacity = s.records.active_groups.capacity();
+    s.seal(None, JsonSemanticSummary::default()).unwrap();
+    let (sealed, budget) = s.into_sealed().unwrap();
+    assert_eq!(sealed.records.active_groups.as_ptr(), pointer);
+    assert_eq!(sealed.records.active_groups.capacity(), capacity);
+    assert_eq!(budget.scratch, 0);
+    assert!(budget.usage.retained_bytes >= capacity * size_of::<bool>());
+}

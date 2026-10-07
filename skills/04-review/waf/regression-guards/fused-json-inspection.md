@@ -9,8 +9,8 @@ knowledge_type: regression-guards
 ## Conclusion and scope
 
 The native WAF JSON path uses JsonStream and JsonChecker to validate a complete
-source without a DOM or complete field-value mapping. Static predicates run as
-semantic values complete. Transaction effects run later in canonical rule order.
+source without a DOM or complete field-value mapping. Reachable static predicates
+run as semantic values complete. Transaction effects run later in canonical rule order.
 Production edgion-waf does not depend on serde_json; test oracles may use it.
 This is a JSON execution contract, not a claim that every upstream CRS rule is
 supported or that arbitrary predicates visit every character only once.
@@ -77,6 +77,39 @@ short-lived borrowed sink/context. True EOF, exact captured/available parity and
 the complete BodyAccounting prelude precede sealing and Phase 2. Failed completion
 is terminal; unfinished Drop poisons publication. Raw visibility obtains the same
 canonical immutable Bytes owner only when required by the existing policy.
+
+## Demand-driven scratch and static activation
+
+Transaction matcher, boolean-regex and capture-regex caches use fixed Option
+slots and initialize once at their shared first-use seams, including selectors
+and capture extraction. They retain request-owned capacity until Drop. Full
+generation scratch envelopes remain conservatively admitted, with actual Option
+layout/capacity; the retained-byte gauge does not report measured heap.
+A prior shared scan requires an initialized matching scratch slot.
+
+`inspection_activation.rs` compiles bounded Phase2 forward successors and proves
+singleton literal TX integer skipAfter gates stable across all Phase2 effects.
+Unknown writes, dynamic keys that may alias, capture writes/cleanup, whole-rule
+removal or TX-target removal preserve conservative execution. Non-TX target
+removal cannot change TX-only gate selection. No CRS IDs, tags or level names
+select the optimization. A once-per-inspection charged may-reach mask accounts
+for earlier jumps, removed gates, every chain/name/value consumer and later phases.
+
+Only static dispatch is filtered. Grammar, duplicates, candidate/name metadata,
+counts, deferred and raw demand remain unchanged. StoreRecords owns the mask
+through sealing. Canonical lookup checks it before shared-profile completion
+can yield NoMatch; inactive/invalid access is sticky. The JSON summary guard is
+also explicit and cannot swallow an inactive-fact error. Abandon clears the mask
+before resetting retained usage. A successful active sibling does not authorize
+reading a pruned group.
+
+Avoiding unreachable work can turn a former default result-work failure into
+success without raising limits. The private test-only unpruned oracle compares
+ordered findings, TX/captures and later phases; its enlarged reference work cap
+is never a production override. Exact compiler/constructor budget boundaries,
+mask lifecycle and typed-control counterexamples are regression gates. Re-evaluate
+the proof when adding TX-writing actions, capture aliases, target controls,
+scheduler edges or consumers. See the [reviewed implementation record](../../../../tasks/pending/waf-demand-driven/04-verification.md).
 
 ## Alternatives and limits
 

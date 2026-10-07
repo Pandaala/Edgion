@@ -200,6 +200,20 @@ GATEWAY_SOURCE_LOCAL = {
 # These branches and fields must stay in their owning production items so the
 # test configuration can exercise the same function or preserve struct shape.
 SCOPED_EXCEPTIONS = {
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"force_unpruned_inspection: bool,")):
+        "test-only switch for the unpruned inspection oracle",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"force_unpruned_inspection: self\.force_unpruned_inspection,")):
+        "test-only oracle switch preserved by canonical TX clone policies",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::GroupScratchInitializations\b")):
+        "test-only matcher cache first-use measurement at the owning operation",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::BooleanScratchInitializations\b")):
+        "test-only boolean cache first-use measurement at the owning operation",
+    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::CaptureScratchInitializations\b")):
+        "test-only capture cache first-use measurement at the owning operation",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"if context\.tx\.force_unpruned_inspection \{")):
+        "test-only branch bypassing optional static activation proof",
+    ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::AvoidedPredicateGroups\b")):
+        "test-only skipped static group measurement at the owning operation",
     ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::UnitTxClones\b")):
         "test-only accounting of new-unit TX clones after first-member matching",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"sequential_ascii: bool,")):

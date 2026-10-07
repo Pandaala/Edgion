@@ -95,7 +95,11 @@ impl DispatchScratch {
             .ok_or(CollectorError::Store(StoreError::Arithmetic))
     }
     fn add(&mut self, id: usize, store: &mut ResultStore<'_>) -> Collected<()> {
-        store.charge_work(1)?;
+        if !store.is_group_active(id)? {
+            #[cfg(test)]
+            measurements::record(Event::AvoidedPredicateGroups, 1);
+            return Ok(());
+        }
         let stamp = self.stamps.get_mut(id).ok_or(CollectorError::State)?;
         if *stamp != self.epoch {
             *stamp = self.epoch;
@@ -174,6 +178,7 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
             failure: None,
             xml_receipt: None,
         };
+        build_activation(&context, &mut state.store, domain)?;
         // Each allocation admits its old/new overlap and reports allocator capacity.
         let mut total = 0;
         reserve_scratch(&mut state.dispatch.groups, group_count, &mut total, &mut state.store)?;
@@ -548,6 +553,134 @@ impl JsonCollector<'_, '_> {
     }
 }
 
+/// The snapshot is built once after Phase1, before any semantic-value dispatch.
+fn build_activation(
+    context: &SingleInputContext<'_>,
+    store: &mut ResultStore<'_>,
+    domain: InspectionDomain,
+) -> Collected<()> {
+    #[cfg(test)]
+    if context.tx.force_unpruned_inspection {
+        return Ok(());
+    }
+    let generation = context.generation;
+    let proof = &generation.inspection_activation;
+    if !proof.has_gate && context.tx.removed_units.is_empty() {
+        return Ok(());
+    }
+    let mut reachable = Vec::new();
+    let mut scratch = 0;
+    reserve_scratch(&mut reachable, proof.steps.len(), &mut scratch, store)?;
+    store.charge_work(proof.steps.len())?;
+    reachable.resize(proof.steps.len(), false);
+    if let Some(first) = reachable.first_mut() {
+        *first = true;
+    }
+    store.initialize_activation(generation.inspection_plan(domain).groups.len())?;
+    for (ordinal, step) in proof.steps.iter().enumerate() {
+        store.charge_work(1)?;
+        if !reachable[ordinal] {
+            continue;
+        }
+        let next = ordinal.checked_add(1).ok_or(StoreError::Arithmetic)?;
+        let Some(unit_id) = step.unit else {
+            if let Some(slot) = reachable.get_mut(next) {
+                *slot = true;
+            }
+            continue;
+        };
+        store.charge_work((usize::BITS - context.tx.removed_units.len().leading_zeros()) as usize + 1)?;
+        if context.tx.removed_units.binary_search(&unit_id).is_ok() {
+            if let Some(slot) = reachable.get_mut(next) {
+                *slot = true;
+            }
+            continue;
+        }
+        activate_consumers(generation, unit_id, domain, store)?;
+        let mut known = None;
+        if let Some(gate) = step.gate {
+            let mut excluded = false;
+            for exclusion in &context.tx.target_exclusions {
+                store.charge_work(1)?;
+                excluded |= exclusion.unit == unit_id && exclusion.collection == CollectionKind::Tx;
+            }
+            if !excluded {
+                let key = generation_bytes(&generation.target_bytes, gate.key)?;
+                for entry in &context.tx.entries {
+                    store.charge_work(1)?;
+                    let candidate = entry.key.observed_bytes(context.request)?;
+                    store.charge_work(candidate.len().min(key.len()))?;
+                    if candidate.eq_ignore_ascii_case(key) {
+                        let value = entry.value.observed_bytes(context.request)?;
+                        // UTF8 validation, syntax and integer parsing each walk
+                        // the seed at most once. Invalid seeds stay unknown.
+                        store.charge_work(value.len().checked_mul(3).ok_or(StoreError::Arithmetic)?)?;
+                        known = parse_i64(value)
+                            .ok()
+                            .map(|actual| integer_relation(gate.relation, actual, gate.expected) ^ gate.negated);
+                        break;
+                    }
+                }
+            }
+        }
+        if known != Some(true) {
+            if let Some(slot) = reachable.get_mut(next) {
+                *slot = true;
+            }
+        }
+        if known != Some(false) {
+            if step.matched < next || step.matched > proof.steps.len() {
+                return Err(CollectorError::State);
+            }
+            if let Some(slot) = reachable.get_mut(step.matched) {
+                *slot = true;
+            }
+        }
+    }
+    // A later-phase or chain consumer owns the same static fact regardless of
+    // the representative group's member. Phase1 has no body subscriptions.
+    for (unit_id, unit) in generation.units.iter().enumerate() {
+        store.charge_work(1)?;
+        if matches!(
+            unit.phase,
+            Phase::ResponseHeaders | Phase::ResponseBody | Phase::Logging
+        ) {
+            activate_consumers(generation, unit_id, domain, store)?;
+        }
+    }
+    drop(reachable);
+    store.scratch_capacity(0)?;
+    Ok(())
+}
+fn activate_consumers(
+    generation: &CompiledGeneration,
+    unit_id: usize,
+    domain: InspectionDomain,
+    store: &mut ResultStore<'_>,
+) -> Collected<()> {
+    use super::super::json_inspection_plan::JsonMemberMode;
+    let unit = generation.units.get(unit_id).ok_or(CollectorError::State)?;
+    let end = unit
+        .member_start
+        .checked_add(unit.member_count)
+        .ok_or(StoreError::Arithmetic)?;
+    for member in generation
+        .inspection_plan(domain)
+        .members
+        .get(unit.member_start..end)
+        .ok_or(CollectorError::State)?
+    {
+        store.charge_work(1)?;
+        for mode in [member.name, member.value] {
+            store.charge_work(1)?;
+            if let JsonMemberMode::StaticFact(group) = mode {
+                store.activate_group(group)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn reserve_scratch<T>(
     values: &mut Vec<T>,
     needed: usize,
@@ -592,7 +725,7 @@ fn exact_name_match(
 }
 fn match_name(
     generation: &CompiledGeneration,
-    scratch: &mut [RegexBooleanScratch],
+    scratch: &mut [Option<RegexBooleanScratch>],
     selector: super::super::CompiledTargetSelector,
     name: &[u8],
     store: &mut ResultStore<'_>,
@@ -601,7 +734,8 @@ fn match_name(
     match selector {
         super::super::CompiledTargetSelector::Regex { program, .. } => {
             let regex = generation.boolean_regexes.get(program).ok_or(CollectorError::State)?;
-            let scratch = scratch.get_mut(program).ok_or(CollectorError::State)?;
+            let slot = scratch.get_mut(program).ok_or(CollectorError::State)?;
+            let scratch = lazy_boolean_scratch(slot, regex);
             regex
                 .is_match(name, scratch)
                 .map_err(map_regex_scratch_error)

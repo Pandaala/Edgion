@@ -828,6 +828,8 @@ impl MatchValue {
 
 #[derive(Default)]
 struct TxState {
+    #[cfg(test)]
+    force_unpruned_inspection: bool,
     entries: Vec<TxEntry>,
     entry_payload_bytes: u128,
     matched_var: Option<MatchValue>,
@@ -1167,9 +1169,9 @@ pub struct Transaction<'generation> {
     json_failure: Option<RuntimeError>,
     next_phase: u8,
     limits: RuntimeLimits,
-    group_scratch: Vec<MatchScratch>,
-    boolean_scratch: Vec<RegexBooleanScratch>,
-    capture_scratch: Vec<RegexCaptureScratch>,
+    group_scratch: Vec<Option<MatchScratch>>,
+    boolean_scratch: Vec<Option<RegexBooleanScratch>>,
+    capture_scratch: Vec<Option<RegexCaptureScratch>>,
     scratch_bytes: usize,
     selected_scratch: Vec<SelectedValue>,
     match_scratch: Vec<MemberMatch>,
@@ -1310,23 +1312,39 @@ impl<'generation> Transaction<'generation> {
         group_scratch
             .try_reserve_exact(generation.groups.len())
             .map_err(|_| RuntimeError::Allocation)?;
-        for group in &generation.groups {
-            group_scratch.push(group.matcher.create_scratch());
-        }
+        group_scratch.resize_with(generation.groups.len(), || None);
         let mut boolean_scratch = Vec::new();
         boolean_scratch
             .try_reserve_exact(generation.boolean_regexes.len())
             .map_err(|_| RuntimeError::Allocation)?;
-        for program in &generation.boolean_regexes {
-            boolean_scratch.push(program.create_scratch());
-        }
+        boolean_scratch.resize_with(generation.boolean_regexes.len(), || None);
         let mut capture_scratch = Vec::new();
         capture_scratch
             .try_reserve_exact(generation.capture_regexes.len())
             .map_err(|_| RuntimeError::Allocation)?;
-        for program in &generation.capture_regexes {
-            capture_scratch.push(program.create_scratch());
+        capture_scratch.resize_with(generation.capture_regexes.len(), || None);
+        let actual_scratch = matcher_scratch_capacity(
+            &generation,
+            group_scratch.capacity(),
+            boolean_scratch.capacity(),
+            capture_scratch.capacity(),
+        )?;
+        if actual_scratch > limits.max_matcher_scratch_bytes {
+            return Err(RuntimeError::MatcherScratchByteLimit {
+                limit: limits.max_matcher_scratch_bytes,
+            });
         }
+        if request
+            .retained_bytes
+            .checked_add(actual_scratch)
+            .ok_or(RuntimeError::Arithmetic)?
+            > limits.max_retained_bytes
+        {
+            return Err(RuntimeError::RetainedByteLimit {
+                limit: limits.max_retained_bytes,
+            });
+        }
+        let scratch_bytes = actual_scratch;
         Ok(Self {
             generation,
             request,
@@ -2491,7 +2509,11 @@ impl<'generation> Transaction<'generation> {
 
     /// Prove a no-hit JSON tail without selecting or evaluating queries. Any
     /// uncertain bound preserves the cursor's selection-before-evaluation errors.
-    fn json_summary_no_hit_tail(&self, member_id: usize, tx: &TxState) -> Result<Option<JsonNoHitTail>, RuntimeError> {
+    fn json_summary_no_hit_tail(
+        &mut self,
+        member_id: usize,
+        tx: &TxState,
+    ) -> Result<Option<JsonNoHitTail>, RuntimeError> {
         #[cfg(test)]
         if self.force_json_cursor {
             return Ok(None);
@@ -2516,6 +2538,21 @@ impl<'generation> Transaction<'generation> {
         else {
             return Ok(None);
         };
+        if let super::json_inspection_plan::JsonMemberMode::StaticFact(group) = self
+            .generation
+            .json_inspection
+            .members
+            .get(member_id)
+            .ok_or(RuntimeError::GenerationInvariant)?
+            .value
+        {
+            results
+                .guard_group(
+                    self.json_budget.as_mut().ok_or(RuntimeError::JsonInspectionState)?,
+                    group,
+                )
+                .map_err(map_store_error)?;
+        }
         let queries = self.request.collection_records(CollectionKind::Args)?;
         let bounds = (|| {
             let count = results.json_summary().ok()?.argument_count;
@@ -2665,51 +2702,14 @@ impl<'generation> Transaction<'generation> {
         schedule_index: usize,
         current: usize,
     ) -> Result<usize, RuntimeError> {
-        let end = unit
-            .member_start
-            .checked_add(unit.member_count)
-            .ok_or(RuntimeError::Arithmetic)?;
-        let members = self
-            .generation
-            .members
-            .get(unit.member_start..end)
-            .ok_or(RuntimeError::GenerationInvariant)?;
-        if let Some(target) = members.iter().find_map(|member| member.skip_after_marker) {
-            return target.checked_add(1).ok_or(RuntimeError::Arithmetic);
-        }
-        let mut skip = None;
-        for member in members {
-            let action_end = member
-                .action_start
-                .checked_add(member.action_count)
-                .ok_or(RuntimeError::Arithmetic)?;
-            for action in self
-                .generation
-                .actions
-                .get(member.action_start..action_end)
-                .ok_or(RuntimeError::GenerationInvariant)?
-            {
-                if let super::CompiledActionOperand::Local(super::LocalActionValue::Skip(count)) = action.operand {
-                    skip = Some(usize::try_from(count).map_err(|_| RuntimeError::Arithmetic)?);
-                }
-            }
-        }
-        let Some(mut remaining) = skip else {
-            return Ok(current);
-        };
-        let schedule = self
-            .generation
-            .schedules
-            .get(schedule_index)
-            .ok_or(RuntimeError::GenerationInvariant)?;
-        let mut cursor = current;
-        while cursor < schedule.len() && remaining != 0 {
-            if matches!(schedule[cursor], super::CompiledScheduleEntry::RuleUnit(_)) {
-                remaining -= 1;
-            }
-            cursor += 1;
-        }
-        Ok(cursor)
+        super::inspection_activation::successor(
+            &self.generation,
+            unit,
+            schedule_index,
+            current,
+            |_| Ok(()),
+            || RuntimeError::GenerationInvariant,
+        )
     }
 
     fn apply_member_actions(
@@ -2896,9 +2896,9 @@ struct SingleInputContext<'a> {
     generation: &'a CompiledGeneration,
     request: &'a RequestState<'a>,
     tx: &'a TxState,
-    group_scratch: &'a mut [MatchScratch],
-    boolean_scratch: &'a mut [RegexBooleanScratch],
-    capture_scratch: &'a mut [RegexCaptureScratch],
+    group_scratch: &'a mut [Option<MatchScratch>],
+    boolean_scratch: &'a mut [Option<RegexBooleanScratch>],
+    capture_scratch: &'a mut [Option<RegexCaptureScratch>],
     scan_cache: Option<&'a mut StageScanCache>,
     json_budget: Option<&'a mut InspectionBudget>,
 }
@@ -3201,7 +3201,7 @@ fn inspect_predicate_stage_into<O: PredicateStageObserver>(
 #[allow(clippy::too_many_arguments)]
 fn extract_captures_into<O: PredicateStageObserver>(
     generation: &CompiledGeneration,
-    scratch: &mut [RegexCaptureScratch],
+    scratch: &mut [Option<RegexCaptureScratch>],
     plan: super::CompiledOperatorPlan,
     input: &[u8],
     limits: RuntimeLimits,
@@ -3253,7 +3253,8 @@ fn extract_captures_into<O: PredicateStageObserver>(
                 .capture_regexes
                 .get(program)
                 .ok_or(RuntimeError::GenerationInvariant)?;
-            let scratch = scratch.get_mut(program).ok_or(RuntimeError::GenerationInvariant)?;
+            let slot = scratch.get_mut(program).ok_or(RuntimeError::GenerationInvariant)?;
+            let scratch = lazy_capture_scratch(slot, regex);
             let results = regex.captures(input, scratch).map_err(map_regex_scratch_error)?;
             for index in 0..regex.capture_len() {
                 let Some(range) = results.group(index) else {
@@ -3770,6 +3771,8 @@ impl TxState {
             .map_err(|_| RuntimeError::Allocation)?;
         target_exclusions.extend_from_slice(&self.target_exclusions);
         let mut cloned = Self {
+            #[cfg(test)]
+            force_unpruned_inspection: self.force_unpruned_inspection,
             entries,
             entry_payload_bytes: self.entry_payload_bytes,
             matched_var: if keep_matches {
@@ -3895,23 +3898,92 @@ fn signed_decimal_bytes(value: i64) -> ([u8; 40], usize) {
 }
 
 fn matcher_scratch_bytes(generation: &CompiledGeneration) -> Result<usize, RuntimeError> {
+    matcher_scratch_capacity(
+        generation,
+        generation.groups.len(),
+        generation.boolean_regexes.len(),
+        generation.capture_regexes.len(),
+    )
+}
+
+fn matcher_scratch_capacity(
+    generation: &CompiledGeneration,
+    groups: usize,
+    booleans: usize,
+    captures: usize,
+) -> Result<usize, RuntimeError> {
     let mut total = 0_usize;
     for group in &generation.groups {
         total = total
-            .checked_add(group.matcher.required_scratch_bytes())
+            .checked_add(
+                group
+                    .matcher
+                    .required_scratch_bytes()
+                    .checked_sub(size_of::<MatchScratch>())
+                    .ok_or(RuntimeError::Arithmetic)?,
+            )
             .ok_or(RuntimeError::Arithmetic)?;
     }
     for program in &generation.boolean_regexes {
         total = total
-            .checked_add(program.required_scratch_bytes())
+            .checked_add(
+                program
+                    .required_scratch_bytes()
+                    .checked_sub(size_of::<RegexBooleanScratch>())
+                    .ok_or(RuntimeError::Arithmetic)?,
+            )
             .ok_or(RuntimeError::Arithmetic)?;
     }
     for program in &generation.capture_regexes {
         total = total
-            .checked_add(program.required_scratch_bytes())
+            .checked_add(
+                program
+                    .required_scratch_bytes()
+                    .checked_sub(size_of::<RegexCaptureScratch>())
+                    .ok_or(RuntimeError::Arithmetic)?,
+            )
+            .ok_or(RuntimeError::Arithmetic)?;
+    }
+    for (count, unit) in [
+        (groups, size_of::<Option<MatchScratch>>()),
+        (booleans, size_of::<Option<RegexBooleanScratch>>()),
+        (captures, size_of::<Option<RegexCaptureScratch>>()),
+    ] {
+        total = total
+            .checked_add(count.checked_mul(unit).ok_or(RuntimeError::Arithmetic)?)
             .ok_or(RuntimeError::Arithmetic)?;
     }
     Ok(total)
+}
+fn lazy_group_scratch<'a>(
+    slot: &'a mut Option<MatchScratch>,
+    program: &crate::matcher::CompiledMatcher,
+) -> &'a mut MatchScratch {
+    slot.get_or_insert_with(|| {
+        #[cfg(test)]
+        measurements::record(Event::GroupScratchInitializations, 1);
+        program.create_scratch()
+    })
+}
+fn lazy_boolean_scratch<'a>(
+    slot: &'a mut Option<RegexBooleanScratch>,
+    program: &crate::matcher::CompiledRegexProgram,
+) -> &'a mut RegexBooleanScratch {
+    slot.get_or_insert_with(|| {
+        #[cfg(test)]
+        measurements::record(Event::BooleanScratchInitializations, 1);
+        program.create_scratch()
+    })
+}
+fn lazy_capture_scratch<'a>(
+    slot: &'a mut Option<RegexCaptureScratch>,
+    program: &crate::matcher::CompiledCaptureRegexProgram,
+) -> &'a mut RegexCaptureScratch {
+    slot.get_or_insert_with(|| {
+        #[cfg(test)]
+        measurements::record(Event::CaptureScratchInitializations, 1);
+        program.create_scratch()
+    })
 }
 
 fn member_has_action(
@@ -3954,7 +4026,7 @@ fn select_values(
     request: &RequestState,
     tx: &TxState,
     response: Option<&ResponseState>,
-    scratch: &mut [RegexBooleanScratch],
+    scratch: &mut [Option<RegexBooleanScratch>],
     ctl_work: &mut usize,
     params: SelectionParams,
     mut json_budget: Option<&mut InspectionBudget>,
@@ -4107,7 +4179,7 @@ fn ctl_excludes_value(
     request: &RequestState,
     tx: &TxState,
     response: Option<&ResponseState>,
-    scratch: &mut [RegexBooleanScratch],
+    scratch: &mut [Option<RegexBooleanScratch>],
     exclusions: &[ActiveTargetExclusion],
     candidate: SelectedValue,
     work: &mut usize,
@@ -4391,7 +4463,7 @@ fn selector_matches(
     request: &RequestState,
     tx: &TxState,
     response: Option<&ResponseState>,
-    scratch: &mut [RegexBooleanScratch],
+    scratch: &mut [Option<RegexBooleanScratch>],
     collection: CollectionKind,
     selector: super::CompiledTargetSelector,
     candidate: SelectedValue,
@@ -4458,7 +4530,8 @@ fn selector_matches(
                 .boolean_regexes
                 .get(program)
                 .ok_or(RuntimeError::GenerationInvariant)?;
-            let scratch = scratch.get_mut(program).ok_or(RuntimeError::GenerationInvariant)?;
+            let slot = scratch.get_mut(program).ok_or(RuntimeError::GenerationInvariant)?;
+            let scratch = lazy_boolean_scratch(slot, regex);
             regex.is_match(name, scratch).map_err(map_regex_scratch_error)
         }
     }
@@ -4558,7 +4631,7 @@ fn physical_operator_work(
 )]
 fn evaluate_matcher_operand_cached(
     generation: &CompiledGeneration,
-    group_scratch: &mut [MatchScratch],
+    group_scratch: &mut [Option<MatchScratch>],
     group: usize,
     pattern_start: usize,
     pattern_count: usize,
@@ -4572,6 +4645,7 @@ fn evaluate_matcher_operand_cached(
         .checked_add(pattern_count)
         .ok_or(RuntimeError::Arithmetic)?;
     if cache.as_ref().is_some_and(|cache| cache.scanned.contains(&group)) {
+        let scratch = scratch.as_mut().ok_or(RuntimeError::GenerationInvariant)?;
         let result = scratch.contains_any_in_range(matcher.matcher.pattern_count(), pattern_start..end);
         #[cfg(test)]
         measurements::record(Event::RangeQueries, 1);
@@ -4587,6 +4661,7 @@ fn evaluate_matcher_operand_cached(
     {
         return Err(RuntimeError::GenerationInvariant);
     }
+    let scratch = lazy_group_scratch(scratch, &matcher.matcher);
     let matches = match evaluation_mode {
         EvaluationMode::Accelerated => matcher.matcher.scan(input, scratch),
         EvaluationMode::Reference => matcher.matcher.scan_reference(input, scratch),
@@ -4615,9 +4690,9 @@ fn evaluate_operator(
     generation: &CompiledGeneration,
     request: &RequestState,
     tx: &TxState,
-    group_scratch: &mut [MatchScratch],
-    boolean_scratch: &mut [RegexBooleanScratch],
-    capture_scratch: &mut [RegexCaptureScratch],
+    group_scratch: &mut [Option<MatchScratch>],
+    boolean_scratch: &mut [Option<RegexBooleanScratch>],
+    capture_scratch: &mut [Option<RegexCaptureScratch>],
     plan: super::CompiledOperatorPlan,
     input: &[u8],
     member_runtime_limit: usize,
@@ -4651,12 +4726,7 @@ fn evaluate_operator(
                 )?)?,
             };
             let actual = parse_i64(input)?;
-            Ok(match relation {
-                super::IntegerRelation::Equal => actual == expected,
-                super::IntegerRelation::GreaterOrEqual => actual >= expected,
-                super::IntegerRelation::Greater => actual > expected,
-                super::IntegerRelation::Less => actual < expected,
-            })
+            Ok(integer_relation(relation, actual, expected))
         }
         super::CompiledOperatorOperand::IpNetworks { start, count } => {
             let Some(address) = std::str::from_utf8(input)
@@ -4693,7 +4763,9 @@ fn evaluate_operator(
                 let scratch = boolean_scratch
                     .get_mut(program)
                     .ok_or(RuntimeError::GenerationInvariant)?;
-                regex.is_match(input, scratch).map_err(map_regex_scratch_error)
+                regex
+                    .is_match(input, lazy_boolean_scratch(scratch, regex))
+                    .map_err(map_regex_scratch_error)
             }
             super::RegexPlanRef::Capture(program) => {
                 let regex = generation
@@ -4703,7 +4775,9 @@ fn evaluate_operator(
                 let scratch = capture_scratch
                     .get_mut(program)
                     .ok_or(RuntimeError::GenerationInvariant)?;
-                regex.is_match(input, scratch).map_err(map_regex_scratch_error)
+                regex
+                    .is_match(input, lazy_capture_scratch(scratch, regex))
+                    .map_err(map_regex_scratch_error)
             }
         },
         super::CompiledOperatorOperand::Matcher {
@@ -4916,7 +4990,7 @@ fn append_runtime(output: &mut Vec<u8>, value: &[u8], limit: usize) -> Result<()
     Ok(())
 }
 
-fn parse_i64(value: &[u8]) -> Result<i64, RuntimeError> {
+pub(super) fn parse_i64(value: &[u8]) -> Result<i64, RuntimeError> {
     let text = std::str::from_utf8(value).map_err(|_| RuntimeError::IntegerConversion)?;
     if text.is_empty()
         || text
@@ -5643,7 +5717,7 @@ fn percent_decoded_len(value: &[u8]) -> usize {
     length
 }
 
-fn decimal_bytes(mut value: usize) -> ([u8; 40], usize) {
+pub(super) fn decimal_bytes(mut value: usize) -> ([u8; 40], usize) {
     let mut bytes = [0_u8; 40];
     let mut start = bytes.len();
     loop {
@@ -5719,3 +5793,12 @@ mod json_inspection_runtime;
 #[path = "xml_inspection_runtime.rs"]
 mod xml_inspection_runtime;
 pub use xml_inspection_runtime::{XmlInspectionLimits, XmlInspectionSession, XmlInspectionUsage};
+
+pub(super) fn integer_relation(relation: super::IntegerRelation, actual: i64, expected: i64) -> bool {
+    match relation {
+        super::IntegerRelation::Equal => actual == expected,
+        super::IntegerRelation::GreaterOrEqual => actual >= expected,
+        super::IntegerRelation::Greater => actual > expected,
+        super::IntegerRelation::Less => actual < expected,
+    }
+}

@@ -10,7 +10,7 @@ knowledge_type: regression-guards
 
 Full WAF inspection uses XmlStream and XmlInspectionSession for effective XML
 processors. The parser validates a bounded UTF-8/XML 1.0 inspection subset without
-a DOM or complete extracted value map. Compiled static predicates run as values
+a DOM or complete extracted value map. Reachable compiled static predicates run as values
 complete; Phase-2 capture, chain, TX and control effects derived from XML values
 run only in canonical rule order after complete source admission. Phase-1 effects
 execute before inspection and can select the processor. This is not arbitrary
@@ -57,6 +57,11 @@ the JSON-only no-hit summary proof. Required candidate metadata can still grow
 with values; parser arena reuse is not a constant-memory whole-transaction claim.
 Broad-only XML dispatch reuses precompiled profile order in the existing text and
 attribute vectors; mixed private Literal/Regex IR keeps its charged fallback.
+XML uses the canonical [demand-driven scratch and static activation](fused-json-inspection.md#demand-driven-scratch-and-static-activation)
+proof, all-consumer mask and checked sealed lookup. XML grammar, namespaces,
+duplicate attributes and metadata remain mandatory when every static group is
+pruned. Non-TX Phase2 target exclusions retain canonical effects and cannot
+suppress a TX-only gate. XML does not use the JSON summary shortcut.
 Transient XML selection kinds come only from checked candidate metadata. Broad
 selectors need no name read; named selectors, capture and matched-variable reads
 retain their checked paths. Static replay reuses the profile returned by the same

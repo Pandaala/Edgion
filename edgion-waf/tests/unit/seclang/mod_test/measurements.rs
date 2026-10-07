@@ -4,6 +4,10 @@ use std::cell::RefCell;
 #[derive(Clone, Copy)]
 #[repr(usize)]
 pub(crate) enum Event {
+    GroupScratchInitializations,
+    BooleanScratchInitializations,
+    CaptureScratchInitializations,
+    AvoidedPredicateGroups,
     GrammarInstances,
     SourceBytes,
     Completions,
