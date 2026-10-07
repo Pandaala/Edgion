@@ -1,0 +1,26 @@
+work_dir: /var/lib/edgion/controller
+server:
+  grpc_listen: "127.0.0.1:12151"
+  admin_listen: "127.0.0.1:12101"
+  probe_listen: "127.0.0.1:12100"
+  metrics_listen: "127.0.0.1:12190"
+logging:
+  log_dir: /var/log/edgion/controller
+  log_prefix: edgion-controller
+  log_level: info
+  json_format: true
+  console: false
+conf_center:
+  type: file_system
+  controller_name: edgion.io/gateway-controller
+  conf_dir: /var/lib/edgion/controller/resources
+debug:
+  enabled: false
+conf_sync:
+  no_sync_kinds: [ReferenceGrant, Secret]
+  default_capacity: 200
+conf_sync_security:
+  tls:
+    cert: /etc/edgion/controller/certs/server.crt
+    key: /etc/edgion/controller/certs/server.key
+    ca: /etc/edgion/controller/certs/ca.crt

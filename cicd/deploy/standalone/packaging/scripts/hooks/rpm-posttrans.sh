@@ -1,0 +1,3 @@
+layout
+restore_removal
+resume

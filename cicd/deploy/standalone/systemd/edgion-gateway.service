@@ -1,0 +1,30 @@
+[Unit]
+Description=Edgion Gateway
+Documentation=https://github.com/Pandaala/Edgion
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=edgion-gateway
+Group=edgion-gateway
+WorkingDirectory=/var/lib/edgion/gateway
+EnvironmentFile=/etc/edgion/gateway/environment
+ExecStart=/usr/bin/edgion-gateway --config-file /etc/edgion/gateway/edgion-gateway.yaml --work-dir /var/lib/edgion/gateway
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=90
+LimitNOFILE=65536
+UMask=0027
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

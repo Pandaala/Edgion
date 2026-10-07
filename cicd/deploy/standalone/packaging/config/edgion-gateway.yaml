@@ -1,0 +1,44 @@
+work_dir: /var/lib/edgion/gateway
+gateway:
+  server_addrs: ["https://127.0.0.1:12151"]
+  admin_listen: "127.0.0.1:12001"
+  probe_listen: "127.0.0.1:12000"
+logging:
+  log_dir: /var/log/edgion/gateway
+  log_prefix: edgion-gateway
+  log_level: "info,pingora_proxy=error,pingora_core=error"
+  json_format: true
+  console: false
+server:
+  threads: 2
+  grace_period_seconds: 30
+  graceful_shutdown_timeout_seconds: 10
+metrics:
+  listen: "127.0.0.1:12090"
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: /var/log/edgion/gateway/edgion_access.log
+      rotation:
+        strategy: daily
+        max_files: 7
+        check_interval_secs: 60
+ssl_log:
+  enabled: true
+  output:
+    localFile:
+      path: /var/log/edgion/gateway/ssl.log
+      rotation:
+        strategy: {size: 104857600}
+        max_files: 5
+        check_interval_secs: 60
+tcp_log:
+  enabled: false
+udp_log:
+  enabled: false
+conf_sync_security:
+  tls:
+    cert: /etc/edgion/gateway/certs/client.crt
+    key: /etc/edgion/gateway/certs/client.key
+    ca: /etc/edgion/gateway/certs/ca.crt

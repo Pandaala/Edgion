@@ -4,9 +4,53 @@ Deploy Edgion API Gateway on bare-metal servers or VMs without Kubernetes.
 
 In standalone mode, the controller uses a **file-system config center** — it watches a local directory of Gateway API YAML files instead of the Kubernetes API. The same binary, same plugin system, same routing engine.
 
+## Packages and Services
+
+Standalone deployment assets are organized here:
+
+```text
+cicd/deploy/standalone/
+  README.md           Deployment entry point
+  packaging/          nFPM manifests, DEB/RPM build scripts, lifecycle hooks
+  systemd/            Authoritative service units and optional drop-ins
+  tests/              Disposable ARM64 package/service lifecycle tests
+  edgion-*.yaml       Manual-deployment process configuration
+  conf/               Manual-deployment resource examples
+  start.sh, stop.sh   Manual-deployment process helpers
+```
+
+| Target | Package format | Service manager | Runtime validation |
+|--------|----------------|-----------------|--------------------|
+| Debian 12 | DEB | systemd | ARM64 Docker |
+| Ubuntu 24.04 | DEB | systemd | ARM64 Docker |
+| Rocky Linux 9 | RPM | systemd | ARM64 Docker |
+
+Controller, Gateway, and CLI are independent packages. The complete package
+lifecycle passed on all three ARM64 targets. An AMD64 build/packaging entry is
+available without runtime validation; see [test scope and limits](tests/README.md).
+
+- [Packaging](packaging/README.md): build, installation, initialization, upgrades,
+  recovery, and removal.
+- [Systemd](systemd/README.md): service identities, limits, shutdown budgets, and
+  operator overrides.
+- [Tests](tests/README.md): repeatable package/service lifecycle verification.
+- [Linux tuning](../linux-tuning/README.md): optional inert tuning assets.
+
+The [manual ARM64 workflow](../../../.github/workflows/standalone-packages.yml)
+builds both formats, runs the matrix, and retains artifacts. Package publication
+and repositories require separate release integration. Build outputs and test
+reports belong in ignored work directories.
+
+First installation leaves services stopped and disabled. Supply credentials,
+certificates, and resource configuration before explicitly starting them. Package
+hooks never tune the host or generate Admin Tokens. The examples below describe
+manual deployment, whose paths differ from packaged installations.
+
 ## Prerequisites
 
-- Linux (x86_64 or aarch64) — tested on Ubuntu 22.04+, Debian 12+, CentOS 9+
+- Manual deployment: a compatible Linux runtime and supplied product binaries.
+- Package targets: Ubuntu 24.04, Debian 12 (DEB), and Rocky Linux 9 (RPM).
+  See [test scope and limits](tests/README.md) for ARM64 validation coverage.
 - Edgion binaries: `edgion-controller`, `edgion-gateway`, `edgion-cli`
 
 ## Quick Start
@@ -27,32 +71,29 @@ cicd/deploy/standalone/start.sh --work-dir /usr/local/edgion
 
 ## Installation
 
-### Option 1: Download Pre-built Binaries
+### Build and Install Packages
+
+See [packaging commands and initialization](packaging/README.md). Build current
+source binaries on the Rocky 9 baseline, then generate three independent DEB
+and RPM packages. First installation leaves Controller and Gateway stopped and
+disabled. Supply tokens and mTLS certificates before explicitly enabling them.
+The CLI package has no daemon service.
+
+Package configuration lives under `/etc/edgion/<role>/`, mutable work data under
+`/var/lib/edgion/<role>/`, and logs under `/var/log/edgion/<role>/`. The directory
+layout and YAML examples below describe manual deployment.
+
+### Build from Source for Manual Deployment
 
 ```bash
-VERSION=0.1.5
-ARCH=$(uname -m)  # x86_64 or aarch64
-
-# Download and install
-curl -L https://github.com/Pandaala/Edgion/releases/download/v${VERSION}/edgion-${VERSION}-${ARCH}.tar.gz \
-  | tar xz -C /usr/local/bin/
-
-# Verify
-edgion-controller --version
-edgion-gateway --version
+cargo build --locked --profile production \
+  -p edgion-gateway -p edgion-controller -p edgion-cli \
+  --bin edgion-gateway --bin edgion-controller --bin edgion-cli
+ls target/production/edgion-{controller,gateway,cli}
 ```
 
-### Option 2: Build from Source
-
-```bash
-# Default build (BoringSSL)
-cargo build --release
-
-# Binaries output to target/release/
-ls target/release/edgion-{controller,gateway,ctl}
-```
-
-The Gateway rustls backend feature is not a supported source-build target.
+The Gateway uses the supported BoringSSL backend. A binary built on a newer
+Linux distribution may require a newer glibc than another target provides.
 
 ## Directory Layout
 
@@ -78,36 +119,19 @@ The Gateway rustls backend feature is not a supported source-build target.
 
 ## Admin Credentials
 
-The controller no longer auto-generates admin credentials at startup. You must supply them
-explicitly before using the Admin API. Two options:
+Each daemon uses an operator-supplied pre-shared bearer token. Supply Controller
+`EDGION_ADMIN_TOKEN` and Gateway `EDGION_GATEWAY_ADMIN_TOKEN` through protected
+environment files for packaged services; see [initialization](packaging/README.md).
+For manual processes, inject these variables from your secret-management system
+or set the documented token fields in protected process configuration files.
 
-**Option A — `[local_auth]` in the config file** (recommended for standalone):
+CLI reads `EDGION_TOKEN` or its protected cached token. Keep tokens out of command
+arguments, source control, logs, and shared files. There is no username/password
+or admin JWT bootstrap. Packages never generate Admin Tokens.
 
-```yaml
-# edgion-controller.yaml
-local_auth:
-  enabled: true
-  username: admin
-  password: "<your-password>"
-  jwt_secret: "<random string, at least 32 characters>"
-  jwt_expiry_hours: 24
-```
-
-**Option B — environment variables** (12-factor style):
-
-```bash
-export EDGION_ADMIN_PASSWORD="$(openssl rand -base64 16)"
-export EDGION_ADMIN_JWT_SECRET="$(openssl rand -base64 32)"
-# EDGION_ADMIN_USERNAME defaults to "admin" if not set
-./start.sh --work-dir /usr/local/edgion
-```
-
-If neither is provided, the server starts successfully but all Admin API business routes
-return `503 Service Unavailable` (fail-close) until credentials are configured and the
-controller is restarted. `/health`, `/ready`, and `/metrics` remain accessible.
-
-> **Do not put the password in a ConfigMap.** Use the config file or env vars — both keep
-> the secret out of version control and Kubernetes ConfigMap storage.
+When tokens are absent, business Admin API routes fail closed with HTTP 503;
+health/readiness probes remain available. See the
+[authentication contract](../../../skills/02-features/02-config/03-auth-bootstrap.md).
 
 ## Configuration
 
@@ -174,7 +198,7 @@ work_dir: "/usr/local/edgion"
 
 gateway:
   server_addrs: ["https://127.0.0.1:12151"]  # Controller gRPC address (https under mTLS)
-  admin_listen: "127.0.0.1:12001"         # Admin API (loopback-only; /configclient, /server-info)
+  admin_listen: "127.0.0.1:12001"         # Admin API (loopback-only; /configclient)
   # probe_listen: "0.0.0.0:12000"         # Liveness/readiness (/health, /ready); default 0.0.0.0:12000
 
 logging:
@@ -312,7 +336,7 @@ cicd/deploy/standalone/stop.sh --work-dir /usr/local/edgion
 
 ## Managing Routes
 
-Use `edgion-cli` to apply configuration changes without restarting:
+Use `edgion-cli` to update routes on existing Gateway listeners without restarting:
 
 ```bash
 # Apply a new route
@@ -322,67 +346,52 @@ edgion-cli --server http://127.0.0.1:12101 apply -f my-route.yaml
 cp my-route.yaml /usr/local/edgion/conf/
 ```
 
-## Systemd Service (Production)
+Listener sockets are created at Gateway startup. Adding or removing listener
+ports, or deleting and recreating a Gateway, requires a Gateway process restart.
+Install the desired GatewayClass, Gateway and routes before starting Gateway;
+when adding a port to a running deployment, wait for configuration sync and then
+restart the Gateway. Route and certificate updates on existing listeners still
+hot-reload. See the [startup contract](../../../skills/01-architecture/02-gateway/01-startup-shutdown.md).
 
-For production deployments, create systemd unit files:
+## Systemd Services
 
-```ini
-# /etc/systemd/system/edgion-controller.service
-[Unit]
-Description=Edgion Controller
-After=network.target
+Use the authoritative [Controller unit](systemd/edgion-controller.service) and
+[Gateway unit](systemd/edgion-gateway.service) installed by the packages. They use
+separate non-login identities, absolute package paths, graceful SIGTERM, and
+bounded restart behavior. CLI has no service.
 
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/edgion-controller \
-  --config-file /usr/local/edgion/config/edgion-controller.yaml \
-  --work-dir /usr/local/edgion
-Restart=always
-RestartSec=5
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```ini
-# /etc/systemd/system/edgion-gateway.service
-[Unit]
-Description=Edgion Gateway
-After=edgion-controller.service
-Requires=edgion-controller.service
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/edgion-gateway \
-  --config-file /usr/local/edgion/config/edgion-gateway.yaml \
-  --work-dir /usr/local/edgion
-Restart=always
-RestartSec=5
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
-```
+The base Gateway unit operates independently of a local Controller. The optional
+[same-host drop-in](systemd/same-host.conf) adds startup ordering without
+propagating Controller stops to Gateway. Install it only for a same-host topology.
+See [service configuration](systemd/README.md) for operator overrides and stop
+budgets. Optional host tuning remains a separate explicit action.
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now edgion-controller edgion-gateway
+# After completing package initialization:
+sudo systemctl enable --now edgion-controller
+curl --fail http://127.0.0.1:12100/ready
+sudo systemctl enable --now edgion-gateway
+curl --fail http://127.0.0.1:12000/ready
 ```
+
+Install the GatewayClass, Gateway and matching routing resources before starting
+Gateway. Service activation and probe readiness do not prove that a newly added
+port is bound; port-set changes require a Gateway restart. Verify a real proxy
+request.
 
 ## Ports
 
 | Service | Port | Bind | Description |
 |---------|------|------|-------------|
-| Controller gRPC | 12151 | 127.0.0.1 (loopback) | Gateway config sync — plaintext by default, so it must not leave the host (see "conf_sync channel security") |
-| Controller Admin | 12101 | 0.0.0.0 | Config apply, `/api/v1`, `/configclient` |
-| Controller Probe | 12100 | 0.0.0.0 | Liveness/readiness (`/health`, `/ready`) |
-| Controller Metrics | 12190 | 0.0.0.0 | Prometheus metrics (`/metrics`) |
-| Gateway HTTP | 80 | 0.0.0.0 | Default HTTP listener |
-| Gateway HTTPS | 443 | 0.0.0.0 | Default HTTPS listener |
-| Gateway Admin | 12001 | 127.0.0.1 (loopback) | Internal admin API (`/configclient`, `/api/v1/server-info`) |
-| Gateway Probe | 12000 | 0.0.0.0 | Liveness/readiness (`/health`, `/ready`) |
-| Gateway Metrics | 12090 | 0.0.0.0 | Prometheus metrics |
+| Controller gRPC | 12151 | 127.0.0.1 packaged; 0.0.0.0 manual example | Gateway config sync with mTLS by default |
+| Controller Admin | 12101 | 127.0.0.1 packaged; 0.0.0.0 manual example | Config apply, `/api/v1`, `/configclient` |
+| Controller Probe | 12100 | 127.0.0.1 packaged; 0.0.0.0 manual default | Liveness/readiness (`/health`, `/ready`) |
+| Controller Metrics | 12190 | 127.0.0.1 packaged; 0.0.0.0 manual default | Prometheus metrics (`/metrics`) |
+| Gateway HTTP | 80 | 0.0.0.0 | Resource-defined example listener |
+| Gateway HTTPS | 443 | 0.0.0.0 | Resource-defined when an HTTPS listener is configured |
+| Gateway Admin | 12001 | 127.0.0.1 (loopback) | Authenticated internal admin API (`/configclient`) |
+| Gateway Probe | 12000 | 127.0.0.1 packaged; 0.0.0.0 manual default | Liveness/readiness (`/health`, `/ready`) |
+| Gateway Metrics | 12090 | 127.0.0.1 packaged; 0.0.0.0 manual default | Prometheus metrics |
 
 ## Troubleshooting
 

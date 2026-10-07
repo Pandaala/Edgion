@@ -1,0 +1,6 @@
+{
+  "name": "edgion-cli",
+  "description": "Edgion command-line configuration and certificate tools",
+  "deb": {"depends": ["ca-certificates", "coreutils"]},
+  "rpm": {"depends": ["ca-certificates", "coreutils"]}
+}

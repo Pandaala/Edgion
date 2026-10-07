@@ -1,0 +1,57 @@
+name: Standalone arm64 packages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packages-and-lifecycle:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    steps:
+      - name: Checkout current source
+        uses: actions/checkout@v6
+
+      - name: Build Linux arm64 binaries on the Rocky 9 baseline
+        run: |
+          cicd/deploy/standalone/packaging/scripts/build-binaries.sh \
+            --arch arm64 --output tmp/standalone-packaging/binaries
+
+      - name: Build DEB and RPM lifecycle revisions
+        run: |
+          for revision in 1 2; do
+            cicd/deploy/standalone/packaging/scripts/build-packages.sh \
+              --arch arm64 --version 0.1.0 --release "$revision" \
+              --binaries tmp/standalone-packaging/binaries \
+              --output tmp/standalone-packaging/packages
+          done
+
+      - name: Verify Debian, Ubuntu and Rocky package lifecycles
+        run: |
+          cicd/deploy/standalone/tests/run-arm64.sh \
+            --packages tmp/standalone-packaging/packages \
+            --report-dir tmp/standalone-packaging/reports
+
+      - name: Upload tested packages and provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: edgion-arm64-package-validation
+          path: |
+            tmp/standalone-packaging/packages/*.deb
+            tmp/standalone-packaging/packages/*.rpm
+            tmp/standalone-packaging/packages/*.json
+            tmp/standalone-packaging/binaries/*.txt
+            tmp/standalone-packaging/binaries/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload bounded lifecycle reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edgion-arm64-package-reports
+          path: tmp/standalone-packaging/reports/
+          if-no-files-found: ignore
+          retention-days: 7

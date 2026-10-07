@@ -1,0 +1,29 @@
+[Unit]
+Description=Edgion Controller
+Documentation=https://github.com/Pandaala/Edgion
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=edgion-controller
+Group=edgion-controller
+WorkingDirectory=/var/lib/edgion/controller
+EnvironmentFile=/etc/edgion/controller/environment
+ExecStart=/usr/bin/edgion-controller --config-file /etc/edgion/controller/edgion-controller.yaml --work-dir /var/lib/edgion/controller
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=45
+LimitNOFILE=65536
+UMask=0027
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

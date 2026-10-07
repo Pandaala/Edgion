@@ -1,0 +1,6 @@
+{
+  "name": "edgion-gateway",
+  "description": "Edgion standalone data-plane service",
+  "deb": {"depends": ["systemd", "passwd", "coreutils", "libc-bin", "mawk | gawk", "ca-certificates"], "predepends": ["passwd", "mawk | gawk"]},
+  "rpm": {"depends": ["systemd", "shadow-utils", "coreutils", "gawk", "ca-certificates"]}
+}
