@@ -19,6 +19,8 @@ pub(crate) struct AiHttpState {
     /// Bounded request metadata and shared atomic usage counters. Contains no
     /// prompt or credential.
     pub(crate) request: Option<AiRequestContext>,
+    /// Captured at actual AiProxy entry, before early errors or rejected plans.
+    pub(crate) client_api: Option<edgion_resources::resources::edgion_plugins::AiApi>,
     /// Immutable canonical request and candidate snapshot for forwarding. The
     /// canonical body is never rendered by Debug or access logging.
     pub(crate) attempt_plan: Option<AiAttemptPlan>,
@@ -58,9 +60,13 @@ pub(crate) struct AiHttpState {
 }
 
 impl EdgionHttpContext {
-    pub(crate) fn has_responses_plan(&self) -> bool {
+    pub(crate) fn capture_ai_client_api(&mut self, api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
+        *self.ensure_ai_state().client_api.get_or_insert(api) == api
+    }
+
+    pub(crate) fn has_unsupported_native_guard_plan(&self) -> bool {
         matches!(self.ai_state().and_then(|state| state.attempt_plan.as_ref()),
-            Some(AiAttemptPlan::Ready(plan)) if plan.api == edgion_resources::resources::edgion_plugins::AiApi::OpenaiResponses)
+            Some(AiAttemptPlan::Ready(plan)) if matches!(plan.api, edgion_resources::resources::edgion_plugins::AiApi::OpenaiResponses | edgion_resources::resources::edgion_plugins::AiApi::AnthropicMessages))
     }
 
     pub(crate) fn try_set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
@@ -73,7 +79,9 @@ impl EdgionHttpContext {
             false
         } else {
             state.request = Some(context);
-            state.client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
+            state.client_stream_dialect = (state.client_api
+                != Some(edgion_resources::resources::edgion_plugins::AiApi::AnthropicMessages))
+            .then_some(AiClientStreamDialect::OpenAiCompatibleSse);
             true
         }
     }
@@ -82,7 +90,9 @@ impl EdgionHttpContext {
     /// request-wide quota handle across AI failover attempts.
     pub(crate) fn replace_ai_attempt_context(&mut self, mut context: AiRequestContext) {
         let state = self.ensure_ai_state();
-        state.client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
+        state.client_stream_dialect = (state.client_api
+            != Some(edgion_resources::resources::edgion_plugins::AiApi::AnthropicMessages))
+        .then_some(AiClientStreamDialect::OpenAiCompatibleSse);
         if let Some(mut previous) = state.request.take() {
             if context.quota.is_none() {
                 context.quota = previous.quota.take();

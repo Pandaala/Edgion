@@ -371,7 +371,7 @@ whether the feature needs incremental bytes or one complete document.
    conversion owner, never in response BodyStorage, a disk spool, or a
    full-response RawWindow. Enforce independent protobuf/ProtoJSON, depth/node,
    metadata, outstanding-output, per-exchange heap and process-wide admission
-   bounds in the [reviewed plan](tasks/pending/grpc-json-transcoding/03-implementation-plan.md).
+   bounds in the [current architecture](skills/01-architecture/02-gateway/00-overview.md#httproute-grpc-json-transcoding).
    Validate real terminal gRPC status before final headers/body commit, preserve
    deadlines and cancellation cleanup, and emit fixed REST errors. Server-streaming
    conversion remains message-window streaming and gains no full-response

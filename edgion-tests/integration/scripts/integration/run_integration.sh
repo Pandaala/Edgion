@@ -1126,7 +1126,7 @@ is_redis_service_required() {
     fi
 
     if [ "$G_RESOURCE" = "EdgionBackend" ]; then
-        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || [ "$G_ITEM" = "Responses" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || { [ "$G_ITEM" = "Responses" ] || [ "$G_ITEM" = "Messages" ]; }; then
             return 0
         fi
     fi
@@ -1144,7 +1144,7 @@ is_redis_service_required() {
     fi
 
     case ",${explicit_suites}," in
-        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,EdgionBackend/SingleProvider,*|*,EdgionBackend/Responses,*|*,EdgionBackend/CredentialExhaustion,*|*,LinkSys/Redis,*|*,LinkSys/RedisTls,*|*,TCPRoute/StreamPlugins,*)
+        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,EdgionBackend/SingleProvider,*|*,EdgionBackend/Responses,*|*,EdgionBackend/Messages,*|*,EdgionBackend/CredentialExhaustion,*|*,LinkSys/Redis,*|*,LinkSys/RedisTls,*|*,TCPRoute/StreamPlugins,*)
             return 0
             ;;
     esac
@@ -1725,6 +1725,7 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "EdgionBackend_SingleProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i SingleProvider" || test_failed=true
                     run_test "EdgionBackend_Responses" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Responses" || test_failed=true
+        run_test "EdgionBackend_Messages" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Messages" || test_failed=true
         run_test "EdgionBackend_AnthropicProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i AnthropicProvider" || test_failed=true
                     run_test "EdgionBackend_Resilience" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Resilience" || test_failed=true
                     run_test "EdgionBackend_CredentialExhaustion" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i CredentialExhaustion" || test_failed=true
@@ -2037,6 +2038,7 @@ run_all_tests() {
 
         run_test "EdgionBackend_SingleProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i SingleProvider" || test_failed=true
         run_test "EdgionBackend_Responses" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Responses" || test_failed=true
+        run_test "EdgionBackend_Messages" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Messages" || test_failed=true
         run_test "EdgionBackend_AnthropicProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i AnthropicProvider" || test_failed=true
         run_test "EdgionBackend_Resilience" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Resilience" || test_failed=true
         run_test "EdgionBackend_CredentialExhaustion" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i CredentialExhaustion" || test_failed=true
@@ -2280,6 +2282,28 @@ run_all_tests() {
         run_dynamic_scenarios || test_failed=true
     fi
 
+    run_messages_sdk() {
+        "$EDGION_MESSAGES_SDK_PYTHON" "$SCRIPT_DIR/test_messages_sdk.py" \
+            --ports "$PROJECT_ROOT/edgion-tests/integration/conf/ports.json"
+    }
+
+    # Messages checks share the owned topology and finish before residue validation.
+    if [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Messages" ]; then
+        run_test "Dyn_AiMessagesBinding" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario AiMessagesBinding" || test_failed=true
+        for control in Responses SingleProvider AnthropicProvider; do
+            run_test "Messages_Control_${control}" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i ${control}" || test_failed=true
+        done
+        run_test "Messages_Control_Http" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Basic" || test_failed=true
+        run_test "Messages_Control_Sse" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i SseStreaming" || test_failed=true
+    fi
+    if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Messages" ]; }; } || [ -z "$G_RESOURCE" ]; then
+        if [ -n "${EDGION_MESSAGES_SDK_PYTHON:-}" ]; then
+            run_test "Messages_SDK" "run_messages_sdk" || test_failed=true
+        else
+            report_test "Messages_SDK" "SKIP" "0" "set EDGION_MESSAGES_SDK_PYTHON to an interpreter with the official anthropic SDK"
+        fi
+    fi
+
     # A resource-wide Gateway sweep loads the dynamic fixtures. An exact
     # Gateway item only loads that item's fixtures and must remain isolated.
     if [ "$G_RESOURCE" = "Gateway" ] && [ -z "$G_ITEM" ]; then
@@ -2514,7 +2538,9 @@ main() {
                 suites="${base_suites},LinkSys/${G_ITEM}"
             fi
         elif [ -n "$G_ITEM" ]; then
-            if [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Responses" ]; then
+            if [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Messages" ]; then
+                suites="${base_suites},LinkSys/Redis,EdgionBackend/Messages,EdgionBackend/Responses,EdgionBackend/SingleProvider,EdgionBackend/AnthropicProvider,HTTPRoute/Basic,HTTPRoute/SseStreaming"
+            elif [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Responses" ]; then
                 suites="${base_suites},LinkSys/Redis,EdgionBackend/Responses"
             elif [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; then
                 suites="${base_suites},EdgionPlugins/base,EdgionPlugins/Waf/DynamicTest"
@@ -2793,7 +2819,7 @@ main() {
 
     # These explicitly selected suites use only 127.0.0.1. Do not require the
     # macOS-only aliases that belong to unrelated LB and GeoIP suites.
-    if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || [ "$G_ITEM" = "Responses" ]; }; } \
+    if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || { [ "$G_ITEM" = "Responses" ] || [ "$G_ITEM" = "Messages" ]; }; }; } \
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
         || { [ "$G_RESOURCE" = "HTTPRoute" ] && [ "$G_ITEM" = "Backend/InformationalRetry" ]; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
@@ -2952,7 +2978,7 @@ main() {
     if $do_start; then
         log_section "Step 2: Start all services and load config"
         export EDGION_TEST_CONTROLLER_GRPC_PORT="${CONTROLLER_GRPC_PORT}"
-        if [ -z "$G_RESOURCE" ] || [ "$G_RESOURCE" = "EdgionBackend" ] || [[ ",${suites}," == *",EdgionBackend/SingleProvider,"* ]] || [[ ",${suites}," == *",EdgionBackend/AnthropicProvider,"* ]] || [[ ",${suites}," == *",EdgionBackend/Resilience,"* ]] || [[ ",${suites}," == *",EdgionBackend/Responses,"* ]] || [[ ",${suites}," == *",EdgionBackend/CredentialExhaustion,"* ]]; then
+        if [ -z "$G_RESOURCE" ] || [ "$G_RESOURCE" = "EdgionBackend" ] || [[ ",${suites}," == *",EdgionBackend/SingleProvider,"* ]] || [[ ",${suites}," == *",EdgionBackend/AnthropicProvider,"* ]] || [[ ",${suites}," == *",EdgionBackend/Resilience,"* ]] || [[ ",${suites}," == *",EdgionBackend/Responses,"* ]] || [[ ",${suites}," == *",EdgionBackend/Messages,"* ]] || [[ ",${suites}," == *",EdgionBackend/CredentialExhaustion,"* ]]; then
             export EDGION_TEST_ENABLE_GENAI_METRICS=1
         else
             unset EDGION_TEST_ENABLE_GENAI_METRICS

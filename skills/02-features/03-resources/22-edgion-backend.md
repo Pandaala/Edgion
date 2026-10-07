@@ -59,8 +59,8 @@ rule must attach `AiProxy`; candidate order and weights come exclusively from
 
 Managed AiProxy requires `api: openaiChat`, with exact effective POST `/v1/chat/completions`
 and local GET `/v1/models`. Native entries omit conversion and accept OpenAI/OpenAICompatible
-candidates. Anthropic requires explicit `conversion: chatToAnthropic`; native Messages and
-Responses remain pending and their recognized API values fail validation. `usageObservation`
+candidates. Anthropic accepts native `api: anthropicMessages`, or explicit Chat `conversion: chatToAnthropic`.
+Native `openaiResponses` accepts OpenAI only; native Messages accepts Anthropic only. Native APIs forbid conversion and injection. `usageObservation`
 defaults off, with no provider usage observer or token/cost publication. `provider` enables
 existing bounded observation; tokenQuota, credential TPM and LowestUsage require it.
 `injectUsageTracking` defaults false and controls declared request mutation independently.

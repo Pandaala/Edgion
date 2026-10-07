@@ -347,7 +347,9 @@ fn prepare_ready_attempt(
 ) -> Result<PreparedAiAttempt, AiDispatchError> {
     if !matches!(
         (plan.api, plan.operation),
-        (AiApi::OpenaiChat, AiOperation::ChatCompletions) | (AiApi::OpenaiResponses, AiOperation::Responses)
+        (AiApi::OpenaiChat, AiOperation::ChatCompletions)
+            | (AiApi::OpenaiResponses, AiOperation::Responses)
+            | (AiApi::AnthropicMessages, AiOperation::Messages)
     ) || plan.body_generation != ctx.request_body.generation()
     {
         ctx.record_error(edgion_resources::EdgionErrorCode::BodyMutationConflict);
@@ -421,6 +423,16 @@ fn prepare_ready_attempt(
         None
     };
     let (body, requested_streaming, anthropic_usage_chunk) = match plan.conversion {
+        None if plan.api == AiApi::AnthropicMessages && ai_backend.provider == AiProvider::Anthropic => {
+            let body = if model.provider_model == plan.logical_model {
+                plan.request_body.clone()
+            } else {
+                crate::ai::protocols::anthropic::request::rewrite_model(&plan.request_body, &model.provider_model)
+                    .map_err(AiDispatchError::Client)?
+                    .unwrap_or_else(|| plan.request_body.clone())
+            };
+            (body, plan.requested_streaming, false)
+        }
         None if matches!(ai_backend.provider, AiProvider::OpenAI | AiProvider::OpenAICompatible)
             && (plan.api != AiApi::OpenaiResponses || ai_backend.provider == AiProvider::OpenAI) =>
         {
@@ -465,24 +477,44 @@ fn prepare_ready_attempt(
         ctx.ensure_ai_state().request_baseline = Some(session.req_header().clone());
     }
     apply_backend_request_headers(session, ctx, selected_route_backend)?;
-    {
+    let observation_supported = {
         let mut adapter = PingoraSessionAdapter::new(session, ctx);
         crate::ai::connectors::provider::prepare_provider_request(
             &mut adapter,
             ai_backend.provider,
+            plan.api,
             &ai_backend.endpoint,
             &credential.credential,
             &plan.canonical_path,
             plan.canonical_query.as_deref(),
             plan.usage_observation == AiUsageObservation::Provider || plan.conversion.is_some(),
-        )?;
+        )?
+    };
+    if !observation_supported
+        && (plan.quota.is_some()
+            || ctx
+                .ai_state()
+                .and_then(|s| s.request.as_ref())
+                .is_some_and(|r| r.quota.is_some())
+            || plan.selection == edgion_resources::resources::edgion_plugins::AiBackendSelection::LowestUsage
+            || plan
+                .candidates
+                .iter()
+                .any(|c| c.weight > 0 && c.backend.as_ref().is_some_and(|b| b.has_credential_tpm)))
+    {
+        return Err(AiDispatchError::Client(AiProxyError::UnsupportedParameter));
     }
 
-    let usage = Arc::new(if plan.api == AiApi::OpenaiResponses {
-        AiUsageShared::with_responses(plan.usage_observation)
+    let usage = Arc::new(if plan.api != AiApi::OpenaiChat {
+        AiUsageShared::with_reported_only(plan.usage_observation)
     } else {
         AiUsageShared::with_observation(plan.usage_observation)
     });
+    if plan.usage_observation == AiUsageObservation::Provider
+        && (plan.observation_unavailable || !observation_supported)
+    {
+        usage.mark_observation_unavailable();
+    }
     usage.set_input_chars(plan.input_chars);
     let eos = crate::ai::runtime::attempt_runtime::new_eos_latch();
     let quota_accumulator = plan.quota.as_ref().map(|quota| quota.accumulator()).or_else(|| {
@@ -525,7 +557,24 @@ fn prepare_ready_attempt(
             unary_owner.clone(),
         )));
     }
-    if plan.conversion.is_none() && plan.usage_observation == AiUsageObservation::Provider {
+    if plan.api == AiApi::AnthropicMessages
+        && plan.usage_observation == AiUsageObservation::Provider
+        && observation_supported
+    {
+        response_processors.push(Box::new(
+            crate::ai::protocols::anthropic::processor::MessagesProcessor::new(
+                Arc::clone(&usage),
+                quota_accumulator.clone(),
+                requested_streaming,
+                plan.terminate_on_over_limit,
+                model.provider_model.clone(),
+            ),
+        ));
+    }
+    if plan.api != AiApi::AnthropicMessages
+        && plan.conversion.is_none()
+        && plan.usage_observation == AiUsageObservation::Provider
+    {
         let processor = if plan.api == AiApi::OpenaiResponses {
             UsageExtractionProcessor::new_responses(
                 Arc::clone(&usage),

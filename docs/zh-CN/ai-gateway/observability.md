@@ -78,3 +78,10 @@ usage 缺失、事件超限/损坏、编码不支持或文档截断时为 unknow
 status=completed 且 usage 缺失时可以确认模型成功，但没有数字账单。HTTP200 failed/incomplete/cancelled
 不会成为凭据健康或自适应 TTFT 的成功样本。off 不安装 body parser，只保留传输 TTFT，不推断模型成功。
 attempt 失败类别增加 provider_failed、provider_incomplete、provider_cancelled；后续传输截断优先，保守保留凭据预留。
+
+## 原生 Messages 核算
+
+Messages 的 provider 观测只采用厂商用量，输入包含缓存计数，迟到计数按累计水位处理。
+off 保持 notObserved；不支持的版本/复合推理、终态用量缺失或流损坏、编码不可观测、未完成
+保持 unknown，不用字符估算。厂商错误不会被后续 stop 覆盖为成功。
+详见[原生边界](./providers.md#原生-messages-的边界)。

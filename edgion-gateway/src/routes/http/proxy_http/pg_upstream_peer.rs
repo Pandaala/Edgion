@@ -1,9 +1,10 @@
 use super::EdgionHttpProxy;
+use crate::ai::protocols::error::render_ai_error;
 use crate::ai::runtime::dispatch::{
     ai_predispatch_deadline, commit_ai_attempt_context, prepare_first_attempt, AiDispatchError,
     AiPeerPredispatchFailure, PreparedAiAttempt,
 };
-use crate::ai::{render_openai_error, AiProxyError};
+use crate::ai::AiProxyError;
 use crate::backends::peer_builder::{
     apply_backend_app_protocol, create_tls_peer, extract_tls_config, parse_backend_app_protocol,
 };
@@ -91,7 +92,7 @@ async fn end_ai_predispatch_error(
     ctx: &mut EdgionHttpContext,
     error: AiProxyError,
 ) -> pingora_core::Result<()> {
-    let (status, body) = render_openai_error(error);
+    let (status, body) = render_ai_error(ctx, error);
     let mut response = ResponseHeader::build(status, None)?;
     edgion_http.server_header_opts.apply_to_response(&mut response);
     response.insert_header("content-type", "application/json")?;

@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: messages-egc
+spec:
+  securityProtect:
+    allowLoopbackUpstream: true
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: messages-class
+spec:
+  controllerName: edgion.io/gateway-controller
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: messages-egc

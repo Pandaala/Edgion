@@ -154,14 +154,14 @@ pub fn collect_grpc_transcoding_errors(entries: &[RequestFilterEntry]) -> Vec<St
 pub fn collect_ai_guard_ordering_errors(entries: &[RequestFilterEntry], errors: &mut Vec<String>) {
     let responses = entries.iter().any(|entry| {
         entry.is_enabled()
-            && matches!(&entry.plugin, EdgionPlugin::AiProxy(config) if config.api == super::AiApi::OpenaiResponses)
+            && matches!(&entry.plugin, EdgionPlugin::AiProxy(config) if matches!(config.api, super::AiApi::OpenaiResponses | super::AiApi::AnthropicMessages))
     });
     if responses
         && entries.iter().any(|entry| {
             entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::AiGuard(_) | EdgionPlugin::Guardrail(_))
         })
     {
-        errors.push("requestPlugins: native Responses does not support AiGuard or Guardrail".to_string());
+        errors.push("requestPlugins: native Responses/Messages does not support AiGuard or Guardrail".to_string());
     }
     let active = |entry: &RequestFilterEntry| entry.is_enabled();
     // The LAST guard against the FIRST proxy: `[AiGuard, AiProxy, AiGuard]`

@@ -291,7 +291,9 @@ fn api_is_required_and_observation_is_an_independent_explicit_contract() {
         .iter()
         .any(|field| field == "api"));
     let unsupported: AiProxyConfig = serde_json::from_value(serde_json::json!({"api":"anthropicMessages"})).unwrap();
-    assert!(unsupported.validation_error().unwrap().contains("not implemented"));
+    assert!(unsupported.validation_error().is_none());
+    assert!(unsupported.accepts_provider(AiProvider::Anthropic));
+    assert!(!unsupported.accepts_provider(AiProvider::OpenAI));
     let mut native: AiProxyConfig = serde_json::from_str(r#"{"api":"openaiChat"}"#).unwrap();
     assert!(native.validation_error().is_none());
     native.inject_usage_tracking = true;
@@ -336,4 +338,27 @@ fn native_responses_has_an_explicit_openai_only_matrix() {
     config.conversion = Some(AiConversion::ChatToAnthropic);
     assert!(config.validation_error().is_some());
     assert!(!config.accepts_provider(AiProvider::Anthropic));
+}
+
+#[test]
+fn native_messages_has_explicit_anthropic_only_accounting_matrix() {
+    let mut config: AiProxyConfig = serde_json::from_str(r#"{"api":"anthropicMessages"}"#).unwrap();
+    assert!(config.validation_error().is_none());
+    assert!(config.accepts_provider(AiProvider::Anthropic));
+    assert!(!config.accepts_provider(AiProvider::OpenAI));
+    assert!(!config.accepts_provider(AiProvider::OpenAICompatible));
+    config.inject_usage_tracking = true;
+    assert!(config.validation_error().is_some());
+    config.inject_usage_tracking = false;
+    config.conversion = Some(AiConversion::ChatToAnthropic);
+    assert!(config.validation_error().is_some());
+    config.conversion = None;
+    config.backend_selection.selection_type = AiBackendSelection::LowestUsage;
+    assert!(config.validation_error().is_some());
+    config.usage_observation = AiUsageObservation::Provider;
+    assert!(config.validation_error().is_none());
+    config.token_quota = Some(base_quota());
+    assert!(config.validation_error().is_none());
+    config.usage_observation = AiUsageObservation::Off;
+    assert!(config.validation_error().is_some());
 }

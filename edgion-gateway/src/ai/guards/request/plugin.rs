@@ -165,9 +165,9 @@ impl RequestFilter for AiGuard {
             .ctx()
             .ai_request_guard_invoked
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        if session.ctx().has_responses_plan() {
+        if session.ctx().has_unsupported_native_guard_plan() {
             log.push_err("responses-guard-unsupported");
-            return openai_error_response(session, AiProxyError::UnsupportedParameter);
+            return crate::ai::protocols::error::ai_error_response(session, AiProxyError::UnsupportedParameter);
         }
         // Re-entry latch. The backendRef-scoped chain re-runs on every upstream
         // attempt, and a published mask is not rolled back by rewind, so a

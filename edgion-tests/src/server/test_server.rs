@@ -646,6 +646,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         // Native Anthropic Messages fixture. Its observation endpoint exposes
         // only a monotonically increasing count, never headers or bodies.
         .route("/anthropic/{*path}", axum::routing::post(anthropic_provider_handler))
+        .route("/messages/{*path}", axum::routing::post(messages_provider_handler))
         .route("/anthropic-fixture/count", get(anthropic_request_count_handler))
         // --- Mirror endpoints (for RequestMirror plugin integration tests) ---
         // POST/GET to /mirror/capture: gateway mirrors requests here; stored by x-trace-id
@@ -2415,6 +2416,238 @@ async fn ai_credential_exhaustion_observations_handler(Path(trace_id): Path<Stri
         .remove(&trace_id)
         .unwrap_or_default();
     axum::Json(serde_json::json!({ "observations": observations }))
+}
+
+/// Separate native Messages fixture; the existing Chat converter fixture is unchanged.
+async fn messages_provider_handler(Path(path): Path<String>, request: AxumRequest<Body>) -> axum::response::Response {
+    use serde_json::json;
+    let (parts, body) = request.into_parts();
+    let Ok(body) = axum::body::to_bytes(body, 1024 * 1024).await else {
+        return (axum::http::StatusCode::PAYLOAD_TOO_LARGE, "fixture body limit").into_response();
+    };
+    let request: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return (axum::http::StatusCode::BAD_REQUEST, "fixture invalid JSON").into_response(),
+    };
+    let query: std::collections::BTreeMap<String, String> =
+        reqwest::Url::parse(&format!("http://fixture{}", parts.uri))
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+    let mode = query.get("mock_mode").map(String::as_str).unwrap_or("normal");
+    let key = parts
+        .headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let credential_label = match key {
+        "messages-key-A" => "A",
+        "messages-key-B" => "B",
+        _ => "invalid",
+    };
+    let observed = json!({
+        "fixture":"messages-native","path":path,"query":query,
+        "request":request,
+        "credential_label":credential_label,
+        "auth_absent":!parts.headers.contains_key("authorization")&&!parts.headers.contains_key("api-key"),
+        "workspace_absent":!parts.headers.contains_key("anthropic-workspace-id"),
+        "profile_absent":!parts.headers.contains_key("anthropic-user-profile-id"),
+        "version":parts.headers.get("anthropic-version").and_then(|v|v.to_str().ok()),
+        "beta":parts.headers.get_all("anthropic-beta").iter().filter_map(|v|v.to_str().ok()).collect::<Vec<_>>(),
+    });
+    let tool = mode == "tool";
+    let thinking = mode == "thinking";
+    let reason = if tool {
+        "tool_use"
+    } else if mode == "pause" {
+        "pause_turn"
+    } else if request["max_tokens"] == 0 {
+        "max_tokens"
+    } else {
+        "end_turn"
+    };
+    let zero = request["max_tokens"] == 0;
+    let content = if zero {
+        json!([])
+    } else if tool {
+        json!([{"type":"tool_use","id":"tool_fixture","name":"weather","input":{"city":"Paris"}}])
+    } else if thinking {
+        json!([{"type":"thinking","thinking":"fixture thought","signature":"opaque-fixture-signature"},{"type":"text","text":"hello"}])
+    } else {
+        json!([{"type":"text","text":observed.to_string()}])
+    };
+    let output_tokens = if zero {
+        0
+    } else if mode == "quota" {
+        32
+    } else {
+        7
+    };
+    let mut usage = json!({"input_tokens":8,"output_tokens":output_tokens,"cache_creation_input_tokens":3,"cache_read_input_tokens":2});
+    if mode == "composite" {
+        usage["iterations"] =
+            json!([{"type":"advisor_message","model":"advisor-model","usage":{"input_tokens":3,"output_tokens":4}}]);
+    }
+    if mode == "iterations" {
+        usage["iterations"] =
+            json!([{"type":"message","model":"fixture-model","usage":{"input_tokens":13,"output_tokens":7}}]);
+    }
+    let message = json!({"id":"msg_fixture","type":"message","role":"assistant","model":"fixture-model","content":content,"stop_reason":reason,"stop_sequence":null,"usage":usage});
+    if request["stream"] != true {
+        let mut wire = message.to_string();
+        if mode == "malformed" {
+            wire.push_str("invalid-tail");
+        }
+        return axum::response::Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(Body::from(wire))
+            .unwrap();
+    }
+    let event = |name: &str, value: serde_json::Value| Bytes::from(format!("event: {name}\ndata: {value}\n\n"));
+    let mut frames = vec![
+        Bytes::from_static(b": heartbeat\n\n"),
+        event(
+            "message_start",
+            json!({"type":"message_start","message":{"id":"msg_fixture","type":"message","role":"assistant","model":"fixture-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":0,"cache_creation_input_tokens":3,"cache_read_input_tokens":0}}}),
+        ),
+    ];
+    for (index, block) in content.as_array().unwrap().iter().enumerate() {
+        let mut start = block.clone();
+        let ty = block["type"].as_str().unwrap();
+        let delta = match ty {
+            "tool_use" => {
+                start["input"] = json!({});
+                json!({"type":"input_json_delta","partial_json":block["input"].to_string()})
+            }
+            "thinking" => {
+                start["thinking"] = json!("");
+                start["signature"] = json!("");
+                json!({"type":"thinking_delta","thinking":block["thinking"]})
+            }
+            _ => {
+                start["text"] = json!("");
+                json!({"type":"text_delta","text":block["text"]})
+            }
+        };
+        frames.push(event(
+            "content_block_start",
+            json!({"type":"content_block_start","index":index,"content_block":start}),
+        ));
+        frames.push(event(
+            "content_block_delta",
+            json!({"type":"content_block_delta","index":index,"delta":delta}),
+        ));
+        if ty == "thinking" {
+            frames.push(event("content_block_delta",json!({"type":"content_block_delta","index":index,"delta":{"type":"signature_delta","signature":block["signature"]}})));
+        }
+        if index == 0 && mode == "long" {
+            frames.extend((0..1000).map(|_| {
+                event(
+                    "content_block_delta",
+                    json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}),
+                )
+            }));
+        }
+        frames.push(event(
+            "content_block_stop",
+            json!({"type":"content_block_stop","index":index}),
+        ));
+    }
+    if mode == "oversized" {
+        frames.push(event(
+            "future_event",
+            json!({"type":"future_event","content":"x".repeat(1024*1024)}),
+        ));
+    }
+    frames.push(event(
+        "message_delta",
+        json!({"type":"message_delta","delta":{},"usage":usage}),
+    ));
+    frames.push(event(
+        "message_delta",
+        json!({"type":"message_delta","delta":{"stop_reason":reason,"stop_sequence":null},"usage":{"output_tokens":output_tokens}}),
+    ));
+    frames.push(event("message_stop", json!({"type":"message_stop"})));
+    if mode == "error" {
+        frames.truncate(1);
+        frames.push(event(
+            "error",
+            json!({"type":"error","error":{"type":"overloaded_error","message":"fixture unavailable"}}),
+        ));
+    }
+    if mode == "malformed" {
+        frames.push(Bytes::from_static(b"data: {"));
+    }
+    if mode == "abort" {
+        frames.truncate(3);
+    }
+    let chunks = if mode == "split" {
+        frames
+            .into_iter()
+            .flat_map(|v| v.chunks(7).map(Bytes::copy_from_slice).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    } else {
+        frames
+    };
+    let trace = if mode == "long" {
+        parts
+            .headers
+            .get("x-trace-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    } else {
+        None
+    };
+    if let Some(trace) = &trace {
+        AI_LONG_STREAM_OBSERVATIONS
+            .lock()
+            .insert(trace.clone(), AiLongStreamObservation::default());
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    let abort = mode == "abort";
+    let interval = Duration::from_millis(if mode == "split" { 1 } else { 20 });
+    tokio::spawn(async move {
+        for chunk in chunks {
+            if tx.send(Ok(chunk)).await.is_err() {
+                if let Some(trace) = &trace {
+                    if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace) {
+                        state.upstream_cancelled = true;
+                    }
+                }
+                return;
+            }
+            if let Some(trace) = &trace {
+                if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace) {
+                    state.chunks_queued += 1;
+                }
+            }
+            tokio::time::sleep(interval).await;
+        }
+        if abort {
+            let _ = tx
+                .send(Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "intentional Messages fixture abort",
+                )))
+                .await;
+        }
+        if let Some(trace) = &trace {
+            if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace) {
+                state.provider_completed = true;
+            }
+        }
+    });
+    let mut response = axum::response::Response::builder()
+        .status(200)
+        .header("content-type", "text/event-stream");
+    if mode == "encoded" {
+        response = response.header("content-encoding", "gzip");
+    }
+    response
+        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        .unwrap()
 }
 
 const ANTHROPIC_PROVIDER_KEY: &str = "anthropic-provider-test-key";

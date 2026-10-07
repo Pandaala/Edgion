@@ -573,6 +573,12 @@ pub trait PluginSession: Send + Sync {
     /// ctx fields; only the error list.
     fn record_error(&mut self, status: EdgionErrorCode);
 
+    /// Capture the configured client API before any local AI rejection.
+    /// Alternate adapters without mutable request state fail closed.
+    fn capture_ai_client_api(&mut self, _api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
+        false
+    }
+
     /// Claim the request-wide AI context. The first writer wins; alternate
     /// adapters without a mutable Edgion context fail closed by default.
     fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {

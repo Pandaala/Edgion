@@ -40,6 +40,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "AiBackendPolicyIntegration",
     "AiBackendSecretRotation",
     "AiResponsesContinuation",
+    "AiMessagesBinding",
     "AiBackendWeighted",
     "AiGuardOrderingDynamic",
     "GatewayDynamic",
@@ -1283,6 +1284,7 @@ fn suite_to_port_key(suite: &str) -> &str {
     match suite {
         "all" => "HTTPRoute/Basic",
         "EdgionBackend/Responses" => "EdgionBackend/Responses",
+        "EdgionBackend/Messages" => "EdgionBackend/Messages",
         "EdgionBackend/AnthropicProvider" => "EdgionBackend/AnthropicProvider",
         "EdgionBackend/CredentialExhaustion" => "EdgionBackend/CredentialExhaustion",
         "EdgionBackend/Resilience" => "EdgionBackend/Resilience",
@@ -1564,6 +1566,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "SpWeighted" => Some(("HTTPRoute/Backend/SessionPersistenceWeighted", PortKind::Http)),
         "DnsResolutionFlap" => Some(("HTTPRoute/Backend/DnsResolutionFlap", PortKind::Http)),
         "AiResponsesContinuation" => Some(("EdgionBackend/Responses", PortKind::Http)),
+        "AiMessagesBinding" => Some(("EdgionBackend/Messages", PortKind::Http)),
         "TlsRouteAttachments" => Some(("TLSRoute/Attachments", PortKind::Tls)),
         "TcpEspReload" => Some(("TCPRoute/StreamPlugins/Dynamic", PortKind::Tcp)),
         "L4TimeoutHotReload" => Some(("TCPRoute/L4TimeoutHotReload", PortKind::Tcp)),
@@ -1590,6 +1593,9 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
     match suite {
         "EdgionBackend/Responses" => {
             runner.add_suite(Box::new(suites::ResponsesTestSuite));
+        }
+        "EdgionBackend/Messages" => {
+            runner.add_suite(Box::new(suites::MessagesTestSuite));
         }
         "EdgionBackend/AnthropicProvider" => {
             if !gateway {
@@ -3291,6 +3297,11 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 Udp,
             ));
             if gateway {
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::MessagesTestSuite),
+                    "EdgionBackend/Messages",
+                    Http,
+                ));
                 runner.add_suite(framework::with_listener(
                     Box::new(suites::ResponsesTestSuite),
                     "EdgionBackend/Responses",

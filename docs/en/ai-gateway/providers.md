@@ -1,6 +1,6 @@
 # Providers
 
-Managed AiProxy entries support OpenAI Chat Completions and native OpenAI Responses. Edgion maps the logical model to
+Managed AiProxy entries support OpenAI Chat Completions, native OpenAI Responses and native Claude Messages. Edgion maps the logical model to
 the selected backend's provider model. Clients choose the model; an explicit model rewrite or
 quota downgrade policy can change that choice.
 
@@ -12,13 +12,13 @@ quota downgrade policy can change that choice.
 | `POST /v1/chat/completions` | `Anthropic` | Chat-to-Messages requests; JSON or SSE translated back to Chat, limited to the subset below |
 | `GET /v1/models` | Chat API route-reachable model catalog | Locally generated catalog; HTTPRoute must admit GET and match this path |
 | `POST /v1/responses` | `OpenAI` | Native Responses JSON or SSE; explicit model required |
-| Native `POST /v1/messages` | Any managed backend | Not yet supported |
+| `POST /v1/messages` | `Anthropic` | Native Messages JSON or SSE; explicit model and max_tokens required |
 | Gemini native, Bedrock | Any managed backend | Not yet supported; deferred scope |
 
 The configured `api: openaiChat` is authoritative. Ingress accepts exact effective POST
 `/v1/chat/completions` and local GET `/v1/models`; custom paths need an earlier URLRewrite.
 Other managed operations return fixed `404 unsupported_endpoint`. `api: openaiResponses` instead admits exact POST `/v1/responses` for `OpenAI` only.
-Native Messages remains rejected during configuration validation.
+`api: anthropicMessages` admits exact POST `/v1/messages` for `Anthropic` only.
 An ordinary HTTPRoute to a Service can separately proxy opaque HTTP traffic without managed AI semantics.
 
 ## Supported providers
@@ -27,9 +27,9 @@ An ordinary HTTPRoute to a Service can separately proxy opaque HTTP traffic with
 |------------|-------------------|------------------|
 | `OpenAI` | Native Chat or Responses requests and responses | `https://api.openai.com` |
 | `OpenAICompatible` | Chat requests and responses | **Required** `endpoint` |
-| `Anthropic` | Chat-to-Messages conversion; JSON and SSE responses translated back to Chat | `https://api.anthropic.com` |
+| `Anthropic` | Native Messages or explicitly selected Chat-to-Messages conversion | `https://api.anthropic.com` |
 
-Native Messages, Gemini, Bedrock and Vertex remain outside current managed support.
+Gemini, Bedrock and Vertex remain outside current managed support.
 
 ## OpenAI and OpenAI-compatible
 
@@ -46,8 +46,8 @@ canonical catalog name. Anthropic conversion always requires a catalog match.
 ## Anthropic translation
 
 Use `api: openaiChat` with `conversion: chatToAnthropic` and exclusively Anthropic candidates
-to select the existing Chat-to-Messages converter. Native entries omit conversion and use only
-OpenAI/OpenAICompatible candidates. The subset covers text messages, declared
+to select the existing Chat-to-Messages converter. Native Chat entries omit conversion and use only
+OpenAI/OpenAICompatible candidates. Native Messages uses Anthropic candidates. The subset covers text messages, declared
 function tools, tool calls/results, `tool_choice`, `parallel_tool_calls`, and `stop`. `n`,
 `temperature`, and `top_p` accept only omission, null, or the neutral value 1, not arbitrary
 sampling controls. System messages must precede the conversation, which must end with a user
@@ -107,3 +107,51 @@ backend header modifier values. RequestId cannot target these reserved headers a
 them. These are provider principal selectors, not arbitrary native extension headers. Use a
 project-scoped key and maintain a fixed operator-controlled principal; selector overrides are not
 supported by the current managed contract. Ordinary opaque HTTP proxying is unaffected.
+
+## Native Messages subset
+
+Set `api: anthropicMessages`; omit `conversion` and `injectUsageTracking`. Use
+`provider: Anthropic` on EdgionBackend. Only POST `/v1/messages` is managed;
+count_tokens, files, batches and other management endpoints are outside this entry.
+Request model and nonnegative integer max_tokens are required; explicit zero is
+preserved for cache prewarming. Native JSON/SSE, tools, signatures, cache controls
+and opaque extensions pass through. Stateless explicit model mapping changes only
+the model token.
+
+All effective anthropic-beta values and the query are preserved. Missing
+anthropic-version defaults to `2023-06-01`; provider observation is certified for
+that version only. Other versions pass through off, or become sticky unknown with
+optional observation. Required accounting rejects an unsupported version before
+dispatch. Client authentication and workspace selectors are removed, then the
+Secret key is installed. Use a key owned by one workspace; effective
+anthropic-user-profile-id is unsupported. Late RequestId/RemoteIp rewrites cannot
+override managed identity or certified protocol headers.
+
+Container reuse, thinking/redacted-thinking history, container uploads and file
+references (including nested tool_result content) require one raw backend slot,
+one declared credential, unchanged provider model and no modelRoutes, downgrade
+or retry. Unresolved credentials and zero-weight backend slots still count.
+Secret rotation must preserve the relevant account/workspace/model; Edgion does
+not prove object authorization or track affinity. Unknown beta identifiers remain
+opaque and have no portability guarantee.
+
+AiGuard/Guardrail combinations are rejected at validation and actual invocation.
+Provider observation uses bounded selective parsing without a response cache.
+Input consumption includes input_tokens plus cache_creation_input_tokens plus
+cache_read_input_tokens; breakdowns are not counted again. Late SSE components
+replace cumulative watermarks. Start placeholders alone do not establish final
+usage: message_delta output and valid stop metadata/message_stop are required.
+Missing/malformed/oversized/encoded metadata, partial streams and provider error
+produce unknown accounting; passive observation preserves response bytes.
+Active quota Reject emits native `event: error` and closes without a Chat DONE
+sentinel. Normal tool_use, pause_turn, max_tokens and refusal are valid stops.
+
+Known compaction/advisor/provider fallback inference remains opaque off and sticky
+unknown with observation. Accounting-required requests reject recognized
+composite inference before dispatch. Response iteration metadata is bounded;
+only same-model message summaries qualify, without adding their subtotals again.
+Configured rates estimate token cost; they do not cover every tool fee, tier,
+mixed cache TTL or the complete provider invoice.
+
+See [Messages](https://platform.claude.com/docs/en/api/messages/create) and
+[streaming](https://platform.claude.com/docs/en/build-with-claude/streaming).

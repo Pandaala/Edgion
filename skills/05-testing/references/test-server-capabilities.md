@@ -331,3 +331,11 @@ Before modifying, search the existing endpoints first:
 rg -n "route\\(|start_auth_server|mirror|oidc|verify|webhook" edgion-tests/src/server/test_server.rs
 rg -n "x-up-|KIND_" edgion-tests/src/server/transport/
 ```
+
+## Native Messages fixture
+
+POST /messages/{path} is separate from Chat conversion. It emits native message JSON
+or named SSE, tool/thinking/signature blocks, cache totals and late cumulative deltas.
+mock_mode selects split, pause, iterations, composite, error, malformed, oversized,
+encoded, abort or long. Fake credentials are exposed only as A/B/invalid labels.
+The fixture never contacts a provider.

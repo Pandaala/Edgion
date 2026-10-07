@@ -658,7 +658,7 @@ fn responses_health_verdict_requires_observed_model_completion_and_actual_eos() 
         ResponseOutcome::Unknown,
     ] {
         let mut active = attempt(3, 0, true);
-        active.usage = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        active.usage = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
         active.usage.observe_response_outcome(outcome);
         active.usage.observe_reported_usage(11, 7, 0, 0);
         active.record_response(200, None);

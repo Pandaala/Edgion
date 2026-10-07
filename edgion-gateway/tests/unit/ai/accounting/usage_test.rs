@@ -1098,7 +1098,7 @@ fn public_off_initialization_suppresses_converter_numeric_publication() {
 #[tokio::test]
 async fn responses_reports_consumption_for_all_native_json_terminal_statuses() {
     for status in ["completed", "incomplete", "failed", "cancelled"] {
-        let shared = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
         let quota = Arc::new(QuotaAccumulator::new_for_test(1));
         let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), Some(quota.clone()), false, false);
         let body = format!(
@@ -1143,7 +1143,7 @@ async fn responses_missing_invalid_or_partial_json_usage_never_becomes_an_estima
             false,
         ),
     ] {
-        let shared = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
         shared.set_input_chars(4000);
         let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), None, false, false);
         feed(&mut processor, &[(body, eos)], ResponseStreamKind::None).await;
@@ -1160,7 +1160,7 @@ async fn responses_missing_invalid_or_partial_json_usage_never_becomes_an_estima
 
 #[tokio::test]
 async fn responses_sse_deltas_and_done_repeats_only_charge_one_terminal_usage_total() {
-    let shared = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+    let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
     let quota = Arc::new(QuotaAccumulator::new_for_test(1));
     let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), Some(quota.clone()), true, false);
     let body = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"text\",\"sequence_number\":1}\n\ndata: {\"type\":\"response.output_text.done\",\"text\":\"text\",\"sequence_number\":2}\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"status\":\"completed\",\"output\":[{\"text\":\"text\"}],\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}}\n\n";
@@ -1184,7 +1184,7 @@ async fn responses_sse_requires_matching_terminal_and_valid_framing() {
         b"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"failed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
         b"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\ndata: unfinished",
     ] {
-        let shared = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
         let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), None, true, false);
         feed(&mut processor, &[(body,true)], ResponseStreamKind::Sse).await;
         assert_eq!(shared.accounting_snapshot(42,true).source, GenAiAttemptUsageSource::Unknown);
@@ -1194,7 +1194,7 @@ async fn responses_sse_requires_matching_terminal_and_valid_framing() {
 
 #[test]
 fn responses_off_preserves_transport_latency_but_does_not_claim_model_success_or_usage() {
-    let shared = AiUsageShared::with_responses(AiUsageObservation::Off);
+    let shared = AiUsageShared::with_reported_only(AiUsageObservation::Off);
     shared.observe_reported_usage(1, 2, 0, 0);
     assert_eq!(
         shared.accounting_snapshot(42, true).source,
@@ -1208,7 +1208,7 @@ fn responses_off_preserves_transport_latency_but_does_not_claim_model_success_or
 async fn responses_heartbeat_blocks_do_not_invalidate_usage_or_trigger_active_reject() {
     let body=b": ping\n\nid: transport-id\n\nevent: heartbeat\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}}\n\n: final ping\n\n";
     for active in [false, true] {
-        let shared = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
         let quota = Arc::new(QuotaAccumulator::new_for_test(100));
         let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), Some(quota.clone()), true, active);
         let mut session = mock_session();

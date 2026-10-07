@@ -42,7 +42,7 @@ so the example checks before reading one.
 
 Replace both Secret values and example provider model names with models available to each provider
 account. The `production` Namespace and `main-gateway` must exist, with Gateway HTTPS for
-`ai.example.com`. This example uses the Chat entry; native Responses uses the separate configuration below, and native Messages remains pending;
+`ai.example.com`. This example uses the Chat entry; native Responses and Messages use the separate configurations below;
 `maxOutputTokens` is a fallback, not an enforced ceiling.
 
 ```yaml
@@ -195,3 +195,20 @@ requestPlugins:
 Omit usageObservation for default-off observation. Send an explicit `model` and native `input`;
 use `stream: true` for native typed SSE. Do not set conversion or injectUsageTracking.
 See [Providers](./providers.md#native-responses-subset) for continuation and operation restrictions.
+
+## Native Messages entry
+
+Attach a separate AiProxy resource to a route whose backend is an Anthropic
+EdgionBackend. The existing Secret, backend and HTTPRoute ownership stays the same.
+
+```yaml
+requestPlugins:
+  - type: AiProxy
+    config:
+      api: anthropicMessages
+      usageObservation: provider
+```
+
+Use the Anthropic SDK with the route's base URL and an application credential;
+send an explicit model and max_tokens to POST /v1/messages. Omit usageObservation
+for opaque native forwarding without numeric accounting. See [Providers](./providers.md#native-messages-subset).

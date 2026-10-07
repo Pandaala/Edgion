@@ -131,3 +131,12 @@ Missing usage or a later upstream/downstream interruption retains the conservati
 Request character estimates and defaults.maxOutputTokens are provisional reservation inputs,
 not a guarantee of complete remote-history or reasoning consumption. Continuation permits one
 raw credential binding only; unresolved bindings still count. See [Providers](./providers.md#native-responses-subset).
+
+## Native Messages credentials
+
+Messages credentials use the existing pool/admission path. State-bound native history requires
+one raw backend slot and one declared credential and disables model-changing routing/retries.
+Native request headers preserve version/beta; managed credentials clear caller authentication
+and workspace selectors, and profile attribution is unsupported. Use an operator-owned
+workspace key; rotating that key across principals is outside the binding guarantee.
+See [native Messages](./providers.md#native-messages-subset).

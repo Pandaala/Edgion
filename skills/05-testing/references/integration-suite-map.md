@@ -118,3 +118,5 @@ A lot of "YAML is there but the test didn't run" issues end up at one of these t
 ## Native Responses
 
 `EdgionBackend/Responses` uses HTTP listener 31989 and the shared test_server AI provider. Load LinkSys/Redis for its quota fixture. `AiResponsesContinuation` adds/restores one unresolved declaration using the same Controller/Gateway topology and business-phase readiness.
+
+- EdgionBackend/Messages: native JSON/SSE, headers, binding, accounting and H1/H2 abort/cancel; AiMessagesBinding rotates Secret A/B/A and adds an unresolved declaration, restoring fixtures before final residue. Optional pinned SDK checks run inside the same canonical runner via EDGION_MESSAGES_SDK_PYTHON.

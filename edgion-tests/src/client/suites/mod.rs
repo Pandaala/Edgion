@@ -148,5 +148,8 @@ pub use status::TlsRouteStatusTestSuite;
 // Services tests (ACME, etc.)
 pub use services::{AcmeGatewayRefOwnershipPhase, AcmeGatewayRefOwnershipTestSuite, AcmeTestSuite};
 
-pub use edgion_backend::{ResponsesContinuationAllowedSuite, ResponsesContinuationRejectedSuite, ResponsesTestSuite};
+pub use edgion_backend::{
+    MessagesBindingAllowedSuite, MessagesBindingRejectedSuite, MessagesCredentialBSuite, MessagesTestSuite,
+    ResponsesContinuationAllowedSuite, ResponsesContinuationRejectedSuite, ResponsesTestSuite,
+};
 pub use edgion_plugins::{GrpcJsonTranscoderDynamicSuite, GrpcJsonTranscoderTestSuite};

@@ -1,0 +1,143 @@
+use super::*;
+fn observe(body: &[u8]) -> Observation {
+    let mut observer = Observer::new();
+    for b in body {
+        observer.feed(std::slice::from_ref(b));
+    }
+    observer.finish("m")
+}
+#[test]
+fn complete_json_normalizes_cache_once_and_discards_large_content() {
+    let body = format!(
+        r#"{{"type":"message","model":"m","stop_reason":"end_turn","content":[{{"type":"thinking","thinking":"{}"}}],"usage":{{"input_tokens":5,"output_tokens":7,"cache_creation_input_tokens":3,"cache_read_input_tokens":2,"cache_creation":{{"ephemeral_5m_input_tokens":3}},"output_tokens_details":{{"thinking_tokens":4}}}}}}"#,
+        "x".repeat(256 * 1024)
+    );
+    let o = observe(body.as_bytes());
+    assert!(!o.invalid);
+    assert!(o.stop);
+    assert_eq!(
+        o.components.normalized(),
+        Some(ReportedAiUsage {
+            input_tokens: 10,
+            output_tokens: 7,
+            cache_read_input_tokens: 2,
+            cache_write_input_tokens: 3
+        })
+    );
+}
+#[test]
+fn single_document_parent_and_decoded_key_replacement_are_last_wins() {
+    let o=observe(br#"{"type":"message","usage":{"input_tokens":999,"output_tokens":3,"cache_read_input_tokens":8},"usage":{"input_tokens":"invalid","input_\u0074okens":2,"output_tokens":4},"stop_reason":"tool_use"}"#);
+    assert!(!o.invalid);
+    assert_eq!(o.components.normalized().unwrap().input_tokens, 2);
+    assert_eq!(o.components.normalized().unwrap().cache_read_input_tokens, 0);
+    assert!(
+        observe(br#"{"type":"message","usage":{"input_tokens":2,"output_tokens":1},"usage":null}"#)
+            .components
+            .normalized()
+            .is_none()
+    );
+}
+#[test]
+fn overflow_invalid_counts_and_malformed_tail_never_become_totals() {
+    for body in [
+        br#"{"usage":{"input_tokens":18446744073709551615,"output_tokens":1}}"#.as_slice(),
+        br#"{"usage":{"input_tokens":18446744073709551615,"output_tokens":0,"cache_creation_input_tokens":1}}"#,
+        br#"{"usage":{"input_tokens":-1,"output_tokens":1}}"#,
+        br#"{"usage":{"input_tokens":1,"output_tokens":1.0}}"#,
+    ] {
+        assert!(observe(body).components.normalized().is_none());
+    }
+    assert!(observe(br#"{"usage":{"input_tokens":1,"output_tokens":2}}tail"#).invalid);
+}
+#[test]
+fn iteration_inspection_distinguishes_subtotals_from_cumulative_usage() {
+    for iterations in [
+        "null",
+        "[]",
+        r#"[{"type":"message","model":"m","usage":{"input_tokens":99}}]"#,
+    ] {
+        let o = observe(
+            format!(r#"{{"model":"m","usage":{{"input_tokens":1,"output_tokens":2,"iterations":{iterations}}}}}"#)
+                .as_bytes(),
+        );
+        assert!(!o.invalid);
+        assert!(!o.composite);
+        assert_eq!(o.components.normalized().unwrap().input_tokens, 1);
+    }
+    for iterations in [
+        r#"[{"type":"compaction"}]"#,
+        r#"[{"type":"advisor_message"}]"#,
+        r#"[{"type":"fallback_message"}]"#,
+        r#"[{"type":"message","model":"other"}]"#,
+        r#"[{"type":"future"}]"#,
+        "[false]",
+        "{}",
+    ] {
+        assert!(
+            observe(
+                format!(r#"{{"model":"m","usage":{{"input_tokens":1,"output_tokens":2,"iterations":{iterations}}}}}"#)
+                    .as_bytes()
+            )
+            .composite,
+            "{iterations}"
+        );
+    }
+}
+#[test]
+fn cumulative_component_patches_preserve_late_cache_and_zero() {
+    let mut components = Components {
+        input: Some(5),
+        output: Some(0),
+        ..Default::default()
+    };
+    components.merge(Components {
+        read: Some(2),
+        write: Some(3),
+        output: Some(7),
+        ..Default::default()
+    });
+    components.merge(Components {
+        input: Some(8),
+        output: Some(4),
+        ..Default::default()
+    });
+    assert_eq!(components.normalized().unwrap().input_tokens, 13);
+    assert_eq!(components.normalized().unwrap().output_tokens, 7);
+}
+
+#[test]
+fn envelope_extensions_cannot_replace_native_accounting() {
+    let o=observe(br#"{"type":"message","usage":{"input_tokens":5,"output_tokens":7,"iterations":[{"type":"advisor_message"}]},"message":{"usage":{"input_tokens":1,"output_tokens":2}},"delta":{"stop_reason":"end_turn"},"stop_reason":"end_turn"}"#);
+    assert!(o.composite);
+    assert_eq!(o.components.normalized().unwrap().input_tokens, 5);
+    let mut start = Observer::for_envelope(Kind::Start);
+    start.feed(br#"{"type":"message_start","usage":{"input_tokens":99,"output_tokens":99},"message":{"type":"message","model":"m","usage":{"input_tokens":5,"output_tokens":0}}}"#);
+    let o = start.finish("m");
+    assert!(!o.invalid);
+    assert_eq!(o.components.normalized().unwrap().input_tokens, 5);
+}
+#[test]
+fn usage_and_iteration_model_duplicates_replace_their_owned_state() {
+    let o=observe(br#"{"type":"message","usage":{"input_tokens":1,"output_tokens":2,"iterations":[{"type":"advisor_message","model":"other"}]},"usage":{"input_tokens":3,"output_tokens":4,"iterations":[{"type":"message","model":"other","model":"m"}]}}"#);
+    assert!(!o.invalid && !o.composite);
+    assert_eq!(o.components.normalized().unwrap().input_tokens, 3);
+    for model in ["7", "null", "true", "{}", "[]"] {
+        let o=observe(format!(r#"{{"usage":{{"input_tokens":1,"output_tokens":2,"iterations":[{{"type":"message","model":{model}}}]}}}}"#).as_bytes());
+        assert!(o.composite, "{model}");
+    }
+}
+
+#[test]
+fn required_native_nulls_are_invalid_but_duplicates_remain_last_wins() {
+    let o = observe(br#"{"type":"message","stop_reason":"end_turn","usage":{"input_tokens":null,"output_tokens":7}}"#);
+    assert!(o.invalid);
+    let o=observe(br#"{"type":"message","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":null,"output_tokens":7}}"#);
+    assert!(!o.invalid);
+    assert_eq!(o.components.normalized().unwrap().output_tokens, 7);
+    let mut delta = Observer::for_envelope(Kind::Delta);
+    delta.feed(br#"{"type":"message_delta","usage":{"input_tokens":null,"cache_read_input_tokens":null,"output_tokens":7},"delta":{"stop_reason":null}}"#);
+    let o = delta.finish("m");
+    assert!(!o.invalid);
+    assert_eq!(o.components.output, Some(7));
+}

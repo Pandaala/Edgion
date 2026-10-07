@@ -47,8 +47,12 @@ body cache or request-path wrapper. Explicit bounded unary conversion is describ
 Logical backend identities, shared backend policy/retry budgets, BodyStorage, the
 SSE decoder/RawWindow, clients/TLS/egress/DNS, Redis limiter, key extraction,
 conditions and observability retain their canonical shared owners. The refactor
-introduces no provider support or new wire behavior. Native Responses, Messages,
-Gemini and Bedrock support remain pending product tasks. Task 02 removed usage-only
+introduces no provider support or new wire behavior. Native POST /v1/responses
+(OpenAI) and POST /v1/messages (Anthropic) are now implemented by their protocol owners.
+Both omit conversion and usage injection and currently reject AiGuard/Guardrail.
+Observation defaults off; enabled observation reuses bounded JSON/SSE parsing and
+canonical settlement with valid provider-reported consumption only. Gemini and
+Bedrock remain pending product tasks. Task 02 removed usage-only
 JSON retention; Task 03 completed bounded unary conversion and final acceptance.
 
 The [HTTP body rules](../../../AGENTS.md#http-body-handling-invariants) allow a

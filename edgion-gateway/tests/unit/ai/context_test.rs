@@ -63,3 +63,21 @@ fn ordinary_context_construction_is_allocation_free() {
     assert_eq!(allocations.calls, 0);
     assert_eq!(allocations.requested_bytes, 0);
 }
+
+#[test]
+fn client_api_capture_is_first_writer_and_survives_a_rejected_plan() {
+    use edgion_resources::resources::edgion_plugins::AiApi;
+    let mut ctx = EdgionHttpContext::new();
+    assert!(ctx.ai_state().is_none());
+    assert!(ctx.capture_ai_client_api(AiApi::AnthropicMessages));
+    assert!(ctx.capture_ai_client_api(AiApi::AnthropicMessages));
+    assert!(!ctx.capture_ai_client_api(AiApi::OpenaiChat));
+    assert!(ctx.try_set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend)));
+    let (status, body) =
+        crate::ai::protocols::error::render_ai_error(&ctx, crate::ai::AiProxyError::BackendUnavailable);
+    assert_eq!(status, 503);
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "overloaded_error");
+    assert!(ctx.ai_state().unwrap().request.is_none());
+}

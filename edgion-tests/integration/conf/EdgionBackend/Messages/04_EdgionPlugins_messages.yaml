@@ -1,0 +1,65 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: messages-off
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        api: anthropicMessages
+        usageObservation: off
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: messages-provider
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        api: anthropicMessages
+        usageObservation: provider
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: messages-quota
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        api: anthropicMessages
+        usageObservation: provider
+        tokenQuota:
+          redisRef: default/redis-test
+          key:
+            - type: header
+              name: x-quota-user
+          limits:
+            - scope: identity
+              tokens: 18
+              window: 1h
+          onExceeded:
+            type: Reject
+          flushTokens: 1
+          flushInterval: 10ms
+          requestTimeout: 2s
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: messages-guard
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiGuard
+      config:
+        rules:
+          - name: tripwire
+            match:
+              type: regex
+              pattern: never-present
+            action: reject

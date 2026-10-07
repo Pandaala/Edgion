@@ -11,5 +11,9 @@ pub use single_provider::{
     AiBackendSecretRotationInitialTestSuite, AiBackendSecretRotationUpdatedTestSuite, SingleProviderTestSuite,
 };
 
+mod messages;
+pub use messages::{
+    MessagesBindingAllowedSuite, MessagesBindingRejectedSuite, MessagesCredentialBSuite, MessagesTestSuite,
+};
 mod responses;
 pub use responses::{ResponsesContinuationAllowedSuite, ResponsesContinuationRejectedSuite, ResponsesTestSuite};

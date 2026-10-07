@@ -1530,6 +1530,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.record_error(status);
     }
 
+    fn capture_ai_client_api(&mut self, api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
+        self.ctx.capture_ai_client_api(api)
+    }
+
     fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
         self.ctx.try_set_ai_request_context(context)
     }
