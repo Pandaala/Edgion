@@ -1,22 +1,15 @@
 //! Etcd ConfCenter configuration schema + client-config conversion.
 //!
 //! YAML-friendly (snake_case) configuration for the etcd backend, plus the
-//! conversion to `EtcdClientConfig` consumed by `EtcdLinkClient::from_config()`.
+//! conversion to the explicit trusted `EtcdBootstrapConfig` input.
 //! This schema lives in the controller (`crate::config::conf_center::etcd`); the
-//! etcd link client and credential-state types it depends on live in `edgion-common`.
+//! etcd link client and bootstrap input types it depends on live in `edgion-common`.
 
-use k8s_openapi::api::core::v1::Secret;
-use k8s_openapi::ByteString;
+use edgion_common::link_sys_core::providers::etcd::EtcdBootstrapConfig;
+use edgion_resources::credentials::materials::{BasicAuthMaterial, TlsMaterial};
+use edgion_resources::resources::link_sys::etcd::{EtcdKeepAlive, EtcdTimeout};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-
-use edgion_common::link_sys_core::credential::CredentialState;
-use edgion_resources::credentials::materials::BasicAuthMaterial;
-use edgion_resources::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
-use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
-use edgion_resources::resources::common::{OutboundTlsLocal, SecretObjectReference, SecretSlot, TlsConfig};
-use edgion_resources::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout};
+use zeroize::Zeroizing;
 
 // ============================================================================
 // EtcdConfig — YAML top-level config
@@ -225,115 +218,38 @@ pub struct EtcdTlsConfig {
 }
 
 // ============================================================================
-// Conversion to EtcdClientConfig (for EtcdLinkClient::from_config)
+// Conversion to the trusted Controller bootstrap input
 // ============================================================================
 
 impl EtcdConfig {
-    /// Convert to `EtcdClientConfig` + `CredentialState` that
-    /// `EtcdLinkClient::from_config()` accepts.
-    ///
-    /// TLS certificate file paths are read from disk and embedded as PEM strings.
-    ///
-    /// Auth note: Controller's ConfCenter uses file-based credentials (YAML
-    /// `conf_center.auth`), not `SecretObjectReference`. To reuse the same
-    /// `build_connect_options` code path as the LinkSys CRD flow, we:
-    /// - fill `EtcdClientConfig.auth` with a synthetic `EtcdAuth` placeholder
-    ///   (the `secret_ref` is never read by the Gateway provider; only
-    ///   `crd.auth.is_some()` is inspected as the "auth configured" gate);
-    /// - return a [`CredentialState::Resolved`] carrying the YAML material so
-    ///   the provider's auth arm gets the plaintext `username` / `password`.
-    ///
-    /// If no `conf_center.auth` section is configured, returns
-    /// `(EtcdClientConfig { auth: None, .. }, CredentialState::NotRequired)`.
-    pub fn to_client_config(&self) -> anyhow::Result<(EtcdClientConfig, CredentialState<BasicAuthMaterial>)> {
-        // Auth: wire YAML username/password into CredentialState::Resolved so
-        // `build_connect_options` picks it up.
-        let (auth, auth_state): (Option<EtcdAuth>, CredentialState<BasicAuthMaterial>) = match &self.auth {
-            Some(cfg) => (
-                Some(EtcdAuth {
-                    // Placeholder slot — `secret_ref` not used by the provider. The
-                    // provider only checks `crd.auth.is_some()` to decide
-                    // whether to authenticate; the material comes from
-                    // `auth_state`, not from `secret_ref`.
-                    slot: SecretSlot {
-                        secret_ref: SecretObjectReference {
-                            group: None,
-                            kind: None,
-                            name: "conf-center-yaml".to_string(),
-                            namespace: None,
-                        },
-                        secret: None,
-                    },
-                }),
-                CredentialState::Resolved(BasicAuthMaterial {
-                    username: Some(cfg.username.clone()),
-                    password: cfg.password.clone(),
-                }),
-            ),
-            None => (None, CredentialState::NotRequired),
-        };
-
-        // TLS — read cert files from disk and wrap them in a synthetic Secret
-        // so that the ConfCenter flow uses the same TLS material path as the
-        // Gateway's CRD-driven LinkSys flow (Secret → TlsMaterial).
-        let tls = if let Some(tls_cfg) = &self.tls {
-            let ca = read_optional_file(&tls_cfg.ca_cert_file)?;
-            let cert = read_optional_file(&tls_cfg.client_cert_file)?;
-            let key = read_optional_file(&tls_cfg.client_key_file)?;
-
-            let mut data = BTreeMap::new();
-            if let Some(pem) = ca {
-                data.insert(TLS_CA_KEY.to_string(), ByteString(pem.into_bytes()));
-            }
-            if let Some(pem) = cert {
-                data.insert(TLS_CERT_KEY.to_string(), ByteString(pem.into_bytes()));
-            }
-            if let Some(pem) = key {
-                data.insert(TLS_KEY_KEY.to_string(), ByteString(pem.into_bytes()));
-            }
-
-            let has_ca = data.contains_key(TLS_CA_KEY);
-            let has_client = data.contains_key(TLS_CERT_KEY) && data.contains_key(TLS_KEY_KEY);
-            let secret = if data.is_empty() {
-                None
-            } else {
-                Some(Secret {
-                    data: Some(data),
-                    type_: Some("kubernetes.io/tls".to_string()),
-                    ..Default::default()
-                })
+    /// Read local PEM files and retain direct bootstrap credentials without
+    /// creating resource references or synthetic Secrets.
+    pub fn to_bootstrap_config(&self) -> anyhow::Result<EtcdBootstrapConfig> {
+        let auth = self.auth.as_ref().map(|cfg| BasicAuthMaterial {
+            username: Some(cfg.username.clone()),
+            password: cfg.password.clone(),
+        });
+        let tls = if let Some(cfg) = &self.tls {
+            let ca = read_optional_file(&cfg.ca_cert_file)?.map(String::into_bytes);
+            let cert = read_optional_file(&cfg.client_cert_file)?.map(String::into_bytes);
+            let key = read_optional_file(&cfg.client_key_file)?.map(|key| Zeroizing::new(key.into_bytes()));
+            // Preserve the established partial-pair behavior: all specified
+            // files are read, but mTLS is selected only for a complete pair.
+            let (client_cert_pem, client_key_pem) = match cert.zip(key) {
+                Some((cert, key)) => (Some(cert), Some(key)),
+                None => (None, None),
             };
-
-            Some(TlsConfig {
-                enabled: true,
-                outbound: OutboundTlsLocal {
-                    // When a CA file is present, declare a synthetic CA ref so that
-                    // resolve_outbound_tls knows to use resolved_ca_certificates
-                    // (Custom CA) rather than system roots.
-                    validation: if has_ca {
-                        Some(OutboundTlsValidation {
-                            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                                group: String::new(),
-                                kind: "Secret".to_string(),
-                                name: "conf-center-ca".to_string(),
-                                namespace: None,
-                            }]),
-                            ..Default::default()
-                        })
-                    } else {
-                        None
-                    },
-                    ..Default::default()
-                },
-                resolved_ca_certificates: if has_ca { secret.clone().map(|s| vec![s]) } else { None },
-                resolved_client_certificate: if has_client { secret } else { None },
+            Some(TlsMaterial {
+                ca_pem: ca,
+                client_cert_pem,
+                client_key_pem,
             })
         } else {
             None
         };
 
         // Timeout / keep-alive: conf_center-scoped defaults are injected HERE,
-        // not in the shared `build_connect_options` — that builder also serves
+        // not in the shared options mapper — that builder also serves
         // the gateway's operator-configured LinkSys etcd clients, whose behavior
         // must not change (spec §10.5).
         //
@@ -358,17 +274,14 @@ impl EtcdConfig {
             permit_without_stream: Some(true),
         });
 
-        Ok((
-            EtcdClientConfig {
-                endpoints: self.endpoints.clone(),
-                auth,
-                tls,
-                timeout,
-                keep_alive,
-                namespace: None,
-            },
-            auth_state,
-        ))
+        Ok(EtcdBootstrapConfig {
+            endpoints: self.endpoints.clone(),
+            auth,
+            tls,
+            timeout,
+            keep_alive,
+            namespace: None,
+        })
     }
 }
 

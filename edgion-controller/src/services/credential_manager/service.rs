@@ -176,11 +176,12 @@ async fn generation_and_fence_hold(
     if !is_current_generation(generation) {
         return false;
     }
-    match (leader, fence) {
+    let fence_holds = match (leader, fence) {
         (Some(leader), Some(fence)) => leader.validate_fence(fence).await,
         (None, None) => true,
         _ => false,
-    }
+    };
+    fence_holds && is_current_generation(generation)
 }
 
 #[derive(Default)]
@@ -218,6 +219,7 @@ enum JobResult {
         identity: String,
         input_revision: String,
         consumer_revision: String,
+        consumer_binding_revision: String,
         result: Box<Result<ReconcileSuccess, ReconcileFailure>>,
     },
     Cleaned {
@@ -481,9 +483,16 @@ async fn run_worker(backend: CredentialManagerBackend, runtime: Arc<ControllerRu
                             publish_manager_result(&runtime, &source, state).await;
                         }
                     }
-                    JobResult::Reconciled { key, identity, input_revision, consumer_revision, result } => {
+                    JobResult::Reconciled { key, identity, input_revision, consumer_revision, consumer_binding_revision, result } => {
                         in_flight.remove(&key);
+                        if !is_current_generation(generation)
+                            || !reconciled_consumers_current(&runtime, &key, &consumer_binding_revision) {
+                            discard_stale_reconciled(&runtime, &identity);
+                            preserve_reconciled_cleanup(&mut states, key, *result);
+                            continue;
+                        }
                         let Some(current) = take_current_for_reconciled(&runtime, &key, &identity, &input_revision) else {
+                            preserve_reconciled_cleanup(&mut states, key, *result);
                             continue;
                         };
                         let state = states.entry(key).or_default();
@@ -560,6 +569,9 @@ async fn reconcile_source(
 ) -> JobResult {
     let key = source.logical_key();
     let identity = source.identity_key();
+    // Notifications emitted by this job advance the retry epoch. Only actual
+    // desired bindings belong in the completion acceptance fence.
+    let consumer_binding_revision = self::consumer_revision(&consumers, 0);
     let result = acquire_and_publish(
         &source,
         &consumers,
@@ -576,6 +588,7 @@ async fn reconcile_source(
         identity,
         input_revision,
         consumer_revision,
+        consumer_binding_revision,
         result: Box::new(result),
     }
 }
@@ -638,7 +651,9 @@ async fn acquire_and_publish(
         .map_err(|_| ReconcileFailure::rotation())?;
 
         // The exact Lease tuple is re-read immediately before issuer I/O.
-        if !generation_and_fence_hold(generation, kube_leader, fence.as_ref()).await {
+        if !generation_and_fence_hold(generation, kube_leader, fence.as_ref()).await
+            || !source_is_current(runtime, source)
+        {
             return Err(ReconcileFailure::transient(None));
         }
         let active_started_wall = SystemTime::now();
@@ -646,6 +661,11 @@ async fn acquire_and_publish(
         let (token, request_started_wall, request_started_mono) = match provider.acquire(&active).await {
             Ok(token) => (token, active_started_wall, active_started_mono),
             Err(error) if error.kind == OAuth2FailureKind::InvalidClient && previous.is_some() => {
+                if !generation_and_fence_hold(generation, kube_leader, fence.as_ref()).await
+                    || !source_is_current(runtime, source)
+                {
+                    return Err(ReconcileFailure::transient(None));
+                }
                 let previous_started_wall = SystemTime::now();
                 let previous_started_mono = Instant::now();
                 let token = provider
@@ -712,7 +732,8 @@ async fn acquire_and_publish(
                 || !source_is_current(runtime, source)
                 || !is_current_generation(generation)
             {
-                return Err(ReconcileFailure::transient(None));
+                publications.extend(previous_publications);
+                return Err(ReconcileFailure::transient(None).with_partial_publication(publications, retained));
             }
             let expectation = match publish_consumer(
                 client,
@@ -748,11 +769,18 @@ async fn acquire_and_publish(
     // Kube-less workers skip Secret I/O entirely (no leftover Secrets exist).
     if let (Some(client), Some(leader), Some(fence)) = (kube_client, kube_leader, fence.as_ref()) {
         for (consumer_key, expectation) in previous_publications {
-            if !is_current_generation(generation) || !leader.validate_fence(fence).await {
-                return Err(ReconcileFailure::transient(None));
-            }
             let api = Api::<Secret>::namespaced(client.clone(), &expectation.identity.consumer.namespace);
-            if secret_io::delete_if_matches(&api, &expectation).await.is_err() {
+            if secret_io::delete_if_matches(&api, &expectation, || async {
+                if !generation_and_fence_hold(generation, Some(leader), Some(fence)).await
+                    || !source_is_current(runtime, source)
+                {
+                    return Err(secret_io::SecretIoError::StaleOperation);
+                }
+                Ok(!publication_is_desired(runtime, &expectation))
+            })
+            .await
+            .is_err()
+            {
                 publications.insert(consumer_key, expectation);
             }
         }
@@ -806,6 +834,22 @@ fn discard_stale_reconciled(runtime: &ControllerRuntime, identity: &str) {
     clear_memory_identity(runtime, identity);
 }
 
+/// A stale job cannot publish retained material or status. Mutations that
+/// already completed still supply exact old output authority for cleanup.
+fn preserve_reconciled_cleanup(
+    states: &mut HashMap<String, SourceState>,
+    key: String,
+    result: Result<ReconcileSuccess, ReconcileFailure>,
+) {
+    let publications = match result {
+        Ok(success) => success.publications,
+        Err(failure) => failure.publications.unwrap_or_default(),
+    };
+    if !publications.is_empty() {
+        states.entry(key).or_default().publications.extend(publications);
+    }
+}
+
 fn take_current_for_reconciled(
     runtime: &ControllerRuntime,
     key: &str,
@@ -816,7 +860,10 @@ fn take_current_for_reconciled(
         discard_stale_reconciled(runtime, identity);
         return None;
     };
-    if current.identity_key() != identity || source_input_revision(&current) != input_revision {
+    if current.identity_key() != identity
+        || source_input_revision(&current) != input_revision
+        || !source_is_current(runtime, &current)
+    {
         discard_stale_reconciled(runtime, identity);
         return None;
     }
@@ -929,7 +976,7 @@ fn retained_for_attempt(
     publication_retry_or_not_due: bool,
     retained: Option<RetainedPublication>,
 ) -> Option<RetainedPublication> {
-    if previous_persist != next_persist && identity_unchanged {
+    if previous_persist != next_persist && identity_unchanged && input_revision_unchanged {
         return retained;
     }
     (publication_retry_or_not_due && identity_unchanged && input_revision_unchanged)
@@ -943,12 +990,40 @@ fn recover_source_state(
     consumers: &[DesiredCredentialConsumer],
     input_revision: &str,
 ) -> SourceState {
-    if !source.persist {
-        return SourceState::default();
+    // Cleanup authority comes from exact old output metadata, independently of
+    // whether the current owner can still adopt its credential material.
+    let mut publications = HashMap::new();
+    for consumer in consumers {
+        let Some(secret) = runtime
+            .secret_store
+            .get(Some(&consumer.target_secret_namespace), &consumer.target_secret_name)
+        else {
+            continue;
+        };
+        let Some(expected) = delete_expectation_from_secret(&secret) else {
+            continue;
+        };
+        if expected.identity.consumer.namespace == consumer.target_secret_namespace
+            && expected.identity.consumer.name == consumer.target_secret_name
+            && expected.identity.consumer.uid == consumer.uid
+            && expected.identity.source.name == source.logical_key()
+            && expected.identity.source.uid == source.uid
+        {
+            publications.insert(consumer.logical_key(), expected);
+        }
+    }
+    if !source.persist
+        || !source_is_current(runtime, source)
+        || source_input_revision(source) != input_revision
+        || !consumers.iter().all(|consumer| consumer_is_current(runtime, consumer))
+    {
+        return SourceState {
+            publications,
+            ..Default::default()
+        };
     }
     let mut publication_ids = HashSet::new();
     let mut recovered: Option<RetainedPublication> = None;
-    let mut publications = HashMap::new();
 
     for consumer in consumers {
         let Some(secret) = runtime
@@ -990,32 +1065,53 @@ fn recover_source_state(
         publication_ids.insert(publication_generation.clone());
 
         let Some(data) = secret.data.as_ref() else {
-            return SourceState::default();
+            return SourceState {
+                publications,
+                ..Default::default()
+            };
         };
         let Ok(material) = BearerResolver.parse(data) else {
-            return SourceState::default();
+            return SourceState {
+                publications,
+                ..Default::default()
+            };
         };
         let Some(valid_until) = annotations
             .get(secret_io::ANNOTATION_VALID_UNTIL)
             .and_then(|value| parse_rfc3339_system_time(value))
         else {
-            return SourceState::default();
+            return SourceState {
+                publications,
+                ..Default::default()
+            };
         };
         let now_wall = SystemTime::now();
         let Some(remaining) = valid_until.duration_since(now_wall).ok() else {
-            return SourceState::default();
+            return SourceState {
+                publications,
+                ..Default::default()
+            };
         };
         if remaining < MIN_USABILITY {
-            return SourceState::default();
+            return SourceState {
+                publications,
+                ..Default::default()
+            };
         }
         let Some(expires_at) = Instant::now().checked_add(remaining) else {
-            return SourceState::default();
+            return SourceState {
+                publications,
+                ..Default::default()
+            };
         };
         let Some(issued_at) = annotations
             .get(secret_io::ANNOTATION_ISSUED_AT)
             .and_then(|value| parse_rfc3339_system_time(value))
         else {
-            return SourceState::default();
+            return SourceState {
+                publications,
+                ..Default::default()
+            };
         };
         let candidate = RetainedPublication {
             access_token: material.token,
@@ -1031,22 +1127,34 @@ fn recover_source_state(
                 || current.access_token != candidate.access_token
                 || current.valid_until != candidate.valid_until
         }) {
-            return SourceState::default();
+            return SourceState {
+                publications,
+                ..Default::default()
+            };
         }
         recovered = Some(candidate);
         if let Some(binding_revision) = annotations.get(secret_io::ANNOTATION_BINDING_REVISION).cloned() {
             let Ok(expectation) = secret_io::capture_delete_expectation(&secret, identity, binding_revision) else {
-                return SourceState::default();
+                return SourceState {
+                    publications,
+                    ..Default::default()
+                };
             };
             publications.insert(consumer.logical_key(), expectation);
         }
     }
 
     if publication_ids.len() != 1 {
-        return SourceState::default();
+        return SourceState {
+            publications,
+            ..Default::default()
+        };
     }
     let Some(retained) = recovered else {
-        return SourceState::default();
+        return SourceState {
+            publications,
+            ..Default::default()
+        };
     };
     let rotation = parse_duration(&source.config.rotation.interval).unwrap_or(Duration::from_secs(900));
     let jitter_key = format!("{}/{}", source.identity_key(), retained.publication_generation);
@@ -1151,26 +1259,20 @@ async fn startup_sweep(
         let Some(expectation) = delete_expectation_from_secret(&secret) else {
             continue;
         };
-        let consumer_key = format!(
-            "{}/{}",
-            expectation.identity.consumer.namespace, expectation.identity.consumer.name
-        );
-        let still_desired = runtime
-            .credential_source_registry
-            .consumer(&consumer_key)
-            .is_some_and(|consumer| {
-                consumer.uid == expectation.identity.consumer.uid
-                    && consumer.source_uid == expectation.identity.source.uid
-                    && consumer.source_generation == expectation.identity.source.generation
-            });
+        let still_desired = publication_is_desired(runtime, &expectation);
         if still_desired {
             continue;
         }
-        if !is_current_generation(generation) || !leader.validate_fence(&fence).await {
-            return false;
-        }
         let api = Api::<Secret>::namespaced(client.clone(), &expectation.identity.consumer.namespace);
-        if secret_io::delete_if_matches(&api, &expectation).await.is_err() {
+        if secret_io::delete_if_matches(&api, &expectation, || async {
+            if !generation_and_fence_hold(generation, Some(leader), Some(&fence)).await {
+                return Err(secret_io::SecretIoError::StaleOperation);
+            }
+            Ok(!publication_is_desired(runtime, &expectation))
+        })
+        .await
+        .is_err()
+        {
             tracing::warn!(
                 component = "credential_manager",
                 "Managed Secret startup cleanup failed"
@@ -1205,6 +1307,29 @@ fn delete_expectation_from_secret(secret: &Secret) -> Option<DeleteExpectation> 
     secret_io::capture_delete_expectation(secret, identity, value(secret_io::ANNOTATION_BINDING_REVISION)?).ok()
 }
 
+fn publication_is_desired(runtime: &ControllerRuntime, expected: &DeleteExpectation) -> bool {
+    let key = format!(
+        "{}/{}",
+        expected.identity.consumer.namespace, expected.identity.consumer.name
+    );
+    let Some(consumer) = runtime.credential_source_registry.consumer(&key) else {
+        return false;
+    };
+    let Some(source) = runtime.credential_source_registry.source(&consumer.source_key) else {
+        return false;
+    };
+    source.persist
+        && source_is_current(runtime, &source)
+        && consumer_is_current(runtime, &consumer)
+        && consumer.uid == expected.identity.consumer.uid
+        && consumer.generation == expected.identity.consumer.generation
+        && consumer.source_key == expected.identity.source.name
+        && consumer.source_uid == expected.identity.source.uid
+        && consumer.source_generation == expected.identity.source.generation
+        && consumer.binding_revision() == expected.binding_revision
+        && source_input_revision(&source) == expected.source_input_revision
+}
+
 fn bootstrap_for_role(
     runtime: &ControllerRuntime,
     source: &DesiredCredentialSource,
@@ -1235,7 +1360,9 @@ fn provider_failure(error: OAuth2ProviderError) -> ReconcileFailure {
 
 fn secret_io_failure(error: secret_io::SecretIoError) -> ReconcileFailure {
     match error {
-        secret_io::SecretIoError::Kubernetes(_) => ReconcileFailure::transient(None),
+        secret_io::SecretIoError::Kubernetes(_) | secret_io::SecretIoError::StaleOperation => {
+            ReconcileFailure::transient(None)
+        }
         secret_io::SecretIoError::TargetSecretConflict => {
             let mut failure = ReconcileFailure::rotation();
             failure.consumer_conflict = true;
@@ -1300,7 +1427,7 @@ async fn publish_consumer(
     };
     let published = match current {
         None => {
-            if !still_current() || !leader.validate_fence(fence).await {
+            if !leader.validate_fence(fence).await || !still_current() {
                 return Err(ReconcileFailure::transient(None));
             }
             match secret_io::create(&publication, &api).await {
@@ -1315,7 +1442,7 @@ async fn publish_consumer(
                         return Err(ReconcileFailure::rotation());
                     }
                     let cas = secret_io::capture_publication_cas(&winner, &identity).map_err(secret_io_failure)?;
-                    if !still_current() || !leader.validate_fence(fence).await {
+                    if !leader.validate_fence(fence).await || !still_current() {
                         return Err(ReconcileFailure::transient(None));
                     }
                     secret_io::publish(&api, &cas, &publication)
@@ -1330,13 +1457,13 @@ async fn publish_consumer(
                 if !secret_io::is_owned_by_consumer(&current, &identity) {
                     return Err(ReconcileFailure::rotation());
                 }
-                if !still_current() || !leader.validate_fence(fence).await {
+                if !leader.validate_fence(fence).await || !still_current() {
                     return Err(ReconcileFailure::transient(None));
                 }
                 secret_io::delete_owned_consumer_object(&api, &current, &identity)
                     .await
                     .map_err(secret_io_failure)?;
-                if !still_current() || !leader.validate_fence(fence).await {
+                if !leader.validate_fence(fence).await || !still_current() {
                     return Err(ReconcileFailure::transient(None));
                 }
                 let recreated = secret_io::create(&publication, &api).await.map_err(secret_io_failure)?;
@@ -1347,7 +1474,7 @@ async fn publish_consumer(
                 if !secret_io::is_owned_by_consumer(&current, &identity) {
                     return Err(ReconcileFailure::rotation());
                 }
-                if !still_current() || !leader.validate_fence(fence).await {
+                if !leader.validate_fence(fence).await || !still_current() {
                     return Err(ReconcileFailure::transient(None));
                 }
                 return secret_io::repair_and_publish_owned_consumer(&api, &current, &publication)
@@ -1359,7 +1486,7 @@ async fn publish_consumer(
                     });
             }
             let cas = secret_io::capture_publication_cas(&current, &identity).map_err(secret_io_failure)?;
-            if !still_current() || !leader.validate_fence(fence).await {
+            if !leader.validate_fence(fence).await || !still_current() {
                 return Err(ReconcileFailure::transient(None));
             }
             secret_io::publish(&api, &cas, &publication)
@@ -1381,13 +1508,21 @@ async fn cleanup_removed_source(
     if let Some(fence) = leader.current_fence() {
         let mut entries = publications.into_iter();
         while let Some((consumer_key, expectation)) = entries.next() {
-            if !is_current_generation(generation) || !leader.validate_fence(&fence).await {
+            if !generation_and_fence_hold(generation, Some(&leader), Some(&fence)).await {
                 remaining.insert(consumer_key, expectation);
                 remaining.extend(entries);
                 break;
             }
             let api = Api::<Secret>::namespaced(client.clone(), &expectation.identity.consumer.namespace);
-            if secret_io::delete_if_matches(&api, &expectation).await.is_err() {
+            if secret_io::delete_if_matches(&api, &expectation, || async {
+                if !generation_and_fence_hold(generation, Some(&leader), Some(&fence)).await {
+                    return Err(secret_io::SecretIoError::StaleOperation);
+                }
+                Ok(true)
+            })
+            .await
+            .is_err()
+            {
                 remaining.insert(consumer_key, expectation);
             }
         }
@@ -1448,63 +1583,122 @@ async fn publish_manager_result(runtime: &ControllerRuntime, source: &DesiredCre
         conflicted_consumer_count: state.conflicted_consumer_count,
     };
     let key = source.logical_key();
+    if source_is_current(runtime, source) && consumers.iter().all(|consumer| consumer_is_current(runtime, consumer)) {
+        maybe_clear_memory_after_fan_out(runtime, source, published_consumer_count, consumers.len() as u32);
+    }
     if runtime.credential_source_registry.replace_result(key.clone(), result) {
         if let Some(processor) = runtime.processor_registry.get("LinkSys") {
             processor.requeue(key).await;
         }
     }
-    maybe_clear_memory_after_fan_out(runtime, source, published_consumer_count, consumers.len() as u32);
 }
 
 fn source_is_current(runtime: &ControllerRuntime, expected: &DesiredCredentialSource) -> bool {
-    let registry_current = runtime
-        .credential_source_registry
-        .source(&expected.logical_key())
-        .is_some_and(|current| {
-            current.uid == expected.uid
-                && current.generation == expected.generation
-                && source_input_revision(&current) == source_input_revision(expected)
-        });
-    registry_current
-        && expected.secret_inputs.iter().all(|input| {
-            let source_namespace = expected.resource.namespace.as_deref().unwrap_or("default");
-            let authority_current = runtime.ref_grant_store.authorization_revision(
-                source_namespace,
-                "edgion.io",
-                "LinkSys",
-                &input.namespace,
-                "",
-                "Secret",
-                Some(&input.name),
-            ) == input.authorization_revision;
-            authority_current
-                && runtime
-                    .secret_store
-                    .get(Some(&input.namespace), &input.name)
-                    .is_some_and(|secret| {
-                        secret.metadata.uid == input.uid && secret.metadata.resource_version == input.resource_version
-                    })
-        })
+    let Some(current) = runtime.credential_source_registry.source(&expected.logical_key()) else {
+        return false;
+    };
+    if current.uid != expected.uid
+        || current.generation != expected.generation
+        || source_input_revision(&current) != source_input_revision(expected)
+    {
+        return false;
+    }
+    let Some(processor) = runtime.processor_registry.get("LinkSys") else {
+        return false;
+    };
+    let Some(raw) = processor.get_raw_any(&expected.logical_key()) else {
+        return false;
+    };
+    let Ok(owner) = raw.downcast::<edgion_resources::resources::link_sys::LinkSys>() else {
+        return false;
+    };
+    if owner.metadata.uid.as_deref() != Some(expected.uid.as_str())
+        || owner.metadata.generation.unwrap_or_default() != expected.generation
+        || expected.secret_inputs.is_empty()
+    {
+        return false;
+    }
+    let mut checked = Vec::new();
+    for input in &expected.secret_inputs {
+        if !checked
+            .iter()
+            .any(|prior: &&edgion_resources::resources::refs::FrozenFieldReference| {
+                prior.same_owner_snapshot(&input.reference)
+            })
+        {
+            if !input.reference.matches_link_sys(&owner) {
+                return false;
+            }
+            checked.push(&input.reference);
+        }
+        let Ok(query) = input.reference.grant_query() else {
+            return false;
+        };
+        let target = query.target();
+        if target.group_kind().group() != ""
+            || target.group_kind().kind() != "Secret"
+            || target.scope().namespace() != Some(input.namespace.as_str())
+            || target.name() != input.name
+            || runtime.ref_grant_store.query_authorization_revision(query).as_deref()
+                != Some(input.authorization_revision.as_str())
+        {
+            return false;
+        }
+        if !runtime
+            .secret_store
+            .get(Some(&input.namespace), &input.name)
+            .is_some_and(|secret| {
+                secret.metadata.uid == input.uid && secret.metadata.resource_version == input.resource_version
+            })
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn consumer_is_current(runtime: &ControllerRuntime, expected: &DesiredCredentialConsumer) -> bool {
-    let desired_current = runtime
+    if runtime
         .credential_source_registry
         .consumer(&expected.logical_key())
         .as_ref()
-        == Some(expected);
-    let consumer_namespace = expected.resource.namespace.as_deref().unwrap_or("default");
-    let source_name = expected.source_key.rsplit('/').next().unwrap_or_default();
-    desired_current
-        && runtime.ref_grant_store.authorization_revision(
-            consumer_namespace,
-            "edgion.io",
-            "EdgionPlugins",
-            expected.source_key.split('/').next().unwrap_or("default"),
-            "edgion.io",
-            "LinkSys",
-            Some(source_name),
-        ) == expected.authorization_revision
+        != Some(expected)
+    {
+        return false;
+    }
+    let Some(processor) = runtime.processor_registry.get("EdgionPlugins") else {
+        return false;
+    };
+    let Some(raw) = processor.get_raw_any(&expected.logical_key()) else {
+        return false;
+    };
+    let Ok(owner) = raw.downcast::<edgion_resources::resources::edgion_plugins::EdgionPlugins>() else {
+        return false;
+    };
+    if owner.metadata.uid.as_deref() != Some(expected.uid.as_str())
+        || owner.metadata.generation.unwrap_or_default() != expected.generation
+        || !expected.reference.matches_plugins(&owner)
+    {
+        return false;
+    }
+    let Ok(query) = expected.reference.grant_query() else {
+        return false;
+    };
+    let target = query.target();
+    target.group_kind().group() == "edgion.io"
+        && target.group_kind().kind() == "LinkSys"
+        && target
+            .scope()
+            .namespace()
+            .is_some_and(|namespace| format!("{namespace}/{}", target.name()) == expected.source_key)
+        && runtime.ref_grant_store.query_authorization_revision(query).as_deref()
+            == Some(expected.authorization_revision.as_str())
+}
+
+fn reconciled_consumers_current(runtime: &ControllerRuntime, source_key: &str, expected_revision: &str) -> bool {
+    let consumers = runtime.credential_source_registry.consumers_for_source(source_key);
+    consumer_revision(&consumers, 0) == expected_revision
+        && consumers.iter().all(|consumer| consumer_is_current(runtime, consumer))
 }
 
 fn source_input_revision(source: &DesiredCredentialSource) -> String {
@@ -1513,7 +1707,9 @@ fn source_input_revision(source: &DesiredCredentialSource) -> String {
         .iter()
         .map(|input| {
             format!(
-                "{}\0{}\0{}\0{}\0{}\0{}",
+                "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+                input.reference.owner_revision(),
+                input.reference.slot_revision(),
                 input.role,
                 input.namespace,
                 input.name,

@@ -24,15 +24,15 @@ use edgion_resources::resources::common::{ParentReference, RefDenied};
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 #[cfg(test)]
 use edgion_resources::resources::edgion_plugins::{AiProxyConfig, EdgionPlugin, EdgionPlugins};
-use edgion_resources::resources::extension_ref::{
-    is_supported_edgion_plugins_ref, validate_extension_ref_filter, ExtensionRefValidationError,
-};
 use edgion_resources::resources::http_route::{
     DelegationIssue, HTTPBackendRefKind, HTTPRouteFilterType, HTTPRouteRule, HTTPRouteStatus, GATEWAY_API_GROUP,
 };
 #[cfg(test)]
 use edgion_resources::resources::http_route_ai_admission::{self as shared_ai_admission, AiProxyAdmission};
 use edgion_resources::resources::http_route_ai_admission::{ResolvedAiAdmission, ResolvedForwardingTarget};
+use edgion_resources::resources::refs::extension_ref::{
+    is_supported_edgion_plugins_ref, validate_extension_ref_filter, ExtensionRefValidationError,
+};
 use edgion_resources::ResourceKind;
 
 /// True for parentRef entries that attach the route to a Gateway listener

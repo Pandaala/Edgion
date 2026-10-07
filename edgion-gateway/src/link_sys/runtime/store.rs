@@ -19,8 +19,7 @@ use crate::link_sys::providers::etcd::{EtcdApply, EtcdLinkClient};
 use crate::link_sys::providers::kafka::{KafkaApply, KafkaLinkClient};
 use crate::link_sys::providers::otlp::{OtlpApply, OtlpLinkClient};
 use crate::link_sys::providers::redis::{RedisApply, RedisLinkClient};
-use crate::link_sys::providers::webhook::{fingerprint_webhook, WebhookLinkClient};
-use crate::link_sys::runtime::apply::RuntimeFingerprint;
+use crate::link_sys::providers::webhook::{WebhookCandidate, WebhookLinkClient};
 use crate::link_sys::runtime::runner::PersistentRunner;
 use crate::link_sys::LinkSysHealth;
 use crate::observe::metrics::registry::record_link_sys_health;
@@ -538,19 +537,16 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
             if !credential::resolved_state(resource).is_buildable() || !webhook_secrets_ready(config) {
                 return;
             }
+            let incoming = WebhookCandidate::from_link_sys(Arc::new(resource.clone()))
+                .expect("the Webhook publication branch has the matching actual provider");
             if let Some(entry) = existing {
                 if let ProviderRuntime::Webhook(client) = &entry.provider {
-                    if webhook_can_reuse(client, resource, forced) {
+                    if incoming.can_reuse(client, forced) {
                         return;
                     }
                 }
             }
-            match WebhookLinkClient::prepare(
-                key,
-                config.clone(),
-                resource.metadata.namespace.as_deref(),
-                webhook_fingerprint_or_unspecified(resource),
-            ) {
+            match incoming.prepare(key) {
                 Ok(client) => {
                     let entry = RuntimeEntry::new(ProviderRuntime::Webhook(Arc::new(client)));
                     if let Some(old) = entries.insert(key.to_string(), entry) {
@@ -560,17 +556,19 @@ fn apply_entry(entries: &mut RuntimeMap, counts: &mut ProviderCounts, key: &str,
                 Err(error) => tracing::error!(key, label = "Webhook", error = %error, "LinkSys preparation failed"),
             }
         }
-        SystemConfig::HttpDns(config) => {
+        SystemConfig::HttpDns(_) => {
+            let incoming = edgion_common::dns::HttpDnsCandidate::from_link_sys(Arc::new(resource.clone()))
+                .expect("the HTTPDNS publication branch has the matching actual provider");
             if !forced {
                 if let Some(entry) = existing {
                     if let ProviderRuntime::HttpDns(prepared) = &entry.provider {
-                        if prepared.matches_config(config) {
+                        if incoming.matches(prepared) {
                             return;
                         }
                     }
                 }
             }
-            let prepared = edgion_common::dns::PreparedHttpDns::prepare(config.clone());
+            let prepared = incoming.prepare();
             if !prepared.is_ready() {
                 tracing::warn!(
                     key,
@@ -904,19 +902,6 @@ fn credential_readiness<M>(
 
 fn webhook_secrets_ready(config: &edgion_resources::resources::link_sys::webhook::WebhookServiceConfig) -> bool {
     config.unresolved_secret_refs().is_empty()
-}
-
-fn webhook_fingerprint_or_unspecified(resource: &LinkSys) -> RuntimeFingerprint {
-    fingerprint_webhook(resource).unwrap_or_else(|_| RuntimeFingerprint::unspecified())
-}
-
-fn webhook_can_reuse(existing: &WebhookLinkClient, resource: &LinkSys, forced: bool) -> bool {
-    if forced {
-        return false;
-    }
-    let incoming = webhook_fingerprint_or_unspecified(resource);
-    let live = existing.runtime_fingerprint();
-    live.equal_runtime(&incoming) || live.rv_skip_allows_reuse(&incoming)
 }
 
 fn dispatch_full_set(data: &LinkSysMap, forced: bool) {

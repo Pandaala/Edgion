@@ -2,6 +2,11 @@
 
 /// Edgion-specific annotations
 pub mod edgion {
+    /// Reserved Controller-resolved transport marker for ConfigMap CA material.
+    /// Ordinary fetched Secrets have this marker removed before embedding.
+    pub const CONTROLLER_CA_SOURCE: &str = "edgion.io/controller-ca-source";
+    /// Exact source kind carried by [`CONTROLLER_CA_SOURCE`].
+    pub const CONTROLLER_CA_SOURCE_CONFIG_MAP: &str = "ConfigMap";
     /// Gateway-local traffic socket IP, independent of Gateway API external addresses.
     pub const LOCAL_BIND_IP: &str = "edgion.io/local-bind-ip";
     /// Service annotation naming the Gateway whose external address it serves.

@@ -31,7 +31,10 @@ use reqwest::Client;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
+use crate::link_sys::http_client::{
+    build_outbound_client, build_outbound_client_with_tls_selection, OutboundClientConfig, OutboundRedirect,
+};
+use crate::link_sys::outbound_tls::{GlobalOutboundTlsSnapshot, ValidatedLocalTlsSelection};
 
 /// Global shared HTTP client with connection pooling.
 ///
@@ -115,17 +118,37 @@ pub fn build_webhook_client(
     if tls_config.is_none() && dns_resolver.is_none() {
         return None;
     }
-    Some(build_outbound_client(OutboundClientConfig {
+    let mut config = webhook_client_config(dns_resolver);
+    config.tls = tls_config.clone();
+    Some(build_outbound_client(config))
+}
+
+pub(crate) fn build_webhook_client_with_tls_selection(
+    proof: &ValidatedLocalTlsSelection<'_>,
+    defaults: &GlobalOutboundTlsSnapshot,
+    dns_resolver: Option<std::sync::Arc<dyn reqwest::dns::Resolve>>,
+) -> Option<anyhow::Result<Client>> {
+    if proof.active_field().is_none() && dns_resolver.is_none() {
+        return None;
+    }
+    Some(build_outbound_client_with_tls_selection(
+        webhook_client_config(dns_resolver),
+        proof,
+        defaults,
+    ))
+}
+
+fn webhook_client_config(dns_resolver: Option<std::sync::Arc<dyn reqwest::dns::Resolve>>) -> OutboundClientConfig {
+    OutboundClientConfig {
         pool_max_idle_per_host: Some(32),
         connect_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(Duration::from_secs(10)),
         redirect: OutboundRedirect::Deny,
         disable_proxy: true,
-        tls: tls_config.clone(),
         tls_context: Some("Webhook"),
         dns_resolver,
         ..Default::default()
-    }))
+    }
 }
 
 /// Canonical hop-by-hop headers that MUST NOT be forwarded to upstream services.

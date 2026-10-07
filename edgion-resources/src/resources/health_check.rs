@@ -152,7 +152,7 @@ impl ActiveHealthCheckConfig {
                 return Some("health check CA references must be nonempty and exclusive with system CA");
             }
             for reference in refs {
-                if !is_core_api_group(&reference.group)
+                if !is_core_api_group(reference.group.as_deref().unwrap_or_default())
                     || !matches!(reference.kind.as_str(), "Secret" | "ConfigMap")
                     || !valid_reference_name(&reference.name)
                     || reference

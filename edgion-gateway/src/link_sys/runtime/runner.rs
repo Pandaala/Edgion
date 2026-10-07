@@ -46,14 +46,16 @@ enum LoopExit {
 #[async_trait]
 pub trait ApplyOwner: Send + Sync + 'static {
     type Client: Send + Sync + 'static;
+    type Candidate: Send + Sync;
 
-    fn fingerprint(incoming: &LinkSys) -> anyhow::Result<RuntimeFingerprint>;
+    fn prepare(incoming: Arc<LinkSys>) -> anyhow::Result<Self::Candidate>;
+    fn fingerprint(incoming: &Self::Candidate) -> anyhow::Result<RuntimeFingerprint>;
     fn fingerprint_live(client: &Self::Client) -> RuntimeFingerprint;
     fn coverage(client: &Self::Client) -> ConnectionCoverage;
     fn published_health(_client: &Self::Client) -> Option<&PublishedHealth> {
         None
     }
-    fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>>;
+    fn build(key: &str, incoming: &Self::Candidate) -> anyhow::Result<Arc<Self::Client>>;
     async fn init(client: &Self::Client) -> anyhow::Result<()>;
     async fn shutdown(client: Arc<Self::Client>);
     fn mark_retired(client: &Self::Client);
@@ -261,7 +263,21 @@ async fn run_loop<O: ApplyOwner>(
             DesiredState::Ready { link } => {
                 let start_gen = snapshot.gen;
                 let forced = snapshot.force_gen > fulfilled_force_gen;
-                let incoming_fp = match O::fingerprint(&link) {
+                // Owning proof precedes digest/RV and zero-live decisions. Keep
+                // the same immutable input across construction and init retries.
+                let candidate = match O::prepare(link) {
+                    Ok(candidate) => candidate,
+                    Err(error) => {
+                        tracing::error!(key = %runner.key, label = O::label(), error = %error,
+                            "LinkSys candidate preparation failed");
+                        if wait_change_or_shutdown(&mut rx, &shutdown).await {
+                            finish_delete::<O>(&runner).await;
+                            return;
+                        }
+                        continue;
+                    }
+                };
+                let incoming_fp = match O::fingerprint(&candidate) {
                     Ok(fp) => fp,
                     Err(e) => {
                         tracing::error!(
@@ -305,7 +321,7 @@ async fn run_loop<O: ApplyOwner>(
                     }
                 }
 
-                match connect_generation::<O>(&runner, &mut rx, &shutdown, &link, start_gen, &mut backoff).await {
+                match connect_generation::<O>(&runner, &mut rx, &shutdown, &candidate, start_gen, &mut backoff).await {
                     LoopExit::Continue => {
                         fulfilled_force_gen = snapshot.force_gen;
                         backoff.reset();
@@ -348,7 +364,7 @@ async fn connect_generation<O: ApplyOwner>(
     runner: &PersistentRunner<O>,
     rx: &mut watch::Receiver<Desired>,
     shutdown: &CancellationToken,
-    link: &LinkSys,
+    candidate: &O::Candidate,
     start_gen: u64,
     backoff: &mut ConnectBackoff,
 ) -> LoopExit {
@@ -369,7 +385,7 @@ async fn connect_generation<O: ApplyOwner>(
             join_retire::<O>(runner).await;
         }
 
-        let client = match O::build(&runner.key, link) {
+        let client = match O::build(&runner.key, candidate) {
             Ok(client) => client,
             Err(e) => {
                 tracing::error!(

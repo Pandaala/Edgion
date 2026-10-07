@@ -1,5 +1,6 @@
 use super::*;
 use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
+use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::common::OutboundTlsLocal;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
@@ -345,14 +346,14 @@ fn ldap_new_tls_cases_are_process_isolated() {
 
 fn run_ldap_new_tls_case_table() {
     use edgion_common::link_sys_core::outbound_tls::set_outbound_global_default;
-    use edgion_resources::resources::backend_tls_policy::{
-        BackendTLSPolicyCACertificateRef, SubjectAltName, SubjectAltNameType,
-    };
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
     use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
     use edgion_resources::resources::common::{OutboundTlsConfig, SecretObjectReference};
 
     install_test_crypto_provider();
-    set_outbound_global_default(OutboundTlsConfig::default());
+    set_outbound_global_default(edgion_common::link_sys_core::outbound_tls::test_util::snapshot(
+        OutboundTlsConfig::default(),
+    ));
 
     let ldaps = LdapAuth::new(&LdapAuthConfig {
         ldaps: true,
@@ -407,10 +408,10 @@ fn run_ldap_new_tls_case_table() {
         ldaps: true,
         tls: OutboundTlsLocal {
             validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                ca_certificate_refs: Some(vec![CustomCACertificateRef {
                     kind: "Secret".to_string(),
                     name: "missing-ca".to_string(),
-                    group: String::new(),
+                    group: Some(String::new()),
                     namespace: None,
                 }]),
                 ..Default::default()
@@ -425,10 +426,10 @@ fn run_ldap_new_tls_case_table() {
         ldaps: true,
         tls: OutboundTlsLocal {
             validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                ca_certificate_refs: Some(vec![CustomCACertificateRef {
                     kind: "Secret".to_string(),
                     name: "invalid-ca".to_string(),
-                    group: String::new(),
+                    group: Some(String::new()),
                     namespace: None,
                 }]),
                 ..Default::default()
@@ -444,7 +445,7 @@ fn run_ldap_new_tls_case_table() {
         group: None,
         kind: None,
         name: "ldap-client".to_string(),
-        namespace: None,
+        namespace: Some("default".into()),
     };
     let missing_client = LdapAuth::new(&LdapAuthConfig {
         ldaps: true,
@@ -480,14 +481,16 @@ fn run_ldap_new_tls_case_table() {
         .expect("test client identity must generate");
     let cert_pem = generated.cert.pem();
     let key_pem = generated.signing_key.serialize_pem();
-    set_outbound_global_default(OutboundTlsConfig {
-        client_certificate_ref: Some(client_ref),
-        resolved_client_certificate: Some(secret_with(&[
-            ("tls.crt", cert_pem.as_bytes()),
-            ("tls.key", key_pem.as_bytes()),
-        ])),
-        ..Default::default()
-    });
+    let mut global_identity = secret_with(&[("tls.crt", cert_pem.as_bytes()), ("tls.key", key_pem.as_bytes())]);
+    global_identity.metadata.name = Some("ldap-client".into());
+    global_identity.metadata.namespace = Some("default".into());
+    set_outbound_global_default(edgion_common::link_sys_core::outbound_tls::test_util::snapshot(
+        OutboundTlsConfig {
+            client_certificate_ref: Some(client_ref),
+            resolved_client_certificate: Some(global_identity),
+            ..Default::default()
+        },
+    ));
     let inherited_client = LdapAuth::new(&LdapAuthConfig {
         ldaps: true,
         ..test_config()
@@ -497,10 +500,12 @@ fn run_ldap_new_tls_case_table() {
         "local TLS must inherit the valid global client identity"
     );
 
-    set_outbound_global_default(OutboundTlsConfig {
-        verify: false,
-        ..Default::default()
-    });
+    set_outbound_global_default(edgion_common::link_sys_core::outbound_tls::test_util::snapshot(
+        OutboundTlsConfig {
+            verify: false,
+            ..Default::default()
+        },
+    ));
     let inherited_skip_verify = LdapAuth::new(&LdapAuthConfig {
         ldaps: true,
         ..test_config()
@@ -510,7 +515,9 @@ fn run_ldap_new_tls_case_table() {
         "unset local verify must inherit global false"
     );
 
-    set_outbound_global_default(OutboundTlsConfig::default());
+    set_outbound_global_default(edgion_common::link_sys_core::outbound_tls::test_util::snapshot(
+        OutboundTlsConfig::default(),
+    ));
 }
 
 // -----------------------------------------------------------------------

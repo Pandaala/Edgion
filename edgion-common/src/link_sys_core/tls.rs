@@ -1,9 +1,11 @@
-//! Gateway-side TLS helpers for `LinkSys` resources.
+//! Canonical TLS conversion helpers for `LinkSys` resources.
 //!
 //! All outbound TLS flows through the shared resolver
 //! ([`crate::link_sys_core::outbound_tls::resolve_outbound_tls`]):
 //! - `apply_resolved_outbound_tls` — reqwest path (ES, webhook)
-//! - `build_rustls_client_config` — rustls path (Redis via fred)
+//! - `build_validated_rustls_client_config` — actual-owner Redis/Fred path
+//! - `build_kafka_rustls_client_config` — actual-owner Kafka/rskafka path
+//! - `build_rustls_client_config` — raw adapters pending their owning migration
 //!
 //! The resolver handles global-default inheritance and CA material resolution.
 //! `verify=false` is honored when the provider supports it (operator responsibility)
@@ -20,8 +22,9 @@ use crate::link_sys_core::outbound_tls::{self, EffectiveCa};
 
 /// Build a rustls [`ClientConfig`] from a CRD-level [`TlsConfig`].
 ///
-/// Used by providers whose SDK consumes `rustls::ClientConfig` directly (e.g.
-/// fred's Redis client via `TlsConnector::from(ClientConfig)`). Providers that
+/// Used by remaining raw adapters whose SDK consumes `rustls::ClientConfig`
+/// directly. Redis's actual-owner adapter uses the validated entry and the same
+/// conversion core. Providers that
 /// accept raw PEM (etcd-client / reqwest) should use
 /// `apply_resolved_outbound_tls` instead.
 ///
@@ -54,6 +57,21 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
     )
     .map_err(|e| anyhow::anyhow!("LinkSys TLS configuration error: {e:?}"))?;
 
+    build_effective_rustls_client_config(&resolved)
+}
+
+/// Build from an actual owning selection and one captured inherited generation.
+pub(crate) fn build_validated_rustls_client_config(
+    proof: &outbound_tls::ValidatedLocalTlsSelection<'_>,
+    defaults: &outbound_tls::GlobalOutboundTlsSnapshot,
+    provider: &str,
+) -> Result<Option<ClientConfig>> {
+    let resolved = outbound_tls::resolve_validated_outbound_tls_audited(proof, false, provider, defaults)
+        .map_err(|error| anyhow::anyhow!("{provider} TLS configuration error: {error:?}"))?;
+    build_effective_rustls_client_config(&resolved)
+}
+
+fn build_effective_rustls_client_config(resolved: &outbound_tls::ResolvedOutboundTls) -> Result<Option<ClientConfig>> {
     resolved.reject_unsupported_identity_policy("LinkSys")?;
 
     // Nothing to configure: system CA + no client identity → caller uses
@@ -63,6 +81,31 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
         return Ok(None);
     }
 
+    build_concrete_rustls_client_config(resolved).map(Some)
+}
+
+/// Fixed actual Kafka entry. rskafka treats an absent connector as plaintext,
+/// so every enabled TLS selection produces a concrete verifying connector.
+pub fn build_kafka_rustls_client_config(input: &outbound_tls::PreparedLinkSysTls) -> Result<Option<ClientConfig>> {
+    anyhow::ensure!(
+        matches!(
+            &input.owner().spec.config,
+            edgion_resources::resources::link_sys::SystemConfig::Kafka(_)
+        ),
+        "Kafka TLS construction requires an actual Kafka LinkSys"
+    );
+    input.with_tls_selection(|proof, defaults| {
+        if proof.active_field().is_none() {
+            return Ok(None);
+        }
+        let resolved = outbound_tls::resolve_validated_outbound_tls_audited(proof, false, "Kafka", defaults)
+            .map_err(|error| anyhow::anyhow!("Kafka TLS configuration error: {error:?}"))?;
+        build_concrete_rustls_client_config(&resolved).map(Some)
+    })
+}
+
+fn build_concrete_rustls_client_config(resolved: &outbound_tls::ResolvedOutboundTls) -> Result<ClientConfig> {
+    resolved.reject_unsupported_identity_policy("LinkSys")?;
     let mut roots = RootCertStore::empty();
 
     match &resolved.ca {
@@ -108,7 +151,7 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
         None => builder.with_no_client_auth(),
     };
 
-    Ok(Some(client_config))
+    Ok(client_config)
 }
 
 /// Apply custom CA PEM bundles to a reqwest `ClientBuilder` with REPLACE
@@ -155,7 +198,7 @@ pub(crate) fn apply_resolved_outbound_tls_with_defaults(
     builder: reqwest::ClientBuilder,
     tls: &TlsConfig,
     provider: &str,
-    defaults: &edgion_resources::resources::common::OutboundTlsConfig,
+    defaults: &outbound_tls::GlobalOutboundTlsSnapshot,
 ) -> Result<reqwest::ClientBuilder> {
     let resolved = outbound_tls::resolve_outbound_tls_audited_with_defaults(
         &tls.outbound,
@@ -167,6 +210,25 @@ pub(crate) fn apply_resolved_outbound_tls_with_defaults(
     )
     .map_err(|e| anyhow::anyhow!("{provider} TLS configuration error: {e:?}"))?;
 
+    apply_effective_outbound_tls(builder, &resolved, provider)
+}
+
+pub(crate) fn apply_validated_outbound_tls(
+    builder: reqwest::ClientBuilder,
+    proof: &outbound_tls::ValidatedLocalTlsSelection<'_>,
+    provider: &str,
+    defaults: &outbound_tls::GlobalOutboundTlsSnapshot,
+) -> Result<reqwest::ClientBuilder> {
+    let resolved = outbound_tls::resolve_validated_outbound_tls_audited(proof, true, provider, defaults)
+        .map_err(|e| anyhow::anyhow!("{provider} TLS configuration error: {e:?}"))?;
+    apply_effective_outbound_tls(builder, &resolved, provider)
+}
+
+fn apply_effective_outbound_tls(
+    builder: reqwest::ClientBuilder,
+    resolved: &outbound_tls::ResolvedOutboundTls,
+    provider: &str,
+) -> Result<reqwest::ClientBuilder> {
     resolved.reject_unsupported_identity_policy(provider)?;
 
     let mut builder = builder;

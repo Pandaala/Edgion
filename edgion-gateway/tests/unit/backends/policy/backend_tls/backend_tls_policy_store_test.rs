@@ -351,7 +351,6 @@ fn incomplete_custom_ca_is_invalid() {
         group: String::new(),
         kind: "ConfigMap".to_string(),
         name: "ca".to_string(),
-        namespace: None,
     }]);
     store.replace_all(HashMap::from([("tenant/custom".to_string(), custom)]));
     assert!(store

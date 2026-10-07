@@ -1,8 +1,7 @@
-//! CRD `EtcdClientConfig` → `etcd_client::ConnectOptions` mapping.
+//! Actual LinkSys and trusted bootstrap inputs to retained Etcd SDK options.
 //!
-//! This module bridges the CRD configuration types (serde-driven, user-facing YAML)
-//! with etcd-client's `ConnectOptions`. The mapping follows the Library-First principle:
-//! we use etcd-client's API directly without inventing our own abstractions.
+//! Both entries use the shared borrowed TLS core and one scalar/options mapper.
+//! SDK options are prepared once for ordinary and dedicated election connections.
 
 use std::time::Duration;
 
@@ -10,10 +9,12 @@ use anyhow::Result;
 use etcd_client::{Certificate, ConnectOptions, Identity, TlsOptions};
 
 use crate::link_sys_core::credential::CredentialState;
-use crate::link_sys_core::outbound_tls::{self, EffectiveCa};
+use crate::link_sys_core::outbound_tls::{self, EffectiveCa, GlobalOutboundTlsSnapshot, PreparedLinkSysTls};
 use edgion_resources::credentials::materials::BasicAuthMaterial;
-use edgion_resources::resources::common::TlsConfig;
-use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
+use edgion_resources::resources::link_sys::etcd::{
+    validate_etcd_connection_fields, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout,
+};
+use edgion_resources::resources::link_sys::SystemConfig;
 
 // ============================================================================
 // Safety ceilings for connection configuration
@@ -27,59 +28,114 @@ const DEFAULT_DIAL_TIMEOUT_MS: u64 = 5_000;
 // Config mapping (CRD → etcd-client ConnectOptions)
 // ============================================================================
 
-/// Map `EtcdClientConfig` (CRD) to `etcd_client::ConnectOptions`.
-///
-/// Returns `None` if no special options are needed (minimal config).
-/// The caller passes the options to `Client::connect(endpoints, options)`.
-///
-/// `auth` is the [`CredentialState`] produced by
-/// [`credential::basic_state`](crate::link_sys_core::credential::basic_state).
-/// `Pending` / `Invalid` produce a fail-fast `bail!`.
-pub fn build_connect_options(
-    crd: &EtcdClientConfig,
-    auth: &CredentialState<BasicAuthMaterial>,
-) -> Result<Option<ConnectOptions>> {
-    let errors = crd.validation_errors();
+pub(super) struct PreparedOptions {
+    pub(super) ordinary: ConnectOptions,
+    pub(super) election: ConnectOptions,
+}
+
+fn validate_fields(
+    endpoints: &[String],
+    timeout: Option<&EtcdTimeout>,
+    keep_alive: Option<&EtcdKeepAlive>,
+) -> Result<()> {
+    let errors = validate_etcd_connection_fields(endpoints, timeout, keep_alive);
     anyhow::ensure!(errors.is_empty(), "Invalid Etcd configuration: {}", errors.join("; "));
+    Ok(())
+}
+
+fn auth_material(declared: bool, auth: &CredentialState<BasicAuthMaterial>) -> Result<Option<&BasicAuthMaterial>> {
+    if !declared {
+        return Ok(None);
+    }
+    let material = crate::link_sys_core::credential::require_basic_material(auth, "Etcd")?.ok_or_else(|| {
+        anyhow::anyhow!("Etcd auth configured in CRD but credential state is NotRequired (internal bug)")
+    })?;
+    Ok(Some(material))
+}
+
+pub(super) fn build_owned_options(input: &PreparedLinkSysTls) -> Result<PreparedOptions> {
+    let SystemConfig::Etcd(config) = &input.owner().spec.config else {
+        anyhow::bail!("Etcd construction requires an actual Etcd LinkSys");
+    };
+    validate_fields(&config.endpoints, config.timeout.as_ref(), config.keep_alive.as_ref())?;
+    let auth = crate::link_sys_core::credential::basic_state(input.owner());
+    anyhow::ensure!(
+        auth.is_buildable(),
+        "Etcd construction called with non-buildable credential state: {}",
+        auth.kind()
+    );
+    let tls = input.with_tls_selection(|proof, defaults| {
+        if proof.active_field().is_none() {
+            return Ok(None);
+        }
+        let resolved = outbound_tls::resolve_validated_outbound_tls_audited(proof, false, "Etcd", defaults)
+            .map_err(tls_configuration_error)?;
+        tls_options_from_resolved(resolved).map(Some)
+    })?;
+    let base = build_base_options(
+        config.timeout.as_ref(),
+        config.keep_alive.as_ref(),
+        auth_material(config.auth.is_some(), &auth)?,
+        tls,
+    );
+    Ok(finish_options(base, config.timeout.as_ref()))
+}
+
+pub(super) fn build_bootstrap_options(
+    config: &super::client::EtcdBootstrapConfig,
+    defaults: Option<&GlobalOutboundTlsSnapshot>,
+) -> Result<PreparedOptions> {
+    validate_fields(&config.endpoints, config.timeout.as_ref(), config.keep_alive.as_ref())?;
+    let tls = match config.tls.as_ref() {
+        None => None,
+        Some(material) => {
+            let defaults = defaults.ok_or_else(|| anyhow::anyhow!("Etcd bootstrap TLS requires captured defaults"))?;
+            let resolved = outbound_tls::resolve_etcd_bootstrap_tls_audited(material, defaults)
+                .map_err(tls_configuration_error)?;
+            Some(tls_options_from_resolved(resolved)?)
+        }
+    };
+    let base = build_base_options(
+        config.timeout.as_ref(),
+        config.keep_alive.as_ref(),
+        config.auth.as_ref(),
+        tls,
+    );
+    Ok(finish_options(base, config.timeout.as_ref()))
+}
+
+/// One scalar/options mapper for actual resource and trusted bootstrap inputs.
+/// The base deliberately excludes unary request timeout for election reuse.
+fn build_base_options(
+    timeout: Option<&EtcdTimeout>,
+    keep_alive: Option<&EtcdKeepAlive>,
+    auth: Option<&BasicAuthMaterial>,
+    tls: Option<TlsOptions>,
+) -> Option<ConnectOptions> {
     let mut options = ConnectOptions::new();
     let mut has_options = false;
 
-    if crd.auth.is_some() {
-        let m = crate::link_sys_core::credential::require_basic_material(auth, "Etcd")?.ok_or_else(|| {
-            anyhow::anyhow!("Etcd auth configured in CRD but credential state is NotRequired (internal bug)")
-        })?;
+    if let Some(m) = auth {
         let user = m.username.as_deref().unwrap_or("");
         options = options.with_user(user, m.password.as_str());
         has_options = true;
     }
 
-    // TLS — parse CA / mTLS material from the CRD (inline + resolved Secret)
-    // and feed it into etcd-client's `TlsOptions`.
-    if let Some(tls) = &crd.tls {
-        if tls.enabled {
-            let tls_options = build_tls_options(tls)?;
-            options = options.with_tls(tls_options);
-            has_options = true;
-        }
+    if let Some(tls) = tls {
+        options = options.with_tls(tls);
+        has_options = true;
     }
 
     // Dial (connection) timeout
-    if let Some(timeout) = &crd.timeout {
+    if let Some(timeout) = timeout {
         if let Some(dial_ms) = timeout.dial {
-            let dial = dial_ms.min(MAX_DIAL_TIMEOUT_MS);
-            options = options.with_connect_timeout(Duration::from_millis(dial));
-            has_options = true;
-        }
-        // Per-request timeout
-        if let Some(request_ms) = timeout.request {
-            let request = request_ms.min(MAX_REQUEST_TIMEOUT_MS);
-            options = options.with_timeout(Duration::from_millis(request));
+            options = options.with_connect_timeout(clamped_dial_timeout(dial_ms));
             has_options = true;
         }
     }
 
     // HTTP/2 keep-alive
-    if let Some(ka) = &crd.keep_alive {
+    if let Some(ka) = keep_alive {
         if let (Some(time), Some(timeout)) = (ka.time, ka.timeout) {
             options = options.with_keep_alive(Duration::from_secs(time), Duration::from_secs(timeout));
             has_options = true;
@@ -97,55 +153,77 @@ pub fn build_connect_options(
     // zero-K8s-impact violation). The conf_center client, which DOES need
     // always-on h2 keepalive (spec §4.2 fact 2: h2 PING is the only thing that
     // kills a blackholed established stream), gets its defaults injected at its
-    // own config-conversion layer: `EtcdConfig::to_client_config` in
+    // own config-conversion layer: `EtcdConfig::to_bootstrap_config` in
     // edgion-controller fills `timeout.dial` and `keep_alive` before this
     // builder ever runs.
-    Ok(if has_options { Some(options) } else { None })
-}
-
-/// Connect options for the DEDICATED leader-election client (spec §4.2/§3.2).
-///
-/// Identical to [`build_connect_options`] EXCEPT the channel-wide per-request
-/// timeout is stripped. etcd's v3election `campaign()` is a unary RPC that
-/// blocks server-side until this candidate wins; a channel-wide request timeout
-/// would abort it every `request_timeout_ms`, turning a healthy standby into a
-/// re-campaign hot loop and breaking active-passive HA. h2 keepalive is retained
-/// (from the shared builder) so a blackholed campaign connection still dies.
-pub fn election_connect_options(
-    crd: &EtcdClientConfig,
-    auth: &CredentialState<BasicAuthMaterial>,
-) -> Result<ConnectOptions> {
-    let mut crd = crd.clone();
-    if let Some(t) = crd.timeout.as_mut() {
-        t.request = None;
+    if has_options {
+        Some(options)
+    } else {
+        None
     }
-    Ok(build_connect_options(&crd, auth)?.unwrap_or_else(default_connect_options))
 }
 
-/// Build TLS options from CRD config.
-///
-/// Uses the shared [`outbound_tls::resolve_outbound_tls`] resolver with
-/// `provider_can_disable: false` — etcd-client's TLS stack always verifies
-/// certificates and has no skip-verify knob, so the resolver will return
-/// [`EdgionErrorCode::OutboundTlsVerifyUnsupported`] (mapped to an error here)
-/// if `verify=false` is configured, preventing a silent ignore of the
-/// operator's intent.
-fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
-    let resolved = outbound_tls::resolve_outbound_tls(
-        &tls.outbound,
-        tls.resolved_ca_certificates.as_deref(),
-        tls.resolved_client_certificate.as_ref(),
-        false, // etcd-client cannot disable TLS verification
-        "Etcd",
+#[allow(
+    clippy::unwrap_or_default,
+    reason = "etcd-client ConnectOptions::new enables idle keepalive; derived Default does not"
+)]
+fn finish_options(base: Option<ConnectOptions>, timeout: Option<&EtcdTimeout>) -> PreparedOptions {
+    let (ordinary_timeout, election_timeout) =
+        connection_timeout_overrides(base.is_some(), timeout.and_then(|timeout| timeout.request));
+    let election = apply_timeout_overrides(base.clone().unwrap_or_else(ConnectOptions::new), election_timeout);
+    let ordinary = apply_timeout_overrides(base.unwrap_or_else(ConnectOptions::new), ordinary_timeout);
+    PreparedOptions { ordinary, election }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ConnectionTimeoutOverrides {
+    dial: Option<Duration>,
+    request: Option<Duration>,
+}
+
+/// Ordinary request-only options preserve an absent dial timeout. Election
+/// always omits unary deadlines and uses the bounded fallback for an empty base.
+fn connection_timeout_overrides(
+    base_present: bool,
+    request: Option<u64>,
+) -> (ConnectionTimeoutOverrides, ConnectionTimeoutOverrides) {
+    (
+        ConnectionTimeoutOverrides {
+            dial: (!base_present && request.is_none()).then(|| clamped_dial_timeout(DEFAULT_DIAL_TIMEOUT_MS)),
+            request: request.map(|ms| Duration::from_millis(ms.min(MAX_REQUEST_TIMEOUT_MS))),
+        },
+        ConnectionTimeoutOverrides {
+            dial: (!base_present).then(|| clamped_dial_timeout(DEFAULT_DIAL_TIMEOUT_MS)),
+            request: None,
+        },
     )
-    .map_err(|e| {
-        anyhow::anyhow!(
-            "Etcd TLS configuration error: {e:?}. \
+}
+
+fn clamped_dial_timeout(ms: u64) -> Duration {
+    Duration::from_millis(ms.min(MAX_DIAL_TIMEOUT_MS))
+}
+
+fn apply_timeout_overrides(mut options: ConnectOptions, timeout: ConnectionTimeoutOverrides) -> ConnectOptions {
+    if let Some(dial) = timeout.dial {
+        options = options.with_connect_timeout(dial);
+    }
+    if let Some(request) = timeout.request {
+        options = options.with_timeout(request);
+    }
+    options
+}
+
+/// Preserve the existing capability error text for keyed construction failures.
+/// The canonical resolver rejects skip-verify before an SDK connection is made.
+fn tls_configuration_error(error: edgion_resources::EdgionErrorCode) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Etcd TLS configuration error: {error:?}. \
              etcd-client does not support skip-verify; \
              use a proper CA certificate or connect without TLS."
-        )
-    })?;
+    )
+}
 
+fn tls_options_from_resolved(resolved: outbound_tls::ResolvedOutboundTls) -> Result<TlsOptions> {
     resolved.reject_unsupported_identity_policy("Etcd")?;
 
     let mut tls_options = TlsOptions::new();
@@ -165,18 +243,6 @@ fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
     Ok(tls_options)
 }
 
-/// Get default connect options with a reasonable dial timeout.
-/// Used when no specific options are configured but we still want a timeout.
-pub fn default_connect_options() -> ConnectOptions {
-    // Shared fallback for EVERY fully-unconfigured EtcdLinkClient (LinkSys
-    // included) — dial timeout only, no h2 keepalive, exactly the pre-election
-    // behavior. The conf_center client never reaches this fallback: its
-    // config-conversion layer (`EtcdConfig::to_client_config`) always fills
-    // `timeout.dial` and `keep_alive`, which is where the leader-election
-    // blackhole-detection defaults (spec §4.2 fact 2) live.
-    ConnectOptions::new().with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS))
-}
-
 /// Default ceiling for live health-probe `status()` calls when the CRD does not
 /// set an explicit per-request timeout. 5s matches the Redis provider's
 /// DEFAULT_COMMAND_TIMEOUT_MS, keeping cross-provider health semantics aligned.
@@ -190,8 +256,11 @@ const DEFAULT_HEALTH_PROBE_TIMEOUT_MS: u64 = 5_000;
 /// wrap is a hard backstop whose real value is protecting the *unconfigured*
 /// case (where a stuck etcd would otherwise hang the call forever).
 pub fn health_probe_timeout(crd: &EtcdClientConfig) -> Duration {
-    crd.timeout
-        .as_ref()
+    probe_timeout_for(crd.timeout.as_ref())
+}
+
+pub(super) fn probe_timeout_for(timeout: Option<&EtcdTimeout>) -> Duration {
+    timeout
         .and_then(|t| t.request)
         .map(|ms| Duration::from_millis(ms.min(MAX_REQUEST_TIMEOUT_MS)))
         .unwrap_or_else(|| Duration::from_millis(DEFAULT_HEALTH_PROBE_TIMEOUT_MS))

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use edgion_common::link_sys_core::outbound_tls::PreparedLinkSysTls;
 use edgion_resources::resources::link_sys::etcd::{normalize_etcd_endpoint, EtcdClientConfig};
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
@@ -16,14 +17,42 @@ use edgion_common::link_sys_core::providers::etcd::config_mapping::{MAX_DIAL_TIM
 
 use super::EtcdLinkClient;
 
-pub struct EtcdApply;
+pub(crate) struct EtcdApply;
+
+pub(crate) struct EtcdCandidate {
+    pub(super) tls: Arc<PreparedLinkSysTls>,
+    fingerprint: RuntimeFingerprint,
+}
+
+impl EtcdCandidate {
+    pub(super) fn new(owner: Arc<LinkSys>) -> anyhow::Result<Self> {
+        Self::from_prepared(PreparedLinkSysTls::from_link_sys(owner)?)
+    }
+    pub(super) fn from_prepared(tls: PreparedLinkSysTls) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            matches!(&tls.owner().spec.config, SystemConfig::Etcd(_)),
+            "Etcd candidate requires an actual Etcd LinkSys"
+        );
+        tls.validate_active_inheritance()?;
+        let fingerprint = fingerprint_etcd_fields(tls.owner(), |hasher| tls.hash_active_inheritance(hasher))?;
+        Ok(Self {
+            tls: Arc::new(tls),
+            fingerprint,
+        })
+    }
+}
 
 #[async_trait]
 impl ApplyOwner for EtcdApply {
     type Client = EtcdLinkClient;
+    type Candidate = EtcdCandidate;
 
-    fn fingerprint(incoming: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
-        fingerprint_etcd(incoming)
+    fn prepare(incoming: Arc<LinkSys>) -> anyhow::Result<Self::Candidate> {
+        EtcdCandidate::new(incoming)
+    }
+
+    fn fingerprint(incoming: &Self::Candidate) -> anyhow::Result<RuntimeFingerprint> {
+        Ok(incoming.fingerprint.clone())
     }
 
     fn fingerprint_live(client: &Self::Client) -> RuntimeFingerprint {
@@ -40,16 +69,11 @@ impl ApplyOwner for EtcdApply {
         Some(client.published_health())
     }
 
-    fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
-        let SystemConfig::Etcd(config) = &incoming.spec.config else {
-            anyhow::bail!("Etcd build called with a non-Etcd LinkSys");
-        };
-        let auth = credential::basic_state(incoming);
-        let fingerprint = fingerprint_etcd(incoming)?;
-        let (rebuild, secret, rv) = fingerprint.into_parts();
-        anyhow::ensure!(incoming.key_name_str() == key, "Etcd LinkSys key mismatch");
+    fn build(key: &str, incoming: &Self::Candidate) -> anyhow::Result<Arc<Self::Client>> {
+        let (rebuild, secret, rv) = incoming.fingerprint.clone().into_parts();
+        anyhow::ensure!(incoming.tls.owner().key_name_str() == key, "Etcd LinkSys key mismatch");
         Ok(Arc::new(
-            EtcdLinkClient::from_config(key, config, &auth)?
+            EtcdLinkClient::from_prepared_link_sys(Arc::clone(&incoming.tls))?
                 .with_gateway_apply_meta(rebuild, secret, rv)
                 .with_health_transition_reporter(health_transition_reporter(key)),
         ))
@@ -74,7 +98,10 @@ impl ApplyOwner for EtcdApply {
     }
 }
 
-pub fn fingerprint_etcd(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
+fn fingerprint_etcd_fields(
+    ls: &LinkSys,
+    inherited: impl FnOnce(&mut FingerprintHasher) -> anyhow::Result<()>,
+) -> anyhow::Result<RuntimeFingerprint> {
     let SystemConfig::Etcd(cfg) = &ls.spec.config else {
         anyhow::bail!("fingerprint_etcd called with a non-Etcd LinkSys");
     };
@@ -88,6 +115,7 @@ pub fn fingerprint_etcd(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
     let mut secret = FingerprintHasher::new();
     hash_auth_material(&mut secret, ls);
     hash_tls_material(&mut secret, cfg.tls.as_ref());
+    inherited(&mut secret)?;
 
     Ok(RuntimeFingerprint::from_parts(
         rebuild.finish(),
@@ -112,7 +140,7 @@ fn hash_rebuild_fields(h: &mut FingerprintHasher, cfg: &EtcdClientConfig) {
     h.opt_str(cfg.namespace.as_deref().filter(|namespace| !namespace.is_empty()));
 
     // Keep-alive is applied only when both time and timeout are set
-    // (`build_connect_options`); invalid partial objects are rejected before hashing.
+    // in the shared options core; invalid partial objects are rejected before hashing.
     match cfg.keep_alive.as_ref() {
         Some(ka) => {
             if let (Some(time), Some(timeout)) = (ka.time, ka.timeout) {

@@ -7,6 +7,111 @@ fn default_redirect_is_deny() {
 }
 
 #[test]
+fn owned_client_rejects_all_raw_tls_substitutions_and_inactive_ignores_bad_global_source() {
+    use crate::link_sys_core::outbound_tls::{validate_local_tls_selection, GlobalOutboundTlsSnapshot};
+    use edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences;
+    let owner: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"resolver","namespace":"apps"},"spec":{"type":"httpdns","config":{"preset":"aliyun"}}
+    }))
+    .unwrap();
+    let prepared = PreparedLinkSysReferences::from_link_sys(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let proof = validate_local_tls_selection(binding.outbound_tls_selection().unwrap()).unwrap();
+    let invalid: edgion_resources::EdgionGatewayConfig = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"global","namespace":"apps"},"spec":{}
+    }))
+    .unwrap();
+    let defaults = std::sync::Arc::new(GlobalOutboundTlsSnapshot::from_configs([std::sync::Arc::new(invalid)]));
+    assert!(build_outbound_client_with_tls_selection(OutboundClientConfig::default(), &proof, &defaults).is_ok());
+    let preconfigured =
+        rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+    for cfg in [
+        OutboundClientConfig {
+            tls: Some(TlsConfig::default()),
+            ..Default::default()
+        },
+        OutboundClientConfig {
+            tls_defaults: Some(std::sync::Arc::clone(&defaults)),
+            ..Default::default()
+        },
+        OutboundClientConfig {
+            preconfigured_tls: Some(preconfigured),
+            ..Default::default()
+        },
+    ] {
+        let error = build_outbound_client_with_tls_selection(cfg, &proof, &defaults).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "OutboundClient: proved local TLS cannot be replaced by raw TLS inputs"
+        );
+    }
+}
+
+#[test]
+fn fixed_header_owned_factory_rejects_every_raw_tls_override() {
+    use crate::link_sys_core::outbound_tls::{GlobalOutboundTlsSnapshot, PreparedLinkSysTls};
+    use std::sync::Arc;
+    let owner: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"es","namespace":"apps"},
+        "spec":{"type":"elasticsearch","config":{"endpoints":["https://es.example:9200"]}}
+    }))
+    .unwrap();
+    let invalid: edgion_resources::EdgionGatewayConfig = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"bad","namespace":"apps"},"spec":{"outboundTls":{"verify":true}}
+    }))
+    .unwrap();
+    let defaults = Arc::new(GlobalOutboundTlsSnapshot::from_configs([Arc::new(invalid)]));
+    let prepared = PreparedLinkSysTls::with_snapshot(Arc::new(owner), Arc::clone(&defaults)).unwrap();
+    prepared
+        .with_tls_selection(|proof, global| {
+            let headers = reqwest::header::HeaderMap::from_iter([(
+                reqwest::header::CONTENT_TYPE,
+                reqwest::header::HeaderValue::from_static("application/json"),
+            )]);
+            assert!(build_outbound_client_with_tls_selection_and_headers(
+                OutboundClientConfig::default(),
+                proof,
+                global,
+                headers
+            )
+            .is_ok());
+            let preconfigured =
+                rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                    .with_safe_default_protocol_versions()
+                    .unwrap()
+                    .with_root_certificates(rustls::RootCertStore::empty())
+                    .with_no_client_auth();
+            for cfg in [
+                OutboundClientConfig {
+                    tls: Some(TlsConfig::default()),
+                    ..Default::default()
+                },
+                OutboundClientConfig {
+                    tls_defaults: Some(Arc::clone(&defaults)),
+                    ..Default::default()
+                },
+                OutboundClientConfig {
+                    preconfigured_tls: Some(preconfigured),
+                    ..Default::default()
+                },
+            ] {
+                assert_eq!(
+                    build_outbound_client_with_tls_selection_and_headers(cfg, proof, global, Default::default())
+                        .unwrap_err()
+                        .to_string(),
+                    "OutboundClient: proved local TLS cannot be replaced by raw TLS inputs"
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn conflicting_tls_configuration_is_rejected() {
     let tls =
         rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))

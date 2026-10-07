@@ -1,12 +1,11 @@
-use crate::link_sys_core::credential::CredentialState;
+use crate::link_sys_core::providers::etcd::EtcdBootstrapConfig;
 use crate::link_sys_core::providers::etcd::EtcdLinkClient;
-use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 
 /// Build + connect an `EtcdLinkClient` against a local etcd. Inlined (rather
 /// than sharing ops.rs's private test helper) to keep the test modules
 /// independent — see Task 4 deviation note.
 async fn test_client() -> EtcdLinkClient {
-    let config = EtcdClientConfig {
+    let config = EtcdBootstrapConfig {
         endpoints: vec!["http://localhost:2379".to_string()],
         auth: None,
         tls: None,
@@ -14,8 +13,8 @@ async fn test_client() -> EtcdLinkClient {
         keep_alive: None,
         namespace: None,
     };
-    let client = EtcdLinkClient::from_config("default/etcd-test", &config, &CredentialState::NotRequired)
-        .expect("from_config must succeed");
+    let client =
+        EtcdLinkClient::from_bootstrap("default/etcd-test", config).expect("bootstrap construction must succeed");
     client.init().await.expect("etcd init must connect");
     client
 }

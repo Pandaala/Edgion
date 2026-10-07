@@ -8,6 +8,10 @@ use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 
 use super::*;
+// Historical provider-field encoding; owning replay is covered separately.
+fn fingerprint_otlp(owner: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
+    fingerprint_otlp_fields(owner, |_| {})
+}
 
 fn otlp_ls(endpoint: &str, timeout_ms: u64, rv: Option<&str>) -> LinkSys {
     LinkSys {
@@ -83,8 +87,24 @@ fn bearer_and_tls_material_rebuild() {
         };
         config.tls = Some(TlsConfig {
             enabled: true,
-            outbound: OutboundTlsLocal::default(),
+            outbound: OutboundTlsLocal {
+                validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![edgion_resources::resources::common::CustomCACertificateRef {
+                        group: None,
+                        kind: "Secret".into(),
+                        name: "ca".into(),
+                        namespace: None,
+                    }]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
             resolved_ca_certificates: Some(vec![Secret {
+                metadata: kube::core::ObjectMeta {
+                    name: Some("ca".into()),
+                    namespace: Some("fp".into()),
+                    ..Default::default()
+                },
                 data: Some(BTreeMap::from([("ca.crt".to_string(), ByteString(ca.to_vec()))])),
                 ..Default::default()
             }]),
@@ -118,4 +138,139 @@ fn resource_and_sync_versions_are_ignored() {
     assert!(fingerprint_otlp(&first)
         .unwrap()
         .equal_runtime(&fingerprint_otlp(&second).unwrap()));
+}
+
+fn candidate(
+    owner: LinkSys,
+    defaults: Arc<edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot>,
+) -> anyhow::Result<OtlpCandidate> {
+    OtlpCandidate::from_prepared(
+        edgion_common::link_sys_core::outbound_tls::PreparedOtlpTls::with_snapshot(Arc::new(owner), defaults)?,
+    )
+}
+
+#[test]
+fn owned_preparation_precedes_same_rv_and_zero_live_reuse_for_implicit_https() {
+    use edgion_common::link_sys_core::outbound_tls::{test_util, GlobalOutboundTlsSnapshot};
+    use edgion_resources::resources::common::OutboundTlsConfig;
+    let a = Arc::new(GlobalOutboundTlsSnapshot::from_configs([]));
+    let b = test_util::snapshot(OutboundTlsConfig {
+        verify: false,
+        ..Default::default()
+    });
+    for endpoint in ["http://collector.example:4317", "https://collector.example:4317"] {
+        for tls in [
+            None,
+            Some(serde_json::from_value(serde_json::json!({"enabled":false})).unwrap()),
+        ] {
+            let mut actual = otlp_ls(endpoint, 1_000, Some("42"));
+            let SystemConfig::Otlp(config) = &mut actual.spec.config else {
+                unreachable!()
+            };
+            config.tls = tls;
+            let first = candidate(actual.clone(), a.clone()).unwrap();
+            let second = candidate(actual.clone(), b.clone()).unwrap();
+            assert_eq!(
+                OtlpApply::fingerprint(&first)
+                    .unwrap()
+                    .rv_skip_allows_reuse(&OtlpApply::fingerprint(&second).unwrap()),
+                endpoint.starts_with("http://")
+            );
+            let client = OtlpApply::build("fp/otlp", &first).unwrap();
+            assert_eq!(OtlpApply::coverage(&client).live, 0);
+            for field in ["name", "namespace", "empty-namespace", "invalid-namespace"] {
+                let mut invalid = actual.clone();
+                match field {
+                    "name" => invalid.metadata.name = None,
+                    "namespace" => invalid.metadata.namespace = None,
+                    "empty-namespace" => invalid.metadata.namespace = Some("".into()),
+                    _ => invalid.metadata.namespace = Some("Bad".into()),
+                }
+                assert!(candidate(invalid, a.clone()).is_err(), "{field}");
+            }
+            assert!(OtlpApply::build("fp/another", &first).is_err());
+        }
+    }
+}
+
+#[test]
+fn actual_snapshot_capture_survives_publication_and_repeated_transport_construction() {
+    use edgion_common::link_sys_core::outbound_tls::{
+        outbound_global_default, set_outbound_global_default, GlobalOutboundTlsSnapshot,
+    };
+    const CHILD: &str = "EDGION_OTLP_OWNED_CAPTURE_CHILD";
+    const TEST: &str = "link_sys::providers::otlp::apply::tests::actual_snapshot_capture_survives_publication_and_repeated_transport_construction";
+    if std::env::var(CHILD).as_deref() != Ok(TEST) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, TEST)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(stdout.contains("1 passed; 0 failed"), "{stdout}");
+        return;
+    }
+    struct Restore(Arc<GlobalOutboundTlsSnapshot>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_outbound_global_default(self.0.clone());
+        }
+    }
+    let _restore = Restore(outbound_global_default());
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    set_outbound_global_default(Arc::new(GlobalOutboundTlsSnapshot::from_configs([])));
+    let actual = Arc::new(otlp_ls("https://collector.example:4317", 1_000, Some("42")));
+    let prepared = OtlpApply::prepare(actual.clone()).unwrap();
+    let bad: edgion_resources::EdgionGatewayConfig = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"bad","namespace":"apps"}, "spec":{"outboundTls":{"verify":true}}
+    }))
+    .unwrap();
+    set_outbound_global_default(Arc::new(GlobalOutboundTlsSnapshot::from_configs([Arc::new(bad)])));
+    for _ in 0..2 {
+        let client = OtlpApply::build("fp/otlp", &prepared).unwrap();
+        assert!(client
+            .runtime_fingerprint()
+            .equal_runtime(&OtlpApply::fingerprint(&prepared).unwrap()));
+        client.assert_retained_transport_input(&prepared.tls, actual.as_ref());
+    }
+    assert!(OtlpApply::prepare(actual).is_err());
+}
+
+#[test]
+fn proof_and_fingerprint_are_pure_and_cold_capability_failure_keeps_tls_audit() {
+    use edgion_common::link_sys_core::outbound_tls::test_util;
+    use edgion_resources::resources::common::OutboundTlsConfig;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tracing_subscriber::{layer::SubscriberExt, Layer};
+    struct Audits(Arc<AtomicUsize>);
+    impl<S: tracing::Subscriber> Layer<S> for Audits {
+        fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+            if event.metadata().target() == "edgion_common::link_sys_core::outbound_tls" {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    let count = Arc::new(AtomicUsize::new(0));
+    let subscriber = tracing_subscriber::registry().with(Audits(count.clone()));
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let defaults = test_util::snapshot(OutboundTlsConfig {
+        verify: false,
+        ..Default::default()
+    });
+    let prepared = candidate(otlp_ls("https://collector.example:4317", 1_000, Some("42")), defaults).unwrap();
+    for _ in 0..3 {
+        let _ = OtlpApply::fingerprint(&prepared).unwrap();
+    }
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+    assert!(OtlpApply::build("fp/otlp", &prepared).is_err());
+    assert_eq!(
+        count.load(Ordering::Relaxed),
+        1,
+        "only cold resolution emits the unsupported verify audit"
+    );
 }

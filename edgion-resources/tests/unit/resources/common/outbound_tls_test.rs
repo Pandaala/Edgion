@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn standard_and_custom_ca_wire_contracts_stay_distinct() {
+    use crate::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+
+    let omitted = serde_json::json!({"kind": "Secret", "name": "ca"});
+    let custom: CustomCACertificateRef = serde_json::from_value(omitted.clone()).unwrap();
+    assert_eq!(custom.group, None);
+    assert!(serde_json::from_value::<BackendTLSPolicyCACertificateRef>(omitted).is_err());
+
+    let standard: BackendTLSPolicyCACertificateRef = serde_json::from_value(serde_json::json!({
+        "group": "", "kind": "ConfigMap", "name": "ca"
+    }))
+    .unwrap();
+    assert_eq!(serde_json::to_value(standard).unwrap()["group"], "");
+    for value in [
+        serde_json::json!({"group": null, "kind": "Secret", "name": "ca"}),
+        serde_json::json!({"group": "", "name": "ca"}),
+        serde_json::json!({"group": "", "kind": "Secret"}),
+    ] {
+        assert!(serde_json::from_value::<BackendTLSPolicyCACertificateRef>(value).is_err());
+    }
+    for value in [
+        serde_json::json!({"group": "", "name": "ca"}),
+        serde_json::json!({"kind": null, "name": "ca"}),
+        serde_json::json!({"kind": "Secret"}),
+    ] {
+        assert!(serde_json::from_value::<CustomCACertificateRef>(value).is_err());
+    }
+    let standard_schema = serde_json::to_value(schemars::schema_for!(BackendTLSPolicyCACertificateRef)).unwrap();
+    assert!(standard_schema["properties"].get("namespace").is_none());
+    assert!(standard_schema["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| field == "group"));
+    let custom_schema = serde_json::to_value(schemars::schema_for!(CustomCACertificateRef)).unwrap();
+    assert!(custom_schema["properties"].get("namespace").is_some());
+    assert!(!custom_schema["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| field == "group"));
+}
+
+#[test]
 fn validation_shape_parses_and_camelcases() {
     let json = r#"{"validation":{"caCertificateRefs":[{"kind":"Secret","name":"idp-ca"},{"kind":"ConfigMap","name":"corp-ca"}],"hostname":"idp.example.com","subjectAltNames":[{"type":"Hostname","hostname":"idp.example.com"}]},"clientCertificateRef":{"name":"idp-client"}}"#;
     let l: OutboundTlsLocal = serde_json::from_str(json).unwrap();

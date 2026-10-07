@@ -46,6 +46,7 @@ use edgion_common::dns::resolver_select::{
 };
 use edgion_common::dns::{resolve, ResolverSpec};
 use edgion_resources::constants::annotations::edgion as edgion_annotations;
+use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::EdgionErrorCode;
 use peer_builder::first_safe_inet_addr;
@@ -90,7 +91,7 @@ fn selected_http_service_input(
         }
     };
     let service_key = format!("{namespace}/{name}");
-    let service_kind = ServiceBackendKind::from_kind(compiled.kind.as_ref());
+    let service_kind = ServiceBackendKind::Service;
     let context_matches = backend_context.is_some_and(|context| {
         context.service_key.as_deref() == Some(service_key.as_str())
             && context.service_kind.as_ref() == Some(&service_kind)
@@ -111,6 +112,14 @@ fn captured_lb_policy(backend_context: Option<&crate::BackendContext>) -> Option
     backend_context
         .and_then(|context| context.effective_policy.as_ref())
         .and_then(|policy| policy.load_balancer.clone())
+}
+
+fn grpc_service_context_matches(backend_context: Option<&crate::BackendContext>, target: &PolicyTargetKey) -> bool {
+    backend_context.is_some_and(|context| {
+        context.service_key.as_deref().and_then(|key| key.split_once('/'))
+            == Some((target.namespace.as_str(), target.name.as_str()))
+            && context.service_kind.as_ref() == Some(&ServiceBackendKind::Service)
+    })
 }
 
 pub(crate) fn captured_degrade_policy(backend_context: Option<&crate::BackendContext>) -> ServiceDegradePolicy {
@@ -140,6 +149,13 @@ pub(crate) async fn try_get_peer(
             .selected_grpc_backend
             .as_ref()
             .ok_or(EdgionErrorCode::GrpcUpstreamNotBackendRefs)?;
+        let target = grpc_br
+            .logical()
+            .policy_target_key()
+            .ok_or(EdgionErrorCode::BackendUnsupportedKind)?;
+        if !grpc_service_context_matches(ctx.backend_context.as_ref(), target) {
+            return Err(EdgionErrorCode::UpstreamNotBackendRefs);
+        }
         let (service_key, service_type) = ctx
             .backend_context
             .as_ref()

@@ -1,6 +1,6 @@
 //! Shared Gateway API `ExtensionRef` validation.
 
-use super::http_route::LocalObjectReference;
+use crate::resources::http_route::LocalObjectReference;
 
 /// The only `ExtensionRef` target implemented by Edgion.
 pub const EDGION_PLUGINS_GROUP: &str = "edgion.io";
@@ -37,5 +37,5 @@ pub fn validate_extension_ref_filter(
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/resources/extension_ref_test.rs"]
+#[path = "../../../tests/unit/resources/refs/extension_ref_test.rs"]
 mod tests;

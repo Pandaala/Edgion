@@ -21,6 +21,21 @@ The [original condition-layer decision](../superseded/unified-condition-layer.md
 retains its useful single-owner rationale, but its old container examples are historical.
 Follow current schema and consumer documentation when changing grouping fields.
 
+Controller credential resolution uses `refs::condition_fields::PreparedConditionReferences`
+after ConfigData expansion. Its synchronous visitor covers entry skip/run,
+request/response body gates, both dye directions, RequestRestriction and effective
+RequestAccessPolicy IP rules and expanded URL candidates. Inactive and unsupported
+stages remain visitable to clear resolved credentials, but mint no reference token.
+Each leaf loan retains the actual EdgionPlugins source, Boolean position and
+reference wire; no API accepts an unrelated leaf plus caller-supplied owner.
+
+Effective RAP profiles and candidates belong to this synchronous catalogue.
+Do not include them in the raw-owner frozen topology used by asynchronous
+credential publication: expansion legitimately changes them without changing
+the raw resource. Condition tokens deliberately reject freezing. Profile-map
+insertion order is immaterial; profile keys, rule branches, group/rule names,
+candidate positions and reference ordering remain part of the binding.
+
 ## Verification and re-evaluation
 
 This page separates existing current architecture from historical review examples;

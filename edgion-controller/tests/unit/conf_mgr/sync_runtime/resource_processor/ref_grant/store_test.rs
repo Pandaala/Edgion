@@ -2,6 +2,43 @@ use super::*;
 use edgion_resources::resources::{ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
+#[test]
+fn bound_authorization_revision_tracks_replacement_and_revocation() {
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
+        "metadata":{"name":"auth", "namespace":"source"},
+        "spec":{"requestPlugins":[{"type":"Csrf", "config":{"secretRef":{"name":"key", "namespace":"target"}}}]}
+    }))
+    .unwrap();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let references = entry.references().unwrap();
+    let token = references.csrf_secret().unwrap();
+    let query = token.validated().unwrap().grant_query();
+    let store = ReferenceGrantStore::new();
+    assert!(!store.check_query(query));
+    assert_eq!(store.query_authorization_revision(query), None);
+    let mut grant = create_test_grant("target", "allow", "source", "EdgionPlugins", "Secret");
+    grant.spec.from[0].group = "edgion.io".to_string();
+    grant.metadata.uid = Some("uid-a".to_string());
+    grant.metadata.resource_version = Some("1".to_string());
+    store.upsert("target/allow".to_string(), Arc::new(grant.clone()));
+    assert!(store.check_query(query));
+    assert_eq!(store.query_authorization_revision(query).as_deref(), Some("uid-a:1"));
+    grant.metadata.uid = Some("uid-b".to_string());
+    grant.metadata.resource_version = Some("2".to_string());
+    store.upsert("target/allow".to_string(), Arc::new(grant.clone()));
+    assert_eq!(store.query_authorization_revision(query).as_deref(), Some("uid-b:2"));
+    grant.spec.to[0].name = Some("other".to_string());
+    store.upsert("target/allow".to_string(), Arc::new(grant));
+    assert!(!store.check_query(query));
+    assert_eq!(store.query_authorization_revision(query), None);
+    store.remove("target/allow");
+    assert_eq!(store.query_authorization_revision(query), None);
+}
+
 fn create_test_grant(
     namespace: &str,
     name: &str,

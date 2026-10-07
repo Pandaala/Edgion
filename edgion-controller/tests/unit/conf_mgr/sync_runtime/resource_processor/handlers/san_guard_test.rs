@@ -33,12 +33,11 @@ fn predicates_on_empty_and_none() {
 
 #[test]
 fn only_ca_refs_is_neither_san_nor_hostname() {
-    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::CustomCACertificateRef;
     let v = OutboundTlsValidation {
-        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+        ca_certificate_refs: Some(vec![CustomCACertificateRef {
             kind: "Secret".to_string(),
             name: "my-ca".to_string(),
-            namespace: None,
             ..Default::default()
         }]),
         ..Default::default()

@@ -1,11 +1,10 @@
 use super::*;
-use crate::link_sys_core::credential::CredentialState;
-use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
+use crate::link_sys_core::providers::etcd::EtcdBootstrapConfig;
 
 /// Minimal config pointing at a local etcd, mirroring the fixture in
 /// `client.rs`'s test module.
-fn minimal_config() -> EtcdClientConfig {
-    EtcdClientConfig {
+fn minimal_config() -> EtcdBootstrapConfig {
+    EtcdBootstrapConfig {
         endpoints: vec!["http://localhost:2379".to_string()],
         auth: None,
         tls: None,
@@ -18,8 +17,8 @@ fn minimal_config() -> EtcdClientConfig {
 /// Build + connect an `EtcdLinkClient` against a local etcd.
 async fn test_client() -> EtcdLinkClient {
     let config = minimal_config();
-    let client = EtcdLinkClient::from_config("default/etcd-test", &config, &CredentialState::NotRequired)
-        .expect("from_config must succeed");
+    let client =
+        EtcdLinkClient::from_bootstrap("default/etcd-test", config).expect("bootstrap construction must succeed");
     client.init().await.expect("etcd init must connect");
     client
 }

@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use crate::link_sys::credential::CredentialState;
+use edgion_resources::resources::link_sys::redis::RedisClientConfig;
 use edgion_resources::resources::link_sys::redis::RedisPool;
 
 use super::*;
@@ -22,7 +24,7 @@ fn uninitialized_pool_has_no_connected_member() {
         topology: None,
         tls: None,
     };
-    let client = RedisLinkClient::from_config("test/redis", &config, &CredentialState::NotRequired).unwrap();
+    let client = RedisLinkClient::from_test_config("test/redis", &config, &CredentialState::NotRequired).unwrap();
 
     assert!(!pool_has_connected_member(client.pool()));
     let coverage = client.connection_coverage();
@@ -41,7 +43,8 @@ async fn init_installs_egress_resolver_before_fred_connects() {
         topology: None,
         tls: None,
     };
-    let client = RedisLinkClient::from_config("test/blocked-redis", &config, &CredentialState::NotRequired).unwrap();
+    let client =
+        RedisLinkClient::from_test_config("test/blocked-redis", &config, &CredentialState::NotRequired).unwrap();
 
     let error = tokio::time::timeout(Duration::from_secs(1), client.init())
         .await

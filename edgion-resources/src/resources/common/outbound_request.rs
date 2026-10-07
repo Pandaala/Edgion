@@ -45,6 +45,19 @@ pub struct OutboundRequestSpec {
     pub body: Option<BodySpec>,
 }
 
+/// Private authored positions shared by admission and owning reference traversal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub(crate) enum RequestTemplatePosition {
+    Path,
+    Method,
+    ArgsCustom(usize),
+    HeadersCustom(usize),
+    CookiesCustom(usize),
+    BodyJson,
+    BodyRaw,
+    BodyForm(usize),
+}
+
 /// Canary substituted for every variable by the config-time JSON lint.
 /// Non-numeric on purpose: an unquoted placeholder renders as a bare
 /// identifier, which fails JSON parsing.
@@ -203,25 +216,37 @@ impl OutboundRequestSpec {
 
     /// Visit every template surface for both admission and Secret dependency discovery.
     fn visit_templates(&self, mut scan: impl FnMut(&str)) {
+        self.visit_template_fields(|_, template| scan(template));
+    }
+
+    pub(crate) fn visit_template_fields(&self, mut scan: impl FnMut(RequestTemplatePosition, &str)) {
         if let Some(p) = &self.path {
-            scan(&p.template);
+            scan(RequestTemplatePosition::Path, &p.template);
         }
         if let Some(m) = &self.method {
-            scan(&m.template);
+            scan(RequestTemplatePosition::Method, &m.template);
         }
-        for group in [&self.args, &self.headers, &self.cookies] {
-            for f in &group.custom {
+        for (group, position) in [
+            (
+                &self.args,
+                RequestTemplatePosition::ArgsCustom as fn(usize) -> RequestTemplatePosition,
+            ),
+            (&self.headers, RequestTemplatePosition::HeadersCustom),
+            (&self.cookies, RequestTemplatePosition::CookiesCustom),
+        ] {
+            for (index, f) in group.custom.iter().enumerate() {
                 if let CustomSource::Template(t) = &f.source {
-                    scan(t);
+                    scan(position(index), t);
                 }
             }
         }
         match &self.body {
-            Some(BodySpec::Json { template }) | Some(BodySpec::Raw { template }) => scan(template),
+            Some(BodySpec::Json { template }) => scan(RequestTemplatePosition::BodyJson, template),
+            Some(BodySpec::Raw { template }) => scan(RequestTemplatePosition::BodyRaw, template),
             Some(BodySpec::Form { fields }) => {
-                for f in fields {
+                for (index, f) in fields.iter().enumerate() {
                     if let CustomSource::Template(t) = &f.source {
-                        scan(t);
+                        scan(RequestTemplatePosition::BodyForm(index), t);
                     }
                 }
             }

@@ -31,8 +31,8 @@ before enqueueing. The reservation uses shared atomic counters and travels in
 an enqueue error, or when a receiver and its queued records are dropped.
 `TopicReservation` similarly releases the topic slot when the map entry is
 removed or the client shuts down. Controller-side `LinkSys::validate_config`
-rejects zero limits, and `KafkaLinkClient::from_config` repeats the check at the
-runtime boundary.
+rejects zero limits, and `KafkaLinkClient::from_link_sys` derives the actual owning
+Kafka config and repeats the check at the runtime construction boundary.
 
 ## Alternatives and limits
 

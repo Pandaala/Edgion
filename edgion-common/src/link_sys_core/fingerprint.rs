@@ -1,9 +1,64 @@
 //! Canonical private fingerprint encoding for outbound policy and consumed TLS material.
 
+use edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE;
 use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType, WellKnownCACertificates};
-use edgion_resources::resources::common::TlsConfig;
+use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+use edgion_resources::resources::common::{OutboundTlsLocal, SecretObjectReference, TlsConfig};
 use k8s_openapi::api::core::v1::Secret;
 use sha2::{Digest, Sha256};
+
+use super::outbound_tls::{GlobalOutboundTlsSnapshot, TlsMaterialProofError};
+
+/// Encode only the inherited axes consumed by the actual local policy. None
+/// denotes native inactive transport; callers separately prove owning authority.
+pub fn hash_tls_inheritance(
+    h: &mut FingerprintHasher,
+    local: Option<&OutboundTlsLocal>,
+    global: &GlobalOutboundTlsSnapshot,
+) {
+    let Some(local) = local else {
+        h.tag(0);
+        return;
+    };
+    h.tag(1);
+    let proofs = global.effective_proofs(local);
+    h.tag(0); // verify axis
+    if local.verify.is_none() {
+        h.tag(1);
+        h.opt_bool(Some(global.verify()));
+        hash_proof(h, proofs[0]);
+    } else {
+        h.tag(0);
+    }
+    h.tag(1); // whole validation/CA axis
+    if local.validation.is_none() {
+        h.tag(1);
+        hash_outbound_policy(h, None, global.validation(), None);
+        hash_secrets(h, global.ca_material());
+        hash_proof(h, proofs[1]);
+    } else {
+        h.tag(0);
+    }
+    h.tag(2); // client identity axis
+    if local.client_certificate_ref.is_none() {
+        h.tag(1);
+        hash_outbound_policy(h, None, None, global.client_reference());
+        hash_secret(h, global.client_material());
+        hash_proof(h, proofs[2]);
+    } else {
+        h.tag(0);
+    }
+}
+
+fn hash_proof(h: &mut FingerprintHasher, proof: Result<(), TlsMaterialProofError>) {
+    match proof {
+        Ok(()) => h.tag(0),
+        Err(error) => {
+            h.tag(1);
+            h.bytes(error.to_string().as_bytes());
+        }
+    }
+}
 
 // Keep shared TLS policy and consumed Secret material encoding in one place.
 // Provider-specific rebuild and credential fields remain with each owner.
@@ -17,8 +72,22 @@ pub fn hash_tls_policy(h: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
     if !tls.enabled {
         return;
     }
-    h.opt_bool(tls.outbound.verify);
-    match tls.outbound.validation.as_ref() {
+    hash_outbound_policy(
+        h,
+        tls.outbound.verify,
+        tls.outbound.validation.as_ref(),
+        tls.outbound.client_certificate_ref.as_ref(),
+    );
+}
+
+pub(crate) fn hash_outbound_policy(
+    h: &mut FingerprintHasher,
+    verify: Option<bool>,
+    validation: Option<&OutboundTlsValidation>,
+    client: Option<&SecretObjectReference>,
+) {
+    h.opt_bool(verify);
+    match validation {
         None => h.tag(0),
         Some(validation) => {
             h.tag(1);
@@ -47,7 +116,7 @@ pub fn hash_tls_policy(h: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
                     h.tag(1);
                     h.u64(refs.len() as u64);
                     for r in refs {
-                        h.bytes(r.group.as_bytes());
+                        h.bytes(r.group.as_deref().unwrap_or_default().as_bytes());
                         h.bytes(r.kind.as_bytes());
                         h.bytes(r.name.as_bytes());
                         h.opt_str(r.namespace.as_deref());
@@ -56,7 +125,7 @@ pub fn hash_tls_policy(h: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
             }
         }
     }
-    match tls.outbound.client_certificate_ref.as_ref() {
+    match client {
         None => h.tag(0),
         Some(r) => {
             h.tag(1);
@@ -90,7 +159,7 @@ pub fn hash_tls_material(h: &mut FingerprintHasher, tls: Option<&TlsConfig>) {
     hash_secret(h, tls.resolved_client_certificate.as_ref());
 }
 
-fn hash_secrets(h: &mut FingerprintHasher, secrets: Option<&[Secret]>) {
+pub(crate) fn hash_secrets(h: &mut FingerprintHasher, secrets: Option<&[Secret]>) {
     match secrets {
         None => h.tag(0),
         Some(secrets) => {
@@ -103,7 +172,7 @@ fn hash_secrets(h: &mut FingerprintHasher, secrets: Option<&[Secret]>) {
     }
 }
 
-fn hash_secret(h: &mut FingerprintHasher, secret: Option<&Secret>) {
+pub(crate) fn hash_secret(h: &mut FingerprintHasher, secret: Option<&Secret>) {
     match secret {
         None => h.tag(0),
         Some(secret) => {
@@ -114,6 +183,18 @@ fn hash_secret(h: &mut FingerprintHasher, secret: Option<&Secret>) {
 }
 
 fn hash_secret_data(h: &mut FingerprintHasher, secret: &Secret) {
+    // Owning material proof consumes these fields, so byte-identical bundles
+    // with different identities or source kinds must not share a fingerprint.
+    // UID and resourceVersion remain excluded from material identity.
+    h.opt_str(secret.metadata.name.as_deref());
+    h.opt_str(secret.metadata.namespace.as_deref());
+    h.opt_str(
+        secret
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.get(CONTROLLER_CA_SOURCE).map(String::as_str)),
+    );
     let mut entries: Vec<(&String, &k8s_openapi::ByteString)> = secret
         .data
         .as_ref()
@@ -176,3 +257,7 @@ impl Default for FingerprintHasher {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/link_sys_core/fingerprint_test.rs"]
+mod tests;

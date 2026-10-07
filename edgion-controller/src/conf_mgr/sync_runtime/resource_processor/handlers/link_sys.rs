@@ -11,7 +11,7 @@
 //! the Gateway side via `edgion_resources::credentials`.
 
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{
-    resolve_credential, resolve_request_secrets, resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome,
+    resolve_bound_secret, resolve_request_secrets, AuthorizedSecret,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::{
     ControllerCredentialSourceConfig, CredentialSecretInput, DesiredCredentialSource,
@@ -24,13 +24,16 @@ use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::credentials::{ResolveError, SecretMaterialResolver};
 use edgion_resources::prelude_resources::LinkSys;
 use edgion_resources::resources::common::ResolvedSecrets;
-use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::link_sys::{
     CredentialSourceConfig, CredentialSourceProvider, LinkSysStatus, SystemConfig,
 };
 
-use super::auth_spec::{AuthSpec, OtlpTlsSpec, TlsSpec};
+use super::auth_spec::{self, AuthSpec, ResolvedTls};
 use super::san_guard;
+use edgion_resources::resources::refs::link_sys_fields::{
+    BoundLinkSysConfigMut, LinkSysReferences, PreparedLinkSysReferences,
+};
+use edgion_resources::resources::refs::{ReferenceError, ReferenceToken};
 use edgion_resources::ResourceKind;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
@@ -87,46 +90,6 @@ impl LinkSysHandler {
 impl Default for LinkSysHandler {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Translate a pipeline `ResolveOutcome<T>` into `Result<T, ResolvedRefsError>`.
-///
-/// Cross-namespace denial maps to the Gateway-API standard `RefNotPermitted`
-/// (not a dedicated `ReferenceGrantMissing` reason): the pipeline cannot
-/// distinguish "no grant yet" from "grant denies", so a more specific reason
-/// would promise operators a signal we cannot deliver.
-fn outcome_to_result<T>(outcome: ResolveOutcome<T>) -> Result<T, ResolvedRefsError> {
-    match outcome {
-        ResolveOutcome::Ok(t) => Ok(t),
-        ResolveOutcome::Pending(PendingReason::SecretNotFound { namespace, name }) => {
-            Err(ResolvedRefsError::SecretNotFound { namespace, name })
-        }
-        ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
-            from_ns,
-            to_ns,
-            secret_name,
-        }) => Err(ResolvedRefsError::RefNotPermitted {
-            from_namespace: from_ns,
-            from_kind: ResourceKind::LinkSys.as_str(),
-            target_namespace: to_ns,
-            target_name: secret_name,
-        }),
-        ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(keys)) => {
-            Err(ResolvedRefsError::MissingKeys { keys })
-        }
-        ResolveOutcome::Invalid(InvalidCredentialError::DecodeError { key, detail }) => {
-            Err(ResolvedRefsError::DecodeError { key, detail })
-        }
-        ResolveOutcome::Invalid(InvalidCredentialError::InvalidValue { key, class }) => {
-            Err(ResolvedRefsError::DecodeError {
-                key,
-                detail: class.to_string(),
-            })
-        }
-        ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { got, allowed }) => {
-            Err(ResolvedRefsError::InvalidSecretType { got, allowed })
-        }
     }
 }
 
@@ -246,7 +209,14 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
             .credential_source_registry
             .remove_source(&owner.resource_key());
 
-        let resolution = resolve_for_spec(ctx, &owner, &mut ls.spec.config).await;
+        let prepared = PreparedLinkSysReferences::from_link_sys(&ls);
+        let resolution = match prepared.bind_mut(&mut ls) {
+            Ok(mut binding) => resolve_for_spec(ctx, &owner, &mut binding).await,
+            Err(error) => SpecResolution {
+                errors: vec![ResolvedRefsError::InvalidReference { error }],
+                ..Default::default()
+            },
+        };
         let SpecResolution {
             errors,
             credential_inputs,
@@ -282,7 +252,10 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
         apply_resolved_refs_condition(&mut ls, generation, &errors);
 
         for err in &errors {
-            if matches!(err, ResolvedRefsError::InvalidKind { .. }) {
+            if matches!(
+                err,
+                ResolvedRefsError::InvalidKind { .. } | ResolvedRefsError::InvalidReference { .. }
+            ) {
                 tracing::warn!(
                     link_sys = %owner.key(),
                     "Credential reference is invalid; update the LinkSys reference"
@@ -439,228 +412,265 @@ mod unknown_fields_tests;
 // Helper functions: resolve Secret per auth variant and inject into spec
 // ============================================================================
 
-async fn drive_standard<A: AuthSpec, T: TlsSpec>(
-    ctx: &HandlerContext,
-    owner: &ResourceRef,
-    auth: Option<&mut A>,
-    tls: Option<&mut T>,
-) -> Vec<ResolvedRefsError> {
-    let mut errs = Vec::new();
-    if let Some(a) = auth {
-        // `SecretSlot.secret` is Controller-resolved transport state, never
-        // operator input. Clear it before every attempt so a failed lookup or
-        // requeue cannot retain an injected or stale credential.
-        a.slot_mut().secret = None;
-        if let Some(e) = a.resolve(ctx, owner).await {
-            errs.push(e);
-        }
-    }
-    if let Some(t) = tls {
-        if let Some(e) = t.resolve(ctx, owner).await {
-            errs.push(e);
-        }
-    }
-    errs
-}
-
-/// Attempt to resolve every Secret reference inside `config` and attach the
-/// resolved Secret onto the corresponding `auth.secret` / `tls.certs.secret`
-/// field. Returns the collected `ResolvedRefsError`s (empty on full success).
-///
-/// **Multi-error collection**: auth and tls are resolved independently —
-/// a failure on one side does not short-circuit the other. This matches the
-/// Gateway-API convention where `ResolvedRefs.message` aggregates all broken
-/// refs and `reason` is picked deterministically via
-/// `pick_resolved_refs_reason`'s priority table. Without this, an operator
-/// who mistypes both Secret names only sees the auth error first, then has
-/// to reconcile again to discover the tls error — and the priority table
-/// effectively never fires because the slice always has one element.
-///
-/// Leaving `secret: None` on the unresolved field is safe: gateway providers
-/// only build a client when `CredentialState::is_buildable` returns true, so
-/// a partially resolved spec never reaches a live client.
 #[derive(Default)]
 struct SpecResolution {
     errors: Vec<ResolvedRefsError>,
     credential_inputs: Vec<CredentialSecretInput>,
-    manager_config: Option<edgion_resources::resources::link_sys::CredentialSourceConfig>,
+    manager_config: Option<CredentialSourceConfig>,
 }
 
-fn secret_input(
-    ctx: &HandlerContext,
-    owner: &ResourceRef,
+#[derive(Default)]
+struct ProviderResolution {
+    auth: Option<Secret>,
+    tls: Option<ResolvedTls>,
+    templates: Option<ResolvedSecrets>,
+    spec: SpecResolution,
+}
+
+pub(super) fn secret_input(
     role: &'static str,
-    secret_ref: &SecretObjectReference,
-) -> Option<CredentialSecretInput> {
-    let owner_ns = owner.namespace.as_deref().unwrap_or("default");
-    let namespace = secret_ref.effective_namespace(owner_ns).to_string();
-    let secret = ctx.runtime().secret_store.get(Some(&namespace), &secret_ref.name)?;
-    Some(CredentialSecretInput {
+    token: ReferenceToken<'_>,
+    authorized: &AuthorizedSecret,
+) -> Result<CredentialSecretInput, ResolvedRefsError> {
+    let reference = token
+        .validated()
+        .map_err(|error| ResolvedRefsError::InvalidReference { error })?;
+    let target = reference.target();
+    Ok(CredentialSecretInput {
+        reference: token
+            .freeze()
+            .map_err(|error| ResolvedRefsError::InvalidReference { error })?,
         role,
-        namespace: namespace.clone(),
-        name: secret_ref.name.clone(),
-        uid: secret.metadata.uid,
-        resource_version: secret.metadata.resource_version,
-        authorization_revision: ctx.runtime().ref_grant_store.authorization_revision(
-            owner_ns,
-            "edgion.io",
-            "LinkSys",
-            &namespace,
-            "",
-            "Secret",
-            Some(&secret_ref.name),
-        ),
+        namespace: target
+            .scope()
+            .namespace()
+            .ok_or(ResolvedRefsError::InvalidReference {
+                error: ReferenceError::MissingNamespace,
+            })?
+            .to_string(),
+        name: target.name().to_string(),
+        uid: authorized.secret.metadata.uid.clone(),
+        resource_version: authorized.secret.metadata.resource_version.clone(),
+        authorization_revision: authorized.authorization_revision.clone(),
     })
 }
 
-async fn resolve_credential_source(
+fn drive_standard<A: AuthSpec>(
     ctx: &HandlerContext,
     owner: &ResourceRef,
-    config: &mut edgion_resources::resources::link_sys::CredentialSourceConfig,
-) -> SpecResolution {
-    let mut result = SpecResolution::default();
-    let mut resolved_tls = None;
-    let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &mut config.provider;
-
-    // These fields are Controller-resolved transport state on ordinary
-    // LinkSys variants. A credential source is Controller-only, so submitted
-    // or stale resolved values must never enter conf_sync.
-    if let Some(tls) = provider.tls.as_mut() {
-        tls.resolved_ca_certificates = None;
-        tls.resolved_client_certificate = None;
-    }
-
-    let active = &provider.client_authentication.active_secret_ref;
-    match resolve_credential(ctx, owner, "edgion.io", "LinkSys", active, &OAuth2BootstrapResolver).await {
-        ResolveOutcome::Ok(()) => {
-            if let Some(input) = secret_input(ctx, owner, "active-bootstrap", active) {
-                result.credential_inputs.push(input);
-            }
-        }
-        outcome => result.errors.push(outcome_to_result(outcome).unwrap_err()),
-    }
-
-    if let Some(previous) = &provider.client_authentication.previous_secret_ref {
-        match resolve_credential(ctx, owner, "edgion.io", "LinkSys", previous, &OAuth2BootstrapResolver).await {
-            ResolveOutcome::Ok(()) => {
-                if let Some(input) = secret_input(ctx, owner, "previous-bootstrap", previous) {
-                    result.credential_inputs.push(input);
-                }
-            }
-            outcome => result.errors.push(outcome_to_result(outcome).unwrap_err()),
+    auth: Option<&A>,
+    references: &LinkSysReferences<'_>,
+) -> ProviderResolution {
+    let mut result = ProviderResolution::default();
+    if let Some(auth) = auth {
+        match references.auth_secret() {
+            Some(token) => match auth.resolve(ctx, owner, token) {
+                Ok(authorized) => result.auth = Some(authorized.secret),
+                Err(error) => result.spec.errors.push(error),
+            },
+            None => result.spec.errors.push(ResolvedRefsError::InvalidReference {
+                error: ReferenceError::StaleBinding,
+            }),
         }
     }
-
-    if let Some(tls) = provider.tls.as_ref().filter(|tls| tls.enabled) {
-        let mut resolution_copy = tls.clone();
-        if let Some(error) = resolution_copy.resolve(ctx, owner).await {
-            result.errors.push(error);
-        } else {
-            if let Some(refs) = resolution_copy
-                .outbound
-                .validation
-                .as_ref()
-                .and_then(|validation| validation.ca_certificate_refs.as_deref())
-            {
-                for ca_ref in refs.iter().filter(|reference| reference.kind == "Secret") {
-                    let reference = SecretObjectReference {
-                        group: Some(ca_ref.group.clone()),
-                        kind: Some(ca_ref.kind.clone()),
-                        name: ca_ref.name.clone(),
-                        namespace: ca_ref.namespace.clone(),
-                    };
-                    if let Some(input) = secret_input(ctx, owner, "tls-ca", &reference) {
-                        result.credential_inputs.push(input);
-                    }
-                }
-            }
-            if let Some(reference) = resolution_copy.outbound.client_certificate_ref.as_ref() {
-                if let Some(input) = secret_input(ctx, owner, "tls-client-certificate", reference) {
-                    result.credential_inputs.push(input);
-                }
-            }
-            resolved_tls = Some(resolution_copy);
-        }
-    }
-
-    let mut manager_config = config.clone();
-    let CredentialSourceProvider::OAuth2ClientCredentials(manager_provider) = &mut manager_config.provider;
-    manager_provider.tls = resolved_tls;
-    result.manager_config = Some(manager_config);
-
+    resolve_provider_tls(ctx, owner, references, &mut result);
     result
 }
 
-async fn resolve_for_spec(ctx: &HandlerContext, owner: &ResourceRef, config: &mut SystemConfig) -> SpecResolution {
-    let errors = match config {
-        SystemConfig::Unsupported => Vec::new(),
-        SystemConfig::Redis(r) => drive_standard(ctx, owner, r.auth.as_mut(), r.tls.as_mut()).await,
-        SystemConfig::Etcd(e) => drive_standard(ctx, owner, e.auth.as_mut(), e.tls.as_mut()).await,
-        SystemConfig::Otlp(o) => {
-            let mut tls = o.tls.as_mut().map(OtlpTlsSpec);
-            drive_standard(ctx, owner, o.auth.as_mut(), tls.as_mut()).await
+fn resolve_provider_tls(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    references: &LinkSysReferences<'_>,
+    result: &mut ProviderResolution,
+) {
+    if let Some(references) = references.tls() {
+        let tls = auth_spec::resolve_tls(ctx, owner, references);
+        if let Some(error) = tls.error.as_ref() {
+            result.spec.errors.push(error.clone());
         }
-        SystemConfig::Elasticsearch(es) => drive_standard(ctx, owner, es.auth.as_mut(), es.tls.as_mut()).await,
-        SystemConfig::Webhook(w) => {
-            let mut errs = Vec::new();
-
-            // Resolve TLS (unchanged).
-            if let Some(tls) = w.conn.tls.as_mut() {
-                if let Some(e) = tls.resolve(ctx, owner).await {
-                    errs.push(e);
-                }
-            }
-
-            // Resolve every ${secretRef:ns/name:key} referenced in the outbound
-            // request templates, carrying the values inline. FULL REBUILD: the
-            // map is reconstructed from scratch each reconcile so a deleted
-            // Secret drops out (fail-closed via the gateway readiness gate).
-            let names: Vec<String> = w.collect_secret_ref_names();
-            let (resolved, helper_errs) = resolve_request_secrets(ctx, owner, ResourceKind::LinkSys, &names).await;
-            errs.extend(helper_errs);
-            w.resolved_secrets = if resolved.is_empty() {
-                None
-            } else {
-                Some(ResolvedSecrets(resolved))
-            };
-
-            errs
-        }
-        SystemConfig::Kafka(kafka_config) => {
-            drive_standard(ctx, owner, kafka_config.sasl.as_mut(), kafka_config.tls.as_mut()).await
-        }
-        SystemConfig::HttpDns(h) => {
-            // `connection` holds HTTP DNS TLS, timeout, and loopback policy;
-            // its outbound TLS refs get the same treatment as every other
-            // provider. Non-TLS secretRef resolution for httpdns (if any is
-            // added later) stays deferred; TLS is resolved here like the rest.
-            let mut errs = Vec::new();
-            if let Some(conn) = h.connection.as_mut() {
-                if let Some(tls) = conn.tls.as_mut() {
-                    if let Some(e) = tls.resolve(ctx, owner).await {
-                        errs.push(e);
-                    }
-                }
-            }
-            errs
-        }
-        SystemConfig::CredentialSource(source) => return resolve_credential_source(ctx, owner, source).await,
-    };
-    SpecResolution {
-        errors,
-        credential_inputs: Vec::new(),
-        manager_config: None,
+        result.tls = Some(tls);
     }
 }
 
-pub(super) async fn resolve_one<R: SecretMaterialResolver>(
+fn clear_materials(config: &mut SystemConfig) {
+    fn auth<A: AuthSpec>(value: Option<&mut A>) {
+        if let Some(value) = value {
+            value.slot_mut().secret = None;
+        }
+    }
+    fn tls(value: Option<&mut edgion_resources::resources::common::TlsConfig>) {
+        if let Some(value) = value {
+            value.resolved_ca_certificates = None;
+            value.resolved_client_certificate = None;
+        }
+    }
+    match config {
+        SystemConfig::Redis(value) => {
+            auth(value.auth.as_mut());
+            tls(value.tls.as_mut());
+        }
+        SystemConfig::Etcd(value) => {
+            auth(value.auth.as_mut());
+            tls(value.tls.as_mut());
+        }
+        SystemConfig::Elasticsearch(value) => {
+            auth(value.auth.as_mut());
+            tls(value.tls.as_mut());
+        }
+        SystemConfig::Kafka(value) => {
+            auth(value.sasl.as_mut());
+            tls(value.tls.as_mut());
+        }
+        SystemConfig::Otlp(value) => {
+            auth(value.auth.as_mut());
+            tls(value.tls.as_mut());
+        }
+        SystemConfig::Webhook(value) => {
+            value.resolved_secrets = None;
+            tls(value.conn.tls.as_mut());
+        }
+        SystemConfig::HttpDns(value) => {
+            tls(value.connection.as_mut().and_then(|connection| connection.tls.as_mut()));
+        }
+        SystemConfig::CredentialSource(value) => match &mut value.provider {
+            CredentialSourceProvider::OAuth2ClientCredentials(provider) => tls(provider.tls.as_mut()),
+        },
+        SystemConfig::Unsupported => {}
+    }
+}
+
+fn apply_materials(config: &mut SystemConfig, mut result: ProviderResolution) -> SpecResolution {
+    fn auth<A: AuthSpec>(value: Option<&mut A>, resolved: Option<Secret>) {
+        if let Some(value) = value {
+            value.slot_mut().secret = resolved;
+        }
+    }
+    fn tls(value: Option<&mut edgion_resources::resources::common::TlsConfig>, resolved: Option<ResolvedTls>) {
+        if let (Some(value), Some(resolved)) = (value, resolved) {
+            resolved.apply(value);
+        }
+    }
+    match config {
+        SystemConfig::Redis(value) => {
+            auth(value.auth.as_mut(), result.auth);
+            tls(value.tls.as_mut(), result.tls);
+        }
+        SystemConfig::Etcd(value) => {
+            auth(value.auth.as_mut(), result.auth);
+            tls(value.tls.as_mut(), result.tls);
+        }
+        SystemConfig::Elasticsearch(value) => {
+            auth(value.auth.as_mut(), result.auth);
+            tls(value.tls.as_mut(), result.tls);
+        }
+        SystemConfig::Kafka(value) => {
+            auth(value.sasl.as_mut(), result.auth);
+            tls(value.tls.as_mut(), result.tls);
+        }
+        SystemConfig::Otlp(value) => {
+            auth(value.auth.as_mut(), result.auth);
+            tls(value.tls.as_mut(), result.tls);
+        }
+        SystemConfig::Webhook(value) => {
+            value.resolved_secrets = result.templates.take();
+            tls(value.conn.tls.as_mut(), result.tls);
+        }
+        SystemConfig::HttpDns(value) => {
+            tls(
+                value.connection.as_mut().and_then(|connection| connection.tls.as_mut()),
+                result.tls,
+            );
+        }
+        // Only the manager-only clone receives resolved TLS for this provider.
+        SystemConfig::CredentialSource(_) | SystemConfig::Unsupported => {}
+    }
+    result.spec
+}
+
+fn resolve_credential_source(
     ctx: &HandlerContext,
     owner: &ResourceRef,
-    secret_ref: &SecretObjectReference,
-    resolver: &R,
-) -> Result<Option<Secret>, ResolvedRefsError> {
-    let outcome = resolve_secret(ctx, owner, "edgion.io", "LinkSys", secret_ref, resolver).await;
-    outcome_to_result(outcome).map(Some)
+    config: &CredentialSourceConfig,
+    references: &LinkSysReferences<'_>,
+) -> ProviderResolution {
+    let mut result = ProviderResolution::default();
+    for (role, token) in [
+        ("active-bootstrap", references.active_bootstrap_secret()),
+        ("previous-bootstrap", references.previous_bootstrap_secret()),
+    ] {
+        let Some(token) = token else {
+            if role == "active-bootstrap" {
+                result.spec.errors.push(ResolvedRefsError::InvalidReference {
+                    error: ReferenceError::StaleBinding,
+                });
+            }
+            continue;
+        };
+        match resolve_bound_secret(ctx, owner, token, &OAuth2BootstrapResolver) {
+            Ok(authorized) => match secret_input(role, token, &authorized) {
+                Ok(input) => result.spec.credential_inputs.push(input),
+                Err(error) => result.spec.errors.push(error),
+            },
+            Err(error) => result.spec.errors.push(error),
+        }
+    }
+    resolve_provider_tls(ctx, owner, references, &mut result);
+    let mut manager_config = config.clone();
+    let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &mut manager_config.provider;
+    provider.tls = match result.tls.take() {
+        Some(mut resolved) if resolved.error.is_none() => {
+            result.spec.credential_inputs.append(&mut resolved.inputs);
+            // The owning block is already cleared; only this private clone gets material.
+            let mut tls = provider.tls.take().expect("an enabled TLS loan has an owning block");
+            resolved.apply(&mut tls);
+            Some(tls)
+        }
+        _ => None,
+    };
+    result.spec.manager_config = Some(manager_config);
+    result
+}
+
+async fn resolve_for_spec(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    binding: &mut BoundLinkSysConfigMut<'_>,
+) -> SpecResolution {
+    clear_materials(binding.config_mut());
+    let result = {
+        let references = match binding.references() {
+            Ok(references) => references,
+            Err(error) => {
+                return SpecResolution {
+                    errors: vec![ResolvedRefsError::InvalidReference { error }],
+                    ..Default::default()
+                }
+            }
+        };
+        match binding.config() {
+            SystemConfig::Redis(value) => drive_standard(ctx, owner, value.auth.as_ref(), &references),
+            SystemConfig::Etcd(value) => drive_standard(ctx, owner, value.auth.as_ref(), &references),
+            SystemConfig::Elasticsearch(value) => drive_standard(ctx, owner, value.auth.as_ref(), &references),
+            SystemConfig::Kafka(value) => drive_standard(ctx, owner, value.sasl.as_ref(), &references),
+            SystemConfig::Otlp(value) => drive_standard(ctx, owner, value.auth.as_ref(), &references),
+            SystemConfig::Webhook(_) => {
+                let mut result = ProviderResolution::default();
+                resolve_provider_tls(ctx, owner, &references, &mut result);
+                let (resolved, errors) = resolve_request_secrets(ctx, owner, references.request_secrets());
+                result.spec.errors.extend(errors);
+                result.templates = (!resolved.is_empty()).then_some(ResolvedSecrets(resolved));
+                result
+            }
+            SystemConfig::HttpDns(_) => {
+                let mut result = ProviderResolution::default();
+                resolve_provider_tls(ctx, owner, &references, &mut result);
+                result
+            }
+            SystemConfig::CredentialSource(config) => resolve_credential_source(ctx, owner, config, &references),
+            SystemConfig::Unsupported => ProviderResolution::default(),
+        }
+    };
+    apply_materials(binding.config_mut(), result)
 }
 
 #[cfg(test)]

@@ -111,7 +111,7 @@ fn test_to_client_config_minimal() {
         leader_election: EtcdLeaderElectionConfig::default(),
     };
 
-    let (client_config, auth_state) = config.to_client_config().unwrap();
+    let client_config = config.to_bootstrap_config().unwrap();
     assert_eq!(client_config.endpoints, vec!["http://127.0.0.1:2379"]);
     assert!(client_config.auth.is_none());
     assert!(client_config.tls.is_none());
@@ -125,12 +125,11 @@ fn test_to_client_config_minimal() {
     let ka = client_config.keep_alive.as_ref().expect("keepalive default expected");
     assert_eq!((ka.time, ka.timeout), (Some(5), Some(3)));
     assert_eq!(ka.permit_without_stream, Some(true));
-    assert!(matches!(auth_state, CredentialState::NotRequired));
 }
 
 #[test]
 fn test_to_client_config_with_auth_wires_yaml_credentials_into_state() {
-    // YAML `conf_center.auth` must flow through to `CredentialState::Resolved`.
+    // YAML credentials remain direct bootstrap material.
     let config = EtcdConfig {
         controller_name: Some("edgion.io/gateway-controller".into()),
         endpoints: vec!["http://127.0.0.1:2379".to_string()],
@@ -147,19 +146,11 @@ fn test_to_client_config_with_auth_wires_yaml_credentials_into_state() {
         leader_election: EtcdLeaderElectionConfig::default(),
     };
 
-    let (client_config, auth_state) = config.to_client_config().unwrap();
+    let client_config = config.to_bootstrap_config().unwrap();
 
-    assert!(
-        client_config.auth.is_some(),
-        "placeholder EtcdAuth must be present so the provider's `crd.auth.is_some()` gate opens"
-    );
-    match auth_state {
-        CredentialState::Resolved(mat) => {
-            assert_eq!(mat.username.as_deref(), Some("root"));
-            assert_eq!(mat.password, "changeme");
-        }
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    let material = client_config.auth.as_ref().expect("direct YAML credentials");
+    assert_eq!(material.username.as_deref(), Some("root"));
+    assert_eq!(material.password, "changeme");
 
     let timeout = client_config.timeout.unwrap();
     assert_eq!(timeout.dial, Some(5000));
@@ -181,21 +172,12 @@ fn test_to_client_config_without_auth_is_not_required() {
         leader_election: EtcdLeaderElectionConfig::default(),
     };
 
-    let (client_config, auth_state) = config.to_client_config().unwrap();
+    let client_config = config.to_bootstrap_config().unwrap();
     assert!(client_config.auth.is_none());
-    assert!(matches!(auth_state, CredentialState::NotRequired));
 }
 
-/// A CA-only TLS config (only ca_cert_file set, no client cert/key) must:
-/// - produce a TlsConfig with validation.caCertificateRefs set so the resolver
-///   reads the CA from resolved_ca_certificates (not system roots).
-/// - have resolved_ca_certificates set (the CA material).
-/// - have resolved_client_certificate = None (no mTLS identity).
-///
-/// Regression guard for the bug where the synthetic Secret was assigned to
-/// BOTH resolved_ca_certificates and resolved_client_certificate, causing the
-/// resolver to fail with OutboundTlsClientCertInvalid when no tls.crt/tls.key
-/// were present.
+/// A disk CA selects direct custom CA material without a client identity.
+/// This retains the CA-only regression coverage without synthetic Secrets.
 #[test]
 fn test_ca_only_tls_config_does_not_set_client_secret() {
     use std::io::Write;
@@ -227,25 +209,74 @@ fn test_ca_only_tls_config_does_not_set_client_secret() {
         leader_election: EtcdLeaderElectionConfig::default(),
     };
 
-    let (client_config, _) = config.to_client_config().unwrap();
+    let client_config = config.to_bootstrap_config().unwrap();
     let tls = client_config.tls.expect("TLS config must be present");
 
-    // When a CA file is configured, the outbound validation block must contain a
-    // non-empty ca_certificate_refs so that resolve_outbound_tls picks Custom CA.
-    assert!(
-        tls.outbound
-            .validation
-            .as_ref()
-            .and_then(|v| v.ca_certificate_refs.as_ref())
-            .is_some_and(|r| !r.is_empty()),
-        "outbound.validation.ca_certificate_refs must be set when ca_cert_file is provided"
+    assert_eq!(
+        tls.ca_pem.as_deref(),
+        Some(b"-----BEGIN CERTIFICATE-----\nMIIBxxx\n-----END CERTIFICATE-----\n".as_slice())
     );
+    assert!(tls.client_cert_pem.is_none());
+    assert!(tls.client_key_pem.is_none());
+}
+
+fn file_tls_config() -> EtcdConfig {
+    serde_json::from_value(serde_json::json!({"endpoints":["https://etcd.example:2379"],"tls":{}})).unwrap()
+}
+
+#[test]
+fn bootstrap_keeps_tls_presence_and_direct_complete_identity_redacted() {
+    let mut config = file_tls_config();
+    let empty = config.to_bootstrap_config().unwrap();
+    let tls = empty.tls.expect("an explicit empty TLS block still selects TLS");
+    assert!(tls.ca_pem.is_none() && tls.client_cert_pem.is_none() && tls.client_key_pem.is_none());
+    let cert = tempfile::NamedTempFile::new().unwrap();
+    let key = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(cert.path(), "disk-certificate").unwrap();
+    std::fs::write(key.path(), "disk-private-key").unwrap();
+    let tls = config.tls.as_mut().unwrap();
+    tls.client_cert_file = Some(cert.path().to_str().unwrap().into());
+    tls.client_key_file = Some(key.path().to_str().unwrap().into());
+    config.auth = Some(EtcdAuthConfig {
+        username: "root".into(),
+        password: "bootstrap-password".into(),
+    });
+    let direct = config.to_bootstrap_config().unwrap();
+    let debug = format!("{direct:?}");
+    assert!(!debug.contains("disk-private-key") && !debug.contains("bootstrap-password"));
+    let tls = direct.tls.unwrap();
+    assert_eq!(tls.client_cert_pem.as_deref(), Some(b"disk-certificate".as_slice()));
+    assert_eq!(tls.client_key_pem.unwrap().as_slice(), b"disk-private-key");
+}
+
+#[test]
+fn bootstrap_partial_identity_is_inert_but_every_declared_file_is_read() {
+    let cert = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(cert.path(), "disk-certificate").unwrap();
+    let mut config = file_tls_config();
+    config.tls.as_mut().unwrap().client_cert_file = Some(cert.path().to_str().unwrap().into());
+    let tls = config.to_bootstrap_config().unwrap().tls.unwrap();
+    assert!(tls.client_cert_pem.is_none() && tls.client_key_pem.is_none());
+    let key = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(key.path(), [0xff]).unwrap();
+    config.tls.as_mut().unwrap().client_key_file = Some(key.path().to_str().unwrap().into());
+    let error = config.to_bootstrap_config().unwrap_err().to_string();
     assert!(
-        tls.resolved_ca_certificates.is_some(),
-        "resolved_ca_certificates must carry the CA material"
+        error.contains("Failed to read TLS file"),
+        "invalid UTF-8 remains a file-read failure"
     );
-    assert!(
-        tls.resolved_client_certificate.is_none(),
-        "resolved_client_certificate must be None when no client cert/key is configured (CA-only)"
-    );
+}
+
+#[test]
+fn bootstrap_half_keepalive_uses_controller_defaults_only_for_missing_half() {
+    let mut config = file_tls_config();
+    config.keep_alive_time_secs = Some(17);
+    let direct = config.to_bootstrap_config().unwrap();
+    let keepalive = direct.keep_alive.unwrap();
+    assert_eq!((keepalive.time, keepalive.timeout), (Some(17), Some(3)));
+    config.keep_alive_time_secs = None;
+    config.keep_alive_timeout_secs = Some(11);
+    let direct = config.to_bootstrap_config().unwrap();
+    let keepalive = direct.keep_alive.unwrap();
+    assert_eq!((keepalive.time, keepalive.timeout), (Some(5), Some(11)));
 }

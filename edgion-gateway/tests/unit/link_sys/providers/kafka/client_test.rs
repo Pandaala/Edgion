@@ -1,6 +1,41 @@
 use super::*;
 use edgion_resources::resources::link_sys::kafka::KafkaClientConfig;
 
+impl KafkaLinkClient {
+    pub(in crate::link_sys::providers::kafka) fn assert_retained_connection_input(
+        &self,
+        prepared: &Arc<PreparedLinkSysTls>,
+        actual: &LinkSys,
+    ) {
+        let input = Arc::clone(&self.connection);
+        assert!(Arc::ptr_eq(&input, &self.connection));
+        assert!(Arc::ptr_eq(&input.owner, prepared));
+        assert!(std::ptr::eq(input.owner.owner(), actual));
+        let tls = Arc::clone(input.tls.as_ref().expect("enabled TLS has a connector"));
+        for _ in 0..2 {
+            let next = Arc::clone(&input);
+            let _ = next.client_builder();
+            assert!(Arc::ptr_eq(&tls, next.tls.as_ref().unwrap()));
+            assert!(Arc::ptr_eq(&next.owner, prepared));
+        }
+    }
+}
+
+fn from_test_config(
+    name: &str,
+    config: &KafkaClientConfig,
+    auth: &CredentialState<ResolvedCredential>,
+) -> Result<KafkaLinkClient> {
+    assert!(matches!(auth, CredentialState::NotRequired));
+    let (namespace, name) = name.split_once('/').unwrap_or(("default", name));
+    let owner = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":name,"namespace":namespace},
+        "spec":{"type":"kafka","config":config}
+    }))
+    .unwrap();
+    KafkaLinkClient::from_link_sys(Arc::new(owner))
+}
+
 #[test]
 fn test_kafka_link_client_from_config_empty_brokers_fails() {
     let config = KafkaClientConfig {
@@ -14,7 +49,7 @@ fn test_kafka_link_client_from_config_empty_brokers_fails() {
         linger_ms: None,
     };
     let auth = CredentialState::NotRequired;
-    let result = KafkaLinkClient::from_config("test", &config, &auth);
+    let result = from_test_config("test", &config, &auth);
     assert!(result.is_err());
     // Use `.err().unwrap()` instead of `.unwrap_err()` to avoid requiring
     // `KafkaLinkClient: Debug`.
@@ -34,7 +69,7 @@ fn test_kafka_link_client_from_config_ok() {
         linger_ms: None,
     };
     let auth = CredentialState::NotRequired;
-    let result = KafkaLinkClient::from_config("default/kafka-main", &config, &auth);
+    let result = from_test_config("default/kafka-main", &config, &auth);
     assert!(result.is_ok());
     let client = result.unwrap();
     assert!(!client.healthy()); // not initialized yet
@@ -57,8 +92,8 @@ fn try_produce_rejects_retired_generation() {
         max_pending_bytes: None,
         linger_ms: None,
     };
-    let client = KafkaLinkClient::from_config("default/kafka-main", &config, &CredentialState::NotRequired)
-        .expect("valid kafka config");
+    let client =
+        from_test_config("default/kafka-main", &config, &CredentialState::NotRequired).expect("valid kafka config");
     client.mark_retired();
     let error = client
         .try_produce("logs", "payload".to_string())
@@ -88,8 +123,8 @@ async fn shutdown_waits_for_pending_producer_tasks_to_terminate() {
         max_pending_bytes: None,
         linger_ms: None,
     };
-    let client = KafkaLinkClient::from_config("default/kafka-main", &config, &CredentialState::NotRequired)
-        .expect("valid kafka config");
+    let client =
+        from_test_config("default/kafka-main", &config, &CredentialState::NotRequired).expect("valid kafka config");
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
     let (stopped_tx, stopped_rx) = tokio::sync::oneshot::channel();
     let producer_handle = tokio::spawn(async move {
@@ -130,7 +165,7 @@ fn test_kafka_link_client_from_config_rejects_zero_channel_size() {
         max_pending_bytes: None,
         linger_ms: None,
     };
-    let result = KafkaLinkClient::from_config("default/kafka-main", &config, &CredentialState::NotRequired);
+    let result = from_test_config("default/kafka-main", &config, &CredentialState::NotRequired);
 
     let error = result.err().expect("zero channel size must be rejected");
     assert!(error.to_string().contains("channel size"));
@@ -148,7 +183,7 @@ fn test_kafka_link_client_from_config_rejects_linger_at_produce_timeout() {
         max_pending_bytes: None,
         linger_ms: Some(PRODUCE_TIMEOUT.as_millis() as u64),
     };
-    let result = KafkaLinkClient::from_config("default/kafka-main", &config, &CredentialState::NotRequired);
+    let result = from_test_config("default/kafka-main", &config, &CredentialState::NotRequired);
 
     let error = result.err().expect("linger at the produce timeout must be rejected");
     assert!(error.to_string().contains("produce timeout"));
@@ -224,4 +259,21 @@ fn producer_health_single_winner_under_contention() {
         .count();
     assert_eq!(winners, 1, "exactly one task may win the false->true flip");
     assert!(flag.load());
+}
+
+#[test]
+fn owning_constructor_rejects_pending_and_invalid_sasl_instead_of_anonymous_connection() {
+    for secret in [serde_json::Value::Null, serde_json::json!({"data":{}})] {
+        let owner = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"kafka"},"spec":{"type":"kafka","config":{
+                "brokers":["kafka.example:9092"],"sasl":{"username":"alice",
+                    "password":{"secretRef":{"name":"password"},"secret":secret}}
+            }}
+        }))
+        .unwrap();
+        let error = KafkaLinkClient::from_link_sys(Arc::new(owner))
+            .err()
+            .expect("unusable authentication must fail");
+        assert!(error.to_string().contains("authentication"));
+    }
 }

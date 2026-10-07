@@ -1,6 +1,97 @@
 use super::*;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry;
 
+type CapturedRequests = std::sync::Arc<parking_lot::Mutex<Vec<(http::Method, serde_json::Value)>>>;
+
+fn cleanup_api() -> (Api<Secret>, CapturedRequests) {
+    let requests = CapturedRequests::default();
+    let captured = requests.clone();
+    let transport = tower::service_fn(move |request: http::Request<kube::client::Body>| {
+        let captured = captured.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            assert_eq!(parts.uri.path(), "/api/v1/namespaces/tenant-a/secrets/provider-plugin");
+            let bytes = body.collect_bytes().await.unwrap();
+            let body = if bytes.is_empty() {
+                Value::Null
+            } else {
+                serde_json::from_slice(&bytes).unwrap()
+            };
+            captured.lock().push((parts.method.clone(), body));
+            let response = match parts.method {
+                http::Method::GET => serde_json::to_value(managed_secret()).unwrap(),
+                http::Method::DELETE => {
+                    json!({ "apiVersion": "v1", "kind": "Status", "status": "Success", "code": 200 })
+                }
+                method => panic!("unexpected Kubernetes method: {method}"),
+            };
+            Ok::<_, std::convert::Infallible>(
+                http::Response::builder()
+                    .status(200)
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(kube::client::Body::from(serde_json::to_vec(&response).unwrap()))
+                    .unwrap(),
+            )
+        }
+    });
+    (
+        Api::namespaced(kube::Client::new(transport, "default"), "tenant-a"),
+        requests,
+    )
+}
+
+#[tokio::test]
+async fn cleanup_rechecks_after_get_and_wait_without_losing_retry_semantics() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    for stale_worker in [false, true] {
+        let (api, requests) = cleanup_api();
+        let expected =
+            capture_delete_expectation(&managed_secret(), identity(), "binding-revision".to_string()).unwrap();
+        let eligible = Arc::new(AtomicBool::new(true));
+        let checked = eligible.clone();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        let deletion = delete_if_matches(&api, &expected, move || async move {
+            entered_tx.send(()).unwrap();
+            resume_rx.await.unwrap();
+            if stale_worker {
+                Err(SecretIoError::StaleOperation)
+            } else {
+                Ok(checked.load(Ordering::SeqCst))
+            }
+        });
+        let revoke = async {
+            entered_rx.await.unwrap();
+            assert_eq!(requests.lock().len(), 1);
+            assert_eq!(requests.lock()[0].0, http::Method::GET);
+            eligible.store(false, Ordering::SeqCst);
+            resume_tx.send(()).unwrap();
+        };
+        let (result, ()) = tokio::join!(deletion, revoke);
+        if stale_worker {
+            assert!(matches!(result, Err(SecretIoError::StaleOperation)));
+        } else {
+            assert!(!result.unwrap());
+        }
+        assert_eq!(requests.lock().len(), 1, "authorization loss must prevent DELETE");
+    }
+}
+
+#[tokio::test]
+async fn authorized_cleanup_preserves_secret_uid_and_resource_version_preconditions() {
+    let (api, requests) = cleanup_api();
+    let expected = capture_delete_expectation(&managed_secret(), identity(), "binding-revision".to_string()).unwrap();
+    assert!(delete_if_matches(&api, &expected, || async { Ok(true) }).await.unwrap());
+    let requests = requests.lock();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].0, http::Method::DELETE);
+    assert_eq!(requests[1].1["preconditions"]["uid"], "secret-uid");
+    assert_eq!(requests[1].1["preconditions"]["resourceVersion"], "42");
+}
+
 fn identity() -> ManagedSecretIdentity {
     ManagedSecretIdentity {
         consumer: ConsumerIdentity {

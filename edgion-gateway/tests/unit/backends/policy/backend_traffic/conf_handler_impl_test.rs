@@ -18,7 +18,7 @@ fn policy(name: &str, svc: &str, lb_type: LoadBalancerType) -> Arc<EdgionBackend
         spec: EdgionBackendTrafficPolicySpec {
             current_status: None,
             target_refs: vec![PolicyTargetRef {
-                group: String::new(),
+                group: Some(String::new()),
                 kind: "Service".to_string(),
                 name: svc.to_string(),
             }],

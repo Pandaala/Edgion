@@ -9,6 +9,12 @@ Use this file when a key is reserved, injected by the system, or only intended f
 | `edgion.io/hostname-resolution` | controller route handlers | Diagnostic summary of effective hostname resolution for `HTTPRoute` / `GRPCRoute` | Do not hand-author. Treat as system-reserved. |
 | `edgion.io/sync-version` | Gateway sync/meta layer | Correlates data-plane state with control-plane sync version | Do not hand-author in manifests. |
 | `edgion.io/dns-resolved-at` | Controller DNS resolver | RFC3339 freshness stamp on a synthetic ExternalName EndpointSlice | Do not hand-author. |
+| `edgion.io/controller-ca-source` | Controller CA material wrapper | Exact `ConfigMap` source kind on synthetic CA Secret material inside resolved transport | Internal only; never author in manifests. Ordinary fetched Secrets have the key removed regardless of value. |
+
+The CA source marker preserves ConfigMap-versus-Secret identity in the existing
+resolved TLS transport. Its authenticity relies on the trusted Controller
+clear-before-resolve boundary; the annotation itself is not an authorization
+credential. Genuine ConfigMap wrappers preserve it during global inheritance.
 
 ## Test And Tooling Keys
 

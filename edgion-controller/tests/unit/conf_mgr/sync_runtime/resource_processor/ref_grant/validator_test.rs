@@ -124,7 +124,7 @@ fn store_with(grants: Vec<(String, ReferenceGrant)>) -> Arc<ReferenceGrantStore>
 
 fn backend_ref(group: &str, kind: Option<&str>, name: &str, namespace: Option<&str>) -> BackendObjectReference {
     BackendObjectReference {
-        group: group.to_string(),
+        group: Some(group.to_string()),
         kind: kind.map(|s| s.to_string()),
         name: name.to_string(),
         namespace: namespace.map(|s| s.to_string()),

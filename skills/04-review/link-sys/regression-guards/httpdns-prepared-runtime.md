@@ -55,6 +55,33 @@ fingerprint. Failed preparation is retained before querying, so repeated failure
 do not reconstruct/audit each tick. Desired-Service pruning releases these
 handles. Credential acquisition prepares at its own cold acquisition boundary.
 
+The reference-contract implementation retains actual LinkSys owners in the opaque
+HttpDnsCandidate alongside prepared reference topology and one captured EGC global
+TLS snapshot. Incoming source identity and active local pairing proof precede reuse
+in both Gateway runtime publication and Controller ServiceDnsState. Enabled TLS
+also checks the independently inherited axes. Absent/disabled TLS retains native
+system trust/no client and does not consume global TLS; its actual source identity
+is still checked. Only another provider returns no candidate: malformed existing
+HTTPDNS preserves its authored fallback as a failed generation.
+
+HTTPDNS and Webhook use the same Common inherited-axis fingerprint encoder and
+pure active-local inheritance check. Local verify, entire validation/CA, and client
+overrides mask the corresponding global inputs before encoding. Changing a masked
+global axis keeps the private client identity; an unmasked change or failed
+inherited proof prevents ready reuse. Address-cache identity remains separate.
+
+Comparison performs no PEM parsing or TLS audit. A ready fetcher cannot be reused
+under failed authority even for equal resourceVersion/policy/material bytes. A
+matching failed generation has no client to authorize and retains its fallback
+without repeated preparation; repaired source identity/proof triggers recovery.
+Preparation reborrows the same immutable actual owner and captured global snapshot.
+The canonical HTTP factory's owning-selection entry rejects raw TLS substitutions
+and shares existing native TLS application and configuration auditing. Query config
+copies only query fields and never clones connection/Secret material to discard.
+Public direct fetcher construction validates the same full actual-owner candidate.
+Other providers, plugin transports and reference-annotation ownership remain open
+under tasks/pending/resource-reference-contract/; this is not a full-task verdict.
+
 ## Alternatives and limits
 
 No retry/active-health/rate-limit engine is added: the existing explicit DNS
@@ -70,6 +97,17 @@ Gateway API routing contracts, or forcibly revoke already borrowed handles.
 Idle-pool limits bound retained idle connections, not concurrent active queries.
 
 ## Verification and re-evaluation
+
+During the reference migration, fresh Common library tests passed 350 with four
+existing real-Etcd tests ignored, eight Common compile-fail doctests passed, and
+Common/Controller/Gateway library checking passed. Controller DNS tests passed 11,
+Gateway store tests passed 37 and the existing real HTTPDNS transport tests passed
+14. These cover both incoming source/pairing replay gates, repeated failed reuse,
+repair, direct actual-owner construction and comparison-only zero audit. Layout
+and reference-contract drift checks passed; agent-doc validation still has three
+current-HEAD dangling gRPC task links tracked in the reference task. These scoped
+results do not establish live conformance, all-provider runtime coverage or
+whole-task completion.
 
 Fresh verification on 2026-10-05 passed independent Astra plan and final code/
 knowledge review. Focused tests passed: Common DNS 59, real HTTP/DNS transport 14,

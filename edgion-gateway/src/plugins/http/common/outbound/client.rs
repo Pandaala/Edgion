@@ -27,9 +27,17 @@ use edgion_common::dns::ResolverSpec;
 use crate::backends::service_kind::ServiceBackendKind;
 use crate::backends::validate_endpoint_backend_addr;
 use crate::observe::metrics::record_egress_blocked;
-use crate::plugins::http::common::http_client::{build_webhook_client, get_http_client_arc};
+use crate::plugins::http::common::http_client::{
+    build_webhook_client, build_webhook_client_with_tls_selection, get_http_client_arc,
+};
 use crate::util::net::IpClass;
+use edgion_common::link_sys_core::outbound_tls::{
+    validate_active_tls_inheritance, validate_local_tls_selection, GlobalOutboundTlsSnapshot,
+    ValidatedLocalTlsSelection,
+};
 use edgion_resources::resources::common::external_http::validate_connection_target;
+use edgion_resources::resources::link_sys::SystemConfig;
+use edgion_resources::resources::refs::link_sys_fields::BoundLinkSysConfig;
 
 use super::call::replace_url_host;
 use super::egress::{default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver};
@@ -142,6 +150,13 @@ pub struct ManagedOutboundClient {
     pub resolved_secrets: Option<edgion_resources::resources::common::external_http::ResolvedSecrets>,
 }
 
+// The raw branch remains only for consumers awaiting their owning migration.
+// Webhook always enters through its actual LinkSys binding.
+enum ClientTls<'a, 'owner> {
+    Raw,
+    Owned(&'a ValidatedLocalTlsSelection<'owner>, &'a GlobalOutboundTlsSnapshot),
+}
+
 impl std::fmt::Debug for ManagedOutboundClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManagedOutboundClient")
@@ -196,6 +211,50 @@ impl ManagedOutboundClient {
         ref_label: &str,
         timeout_retry_default: bool,
     ) -> Result<Self, String> {
+        Self::build(
+            conn,
+            request,
+            secrets,
+            ref_label,
+            timeout_retry_default,
+            None,
+            ClientTls::Raw,
+        )
+    }
+
+    /// Prepare only the Webhook variant borrowed from its actual LinkSys.
+    pub(crate) fn from_webhook(
+        binding: &BoundLinkSysConfig<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+        ref_label: &str,
+    ) -> Result<Self, String> {
+        let source = binding.source().map_err(|error| error.to_string())?;
+        let SystemConfig::Webhook(config) = binding.config() else {
+            return Err("managed Webhook construction requires the actual Webhook provider".into());
+        };
+        let selection = binding.outbound_tls_selection().map_err(|error| error.to_string())?;
+        let proof = validate_local_tls_selection(selection).map_err(|error| error.to_string())?;
+        validate_active_tls_inheritance(&proof, defaults).map_err(|error| error.to_string())?;
+        Self::build(
+            &config.conn,
+            &config.request,
+            config.resolved_secrets.as_ref(),
+            ref_label,
+            false,
+            source.scope().namespace(),
+            ClientTls::Owned(&proof, defaults),
+        )
+    }
+
+    fn build(
+        conn: &ExternalHttpConnection,
+        request: &OutboundRequestSpec,
+        secrets: Option<&ResolvedSecrets>,
+        ref_label: &str,
+        timeout_retry_default: bool,
+        owner_namespace: Option<&str>,
+        tls: ClientTls<'_, '_>,
+    ) -> Result<Self, String> {
         // ── 1. Validate target ─────────────────────────────────────────────
         if let Some(e) = validate_connection_target(conn) {
             return Err(format!("invalid target for '{}': {}", ref_label, e));
@@ -219,7 +278,11 @@ impl ManagedOutboundClient {
         // Resolved before the DNS resolver / client are built so that resolver
         // selection (step 4) can key off `ResolvedTarget` itself rather than a
         // second, independently-derived classification of the target kind.
-        let resolved_target = build_resolved_target(&conn.target, conn.tls.is_some())?;
+        let tls_active = match &tls {
+            ClientTls::Raw => conn.tls.is_some(),
+            ClientTls::Owned(proof, _) => proof.active_field().is_some(),
+        };
+        let resolved_target = build_resolved_target_in_namespace(&conn.target, tls_active, owner_namespace)?;
 
         // ── 4. Build the DNS resolver: EgressResolver for URL targets, or the
         //      pinned resolver for a Service-pool anchor ────────────────────
@@ -276,7 +339,11 @@ impl ManagedOutboundClient {
         // is needed; a URL target and a Service-pool target both always supply a
         // resolver (steps 2-4 above), so only a `ServiceClusterIp` (`Static`)
         // target with no TLS block falls back to the shared global client.
-        let http_client = match build_webhook_client(&conn.tls, dns_resolver) {
+        let prepared_client = match tls {
+            ClientTls::Raw => build_webhook_client(&conn.tls, dns_resolver),
+            ClientTls::Owned(proof, defaults) => build_webhook_client_with_tls_selection(proof, defaults, dns_resolver),
+        };
+        let http_client = match prepared_client {
             None => get_http_client_arc(),
             Some(Ok(client)) => Arc::new(client),
             Some(Err(e)) => {
@@ -320,7 +387,7 @@ impl ManagedOutboundClient {
             // we can move it without cloning the AtomicUsize cursor (which is not
             // Clone). In practice the health task always uses pick_url() which
             // re-reads the global EndpointSlice store each tick.
-            let task_target = build_resolved_target(&conn.target, conn.tls.is_some())
+            let task_target = build_resolved_target_in_namespace(&conn.target, tls_active, owner_namespace)
                 .unwrap_or(ResolvedTarget::Static(String::new()));
             Some(tokio::spawn(async move {
                 run_active_health_check(
@@ -470,12 +537,16 @@ impl ManagedOutboundClient {
 /// the URL encodes the transport, and the `tls` block only supplies custom CA /
 /// client-certificate material. `tls_enabled` still drives the scheme for Service
 /// targets, which carry no scheme of their own.
-fn build_resolved_target(target: &WebhookTarget, tls_enabled: bool) -> Result<ResolvedTarget, String> {
+fn build_resolved_target_in_namespace(
+    target: &WebhookTarget,
+    tls_enabled: bool,
+    owner_namespace: Option<&str>,
+) -> Result<ResolvedTarget, String> {
     match target.kind()? {
         TargetKind::Url { url, .. } => Ok(ResolvedTarget::Static(url.to_string())),
         TargetKind::Service(svc) => {
             let scheme: &'static str = if tls_enabled { "https" } else { "http" };
-            let ns = svc.namespace.as_deref().unwrap_or("default");
+            let ns = svc.namespace.as_deref().or(owner_namespace).unwrap_or("default");
             // `kind()` has already validated a Service target's name/port/kind, so
             // this unwrap_or_default cannot fire in practice.
             let name = svc.name.as_deref().unwrap_or_default();

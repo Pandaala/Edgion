@@ -103,7 +103,7 @@ fn complete_value_limit_is_inclusive_and_overflow_safe() {
 
 #[test]
 fn invalid_bearer_syntax_maps_without_material() {
-    let error = map_invalid_error(InvalidCredentialError::InvalidValue {
+    let error = map_resolve_error(edgion_resources::credentials::ResolveError::InvalidValue {
         key: "bearerToken",
         class: edgion_resources::credentials::InvalidValueClass::BearerToken,
     });
@@ -112,6 +112,34 @@ fn invalid_bearer_syntax_maps_without_material() {
         ResolvedRefsError::DecodeError { key: "bearerToken", .. }
     ));
     assert!(!error.message().contains("credential-value"));
+}
+
+#[tokio::test]
+async fn invalid_authored_identity_never_fetches_same_name_secret_or_registers_edges() {
+    let (context, runtime) = make_context(HashMap::from([(
+        "default/provider-token".to_string(),
+        secret("provider-token", b"valid-token"),
+    )]));
+    let owner = ResourceRef::new(
+        ResourceKind::EdgionPlugins,
+        Some("default".to_string()),
+        "injector".to_string(),
+    );
+    let mut ep = plugin(Some("stale-token"));
+    let EdgionPlugin::CredentialInjector(config) = &mut ep.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        panic!("expected Injector");
+    };
+    config.credential_ref.kind = Some("ConfigMap".to_string());
+    resolve(&mut ep, &owner, &context).await;
+    assert_eq!(resolved_value(&ep), None);
+    assert!(same_name_secret_deps(&context, &owner).is_empty());
+    assert!(runtime
+        .credential_source_registry
+        .consumer("default/injector")
+        .is_none());
+    assert!(status_errors(&ep, &owner, &context)
+        .iter()
+        .any(|error| matches!(error, ResolvedRefsError::InvalidReference { .. })));
 }
 
 #[test]
@@ -516,6 +544,7 @@ async fn persist_on_link_sys_still_requires_managed_secret() {
     );
 
     let consumer = DesiredCredentialConsumer {
+        reference: crate::reference_test_support::injector_reference(&link_sys_plugin()),
         resource: owner.clone(),
         uid: "consumer-uid".to_string(),
         generation: 3,

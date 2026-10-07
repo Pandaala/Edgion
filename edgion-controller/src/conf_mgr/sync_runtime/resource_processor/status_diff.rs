@@ -17,7 +17,8 @@
 //!    called by `processor.rs`. It deserializes old/new JSON into
 //!    `serde_json::Value`, then delegates to type-specific comparators.
 
-use edgion_resources::resources::common::{ParentReference, ParentStatusIdentity};
+use edgion_resources::resources::common::ParentReference;
+use edgion_resources::resources::refs::ParentStatusIdentity;
 use serde_json::Value;
 use std::collections::BTreeMap;
 

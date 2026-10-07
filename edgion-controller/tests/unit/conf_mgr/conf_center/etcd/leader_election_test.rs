@@ -1,13 +1,12 @@
 use super::*;
 use crate::conf_mgr::sync_runtime::ShutdownHandle;
-use edgion_common::link_sys_core::credential::CredentialState;
+use edgion_common::link_sys_core::providers::etcd::EtcdBootstrapConfig;
 use edgion_common::link_sys_core::providers::etcd::EtcdLinkClient;
-use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 
 /// Build + connect an `EtcdLinkClient` against a local etcd, mirroring the
 /// edgion-common ops.rs test helper.
 async fn test_link_client() -> EtcdLinkClient {
-    let config = EtcdClientConfig {
+    let config = EtcdBootstrapConfig {
         endpoints: vec!["http://localhost:2379".to_string()],
         auth: None,
         tls: None,
@@ -15,8 +14,8 @@ async fn test_link_client() -> EtcdLinkClient {
         keep_alive: None,
         namespace: None,
     };
-    let client = EtcdLinkClient::from_config("default/etcd-le-test", &config, &CredentialState::NotRequired)
-        .expect("from_config must succeed");
+    let client =
+        EtcdLinkClient::from_bootstrap("default/etcd-le-test", config).expect("bootstrap construction must succeed");
     client.init().await.expect("etcd init must connect");
     client
 }

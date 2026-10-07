@@ -302,3 +302,26 @@ fn unsupported_stream_plugin_schema_admits_future_types() {
         assert!(validator.validate(ResourceKind::EdgionStreamPlugins, &value).is_ok());
     }
 }
+
+#[test]
+fn reference_contract_errors_mask_listener_options_keys() {
+    let crd_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+    let validator = SchemaValidator::from_crd_dir(&crd_dir).unwrap();
+    let private_key = format!("credential-{}", "x".repeat(400));
+    let value = serde_json::json!({
+        "apiVersion":"gateway.networking.k8s.io/v1", "kind":"Gateway",
+        "metadata":{"name":"gw", "namespace":"default"},
+        "spec":{"gatewayClassName":"edgion", "listeners":[{
+            "name":"https", "port":443, "protocol":"HTTPS",
+            "tls":{"mode":"Terminate", "options":{private_key.clone(): 42}}
+        }]}
+    });
+    let error = validator
+        .validate_gateway_source("gateway.networking.k8s.io", "v1", "Gateway", &value)
+        .unwrap_err()
+        .to_string();
+    assert!(!error.contains(&private_key));
+    assert!(!error.contains("credential-"));
+    assert!(error.contains("/spec/listeners/0/tls/options/*"), "{error}");
+    assert!(error.len() < 1000);
+}

@@ -5,7 +5,7 @@
 use super::common::PolicyAncestorStatus;
 
 crate::redact::impl_redacted_debug!(BackendTLSPolicySpec);
-use super::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass};
+use super::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
 use super::gateway::SecretObjectReference;
 use k8s_openapi::api::core::v1::Secret;
 use kube::CustomResource;
@@ -99,29 +99,6 @@ pub struct BackendTLSPolicyTargetRef {
     pub section_name: Option<String>,
 }
 
-impl BackendTLSPolicyTargetRef {
-    /// Parse the accepted direct policy target group/kind pair.
-    pub fn target_kind(&self) -> Result<PolicyTargetKind, String> {
-        match (self.group.as_str(), self.kind.as_str()) {
-            ("" | "core", "Service") => Ok(PolicyTargetKind::Service),
-            ("edgion.io", "EdgionBackend") => Ok(PolicyTargetKind::EdgionBackend),
-            _ => Err(format!(
-                "targetRef {}/{} {}: supported targets are core-group Service or edgion.io/EdgionBackend",
-                self.group, self.kind, self.name
-            )),
-        }
-    }
-
-    /// Resolve this same-namespace reference to the canonical policy identity.
-    pub fn canonical_key(&self, namespace: &str) -> Result<PolicyTargetKey, String> {
-        Ok(PolicyTargetKey {
-            target_kind: self.target_kind()?,
-            namespace: namespace.to_string(),
-            name: self.name.clone(),
-        })
-    }
-}
-
 /// BackendTLSPolicyValidation contains backend TLS validation configuration.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -153,18 +130,12 @@ pub struct BackendTLSPolicyValidation {
     pub well_known_ca_certificates: Option<WellKnownCACertificates>,
 }
 
-/// BackendTLSPolicyCACertificateRef identifies a ConfigMap or Secret containing a CA certificate bundle.
-///
-/// For BackendTLSPolicy, per Gateway API spec, refs must be in the same namespace as the policy;
-/// `namespace` is ignored by the `DirectSameNs` fetch strategy. For non-BTP consumers (e.g.
-/// EdgionGatewayConfig outbound TLS), an explicit `namespace` enables cross-namespace trust-anchor
-/// references subject to a `ReferenceGrant` when the `GrantGated` fetch strategy is used.
+/// Required standard local reference to a CA bundle in the policy namespace.
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendTLSPolicyCACertificateRef {
     /// Group is the group of the referent. For example, "".
-    /// When unspecified or empty string, core API group is inferred.
-    #[serde(default)]
+    /// This field is required; an explicit empty string denotes the core group.
     pub group: String,
 
     /// Kind is the kind of the referent. For example "Secret" or "ConfigMap".
@@ -172,14 +143,6 @@ pub struct BackendTLSPolicyCACertificateRef {
 
     /// Name is the name of the referent.
     pub name: String,
-
-    /// Namespace of the referent. When absent the controller infers the same namespace
-    /// as the owning resource. For cluster-scoped resources (e.g. EdgionGatewayConfig)
-    /// this field is required; refs without a namespace are skipped.
-    /// Cross-namespace refs require a matching ReferenceGrant when the `GrantGated`
-    /// fetch strategy is in use.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
 }
 
 /// SubjectAltName represents a Subject Alternative Name.

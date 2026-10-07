@@ -176,5 +176,6 @@ The following annotations are managed automatically by the system; **do not set 
 | `edgion.io/hostname-resolution` | DNS resolution results injected by the Controller |
 | `edgion.io/sync-version` | Configuration sync version number |
 | `edgion.io/dns-resolved-at` | Controller-written freshness timestamp on synthetic EndpointSlices |
+| `edgion.io/controller-ca-source` | Internal `ConfigMap` source marker on Controller-resolved CA material; stripped from ordinary fetched Secrets |
 
 See the [references/](references/) directory for the detailed reference.

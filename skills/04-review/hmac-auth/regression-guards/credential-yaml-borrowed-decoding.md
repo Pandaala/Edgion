@@ -8,16 +8,17 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-Controller `resolve_credential/hmac.rs::resolve_group` validates UTF-8 with
+Controller `resolve_credential/hmac.rs::decode_group_secret` validates UTF-8 with
 `std::str::from_utf8(&credentials_yaml_bytes.0)` and passes the resulting `&str`
 to the YAML parser. Both standalone HmacAuth and shared HMAC conditions use this
-resolver. D0036 removes one avoidable full-YAML copy per fetched credential Secret;
+decoder through owning reference tokens. D0036 removes one avoidable full-YAML copy per fetched credential Secret;
 it does not remove all credential copies or establish allocator erasure.
 
 ## Rationale and evidence
 
-`SecretStore::get` clones the stored Secret. `fetch_secret` returns that owned
-Secret after reference registration and grant checks. The local Secret owns
+`SecretStore::get` clones the stored Secret. `fetch_bound_secret` returns that owned
+Secret after validating the actual field identity, reference registration and
+exact grant checks. The local Secret owns
 `data["credentials.yaml"]` throughout synchronous decoding and parsing. Previously,
 `String::from_utf8(bytes.clone())` allocated another complete credential buffer
 solely to validate and expose UTF-8. Borrowing removes that extra owner without
@@ -31,7 +32,7 @@ including for a single user. Operators may author that list as a block scalar in
 `normalize_string_data`, which copies each string value into the same `data` key;
 it does not synthesize a credential list from top-level `username` / `secret` keys.
 
-`resolve_group` requires `data["credentials.yaml"]`, decodes UTF-8, and parses
+`decode_group_secret` requires `data["credentials.yaml"]`, decodes UTF-8, and parses
 `Vec<serde_yaml::Value>`. `HmacMatchConfig.username_field` and `secret_field` select
 keys inside each mapping entry. The username becomes a `resolved_credentials` map
 key; `HmacCredential.secret` holds the trimmed secret bytes and `group` records
@@ -66,6 +67,13 @@ truncated UTF-8, safe decode diagnostics, reference registration, and valid
 credentials following invalid Secrets. Existing HMAC tests cover shared conditions,
 first-wins, metadata policy, and re-resolution. Tests verify semantics; the removed
 clone is established by source inspection, not an allocation-count benchmark.
+Standalone HmacAuth derives its metadata whitelist from its actual plugin
+configuration. Condition HMAC uses the same decoder with an empty whitelist,
+preserving its ignore-metadata policy. Both status paths validate identity,
+authorization and existence using owning tokens; status does not deeply parse
+credential YAML. Effective condition references are prepared after ConfigData
+expansion and cannot freeze into raw-owner asynchronous descriptors.
+
 Re-evaluate if fetching becomes borrowed, decoding becomes asynchronous, the parser
 retains borrowed values, or resolved credential ownership changes. Fresh execution
 results are recorded in the ownership evidence.

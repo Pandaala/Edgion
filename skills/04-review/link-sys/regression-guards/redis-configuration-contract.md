@@ -61,6 +61,28 @@ configuration. The same type resolves timeout defaults and bounds, preventing
 the Controller and Gateway from interpreting a value differently. Runtime
 mapping must reject invalid values rather than clamp them.
 
+Redis production construction now takes the actual Arc<LinkSys>. Common's
+private-field PreparedRedisTls retains its reference topology and one global TLS
+snapshot; source and whole active ordered material pairing precede the runner's
+digest/RV/zero-live decisions. Disabled local references remain inert; rediss
+still selects TLS and inherits global defaults through an empty local policy.
+Consumed inherited axes join the material digest, with local override masks.
+RedisCandidate supplies the same preparation and fingerprint to every runner
+retry. Construction resolves once into the shared rustls conversion core and
+Fred retains the connector across seed/reconnect/Sentinel/Cluster dials. Mapping
+never reconstructs TLS or reads globals. System-root fallback, private CA replace,
+mTLS, verify=false and unsupported hostname/SAN rejection remain unchanged.
+The test-util-only from_test_config fixture creates a named actual owner and
+delegates to this production path; normal builds expose no detached constructor.
+This TLS migration does not claim the separate auth-material ownership migration.
+
+Ordinary preparation/build failure retains the prior published client for new
+lookups/calls under the existing custom LinkSys lifecycle. Forced refresh retires
+that publication first and remains pending until a replacement publishes. A
+proof failure cannot retire an ordinary zero-live publication through plan_apply.
+Other persistent providers currently have only mechanical candidate adapters;
+their owning TLS migrations remain open in the resource-reference task.
+
 The Gateway sets Fred's connection timeout, command timeout, pool size,
 `max_command_attempts`, and optional cluster redirect limit explicitly. Any new
 Redis field must be wired through schema, validation, runtime behavior,

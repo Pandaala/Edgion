@@ -40,11 +40,7 @@ impl CrossNamespaceValidator {
         for backend_ref in backend_refs {
             if let Some(backend_ns) = &backend_ref.namespace {
                 if backend_ns != route_namespace {
-                    let group = if backend_ref.group.is_empty() {
-                        ""
-                    } else {
-                        &backend_ref.group
-                    };
+                    let group = backend_ref.group.as_deref().unwrap_or_default();
                     let kind = backend_ref.kind.as_deref().unwrap_or("Service");
 
                     let allowed = self.store.check_reference_allowed(

@@ -35,19 +35,30 @@ existing unknown/not-rejected behavior; this is not proof of plugin availability
 Plugin dependency registration stays on EGC, preserving plugin → EGC → class
 requeues. See the [shared status guard](../../04-review/status/regression-guards/shared-config-status-deployment-independence.md).
 
-`parse` clears prior Secret registrations and resolves the cluster-wide
-`outboundTls.validation.caCertificateRefs` through runtime material stores with
-ReferenceGrant enforcement, and embeds `resolved_ca_certificates` for conf_sync. Because the owner
-is cluster-scoped, referenced material must carry an explicit namespace.
+The actual-owner `PreparedEgcTlsReferences` visitor validates a true Cluster owner
+and explicit target namespaces. `preparse` reports intrinsic reference errors,
+including an invalid owner even when no TLS block exists. Material visibility does
+not enter shared EGC Accepted. No shared ResolvedRefs condition is introduced.
 
-The same parse pass clears and resolves `outboundTls.clientCertificateRef` into
-`resolvedClientCertificate`. It requires an explicit namespace and a core Secret
-reference, and uses the shared grant-gated credential fetch. Missing Secrets and
-missing grants remain indexed for reprocessing; every generation clears stale
-material before lookup. Cluster-scoped source identity follows the existing CA
-fetch convention (`default` on the source side of a cross-namespace grant).
-Secret key/certificate validation remains in the shared outbound TLS consumer;
-missing identity material fails closed rather than silently dropping mTLS.
+`parse` clears prior registrations and both resolved material fields before
+reading stores. The two exact fields `outboundTls.validation.caCertificateRefs[]`
+and `outboundTls.clientCertificateRef` use opaque administrative selections from
+their actual EGC owner. EGC write authority authorizes selecting named visible
+material in explicit namespaces. These selections do not require ReferenceGrant
+and do not fabricate a source namespace or Grant dependency. This authority does
+not extend to namespaced plugin/LinkSys references or globalPluginsRef.
+CA kinds are Secret/ConfigMap; the client kind defaults to Secret. Omitted/empty
+group and the approved custom `core` spelling select the core API. Target namespace
+must be explicit, nonempty and valid. Every valid slot, including missing material,
+registers a recovery dependency; invalid slots create no lookup/edge. Canonical
+dependency ownership is EGC/name/namespace=None, including malformed-namespace
+updates and delete cleanup. CA and client outcomes remain independent.
+
+Ordinary Secret copies lose the reserved ConfigMap marker; actual ConfigMaps use
+the shared provenance wrapper. No requested identity is written over fetched
+metadata. Material/key/certificate parsing remains with outbound TLS consumers.
+The owning global policy loan borrows actual policy/material and is separate from
+the still-pending full global preparation and client-reuse migration.
 
 Change/delete events requeue all GatewayClass resources because their parametersRef status depends
 on EdgionGatewayConfig existence; delete also clears Secret registrations.

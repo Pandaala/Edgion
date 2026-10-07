@@ -19,8 +19,7 @@ use tokio::sync::mpsc;
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
 use crate::link_sys::runtime::health_probe::{flip_log_allowed, new_published_health};
-use edgion_common::link_sys_core::PublishedHealth;
-use edgion_resources::resources::common::TlsConfig;
+use edgion_common::link_sys_core::{outbound_tls::PreparedLinkSysTls, PublishedHealth};
 use edgion_resources::resources::link_sys::kafka::{
     KafkaClientConfig, DEFAULT_KAFKA_CHANNEL_SIZE, DEFAULT_KAFKA_LINGER_MS, DEFAULT_KAFKA_MAX_PENDING_BYTES,
     DEFAULT_KAFKA_MAX_PENDING_RECORDS, DEFAULT_KAFKA_MAX_TOPICS,
@@ -37,7 +36,7 @@ const KAFKA_REBUILD_THRESHOLD: u32 = 3;
 /// dead/old-IP broker makes `produce().await` hang forever; this timeout forces
 /// the task to exit (closing its channel) so the self-heal + rebuild can respawn
 /// it on the current client. Generous relative to `linger_ms`.
-/// `from_config` rejects linger durations at or above this ceiling so every
+/// Owning construction rejects linger durations at or above this ceiling so every
 /// accepted configuration leaves time for the produce operation itself.
 const PRODUCE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -140,30 +139,42 @@ struct TopicEntry {
     _reservation: TopicReservation,
 }
 
-/// Build the rustls `ClientConfig` for the rskafka TLS connector.
-///
-/// Delegates custom-CA / client-mTLS / verify-gate resolution to the shared
-/// [`crate::link_sys::tls::build_rustls_client_config`]. That helper returns
-/// `None` when the operator supplied no custom CA and no client identity; unlike
-/// reqwest / fred, rskafka has **no implicit default TLS connector** — omitting
-/// `tls_config` yields a plaintext connection — so in that case we still build an
-/// explicit system-roots (built-in webpki) verifying config to honor
-/// `tls.enabled: true`.
-fn build_kafka_tls_config(tls: &TlsConfig) -> Result<rustls::ClientConfig> {
-    if let Some(cfg) = crate::link_sys::tls::build_rustls_client_config(tls)? {
-        return Ok(cfg);
+/// Immutable connection input retained by initialization and probe recovery.
+struct KafkaConnectionInput {
+    owner: Arc<PreparedLinkSysTls>,
+    auth: CredentialState<ResolvedCredential>,
+    tls: Option<Arc<rustls::ClientConfig>>,
+}
+
+impl KafkaConnectionInput {
+    fn config(&self) -> &KafkaClientConfig {
+        let SystemConfig::Kafka(config) = &self.owner.owner().spec.config else {
+            unreachable!("prepared Kafka provider is immutable")
+        };
+        config
     }
-    let mut roots = rustls::RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    Ok(rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth())
+
+    fn client_builder(&self) -> ClientBuilder {
+        let config = self.config();
+        let mut builder = ClientBuilder::new(config.brokers.clone());
+        if let Some(tls) = &self.tls {
+            builder = builder.tls_config(Arc::clone(tls));
+        }
+        if let Some(sasl) = &config.sasl {
+            if let CredentialState::Resolved(ResolvedCredential::Basic(basic)) = &self.auth {
+                builder = builder.sasl_config(SaslConfig::Plain(Credentials::new(
+                    sasl.username.clone(),
+                    basic.password.clone(),
+                )));
+            }
+        }
+        builder
+    }
 }
 
 pub struct KafkaLinkClient {
     name: String,
-    config: KafkaClientConfig,
-    auth: CredentialState<ResolvedCredential>,
+    connection: Arc<KafkaConnectionInput>,
     channel_size: usize,
     linger_ms: u64,
     inner_client: Arc<ArcSwapOption<rskafka::client::Client>>,
@@ -185,11 +196,36 @@ pub struct KafkaLinkClient {
 }
 
 impl KafkaLinkClient {
-    pub fn from_config(
-        name: &str,
-        config: &KafkaClientConfig,
-        auth: &CredentialState<ResolvedCredential>,
-    ) -> Result<Self> {
+    /// Build only from an actual immutable LinkSys owner.
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use edgion_gateway::link_sys::providers::kafka::KafkaLinkClient;
+    /// let owner = serde_json::from_value(serde_json::json!({"metadata":{"name":"kafka"},
+    ///     "spec":{"type":"kafka","config":{"brokers":["kafka.example:9092"]}}})).unwrap();
+    /// let client = KafkaLinkClient::from_link_sys(Arc::new(owner));
+    /// ```
+    /// ```compile_fail
+    /// use edgion_gateway::link_sys::providers::kafka::KafkaLinkClient;
+    /// use edgion_common::link_sys_core::credential::CredentialState;
+    /// use edgion_resources::resources::link_sys::kafka::KafkaClientConfig;
+    /// let config: KafkaClientConfig = serde_json::from_str(r#"{"brokers":["kafka.example:9092"]}"#).unwrap();
+    /// let client = KafkaLinkClient::from_config("kafka", &config, &CredentialState::NotRequired);
+    /// ```
+    pub fn from_link_sys(owner: Arc<LinkSys>) -> Result<Self> {
+        let candidate = super::apply::KafkaCandidate::new(owner)?;
+        let actual = candidate.tls.owner();
+        let name = format!(
+            "{}/{}",
+            actual.metadata.namespace.as_deref().unwrap_or("default"),
+            actual.metadata.name.as_deref().unwrap_or_default()
+        );
+        Self::from_candidate(&name, &candidate)
+    }
+
+    pub(super) fn from_candidate(name: &str, candidate: &super::apply::KafkaCandidate) -> Result<Self> {
+        let SystemConfig::Kafka(config) = &candidate.tls.owner().spec.config else {
+            anyhow::bail!("Kafka construction requires an actual Kafka LinkSys");
+        };
         if config.brokers.is_empty() {
             anyhow::bail!("Kafka brokers list is empty for '{}'", name);
         }
@@ -217,10 +253,16 @@ impl KafkaLinkClient {
                 name
             );
         }
+        let auth = crate::link_sys::credential::resolved_state(candidate.tls.owner());
+        anyhow::ensure!(auth.is_buildable(), "Kafka authentication is {}", auth.kind());
+        let tls = edgion_common::link_sys_core::tls::build_kafka_rustls_client_config(&candidate.tls)?.map(Arc::new);
         Ok(Self {
             name: name.to_string(),
-            config: config.clone(),
-            auth: auth.clone(),
+            connection: Arc::new(KafkaConnectionInput {
+                owner: Arc::clone(&candidate.tls),
+                auth,
+                tls,
+            }),
             channel_size,
             linger_ms,
             inner_client: Arc::new(ArcSwapOption::empty()),
@@ -232,22 +274,10 @@ impl KafkaLinkClient {
             last_flip_log_ms: Arc::new(AtomicU64::new(0)),
             shutdown_tx: parking_lot::Mutex::new(None),
             probe_handle: parking_lot::Mutex::new(None),
-            fingerprint: RuntimeFingerprint::unspecified(),
+            fingerprint: candidate.fingerprint().clone(),
             retired: Arc::new(AtomicBool::new(false)),
             shutdown_started: AtomicBool::new(false),
         })
-    }
-
-    /// Build from a resolved Kafka LinkSys, including the apply fingerprint.
-    pub(crate) fn from_linksys(name: &str, ls: &LinkSys) -> Result<Arc<Self>> {
-        let SystemConfig::Kafka(config) = &ls.spec.config else {
-            anyhow::bail!("Kafka from_linksys called with a non-Kafka LinkSys");
-        };
-        let auth = crate::link_sys::credential::resolved_state(ls);
-        let fingerprint = super::apply::fingerprint_kafka(ls)?;
-        let mut client = Self::from_config(name, config, &auth)?;
-        client.fingerprint = fingerprint;
-        Ok(Arc::new(client))
     }
 
     pub(crate) fn runtime_fingerprint(&self) -> &RuntimeFingerprint {
@@ -255,9 +285,9 @@ impl KafkaLinkClient {
     }
 
     pub(crate) fn connection_coverage(&self) -> ConnectionCoverage {
-        let configured = self.config.brokers.len().max(1);
+        let configured = self.connection.config().brokers.len().max(1);
         let live = if self.inner_client.load_full().is_some() && self.healthy() {
-            self.config.brokers.len()
+            self.connection.config().brokers.len()
         } else {
             0
         };
@@ -281,38 +311,11 @@ impl KafkaLinkClient {
         &self.healthy
     }
 
-    /// Build a connected rskafka client from brokers + resolved auth. Shared by
-    /// `init()` and the background-probe rebuild so the two cannot diverge.
-    async fn build_kafka_client(
-        brokers: &[String],
-        auth: &CredentialState<ResolvedCredential>,
-        config: &KafkaClientConfig,
-    ) -> Result<rskafka::client::Client> {
-        let mut builder = ClientBuilder::new(brokers.to_vec());
-
-        // TLS — rskafka 0.6 targets rustls 0.23 (matching the workspace), so the
-        // shared outbound resolver / builder can drive the connector directly:
-        // custom CA (REPLACE), client mTLS identity, and the verify gate all flow
-        // through `build_rustls_client_config` (provider_can_disable=false — the
-        // rustls connector always verifies, so verify=false is rejected there).
-        if let Some(tls_config) = &config.tls {
-            if tls_config.enabled {
-                builder = builder.tls_config(Arc::new(build_kafka_tls_config(tls_config)?));
-            }
-        }
-
-        // SASL/PLAIN — the resolved credential carries the password from the K8s Secret;
-        // the username lives directly in the CRD spec.
-        if let Some(sasl) = &config.sasl {
-            if let CredentialState::Resolved(ResolvedCredential::Basic(basic)) = auth {
-                builder = builder.sasl_config(SaslConfig::Plain(Credentials::new(
-                    sasl.username.clone(),
-                    basic.password.clone(),
-                )));
-            }
-        }
-
-        builder
+    /// SDK reconnects and probe recovery retain the constructed connector and
+    /// actual owner; only SDK-required broker/credential strings are copied.
+    async fn build_kafka_client(input: &KafkaConnectionInput) -> Result<rskafka::client::Client> {
+        input
+            .client_builder()
             .build()
             .await
             .map_err(|e| anyhow::anyhow!("Kafka client build failed: {}", e))
@@ -470,7 +473,7 @@ impl KafkaLinkClient {
 
 impl KafkaLinkClient {
     pub async fn init(&self) -> Result<()> {
-        let client = Self::build_kafka_client(&self.config.brokers, &self.auth, &self.config).await?;
+        let client = Self::build_kafka_client(&self.connection).await?;
         self.inner_client.store(Some(Arc::new(client)));
         self.healthy.update(true, false);
 
@@ -491,18 +494,14 @@ impl KafkaLinkClient {
             shutdown_rx,
             {
                 let inner = Arc::clone(&self.inner_client);
-                let brokers = self.config.brokers.clone();
-                let auth = self.auth.clone();
-                let config = self.config.clone();
+                let connection = Arc::clone(&self.connection);
                 let name = self.name.clone();
                 let fail_count = Arc::new(AtomicU32::new(0));
                 let retired = Arc::clone(&self.retired);
                 let healthy = Arc::clone(&self.healthy);
                 move || {
                     let inner = Arc::clone(&inner);
-                    let brokers = brokers.clone();
-                    let auth = auth.clone();
-                    let config = config.clone();
+                    let connection = Arc::clone(&connection);
                     let name = name.clone();
                     let fail_count = Arc::clone(&fail_count);
                     let retired = Arc::clone(&retired);
@@ -524,7 +523,7 @@ impl KafkaLinkClient {
                         // before we ever reach the rebuild. build_kafka_client reconnects from the
                         // configured bootstrap brokers (fresh DNS), recovering pod-IP churn.
                         if n >= KAFKA_REBUILD_THRESHOLD {
-                            match Self::build_kafka_client(&brokers, &auth, &config).await {
+                            match Self::build_kafka_client(&connection).await {
                                 Ok(c) => {
                                     let c = Arc::new(c);
                                     inner.store(Some(Arc::clone(&c)));

@@ -1,6 +1,6 @@
 use super::*;
-use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
 use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::common::{OutboundTlsLocal, SecretObjectReference, TlsConfig as CommonTlsConfig};
 use edgion_resources::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
 use edgion_resources::resources::link_sys::LinkSysSpec;
@@ -507,8 +507,8 @@ fn dispatch_gate_blocks_tls_ref_without_secret() {
                     // CA certificate refs declared but not yet resolved
                     outbound: OutboundTlsLocal {
                         validation: Some(OutboundTlsValidation {
-                            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                                group: String::new(),
+                            ca_certificate_refs: Some(vec![CustomCACertificateRef {
+                                group: Some(String::new()),
                                 kind: "Secret".into(),
                                 name: "tls".into(),
                                 namespace: None,

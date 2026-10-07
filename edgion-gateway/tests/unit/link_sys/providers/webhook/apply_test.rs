@@ -3,6 +3,10 @@ use edgion_resources::resources::common::{ExternalHttpConnection, WebhookService
 use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 use edgion_resources::resources::link_sys::LinkSysSpec;
 
+fn fingerprint(owner: &LinkSys) -> RuntimeFingerprint {
+    fingerprint_webhook(owner, &GlobalOutboundTlsSnapshot::from_configs([])).unwrap()
+}
+
 fn webhook_ls(port: i32, rv: Option<&str>) -> LinkSys {
     LinkSys {
         metadata: kube::core::ObjectMeta {
@@ -38,16 +42,30 @@ fn webhook_ls(port: i32, rv: Option<&str>) -> LinkSys {
 fn equal_port_matches() {
     let a = webhook_ls(8080, Some("1"));
     let b = webhook_ls(8080, Some("2"));
-    assert!(fingerprint_webhook(&a)
-        .unwrap()
-        .equal_runtime(&fingerprint_webhook(&b).unwrap()));
+    assert!(fingerprint(&a).equal_runtime(&fingerprint(&b)));
 }
 
 #[test]
 fn port_change_rebuilds() {
     let a = webhook_ls(8080, None);
     let b = webhook_ls(8081, None);
-    assert!(!fingerprint_webhook(&a)
-        .unwrap()
-        .equal_runtime(&fingerprint_webhook(&b).unwrap()));
+    assert!(!fingerprint(&a).equal_runtime(&fingerprint(&b)));
+}
+
+#[test]
+fn absent_and_disabled_tls_have_equal_runtime_identity() {
+    let absent = webhook_ls(8080, Some("1"));
+    let mut disabled = webhook_ls(8080, Some("2"));
+    let SystemConfig::Webhook(config) = &mut disabled.spec.config else {
+        unreachable!()
+    };
+    config.conn.tls = Some(
+        serde_json::from_value(serde_json::json!({
+            "enabled":false,
+            "validation":{"caCertificateRefs":[{"group":"foreign.example","kind":"Secret","name":"bad"}]},
+            "resolvedCaCertificates":[{"metadata":{"name":"wrong","namespace":"wrong"}}]
+        }))
+        .unwrap(),
+    );
+    assert!(fingerprint(&absent).equal_runtime(&fingerprint(&disabled)));
 }

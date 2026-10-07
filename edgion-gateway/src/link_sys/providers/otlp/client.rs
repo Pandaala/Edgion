@@ -8,8 +8,7 @@ use std::time::Duration;
 use arc_swap::ArcSwapOption;
 use edgion_common::dns::ResolverSpec;
 use edgion_common::link_sys_core::PublishedHealth;
-use edgion_resources::output::LinkSysRef;
-use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
+use edgion_resources::resources::link_sys::LinkSys;
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
 use opentelemetry_sdk::logs::{BatchConfigBuilder, BatchLogProcessor, LogBatch, LogExporter, SdkLoggerProvider};
 use parking_lot::Mutex;
@@ -17,12 +16,14 @@ use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use super::apply::OtlpCandidate;
 use super::log_sender::emit_record;
 use super::transport::PreparedTransport;
 use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
 use crate::link_sys::runtime::health_probe::{
     apply_health_result, new_published_health, spawn_health_probe, ProbeConfig,
 };
+use crate::link_sys::runtime::runner::ApplyOwner;
 use crate::link_sys::LogMeta;
 
 type CleanupResult = Result<(), &'static str>;
@@ -142,6 +143,20 @@ fn retire(pipeline: Arc<Pipeline>) -> JoinHandle<CleanupResult> {
 }
 
 /// One prepared and eventually published OTLP generation.
+/// ```no_run
+/// use std::sync::Arc;
+/// use edgion_gateway::link_sys::providers::otlp::OtlpLinkClient;
+/// let owner = serde_json::from_value(serde_json::json!({"metadata":{"name":"otlp","namespace":"apps"},
+///     "spec":{"type":"otlp","config":{"endpoint":"http://collector.example:4317"}}})).unwrap();
+/// let client = OtlpLinkClient::from_link_sys(Arc::new(owner)).unwrap();
+/// ```
+/// Detached construction is unavailable:
+/// ```compile_fail
+/// use edgion_gateway::link_sys::providers::otlp::OtlpLinkClient;
+/// let owner = serde_json::from_value(serde_json::json!({"metadata":{"name":"otlp","namespace":"apps"},
+///     "spec":{"type":"otlp","config":{"endpoint":"http://collector.example:4317"}}})).unwrap();
+/// let client = OtlpLinkClient::from_linksys("apps/otlp", &owner);
+/// ```
 pub struct OtlpLinkClient {
     key: String,
     transport: Arc<PreparedTransport>,
@@ -156,35 +171,27 @@ pub struct OtlpLinkClient {
 }
 
 impl OtlpLinkClient {
-    pub fn from_linksys(key: &str, resource: &LinkSys) -> anyhow::Result<Arc<Self>> {
-        Self::from_linksys_inner(key, resource, ResolverSpec::System)
+    pub fn from_link_sys(resource: Arc<LinkSys>) -> anyhow::Result<Arc<Self>> {
+        let key = resource.key_name_str();
+        Self::from_candidate(&key, &OtlpCandidate::new(resource)?, ResolverSpec::System)
     }
 
     #[cfg(feature = "test-util")]
-    pub fn from_linksys_with_resolver(
-        key: &str,
-        resource: &LinkSys,
-        resolver: ResolverSpec,
-    ) -> anyhow::Result<Arc<Self>> {
-        Self::from_linksys_inner(key, resource, resolver)
+    pub fn from_link_sys_with_resolver(resource: Arc<LinkSys>, resolver: ResolverSpec) -> anyhow::Result<Arc<Self>> {
+        let key = resource.key_name_str();
+        Self::from_candidate(&key, &OtlpCandidate::new(resource)?, resolver)
     }
 
-    fn from_linksys_inner(key: &str, resource: &LinkSys, resolver: ResolverSpec) -> anyhow::Result<Arc<Self>> {
-        let (namespace, name) = key.split_once('/').ok_or_else(|| anyhow::anyhow!("invalid_config"))?;
-        LinkSysRef {
-            namespace: namespace.to_owned(),
-            name: name.to_owned(),
-        }
-        .validate()
-        .map_err(|_| anyhow::anyhow!("invalid_config"))?;
-        if resource.key_name_str() != key || !resource.validate_config().is_empty() {
+    pub(super) fn from_candidate(
+        key: &str,
+        candidate: &OtlpCandidate,
+        resolver: ResolverSpec,
+    ) -> anyhow::Result<Arc<Self>> {
+        if candidate.tls.owner().key_name_str() != key {
             anyhow::bail!("invalid_config");
         }
-        let SystemConfig::Otlp(config) = &resource.spec.config else {
-            anyhow::bail!("OTLP from_linksys called with a non-OTLP LinkSys");
-        };
-        let transport = PreparedTransport::prepare(config, resolver).map_err(anyhow::Error::msg)?;
-        let fingerprint = super::apply::fingerprint_otlp(resource)?;
+        let transport = PreparedTransport::prepare(Arc::clone(&candidate.tls), resolver).map_err(anyhow::Error::msg)?;
+        let fingerprint = super::apply::OtlpApply::fingerprint(candidate)?;
         Ok(Arc::new(Self {
             key: key.to_string(),
             transport,

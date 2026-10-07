@@ -377,7 +377,8 @@ fn webhook_with_unresolved_secret_ref_is_not_ready() {
 async fn redis_relist_and_pending_update_preserve_published_generation() {
     let registry = RuntimeRegistry::new();
     let resource = create_redis_linksys("test", "link", InjectedSecret::Valid);
-    let client = RedisApply::build("test/link", &resource).unwrap();
+    let candidate = RedisApply::prepare(Arc::new(resource.clone())).unwrap();
+    let client = RedisApply::build("test/link", &candidate).unwrap();
     let runner = PersistentRunner::<RedisApply>::spawn_with_published("test/link".to_string(), client.clone());
     registry.install(
         "test/link",
@@ -400,7 +401,7 @@ async fn redis_relist_and_pending_update_preserve_published_generation() {
 async fn etcd_relist_and_pending_update_preserve_published_generation() {
     let registry = RuntimeRegistry::new();
     let resource = create_etcd_linksys("test", "link", InjectedSecret::Valid);
-    let client = EtcdApply::build("test/link", &resource).unwrap();
+    let client = EtcdApply::build("test/link", &EtcdApply::prepare(Arc::new(resource.clone())).unwrap()).unwrap();
     let runner = PersistentRunner::<EtcdApply>::spawn_with_published("test/link".to_string(), client.clone());
     registry.install(
         "test/link",
@@ -423,7 +424,7 @@ async fn etcd_relist_and_pending_update_preserve_published_generation() {
 async fn es_relist_and_pending_update_preserve_published_generation() {
     let registry = RuntimeRegistry::new();
     let resource = create_es_linksys("test", "link", InjectedSecret::Valid);
-    let client = EsApply::build("test/link", &resource).unwrap();
+    let client = EsApply::build("test/link", &EsApply::prepare(Arc::new(resource.clone())).unwrap()).unwrap();
     let runner = PersistentRunner::<EsApply>::spawn_with_published("test/link".to_string(), client.clone());
     registry.install(
         "test/link",
@@ -446,7 +447,7 @@ async fn es_relist_and_pending_update_preserve_published_generation() {
 async fn kafka_relist_and_pending_update_preserve_published_generation() {
     let registry = RuntimeRegistry::new();
     let resource = create_kafka_linksys_sasl("test", "link", InjectedSecret::Valid);
-    let client = KafkaApply::build("test/link", &resource).unwrap();
+    let client = KafkaApply::build("test/link", &KafkaApply::prepare(Arc::new(resource.clone())).unwrap()).unwrap();
     let runner = PersistentRunner::<KafkaApply>::spawn_with_published("test/link".to_string(), client.clone());
     registry.install(
         "test/link",
@@ -469,7 +470,7 @@ async fn kafka_relist_and_pending_update_preserve_published_generation() {
 async fn otlp_relist_and_pending_update_preserve_published_generation() {
     let registry = RuntimeRegistry::new();
     let resource = create_otlp_linksys("test", "link", InjectedSecret::Valid);
-    let client = OtlpApply::build("test/link", &resource).unwrap();
+    let client = OtlpApply::build("test/link", &OtlpApply::prepare(Arc::new(resource.clone())).unwrap()).unwrap();
     let runner = PersistentRunner::<OtlpApply>::spawn_with_published("test/link".to_string(), client.clone());
     registry.install(
         "test/link",
@@ -493,10 +494,10 @@ async fn old_probe_result_cannot_overwrite_published_health_gauge() {
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     let registry = RuntimeRegistry::new();
     let resource = create_etcd_linksys("test", "link", InjectedSecret::Valid);
-    let old_client = EtcdApply::build("test/link", &resource).unwrap();
+    let old_client = EtcdApply::build("test/link", &EtcdApply::prepare(Arc::new(resource.clone())).unwrap()).unwrap();
     let old = PersistentRunner::<EtcdApply>::spawn_with_published("test/link".to_string(), old_client.clone());
     registry.install("test/link", Some(RuntimeEntry::new(ProviderRuntime::Etcd(old.clone()))));
-    let new_client = EtcdApply::build("test/link", &resource).unwrap();
+    let new_client = EtcdApply::build("test/link", &EtcdApply::prepare(Arc::new(resource.clone())).unwrap()).unwrap();
     let new = PersistentRunner::<EtcdApply>::spawn_with_published("test/link".to_string(), new_client);
     registry.install("test/link", Some(RuntimeEntry::new(ProviderRuntime::Etcd(new.clone()))));
     let recorder = DebuggingRecorder::new();
@@ -531,46 +532,40 @@ async fn typed_getters_only_return_the_current_provider() {
         RuntimeEntry::new(ProviderRuntime::Redis(
             PersistentRunner::<RedisApply>::spawn_with_published(
                 key.to_string(),
-                RedisApply::build(key, &resources[0]).unwrap(),
+                RedisApply::build(key, &RedisApply::prepare(Arc::new(resources[0].clone())).unwrap()).unwrap(),
             ),
         )),
         RuntimeEntry::new(ProviderRuntime::Etcd(
             PersistentRunner::<EtcdApply>::spawn_with_published(
                 key.to_string(),
-                EtcdApply::build(key, &resources[1]).unwrap(),
+                EtcdApply::build(key, &EtcdApply::prepare(Arc::new(resources[1].clone())).unwrap()).unwrap(),
             ),
         )),
         RuntimeEntry::new(ProviderRuntime::Elasticsearch(
             PersistentRunner::<EsApply>::spawn_with_published(
                 key.to_string(),
-                EsApply::build(key, &resources[2]).unwrap(),
+                EsApply::build(key, &EsApply::prepare(Arc::new(resources[2].clone())).unwrap()).unwrap(),
             ),
         )),
         RuntimeEntry::new(ProviderRuntime::Kafka(
             PersistentRunner::<KafkaApply>::spawn_with_published(
                 key.to_string(),
-                KafkaApply::build(key, &resources[3]).unwrap(),
+                KafkaApply::build(key, &KafkaApply::prepare(Arc::new(resources[3].clone())).unwrap()).unwrap(),
             ),
         )),
         RuntimeEntry::new(ProviderRuntime::Otlp(
             PersistentRunner::<OtlpApply>::spawn_with_published(
                 key.to_string(),
-                OtlpApply::build(key, &resources[4]).unwrap(),
+                OtlpApply::build(key, &OtlpApply::prepare(Arc::new(resources[4].clone())).unwrap()).unwrap(),
             ),
         )),
         {
             let resource = &resources[5];
-            let SystemConfig::Webhook(config) = &resource.spec.config else {
-                panic!("expected webhook")
-            };
             RuntimeEntry::new(ProviderRuntime::Webhook(Arc::new(
-                WebhookLinkClient::prepare(
-                    key,
-                    config.clone(),
-                    Some("test"),
-                    webhook_fingerprint_or_unspecified(resource),
-                )
-                .unwrap(),
+                WebhookCandidate::from_link_sys(Arc::new(resource.clone()))
+                    .unwrap()
+                    .prepare(key)
+                    .unwrap(),
             )))
         },
     ];
@@ -758,6 +753,90 @@ fn httpdns_handle(registry: &RuntimeRegistry) -> Arc<edgion_common::dns::Prepare
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn httpdns_same_rv_actual_owner_failure_replaces_ready_reuses_failed_and_recovers() {
+    let registry = RuntimeRegistry::new();
+    let original = one(httpdns_resource(100));
+    registry.apply(&original, &HashSet::new(), &original, true, false);
+    let ready = httpdns_handle(&registry);
+    assert!(ready.is_ready());
+    let mut malformed = original.clone();
+    malformed.get_mut("test/link").unwrap().metadata.name = None;
+    assert_eq!(
+        original["test/link"].metadata.resource_version,
+        malformed["test/link"].metadata.resource_version
+    );
+    registry.apply(&malformed, &HashSet::new(), &malformed, false, false);
+    let failed = httpdns_handle(&registry);
+    assert!(!failed.is_ready() && !Arc::ptr_eq(&ready, &failed));
+    assert!(edgion_common::dns::resolve(
+        &edgion_common::dns::ResolverSpec::HttpDns(Arc::clone(&failed)),
+        "localhost"
+    )
+    .await
+    .is_err());
+    registry.apply(&malformed, &HashSet::new(), &malformed, false, false);
+    assert!(Arc::ptr_eq(&failed, &httpdns_handle(&registry)));
+    registry.apply(&original, &HashSet::new(), &original, false, false);
+    let repaired = httpdns_handle(&registry);
+    assert!(repaired.is_ready() && !Arc::ptr_eq(&failed, &repaired));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn httpdns_same_rv_active_reference_or_material_failure_cannot_reuse_ready_client() {
+    let registry = RuntimeRegistry::new();
+    let mut resource = httpdns_resource(100);
+    let SystemConfig::HttpDns(config) = &mut resource.spec.config else {
+        unreachable!()
+    };
+    config.connection.as_mut().unwrap().tls = Some(
+        serde_json::from_value(serde_json::json!({
+            "enabled":true,"verify":false,"validation":{"caCertificateRefs":[{"kind":"Secret","name":"ca"}]},
+            "resolvedCaCertificates":[{"metadata":{"name":"ca","namespace":"test"}}]
+        }))
+        .unwrap(),
+    );
+    let original = one(resource);
+    registry.apply(&original, &HashSet::new(), &original, true, false);
+    assert!(httpdns_handle(&registry).is_ready());
+    for case in ["group", "material-namespace", "missing-material"] {
+        let mut malformed = original.clone();
+        let SystemConfig::HttpDns(config) = &mut malformed.get_mut("test/link").unwrap().spec.config else {
+            unreachable!()
+        };
+        let tls = config.connection.as_mut().unwrap().tls.as_mut().unwrap();
+        match case {
+            "group" => {
+                tls.outbound
+                    .validation
+                    .as_mut()
+                    .unwrap()
+                    .ca_certificate_refs
+                    .as_mut()
+                    .unwrap()[0]
+                    .group = Some("other.example".into())
+            }
+            "material-namespace" => {
+                tls.resolved_ca_certificates.as_mut().unwrap()[0].metadata.namespace = Some("other".into())
+            }
+            "missing-material" => tls.resolved_ca_certificates = None,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            original["test/link"].metadata.resource_version,
+            malformed["test/link"].metadata.resource_version
+        );
+        let ready = httpdns_handle(&registry);
+        registry.apply(&malformed, &HashSet::new(), &malformed, false, false);
+        let failed = httpdns_handle(&registry);
+        assert!(!failed.is_ready() && !Arc::ptr_eq(&ready, &failed), "{case}");
+        registry.apply(&malformed, &HashSet::new(), &malformed, false, false);
+        assert!(Arc::ptr_eq(&failed, &httpdns_handle(&registry)), "{case}");
+        registry.apply(&original, &HashSet::new(), &original, false, false);
+        assert!(httpdns_handle(&registry).is_ready(), "{case}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn httpdns_relist_reuses_but_changes_even_with_same_rv_publish_latest_fallback() {
     let registry = RuntimeRegistry::new();
     let original = one(httpdns_resource(100));
@@ -834,7 +913,12 @@ async fn httpdns_secret_material_rotation_replaces_client_and_preserves_address_
     };
     config.connection.as_mut().unwrap().tls = Some(edgion_resources::resources::common::TlsConfig {
         enabled: true,
+        outbound: serde_json::from_value(serde_json::json!({"verify":false,"validation":{
+            "caCertificateRefs":[{"kind":"Secret","name":"ca"}]
+        }}))
+        .unwrap(),
         resolved_ca_certificates: Some(vec![Secret {
+            metadata: serde_json::from_value(serde_json::json!({"name":"ca","namespace":"test"})).unwrap(),
             data: Some(std::collections::BTreeMap::from([(
                 "tls.ca.crt".into(),
                 ByteString(b"old-material".to_vec()),
@@ -846,6 +930,7 @@ async fn httpdns_secret_material_rotation_replaces_client_and_preserves_address_
     let data = one(resource.clone());
     registry.apply(&data, &HashSet::new(), &data, true, false);
     let first = httpdns_handle(&registry);
+    assert!(first.is_ready());
     let fingerprint = edgion_common::dns::ResolverSpec::HttpDns(first.clone()).fingerprint();
     let SystemConfig::HttpDns(config) = &mut resource.spec.config else {
         unreachable!()
@@ -1381,7 +1466,7 @@ async fn published_etcd_client_is_sampled_without_network_init() {
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     let registry = RuntimeRegistry::new();
     let resource = create_etcd_linksys("test", "link", InjectedSecret::Valid);
-    let client = EtcdApply::build("test/link", &resource).unwrap();
+    let client = EtcdApply::build("test/link", &EtcdApply::prepare(Arc::new(resource.clone())).unwrap()).unwrap();
     let runner = PersistentRunner::<EtcdApply>::spawn_with_published("test/link".to_string(), client);
     registry.install(
         "test/link",
@@ -1402,7 +1487,7 @@ async fn published_etcd_client_is_sampled_without_network_init() {
 async fn last_registry_owner_drop_stops_runner_without_waiting_for_arc_drop() {
     let registry = RuntimeRegistry::new();
     let resource = create_etcd_linksys("test", "link", InjectedSecret::Valid);
-    let client = EtcdApply::build("test/link", &resource).unwrap();
+    let client = EtcdApply::build("test/link", &EtcdApply::prepare(Arc::new(resource.clone())).unwrap()).unwrap();
     let runner = PersistentRunner::<EtcdApply>::spawn_with_published("test/link".to_string(), client);
     registry.install(
         "test/link",
@@ -1476,5 +1561,98 @@ async fn webhook_forced_tls_rebuild_revokes_unusable_generation_and_recovers() {
         assert!(!Arc::ptr_eq(&old, &recovered));
         assert!(!recovered.stopped.load(Ordering::Acquire));
         assert_eq!(registry.count(ProviderKind::Webhook), 1);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn webhook_same_rv_invalid_owner_preserves_last_good_but_forced_rebuild_withdraws() {
+    for source in ["name", "namespace"] {
+        let registry = RuntimeRegistry::new();
+        let mut valid = create_test_webhook_linksys("test", "link");
+        valid.metadata.resource_version = Some("42".into());
+        let data = one(valid.clone());
+        registry.apply(&data, &HashSet::new(), &data, true, false);
+        let old = registry.get("test/link").unwrap();
+        let mut invalid = valid;
+        if source == "name" {
+            invalid.metadata.name = None;
+        } else {
+            invalid.metadata.namespace = Some("".into());
+        }
+        let ProviderRuntime::Webhook(client) = &old.provider else {
+            unreachable!()
+        };
+        assert!(!WebhookCandidate::from_link_sys(Arc::new(invalid.clone()))
+            .unwrap()
+            .can_reuse(client, false));
+        let invalid = one(invalid);
+        for _ in 0..2 {
+            registry.apply(&invalid, &HashSet::new(), &invalid, false, false);
+            assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
+            assert!(!old.stopped.load(Ordering::Acquire));
+        }
+        registry.apply(&invalid, &HashSet::new(), &invalid, true, true);
+        assert!(old.stopped.load(Ordering::Acquire));
+        assert!(registry.get("test/link").is_none());
+        assert_eq!(registry.count(ProviderKind::Webhook), 0);
+        registry.apply(&data, &HashSet::new(), &data, false, false);
+        assert!(!Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
+        assert_eq!(registry.count(ProviderKind::Webhook), 1);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn webhook_same_rv_active_reference_failure_obeys_ordinary_and_forced_policy() {
+    for failure in ["group", "material-namespace", "missing-material"] {
+        let registry = RuntimeRegistry::new();
+        let mut valid = create_test_webhook_linksys("test", "link");
+        valid.metadata.resource_version = Some("42".into());
+        let SystemConfig::Webhook(config) = &mut valid.spec.config else {
+            unreachable!()
+        };
+        config.conn.tls = Some(serde_json::from_value(serde_json::json!({
+            "enabled":true,"verify":false,
+            "validation":{"caCertificateRefs":[{"kind":"Secret","name":"ca"}]},
+            "resolvedCaCertificates":[{"metadata":{"name":"ca","namespace":"test"},"data":{"ca.crt":"Y2VydGlmaWNhdGU="}}]
+        })).unwrap());
+        let data = one(valid.clone());
+        registry.apply(&data, &HashSet::new(), &data, true, false);
+        let old = registry.get("test/link").unwrap();
+        let mut invalid = valid;
+        let SystemConfig::Webhook(config) = &mut invalid.spec.config else {
+            unreachable!()
+        };
+        let tls = config.conn.tls.as_mut().unwrap();
+        match failure {
+            "group" => {
+                tls.outbound
+                    .validation
+                    .as_mut()
+                    .unwrap()
+                    .ca_certificate_refs
+                    .as_mut()
+                    .unwrap()[0]
+                    .group = Some("foreign.example".into())
+            }
+            "material-namespace" => {
+                tls.resolved_ca_certificates.as_mut().unwrap()[0].metadata.namespace = Some("other".into())
+            }
+            _ => tls.resolved_ca_certificates = None,
+        }
+        let ProviderRuntime::Webhook(client) = &old.provider else {
+            unreachable!()
+        };
+        assert!(!WebhookCandidate::from_link_sys(Arc::new(invalid.clone()))
+            .unwrap()
+            .can_reuse(client, false));
+        let invalid = one(invalid);
+        registry.apply(&invalid, &HashSet::new(), &invalid, false, false);
+        assert!(Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
+        registry.apply(&invalid, &HashSet::new(), &invalid, true, true);
+        assert!(registry.get("test/link").is_none());
+        assert!(old.stopped.load(Ordering::Acquire));
+        registry.apply(&data, &HashSet::new(), &data, false, false);
+        assert_eq!(registry.count(ProviderKind::Webhook), 1);
+        assert!(!Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
     }
 }

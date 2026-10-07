@@ -35,16 +35,41 @@ from their manager config and credential-input revision list.
 - `edgion-common/src/link_sys_core/credential.rs`: `tls_ready_inner` does not wait
   for inactive references. Gateway `credential_readiness` uses this result before
   provider mapping, in both full and partial updates.
-- Redis mapping filters disabled local policy while retaining `rediss://` TLS;
+- Redis's owning PreparedRedisTls filters disabled local policy while retaining
+  `rediss://` TLS and its existing empty-local global inheritance. It proves source
+  and whole active pairing before replay, retains one captured snapshot across
+  retries, then builds one connector through the shared rustls conversion core.
+  Fred mapping receives that connector without resolving TLS again;
   other providers keep their existing transport-selection and TLS-loading paths.
   HTTP providers use `build_outbound_client` and `apply_resolved_outbound_tls`;
   active TLS policy continues through `resolve_outbound_tls`, as required by
   [the unification rules](../../../00-design-rules.md#d-cross-cutting-unification--one-canonical-implementation-per-mechanism).
 - `edgion-gateway/src/link_sys/providers/webhook/client.rs`:
-  `WebhookLinkClient::prepare` removes inactive TLS before passing the connection
-  to `ManagedOutboundClient`. That engine uses TLS block presence for Service target
-  scheme and HTTP client construction; passing a disabled block would still select
-  HTTPS or fail on unresolved references. URL targets retain their explicit scheme.
+  WebhookCandidate retains the actual owner and captured snapshot. Its owning
+  ManagedOutboundClient entry checks source and active pairing, then selects
+  Service target scheme and canonical HTTP construction from the proved active
+  field. Inactive TLS uses native defaults without cloning/removing config or
+  consuming inherited policy. URL targets retain their explicit scheme.
+- Elasticsearch's EsCandidate retains the shared actual PreparedLinkSysTls
+  container and checks active inherited authority before persistent planning.
+  Its fixed-header owning HTTP factory derives config/auth from that owner and
+  borrows the same captured TLS selection. Absent/disabled TLS retains native
+  HTTPS trust without global inheritance. Bulk and recovery reuse the Client;
+  init continues publishing unhealthy after a failed initial probe. Ordinary
+  custom failure retains a callable prior publication; forced refresh withdraws
+  it before replacement. Existing redirects, proxy use and system DNS remain
+  unchanged; this slice establishes no egress/proxy verdict or auth-ref authority.
+- KafkaCandidate uses PreparedLinkSysTls with a fixed actual Kafka variant and
+  checks source, whole active pairing and consumed inherited authority before
+  replay. Its fixed Common rustls entry uses the sole concrete conversion core.
+  Absent/disabled local TLS yields no connector; enabled System TLS supplies an
+  explicit connector because rskafka 0.6 uses None as plaintext. Kafka's private
+  connection input retains the actual owner and constructed connector Arc across
+  init, probe recovery and SDK broker reconnects. It does not clone TLS config or
+  resolved Secrets or reread global defaults. Pending/Invalid SASL remains a
+  construction error, without claiming auth-reference authority. Ordinary custom
+  failure can retain prior callable publication; forced refresh withdraws it.
+  Pure preparation/connector tests do not establish a live Kafka TLS handshake.
 
 The original defect was before provider mapping: the Controller resolved unused
 references, and Gateway readiness returned false for unresolved inactive refs.
@@ -52,10 +77,11 @@ Fresh clients were skipped; full and partial updates could preserve an old clien
 instead of publishing the requested configuration. SAN/hostname admission also
 inspected inactive policy. Credential-source resolution errors prevented desired
 source registration. These are different consequences of missing enablement gates.
-Independent review additionally traced the Webhook manager's downstream consumer:
-fixing only the front-end gates left it consuming inactive policy. Filtering at
-the LinkSys-specific preparation boundary closes that path without changing shared
-plugin-client contracts.
+Independent review additionally traced the former Webhook manager's downstream
+consumer: fixing only the front-end gates left it consuming inactive policy.
+Historical filtering at LinkSys preparation fixed that defect. The current owning
+selection preserves that gate and proves actual source/material before replay;
+other shared plugin-client migrations remain in progress in the reference task.
 
 ## Alternatives and limits
 
@@ -134,3 +160,29 @@ dependencies and scheme behavior must be reviewed together with front-end gates.
   blocks reference resolution/readiness or changes Webhook transport selection.
 - `redis-tls-integration-coverage`: fixed; successful default-trust, custom-CA,
   and mutual-TLS Redis handshakes have isolated integration coverage.
+
+## Etcd owning and trusted-bootstrap inputs
+
+Etcd now prepares actual LinkSys source and whole active TLS pairing before
+persistent reuse. Cold construction uses the captured defaults and fixed
+provider capability; absent/disabled TLS does not inherit global policy, including
+HTTPS endpoints. Prepared ordinary and election SDK options are retained in one
+immutable connection input across every connection path. Unsupported TLS policy
+fails before any dial. The trusted Controller bootstrap input uses direct disk
+PEM and YAML credentials through the same private borrowed TLS core; it creates
+no Secret or resource reference. Disk CA masks whole inherited validation;
+declared global client identity wins and never falls back to disk on failure.
+This preserves upstream SDK semantics rather than establishing new root-store,
+PEM-cloning or end-to-end zeroization guarantees.
+
+## OTLP HTTPS inheritance at actual-owner preparation
+
+PreparedOtlpTls preserves OTLP's explicit metadata/config validation and proves
+actual source before replay. Active local pairing and consumed inherited proofs
+precede OtlpCandidate fingerprints and persistent reuse. Unlike Etcd's explicit
+local enablement gate, OTLP HTTPS with absent/disabled local TLS inherits the
+captured globals via empty local policy. HTTP consumes no global TLS and rejects
+an enabled local block. The closed adapter feeds the canonical audited resolver;
+Gateway performs the one native tonic014 SDK conversion and retains its Endpoint
+and actual owning input through retries/reconnects. Authentication authority and
+other providers' distinct native TLS policies are not changed by this adapter.

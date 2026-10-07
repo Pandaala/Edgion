@@ -110,6 +110,8 @@ pub enum Ownership {
 
 #[derive(Debug, Error)]
 pub enum SecretIoError {
+    #[error("managed credential operation is no longer authorized")]
+    StaleOperation,
     #[error("managed credential Secret target is owned by another actor")]
     TargetSecretConflict,
     #[error("managed credential Secret is missing required Kubernetes metadata")]
@@ -484,7 +486,15 @@ pub async fn delete_owned_consumer_object(
 
 /// Re-GET, recheck exact old markers, then delete with Secret UID and RV
 /// preconditions. Returns `false` when cleanup is obsolete or the object is gone.
-pub async fn delete_if_matches(api: &Api<Secret>, expected: &DeleteExpectation) -> Result<bool, SecretIoError> {
+pub async fn delete_if_matches<F, Fut>(
+    api: &Api<Secret>,
+    expected: &DeleteExpectation,
+    authorize: F,
+) -> Result<bool, SecretIoError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<bool, SecretIoError>>,
+{
     let Some(secret) = api.get_opt(&expected.identity.consumer.name).await? else {
         return Ok(false);
     };
@@ -506,6 +516,11 @@ pub async fn delete_if_matches(api: &Api<Secret>, expected: &DeleteExpectation) 
     }
 
     let params = delete_params(&secret)?;
+    // GET and leader validation can both suspend. The caller rechecks its
+    // runtime generation and cleanup eligibility at this final boundary.
+    if !authorize().await? {
+        return Ok(false);
+    }
     api.delete(&expected.identity.consumer.name, &params).await?;
     Ok(true)
 }

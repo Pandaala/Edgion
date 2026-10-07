@@ -199,7 +199,7 @@ fn ai_target_rejects_section_and_wrong_variant_identity() {
 }
 
 #[test]
-fn direct_ca_namespace_and_duplicate_targets_are_rejected() {
+fn duplicate_direct_targets_are_rejected() {
     let (ctx, _) = make_ctx();
     let handler = BackendTlsPolicyHandler::default();
     let mut policy = make_btp("ns", "tls", "svc", "2026-01-01T00:00:00+00:00");
@@ -208,12 +208,10 @@ fn direct_ca_namespace_and_duplicate_targets_are_rejected() {
         group: String::new(),
         kind: "Secret".to_string(),
         name: "ca".to_string(),
-        namespace: Some("other".to_string()),
     }]);
     policy.spec.target_refs.push(policy.spec.target_refs[0].clone());
     let errors = handler.validate(&policy, &ctx);
     assert!(errors.iter().any(|error| error.contains("exactly one")));
-    assert!(errors.iter().any(|error| error.contains("must not specify namespace")));
 }
 
 #[tokio::test]

@@ -12,13 +12,26 @@ knowledge_type: regression-guards
 ## Conclusion
 
 `EdgionGatewayConfigHandler` no longer applies a process-global value once per
-resource during the store iteration. Both globals are now recomputed from the
+resource during the store iteration. These globals are now recomputed from the
 **entire** store after every mutation, with an order-independent aggregate and a
 reset-to-default when no instance carries the field:
 
 - `linkSys.webhookMaxResponseBytes` → `min` (strictest cap wins), default `16384`.
 - `linkSys.maxInstancesPerKind` → `min` (strictest cap wins), default `200`.
 - `loadBalancing.degradeThreshold` → `max` (panic engages as early as any asks), default `0`.
+
+Outbound TLS is a separate aggregation over actual immutable EGC Arcs. Common's
+opaque GlobalOutboundTlsSnapshot owns that canonical aggregation, with inherited
+verify source proof and independent selected validation/CA and client proofs.
+An absent TLS block contributes verify=true; SAN/hostname-only blocks do not count
+as CA candidates. Multiple CA candidates preserve the existing System fallback;
+multiple declared client refs fail closed. Invalid declarations are counted before
+proof. Full/partial/delete retain original input Arcs and restore process defaults.
+Other min/max globals above and listener publication scope are unchanged. The
+reference-contract scoped review passed with 37 fresh Gateway publication tests,
+344 Common library tests and four compile-fail boundaries; remaining local TLS
+transport/replay migrations are still open. See the owning
+[fingerprint contract](../../link-sys/regression-guards/shared-tls-fingerprint-encoding.md).
 
 Re-reports of the form "per-resource apply is order-dependent" / "delete never
 resets the global" / "two cluster-scoped configs flip the value across relist"

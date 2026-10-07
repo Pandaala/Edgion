@@ -1561,7 +1561,11 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
             (
                 grpc_br.name.clone(),
                 ns,
-                ServiceBackendKind::from_kind(grpc_br.kind.as_ref()),
+                if grpc_br.logical().policy_target_key().is_some() {
+                    ServiceBackendKind::Service
+                } else {
+                    ServiceBackendKind::Unsupported("invalid gRPC backend reference".to_string())
+                },
                 Some(grpc_br.slot()),
             )
         } else if let Some(http_br) = ctx.selected_backend.as_ref() {
@@ -1573,7 +1577,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
                 .to_string();
             let ns = http_br.namespace.clone().unwrap_or(route_ns);
             let service_kind = match &http_br.target {
-                CompiledBackendTarget::Service { .. } => ServiceBackendKind::from_kind(http_br.kind.as_ref()),
+                CompiledBackendTarget::Service { .. } => ServiceBackendKind::Service,
                 CompiledBackendTarget::EdgionBackend { .. } | CompiledBackendTarget::Invalid { .. } => {
                     ServiceBackendKind::Unsupported(
                         http_br
@@ -1606,12 +1610,7 @@ fn direct_backend_metadata(
         CompiledBackendTarget::Service { namespace, name } => (namespace.clone(), name.clone()),
         CompiledBackendTarget::EdgionBackend { .. } | CompiledBackendTarget::Invalid { .. } => return None,
     };
-    Some((
-        name,
-        namespace,
-        ServiceBackendKind::from_kind(compiled.kind.as_ref()),
-        compiled.slot,
-    ))
+    Some((name, namespace, ServiceBackendKind::Service, compiled.slot))
 }
 
 fn validate_resolved_domain_addr(

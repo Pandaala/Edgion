@@ -11,8 +11,8 @@
 //! - [`CaFetchStrategy::GrantGated`]: Routes all Secret lookups through
 //!   [`fetch_secret`] and all ConfigMap lookups through [`fetch_configmap`],
 //!   both of which enforce `ReferenceGrant` for cross-namespace references.
-//!   Suitable for plugin / EdgionGatewayConfig outbound TLS where cross-ns trust
-//!   anchors are valid but require an explicit grant.
+//!   EGC's two cluster-owned TLS fields instead use their dedicated owning
+//!   administrative selections in `egc_tls`; no source namespace is fabricated.
 //!
 //! ConfigMap refs are converted into synthetic `Secret` objects carrying the
 //! `ca.crt` PEM under the standard [`CA_CERT`] key, so downstream consumers
@@ -20,16 +20,79 @@
 
 use std::collections::BTreeMap;
 
-use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::ByteString;
 
+use edgion_resources::constants::annotations::edgion::{CONTROLLER_CA_SOURCE, CONTROLLER_CA_SOURCE_CONFIG_MAP};
 use edgion_resources::constants::secret_keys::tls::CA_CERT;
-use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::common::{is_core_api_group, SecretObjectReference};
 
 use super::super::{format_configmap_ref_key, format_secret_key, HandlerContext, ResourceRef};
 use super::pipeline::{fetch_configmap, fetch_secret, FetchOutcome};
+
+/// Material rebuilt from the actual owning TLS fields; no configuration loan
+/// survives publication back into the plugin.
+pub(crate) struct BoundTlsMaterial {
+    pub ca_certificates: Option<Vec<Secret>>,
+    pub client_certificate: Option<Secret>,
+}
+
+pub(crate) fn resolve_bound_tls(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    references: edgion_resources::resources::refs::plugin_fields::TlsReferences<'_>,
+) -> BoundTlsMaterial {
+    use super::pipeline::{fetch_bound_configmap, fetch_bound_secret, BoundFetchOutcome};
+    let mut ca_certificates = Vec::new();
+    for token in references.ca_certificates() {
+        let Ok(reference) = token.validated() else { continue };
+        match reference.target().group_kind().kind() {
+            "Secret" => {
+                if let BoundFetchOutcome::Ok(authorized) = fetch_bound_secret(ctx, owner, token) {
+                    ca_certificates.push(authorized.secret);
+                }
+            }
+            "ConfigMap" => {
+                if let BoundFetchOutcome::Ok(configmap) = fetch_bound_configmap(ctx, owner, token) {
+                    if let Some(material) = configmap_ca_material(&configmap) {
+                        ca_certificates.push(material);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let client_certificate =
+        references
+            .client_certificate()
+            .and_then(|token| match fetch_bound_secret(ctx, owner, token) {
+                BoundFetchOutcome::Ok(authorized) => Some(authorized.secret),
+                BoundFetchOutcome::Pending(_) | BoundFetchOutcome::Invalid(_) => None,
+            });
+    BoundTlsMaterial {
+        ca_certificates: (!ca_certificates.is_empty()).then_some(ca_certificates),
+        client_certificate,
+    }
+}
+
+pub(crate) fn bound_ca_status_error(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: edgion_resources::resources::refs::ReferenceToken<'_>,
+) -> Option<super::super::ResolvedRefsError> {
+    use super::super::ResolvedRefsError;
+    use super::pipeline::{bound_configmap_status_result, bound_secret_status_error};
+    let reference = match token.validated() {
+        Ok(reference) => reference,
+        Err(error) => return Some(ResolvedRefsError::InvalidReference { error }),
+    };
+    if reference.target().group_kind().kind() == "Secret" {
+        return bound_secret_status_error(ctx, owner, token);
+    }
+    bound_configmap_status_result(ctx, owner, token).err()
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -54,8 +117,8 @@ pub enum CaFetchStrategy {
     /// fields identify the requesting resource type on the *from* side of the
     /// grant (`from.group`, `from.kind`).
     ///
-    /// Used for plugin / EdgionGatewayConfig outbound TLS where refs may
-    /// span namespaces with appropriate grants.
+    /// Remaining legacy callers may span namespaces with appropriate grants.
+    /// EGC uses its exclusive typed administrative field selection instead.
     GrantGated { group: &'static str, kind: &'static str },
 }
 
@@ -82,9 +145,9 @@ pub enum CaFetchStrategy {
 ///
 /// - `ctx`: handler context (provides runtime stores and SecretRefManager).
 /// - `resource_ref`: the owning resource (used for SecretRefManager wiring).
-/// - `owner_ns`: the owning resource's namespace. `None` for cluster-scoped
-///   resources (e.g. EdgionGatewayConfig); in that case refs *must* carry an
-///   explicit `namespace` or they are skipped as unresolvable.
+/// - `owner_ns`: the owning namespace for this legacy helper. With no owner
+///   namespace, refs need an explicit namespace to be resolvable. This helper
+///   does not mint EGC administrative authority and is not used by that owner.
 /// - `refs`: slice of CA certificate refs to resolve.
 /// - `strategy`: fetch strategy controlling grant enforcement.
 ///
@@ -94,14 +157,14 @@ pub fn resolve_ca_certificate_refs(
     ctx: &HandlerContext,
     resource_ref: &ResourceRef,
     owner_ns: Option<&str>,
-    refs: &[BackendTLSPolicyCACertificateRef],
+    refs: &[CustomCACertificateRef],
     strategy: CaFetchStrategy,
 ) -> Vec<Secret> {
     let mut resolved = Vec::new();
 
     for ca_ref in refs {
-        let is_secret = is_core_api_group(&ca_ref.group) && ca_ref.kind == "Secret";
-        let is_configmap = is_core_api_group(&ca_ref.group) && ca_ref.kind == "ConfigMap";
+        let is_secret = is_core_api_group(ca_ref.group.as_deref().unwrap_or_default()) && ca_ref.kind == "Secret";
+        let is_configmap = is_core_api_group(ca_ref.group.as_deref().unwrap_or_default()) && ca_ref.kind == "ConfigMap";
 
         if !is_secret && !is_configmap {
             // Unknown kind: skip silently.
@@ -174,7 +237,7 @@ pub fn resolve_ca_certificate_refs(
             };
 
             if let Some(secret) = maybe_secret {
-                resolved.push(secret);
+                resolved.push(ordinary_secret_material(secret));
             }
         } else {
             // ConfigMap kind.
@@ -217,18 +280,8 @@ pub fn resolve_ca_certificate_refs(
             };
 
             if let Some(cm) = maybe_cm {
-                let ca_pem = cm
-                    .data
-                    .as_ref()
-                    .and_then(|d| d.get(CA_CERT))
-                    .filter(|v| !v.trim().is_empty());
-
-                if let Some(pem) = ca_pem {
-                    resolved.push(synthetic_secret_from_pem(
-                        ca_ref.name.clone(),
-                        effective_ns.to_string(),
-                        pem,
-                    ));
+                if let Some(material) = configmap_ca_material(&cm) {
+                    resolved.push(material);
                 }
                 // If ca.crt is absent or empty: silently skip (no tracing needed;
                 // the ConfigMap was found, the data just lacks the key).
@@ -243,22 +296,39 @@ pub fn resolve_ca_certificate_refs(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Build a synthetic `Secret` carrying a single PEM bundle under [`CA_CERT`].
-///
-/// Mirrors the pattern in `backend_tls_policy.rs:216-227` so callers can treat
-/// ConfigMap-sourced and Secret-sourced CA bundles uniformly.
-fn synthetic_secret_from_pem(name: String, namespace: String, pem: &str) -> Secret {
+/// Convert an actual fetched ConfigMap to the resolved CA transport shape.
+/// Only identity metadata and the exact internal source marker are retained.
+pub(crate) fn configmap_ca_material(configmap: &ConfigMap) -> Option<Secret> {
+    let pem = configmap
+        .data
+        .as_ref()?
+        .get(CA_CERT)
+        .filter(|value| !value.trim().is_empty())?;
     let mut data = BTreeMap::new();
     data.insert(CA_CERT.to_string(), ByteString(pem.as_bytes().to_vec()));
-    Secret {
+    Some(Secret {
         metadata: ObjectMeta {
-            name: Some(name),
-            namespace: Some(namespace),
+            name: configmap.metadata.name.clone(),
+            namespace: configmap.metadata.namespace.clone(),
+            uid: configmap.metadata.uid.clone(),
+            resource_version: configmap.metadata.resource_version.clone(),
+            annotations: Some(BTreeMap::from([(
+                CONTROLLER_CA_SOURCE.to_string(),
+                CONTROLLER_CA_SOURCE_CONFIG_MAP.to_string(),
+            )])),
             ..Default::default()
         },
         data: Some(data),
         ..Default::default()
+    })
+}
+
+/// Discard operator-supplied source markers from ordinary fetched Secrets.
+pub(crate) fn ordinary_secret_material(mut secret: Secret) -> Secret {
+    if let Some(annotations) = secret.metadata.annotations.as_mut() {
+        annotations.remove(CONTROLLER_CA_SOURCE);
     }
+    secret
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use edgion_common::link_sys_core::outbound_tls::PreparedOtlpTls;
 use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::resources::link_sys::otlp::OtlpBearerResolver;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
@@ -14,14 +15,38 @@ use crate::link_sys::runtime::runner::ApplyOwner;
 
 use super::client::OtlpLinkClient;
 
-pub struct OtlpApply;
+pub(crate) struct OtlpApply;
+
+pub(crate) struct OtlpCandidate {
+    pub(super) tls: Arc<PreparedOtlpTls>,
+    fingerprint: RuntimeFingerprint,
+}
+
+impl OtlpCandidate {
+    pub(super) fn new(owner: Arc<LinkSys>) -> anyhow::Result<Self> {
+        Self::from_prepared(PreparedOtlpTls::from_link_sys(owner)?)
+    }
+
+    pub(super) fn from_prepared(tls: PreparedOtlpTls) -> anyhow::Result<Self> {
+        let fingerprint = fingerprint_otlp_fields(tls.owner(), |hasher| tls.hash_inheritance(hasher))?;
+        Ok(Self {
+            tls: Arc::new(tls),
+            fingerprint,
+        })
+    }
+}
 
 #[async_trait]
 impl ApplyOwner for OtlpApply {
     type Client = OtlpLinkClient;
+    type Candidate = OtlpCandidate;
 
-    fn fingerprint(incoming: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
-        fingerprint_otlp(incoming)
+    fn prepare(incoming: Arc<LinkSys>) -> anyhow::Result<Self::Candidate> {
+        OtlpCandidate::new(incoming)
+    }
+
+    fn fingerprint(incoming: &Self::Candidate) -> anyhow::Result<RuntimeFingerprint> {
+        Ok(incoming.fingerprint.clone())
     }
 
     fn fingerprint_live(client: &Self::Client) -> RuntimeFingerprint {
@@ -36,8 +61,8 @@ impl ApplyOwner for OtlpApply {
         Some(client.published_health())
     }
 
-    fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
-        OtlpLinkClient::from_linksys(key, incoming)
+    fn build(key: &str, incoming: &Self::Candidate) -> anyhow::Result<Arc<Self::Client>> {
+        OtlpLinkClient::from_candidate(key, incoming, edgion_common::dns::ResolverSpec::System)
     }
 
     async fn init(client: &Self::Client) -> anyhow::Result<()> {
@@ -63,7 +88,10 @@ impl ApplyOwner for OtlpApply {
     }
 }
 
-pub fn fingerprint_otlp(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
+fn fingerprint_otlp_fields(
+    ls: &LinkSys,
+    inherited: impl FnOnce(&mut FingerprintHasher),
+) -> anyhow::Result<RuntimeFingerprint> {
     let SystemConfig::Otlp(config) = &ls.spec.config else {
         anyhow::bail!("fingerprint_otlp called with a non-OTLP LinkSys");
     };
@@ -92,6 +120,7 @@ pub fn fingerprint_otlp(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
         }
     }
     hash_tls_material(&mut secret, config.tls.as_ref());
+    inherited(&mut secret);
 
     Ok(RuntimeFingerprint::from_parts(
         rebuild.finish(),

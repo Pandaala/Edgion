@@ -158,7 +158,7 @@ fn test_plugin_with_tuning(mut tuning: MirrorTuning) -> RequestMirrorPlugin {
     RequestMirrorPlugin::new(
         HTTPRequestMirrorFilter {
             backend_ref: BackendObjectReference {
-                group: String::new(),
+                group: Some(String::new()),
                 kind: None,
                 name: TEST_SERVICE.to_string(),
                 namespace: Some(TEST_NS.to_string()),
@@ -265,7 +265,7 @@ async fn denied_or_wrong_kind_mirror_never_arms_or_uses_session() {
         (false, "", "Secret", "mirror invalid kind"),
     ] {
         let mut plugin = test_plugin();
-        plugin.config.backend_ref.group = group.to_string();
+        plugin.config.backend_ref.group = Some(group.to_string());
         plugin.config.backend_ref.kind = Some(kind.to_string());
         plugin.config.backend_ref.ref_denied = denied.then(|| edgion_resources::resources::common::RefDenied {
             target_namespace: TEST_NS.to_string(),

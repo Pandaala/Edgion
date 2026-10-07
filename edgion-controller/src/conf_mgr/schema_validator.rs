@@ -335,7 +335,7 @@ impl SchemaValidator {
     }
 
     /// Validate the authored source document, before typed serde or version bumps.
-    /// This checks OpenAPI constraints only; Kubernetes CEL is not evaluated here.
+    /// Reuses the finite reference normalization/CEL view before existing OpenAPI checks.
     pub fn validate_gateway_source(
         &self,
         group: &str,
@@ -355,6 +355,32 @@ impl SchemaValidator {
                 Ok(())
             };
         };
+        let prepared =
+            edgion_resources::resources::refs::source_contract::prepare_gateway_source(group, version, kind, value)
+                .map_err(|_| ValidationError::SchemaViolation("Gateway API reference validation failed".to_string()))?;
+        if let Some(view) = &prepared {
+            if !view.violations.is_empty() {
+                return Err(ValidationError::SchemaViolation(
+                    view.violations
+                        .iter()
+                        .take(16)
+                        .map(|violation| {
+                            format!(
+                                "Path: {}, Schema: {}",
+                                safe_gateway_error_path(
+                                    &violation.instance_path,
+                                    &violation.schema_path,
+                                    &view.normalized
+                                ),
+                                violation.schema_path.chars().take(200).collect::<String>()
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                ));
+            }
+        }
+        let value = prepared.as_ref().map(|view| &view.normalized).unwrap_or(value);
         let mut errors: Vec<_> = validator
             .iter_errors(value)
             .take(17)

@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 
 use edgion_resources::resources::link_sys::{CredentialSourceConfig, CredentialSourceState};
+use edgion_resources::resources::refs::FrozenFieldReference;
 use parking_lot::RwLock;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -24,6 +25,7 @@ pub const BINDING_REVISION_ANNOTATION: &str = "edgion.io/credential-binding-revi
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CredentialSecretInput {
+    pub reference: FrozenFieldReference,
     pub role: &'static str,
     pub namespace: String,
     pub name: String,
@@ -76,6 +78,7 @@ impl DesiredCredentialSource {
 /// Desired publication binding produced by an `EdgionPlugins` reconcile.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesiredCredentialConsumer {
+    pub reference: FrozenFieldReference,
     pub resource: ResourceRef,
     pub uid: String,
     pub generation: i64,
@@ -130,6 +133,8 @@ impl DesiredCredentialConsumer {
             self.target_secret_namespace.as_str(),
             self.target_secret_name.as_str(),
             self.authorization_revision.as_str(),
+            self.reference.owner_revision(),
+            &self.reference.slot_revision(),
         ] {
             digest.update(part.as_bytes());
             digest.update([0]);

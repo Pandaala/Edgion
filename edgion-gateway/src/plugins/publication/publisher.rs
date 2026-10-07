@@ -8,10 +8,10 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
-use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::http_route::HTTPRouteFilterType;
 use edgion_resources::resources::http_route_ai_admission::{ai_rule_invalid_reason, AiProxyAdmission};
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily, PluginPolicyAction};
+use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::{EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, GatewayClass, HTTPRoute, ListenerKey};
 
 use super::inputs::{effective_http_rules, GatewayInput, RouteInput, RouteKind};

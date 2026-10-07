@@ -308,9 +308,9 @@ fn resolve_parent_refs_preserves_declared_port_constraints() {
 fn is_core_service_backend_ref_accepts_core_service_and_rejects_others() {
     // Omitted group + kind defaults to a core Service.
     assert!(is_core_service_backend_ref(None, None));
-    // Explicit empty / "core" group with the Service kind.
+    // Explicit empty group with the Service kind.
     assert!(is_core_service_backend_ref(Some(""), Some("Service")));
-    assert!(is_core_service_backend_ref(Some("core"), Some("Service")));
+    assert!(!is_core_service_backend_ref(Some("core"), Some("Service")));
     // Unknown group or non-Service kind is not routable.
     assert!(!is_core_service_backend_ref(Some("example.com"), Some("Foo")));
     assert!(!is_core_service_backend_ref(Some(""), Some("Deployment")));
@@ -376,7 +376,7 @@ fn classify_l4_selected_backend_allows_core_service() {
     );
     assert_eq!(
         classify_l4_selected_backend(None, Some("core"), Some("Service")),
-        L4SelectedBackend::Proceed
+        L4SelectedBackend::UnsupportedKind
     );
 }
 

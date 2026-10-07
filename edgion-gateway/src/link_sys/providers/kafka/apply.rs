@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use edgion_common::link_sys_core::outbound_tls::PreparedLinkSysTls;
 use edgion_resources::resources::link_sys::kafka::{
     KafkaClientConfig, DEFAULT_KAFKA_CHANNEL_SIZE, DEFAULT_KAFKA_LINGER_MS, DEFAULT_KAFKA_MAX_PENDING_BYTES,
     DEFAULT_KAFKA_MAX_PENDING_RECORDS, DEFAULT_KAFKA_MAX_TOPICS,
@@ -17,14 +18,47 @@ use crate::link_sys::runtime::runner::ApplyOwner;
 
 use super::client::KafkaLinkClient;
 
-pub struct KafkaApply;
+pub(crate) struct KafkaApply;
+
+pub(crate) struct KafkaCandidate {
+    pub(super) tls: Arc<PreparedLinkSysTls>,
+    fingerprint: RuntimeFingerprint,
+}
+
+impl KafkaCandidate {
+    pub(super) fn new(owner: Arc<LinkSys>) -> anyhow::Result<Self> {
+        Self::from_prepared(PreparedLinkSysTls::from_link_sys(owner)?)
+    }
+
+    pub(super) fn from_prepared(tls: PreparedLinkSysTls) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            matches!(&tls.owner().spec.config, SystemConfig::Kafka(_)),
+            "Kafka candidate requires an actual Kafka LinkSys"
+        );
+        tls.validate_active_inheritance()?;
+        let fingerprint = fingerprint_kafka_fields(tls.owner(), |hasher| tls.hash_active_inheritance(hasher))?;
+        Ok(Self {
+            tls: Arc::new(tls),
+            fingerprint,
+        })
+    }
+
+    pub(super) fn fingerprint(&self) -> &RuntimeFingerprint {
+        &self.fingerprint
+    }
+}
 
 #[async_trait]
 impl ApplyOwner for KafkaApply {
     type Client = KafkaLinkClient;
+    type Candidate = KafkaCandidate;
 
-    fn fingerprint(incoming: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
-        fingerprint_kafka(incoming)
+    fn prepare(incoming: Arc<LinkSys>) -> anyhow::Result<Self::Candidate> {
+        KafkaCandidate::new(incoming)
+    }
+
+    fn fingerprint(incoming: &Self::Candidate) -> anyhow::Result<RuntimeFingerprint> {
+        Ok(incoming.fingerprint.clone())
     }
 
     fn fingerprint_live(client: &Self::Client) -> RuntimeFingerprint {
@@ -39,8 +73,8 @@ impl ApplyOwner for KafkaApply {
         Some(client.published_health())
     }
 
-    fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
-        KafkaLinkClient::from_linksys(key, incoming)
+    fn build(key: &str, incoming: &Self::Candidate) -> anyhow::Result<Arc<Self::Client>> {
+        KafkaLinkClient::from_candidate(key, incoming).map(Arc::new)
     }
 
     async fn init(client: &Self::Client) -> anyhow::Result<()> {
@@ -62,7 +96,10 @@ impl ApplyOwner for KafkaApply {
     }
 }
 
-pub fn fingerprint_kafka(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
+fn fingerprint_kafka_fields(
+    ls: &LinkSys,
+    inherited: impl FnOnce(&mut FingerprintHasher) -> anyhow::Result<()>,
+) -> anyhow::Result<RuntimeFingerprint> {
     let SystemConfig::Kafka(cfg) = &ls.spec.config else {
         anyhow::bail!("fingerprint_kafka called with a non-Kafka LinkSys");
     };
@@ -74,6 +111,7 @@ pub fn fingerprint_kafka(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
     let mut secret = FingerprintHasher::new();
     hash_auth_material(&mut secret, ls);
     hash_tls_material(&mut secret, cfg.tls.as_ref());
+    inherited(&mut secret)?;
 
     Ok(RuntimeFingerprint::from_parts(
         rebuild.finish(),

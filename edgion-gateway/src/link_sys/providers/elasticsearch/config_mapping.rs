@@ -5,12 +5,16 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use reqwest::{Client, ClientBuilder};
+use reqwest::Client;
 use std::time::Duration;
 
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
-use crate::link_sys::http_client::{apply_outbound_policy, OutboundClientConfig, OutboundRedirect};
+use crate::link_sys::http_client::{
+    build_outbound_client_with_tls_selection_and_headers, OutboundClientConfig, OutboundRedirect,
+};
+use edgion_common::link_sys_core::outbound_tls::PreparedLinkSysTls;
 use edgion_resources::resources::link_sys::elasticsearch::*;
+use edgion_resources::resources::link_sys::SystemConfig;
 
 // ============================================================================
 // Safety ceilings
@@ -48,10 +52,20 @@ const DEFAULT_DATE_PATTERN: &str = "%Y.%m.%d";
 // Build reqwest Client from CRD config
 // ============================================================================
 
-/// Build a reqwest Client and default headers from CRD config.
-///
-/// The returned `HeaderMap` includes Content-Type and any auth headers.
-/// TLS and pool settings are applied to the client builder.
+/// Build from the actual source, selection and captured inherited generation.
+pub(super) fn build_es_client(prepared: &PreparedLinkSysTls) -> Result<Client> {
+    let SystemConfig::Elasticsearch(config) = &prepared.owner().spec.config else {
+        anyhow::bail!("Elasticsearch client requires an actual Elasticsearch owner");
+    };
+    let auth = crate::link_sys::credential::resolved_state(prepared.owner());
+    let headers = es_default_headers(config, &auth)?;
+    prepared.with_tls_selection(|proof, defaults| {
+        build_outbound_client_with_tls_selection_and_headers(es_client_config(config), proof, defaults, headers)
+            .context("failed to build reqwest client")
+    })
+}
+
+/// Pure default-header construction shared by owning runtime and auth tests.
 ///
 /// `auth` is the [`CredentialState`] produced by
 /// [`credential::resolved_state`](crate::link_sys::credential::resolved_state).
@@ -59,35 +73,28 @@ const DEFAULT_DATE_PATTERN: &str = "%Y.%m.%d";
 /// variant, a `Resolved(_)` value is guaranteed to match the CRD's auth kind
 /// — "type mismatch" is therefore impossible and is not checked here.
 /// `Pending` / `Invalid` produce a fail-fast `bail!`.
-pub fn build_es_client(
+fn es_default_headers(
     crd: &ElasticsearchClientConfig,
     auth: &CredentialState<ResolvedCredential>,
-) -> Result<(Client, HeaderMap)> {
+) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     apply_auth(&mut headers, crd, auth)?;
+    Ok(headers)
+}
 
+fn es_client_config(crd: &ElasticsearchClientConfig) -> OutboundClientConfig {
     let (idle_per_host, idle_timeout) = es_pool(crd);
     let (connect_timeout, request_timeout) = es_timeouts(crd);
-    let tls = crd.tls.as_ref().filter(|t| t.enabled).cloned();
-
-    let builder = apply_outbound_policy(
-        ClientBuilder::new(),
-        OutboundClientConfig {
-            pool_max_idle_per_host: Some(idle_per_host),
-            pool_idle_timeout: Some(idle_timeout),
-            connect_timeout: Some(connect_timeout),
-            total_timeout: Some(request_timeout),
-            redirect: OutboundRedirect::Limit(10),
-            tls,
-            tls_context: Some("Elasticsearch"),
-            ..Default::default()
-        },
-    )?
-    .default_headers(headers.clone());
-
-    let client = builder.build().context("failed to build reqwest client")?;
-    Ok((client, headers))
+    OutboundClientConfig {
+        pool_max_idle_per_host: Some(idle_per_host),
+        pool_idle_timeout: Some(idle_timeout),
+        connect_timeout: Some(connect_timeout),
+        total_timeout: Some(request_timeout),
+        redirect: OutboundRedirect::Limit(10),
+        tls_context: Some("Elasticsearch"),
+        ..Default::default()
+    }
 }
 
 /// Compute the (max-idle-per-host, idle-timeout) pool values from the CRD,

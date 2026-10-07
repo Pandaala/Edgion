@@ -212,7 +212,7 @@ async fn run_scenarios(core: &RedisRateLimiter, client: &RedisLinkClient, limit_
 #[ignore = "requires the integration Redis fixture"]
 async fn token_bucket_preserves_fractional_refill_state() -> Result<()> {
     let (config, auth) = redis_config();
-    let client = RedisLinkClient::from_config("integration/token-bucket-fractional-refill", &config, &auth)?;
+    let client = RedisLinkClient::from_test_config("integration/token-bucket-fractional-refill", &config, &auth)?;
     client
         .init()
         .await

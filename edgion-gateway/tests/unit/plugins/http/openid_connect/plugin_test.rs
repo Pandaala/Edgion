@@ -7,6 +7,7 @@ use crate::plugins::runtime::PluginLog;
 use crate::plugins::runtime::RequestFilter;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::{normalize_path, PathNormalizationConfig};
+use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::edgion_plugins::{OpenidConnectConfig, UnauthAction, VerificationMode};
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{Algorithm, Header};
@@ -147,8 +148,8 @@ fn oidc_secret(client_secret: &[u8], session_secret: &[u8]) -> k8s_openapi::api:
 
 #[test]
 fn prepared_generation_clears_carriers_without_mutating_caller_and_uses_static_name() {
-    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
     use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use edgion_resources::resources::common::CustomCACertificateRef;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
 
@@ -160,8 +161,8 @@ fn prepared_generation_clears_carriers_without_mutating_caller_and_uses_static_n
     config.resolved_oidc_client_secret = Some("client-generation-one".to_string());
     config.resolved_session_secret = Some("session-generation-one-secret-32-bytes".to_string());
     config.tls.validation = Some(OutboundTlsValidation {
-        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-            group: String::new(),
+        ca_certificate_refs: Some(vec![CustomCACertificateRef {
+            group: Some(String::new()),
             kind: "Secret".to_string(),
             name: "idp-ca".to_string(),
             namespace: None,
@@ -2503,14 +2504,14 @@ fn oidc_san_pinning_config_fails_with_empty_custom_ca() {
 
 #[test]
 fn oidc_construction_fails_closed_when_custom_ca_is_unresolved() {
-    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
     use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use edgion_resources::resources::common::CustomCACertificateRef;
 
     let mut config = base_config();
     config.tls.verify = Some(true);
     config.tls.validation = Some(OutboundTlsValidation {
-        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-            group: String::new(),
+        ca_certificate_refs: Some(vec![CustomCACertificateRef {
+            group: Some(String::new()),
             kind: "Secret".to_string(),
             name: "idp-ca".to_string(),
             namespace: None,
@@ -2526,16 +2527,16 @@ fn oidc_construction_fails_closed_when_custom_ca_is_unresolved() {
 
 #[test]
 fn oidc_construction_fails_closed_when_custom_ca_contains_no_certificate() {
-    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
     use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use edgion_resources::resources::common::CustomCACertificateRef;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
 
     let mut config = base_config();
     config.tls.verify = Some(true);
     config.tls.validation = Some(OutboundTlsValidation {
-        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-            group: String::new(),
+        ca_certificate_refs: Some(vec![CustomCACertificateRef {
+            group: Some(String::new()),
             kind: "Secret".to_string(),
             name: "idp-ca".to_string(),
             namespace: None,
@@ -2558,9 +2559,7 @@ fn oidc_construction_fails_closed_when_custom_ca_contains_no_certificate() {
 
 #[test]
 fn oidc_construction_rejects_mixed_custom_ca_with_and_without_san() {
-    use edgion_resources::resources::backend_tls_policy::{
-        BackendTLSPolicyCACertificateRef, SubjectAltName, SubjectAltNameType,
-    };
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
     use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
@@ -2578,8 +2577,8 @@ fn oidc_construction_rejects_mixed_custom_ca_with_and_without_san() {
         config.tls.validation = Some(OutboundTlsValidation {
             ca_certificate_refs: Some(
                 ["idp-ca-valid", "idp-ca-empty"]
-                    .map(|name| BackendTLSPolicyCACertificateRef {
-                        group: String::new(),
+                    .map(|name| CustomCACertificateRef {
+                        group: Some(String::new()),
                         kind: "Secret".to_string(),
                         name: name.to_string(),
                         namespace: None,
@@ -2629,9 +2628,7 @@ fn oidc_construction_fails_closed_when_mtls_secret_is_unresolved() {
 
 #[test]
 fn oidc_san_construction_fails_closed_when_custom_ca_is_invalid() {
-    use edgion_resources::resources::backend_tls_policy::{
-        BackendTLSPolicyCACertificateRef, SubjectAltName, SubjectAltNameType,
-    };
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
     use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
@@ -2639,8 +2636,8 @@ fn oidc_san_construction_fails_closed_when_custom_ca_is_invalid() {
     let mut config = base_config();
     config.tls.verify = Some(true);
     config.tls.validation = Some(OutboundTlsValidation {
-        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-            group: String::new(),
+        ca_certificate_refs: Some(vec![CustomCACertificateRef {
+            group: Some(String::new()),
             kind: "Secret".to_string(),
             name: "idp-ca".to_string(),
             namespace: None,

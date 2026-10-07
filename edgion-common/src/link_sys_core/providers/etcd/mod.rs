@@ -14,6 +14,6 @@ pub mod config_mapping;
 pub mod election;
 pub mod ops;
 
-pub use client::EtcdLinkClient;
+pub use client::{EtcdBootstrapConfig, EtcdLinkClient};
 pub use election::{ElectionSession, LeaderKey};
 pub use ops::{EtcdLockGuard, KeyValueRaw};

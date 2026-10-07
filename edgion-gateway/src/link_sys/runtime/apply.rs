@@ -48,11 +48,6 @@ impl RuntimeFingerprint {
         }
     }
 
-    /// Placeholder for clients built outside the runner (unit tests of `from_config`).
-    pub fn unspecified() -> Self {
-        Self::from_parts([0; 32], [0; 32], None)
-    }
-
     pub fn is_unspecified(&self) -> bool {
         self.rebuild == [0; 32] && self.secret == [0; 32]
     }

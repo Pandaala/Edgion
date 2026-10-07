@@ -20,7 +20,6 @@ use edgion_resources::constants::annotations;
 use edgion_resources::constants::app::GATEWAY_NAME;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::prelude_resources::Gateway;
-use edgion_resources::resources::common::is_core_api_group;
 use edgion_resources::resources::gateway::{
     FrontendCACertificateRef, FrontendCAResolutionError, FrontendCASourceIdentity, FrontendCASourceKind,
     FrontendMatcherEligibility, FrontendValidationMode, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig,
@@ -773,7 +772,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 }
 
                 let valid_secret_ref = client_ref.kind.as_deref().unwrap_or("Secret") == "Secret"
-                    && is_core_api_group(client_ref.group.as_deref().unwrap_or(""));
+                    && client_ref.group.as_deref().unwrap_or("").is_empty();
                 let permitted = client_ns == gateway_ns
                     || !is_reference_grant_validation_enabled()
                     || ctx.runtime().ref_grant_store.check_reference_allowed(
@@ -788,7 +787,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
                 if valid_secret_ref && permitted {
                     if let Some(secret) = ctx.runtime().secret_store.get(Some(client_ns), &client_ref.name) {
-                        backend_tls.resolved_client_certificate = Some(secret);
+                        backend_tls.resolved_client_certificate =
+                            Some(super::super::credential::ca_refs::ordinary_secret_material(secret));
                     } else {
                         tracing::info!(
                             gateway = %resource_ref.key(),
@@ -878,7 +878,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                         {
                             secret.metadata.namespace = Some(cert_ns_str.to_string());
                             secret.metadata.name = Some(cert_ref.name.clone());
-                            outcome.secret = Some(secret);
+                            outcome.secret = Some(super::super::credential::ca_refs::ordinary_secret_material(secret));
                             tracing::debug!(
                                 gateway = %resource_ref.key(),
                                 listener = %listener.name,

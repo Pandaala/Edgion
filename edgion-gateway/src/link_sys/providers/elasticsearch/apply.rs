@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use edgion_common::link_sys_core::outbound_tls::PreparedLinkSysTls;
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
@@ -15,14 +16,42 @@ use crate::link_sys::runtime::runner::ApplyOwner;
 use super::client::EsLinkClient;
 use super::config_mapping::{es_pool, es_timeouts, EsBulkConfig};
 
-pub struct EsApply;
+pub(crate) struct EsApply;
+
+pub(crate) struct EsCandidate {
+    pub(super) tls: PreparedLinkSysTls,
+    fingerprint: RuntimeFingerprint,
+}
+
+impl EsCandidate {
+    pub(super) fn new(owner: Arc<LinkSys>) -> anyhow::Result<Self> {
+        Self::from_prepared(PreparedLinkSysTls::from_link_sys(owner)?)
+    }
+    pub(super) fn from_prepared(tls: PreparedLinkSysTls) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            matches!(&tls.owner().spec.config, SystemConfig::Elasticsearch(_)),
+            "Elasticsearch candidate requires an actual Elasticsearch LinkSys"
+        );
+        tls.validate_active_inheritance()?;
+        let fingerprint = fingerprint_es_fields(tls.owner(), |hasher| tls.hash_active_inheritance(hasher))?;
+        Ok(Self { tls, fingerprint })
+    }
+    pub(super) fn fingerprint(&self) -> &RuntimeFingerprint {
+        &self.fingerprint
+    }
+}
 
 #[async_trait]
 impl ApplyOwner for EsApply {
     type Client = EsLinkClient;
+    type Candidate = EsCandidate;
 
-    fn fingerprint(incoming: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
-        fingerprint_es(incoming)
+    fn prepare(incoming: Arc<LinkSys>) -> anyhow::Result<Self::Candidate> {
+        EsCandidate::new(incoming)
+    }
+
+    fn fingerprint(incoming: &Self::Candidate) -> anyhow::Result<RuntimeFingerprint> {
+        Ok(incoming.fingerprint.clone())
     }
 
     fn fingerprint_live(client: &Self::Client) -> RuntimeFingerprint {
@@ -37,8 +66,8 @@ impl ApplyOwner for EsApply {
         Some(client.published_health())
     }
 
-    fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
-        EsLinkClient::from_linksys(key, incoming)
+    fn build(key: &str, incoming: &Self::Candidate) -> anyhow::Result<Arc<Self::Client>> {
+        EsLinkClient::from_candidate(key, incoming).map(Arc::new)
     }
 
     async fn init(client: &Self::Client) -> anyhow::Result<()> {
@@ -60,7 +89,10 @@ impl ApplyOwner for EsApply {
     }
 }
 
-pub fn fingerprint_es(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
+fn fingerprint_es_fields(
+    ls: &LinkSys,
+    inherited: impl FnOnce(&mut FingerprintHasher) -> anyhow::Result<()>,
+) -> anyhow::Result<RuntimeFingerprint> {
     let SystemConfig::Elasticsearch(cfg) = &ls.spec.config else {
         anyhow::bail!("fingerprint_es called with a non-Elasticsearch LinkSys");
     };
@@ -72,6 +104,7 @@ pub fn fingerprint_es(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
     let mut secret = FingerprintHasher::new();
     hash_auth_material(&mut secret, ls);
     hash_tls_material(&mut secret, cfg.tls.as_ref());
+    inherited(&mut secret)?;
 
     Ok(RuntimeFingerprint::from_parts(
         rebuild.finish(),

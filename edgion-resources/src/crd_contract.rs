@@ -102,14 +102,14 @@ struct ScopedCelRules {
     rules: Vec<CompiledCelRule>,
 }
 
-struct CompiledFragment {
+pub(crate) struct CompiledFragment {
     schema: Value,
     validator: Validator,
     cel_rules: Vec<ScopedCelRules>,
 }
 
 impl CompiledFragment {
-    fn compile(schema: Value, name: &str) -> Result<Self, CrdContractError> {
+    pub(crate) fn compile(schema: Value, name: &str) -> Result<Self, CrdContractError> {
         let validator = Validator::new(&schema).map_err(|_| CrdContractError::InvalidContract)?;
         let mut cel_rules = Vec::new();
         collect_scoped_cel(&schema, &mut Vec::new(), name, &mut cel_rules)?;
@@ -121,6 +121,11 @@ impl CompiledFragment {
     }
 
     fn validate(&self, input: &Value) -> Result<Vec<CrdViolation>, CrdContractError> {
+        self.prepare(input).map(|(_, violations)| violations)
+    }
+
+    /// Normalize only the supplied bounded projection, keeping the authored view separate.
+    pub(crate) fn prepare(&self, input: &Value) -> Result<(Value, Vec<CrdViolation>), CrdContractError> {
         check_input_bounds(input)?;
         let mut normalized = input.clone();
         prune_non_nullable_null_properties(&self.schema, &mut normalized);
@@ -134,12 +139,10 @@ impl CompiledFragment {
                 message: "value does not satisfy the vendored Gateway API schema".to_string(),
             });
         }
-        if !violations.is_empty() {
-            return Ok(violations);
+        if violations.is_empty() {
+            evaluate_scoped_rules(&normalized, &self.cel_rules, &mut violations)?;
         }
-
-        evaluate_scoped_rules(&normalized, &self.cel_rules, &mut violations)?;
-        Ok(violations)
+        Ok((normalized, violations))
     }
 }
 
@@ -415,7 +418,10 @@ fn evaluate_rules(
     rules: &[CompiledCelRule],
     violations: &mut Vec<CrdViolation>,
 ) -> Result<(), CrdContractError> {
-    let cel_value = to_value(value).map_err(|_| CrdContractError::CelEvaluation)?;
+    // Kubernetes CEL escapes reserved property names. This separate view does
+    // not rename authored properties or affect OpenAPI validation.
+    let cel_view = escape_cel_namespace(value);
+    let cel_value = to_value(&cel_view).map_err(|_| CrdContractError::CelEvaluation)?;
     for rule in rules {
         let mut context = Context::default();
         context.add_variable_from_value("self", cel_value.clone());
@@ -439,24 +445,59 @@ fn evaluate_rules(
     Ok(())
 }
 
-fn check_input_bounds(value: &Value) -> Result<(), CrdContractError> {
-    if serde_json::to_vec(value)
-        .map_err(|_| CrdContractError::InputLimit)?
-        .len()
-        > MAX_INPUT_BYTES
-        || value_depth(value) > MAX_INPUT_DEPTH
-    {
-        return Err(CrdContractError::InputLimit);
+fn escape_cel_namespace(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, child)| {
+                    (
+                        if key == "namespace" {
+                            "__namespace__".to_string()
+                        } else {
+                            key.clone()
+                        },
+                        escape_cel_namespace(child),
+                    )
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(escape_cel_namespace).collect()),
+        _ => value.clone(),
     }
-    Ok(())
 }
 
-fn value_depth(value: &Value) -> usize {
-    match value {
-        Value::Array(values) => 1 + values.iter().map(value_depth).max().unwrap_or(0),
-        Value::Object(values) => 1 + values.values().map(value_depth).max().unwrap_or(0),
-        _ => 1,
+pub(crate) fn check_input_bounds(value: &Value) -> Result<(), CrdContractError> {
+    // Bound recursion before serialization or cloning any submitted subtree.
+    fn within_depth(value: &Value, depth: usize) -> bool {
+        if depth > MAX_INPUT_DEPTH {
+            return false;
+        }
+        match value {
+            Value::Array(values) => values.iter().all(|value| within_depth(value, depth + 1)),
+            Value::Object(values) => values.values().all(|value| within_depth(value, depth + 1)),
+            _ => true,
+        }
     }
+    if !within_depth(value, 1) {
+        return Err(CrdContractError::InputLimit);
+    }
+    struct BoundedWriter {
+        bytes: usize,
+    }
+    impl std::io::Write for BoundedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.bytes = self.bytes.saturating_add(bytes.len());
+            if self.bytes > MAX_INPUT_BYTES {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(BoundedWriter { bytes: 0 }, value).map_err(|_| CrdContractError::InputLimit)
 }
 
 #[cfg(test)]

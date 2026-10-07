@@ -2,13 +2,18 @@
 
 use std::collections::HashMap;
 
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
-use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{
+    fetch_bound_secret, BoundFetchOutcome, PendingReason,
+};
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
     JwtIssuerGroup, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
 };
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::resources::refs::plugin_fields::{
+    BoundPluginEntryMut, PreparedPluginReferences, SecretGroupReferences,
+};
 
 /// Resolve all Secret refs for a single JwtIssuerGroup. Snapshot-merges
 /// `algorithm` + `audiences` from group override or plugin-level default.
@@ -16,17 +21,22 @@ use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 fn resolve_group(
     config: &edgion_resources::resources::edgion_plugins::plugin_configs::JwtAuthConfig,
     group: &JwtIssuerGroup,
-    ep_namespace: Option<&String>,
+    fields: &SecretGroupReferences<'_>,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) -> Option<ResolvedJwtIssuerGroup> {
     let mut credentials: HashMap<String, ResolvedJwtCredential> = HashMap::new();
 
-    for sor in &group.secret_refs {
-        let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_namespace), &sor.name);
-        let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", sor) {
-            FetchOutcome::Ok(s) => s,
-            FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+    for token in fields.references() {
+        let Ok(reference) = token.validated() else {
+            continue;
+        };
+        let target = reference.target();
+        let secret_key = format!("{}/{}", target.scope().namespace().unwrap_or_default(), target.name());
+        let secret = match fetch_bound_secret(ctx, resource_ref, token) {
+            BoundFetchOutcome::Ok(authorized) => authorized.secret,
+            BoundFetchOutcome::Invalid(_) => continue,
+            BoundFetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
                 tracing::info!(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,
@@ -35,7 +45,7 @@ fn resolve_group(
                 );
                 continue;
             }
-            FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
                 ref from_ns,
                 ref to_ns,
                 ref secret_name,
@@ -146,53 +156,60 @@ fn resolve_group(
 /// Resolve JWT credentials from Secrets and register references to SecretRefManager.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
+    prepared: &PreparedPluginReferences,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    if let Some(ref mut plugins) = ep.spec.request_plugins {
-        for entry in plugins.iter_mut() {
-            if let EdgionPlugin::JwtAuth(ref mut config) = entry.plugin {
-                // This field is Controller-owned transport state. Never trust
-                // a value deserialized from the operator-facing resource, and
-                // do not retain credentials from a previous resolution pass.
-                config.resolved_groups_by_iss = None;
+    let Ok(mut bindings) = prepared.bind_mut(ep) else {
+        return;
+    };
+    for entry in bindings.request_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_body_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+}
 
-                let Some(ref groups) = config.issuer_groups else {
-                    continue;
-                };
-
-                let mut by_iss: HashMap<String, ResolvedJwtIssuerGroup> = HashMap::new();
-                for group in groups {
-                    let Some(resolved) =
-                        resolve_group(config, group, ep.metadata.namespace.as_ref(), resource_ref, ctx)
-                    else {
-                        continue;
-                    };
-                    // Index by every iss this group claims. Cross-group iss
-                    // uniqueness is already enforced at preparse, so no
-                    // collision here. Each iss carries its own clone of the
-                    // resolved group to keep serde simple.
-                    for iss in &group.issuers {
-                        by_iss.insert(iss.clone(), resolved.clone());
-                    }
-                }
-
-                if !by_iss.is_empty() {
-                    tracing::info!(
-                        edgion_plugins = %resource_ref.key(),
-                        group_count = groups.len(),
-                        iss_count = by_iss.len(),
-                        "JwtAuth: Resolved issuer groups"
-                    );
-                    config.resolved_groups_by_iss = Some(by_iss);
-                } else {
-                    tracing::warn!(
-                        edgion_plugins = %resource_ref.key(),
-                        "JwtAuth: No issuer groups resolved"
-                    );
-                }
+fn resolve_entry(mut entry: BoundPluginEntryMut<'_>, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+    let EdgionPlugin::JwtAuth(config) = entry.config_mut() else {
+        return;
+    };
+    config.resolved_groups_by_iss = None;
+    if !entry.is_enabled() {
+        return;
+    }
+    let mut by_iss = HashMap::new();
+    {
+        let EdgionPlugin::JwtAuth(config) = entry.config() else {
+            return;
+        };
+        let Ok(references) = entry.references() else {
+            return;
+        };
+        for (group, fields) in config
+            .issuer_groups
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .zip(references.secret_groups())
+        {
+            let Some(resolved) = resolve_group(config, group, &fields, resource_ref, ctx) else {
+                continue;
+            };
+            for iss in &group.issuers {
+                by_iss.insert(iss.clone(), resolved.clone());
             }
         }
+    }
+    if let EdgionPlugin::JwtAuth(config) = entry.config_mut() {
+        config.resolved_groups_by_iss = (!by_iss.is_empty()).then_some(by_iss);
     }
 }
 

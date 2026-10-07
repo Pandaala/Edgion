@@ -7,6 +7,41 @@ use edgion_resources::resources::link_sys::httpdns::HttpDnsConnection;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+fn owner(
+    config: edgion_resources::resources::link_sys::HttpDnsResolverConfig,
+) -> std::sync::Arc<edgion_resources::LinkSys> {
+    use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
+    let mut owner = edgion_resources::LinkSys::new(
+        "resolver",
+        LinkSysSpec {
+            config: SystemConfig::HttpDns(config),
+            current_status: None,
+            unknown_fields: vec![],
+        },
+    );
+    owner.metadata.namespace = Some("apps".into());
+    std::sync::Arc::new(owner)
+}
+fn new_fetcher(connection: Option<&HttpDnsConnection>) -> Result<ReqwestHttpDnsFetcher, DnsError> {
+    use edgion_resources::resources::link_sys::httpdns::{
+        HttpDnsFallback, HttpDnsPreset, HttpDnsResolverConfig, HttpDnsResponseFormat,
+    };
+    ReqwestHttpDnsFetcher::new(owner(HttpDnsResolverConfig {
+        preset: Some(HttpDnsPreset::Aliyun),
+        url_template: None,
+        response: HttpDnsResponseFormat::default(),
+        fallback: HttpDnsFallback::None,
+        connection: connection.cloned(),
+    }))
+}
+fn prepare(
+    config: edgion_resources::resources::link_sys::HttpDnsResolverConfig,
+) -> std::sync::Arc<edgion_common::dns::PreparedHttpDns> {
+    edgion_common::dns::HttpDnsCandidate::from_link_sys(owner(config))
+        .unwrap()
+        .prepare()
+}
+
 /// Spawn a one-shot HTTP/1.1 stub that replies with `body` and returns its URL.
 async fn spawn_stub(body: String) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -39,7 +74,7 @@ fn local_connection() -> HttpDnsConnection {
 async fn production_default_rejects_loopback_literals_and_hostname_before_connect() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let fetcher = ReqwestHttpDnsFetcher::new(None).unwrap();
+    let fetcher = new_fetcher(None).unwrap();
     for host in [
         "127.0.0.1",
         "127.1",
@@ -66,13 +101,13 @@ async fn production_default_rejects_loopback_literals_and_hostname_before_connec
 async fn explicit_loopback_allows_hostname_and_revocation_blocks_new_generation() {
     let url = spawn_stub("answer".into()).await.replace("127.0.0.1", "localhost");
     let mut connection = local_connection();
-    let allowed = ReqwestHttpDnsFetcher::new(Some(&connection)).unwrap();
+    let allowed = new_fetcher(Some(&connection)).unwrap();
     assert_eq!(allowed.get(&url).await.unwrap(), "answer");
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://localhost:{}/d", listener.local_addr().unwrap().port());
     connection.allow_loopback = false;
-    let denied = ReqwestHttpDnsFetcher::new(Some(&connection)).unwrap();
+    let denied = new_fetcher(Some(&connection)).unwrap();
     assert!(denied.get(&url).await.is_err());
     assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept())
         .await
@@ -86,7 +121,7 @@ async fn loopback_override_never_allows_metadata_or_unspecified_literals() {
             allow_loopback,
             ..local_connection()
         };
-        let fetcher = ReqwestHttpDnsFetcher::new(Some(&connection)).unwrap();
+        let fetcher = new_fetcher(Some(&connection)).unwrap();
         for host in [
             "169.254.169.254",
             "[fe80::1]",
@@ -120,19 +155,13 @@ async fn blocked_endpoint_preserves_configured_fallback() {
         fallback: HttpDnsFallback::None,
         connection: None,
     };
-    assert!(resolve(
-        &ResolverSpec::HttpDns(edgion_common::dns::PreparedHttpDns::prepare(config.clone())),
-        "localhost"
-    )
-    .await
-    .is_err());
+    assert!(resolve(&ResolverSpec::HttpDns(prepare(config.clone())), "localhost")
+        .await
+        .is_err());
     config.fallback = HttpDnsFallback::System;
-    let addresses = resolve(
-        &ResolverSpec::HttpDns(edgion_common::dns::PreparedHttpDns::prepare(config)),
-        "localhost",
-    )
-    .await
-    .unwrap();
+    let addresses = resolve(&ResolverSpec::HttpDns(prepare(config)), "localhost")
+        .await
+        .unwrap();
     assert!(addresses.iter().any(|ip| ip.is_loopback()));
 }
 
@@ -160,7 +189,7 @@ async fn redirects_are_not_followed_and_timeout_still_applies() {
             .unwrap()
             .unwrap();
     });
-    let fetcher = ReqwestHttpDnsFetcher::new(Some(&local_connection())).unwrap();
+    let fetcher = new_fetcher(Some(&local_connection())).unwrap();
     assert!(matches!(fetcher.get(&url).await, Err(DnsError::Http(message)) if message.contains("302")));
     server.await.unwrap();
     assert!(tokio::time::timeout(Duration::from_millis(50), target.accept())
@@ -170,7 +199,7 @@ async fn redirects_are_not_followed_and_timeout_still_applies() {
         timeout_ms: Some(50),
         ..local_connection()
     };
-    let fetcher = ReqwestHttpDnsFetcher::new(Some(&connection)).unwrap();
+    let fetcher = new_fetcher(Some(&connection)).unwrap();
     let url = format!("http://{target_addr}/d");
     assert!(tokio::time::timeout(Duration::from_secs(2), fetcher.get(&url))
         .await
@@ -181,7 +210,7 @@ async fn redirects_are_not_followed_and_timeout_still_applies() {
 #[tokio::test]
 async fn fetches_body_from_stub() {
     let url = spawn_stub(r#"{"ips":["1.2.3.4"]}"#.to_string()).await;
-    let fetcher = ReqwestHttpDnsFetcher::new(Some(&local_connection())).unwrap();
+    let fetcher = new_fetcher(Some(&local_connection())).unwrap();
     let body = fetcher.get(&url).await.unwrap();
     assert!(body.contains("1.2.3.4"));
 }
@@ -189,7 +218,7 @@ async fn fetches_body_from_stub() {
 #[tokio::test]
 async fn rejects_body_over_limit() {
     let url = spawn_stub("x".repeat(64 * 1024 + 1)).await;
-    let fetcher = ReqwestHttpDnsFetcher::new(Some(&local_connection())).unwrap();
+    let fetcher = new_fetcher(Some(&local_connection())).unwrap();
     let err = fetcher.get(&url).await.unwrap_err();
     assert!(
         matches!(&err, DnsError::Http(message) if message.contains("response exceeds the 65536-byte limit")),
@@ -217,7 +246,7 @@ async fn end_to_end_preset_parse_via_stub() {
         fallback: HttpDnsFallback::None,
         connection: Some(local_connection()),
     };
-    let fetcher = ReqwestHttpDnsFetcher::new(cfg.connection.as_ref()).unwrap();
+    let fetcher = new_fetcher(cfg.connection.as_ref()).unwrap();
     let ips = edgion_common::dns::httpdns::resolve_http_dns_with(&fetcher, &cfg, "api.example.com")
         .await
         .unwrap();
@@ -231,7 +260,7 @@ async fn configured_body_limit_and_runtime_validation_are_enforced() {
         ..local_connection()
     };
     let url = spawn_stub("12345".into()).await;
-    let fetcher = ReqwestHttpDnsFetcher::new(Some(&connection)).unwrap();
+    let fetcher = new_fetcher(Some(&connection)).unwrap();
     assert!(matches!(fetcher.get(&url).await, Err(DnsError::Http(message)) if message.contains("4-byte limit")));
     for input in [
         serde_json::json!({"timeoutMs": 0}),
@@ -242,7 +271,7 @@ async fn configured_body_limit_and_runtime_validation_are_enforced() {
     ] {
         let connection: HttpDnsConnection = serde_json::from_value(input).unwrap();
         assert!(
-            ReqwestHttpDnsFetcher::new(Some(&connection)).is_err(),
+            new_fetcher(Some(&connection)).is_err(),
             "runtime must reject admission-bypassed settings"
         );
     }
@@ -289,7 +318,7 @@ async fn spawn_keepalive_stub() -> (String, tokio::task::JoinHandle<usize>) {
 
 #[tokio::test]
 async fn prepared_queries_reuse_native_pool_and_config_can_disable_it() {
-    use edgion_common::dns::{resolve, PreparedHttpDns, ResolverSpec};
+    use edgion_common::dns::{resolve, ResolverSpec};
     use edgion_resources::resources::link_sys::httpdns::HttpDnsResolverConfig;
     for (pool_size, expected_connections) in [(8, 1), (0, 2)] {
         let (url, server) = spawn_keepalive_stub().await;
@@ -299,7 +328,7 @@ async fn prepared_queries_reuse_native_pool_and_config_can_disable_it() {
             "connection": {"allowLoopback": true, "poolMaxIdlePerHost": pool_size}
         }))
         .unwrap();
-        let prepared = PreparedHttpDns::prepare(config);
+        let prepared = prepare(config);
         assert!(prepared.is_ready());
         let spec = ResolverSpec::HttpDns(prepared);
         for domain in ["first.example", "second.example"] {
@@ -327,7 +356,7 @@ async fn configured_connect_deadline_bounds_stalled_tls_handshake() {
         connect_timeout_ms: Some(50),
         ..local_connection()
     };
-    let fetcher = ReqwestHttpDnsFetcher::new(Some(&connection)).unwrap();
+    let fetcher = new_fetcher(Some(&connection)).unwrap();
     let started = std::time::Instant::now();
     assert!(tokio::time::timeout(Duration::from_millis(600), fetcher.get(&url))
         .await
@@ -344,7 +373,7 @@ async fn configured_idle_lifetime_releases_pooled_connection() {
         pool_idle_timeout_ms: Some(1),
         ..local_connection()
     };
-    let fetcher = ReqwestHttpDnsFetcher::new(Some(&connection)).unwrap();
+    let fetcher = new_fetcher(Some(&connection)).unwrap();
     let url = url.replace("{domain}", "example.com");
     fetcher.get(&url).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -354,7 +383,7 @@ async fn configured_idle_lifetime_releases_pooled_connection() {
 
 #[tokio::test]
 async fn cancelled_query_does_not_poison_shared_prepared_generation() {
-    use edgion_common::dns::{resolve, PreparedHttpDns, ResolverSpec};
+    use edgion_common::dns::{resolve, ResolverSpec};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/d?host={{domain}}", listener.local_addr().unwrap());
     let (started, request_started) = tokio::sync::oneshot::channel();
@@ -383,7 +412,7 @@ async fn cancelled_query_does_not_poison_shared_prepared_generation() {
         "connection": {"allowLoopback": true, "timeoutMs": 2000}
     }))
     .unwrap();
-    let prepared = PreparedHttpDns::prepare(config);
+    let prepared = prepare(config);
     let first_spec = ResolverSpec::HttpDns(prepared.clone());
     let first = tokio::spawn(async move { resolve(&first_spec, "first.example").await });
     tokio::time::timeout(Duration::from_secs(2), request_started)
@@ -405,7 +434,7 @@ async fn cancelled_query_does_not_poison_shared_prepared_generation() {
 
 #[tokio::test]
 async fn invalid_preparation_uses_the_latest_explicit_dns_fallback() {
-    use edgion_common::dns::{resolve, PreparedHttpDns, ResolverSpec};
+    use edgion_common::dns::{resolve, ResolverSpec};
     use hickory_resolver::proto::{
         op::Message,
         rr::{rdata::A, RData, Record, RecordType},
@@ -438,7 +467,7 @@ async fn invalid_preparation_uses_the_latest_explicit_dns_fallback() {
         "fallback": {"type": "dns", "servers": [address.to_string()]}
     }))
     .unwrap();
-    let prepared = PreparedHttpDns::prepare(config);
+    let prepared = prepare(config);
     assert!(!prepared.is_ready());
     let result = tokio::time::timeout(
         Duration::from_secs(3),

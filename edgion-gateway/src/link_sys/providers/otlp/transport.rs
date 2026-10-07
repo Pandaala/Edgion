@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use edgion_common::dns::ResolverSpec;
-use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa};
+use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, PreparedOtlpTls};
 use edgion_common::tls_validation::parse_canonical_ca_bundle;
 use edgion_resources::credentials::SecretMaterialResolver;
-use edgion_resources::resources::common::TlsConfig;
-use edgion_resources::resources::link_sys::otlp::{OtlpBearerResolver, OtlpClientConfig};
+use edgion_resources::resources::link_sys::otlp::OtlpBearerResolver;
+use edgion_resources::resources::link_sys::SystemConfig;
 use hyper_util::rt::TokioIo;
 use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_sdk::logs::{LogBatch, LogExporter};
@@ -23,6 +23,7 @@ pub(super) const CONNECT_DEADLINE: Duration = Duration::from_secs(3);
 /// Connection-sensitive material has one immutable owner per desired generation.
 /// Intentionally has no Debug implementation: Endpoint and metadata contain secrets.
 pub(super) struct PreparedTransport {
+    _input: Arc<PreparedOtlpTls>,
     endpoint: Endpoint,
     host: Arc<str>,
     port: u16,
@@ -32,8 +33,11 @@ pub(super) struct PreparedTransport {
 }
 
 impl PreparedTransport {
-    pub fn prepare(config: &OtlpClientConfig, resolver: ResolverSpec) -> Result<Arc<Self>, &'static str> {
-        let parsed = config.validate().map_err(|_| "invalid_config")?;
+    pub fn prepare(input: Arc<PreparedOtlpTls>, resolver: ResolverSpec) -> Result<Arc<Self>, &'static str> {
+        let SystemConfig::Otlp(config) = &input.owner().spec.config else {
+            return Err("invalid_config");
+        };
+        let parsed = input.endpoint();
         let timeout = Duration::from_millis(config.timeout_ms);
         let mut metadata = MetadataMap::new();
         if let Some(auth) = &config.auth {
@@ -45,29 +49,10 @@ impl PreparedTransport {
             value.set_sensitive(true);
             metadata.insert("authorization", value);
         }
-        let mut endpoint = Endpoint::from(parsed.uri)
+        let mut endpoint = Endpoint::from(parsed.uri.clone())
             .connect_timeout(timeout.min(CONNECT_DEADLINE))
             .timeout(timeout);
-        if parsed.tls {
-            let empty = TlsConfig::default();
-            let local = config.tls.as_ref().filter(|tls| tls.enabled).unwrap_or(&empty);
-            let resolved = resolve_outbound_tls(
-                &local.outbound,
-                local.resolved_ca_certificates.as_deref(),
-                local.resolved_client_certificate.as_ref(),
-                false,
-                "otlp",
-            )
-            .map_err(|_| "invalid_tls")?;
-            if resolved.san.as_ref().is_some_and(|validation| {
-                validation.hostname.is_some()
-                    || validation
-                        .subject_alt_names
-                        .as_ref()
-                        .is_some_and(|names| !names.is_empty())
-            }) {
-                return Err("invalid_tls");
-            }
+        if let Some(resolved) = input.resolve_tls().map_err(|_| "invalid_tls")? {
             let mut tls = ClientTlsConfig::new()
                 .domain_name(parsed.host.clone())
                 .timeout(timeout.min(CONNECT_DEADLINE));
@@ -85,10 +70,13 @@ impl PreparedTransport {
             }
             endpoint = endpoint.tls_config(tls).map_err(|_| "invalid_tls")?;
         }
+        let host = parsed.host.clone().into();
+        let port = parsed.port;
         Ok(Arc::new(Self {
+            _input: input,
             endpoint,
-            host: parsed.host.into(),
-            port: parsed.port,
+            host,
+            port,
             resolver,
             metadata,
             timeout,

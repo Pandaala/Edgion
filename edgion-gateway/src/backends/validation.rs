@@ -6,7 +6,7 @@ use crate::backends::policy::backend_tls::BackendTLSPolicySnapshot;
 use crate::backends::{service_section_key_from_port, BackendTlsPolicyLookup};
 use crate::routes::http::match_unit::CompiledBackend;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
-use edgion_resources::{EdgionErrorCode, HTTPBackendRef, HTTPBackendRefKind};
+use edgion_resources::{EdgionErrorCode, HTTPBackendRef};
 
 /// Route-owned permission to select an endpoint in one canonical Service section.
 /// Constructed before publication, never from request-supplied identity.
@@ -19,11 +19,16 @@ pub struct DirectEndpointAuthorization {
 
 impl DirectEndpointAuthorization {
     pub fn compile(backend: &HTTPBackendRef, route_namespace: &str) -> Option<Self> {
-        if backend.ref_denied.is_some() || backend.backend_kind() != HTTPBackendRefKind::Service {
+        if backend.ref_denied.is_some() {
             return None;
         }
+        let edgion_resources::resources::refs::targets::BackendTarget::Service(identity) =
+            backend.validated_target(route_namespace).ok()?
+        else {
+            return None;
+        };
         let section = service_section_key_from_port(backend.port).ok()?;
-        let namespace = backend.namespace.as_deref().unwrap_or(route_namespace);
+        let namespace = identity.scope().namespace()?;
         Some(Self {
             service_key: format!("{namespace}/{}", backend.name),
             section,

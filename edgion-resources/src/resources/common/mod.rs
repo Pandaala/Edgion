@@ -8,7 +8,6 @@ pub(crate) mod kubernetes_name;
 pub mod log_labels;
 pub mod outbound_request;
 pub mod outbound_tls;
-mod parent_identity;
 pub mod request_template;
 pub mod secret_object_ref;
 pub mod secret_slot;
@@ -29,8 +28,7 @@ pub use log_labels::resolve_log_labels;
 pub use outbound_request::{
     CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec, PresencePolicy,
 };
-pub use outbound_tls::{OutboundTlsConfig, OutboundTlsLocal, OutboundTlsValidation};
-pub use parent_identity::{ParentRefIdentity, ParentStatusIdentity};
+pub use outbound_tls::{CustomCACertificateRef, OutboundTlsConfig, OutboundTlsLocal, OutboundTlsValidation};
 pub use secret_object_ref::SecretObjectReference;
 pub use secret_slot::SecretSlot;
 pub use service_backend_kind::ServiceBackendKind;
@@ -52,14 +50,6 @@ pub fn is_false(v: &bool) -> bool {
 #[inline]
 pub fn is_core_api_group(group: &str) -> bool {
     group.is_empty() || group == "core"
-}
-
-/// Check if two API groups are equivalent, treating `""` and `"core"` as the same.
-pub fn api_groups_match(a: &str, b: &str) -> bool {
-    if a == b {
-        return true;
-    }
-    is_core_api_group(a) && is_core_api_group(b)
 }
 
 /// Controller-resolved route attachment used to preserve Gateway identity

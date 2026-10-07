@@ -50,7 +50,7 @@ fn policy(
         spec: EdgionBackendTrafficPolicySpec {
             current_status: None,
             target_refs: vec![PolicyTargetRef {
-                group: String::new(),
+                group: Some(String::new()),
                 kind: "Service".to_string(),
                 name: svc.to_string(),
             }],
@@ -83,7 +83,7 @@ fn ai_policy(ns: &str, name: &str, target: &str, percent: u8, timeout: &str) -> 
         spec: EdgionBackendTrafficPolicySpec {
             current_status: None,
             target_refs: vec![PolicyTargetRef {
-                group: "edgion.io".to_string(),
+                group: Some("edgion.io".to_string()),
                 kind: "EdgionBackend".to_string(),
                 name: target.to_string(),
             }],
@@ -305,7 +305,7 @@ fn invalid_policy_is_skipped() {
         spec: EdgionBackendTrafficPolicySpec {
             current_status: None,
             target_refs: vec![PolicyTargetRef {
-                group: String::new(),
+                group: Some(String::new()),
                 kind: "Service".to_string(),
                 name: "svc".to_string(),
             }],
@@ -897,7 +897,7 @@ fn multi_target_partial_update_publishes_both_ai_targets_atomically() {
         .spec
         .target_refs
         .push(PolicyTargetRef {
-            group: "edgion.io".to_string(),
+            group: Some("edgion.io".to_string()),
             kind: "EdgionBackend".to_string(),
             name: "b".to_string(),
         });
@@ -926,7 +926,7 @@ fn multi_target_partial_update_publishes_both_ai_targets_atomically() {
         .spec
         .target_refs
         .push(PolicyTargetRef {
-            group: "edgion.io".to_string(),
+            group: Some("edgion.io".to_string()),
             kind: "EdgionBackend".to_string(),
             name: "b".to_string(),
         });
@@ -1209,7 +1209,7 @@ fn prepare_policy_dedups_repeated_service_target_refs() {
         false,
     );
     Arc::get_mut(&mut p).unwrap().spec.target_refs.push(PolicyTargetRef {
-        group: String::new(),
+        group: Some(String::new()),
         kind: "Service".to_string(),
         name: "svc".to_string(),
     });

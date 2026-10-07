@@ -28,7 +28,7 @@ pub(super) fn allowed(
             },
             from_kind.as_str(),
             backend.namespace.as_deref().unwrap_or(from_ns),
-            &backend.group,
+            backend.group.as_deref().unwrap_or_default(),
             backend.kind.as_deref().unwrap_or("Service"),
             Some(&backend.name),
         )
@@ -108,7 +108,11 @@ pub(super) fn errors<'a>(
                 &[backend.ref_denied.as_ref()],
             ));
             errors.push(ResolvedRefsError::InvalidKind {
-                kind: format!("{}/{}", backend.group, backend.kind.as_deref().unwrap_or("Service")),
+                kind: format!(
+                    "{}/{}",
+                    backend.group.as_deref().unwrap_or_default(),
+                    backend.kind.as_deref().unwrap_or("Service")
+                ),
                 name: backend.name.clone(),
             });
         } else if backend.name.is_empty()

@@ -458,7 +458,7 @@ fn flatten_child_rules(
         let targets = super::request_mirror::resolve_rule(&mut resolved_rule, child_ns, |backend| {
             ctx.lookup.cross_ns_ref_allowed(
                 child_ns,
-                Some(&backend.group),
+                backend.group.as_deref(),
                 backend.kind.as_deref(),
                 &backend.name,
                 backend.namespace.as_deref().unwrap_or(child_ns),

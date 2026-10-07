@@ -69,7 +69,8 @@ fn resolution_preserves_metadata_warnings_and_replaces_credentials() {
         .without_time()
         .with_ansi(false)
         .finish();
-    tracing::subscriber::with_default(subscriber, || resolve(&mut ep, &owner, &ctx));
+    let prepared = PreparedPluginReferences::from_plugins(&ep);
+    tracing::subscriber::with_default(subscriber, || resolve(&mut ep, &prepared, &owner, &ctx));
     log_file.rewind().unwrap();
     let mut logs = String::new();
     log_file.read_to_string(&mut logs).unwrap();
@@ -108,7 +109,8 @@ fn resolution_preserves_metadata_warnings_and_replaces_credentials() {
         "default/first".into(),
         secret("first", "- apiKey: rotated-key\n  x-owner: rotated\n"),
     )]));
-    resolve(&mut ep, &owner, &ctx);
+    let prepared = PreparedPluginReferences::from_plugins(&ep);
+    resolve(&mut ep, &prepared, &owner, &ctx);
     let EdgionPlugin::KeyAuth(config) = &ep.spec.request_plugins.as_ref().unwrap()[0].plugin else {
         panic!("expected KeyAuth")
     };
@@ -116,7 +118,8 @@ fn resolution_preserves_metadata_warnings_and_replaces_credentials() {
     assert_eq!(keys.len(), 1);
     assert_eq!(keys["rotated-key"].headers["x-owner"], "rotated");
     runtime.secret_store.replace_all(HashMap::new());
-    resolve(&mut ep, &owner, &ctx);
+    let prepared = PreparedPluginReferences::from_plugins(&ep);
+    resolve(&mut ep, &prepared, &owner, &ctx);
     let EdgionPlugin::KeyAuth(config) = &ep.spec.request_plugins.as_ref().unwrap()[0].plugin else {
         panic!("expected KeyAuth")
     };

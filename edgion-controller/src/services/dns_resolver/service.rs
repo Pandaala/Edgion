@@ -27,7 +27,7 @@ use parking_lot::Mutex;
 use edgion_common::dns::resolver_select::{
     candidate_from_annotations, resolve_effective_spec, LinkSysKey, ResolverCandidate,
 };
-use edgion_common::dns::{resolve, PreparedHttpDns, ResolverSpec};
+use edgion_common::dns::{resolve, HttpDnsCandidate, PreparedHttpDns, ResolverSpec};
 use edgion_common::time::now_rfc3339;
 use edgion_resources::constants::annotations::edgion::DNS_RESOLUTION_MODE;
 use edgion_resources::constants::labels::k8s::SERVICE_NAME;
@@ -110,21 +110,21 @@ struct ServiceDnsState {
 }
 
 impl ServiceDnsState {
-    fn prepare(
-        &mut self,
-        key: &LinkSysKey,
-        config: edgion_resources::resources::link_sys::HttpDnsResolverConfig,
-    ) -> Arc<PreparedHttpDns> {
+    fn prepare(&mut self, key: &LinkSysKey, owner: Arc<LinkSys>) -> Option<Arc<PreparedHttpDns>> {
+        let Some(incoming) = HttpDnsCandidate::from_link_sys(owner) else {
+            self.prepared = None;
+            return None;
+        };
         if let Some((previous_key, prepared)) = &self.prepared {
-            if previous_key == key && prepared.matches_config(&config) {
-                return Arc::clone(prepared);
+            if previous_key == key && incoming.matches(prepared) {
+                return Some(Arc::clone(prepared));
             }
         }
-        let prepared = PreparedHttpDns::prepare(config);
+        let prepared = incoming.prepare();
         // Store before the query, including failure, so refreshes do not rebuild
         // invalid generations or repeat their TLS audit every tick.
         self.prepared = Some((key.clone(), Arc::clone(&prepared)));
-        prepared
+        Some(prepared)
     }
 }
 
@@ -443,8 +443,8 @@ async fn effective_spec(
     let service_candidate = candidate_from_annotations(svc_annotations);
     let layers = [service_candidate, default_candidate.clone()];
     let prepared = match layers.iter().flatten().next() {
-        Some(ResolverCandidate::HttpDnsRef(key)) => match fetch_httpdns_config(client, key).await {
-            Some(config) => Some(state.prepare(key, config)),
+        Some(ResolverCandidate::HttpDnsRef(key)) => match fetch_httpdns_owner(client, key).await {
+            Some(owner) => state.prepare(key, owner),
             None => {
                 state.prepared = None;
                 None
@@ -483,16 +483,14 @@ pub(crate) fn controller_default_resolver_without_kube() -> ResolverSpec {
     resolve_effective_spec(&[default_candidate], |_| None)
 }
 
-/// Fetch an httpdns LinkSys's resolver config from the apiserver. Returns `None`
+/// Fetch an actual httpdns LinkSys owner from the apiserver. Returns `None`
 /// when the object is missing or is not an httpdns LinkSys (a dangling ref then
 /// fails safe to the system resolver in `resolve_effective_spec`).
-async fn fetch_httpdns_config(
-    client: &Client,
-    key: &LinkSysKey,
-) -> Option<edgion_resources::resources::link_sys::HttpDnsResolverConfig> {
+async fn fetch_httpdns_owner(client: &Client, key: &LinkSysKey) -> Option<Arc<LinkSys>> {
     let api: Api<LinkSys> = Api::namespaced(client.clone(), &key.namespace);
     match api.get(&key.name).await {
-        Ok(ls) => ls.spec.config.as_http_dns().cloned(),
+        Ok(ls) if ls.spec.config.as_http_dns().is_some() => Some(Arc::new(ls)),
+        Ok(_) => None,
         Err(_) => None,
     }
 }

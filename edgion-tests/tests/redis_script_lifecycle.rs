@@ -136,7 +136,7 @@ impl Fixture {
         } else {
             CredentialState::NotRequired
         };
-        let client = RedisLinkClient::from_config(name, &config, &auth)?;
+        let client = RedisLinkClient::from_test_config(name, &config, &auth)?;
         client.init().await?;
         Ok(client)
     }

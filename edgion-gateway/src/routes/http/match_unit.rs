@@ -165,17 +165,19 @@ impl CompiledBackend {
     }
 
     fn compile_target(schema: &HTTPBackendRef, route_namespace: &str) -> CompiledBackendTarget {
-        let namespace = schema.namespace.as_deref().unwrap_or(route_namespace).to_string();
-        match schema.backend_kind() {
-            HTTPBackendRefKind::Service => CompiledBackendTarget::Service {
-                namespace,
-                name: schema.name.clone(),
+        use edgion_resources::resources::refs::targets::BackendTarget;
+        match schema.validated_target(route_namespace) {
+            Ok(BackendTarget::Service(identity)) => CompiledBackendTarget::Service {
+                namespace: identity.scope().namespace().unwrap_or_default().to_string(),
+                name: identity.name().to_string(),
             },
-            HTTPBackendRefKind::EdgionBackend if schema.port.is_none() => CompiledBackendTarget::EdgionBackend {
-                namespace,
-                name: schema.name.clone(),
+            Ok(BackendTarget::EdgionBackend(identity)) => CompiledBackendTarget::EdgionBackend {
+                namespace: identity.scope().namespace().unwrap_or_default().to_string(),
+                name: identity.name().to_string(),
             },
-            classified_kind => CompiledBackendTarget::Invalid { classified_kind },
+            _ => CompiledBackendTarget::Invalid {
+                classified_kind: schema.backend_kind(),
+            },
         }
     }
 }

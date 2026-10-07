@@ -8,6 +8,106 @@ use edgion_resources::resources::link_sys::LinkSysSpec;
 use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
 
+// These historical cases isolate the existing local encoding. Owning replay
+// tests below exercise proof and inherited identity before the runner decisions.
+fn fingerprint_redis(owner: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
+    fingerprint_redis_fields(owner, |_| {})
+}
+
+#[test]
+fn actual_redis_candidate_rejects_invalid_same_rv_source_and_pairs_before_planning() {
+    use edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot;
+    let defaults = Arc::new(GlobalOutboundTlsSnapshot::from_configs([]));
+    let mut valid = redis_ls(vec!["redis://redis.example:6379"], Some("42"));
+    let SystemConfig::Redis(config) = &mut valid.spec.config else {
+        unreachable!()
+    };
+    config.tls = Some(
+        serde_json::from_value(serde_json::json!({
+            "enabled":true,"verify":true,
+            "validation":{"caCertificateRefs":[{"kind":"Secret","name":"ca"}]},
+            "resolvedCaCertificates":[{"metadata":{"name":"ca","namespace":"fp"}}]
+        }))
+        .unwrap(),
+    );
+    let prepared = PreparedRedisTls::with_snapshot(Arc::new(valid.clone()), Arc::clone(&defaults)).unwrap();
+    let candidate = RedisCandidate::from_prepared(prepared).unwrap();
+    let live = candidate.fingerprint().clone();
+    assert!(matches!(
+        crate::link_sys::runtime::apply::plan_apply(
+            Some(&live),
+            candidate.fingerprint(),
+            ConnectionCoverage { live: 1, configured: 1 },
+            false
+        ),
+        crate::link_sys::runtime::apply::ApplyPlan::Reuse
+    ));
+    for field in ["source", "foreign-group", "missing", "namespace"] {
+        let mut bad = valid.clone();
+        if field == "source" {
+            bad.metadata.name = None;
+        } else {
+            let SystemConfig::Redis(config) = &mut bad.spec.config else {
+                unreachable!()
+            };
+            let tls = config.tls.as_mut().unwrap();
+            match field {
+                "foreign-group" => {
+                    tls.outbound
+                        .validation
+                        .as_mut()
+                        .unwrap()
+                        .ca_certificate_refs
+                        .as_mut()
+                        .unwrap()[0]
+                        .group = Some("foreign.example".into())
+                }
+                "missing" => tls.resolved_ca_certificates = None,
+                _ => tls.resolved_ca_certificates.as_mut().unwrap()[0].metadata.namespace = Some("other".into()),
+            }
+        }
+        assert!(
+            PreparedRedisTls::with_snapshot(Arc::new(bad.clone()), Arc::clone(&defaults)).is_err(),
+            "{field}"
+        );
+        assert!(RedisApply::prepare(Arc::new(bad)).is_err(), "runner {field}");
+    }
+}
+
+#[test]
+fn consumed_global_changes_invalidate_same_rv_redis_reuse_and_masks_preserve_identity() {
+    use edgion_common::link_sys_core::outbound_tls::test_util;
+    use edgion_resources::resources::common::OutboundTlsConfig;
+    let a = test_util::snapshot(OutboundTlsConfig::default());
+    let b = test_util::snapshot(OutboundTlsConfig {
+        verify: false,
+        ..Default::default()
+    });
+    let valid = Arc::new(redis_ls(vec!["rediss://redis.example:6380"], Some("42")));
+    let left =
+        RedisCandidate::from_prepared(PreparedRedisTls::with_snapshot(Arc::clone(&valid), Arc::clone(&a)).unwrap())
+            .unwrap();
+    let right = RedisCandidate::from_prepared(PreparedRedisTls::with_snapshot(valid, Arc::clone(&b)).unwrap()).unwrap();
+    assert!(!left.fingerprint().equal_runtime(right.fingerprint()));
+    assert!(!left.fingerprint().rv_skip_allows_reuse(right.fingerprint()));
+    let mut masked = redis_ls(vec!["rediss://redis.example:6380"], Some("42"));
+    let SystemConfig::Redis(config) = &mut masked.spec.config else {
+        unreachable!()
+    };
+    config.tls = Some(TlsConfig {
+        enabled: true,
+        outbound: OutboundTlsLocal {
+            verify: Some(true),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let masked = Arc::new(masked);
+    let left = RedisCandidate::from_prepared(PreparedRedisTls::with_snapshot(Arc::clone(&masked), a).unwrap()).unwrap();
+    let right = RedisCandidate::from_prepared(PreparedRedisTls::with_snapshot(masked, b).unwrap()).unwrap();
+    assert!(left.fingerprint().equal_runtime(right.fingerprint()));
+}
+
 fn redis_ls(endpoints: Vec<&str>, rv: Option<&str>) -> LinkSys {
     LinkSys {
         metadata: kube::core::ObjectMeta {

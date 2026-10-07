@@ -209,7 +209,7 @@ impl OtlpClientConfig {
                 if let Some(refs) = &validation.ca_certificate_refs {
                     for reference in refs {
                         validate_otlp_secret_ref(&SecretObjectReference {
-                            group: Some(reference.group.clone()),
+                            group: reference.group.clone(),
                             kind: Some(reference.kind.clone()),
                             name: reference.name.clone(),
                             namespace: reference.namespace.clone(),

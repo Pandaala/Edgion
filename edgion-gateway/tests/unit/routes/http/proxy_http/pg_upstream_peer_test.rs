@@ -947,7 +947,7 @@ fn service_policy_fields(
         spec: EdgionBackendTrafficPolicySpec {
             current_status: None,
             target_refs: vec![PolicyTargetRef {
-                group: String::new(),
+                group: Some(String::new()),
                 kind: "Service".to_string(),
                 name: svc.to_string(),
             }],
@@ -1130,7 +1130,7 @@ fn begin_upstream_attempt_does_not_recapture_on_retry() {
         spec: EdgionBackendTrafficPolicySpec {
             current_status: None,
             target_refs: vec![PolicyTargetRef {
-                group: String::new(),
+                group: Some(String::new()),
                 kind: "Service".to_string(),
                 name: "svc".to_string(),
             }],
@@ -1185,7 +1185,7 @@ fn begin_upstream_attempt_does_not_recapture_on_retry() {
         spec: EdgionBackendTrafficPolicySpec {
             current_status: None,
             target_refs: vec![PolicyTargetRef {
-                group: String::new(),
+                group: Some(String::new()),
                 kind: "Service".to_string(),
                 name: "svc".to_string(),
             }],
@@ -1244,7 +1244,7 @@ fn grpc_begin_upstream_attempt_captures_without_selected_backend() {
         spec: EdgionBackendTrafficPolicySpec {
             current_status: None,
             target_refs: vec![PolicyTargetRef {
-                group: String::new(),
+                group: Some(String::new()),
                 kind: "Service".to_string(),
                 name: "svc".to_string(),
             }],

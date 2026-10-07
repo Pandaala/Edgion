@@ -12,9 +12,9 @@ use crate::EdgionHttpContext;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
 use edgion_resources::resources::edgion_plugins::{CorsConfig, WafConfig};
-use edgion_resources::resources::extension_ref::{validate_extension_ref_filter, ExtensionRefValidationError};
 use edgion_resources::resources::header_modifier::{validate_grpc_filter_list, validate_http_filter_list};
 use edgion_resources::resources::http_route::MirrorTuning;
+use edgion_resources::resources::refs::extension_ref::{validate_extension_ref_filter, ExtensionRefValidationError};
 use edgion_resources::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
 };

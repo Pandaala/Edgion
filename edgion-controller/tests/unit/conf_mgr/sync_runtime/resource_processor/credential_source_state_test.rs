@@ -3,6 +3,13 @@ use edgion_resources::ResourceKind;
 
 fn consumer(source_key: &str) -> DesiredCredentialConsumer {
     DesiredCredentialConsumer {
+        reference: crate::reference_test_support::injector_reference(&crate::reference_test_support::injector_owner(
+            "apps",
+            "provider",
+            "consumer-uid",
+            3,
+            source_key,
+        )),
         resource: ResourceRef::new(
             ResourceKind::EdgionPlugins,
             Some("apps".to_string()),

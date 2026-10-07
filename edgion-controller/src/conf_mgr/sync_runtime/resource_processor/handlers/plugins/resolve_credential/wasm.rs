@@ -1,215 +1,174 @@
-//! Wasm plugin credential resolution.
-//!
-//! Resolves the `source.fetch` refs on each `Wasm` plugin:
-//! `fetch.tls.validation.caCertificateRefs` → `resolved_ca_certificates`,
-//! `fetch.tls.clientCertificateRef` → `resolved_client_certificate`, and
-//! `fetch.authHeaderSecretRef` → `resolved_auth_header` (the value the
-//! gateway sends as the `Authorization` header when fetching `source.url`
-//! bytecode from a private artifact repository). Also resolves
-//! `source.oci.pullSecretRef` → `resolved_pull_secret` (the raw
-//! dockerconfigjson document used to authenticate an OCI registry pull).
-//!
-//! References are registered with `SecretRefManager` (inside `fetch_secret` /
-//! `resolve_ca_certificate_refs`) so a Secret change re-processes the owning
-//! `EdgionPlugins` resource.
+//! Wasm fetch and registry credentials resolved from actual owning fields.
 
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{
-    fetch_secret, resolve_ca_certificate_refs, CaFetchStrategy, FetchOutcome, PendingReason,
-};
-use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
+use super::read_secret_utf8;
+use crate::conf_mgr::sync_runtime::resource_processor::credential::ca_refs::resolve_bound_tls;
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_bound_secret, BoundFetchOutcome};
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::resources::refs::plugin_fields::{BoundPluginEntryMut, PreparedPluginReferences};
 
-/// Resolve Wasm `source.fetch` secrets in every stage list (a Wasm entry can
-/// appear at the request stage and the upstream-response stages alike).
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
-    resource_ref: &ResourceRef,
+    prepared: &PreparedPluginReferences,
+    owner: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    let ep_ns = ep.metadata.namespace.clone();
+    let Ok(mut bindings) = prepared.bind_mut(ep) else {
+        return;
+    };
+    for entry in bindings.request_entries() {
+        resolve_entry(entry, owner, ctx);
+    }
+    for entry in bindings.response_filter_entries() {
+        resolve_entry(entry, owner, ctx);
+    }
+    for entry in bindings.response_body_filter_entries() {
+        resolve_entry(entry, owner, ctx);
+    }
+    for entry in bindings.response_entries() {
+        resolve_entry(entry, owner, ctx);
+    }
+}
 
-    macro_rules! resolve_stage {
-        ($stage:expr) => {
-            if let Some(ref mut entries) = $stage {
-                for entry in entries.iter_mut() {
-                    resolve_wasm_plugin(&mut entry.plugin, ep_ns.as_ref(), resource_ref, ctx);
-                }
+fn resolve_entry(mut entry: BoundPluginEntryMut<'_>, owner: &ResourceRef, ctx: &HandlerContext) {
+    let EdgionPlugin::Wasm(config) = entry.config_mut() else {
+        return;
+    };
+    if let Some(oci) = config.source.oci.as_mut() {
+        oci.resolved_pull_secret = None;
+    }
+    if let Some(fetch) = config.source.fetch.as_mut() {
+        fetch.resolved_auth_header = None;
+        if let Some(tls) = fetch.tls.as_mut() {
+            tls.resolved_ca_certificates = None;
+            tls.resolved_client_certificate = None;
+        }
+    }
+    let (auth, pull, tls) = {
+        let EdgionPlugin::Wasm(config) = entry.config() else {
+            return;
+        };
+        let Ok(references) = entry.references() else { return };
+        let auth = references.wasm_auth_header_secret().and_then(|token| {
+            let key = &config.source.fetch.as_ref()?.auth_header_secret_ref.as_ref()?.key;
+            match fetch_bound_secret(ctx, owner, token) {
+                BoundFetchOutcome::Ok(authorized) => read_secret_utf8(&authorized.secret, &[key]).map(str::to_owned),
+                BoundFetchOutcome::Pending(_) | BoundFetchOutcome::Invalid(_) => None,
+            }
+        });
+        let pull = references
+            .wasm_pull_secret()
+            .and_then(|token| match fetch_bound_secret(ctx, owner, token) {
+                BoundFetchOutcome::Ok(authorized) => extract_dockerconfigjson(&authorized.secret).ok(),
+                BoundFetchOutcome::Pending(_) | BoundFetchOutcome::Invalid(_) => None,
+            });
+        (
+            auth,
+            pull,
+            references.tls().map(|tls| resolve_bound_tls(ctx, owner, tls)),
+        )
+    };
+    if let EdgionPlugin::Wasm(config) = entry.config_mut() {
+        if let Some(oci) = config.source.oci.as_mut() {
+            oci.resolved_pull_secret = pull;
+        }
+        if let Some(fetch) = config.source.fetch.as_mut() {
+            fetch.resolved_auth_header = auth;
+            if let (Some(tls), Some(material)) = (fetch.tls.as_mut(), tls) {
+                tls.resolved_ca_certificates = material.ca_certificates;
+                tls.resolved_client_certificate = material.client_certificate;
+            }
+        }
+    }
+}
+
+/// Read-only status follows the same owning fields, activity and material checks.
+/// OCI parsing stays shallow: registry-host and credential matching belong to
+/// the Gateway's pull implementation and continue failing closed there.
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn status_errors(
+    ep: &EdgionPlugins,
+    owner: &ResourceRef,
+    ctx: &HandlerContext,
+) -> Vec<crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError> {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::{
+        bound_secret_status_error, bound_secret_status_result,
+    };
+    use crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError;
+    let prepared = PreparedPluginReferences::from_plugins(ep);
+    let bindings = match prepared.bind(ep) {
+        Ok(bindings) => bindings,
+        Err(error) => return vec![ResolvedRefsError::InvalidReference { error }],
+    };
+    let mut errors = Vec::new();
+    for entry in bindings
+        .request_entries()
+        .chain(bindings.response_filter_entries())
+        .chain(bindings.response_body_filter_entries())
+        .chain(bindings.response_entries())
+    {
+        let EdgionPlugin::Wasm(config) = entry.config() else {
+            continue;
+        };
+        let references = match entry.references() {
+            Ok(references) => references,
+            Err(error) => {
+                errors.push(ResolvedRefsError::InvalidReference { error });
+                continue;
             }
         };
-    }
-
-    resolve_stage!(ep.spec.request_plugins);
-    resolve_stage!(ep.spec.upstream_response_filter_plugins);
-    resolve_stage!(ep.spec.upstream_response_body_filter_plugins);
-    resolve_stage!(ep.spec.upstream_response_plugins);
-}
-
-/// Resolve the fetch refs of a single plugin entry if it is a Wasm plugin
-/// with a `source.fetch` block. No-op otherwise.
-fn resolve_wasm_plugin(
-    plugin: &mut EdgionPlugin,
-    ep_ns: Option<&String>,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    let EdgionPlugin::Wasm(ref mut config) = plugin else {
-        return;
-    };
-
-    resolve_oci_pull_secret(config, ep_ns, resource_ref, ctx);
-
-    let Some(ref mut fetch) = config.source.fetch else {
-        return;
-    };
-
-    // Reset runtime-resolved fields first to avoid stale values on update.
-    fetch.resolved_auth_header = None;
-
-    if let Some(ref mut tls) = fetch.tls {
-        tls.resolved_ca_certificates = None;
-        tls.resolved_client_certificate = None;
-
-        let ca_refs = tls
-            .outbound
-            .validation
-            .as_ref()
-            .and_then(|v| v.ca_certificate_refs.as_deref())
-            .unwrap_or_default();
-        let resolved_cas = resolve_ca_certificate_refs(
-            ctx,
-            resource_ref,
-            ep_ns.map(String::as_str),
-            ca_refs,
-            CaFetchStrategy::GrantGated {
-                group: "edgion.io",
-                kind: "EdgionPlugins",
-            },
-        );
-        tls.resolved_ca_certificates = (!resolved_cas.is_empty()).then_some(resolved_cas);
-
-        if let Some(sor) = tls.outbound.client_certificate_ref.clone() {
-            let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_ns), &sor.name);
-            match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
-                FetchOutcome::Ok(secret) => {
-                    tls.resolved_client_certificate = Some(secret);
-                }
-                FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
-                    tracing::info!(
-                        edgion_plugins = %resource_ref.key(),
-                        secret_key = %secret_key,
-                        "Wasm fetch: client identity secret not found yet, will reprocess when the Secret arrives"
-                    );
-                }
-                FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
-                    ref from_ns,
-                    ref to_ns,
-                    ref secret_name,
-                }) => {
-                    tracing::warn!(
-                        edgion_plugins = %resource_ref.key(),
-                        from_ns = %from_ns,
-                        to_ns = %to_ns,
-                        secret_name = %secret_name,
-                        "Wasm fetch: cross-namespace client identity secret reference denied (ReferenceGrant missing)"
-                    );
+        if let Some(token) = references.wasm_auth_header_secret() {
+            match bound_secret_status_result(ctx, owner, token) {
+                Err(error) => errors.push(error),
+                Ok(authorized) => {
+                    if let Some(auth) = config
+                        .source
+                        .fetch
+                        .as_ref()
+                        .and_then(|fetch| fetch.auth_header_secret_ref.as_ref())
+                    {
+                        if read_secret_utf8(&authorized.secret, &[&auth.key]).is_none() {
+                            errors.push(ResolvedRefsError::DecodeError {
+                                key: "authHeaderSecretRef",
+                                detail: format!("Secret data key '{}' is missing, empty, or not UTF-8", auth.key),
+                            });
+                        }
+                    }
                 }
             }
         }
-    }
-
-    if let Some(auth) = fetch.auth_header_secret_ref.clone() {
-        let secret_key = format_secret_key(auth.secret.namespace.as_ref().or(ep_ns), &auth.secret.name);
-        match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &auth.secret) {
-            FetchOutcome::Ok(secret) => match super::read_secret_utf8(&secret, &[auth.key.as_str()]) {
-                Some(value) => {
-                    fetch.resolved_auth_header = Some(value.to_owned());
+        if let Some(token) = references.wasm_pull_secret() {
+            match bound_secret_status_result(ctx, owner, token) {
+                Err(error) => errors.push(error),
+                Ok(authorized) => {
+                    if authorized.secret.type_.as_deref() != Some("kubernetes.io/dockerconfigjson") {
+                        errors.push(ResolvedRefsError::InvalidSecretType {
+                            got: authorized.secret.type_.clone().unwrap_or_default(),
+                            allowed: &["kubernetes.io/dockerconfigjson"],
+                        });
+                    } else if read_secret_utf8(&authorized.secret, &[".dockerconfigjson"]).is_none() {
+                        errors.push(ResolvedRefsError::DecodeError {
+                            key: ".dockerconfigjson",
+                            detail: "Secret key .dockerconfigjson is missing, empty, or not UTF-8".to_string(),
+                        });
+                    }
                 }
-                None => {
-                    tracing::warn!(
-                        edgion_plugins = %resource_ref.key(),
-                        secret_key = %secret_key,
-                        auth_key = %auth.key,
-                        "Wasm fetch: auth header Secret found but key is missing or empty"
-                    );
-                }
-            },
-            FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
-                tracing::info!(
-                    edgion_plugins = %resource_ref.key(),
-                    secret_key = %secret_key,
-                    "Wasm fetch: auth header secret not found yet, will reprocess when the Secret arrives"
+            }
+        }
+        if let Some(tls) = references.tls() {
+            for token in tls.ca_certificates() {
+                errors.extend(
+                    crate::conf_mgr::sync_runtime::resource_processor::credential::ca_refs::bound_ca_status_error(
+                        ctx, owner, token,
+                    ),
                 );
             }
-            FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
-                ref from_ns,
-                ref to_ns,
-                ref secret_name,
-            }) => {
-                tracing::warn!(
-                    edgion_plugins = %resource_ref.key(),
-                    from_ns = %from_ns,
-                    to_ns = %to_ns,
-                    secret_name = %secret_name,
-                    "Wasm fetch: cross-namespace auth header secret reference denied (ReferenceGrant missing)"
-                );
+            if let Some(token) = tls.client_certificate() {
+                errors.extend(bound_secret_status_error(ctx, owner, token));
             }
         }
     }
-}
-
-/// Resolve `source.oci.pullSecretRef` into `resolved_pull_secret` (the raw
-/// dockerconfigjson document; the gateway matches the registry host at pull
-/// time). An unresolvable reference leaves the field `None`, which the
-/// gateway treats as a load failure — never a silent anonymous pull.
-fn resolve_oci_pull_secret(
-    config: &mut edgion_resources::resources::edgion_plugins::plugin_configs::WasmConfig,
-    ep_ns: Option<&String>,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    let Some(ref mut oci) = config.source.oci else {
-        return;
-    };
-    // Reset first to avoid stale values on update.
-    oci.resolved_pull_secret = None;
-    let Some(sor) = oci.pull_secret_ref.clone() else {
-        return;
-    };
-    let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_ns), &sor.name);
-    match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
-        FetchOutcome::Ok(secret) => match extract_dockerconfigjson(&secret) {
-            Ok(json) => oci.resolved_pull_secret = Some(json),
-            Err(reason) => {
-                tracing::warn!(
-                    edgion_plugins = %resource_ref.key(),
-                    secret_key = %secret_key,
-                    reason = %reason,
-                    "Wasm oci: pull secret found but invalid"
-                );
-            }
-        },
-        FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
-            tracing::info!(
-                edgion_plugins = %resource_ref.key(),
-                secret_key = %secret_key,
-                "Wasm oci: pull secret not found yet, will reprocess when the Secret arrives"
-            );
-        }
-        FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
-            ref from_ns,
-            ref to_ns,
-            ref secret_name,
-        }) => {
-            tracing::warn!(
-                edgion_plugins = %resource_ref.key(),
-                from_ns = %from_ns,
-                to_ns = %to_ns,
-                secret_name = %secret_name,
-                "Wasm oci: cross-namespace pull secret reference denied (ReferenceGrant missing)"
-            );
-        }
-    }
+    errors
 }
 
 /// Validate the Secret shape for an image pull secret: type

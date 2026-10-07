@@ -49,9 +49,10 @@ Controller                                      Gateway
 > (including `request.body` — `json`/`raw` templates and `form` field templates) are
 > expressed as `${secretRef:ns/name:key}` inside a `template` string (e.g.,
 > `template: "Bearer ${secretRef:prod/webhook-token:token}"`). The controller
-> (`SystemConfig::Webhook` arm) scans `collect_secret_ref_names`, registers each ref in
-> `SecretRefManager`, fetches the Secret via `fetch_secret` (ReferenceGrant enforced for
-> cross-namespace), and embeds the resolved values in `spec.resolved_secrets` (a
+> binds template positions to the actual LinkSys through PreparedLinkSysReferences.
+> The shared bound acquisition pipeline registers each valid dependency before its
+> Grant/store check, enforces ReferenceGrant for cross-namespace references, and
+> embeds the resolved values in `spec.config.resolvedSecrets` (a
 > `ResolvedSecrets` newtype; admin `/configclient` renders entries as `"[redacted]"`). The
 > full struct is shipped over conf_sync; the gateway substitutes `${secretRef:...}` vars from
 > `resolved_secrets` at call time. A Secret change triggers `trigger_cascading_requeue` → full
@@ -59,15 +60,30 @@ Controller                                      Gateway
 
 ### conf_sync
 
-- The gateway receives the **full** `WebhookServiceConfig` struct (serde) — the standard LinkSys conf_sync path. The compiled request templates are re-derived gateway-side from the synced `request` block (no separate "compiled" wire format). Resolved secret values ride along in `spec.resolved_secrets` (a `ResolvedSecrets` newtype); admin `/configclient` output renders each entry as `"[redacted]"`.
+- The gateway receives the **full** `WebhookServiceConfig` struct (serde) — the standard LinkSys conf_sync path. The compiled request templates are re-derived gateway-side from the synced `request` block (no separate "compiled" wire format). Resolved secret values ride along in `spec.config.resolvedSecrets` (a `ResolvedSecrets` newtype); admin `/configclient` output renders each entry as `"[redacted]"`.
 - The gateway compiles `CompiledRequest` once during ordered candidate preparation, **not** per call — keeping the request-time (RT) loop free of template parsing. `${secretRef:...}` substitution happens at call time from the `resolved_secrets` owned by the prepared `ManagedOutboundClient`.
 
 ### Gateway side (provider-owned preparation and unified publication)
 
 - Ordered source dispatch in `link_sys/runtime/store.rs` applies updates to the single current runtime table; no Webhook-specific mutation registry exists.
-- `WebhookLinkClient::prepare()` calls `ManagedOutboundClient::from_parts()` (`plugins/http/common/outbound/client.rs`) to resolve the target, build the HTTP client, compile the request, and initialize health/rate/retry state before anything becomes visible.
+- `WebhookCandidate` retains the actual LinkSys, reference-only topology and one
+  captured global TLS snapshot. It checks source, active local pairing and
+  inherited authority before digest or same-RV reuse. Its preparation calls
+  `ManagedOutboundClient::from_webhook()` through the actual bound LinkSys to
+  resolve the target, build the canonical proved HTTP client, compile the request
+  and initialize health/rate/retry state before anything becomes visible. Omitted
+  Service namespace and health-probe target namespace derive from the validated
+  source; inactive TLS keeps native defaults without global inheritance.
 - `CompiledRequest::from_spec(spec)` (`plugins/http/common/outbound/request.rs`) compiles every `path`/`method`/`args`/`headers`/`cookies` `custom.template`, and the optional `request.body`, into `CompiledTemplate` values. `${secretRef:ns/name:key}` segments remain compiled tokens and are substituted at call time from the client-owned resolved map.
-- Publication replaces the current typed Webhook entry only after preparation succeeds. Same-type preparation failure retains the current client. A type change removes the old type first and may temporarily leave no client. Removal signals health-task stop without waiting for caller-held handles to disappear. The unused generic lifecycle trait and duplicate Webhook bookkeeping are removed.
+- Publication replaces the current typed Webhook entry only after preparation succeeds.
+  Ordinary same-type preparation/readiness failure retains the current client for
+  subsequent new lookups and calls, including an ordinary update whose Grant-backed
+  material is denied. Forced inherited-TLS rebuild withdraws it before preparing
+  the replacement; an unusable forced generation stays absent. This custom lifecycle
+  does not authorize retained access for standard Gateway API references. A type
+  change removes the old type first and may temporarily leave no client. Removal
+  signals health-task stop without waiting for caller-held handles to disappear.
+  The unused generic lifecycle trait and duplicate Webhook bookkeeping are removed.
 - At call time, `resolve_webhook_key()` or `WebhookCallHandle::call()` delegates to the shared `outbound_call()`, which builds one bounded request and handles target selection, retry, health, rate limit, response-size enforcement, and diagnostics.
 
 ## Consumer API change

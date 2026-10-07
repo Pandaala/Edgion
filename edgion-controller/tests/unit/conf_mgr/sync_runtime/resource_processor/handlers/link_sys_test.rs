@@ -4,7 +4,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::condition_reasons;
 use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::credentials::resolvers::{BasicAuthResolver, EsApiKeyResolver};
-use edgion_resources::resources::common::{Condition, SecretSlot};
+use edgion_resources::resources::common::{Condition, SecretObjectReference, SecretSlot};
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
 use edgion_resources::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
 use edgion_resources::resources::link_sys::LinkSysSpec;
@@ -941,13 +941,11 @@ async fn test_redis_tls_secret_ref_resolution() {
             enabled: true,
             outbound: OutboundTlsLocal {
                 validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
-                    ca_certificate_refs: Some(vec![
-                        edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef {
-                            kind: "Secret".to_string(),
-                            name: "redis-tls".to_string(),
-                            ..Default::default()
-                        },
-                    ]),
+                    ca_certificate_refs: Some(vec![edgion_resources::resources::common::CustomCACertificateRef {
+                        kind: "Secret".to_string(),
+                        name: "redis-tls".to_string(),
+                        ..Default::default()
+                    }]),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -1038,13 +1036,11 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
             enabled: true,
             outbound: OutboundTlsLocal {
                 validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
-                    ca_certificate_refs: Some(vec![
-                        edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef {
-                            kind: "Secret".to_string(),
-                            name: "redis-tls-bad-type".to_string(),
-                            ..Default::default()
-                        },
-                    ]),
+                    ca_certificate_refs: Some(vec![edgion_resources::resources::common::CustomCACertificateRef {
+                        kind: "Secret".to_string(),
+                        name: "redis-tls-bad-type".to_string(),
+                        ..Default::default()
+                    }]),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -1138,7 +1134,7 @@ async fn webhook_service_target_registers_no_service_ref() {
 
     let (ctx, _runtime) = make_ctx(HashMap::new());
     let owner = ResourceRef::new(ResourceKind::LinkSys, Some("ns".to_string()), "websvc".to_string());
-    let mut cfg = SystemConfig::Webhook(WebhookServiceConfig {
+    let cfg = SystemConfig::Webhook(WebhookServiceConfig {
         conn: ExternalHttpConnection {
             target: WebhookTarget {
                 service: WebhookServiceRef {
@@ -1154,7 +1150,18 @@ async fn webhook_service_target_registers_no_service_ref() {
         },
         ..Default::default()
     });
-    let _ = resolve_for_spec(&ctx, &owner, &mut cfg).await;
+    let mut resource = LinkSys::new(
+        "websvc",
+        LinkSysSpec {
+            config: cfg,
+            current_status: None,
+            unknown_fields: Vec::new(),
+        },
+    );
+    resource.metadata.namespace = Some("ns".to_string());
+    let prepared = PreparedLinkSysReferences::from_link_sys(&resource);
+    let mut binding = prepared.bind_mut(&mut resource).unwrap();
+    let _ = resolve_for_spec(&ctx, &owner, &mut binding).await;
     let refs = ctx.runtime().service_ref_mgr.get_refs("ns/websvc");
     assert!(
         refs.is_empty(),
@@ -1461,7 +1468,7 @@ async fn etcd_with_hostname_rejected_phase1() {
 /// Redis with only CA refs (no SAN fields) must NOT be rejected by the SAN guard.
 #[tokio::test]
 async fn redis_ca_only_no_san_accepted() {
-    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::CustomCACertificateRef;
     use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
     use edgion_resources::resources::link_sys::redis::RedisClientConfig;
 
@@ -1483,7 +1490,7 @@ async fn redis_ca_only_no_san_accepted() {
                     enabled: true,
                     outbound: OutboundTlsLocal {
                         validation: Some(OutboundTlsValidation {
-                            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                            ca_certificate_refs: Some(vec![CustomCACertificateRef {
                                 kind: "Secret".to_string(),
                                 name: "redis-ca".to_string(),
                                 namespace: None,

@@ -21,9 +21,11 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::GRPCRoute;
 use edgion_resources::resources::common::{Condition, ParentReference, RefDenied};
-use edgion_resources::resources::extension_ref::{is_supported_edgion_plugins_ref, validate_extension_ref_filter};
 use edgion_resources::resources::grpc_route::{GRPCRouteFilter, GRPCRouteFilterType, GRPCRouteStatus};
 use edgion_resources::resources::http_route::{DelegationIssue, GATEWAY_API_GROUP};
+use edgion_resources::resources::refs::extension_ref::{
+    is_supported_edgion_plugins_ref, validate_extension_ref_filter,
+};
 use edgion_resources::ResourceKind;
 
 /// True for parentRef entries that attach the route to a Gateway listener

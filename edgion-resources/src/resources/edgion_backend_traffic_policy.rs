@@ -153,8 +153,8 @@ pub struct ConnectionOverride {
 #[serde(rename_all = "camelCase")]
 pub struct PolicyTargetRef {
     /// Group of the referent. Empty string (default) = core API group.
-    #[serde(default)]
-    pub group: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     /// Kind of the referent: "Service" or "EdgionBackend".
     pub kind: String,
     /// Name of the referent (same namespace as the policy).
@@ -213,29 +213,6 @@ impl PolicyTargetKey {
 impl fmt::Display for PolicyTargetKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}/{}/{}", self.group(), self.kind(), self.namespace, self.name)
-    }
-}
-
-impl PolicyTargetRef {
-    /// Parse the accepted group/kind pairs into their canonical typed kind.
-    pub fn target_kind(&self) -> Result<PolicyTargetKind, String> {
-        match (self.group.as_str(), self.kind.as_str()) {
-            ("" | "core", "Service") => Ok(PolicyTargetKind::Service),
-            ("edgion.io", "EdgionBackend") => Ok(PolicyTargetKind::EdgionBackend),
-            _ => Err(format!(
-                "targetRef {}/{} {}: supported targets are core-group Service or edgion.io/EdgionBackend",
-                self.group, self.kind, self.name
-            )),
-        }
-    }
-
-    /// Resolve this same-namespace ref into its typed canonical identity.
-    pub fn canonical_key(&self, namespace: &str) -> Result<PolicyTargetKey, String> {
-        Ok(PolicyTargetKey {
-            target_kind: self.target_kind()?,
-            namespace: namespace.to_string(),
-            name: self.name.clone(),
-        })
     }
 }
 

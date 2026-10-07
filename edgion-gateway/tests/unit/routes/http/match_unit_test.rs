@@ -51,16 +51,14 @@ fn compile_http_rule_preserves_slots_and_types_backends() {
     );
     assert_eq!(
         runtime.backends[1].target,
-        CompiledBackendTarget::Service {
-            namespace: "route-ns".to_string(),
-            name: "dns-svc".to_string()
+        CompiledBackendTarget::Invalid {
+            classified_kind: HTTPBackendRefKind::Unsupported
         }
     );
     assert_eq!(
         runtime.backends[2].target,
-        CompiledBackendTarget::Service {
-            namespace: "route-ns".to_string(),
-            name: "imported-svc".to_string()
+        CompiledBackendTarget::Invalid {
+            classified_kind: HTTPBackendRefKind::Unsupported
         }
     );
     assert_eq!(

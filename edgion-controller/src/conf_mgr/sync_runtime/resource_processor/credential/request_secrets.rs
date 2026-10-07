@@ -1,21 +1,14 @@
-//! Helper for resolving `${secretRef:ns/name:key}` inline secret references
-//! in outbound request specs.
-//!
-//! Extracted from the Webhook arm of `link_sys.rs` so that other providers
-//! (e.g. `forward_auth`) can reuse the same loop without duplicating the
-//! fetch / error-mapping logic.
+//! Secret acquisition and readonly status from actual owning request-template fields.
 
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::Secret;
 
-use edgion_resources::resources::common::request_template::parse_secret_ref;
-use edgion_resources::resources::common::SecretObjectReference;
-use edgion_resources::ResourceKind;
+use edgion_resources::resources::refs::TemplateSecretReference;
 
 use super::super::{HandlerContext, ResolvedRefsError, ResourceRef};
-use super::pipeline::fetch_secret_readonly;
-use super::{fetch_secret, FetchOutcome, PendingReason};
+use super::pipeline::fetch_bound_secret_readonly;
+use super::{fetch_bound_secret, BoundFetchOutcome, PendingReason};
 
 /// Read a single key out of a resolved K8s Secret as a UTF-8 string.
 ///
@@ -37,84 +30,61 @@ pub(crate) fn read_secret_key(secret: &Secret, key: &str) -> Result<String, Stri
     Err(format!("key {:?} not found in secret", key))
 }
 
-/// Resolve a slice of `"ns/name:key"` secret-ref names, returning a map of
-/// successfully resolved values and a list of errors for any that could not
-/// be resolved.
-///
-/// This is the shared loop body extracted from the Webhook handler in
-/// `link_sys.rs`. It is parameterized by `owner_kind` so that future callers
-/// (e.g. `forward_auth`) can provide the correct `from_kind` in
-/// `RefNotPermitted` errors without hardcoding `"LinkSys"`.
-///
-/// The returned map is keyed by the raw `"ns/name:key"` string exactly as it
-/// appears in the template (i.e. the same key that the gateway uses to look
-/// up the resolved value at runtime).
-pub async fn resolve_request_secrets(
+/// Preserve exact runtime map keys while acquiring only actual owning tokens.
+pub fn resolve_request_secrets<'a>(
     ctx: &HandlerContext,
     owner: &ResourceRef,
-    owner_kind: ResourceKind,
-    names: &[String],
+    references: impl IntoIterator<Item = TemplateSecretReference<'a>>,
 ) -> (BTreeMap<String, String>, Vec<ResolvedRefsError>) {
-    resolve_request_secrets_core(ctx, owner, owner_kind, names, true)
+    resolve_request_secrets_core(ctx, owner, references, true)
 }
 
 /// Re-evaluate request-template Secret refs for status without registering
 /// dependencies again. Parse owns dependency registration; status derivation
 /// must be a read-only, deterministic projection of current stores and grants.
-pub fn request_secret_errors_readonly(
+pub fn request_secret_errors_readonly<'a>(
     ctx: &HandlerContext,
     owner: &ResourceRef,
-    owner_kind: ResourceKind,
-    names: &[String],
+    references: impl IntoIterator<Item = TemplateSecretReference<'a>>,
 ) -> Vec<ResolvedRefsError> {
-    resolve_request_secrets_core(ctx, owner, owner_kind, names, false).1
+    resolve_request_secrets_core(ctx, owner, references, false).1
 }
 
-fn resolve_request_secrets_core(
+fn resolve_request_secrets_core<'a>(
     ctx: &HandlerContext,
     owner: &ResourceRef,
-    owner_kind: ResourceKind,
-    names: &[String],
+    references: impl IntoIterator<Item = TemplateSecretReference<'a>>,
     register_dependencies: bool,
 ) -> (BTreeMap<String, String>, Vec<ResolvedRefsError>) {
     let mut resolved: BTreeMap<String, String> = BTreeMap::new();
     let mut errs: Vec<ResolvedRefsError> = Vec::new();
 
-    for name in names {
-        let parts = match parse_secret_ref(name) {
-            Ok(p) => p,
-            Err(e) => {
-                // Malformed refs are also rejected at Accepted-validation;
-                // record a resolved-refs error and skip.
-                errs.push(ResolvedRefsError::DecodeError {
-                    key: "secretRef",
-                    detail: format!("{}: {}", name, e),
-                });
-                continue;
-            }
-        };
-        let secret_ref = SecretObjectReference {
-            group: None,
-            kind: None,
-            name: parts.name.clone(),
-            namespace: Some(parts.namespace.clone()),
-        };
+    for reference in references {
+        let token = *reference.reference();
+        if reference.data_key().is_empty() {
+            errs.push(ResolvedRefsError::DecodeError {
+                key: "secretRef",
+                detail: "invalid request-template Secret reference".to_string(),
+            });
+            continue;
+        }
         let outcome = if register_dependencies {
-            fetch_secret(ctx, owner, "edgion.io", owner_kind.as_str(), &secret_ref)
+            fetch_bound_secret(ctx, owner, token)
         } else {
-            fetch_secret_readonly(ctx, owner, "edgion.io", owner_kind.as_str(), &secret_ref)
+            fetch_bound_secret_readonly(ctx, owner, token)
         };
         match outcome {
-            FetchOutcome::Ok(secret) => match read_secret_key(&secret, &parts.key) {
+            BoundFetchOutcome::Ok(authorized) => match read_secret_key(&authorized.secret, reference.data_key()) {
                 Ok(value) => {
-                    resolved.insert(name.clone(), value);
+                    resolved.insert(reference.map_key().to_string(), value);
                 }
                 Err(detail) => errs.push(ResolvedRefsError::DecodeError {
                     key: "secretRef",
-                    detail: format!("{}: {}", name, detail),
+                    detail: format!("{}: {}", reference.map_key(), detail),
                 }),
             },
-            FetchOutcome::Pending(PendingReason::SecretNotFound {
+            BoundFetchOutcome::Invalid(error) => errs.push(ResolvedRefsError::InvalidReference { error }),
+            BoundFetchOutcome::Pending(PendingReason::SecretNotFound {
                 namespace,
                 name: secret_name,
             }) => {
@@ -123,14 +93,14 @@ fn resolve_request_secrets_core(
                     name: secret_name,
                 });
             }
-            FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
                 from_ns,
                 to_ns,
                 secret_name,
             }) => {
                 errs.push(ResolvedRefsError::RefNotPermitted {
                     from_namespace: from_ns,
-                    from_kind: owner_kind.as_str(),
+                    from_kind: owner.kind_str(),
                     target_namespace: to_ns,
                     target_name: secret_name,
                 });

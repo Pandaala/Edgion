@@ -12,11 +12,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use edgion_resources::resources::link_sys::httpdns::HttpDnsConnection;
+use edgion_resources::LinkSys;
 
 use super::httpdns::HttpDnsFetcher;
 use super::{DnsError, ResolverSpec};
 use crate::egress::{classify_ip, EgressPolicy, EgressResolver, IpClass};
-use crate::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig};
+use crate::link_sys_core::http_client::{build_outbound_client_with_tls_selection, OutboundClientConfig};
+use crate::link_sys_core::outbound_tls::{GlobalOutboundTlsSnapshot, ValidatedLocalTlsSelection};
 use crate::test_mode::is_integration_testing_mode;
 
 /// Production [`HttpDnsFetcher`] over a `reqwest::Client`.
@@ -27,20 +29,24 @@ pub struct ReqwestHttpDnsFetcher {
 }
 
 impl ReqwestHttpDnsFetcher {
-    /// Build a fetcher from the resolver's optional connection settings.
+    /// Build a fetcher from its actual HTTPDNS LinkSys owner, validating the
+    /// entire configuration and owning TLS selection before construction.
     ///
     /// - Timeouts and native connection-pool bounds are resolved at preparation.
     /// - `tls` (when `enabled`) → outbound TLS policy (custom CA / mTLS / gated
     ///   `verify=false`). When absent, HTTPS uses the default system roots.
     /// - Proxies are disabled and redirects denied (SSRF hardening) by the
     ///   shared client factory's defaults.
-    pub fn new(conn: Option<&HttpDnsConnection>) -> Result<Self, DnsError> {
-        Self::with_defaults(conn, crate::link_sys_core::outbound_tls::outbound_global_default())
+    pub fn new(owner: Arc<LinkSys>) -> Result<Self, DnsError> {
+        let candidate = super::HttpDnsCandidate::from_link_sys(owner)
+            .ok_or_else(|| DnsError::Http("HTTP DNS input is not an HTTPDNS LinkSys".into()))?;
+        candidate.build_fetcher()
     }
 
-    pub(super) fn with_defaults(
+    pub(super) fn from_bound(
         conn: Option<&HttpDnsConnection>,
-        defaults: edgion_resources::resources::common::OutboundTlsConfig,
+        proof: &ValidatedLocalTlsSelection<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
     ) -> Result<Self, DnsError> {
         if let Some(connection) = conn {
             if !connection.validate().is_empty() {
@@ -62,9 +68,6 @@ impl ReqwestHttpDnsFetcher {
             allow_loopback,
             None,
         );
-        // Pass TLS only when explicitly enabled; the client factory treats
-        // `None` as "no custom TLS" (default roots), per its contract.
-        let tls = conn.and_then(|c| c.tls.clone()).filter(|t| t.enabled);
         let cfg = OutboundClientConfig {
             total_timeout: Some(Duration::from_millis(timeout_ms)),
             connect_timeout: Some(Duration::from_millis(
@@ -79,13 +82,12 @@ impl ReqwestHttpDnsFetcher {
                     .unwrap_or(HttpDnsConnection::DEFAULT_POOL_IDLE_TIMEOUT_MS),
             )),
             disable_proxy: true,
-            tls,
-            tls_defaults: Some(defaults),
             tls_context: Some("HttpDns"),
             dns_resolver: Some(Arc::new(resolver)),
             ..Default::default()
         };
-        let client = build_outbound_client(cfg).map_err(|e| DnsError::Http(e.to_string()))?;
+        let client = build_outbound_client_with_tls_selection(cfg, proof, defaults)
+            .map_err(|e| DnsError::Http(e.to_string()))?;
         Ok(Self {
             client,
             max_response_bytes: conn

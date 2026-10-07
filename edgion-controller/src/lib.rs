@@ -53,3 +53,7 @@ pub mod observe;
 pub mod services;
 
 pub use cli::EdgionControllerCli;
+
+#[cfg(test)]
+#[path = "../tests/unit/lib_test/reference_test_support.rs"]
+mod reference_test_support;

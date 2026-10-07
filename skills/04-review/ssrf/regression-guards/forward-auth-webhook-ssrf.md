@@ -54,7 +54,9 @@ Adding more CIDR blocks here:
 
 **Threat model requires a high-privilege precondition.** Exploiting this path requires:
 - ForwardAuth: write permission to HTTPRoute or EdgionPlugins CRDs (namespace-admin level).
-- Webhook: write permission to LinkSys CRD (cluster-scoped resource, higher privilege).
+- Webhook: write permission to the namespaced LinkSys CRD. Its omitted Service
+  target namespace inherits the actual LinkSys namespace; this does not imply
+  cluster-scoped resource ownership or automatically grant cluster-wide authority.
 
 An attacker with these permissions can already do far more harmful things (reroute traffic, inject
 backends, read Secrets, etc.). SSRF via a Service target is not a boundary breakthrough but lateral

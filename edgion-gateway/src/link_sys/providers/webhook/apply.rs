@@ -3,36 +3,54 @@
 use edgion_resources::resources::common::ResolvedSecrets;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
+use edgion_common::link_sys_core::fingerprint::hash_tls_inheritance;
+use edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot;
+
 use crate::link_sys::runtime::apply::{hash_tls_material, FingerprintHasher, RuntimeFingerprint};
 
-pub fn fingerprint_webhook(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
+pub(super) fn fingerprint_webhook(
+    ls: &LinkSys,
+    defaults: &GlobalOutboundTlsSnapshot,
+) -> anyhow::Result<RuntimeFingerprint> {
     let SystemConfig::Webhook(cfg) = &ls.spec.config else {
         anyhow::bail!("fingerprint_webhook called with a non-Webhook LinkSys");
     };
 
-    let mut cfg = cfg.clone();
-    // Match prepare(): only enabled TLS reaches the outbound client, and a
-    // service target without namespace inherits the LinkSys namespace.
-    cfg.conn.tls = cfg.conn.tls.take().filter(|tls| tls.enabled);
-    if cfg.conn.target.url.is_none() && cfg.conn.target.service.namespace.is_none() {
-        if let Some(ns) = ls.metadata.namespace.as_deref() {
-            cfg.conn.target.service.namespace = Some(ns.to_string());
-        }
-    }
-
     let mut secret = FingerprintHasher::new();
     hash_resolved_secrets(&mut secret, cfg.resolved_secrets.as_ref());
-    hash_tls_material(&mut secret, cfg.conn.tls.as_ref());
+    hash_tls_material(&mut secret, cfg.conn.tls.as_ref().filter(|tls| tls.enabled));
+    hash_tls_inheritance(
+        &mut secret,
+        cfg.conn.tls.as_ref().filter(|tls| tls.enabled).map(|tls| &tls.outbound),
+        defaults,
+    );
 
-    if let Some(tls) = cfg.conn.tls.as_mut() {
-        tls.resolved_ca_certificates = None;
-        tls.resolved_client_certificate = None;
+    // Serialize a borrowed redacted view; no Secret/config is cloned to strip it.
+    let mut conn = {
+        let _redact = edgion_resources::redact::AdminRedactGuard::new();
+        serde_json::to_value(&cfg.conn)?
+    };
+    let fields = conn
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("invalid Webhook fingerprint projection"))?;
+    if cfg.conn.tls.as_ref().is_none_or(|tls| !tls.enabled) {
+        fields.remove("tls");
+    } else if let Some(tls) = fields.get_mut("tls").and_then(serde_json::Value::as_object_mut) {
+        tls.remove("resolvedCaCertificates");
+        tls.remove("resolvedClientCertificate");
+    }
+    if cfg.conn.target.url.is_none() && cfg.conn.target.service.namespace.is_none() {
+        if let Some(target) = fields.get_mut("target").and_then(serde_json::Value::as_object_mut) {
+            target.insert(
+                "namespace".into(),
+                ls.metadata.namespace.as_deref().unwrap_or("default").into(),
+            );
+        }
     }
 
     let mut rebuild = FingerprintHasher::new();
     rebuild.tag(5); // webhook kind tag
-    let conn = serde_json::to_vec(&cfg.conn)?;
-    rebuild.bytes(&conn);
+    rebuild.bytes(&serde_json::to_vec(&conn)?);
     let request = serde_json::to_vec(&cfg.request)?;
     rebuild.bytes(&request);
 

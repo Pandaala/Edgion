@@ -2,11 +2,16 @@
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
-use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{
+    fetch_bound_secret, BoundFetchOutcome, PendingReason,
+};
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::resources::edgion_plugins::plugin_configs::KeyMetadata;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::resources::refs::plugin_fields::{
+    BoundPluginEntryMut, PreparedPluginReferences, SecretGroupReferences,
+};
 
 /// Resolve all Secret refs for a single group, appending entries to
 /// `all_keys`. Cross-group duplicate keys follow **first-wins**: if a
@@ -16,18 +21,22 @@ use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 fn resolve_group(
     config_key_field: &str,
     whitelist: &HashSet<&str>,
-    group_name: &str,
-    secret_refs: &[edgion_resources::resources::gateway::SecretObjectReference],
+    group: &SecretGroupReferences<'_>,
     all_keys: &mut HashMap<String, KeyMetadata>,
-    ep_namespace: Option<&String>,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    for sor in secret_refs {
-        let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_namespace), &sor.name);
-        let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", sor) {
-            FetchOutcome::Ok(s) => s,
-            FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+    let group_name = group.name();
+    for token in group.references() {
+        let Ok(reference) = token.validated() else {
+            continue;
+        };
+        let target = reference.target();
+        let secret_key = format!("{}/{}", target.scope().namespace().unwrap_or_default(), target.name());
+        let secret = match fetch_bound_secret(ctx, resource_ref, token) {
+            BoundFetchOutcome::Ok(authorized) => authorized.secret,
+            BoundFetchOutcome::Invalid(_) => continue,
+            BoundFetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
                 tracing::info!(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,
@@ -36,7 +45,7 @@ fn resolve_group(
                 );
                 continue;
             }
-            FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
                 ref from_ns,
                 ref to_ns,
                 ref secret_name,
@@ -145,56 +154,50 @@ fn resolve_group(
 /// Resolve KeyAuth keys from Secrets and register references to SecretRefManager.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
+    prepared: &PreparedPluginReferences,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    if let Some(ref mut plugins) = ep.spec.request_plugins {
-        for entry in plugins.iter_mut() {
-            if let EdgionPlugin::KeyAuth(ref mut config) = entry.plugin {
-                // This field is Controller-owned transport state. Never trust
-                // a value deserialized from the operator-facing resource, and
-                // do not retain credentials from a previous resolution pass.
-                config.resolved_keys = None;
+    let Ok(mut bindings) = prepared.bind_mut(ep) else {
+        return;
+    };
+    for entry in bindings.request_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_body_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+}
 
-                let Some(ref groups) = config.secret_groups else {
-                    continue;
-                };
-
-                let whitelist: HashSet<&str> = config.upstream_header_fields.iter().map(|s| s.as_str()).collect();
-                let key_field = config.key_field.clone();
-
-                let mut all_keys: HashMap<String, KeyMetadata> = HashMap::new();
-
-                for g in groups {
-                    let group_name: String = g.name.clone();
-                    resolve_group(
-                        &key_field,
-                        &whitelist,
-                        &group_name,
-                        &g.secret_refs,
-                        &mut all_keys,
-                        ep.metadata.namespace.as_ref(),
-                        resource_ref,
-                        ctx,
-                    );
-                }
-
-                if !all_keys.is_empty() {
-                    tracing::info!(
-                        edgion_plugins = %resource_ref.key(),
-                        key_count = all_keys.len(),
-                        group_count = groups.len(),
-                        "KeyAuth: Resolved API keys from Secret groups"
-                    );
-                    config.resolved_keys = Some(all_keys);
-                } else {
-                    tracing::warn!(
-                        edgion_plugins = %resource_ref.key(),
-                        "KeyAuth: No API keys resolved from Secret groups"
-                    );
-                }
-            }
+fn resolve_entry(mut entry: BoundPluginEntryMut<'_>, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+    let EdgionPlugin::KeyAuth(config) = entry.config_mut() else {
+        return;
+    };
+    config.resolved_keys = None;
+    if !entry.is_enabled() {
+        return;
+    }
+    let mut all_keys = HashMap::new();
+    {
+        let EdgionPlugin::KeyAuth(config) = entry.config() else {
+            return;
+        };
+        let whitelist: HashSet<&str> = config.upstream_header_fields.iter().map(String::as_str).collect();
+        let Ok(references) = entry.references() else {
+            return;
+        };
+        for group in references.secret_groups() {
+            resolve_group(&config.key_field, &whitelist, &group, &mut all_keys, resource_ref, ctx);
         }
+    }
+    if let EdgionPlugin::KeyAuth(config) = entry.config_mut() {
+        config.resolved_keys = (!all_keys.is_empty()).then_some(all_keys);
     }
 }
 

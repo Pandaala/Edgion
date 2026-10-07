@@ -2,84 +2,67 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
-use crate::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, HandlerContext, ResolvedRefsError, ResourceRef,
-};
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_bound_secret, BoundFetchOutcome};
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResolvedRefsError, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::resources::edgion_plugins::plugin_configs::ResolvedJweCredential;
 use edgion_resources::resources::edgion_plugins::{EdgionPlugin, ResolvedJweCredentialError};
+use edgion_resources::resources::refs::plugin_fields::{BoundPluginEntryMut, PreparedPluginReferences};
 
 /// Resolve JWE decrypt credentials from Secrets and register references.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
+    prepared: &PreparedPluginReferences,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    if let Some(ref mut plugins) = ep.spec.request_plugins {
-        for entry in plugins.iter_mut() {
-            let enabled = entry.is_enabled();
-            if let EdgionPlugin::JweDecrypt(ref mut config) = entry.plugin {
-                config.resolved_credential = None;
-                if !enabled {
-                    continue;
-                }
+    let Ok(mut bindings) = prepared.bind_mut(ep) else {
+        return;
+    };
+    for entry in bindings.request_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_body_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+}
 
-                let Some(sor) = config.secret_ref.clone() else {
-                    continue;
-                };
-                let secret_key =
-                    format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
-                let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
-                    FetchOutcome::Ok(s) => s,
-                    FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
-                        tracing::info!(
-                            edgion_plugins = %resource_ref.key(),
-                            secret_key = %secret_key,
-                            "JweDecrypt: Secret not found yet, will be reprocessed when Secret arrives"
-                        );
-                        continue;
-                    }
-                    FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
-                        ref from_ns,
-                        ref to_ns,
-                        ref secret_name,
-                    }) => {
-                        tracing::warn!(
-                            edgion_plugins = %resource_ref.key(),
-                            from_ns = %from_ns,
-                            to_ns = %to_ns,
-                            secret_name = %secret_name,
-                            "JweDecrypt: cross-namespace Secret reference denied (ReferenceGrant missing)"
-                        );
-                        continue;
-                    }
-                };
-
-                let mut resolved = ResolvedJweCredential::default();
-
-                // SecretHandler::parse normalizes stringData into data, so the
-                // secret_store always exposes the value through `secret.data`.
-                if let Some(data) = &secret.data {
-                    if let Some(secret_bytes) = data.get("secret") {
-                        resolved.secret = Some(STANDARD.encode(&secret_bytes.0));
-                    }
-                }
-
-                config.resolved_credential = Some(resolved);
-                if config
-                    .resolved_credential
-                    .as_ref()
-                    .is_some_and(|value| value.secret.is_some())
-                {
-                    tracing::debug!(
-                        edgion_plugins = %resource_ref.key(),
-                        secret_key = %secret_key,
-                        "JweDecrypt: Secret resolved and credential filled"
-                    );
-                }
-            }
+fn resolve_entry(mut entry: BoundPluginEntryMut<'_>, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+    let EdgionPlugin::JweDecrypt(config) = entry.config_mut() else {
+        return;
+    };
+    config.resolved_credential = None;
+    if !entry.is_enabled() {
+        return;
+    }
+    let resolved = {
+        let Ok(references) = entry.references() else {
+            return;
+        };
+        let Some(token) = references.jwe_secret() else {
+            return;
+        };
+        let BoundFetchOutcome::Ok(authorized) = fetch_bound_secret(ctx, resource_ref, token) else {
+            return;
+        };
+        // A present but unusable Secret remains visible to the content classifier.
+        ResolvedJweCredential {
+            secret: authorized
+                .secret
+                .data
+                .as_ref()
+                .and_then(|data| data.get("secret"))
+                .map(|bytes| STANDARD.encode(&bytes.0)),
         }
+    };
+    if let EdgionPlugin::JweDecrypt(config) = entry.config_mut() {
+        config.resolved_credential = Some(resolved);
     }
 }
 

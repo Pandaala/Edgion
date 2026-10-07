@@ -60,3 +60,39 @@ fn mismatched_context_cannot_redirect_selected_service() {
         EdgionErrorCode::UpstreamNotBackendRefs
     );
 }
+
+#[test]
+fn grpc_context_must_match_the_selected_service_identity_exactly() {
+    use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind;
+    use ServiceBackendKind::{Service, ServiceImport};
+
+    let target = PolicyTargetKey {
+        target_kind: PolicyTargetKind::Service,
+        namespace: "tenant".to_string(),
+        name: "service-a".to_string(),
+    };
+    assert!(!grpc_service_context_matches(None, &target));
+    for (case, key, kind, expected) in [
+        ("exact", Some("tenant/service-a"), Some(Service), true),
+        ("missing key", None, Some(Service), false),
+        ("missing kind", Some("tenant/service-a"), None, false),
+        ("wrong kind", Some("tenant/service-a"), Some(ServiceImport), false),
+        ("wrong namespace", Some("other/service-a"), Some(Service), false),
+        ("wrong name", Some("tenant/service-b"), Some(Service), false),
+        ("missing separator", Some("tenant"), Some(Service), false),
+        ("extra separator", Some("tenant/service-a/extra"), Some(Service), false),
+        ("empty namespace", Some("/service-a"), Some(Service), false),
+        ("empty name", Some("tenant/"), Some(Service), false),
+        ("empty segments", Some("/"), Some(Service), false),
+        ("empty key", Some(""), Some(Service), false),
+    ] {
+        let mut context = backend_context("tenant/service-a");
+        context.service_key = key.map(str::to_string);
+        context.service_kind = kind;
+        assert_eq!(
+            grpc_service_context_matches(Some(&context), &target),
+            expected,
+            "{case}"
+        );
+    }
+}

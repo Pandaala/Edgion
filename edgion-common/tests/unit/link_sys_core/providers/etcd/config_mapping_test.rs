@@ -1,6 +1,56 @@
 use super::*;
 use crate::link_sys_core::credential::{CredentialState, InvalidReason};
+use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::etcd::*;
+use edgion_resources::resources::link_sys::{LinkSys, LinkSysSpec};
+use std::sync::Arc;
+
+fn owned_tls(config: &EtcdClientConfig) -> Result<Option<TlsOptions>> {
+    let owner = LinkSys {
+        metadata: kube::core::ObjectMeta {
+            name: Some("etcd".into()),
+            namespace: Some("test".into()),
+            ..Default::default()
+        },
+        spec: LinkSysSpec {
+            config: SystemConfig::Etcd(config.clone()),
+            current_status: None,
+            unknown_fields: vec![],
+        },
+        status: None,
+    };
+    let input = PreparedLinkSysTls::from_link_sys(Arc::new(owner))?;
+    input.with_tls_selection(|proof, defaults| {
+        if proof.active_field().is_none() {
+            return Ok(None);
+        }
+        let resolved = outbound_tls::resolve_validated_outbound_tls_audited(proof, false, "Etcd", defaults)
+            .map_err(tls_configuration_error)?;
+        tls_options_from_resolved(resolved).map(Some)
+    })
+}
+
+// Exercise the private scalar mapper and auth mismatch arm; this helper is
+// test-only and creates no public detached resource-construction entry.
+fn build_connect_options(
+    config: &EtcdClientConfig,
+    state: &CredentialState<BasicAuthMaterial>,
+) -> Result<Option<ConnectOptions>> {
+    validate_fields(&config.endpoints, config.timeout.as_ref(), config.keep_alive.as_ref())?;
+    let auth = auth_material(config.auth.is_some(), state)?;
+    Ok(build_base_options(
+        config.timeout.as_ref(),
+        config.keep_alive.as_ref(),
+        auth,
+        owned_tls(config)?,
+    ))
+}
+
+fn build_tls_options(tls: &TlsConfig) -> Result<Option<TlsOptions>> {
+    let mut config = minimal_config(vec!["https://localhost:2379".into()]);
+    config.tls = Some(tls.clone());
+    owned_tls(&config)
+}
 
 /// Shorthand: `NotRequired` state (no auth configured).
 fn no_auth() -> CredentialState<BasicAuthMaterial> {
@@ -9,9 +59,9 @@ fn no_auth() -> CredentialState<BasicAuthMaterial> {
 
 /// Zero-impact guard (spec §10.5): the SHARED builder must never inject
 /// defaults of its own. An unconfigured LinkSys etcd client yields `None`
-/// here and falls back to `default_connect_options()` = dial timeout ONLY —
+/// here and the prepared ordinary/election views use a dial-only fallback —
 /// no h2 keepalive. The conf_center's always-on keepalive lives in
-/// `EtcdConfig::to_client_config` (edgion-controller), not here; if this
+/// `EtcdConfig::to_bootstrap_config` (edgion-controller), not here; if this
 /// test fails, a conf_center default has leaked into every etcd client.
 #[test]
 fn unconfigured_client_gets_no_injected_options() {
@@ -276,13 +326,18 @@ fn etcd_rejects_inherited_hostname_policy() {
     use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
     use edgion_resources::resources::common::{OutboundTlsConfig, OutboundTlsLocal};
     let _guard = outbound_tls::outbound_tls_test_guard();
-    outbound_tls::set_outbound_global_default(OutboundTlsConfig {
-        validation: Some(OutboundTlsValidation {
-            hostname: Some("example.com".into()),
+    outbound_tls::set_outbound_global_default(crate::link_sys_core::outbound_tls::test_util::snapshot(
+        OutboundTlsConfig {
+            validation: Some(OutboundTlsValidation {
+                hostname: Some("example.com".into()),
+                well_known_ca_certificates: Some(
+                    edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::System,
+                ),
+                ..Default::default()
+            }),
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    ));
     let tls = TlsConfig {
         enabled: true,
         outbound: OutboundTlsLocal::default(),
@@ -290,4 +345,44 @@ fn etcd_rejects_inherited_hostname_policy() {
         resolved_client_certificate: None,
     };
     assert!(build_tls_options(&tls).is_err());
+}
+
+#[test]
+fn ordinary_and_election_timeout_policy_preserves_request_only_and_base_options() {
+    let fallback = Some(Duration::from_millis(5_000));
+    let unary = Some(Duration::from_millis(700));
+    for (base, request, ordinary_dial, ordinary_request, election_dial) in [
+        (false, None, fallback, None, fallback),
+        (false, Some(700), None, unary, fallback),
+        (true, None, None, None, None),
+        (true, Some(700), None, unary, None),
+    ] {
+        let (ordinary, election) = connection_timeout_overrides(base, request);
+        assert_eq!(
+            ordinary,
+            ConnectionTimeoutOverrides {
+                dial: ordinary_dial,
+                request: ordinary_request
+            }
+        );
+        assert_eq!(
+            election,
+            ConnectionTimeoutOverrides {
+                dial: election_dial,
+                request: None
+            }
+        );
+    }
+    // A supplied dial/auth/TLS/keepalive base never acquires a fallback dial;
+    // election retains that base and adds no unary request deadline.
+    let (ordinary, election) = connection_timeout_overrides(true, Some(u64::MAX));
+    assert_eq!(ordinary.request, Some(Duration::from_millis(MAX_REQUEST_TIMEOUT_MS)));
+    assert_eq!(ordinary.dial, None);
+    assert_eq!(election.request, None);
+    assert_eq!(election.dial, None);
+    assert_eq!(
+        clamped_dial_timeout(u64::MAX),
+        Duration::from_millis(MAX_DIAL_TIMEOUT_MS)
+    );
+    assert_eq!(clamped_dial_timeout(750), Duration::from_millis(750));
 }

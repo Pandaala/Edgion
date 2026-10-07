@@ -64,12 +64,9 @@ impl EtcdCenter {
             "Creating EtcdCenter"
         );
 
-        // Convert YAML config into the `EtcdClientConfig` + `CredentialState`
-        // pair expected by `EtcdLinkClient::from_config`. The state encodes
-        // whether the YAML file supplied `conf_center.auth` — `Resolved` if
-        // so, `NotRequired` otherwise.
-        let (client_config, auth_state) = config.to_client_config()?;
-        let client = EtcdLinkClient::from_config("conf-center", &client_config, &auth_state)?;
+        // Trusted local credentials and disk PEM use the shared TLS resolver
+        // through an explicit bootstrap boundary, without resource authority.
+        let client = EtcdLinkClient::from_bootstrap("conf-center", config.to_bootstrap_config()?)?;
         client.init().await?;
         let client = Arc::new(client);
 

@@ -25,6 +25,7 @@ use edgion_resources::resources::edgion_plugins::{
     EdgionPlugin, EdgionPluginsStatus, PluginValidation, ResolvedWafBundle, WafBundleResolutionError,
     WafBundleResolutionKind,
 };
+use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
 use edgion_resources::ResourceKind;
 
 use super::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
@@ -311,12 +312,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             );
         }
 
-        for entry in ep.spec.request_plugins.iter_mut().flatten() {
-            if let EdgionPlugin::GrpcJsonTranscoder(config) = &mut entry.plugin {
-                config.resolved_descriptor = None;
-                config.descriptor_error = None;
-            }
-        }
+        super::plugins::grpc_descriptor::clear(ep);
         if let Some(waf) = ep.spec.waf.as_mut() {
             waf.policy_ref.ref_denied = None;
             if let Some(reference) = waf.active_profile_ref.as_mut() {
@@ -362,22 +358,21 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // EdgionConfigData pass and prevent ReferenceGrant revalidation.
         ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
 
-        super::plugins::grpc_descriptor::resolve(&mut ep, &resource_ref, ctx);
-        cred::resolve_basic_auth(&mut ep, &resource_ref, ctx);
+        let credential_references = PreparedPluginReferences::from_plugins(&ep);
+        super::plugins::grpc_descriptor::resolve(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_basic_auth(&mut ep, &credential_references, &resource_ref, ctx);
         cred::resolve_credential_injector(&mut ep, &resource_ref, ctx).await;
-        cred::resolve_jwt(&mut ep, &resource_ref, ctx);
-        cred::resolve_jwe(&mut ep, &resource_ref, ctx);
-        cred::resolve_header_cert_auth(&mut ep, &resource_ref, ctx);
-        cred::resolve_hmac(&mut ep, &resource_ref, ctx);
-        cred::resolve_key_auth(&mut ep, &resource_ref, ctx);
-        cred::resolve_openid_connect(&mut ep, &resource_ref, ctx);
-        cred::resolve_ext_proc(&mut ep, &resource_ref, ctx);
-        cred::resolve_ldap_auth(&mut ep, &resource_ref, ctx);
-        cred::resolve_csrf(&mut ep, &resource_ref, ctx);
-        cred::resolve_forward_auth(&mut ep, &resource_ref, ctx).await;
-        cred::resolve_guardrail(&mut ep, &resource_ref, ctx).await;
-        cred::resolve_ai_guard(&mut ep, &resource_ref, ctx).await;
-        cred::resolve_wasm(&mut ep, &resource_ref, ctx);
+        cred::resolve_jwt(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_jwe(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_header_cert_auth(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_hmac(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_key_auth(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_openid_connect(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_ext_proc(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_ldap_auth(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_csrf(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_managed_http(&mut ep, &credential_references, &resource_ref, ctx);
+        cred::resolve_wasm(&mut ep, &credential_references, &resource_ref, ctx);
 
         // Clear existing EdgionConfigData refs for this EP, then re-register from scratch.
         Self::clear_config_data_refs(&ep, ctx);
@@ -586,11 +581,16 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ep.metadata.name.clone().unwrap_or_default(),
         );
         let mut resolved_errors = Self::resolve_secret_refs(ep, ctx);
+        resolved_errors.extend(super::plugins::grpc_descriptor::status_errors(ep, &resource_ref, ctx));
+        resolved_errors.extend(cred::bound_credential_status_errors(ep, &resource_ref, ctx));
         resolved_errors.extend(cred::credential_injector_status_errors(ep, &resource_ref, ctx));
         resolved_errors.extend(cred::jwe_status_errors(ep));
-        resolved_errors.extend(resolve_secret_match_refs(ep, ctx));
-        resolved_errors.extend(resolve_guardrail_request_secret_refs(ep, ctx));
-        resolved_errors.extend(resolve_wasm_refs(ep, ctx));
+        resolved_errors.extend(super::plugins::condition_tree::credential_status_errors(
+            ep,
+            &resource_ref,
+            ctx,
+        ));
+        resolved_errors.extend(cred::wasm_status_errors(ep, &resource_ref, ctx));
         resolved_errors.extend(resolve_override_refs(ep, ctx));
         resolved_errors.extend(resolve_ip_list_refs(ep, ctx));
         resolved_errors.extend(resolve_active_profile_refs(ep, ctx));
@@ -705,91 +705,6 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
     }
 }
 
-/// Re-run SecretMatch's selected-key usability checks without mutating the
-/// dependency index. Missing objects and grant denials are already reported by
-/// the generic dependency classifier; this adds present-but-unusable content.
-fn resolve_secret_match_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::fetch_secret_readonly;
-    use crate::conf_mgr::sync_runtime::resource_processor::credential::FetchOutcome;
-
-    let owner = ResourceRef::new(
-        ResourceKind::EdgionPlugins,
-        ep.metadata.namespace.clone(),
-        ep.metadata.name.clone().unwrap_or_default(),
-    );
-    let owner_namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
-    let mut errors = Vec::new();
-    super::plugins::condition_tree::for_each_secret_match(ep, |condition| {
-        let FetchOutcome::Ok(secret) =
-            fetch_secret_readonly(ctx, &owner, "edgion.io", "EdgionPlugins", &condition.secret_ref)
-        else {
-            return;
-        };
-        let namespace = condition.secret_ref.effective_namespace(owner_namespace).to_string();
-        let Some(value) = secret.data.as_ref().and_then(|data| data.get(&condition.secret_key)) else {
-            errors.push(ResolvedRefsError::SecretMatchKeyMissing {
-                namespace,
-                name: condition.secret_ref.name.clone(),
-                key: condition.secret_key.clone(),
-            });
-            return;
-        };
-        match std::str::from_utf8(&value.0) {
-            Err(_) => errors.push(ResolvedRefsError::SecretMatchValueInvalid {
-                namespace,
-                name: condition.secret_ref.name.clone(),
-                key: condition.secret_key.clone(),
-                detail: "value is not valid UTF-8",
-            }),
-            Ok(value) if value.trim().is_empty() => {
-                errors.push(ResolvedRefsError::SecretMatchValueInvalid {
-                    namespace,
-                    name: condition.secret_ref.name.clone(),
-                    key: condition.secret_key.clone(),
-                    detail: "value is empty or whitespace-only",
-                });
-            }
-            Ok(_) => {}
-        }
-    });
-    errors
-}
-
-/// Re-evaluate Guardrail request-template Secret refs for the full
-/// Gateway-API status classification. Parse already registered the references;
-/// this path is read-only and additionally catches a present Secret with a
-/// missing/non-UTF-8 key and a cross-namespace reference denied by policy.
-fn resolve_guardrail_request_secret_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    let owner = ResourceRef::new(
-        ResourceKind::EdgionPlugins,
-        ep.metadata.namespace.clone(),
-        ep.metadata.name.clone().unwrap_or_default(),
-    );
-    let mut names = ep
-        .spec
-        .request_plugins
-        .iter()
-        .flatten()
-        .filter_map(|entry| match &entry.plugin {
-            EdgionPlugin::Guardrail(config) => Some(config.request.collect_secret_ref_names()),
-            EdgionPlugin::AiGuard(config) => config
-                .evaluator
-                .as_ref()
-                .map(|evaluator| evaluator.request.collect_secret_ref_names()),
-            _ => None,
-        })
-        .flatten()
-        .collect::<Vec<_>>();
-    names.sort();
-    names.dedup();
-    crate::conf_mgr::sync_runtime::resource_processor::credential::request_secret_errors_readonly(
-        ctx,
-        &owner,
-        ResourceKind::EdgionPlugins,
-        &names,
-    )
-}
-
 /// Preserve first-occurrence ordering while removing exact duplicate status
 /// errors. Guardrail's read-only classifier intentionally reports
 /// SecretNotFound itself, while the generic dependency scan reports the same
@@ -864,222 +779,6 @@ impl EdgionPluginsHandler {
         }
         errors
     }
-}
-
-/// Check every `Wasm` plugin's `source.fetch` and `source.oci` refs
-/// (`authHeaderSecretRef`, `pullSecretRef`, and the `fetch.tls` CA /
-/// client-cert refs) against the Secret store, re-running the *exact*
-/// usable-material checks the Wasm resolver used at `parse` time.
-///
-/// The generic `resolve_secret_refs` above only asks "does the Secret object
-/// exist"; a present-but-unusable Secret (missing/empty/non-UTF-8 key, wrong
-/// type) or a cross-namespace ref with no `ReferenceGrant` (the resolver
-/// registers the dependency *before* the grant check, so the Secret still
-/// looks present) would leave the gateway-visible `resolved_*` field unset
-/// while status wrongly reported `ResolvedRefs=True`. The gateway then
-/// fail-closes on load. This resolver closes that gap by mapping each failure
-/// to the matching `ResolvedRefsError` variant.
-///
-/// Ordering mirrors the resolver's short-circuit (grant → existence → type →
-/// key). A missing Secret object is intentionally *not* reported here — the
-/// generic `resolve_secret_refs` already surfaces it as `SecretNotFound`, so
-/// deferring avoids a double message on the common not-found path. The
-/// `fetch.tls` refs are classified for grant denial only: the CA / client-cert
-/// resolver validates no PEM content itself (present + granted is its whole
-/// usability bar), so status stays faithful to the resolver rather than
-/// stricter than it.
-///
-/// Accepted limitation (WON'T FIX): no deep dockerconfigjson JSON/credential
-/// validation matching the gateway's `select_registry_auth` (malformed JSON,
-/// bad base64 `auth`, non-`user:password`, or a registry host absent from
-/// `.auths`). A `kubectl create secret docker-registry` document is always
-/// well-formed, so host-mismatch is the only realistic failure, and the
-/// controller cannot depend on `edgion-gateway` to reuse that parser — not
-/// worth the cross-crate refactor. The gateway fail-closes on such a pull;
-/// status accuracy is the only cost.
-fn resolve_wasm_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    let owner_ns = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
-    let mut errors = Vec::new();
-
-    macro_rules! scan_stage {
-        ($stage:expr) => {
-            if let Some(entries) = &$stage {
-                for entry in entries {
-                    if let EdgionPlugin::Wasm(config) = &entry.plugin {
-                        collect_wasm_ref_errors(config, &owner_ns, ctx, &mut errors);
-                    }
-                }
-            }
-        };
-    }
-
-    scan_stage!(ep.spec.request_plugins);
-    scan_stage!(ep.spec.upstream_response_filter_plugins);
-    scan_stage!(ep.spec.upstream_response_body_filter_plugins);
-    scan_stage!(ep.spec.upstream_response_plugins);
-    errors
-}
-
-/// Classify the OCI-pull, fetch-auth, and `fetch.tls` (CA / client-cert) refs
-/// of one Wasm plugin, pushing at most one error per ref.
-fn collect_wasm_ref_errors(
-    config: &edgion_resources::resources::edgion_plugins::plugin_configs::WasmConfig,
-    owner_ns: &str,
-    ctx: &HandlerContext,
-    errors: &mut Vec<ResolvedRefsError>,
-) {
-    if let Some(oci) = &config.source.oci {
-        if let Some(sor) = &oci.pull_secret_ref {
-            if let Some(e) = classify_pull_secret_ref(ctx, owner_ns, sor) {
-                errors.push(e);
-            }
-        }
-    }
-    if let Some(fetch) = &config.source.fetch {
-        if let Some(auth) = &fetch.auth_header_secret_ref {
-            if let Some(e) = classify_auth_header_ref(ctx, owner_ns, auth) {
-                errors.push(e);
-            }
-        }
-        if let Some(tls) = &fetch.tls {
-            if let Some(validation) = &tls.outbound.validation {
-                if let Some(refs) = &validation.ca_certificate_refs {
-                    classify_ca_certificate_refs(ctx, owner_ns, refs, errors);
-                }
-            }
-            if let Some(cc) = &tls.outbound.client_certificate_ref {
-                if let Some(e) = wasm_ref_grant_denied(ctx, owner_ns, cc) {
-                    errors.push(e);
-                }
-            }
-        }
-    }
-}
-
-/// Return `RefNotPermitted` when `sor` is a cross-namespace reference with no
-/// `ReferenceGrant` permitting it (mirrors `fetch_secret`'s Step-3 check).
-fn wasm_ref_grant_denied(
-    ctx: &HandlerContext,
-    owner_ns: &str,
-    sor: &edgion_resources::resources::common::SecretObjectReference,
-) -> Option<ResolvedRefsError> {
-    if !sor.is_cross_namespace(owner_ns) {
-        return None;
-    }
-    wasm_grant_denied(ctx, owner_ns, sor.effective_namespace(owner_ns), "Secret", &sor.name)
-}
-
-/// Grant-check core shared by the Wasm ref classifiers: returns
-/// `RefNotPermitted` when a cross-namespace ref into `to_ns` (kind `to_kind`,
-/// core API group) has no matching `ReferenceGrant`. Callers must pass a
-/// `to_ns` already known to differ from `owner_ns`.
-fn wasm_grant_denied(
-    ctx: &HandlerContext,
-    owner_ns: &str,
-    to_ns: &str,
-    to_kind: &str,
-    to_name: &str,
-) -> Option<ResolvedRefsError> {
-    let allowed = ctx.runtime().ref_grant_store.check_reference_allowed(
-        owner_ns,
-        "edgion.io",
-        "EdgionPlugins",
-        to_ns,
-        "",
-        to_kind,
-        Some(to_name),
-    );
-    if allowed {
-        None
-    } else {
-        Some(ResolvedRefsError::RefNotPermitted {
-            from_namespace: owner_ns.to_string(),
-            from_kind: "EdgionPlugins",
-            target_namespace: to_ns.to_string(),
-            target_name: to_name.to_string(),
-        })
-    }
-}
-
-/// Classify the CA-certificate refs of a Wasm `fetch.tls`. Each ref targets a
-/// core Secret or ConfigMap; a cross-namespace ref with no `ReferenceGrant`
-/// yields `RefNotPermitted`, mirroring `resolve_ca_certificate_refs`'s
-/// GrantGated path (which drops such a ref from `resolved_ca_certificates`).
-/// Non-core or unknown-kind refs are skipped, matching the resolver.
-fn classify_ca_certificate_refs(
-    ctx: &HandlerContext,
-    owner_ns: &str,
-    refs: &[edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef],
-    errors: &mut Vec<ResolvedRefsError>,
-) {
-    for ca_ref in refs {
-        if !edgion_resources::resources::common::is_core_api_group(&ca_ref.group)
-            || (ca_ref.kind != "Secret" && ca_ref.kind != "ConfigMap")
-        {
-            continue;
-        }
-        let to_ns = ca_ref.namespace.as_deref().unwrap_or(owner_ns);
-        if to_ns == owner_ns {
-            continue;
-        }
-        if let Some(e) = wasm_grant_denied(ctx, owner_ns, to_ns, &ca_ref.kind, &ca_ref.name) {
-            errors.push(e);
-        }
-    }
-}
-
-/// Classify a Wasm `authHeaderSecretRef`. `None` = usable (or the Secret object
-/// is absent, deferred to the generic not-found path).
-fn classify_auth_header_ref(
-    ctx: &HandlerContext,
-    owner_ns: &str,
-    auth: &edgion_resources::resources::edgion_plugins::plugin_configs::WasmAuthHeaderSecretRef,
-) -> Option<ResolvedRefsError> {
-    if let Some(e) = wasm_ref_grant_denied(ctx, owner_ns, &auth.secret) {
-        return Some(e);
-    }
-    let ns = auth.secret.effective_namespace(owner_ns);
-    // Absent Secret object → SecretNotFound is emitted by `resolve_secret_refs`.
-    let secret = ctx.runtime().secret_store.get(Some(ns), &auth.secret.name)?;
-    // The configured `key` is operator-defined (not `&'static`), so its usable-
-    // material failure can't ride `MissingKeys(Vec<&'static str>)`; carry the
-    // key name in `DecodeError.detail` instead. `read_secret_utf8` collapses
-    // missing / empty / non-UTF-8 into one outcome — exactly what the resolver
-    // did — so the message enumerates all three.
-    if cred::read_secret_utf8(&secret, &[auth.key.as_str()]).is_none() {
-        return Some(ResolvedRefsError::DecodeError {
-            key: "authHeaderSecretRef",
-            detail: format!("Secret data key '{}' is missing, empty, or not UTF-8", auth.key),
-        });
-    }
-    None
-}
-
-/// Classify a Wasm `oci.pullSecretRef`. `None` = usable (or the Secret object
-/// is absent, deferred to the generic not-found path).
-fn classify_pull_secret_ref(
-    ctx: &HandlerContext,
-    owner_ns: &str,
-    sor: &edgion_resources::resources::common::SecretObjectReference,
-) -> Option<ResolvedRefsError> {
-    if let Some(e) = wasm_ref_grant_denied(ctx, owner_ns, sor) {
-        return Some(e);
-    }
-    let ns = sor.effective_namespace(owner_ns);
-    let secret = ctx.runtime().secret_store.get(Some(ns), &sor.name)?;
-    if secret.type_.as_deref() != Some("kubernetes.io/dockerconfigjson") {
-        return Some(ResolvedRefsError::InvalidSecretType {
-            got: secret.type_.clone().unwrap_or_default(),
-            allowed: &["kubernetes.io/dockerconfigjson"],
-        });
-    }
-    if cred::read_secret_utf8(&secret, &[".dockerconfigjson"]).is_none() {
-        return Some(ResolvedRefsError::DecodeError {
-            key: ".dockerconfigjson",
-            detail: "Secret key .dockerconfigjson is missing, empty, or not UTF-8".to_string(),
-        });
-    }
-    None
 }
 
 /// Resolve every named WAF profile. Required sources are atomic; optional sources

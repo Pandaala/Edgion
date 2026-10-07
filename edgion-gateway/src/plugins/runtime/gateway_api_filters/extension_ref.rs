@@ -15,7 +15,7 @@ use crate::plugins::runtime::traits::{
 };
 use crate::plugins::runtime::PluginRuntime;
 use edgion_resources::filters::{PluginRunningResult, PluginRunningStage};
-use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
+use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::LocalObjectReference;
 
 /// Error response body written when an ExtensionRef cannot be resolved

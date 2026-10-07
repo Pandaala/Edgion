@@ -1,4 +1,5 @@
 use super::*;
+use crate::PolicyTargetKind;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 fn make_policy(options: Option<HashMap<String, String>>) -> BackendTLSPolicy {
@@ -186,7 +187,7 @@ fn test_use_system_ca_skip_serialization_when_false() {
 #[test]
 fn canonical_target_identity_is_typed() {
     let service = BackendTLSPolicyTargetRef {
-        group: "core".to_string(),
+        group: "".to_string(),
         kind: "Service".to_string(),
         name: "shared".to_string(),
         section_name: Some("https".to_string()),
@@ -221,4 +222,15 @@ fn resolved_target_class_is_transport_only() {
     let schema = schemars::schema_for!(BackendTLSPolicySpec);
     let schema_json = serde_json::to_value(schema).unwrap();
     assert!(!schema_json.to_string().contains("resolvedTargetClass"));
+}
+
+#[test]
+fn standard_policy_target_does_not_alias_literal_core() {
+    let target = BackendTLSPolicyTargetRef {
+        group: "core".to_string(),
+        kind: "Service".to_string(),
+        name: "api".to_string(),
+        section_name: None,
+    };
+    assert!(target.canonical_key("tenant").is_err());
 }

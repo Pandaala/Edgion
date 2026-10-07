@@ -7,10 +7,10 @@ use std::sync::Arc;
 use edgion_resources::constants::annotations::edgion as annotations;
 use edgion_resources::listener_key::resolve_listener_addr;
 use edgion_resources::resources::common::ParentReference;
-use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::grpc_route::GRPCRouteFilterType;
 use edgion_resources::resources::http_route::{HTTPRouteFilterType, LocalObjectReference, RouteParentStatus};
+use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::{GRPCRoute, Gateway, HTTPRoute, HTTPRouteRule, ListenerKey, TCPRoute, TLSRoute, UDPRoute};
 use kube::api::ObjectMeta;
 

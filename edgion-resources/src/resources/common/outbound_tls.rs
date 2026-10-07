@@ -16,7 +16,30 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::SecretObjectReference;
-use crate::resources::backend_tls_policy::{BackendTLSPolicyCACertificateRef, SubjectAltName, WellKnownCACertificates};
+use crate::resources::backend_tls_policy::{SubjectAltName, WellKnownCACertificates};
+
+/// CA material reference for the finite custom outbound TLS fields.
+///
+/// Group omission denotes the core group. Owning field adapters decide the
+/// allowed target kinds, namespace policy and lowercase `core` convenience.
+/// Kind and name remain required; Secret and ConfigMap are not inferred.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomCACertificateRef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        length(max = 253),
+        pattern(r"^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+    )]
+    pub group: Option<String>,
+    #[schemars(length(min = 1, max = 63), pattern(r"^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$"))]
+    pub kind: String,
+    #[schemars(length(min = 1, max = 253))]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 63), pattern(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"))]
+    pub namespace: Option<String>,
+}
 
 /// Returns `true`; used as `#[serde(default = "default_verify_true")]`.
 pub fn default_verify_true() -> bool {
@@ -29,7 +52,7 @@ pub fn default_verify_true() -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct OutboundTlsValidation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_certificate_refs: Option<Vec<BackendTLSPolicyCACertificateRef>>,
+    pub ca_certificate_refs: Option<Vec<CustomCACertificateRef>>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "wellKnownCACertificates")]
     pub well_known_ca_certificates: Option<WellKnownCACertificates>,
     /// Optional SNI override (default: endpoint host) + default SAN to check.

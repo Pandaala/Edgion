@@ -1,8 +1,52 @@
 use std::sync::atomic::AtomicUsize;
 
 use super::*;
+use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
+use edgion_resources::resources::link_sys::LinkSysSpec;
+
+fn resource_client(name: &str, config: &EtcdClientConfig) -> Result<EtcdLinkClient> {
+    let (namespace, name) = name
+        .split_once('/')
+        .map_or((None, name), |(ns, name)| (Some(ns.to_owned()), name));
+    EtcdLinkClient::from_link_sys(Arc::new(LinkSys {
+        metadata: kube::core::ObjectMeta {
+            name: Some(name.into()),
+            namespace,
+            ..Default::default()
+        },
+        spec: LinkSysSpec {
+            config: SystemConfig::Etcd(config.clone()),
+            current_status: None,
+            unknown_fields: vec![],
+        },
+        status: None,
+    }))
+}
+
+fn bootstrap_client(name: &str) -> Result<EtcdLinkClient> {
+    EtcdLinkClient::from_bootstrap(
+        name,
+        EtcdBootstrapConfig {
+            endpoints: vec!["http://localhost:2379".into()],
+            auth: None,
+            tls: None,
+            timeout: None,
+            keep_alive: None,
+            namespace: None,
+        },
+    )
+}
 
 impl EtcdLinkClient {
+    pub fn assert_retained_connection_input(&self, prepared: &Arc<PreparedLinkSysTls>, actual: &LinkSys) {
+        let owner = self.connection._owner.as_ref().expect("resource owner retained");
+        assert!(Arc::ptr_eq(owner, prepared));
+        assert!(std::ptr::eq(owner.owner(), actual));
+        // Reconnect, probe, and election all share this one immutable input.
+        let recovered = Arc::clone(&self.connection);
+        assert!(Arc::ptr_eq(&recovered, &self.connection));
+    }
+
     pub(crate) fn samples_endpoint_coverage(&self) -> bool {
         self.sample_endpoint_coverage
     }
@@ -19,14 +63,10 @@ fn minimal_config() -> EtcdClientConfig {
     }
 }
 
-fn no_auth() -> CredentialState<BasicAuthMaterial> {
-    CredentialState::NotRequired
-}
-
 #[test]
 fn test_from_config_minimal() {
     let config = minimal_config();
-    let client = EtcdLinkClient::from_config("default/etcd-test", &config, &no_auth());
+    let client = resource_client("default/etcd-test", &config);
     assert!(client.is_ok());
     let client = client.unwrap();
     assert_eq!(client.name(), "default/etcd-test");
@@ -40,7 +80,7 @@ fn test_from_config_with_namespace() {
         namespace: Some("/app/".to_string()),
         ..minimal_config()
     };
-    let client = EtcdLinkClient::from_config("default/etcd-ns", &config, &no_auth()).unwrap();
+    let client = resource_client("default/etcd-ns", &config).unwrap();
     assert_eq!(client.namespace(), Some("/app/"));
     assert_eq!(client.full_key("mykey"), "/app/mykey");
 }
@@ -48,7 +88,7 @@ fn test_from_config_with_namespace() {
 #[test]
 fn test_from_config_without_namespace() {
     let config = minimal_config();
-    let client = EtcdLinkClient::from_config("default/etcd-test", &config, &no_auth()).unwrap();
+    let client = resource_client("default/etcd-test", &config).unwrap();
     assert_eq!(client.full_key("mykey"), "mykey");
 }
 
@@ -58,24 +98,34 @@ fn test_empty_endpoints_returns_error() {
         endpoints: vec![],
         ..minimal_config()
     };
-    let result = EtcdLinkClient::from_config("test", &config, &no_auth());
+    let result = resource_client("test", &config);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("no endpoints"));
 }
 
-/// Defence-in-depth: `from_config` must refuse `Pending` / `Invalid` even
-/// though dispatch normally filters these out up-front.
+/// An actual owner with declared unresolved authentication fails before dial.
 #[test]
 fn test_from_config_pending_state_fails_fast() {
-    let config = minimal_config();
-    let result = EtcdLinkClient::from_config("default/etcd-test", &config, &CredentialState::Pending);
+    let mut config = minimal_config();
+    config.auth = Some(edgion_resources::resources::link_sys::etcd::EtcdAuth {
+        slot: edgion_resources::resources::common::SecretSlot {
+            secret_ref: edgion_resources::resources::common::SecretObjectReference {
+                group: None,
+                kind: None,
+                namespace: None,
+                name: "auth".into(),
+            },
+            secret: None,
+        },
+    });
+    let result = resource_client("default/etcd-test", &config);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("non-buildable"));
 }
 
 #[test]
 fn controller_construction_does_not_enable_endpoint_coverage_sampling() {
-    let client = EtcdLinkClient::from_config("default/etcd-test", &minimal_config(), &no_auth()).unwrap();
+    let client = bootstrap_client("default/etcd-test").unwrap();
     assert!(!client.samples_endpoint_coverage());
     assert_eq!(client.endpoint_coverage(), (0, 1));
     let (rebuild, secret, rv) = client.apply_fingerprint_parts();
@@ -88,7 +138,7 @@ fn controller_construction_does_not_enable_endpoint_coverage_sampling() {
 fn gateway_apply_meta_attaches_fingerprint_and_enables_sampling() {
     let rebuild = [7u8; 32];
     let secret = [9u8; 32];
-    let client = EtcdLinkClient::from_config("default/etcd-gw", &minimal_config(), &no_auth())
+    let client = resource_client("default/etcd-gw", &minimal_config())
         .unwrap()
         .with_gateway_apply_meta(rebuild, secret, Some("11".to_string()));
     assert!(client.samples_endpoint_coverage());
@@ -112,7 +162,7 @@ fn etcd_reports_only_published_health_transitions() {
             degraded_reporter.fetch_add(1, Ordering::Relaxed);
         }
     });
-    let client = EtcdLinkClient::from_config("default/etcd-health", &minimal_config(), &no_auth())
+    let client = resource_client("default/etcd-health", &minimal_config())
         .unwrap()
         .with_health_transition_reporter(reporter);
 
@@ -145,7 +195,7 @@ async fn connection_options_errors_prevent_all_dials() {
         resolved_client_certificate: None,
     });
     // Options must fail before any endpoint is dialed.
-    let Err(error) = connect_with_config(&config.endpoints, &config, &no_auth()).await else {
+    let Err(error) = resource_client("default/etcd-test", &config) else {
         panic!("invalid TLS options must prevent connection");
     };
     assert!(error.to_string().contains("OutboundTlsVerifyUnsupported"));
@@ -153,10 +203,55 @@ async fn connection_options_errors_prevent_all_dials() {
 
 #[tokio::test]
 async fn retired_client_cannot_initialize_or_install_a_monitor() {
-    let client = EtcdLinkClient::from_config("default/retired", &minimal_config(), &no_auth()).unwrap();
+    let client = resource_client("default/retired", &minimal_config()).unwrap();
     client.mark_retired();
     assert!(client.init().await.unwrap_err().to_string().contains("retired"));
     client.start_health_monitor();
     assert!(client.monitor_handle.lock().is_none());
     assert!(client.get_client().await.is_none());
+}
+
+#[test]
+fn connection_input_retains_captured_actual_owner_without_rereading_defaults() {
+    use crate::link_sys_core::outbound_tls::{test_util, GlobalOutboundTlsSnapshot};
+    use edgion_resources::resources::common::OutboundTlsConfig;
+    let config = minimal_config();
+    let actual = Arc::new(LinkSys {
+        metadata: kube::core::ObjectMeta {
+            name: Some("retained".into()),
+            namespace: Some("apps".into()),
+            ..Default::default()
+        },
+        spec: LinkSysSpec {
+            config: SystemConfig::Etcd(config),
+            current_status: None,
+            unknown_fields: vec![],
+        },
+        status: None,
+    });
+    let prepared = Arc::new(
+        PreparedLinkSysTls::with_snapshot(actual.clone(), Arc::new(GlobalOutboundTlsSnapshot::from_configs([])))
+            .unwrap(),
+    );
+    let first = EtcdLinkClient::from_prepared_link_sys(prepared.clone()).unwrap();
+    let second = EtcdLinkClient::from_prepared_link_sys(prepared.clone()).unwrap();
+    first.assert_retained_connection_input(&prepared, &actual);
+    second.assert_retained_connection_input(&prepared, &actual);
+    // Absent TLS does not consume inherited verify=false, even on HTTPS.
+    let mut https = (*actual).clone();
+    let SystemConfig::Etcd(config) = &mut https.spec.config else {
+        unreachable!()
+    };
+    config.endpoints = vec!["https://etcd.example:2379".into()];
+    let input = Arc::new(
+        PreparedLinkSysTls::with_snapshot(
+            Arc::new(https),
+            test_util::snapshot(OutboundTlsConfig {
+                verify: false,
+                ..Default::default()
+            }),
+        )
+        .unwrap(),
+    );
+    assert!(EtcdLinkClient::from_prepared_link_sys(input).is_ok());
 }

@@ -7,6 +7,7 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use edgion_resources::resources::refs::{GrantQuery, ResourceScope};
 use edgion_resources::resources::ReferenceGrant;
 
 /// Type alias for the raw grant map (key: namespace/name)
@@ -37,6 +38,56 @@ pub struct ReferenceGrantStore {
 }
 
 impl ReferenceGrantStore {
+    /// Check an owning-field query without interpreting defaults or aliases.
+    pub fn check_query(&self, query: GrantQuery<'_>) -> bool {
+        let (ResourceScope::Namespaced(source), ResourceScope::Namespaced(target)) =
+            (query.source().scope(), query.target().scope())
+        else {
+            return false;
+        };
+        if source == target {
+            return true;
+        }
+        self.state
+            .read()
+            .by_to_namespace
+            .get(target)
+            .is_some_and(|grants| grants.iter().any(|grant| query.matches(grant)))
+    }
+
+    /// Capture permission and its revision from the same authorizer snapshot.
+    /// A revoked reference has no revision; an empty set can never authorize
+    /// an asynchronous publication captured after revocation.
+    pub fn query_authorization_revision(&self, query: GrantQuery<'_>) -> Option<String> {
+        let (ResourceScope::Namespaced(source), ResourceScope::Namespaced(target)) =
+            (query.source().scope(), query.target().scope())
+        else {
+            return None;
+        };
+        if source == target {
+            return Some("same-namespace".to_string());
+        }
+        let state = self.state.read();
+        let mut revisions = state
+            .by_to_namespace
+            .get(target)?
+            .iter()
+            .filter(|grant| query.matches(grant))
+            .map(|grant| {
+                format!(
+                    "{}:{}",
+                    grant.metadata.uid.as_deref().unwrap_or_default(),
+                    grant.metadata.resource_version.as_deref().unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>();
+        if revisions.is_empty() {
+            return None;
+        }
+        revisions.sort();
+        Some(revisions.join(","))
+    }
+
     pub fn new() -> Self {
         Self {
             state: RwLock::new(State {

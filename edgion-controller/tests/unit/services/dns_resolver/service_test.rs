@@ -1,5 +1,99 @@
 use super::*;
 
+fn httpdns_owner(config: edgion_resources::resources::link_sys::HttpDnsResolverConfig) -> Arc<LinkSys> {
+    use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
+    let mut owner = LinkSys::new(
+        "dns",
+        LinkSysSpec {
+            config: SystemConfig::HttpDns(config),
+            current_status: None,
+            unknown_fields: vec![],
+        },
+    );
+    owner.metadata.namespace = Some("test".into());
+    owner.metadata.resource_version = Some("same-rv".into());
+    Arc::new(owner)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actual_owner_failure_with_same_rv_publishes_fallback_reuses_failure_and_recovers() {
+    let config = serde_json::from_value(serde_json::json!({"preset":"aliyun","fallback":{"type":"none"}})).unwrap();
+    let original = httpdns_owner(config);
+    let key = LinkSysKey {
+        namespace: "test".into(),
+        name: "dns".into(),
+    };
+    let mut state = ServiceDnsState {
+        applied_fingerprint: Some("last-good-slice".into()),
+        ..Default::default()
+    };
+    let ready = state.prepare(&key, Arc::clone(&original)).unwrap();
+    assert!(ready.is_ready());
+    let mut malformed = (*original).clone();
+    malformed.metadata.name = None;
+    let malformed = Arc::new(malformed);
+    assert_eq!(original.metadata.resource_version, malformed.metadata.resource_version);
+    let failed = state.prepare(&key, Arc::clone(&malformed)).unwrap();
+    assert!(!failed.is_ready() && !Arc::ptr_eq(&ready, &failed));
+    assert!(resolve(&ResolverSpec::HttpDns(Arc::clone(&failed)), "localhost")
+        .await
+        .is_err());
+    assert!(Arc::ptr_eq(&failed, &state.prepare(&key, malformed).unwrap()));
+    let repaired = state.prepare(&key, original).unwrap();
+    assert!(repaired.is_ready() && !Arc::ptr_eq(&failed, &repaired));
+    assert_eq!(state.applied_fingerprint.as_deref(), Some("last-good-slice"));
+}
+
+#[test]
+fn active_httpdns_pair_failure_with_same_rv_cannot_reuse_ready_or_hide_missing_get_material() {
+    use edgion_resources::resources::link_sys::SystemConfig;
+    let config = serde_json::from_value(
+        serde_json::json!({"preset":"aliyun","fallback":{"type":"none"},"connection":{"tls":{
+            "enabled":true,"verify":false,"validation":{"caCertificateRefs":[{"kind":"Secret","name":"ca"}]},
+            "resolvedCaCertificates":[{"metadata":{"name":"ca","namespace":"test"}}]
+        }}}),
+    )
+    .unwrap();
+    let original = httpdns_owner(config);
+    let key = LinkSysKey {
+        namespace: "test".into(),
+        name: "dns".into(),
+    };
+    let mut state = ServiceDnsState::default();
+    let ready = state.prepare(&key, Arc::clone(&original)).unwrap();
+    assert!(ready.is_ready());
+    for case in ["group", "material-namespace", "missing-get-material"] {
+        let mut malformed = (*original).clone();
+        let SystemConfig::HttpDns(config) = &mut malformed.spec.config else {
+            unreachable!()
+        };
+        let tls = config.connection.as_mut().unwrap().tls.as_mut().unwrap();
+        match case {
+            "group" => {
+                tls.outbound
+                    .validation
+                    .as_mut()
+                    .unwrap()
+                    .ca_certificate_refs
+                    .as_mut()
+                    .unwrap()[0]
+                    .group = Some("other.example".into())
+            }
+            "material-namespace" => {
+                tls.resolved_ca_certificates.as_mut().unwrap()[0].metadata.namespace = Some("other".into())
+            }
+            "missing-get-material" => tls.resolved_ca_certificates = None,
+            _ => unreachable!(),
+        }
+        let malformed = Arc::new(malformed);
+        assert_eq!(original.metadata.resource_version, malformed.metadata.resource_version);
+        let failed = state.prepare(&key, Arc::clone(&malformed)).unwrap();
+        assert!(!failed.is_ready() && !Arc::ptr_eq(&ready, &failed), "{case}");
+        assert!(Arc::ptr_eq(&failed, &state.prepare(&key, malformed).unwrap()), "{case}");
+        assert!(state.prepare(&key, Arc::clone(&original)).unwrap().is_ready(), "{case}");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn service_preparation_reuses_failures_independently_of_applied_slice() {
     let config = serde_json::from_value(
@@ -14,7 +108,7 @@ async fn service_preparation_reuses_failures_independently_of_applied_slice() {
         applied_fingerprint: Some("last-good-slice".into()),
         ..Default::default()
     };
-    let first = state.prepare(&key, config);
+    let first = state.prepare(&key, httpdns_owner(config)).unwrap();
     assert!(!first.is_ready());
     assert!(resolve(&ResolverSpec::HttpDns(first.clone()), "localhost")
         .await
@@ -23,7 +117,10 @@ async fn service_preparation_reuses_failures_independently_of_applied_slice() {
         serde_json::json!({"preset": "aliyun", "connection": {"timeoutMs": 0}, "fallback": {"type": "none"}}),
     )
     .unwrap();
-    assert!(Arc::ptr_eq(&first, &state.prepare(&key, config)));
+    assert!(Arc::ptr_eq(
+        &first,
+        &state.prepare(&key, httpdns_owner(config)).unwrap()
+    ));
     assert_eq!(state.applied_fingerprint.as_deref(), Some("last-good-slice"));
     let other = LinkSysKey {
         namespace: "test".into(),
@@ -34,7 +131,7 @@ async fn service_preparation_reuses_failures_independently_of_applied_slice() {
     )
     .unwrap();
     assert!(
-        !Arc::ptr_eq(&first, &state.prepare(&other, config)),
+        !Arc::ptr_eq(&first, &state.prepare(&other, httpdns_owner(config)).unwrap()),
         "changing references retires the previous prepared owner"
     );
 }

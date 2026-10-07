@@ -1,6 +1,33 @@
 use super::*;
 use crate::link_sys::credential::{CredentialState, InvalidReason};
+use edgion_common::link_sys_core::outbound_tls::PreparedRedisTls;
+use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::redis::*;
+use edgion_resources::resources::link_sys::{LinkSys, LinkSysSpec, SystemConfig};
+use std::sync::Arc;
+
+fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Builder, usize)> {
+    let mut owner = LinkSys::new(
+        "redis-mapping",
+        LinkSysSpec {
+            config: SystemConfig::Redis(crd.clone()),
+            current_status: None,
+            unknown_fields: Vec::new(),
+        },
+    );
+    owner.metadata.namespace = Some("mapping".into());
+    let prepared = PreparedRedisTls::from_link_sys(Arc::new(owner))?;
+    let connector = if prepared.uses_tls() {
+        Some(match prepared.rustls_client_config()? {
+            Some(config) => fred::types::config::TlsConnector::from(config),
+            None => fred::types::config::TlsConnector::default_rustls()
+                .map_err(|error| anyhow::anyhow!("default rustls connector: {error:?}"))?,
+        })
+    } else {
+        None
+    };
+    super::build_fred_pool(crd, config, connector)
+}
 
 /// Create a minimal RedisClientConfig for testing
 fn minimal_config(endpoints: Vec<String>) -> RedisClientConfig {
@@ -286,7 +313,7 @@ fn rediss_without_tls_block_enables_tls() {
 #[test]
 fn rediss_with_disabled_tls_block_still_enables_tls() {
     assert_outbound_tls_in_subprocess("rediss_with_disabled_tls_block_still_enables_tls", || {
-        use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+        use edgion_resources::resources::common::CustomCACertificateRef;
         use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, SecretObjectReference};
         use k8s_openapi::api::core::v1::Secret;
 
@@ -295,8 +322,8 @@ fn rediss_with_disabled_tls_block_still_enables_tls() {
                 enabled: false,
                 outbound: OutboundTlsLocal {
                     validation: Some(OutboundTlsValidation {
-                        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                            group: String::new(),
+                        ca_certificate_refs: Some(vec![CustomCACertificateRef {
+                            group: Some(String::new()),
                             kind: "Secret".to_string(),
                             name: "ignored-ca".to_string(),
                             namespace: None,

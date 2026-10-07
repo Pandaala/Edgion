@@ -33,7 +33,9 @@ is a bug" rule also gets a line there.
 ### 1. Outbound HTTP client construction — Unified
 
 - **Canon**: `edgion-common/src/link_sys_core/http_client.rs` —
-  `build_outbound_client(OutboundClientConfig)` / `apply_outbound_policy`.
+  `build_outbound_client(OutboundClientConfig)` / `apply_outbound_policy`, plus
+  `build_outbound_client_with_tls_selection` for actual-owner TLS preparation.
+  These entries delegate the same private policy/build core.
   Centralizes pool / timeout / redirect / proxy-env / TLS policy; the default
   redirect policy is `OutboundRedirect::Deny` because a forgotten redirect
   policy is an SSRF surface. Gateway code reaches it via the re-export
@@ -59,11 +61,19 @@ is a bug" rule also gets a line there.
   guest callouts, URL module loads and OCI pulls, openid_connect ordinary and
   SAN-pinning paths, GeoIP updates, encrypted and ordinary active health
   checks, all_endpoint_status, and the Elasticsearch LinkSys provider; plus
-  the CLI admin client and login status probe. The two custom-builder consumers
-  (ordinary health probes and Elasticsearch) call `apply_outbound_policy`;
-  every other listed reqwest construction calls `build_outbound_client`.
-- **Operator-CLI caveat**: `edgion-cli` is the one consumer that sets
-  `disable_proxy: false`. Rule 3's proxy-env disable exists to stop a *server*
+  the CLI admin client and login status probe. At that audit the custom-builder
+  consumers (ordinary health probes and Elasticsearch) called `apply_outbound_policy`;
+  the other listed constructions used `build_outbound_client` at that audit.
+  HTTPDNS and Webhook now use the owning-selection entry through actual LinkSys
+  candidates. Webhook extracts configuration through its fixed-variant owning
+  ManagedOutboundClient entry and shares the private managed construction core.
+  Elasticsearch now supplies typed headers to the canonical owning build entry,
+  retaining actual source and captured TLS without exposing a raw builder.
+- **Operator-CLI caveat**: `edgion-cli` deliberately sets
+  `disable_proxy: false`. Elasticsearch also currently retains that default and
+  Redirect::Limit(10); its TLS-reference migration preserves existing transport
+  behavior, not a new general exemption or proxy/egress acceptance. Rule 3's
+  proxy-env disable exists to stop a *server*
   from being steered through an attacker-influenced proxy; the CLI runs as the
   operator on the operator's own machine, where honoring `HTTP(S)_PROXY` is a
   requirement, not a leak. `redirect: Deny` still applies — the admin API never
@@ -73,6 +83,10 @@ is a bug" rule also gets a line there.
   - Test code.
 
 The factory accepts either schema-level `tls` or `preconfigured_tls`, never both.
+Its owning-selection entry instead borrows a proved actual field and one captured
+global snapshot, rejecting raw `tls`, `tls_defaults` and `preconfigured_tls`
+substitutions. An absent/disabled HTTPDNS or Webhook field uses native TLS defaults without
+consuming inherited trust. Other raw-input consumers remain tracked for migration.
 Verified HTTPS clients needing SAN constraints use the shared Gateway
 `tls::validation::build_verified_outbound_tls` builder and the latter input.
 OIDC, AllEndpointStatus and encrypted active health checks use this path without bypassing outbound transport
@@ -111,6 +125,32 @@ policy. TLS/client construction failure must never select an unconfigured client
   entry with explicit defaults, so LinkSys global trust or client credentials
   cannot override backend identity. Configuration audit logging remains in
   `resolve_outbound_tls`; request-time callers use the pure entry and access logs.
+- The reference migration adds an actual-owner `ValidatedLocalTlsSelection` entry
+  for canonical resolution. HTTPDNS uses `HttpDnsCandidate` and Webhook uses its
+  `WebhookCandidate` plus the fixed-variant managed owning entry. Both use the canonical
+  HTTP factory's `build_outbound_client_with_tls_selection`: one actual LinkSys and
+  captured global snapshot supply incoming proof, replay comparison and build.
+  Raw TLS substitutions are rejected; absent/disabled HTTPDNS/Webhook TLS keeps native
+  system trust without global inheritance. Common's pure active-local inheritance
+  check and masked inherited-axis fingerprint encoder share the same canonical
+  precedence; comparison performs no PEM parsing or TLS audit. RedisCandidate's
+  Common PreparedRedisTls adapter applies the same actual selection/pair checker,
+  captured snapshot and inherited encoder before persistent reuse. Enabled local
+  TLS or implicit rediss selects transport; disabled refs stay inert. One resolved
+  result feeds the shared rustls conversion core and Fred retains its connector
+  across reconnect. Other transports and replay gates
+  remain tracked in `tasks/pending/resource-reference-contract/`.
+  Redis and Elasticsearch now share PreparedLinkSysTls's immutable actual-owner,
+  reference-topology, captured-default and whole-selection orchestration; their
+  closed adapters retain distinct transport/inheritance decisions. ES uses the
+  fixed-header owning factory and retains its constructed Client across bulk and
+  recovery. Absent/disabled ES TLS, including HTTPS endpoints, consumes no globals.
+  Kafka uses that same actual-owner container and inherited encoder before replay.
+  Its fixed owning rustls entry reuses the sole Common concrete conversion core,
+  including explicit System TLS (rskafka None means plaintext). Absent/disabled
+  local TLS consumes no globals. Init and probe recovery retain the constructed
+  connector Arc and actual owner; no TLS config/Secret clones or global rereads.
+  SASL readiness remains fail-fast; auth-reference authority remains outstanding.
 - **Verified consumers**: the reqwest factory, ext_proc (tonic channel with a
   custom hyper connector), ldap_auth (ldap3), the redis provider (fred), the
   kafka provider (rskafka), the etcd link provider, the OTLP LinkSys tonic014 transport, openid_connect token
@@ -421,3 +461,25 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   `ErrorKind` matches with different output types and log vocabularies.
   Rationale and re-evaluation triggers:
   `skills/04-review/jwt-auth/intentional-design/jwt-oidc-helper-split-deliberate.md`.
+
+### Etcd actual-owner and trusted bootstrap TLS
+
+EtcdCandidate and Common Etcd construction retain PreparedLinkSysTls's actual
+source and captured defaults; active local and inherited proof precede reuse.
+The immutable connection input keeps ordinary/election SDK options for all
+reconnect/probe/election paths. Controller's explicit EtcdBootstrapConfig supplies
+trusted disk PEM/YAML material without fabricating resource references. Private
+borrowed adapters enter the same canonical TLS precedence/materialization core.
+The bootstrap input is not resource authority. SDK option/PEM cloning and SDK
+root-store behavior are unchanged and are not new Edgion guarantees.
+
+### OTLP actual-owner HTTPS defaults
+
+PreparedOtlpTls retains the shared actual LinkSys loan and captured defaults,
+plus OTLP's validated destination and explicit source identity contract. HTTPS
+absent/disabled local TLS inherits through empty local policy; HTTP consumes no
+TLS globals. OtlpCandidate proves those selections before same-RV/equality reuse
+and hashes inherited axes in the secret/material digest. Common canonical TLS
+resolution feeds the sole Gateway tonic014 conversion. The transport retains
+its owning input, native Endpoint and metadata across retries/reconnects; SDK
+roots, SNI, deadlines, H2 and dial-time egress behavior remain provider-owned.

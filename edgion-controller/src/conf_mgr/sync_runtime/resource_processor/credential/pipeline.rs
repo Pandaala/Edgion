@@ -15,13 +15,14 @@
 //!   plugin resolvers that do their own data-shape extraction (EdgionPlugins).
 //! - [`resolve_secret`] — full pipeline; returns the validated `Secret`.
 //! - [`resolve_credential`] — full pipeline; returns the parsed `Material`.
-//! - [`resolve_secret_readonly`] — validated Secret lookup without reverse
+//! - [`resolve_bound_secret_readonly`] — validated owning-field lookup without reverse
 //!   dependency registration, for status derivation after parse.
 
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 
 use edgion_resources::credentials::{ResolveError, SecretMaterialResolver};
 use edgion_resources::resources::common::SecretObjectReference;
+use edgion_resources::resources::refs::{BoundFieldReference, ReferenceError, ReferenceToken};
 
 use super::super::ref_grant::read_after_registering_cross_ns_dependency;
 use super::super::{format_configmap_ref_key, format_secret_key, HandlerContext, ResourceRef};
@@ -97,6 +98,328 @@ pub enum FetchOutcome<T> {
     Pending(PendingReason),
 }
 
+/// A lookup from an actual owning-field loan. Invalid identities never create
+/// dependency edges or reach an object store.
+#[derive(Debug)]
+pub enum BoundFetchOutcome<T> {
+    Ok(T),
+    Pending(PendingReason),
+    Invalid(ReferenceError),
+}
+impl<T> BoundFetchOutcome<T> {
+    fn and_then<U>(self, map: impl FnOnce(T) -> BoundFetchOutcome<U>) -> BoundFetchOutcome<U> {
+        match self {
+            Self::Ok(value) => map(value),
+            Self::Pending(reason) => BoundFetchOutcome::Pending(reason),
+            Self::Invalid(error) => BoundFetchOutcome::Invalid(error),
+        }
+    }
+}
+
+/// Secret and authorization captured by one lookup. Async credential inputs
+/// retain this revision instead of independently querying permission again.
+pub struct AuthorizedSecret {
+    pub secret: Secret,
+    pub authorization_revision: String,
+}
+
+impl std::fmt::Debug for AuthorizedSecret {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("AuthorizedSecret").finish_non_exhaustive()
+    }
+}
+
+pub fn fetch_bound_secret(
+    ctx: &HandlerContext,
+    dependency_owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+) -> BoundFetchOutcome<AuthorizedSecret> {
+    fetch_bound_secret_inner(ctx, dependency_owner, token, true)
+}
+
+pub(crate) fn fetch_bound_secret_readonly(
+    ctx: &HandlerContext,
+    dependency_owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+) -> BoundFetchOutcome<AuthorizedSecret> {
+    fetch_bound_secret_inner(ctx, dependency_owner, token, false)
+}
+
+/// Status uses the same bound lookup as parse without adding recovery edges.
+pub(crate) fn bound_secret_status_error(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+) -> Option<super::super::ResolvedRefsError> {
+    bound_secret_status_result(ctx, owner, token).err()
+}
+
+pub(crate) fn bound_secret_status_result(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+) -> Result<AuthorizedSecret, super::super::ResolvedRefsError> {
+    use super::super::ResolvedRefsError;
+    match fetch_bound_secret_readonly(ctx, owner, token) {
+        BoundFetchOutcome::Ok(authorized) => Ok(authorized),
+        BoundFetchOutcome::Invalid(error) => Err(ResolvedRefsError::InvalidReference { error }),
+        BoundFetchOutcome::Pending(PendingReason::SecretNotFound { namespace, name }) => {
+            Err(ResolvedRefsError::SecretNotFound { namespace, name })
+        }
+        BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            from_ns,
+            to_ns,
+            secret_name,
+        }) => Err(ResolvedRefsError::RefNotPermitted {
+            from_namespace: from_ns,
+            from_kind: owner.kind_str(),
+            target_namespace: to_ns,
+            target_name: secret_name,
+        }),
+    }
+}
+
+/// Resolve typed material while retaining the first lookup's authorizer revision.
+pub fn resolve_bound_secret<R: SecretMaterialResolver>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+    resolver: &R,
+) -> Result<AuthorizedSecret, super::super::ResolvedRefsError> {
+    resolve_bound_outcome(fetch_bound_secret(ctx, owner, token), owner, resolver)
+}
+
+pub(crate) fn resolve_bound_secret_readonly<R: SecretMaterialResolver>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+    resolver: &R,
+) -> Result<AuthorizedSecret, super::super::ResolvedRefsError> {
+    resolve_bound_outcome(fetch_bound_secret_readonly(ctx, owner, token), owner, resolver)
+}
+
+/// Read only the generated output derived from a real LinkSys-backed Injector.
+pub(crate) fn resolve_managed_credential_output(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+    register: bool,
+) -> Result<AuthorizedSecret, super::super::ResolvedRefsError> {
+    let outcome = match token.managed_credential_output() {
+        Ok(reference) => fetch_bound_reference(ctx, owner, reference, register),
+        Err(error) => BoundFetchOutcome::Invalid(error),
+    };
+    resolve_bound_outcome(outcome, owner, &super::BearerResolver)
+}
+
+fn resolve_bound_outcome<R: SecretMaterialResolver>(
+    outcome: BoundFetchOutcome<AuthorizedSecret>,
+    owner: &ResourceRef,
+    resolver: &R,
+) -> Result<AuthorizedSecret, super::super::ResolvedRefsError> {
+    use super::super::ResolvedRefsError;
+    let authorized = match outcome {
+        BoundFetchOutcome::Ok(authorized) => authorized,
+        BoundFetchOutcome::Invalid(error) => return Err(ResolvedRefsError::InvalidReference { error }),
+        BoundFetchOutcome::Pending(PendingReason::SecretNotFound { namespace, name }) => {
+            return Err(ResolvedRefsError::SecretNotFound { namespace, name })
+        }
+        BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            from_ns,
+            to_ns,
+            secret_name,
+        }) => {
+            return Err(ResolvedRefsError::RefNotPermitted {
+                from_namespace: from_ns,
+                from_kind: owner.kind_str(),
+                target_namespace: to_ns,
+                target_name: secret_name,
+            })
+        }
+    };
+    validate_secret(&authorized.secret, resolver).map_err(|error| match error {
+        InvalidCredentialError::MissingKeys(keys) => ResolvedRefsError::MissingKeys { keys },
+        InvalidCredentialError::DecodeError { key, detail } => ResolvedRefsError::DecodeError { key, detail },
+        InvalidCredentialError::InvalidValue { key, class } => ResolvedRefsError::DecodeError {
+            key,
+            detail: class.to_string(),
+        },
+        InvalidCredentialError::InvalidSecretType { got, allowed } => {
+            ResolvedRefsError::InvalidSecretType { got, allowed }
+        }
+    })?;
+    Ok(authorized)
+}
+
+fn fetch_bound_secret_inner(
+    ctx: &HandlerContext,
+    dependency_owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+    register: bool,
+) -> BoundFetchOutcome<AuthorizedSecret> {
+    let reference = match token.validated() {
+        Ok(reference) => reference,
+        Err(error) => return BoundFetchOutcome::Invalid(error),
+    };
+    fetch_bound_reference(ctx, dependency_owner, reference, register)
+}
+
+#[derive(Clone, Copy)]
+enum CoreMaterialKind {
+    Secret,
+    ConfigMap,
+}
+impl CoreMaterialKind {
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Secret => "Secret",
+            Self::ConfigMap => "ConfigMap",
+        }
+    }
+}
+struct AuthorizedObject<'a> {
+    namespace: &'a str,
+    name: &'a str,
+    revision: String,
+}
+
+fn authorize_bound_object<'a>(
+    ctx: &HandlerContext,
+    dependency_owner: &ResourceRef,
+    reference: BoundFieldReference<'a>,
+    register: bool,
+    expected: CoreMaterialKind,
+) -> BoundFetchOutcome<AuthorizedObject<'a>> {
+    let owner = reference.owner();
+    if dependency_owner.kind_str() != owner.group_kind().kind()
+        || dependency_owner.name != owner.name()
+        || dependency_owner.namespace.as_deref().unwrap_or("default") != owner.scope().namespace().unwrap_or("")
+    {
+        return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding);
+    }
+    let target = reference.target();
+    if target.group_kind().group() != "" || target.group_kind().kind() != expected.kind() {
+        return BoundFetchOutcome::Invalid(ReferenceError::UnsupportedTarget);
+    }
+    let Some(namespace) = target.scope().namespace() else {
+        return BoundFetchOutcome::Invalid(ReferenceError::MissingNamespace);
+    };
+    if register {
+        let key = match expected {
+            CoreMaterialKind::Secret => format!("{namespace}/{}", target.name()),
+            CoreMaterialKind::ConfigMap => format!(
+                "{}{namespace}/{}",
+                super::super::CONFIG_MAP_REF_KEY_PREFIX,
+                target.name()
+            ),
+        };
+        ctx.secret_ref_manager().add_ref(key, dependency_owner.clone());
+        if !reference.is_same_namespace() {
+            ctx.runtime()
+                .cross_ns_ref_mgr
+                .add_ref(namespace.to_string(), dependency_owner.clone());
+        }
+    }
+    let Some(revision) = ctx
+        .runtime()
+        .ref_grant_store
+        .query_authorization_revision(reference.grant_query())
+    else {
+        return BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            from_ns: reference.source().scope().namespace().unwrap_or("").to_string(),
+            to_ns: namespace.to_string(),
+            secret_name: target.name().to_string(),
+        });
+    };
+    BoundFetchOutcome::Ok(AuthorizedObject {
+        namespace,
+        name: target.name(),
+        revision,
+    })
+}
+
+fn fetch_bound_reference(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    reference: BoundFieldReference<'_>,
+    register: bool,
+) -> BoundFetchOutcome<AuthorizedSecret> {
+    authorize_bound_object(ctx, owner, reference, register, CoreMaterialKind::Secret).and_then(|object| {
+        match ctx.runtime().secret_store.get(Some(object.namespace), object.name) {
+            Some(secret) => BoundFetchOutcome::Ok(AuthorizedSecret {
+                secret: super::ca_refs::ordinary_secret_material(secret),
+                authorization_revision: object.revision,
+            }),
+            None => BoundFetchOutcome::Pending(PendingReason::SecretNotFound {
+                namespace: object.namespace.to_string(),
+                name: object.name.to_string(),
+            }),
+        }
+    })
+}
+
+pub(crate) fn fetch_bound_configmap(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+) -> BoundFetchOutcome<ConfigMap> {
+    fetch_bound_configmap_inner(ctx, owner, token, true)
+}
+
+pub(crate) fn fetch_bound_configmap_readonly(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+) -> BoundFetchOutcome<ConfigMap> {
+    fetch_bound_configmap_inner(ctx, owner, token, false)
+}
+
+pub(crate) fn bound_configmap_status_result(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+) -> Result<ConfigMap, super::super::ResolvedRefsError> {
+    use super::super::ResolvedRefsError;
+    match fetch_bound_configmap_readonly(ctx, owner, token) {
+        BoundFetchOutcome::Ok(configmap) => Ok(configmap),
+        BoundFetchOutcome::Invalid(error) => Err(ResolvedRefsError::InvalidReference { error }),
+        BoundFetchOutcome::Pending(PendingReason::SecretNotFound { namespace, name }) => {
+            Err(ResolvedRefsError::ConfigMapNotFound { namespace, name })
+        }
+        BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            from_ns,
+            to_ns,
+            secret_name,
+        }) => Err(ResolvedRefsError::RefNotPermitted {
+            from_namespace: from_ns,
+            from_kind: owner.kind_str(),
+            target_namespace: to_ns,
+            target_name: secret_name,
+        }),
+    }
+}
+
+fn fetch_bound_configmap_inner(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+    register: bool,
+) -> BoundFetchOutcome<ConfigMap> {
+    let reference = match token.validated() {
+        Ok(reference) => reference,
+        Err(error) => return BoundFetchOutcome::Invalid(error),
+    };
+    authorize_bound_object(ctx, owner, reference, register, CoreMaterialKind::ConfigMap).and_then(|object| {
+        match ctx.runtime().configmap_store.get(Some(object.namespace), object.name) {
+            Some(configmap) => BoundFetchOutcome::Ok(configmap),
+            None => BoundFetchOutcome::Pending(PendingReason::SecretNotFound {
+                namespace: object.namespace.to_string(),
+                name: object.name.to_string(),
+            }),
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Internal steps (shared by the four entry points)
 // ---------------------------------------------------------------------------
@@ -121,19 +444,6 @@ pub fn fetch_secret(
     secret_ref: &SecretObjectReference,
 ) -> FetchOutcome<Secret> {
     fetch_secret_inner(ctx, owner, owner_group, owner_kind, secret_ref, true)
-}
-
-/// Read-only form of [`fetch_secret`] for status derivation after parse has
-/// already registered dependencies. It shares the exact namespace, grant, and
-/// store lookup path but does not mutate `SecretRefManager`.
-pub(crate) fn fetch_secret_readonly(
-    ctx: &HandlerContext,
-    owner: &ResourceRef,
-    owner_group: &str,
-    owner_kind: &str,
-    secret_ref: &SecretObjectReference,
-) -> FetchOutcome<Secret> {
-    fetch_secret_inner(ctx, owner, owner_group, owner_kind, secret_ref, false)
 }
 
 fn fetch_secret_inner(
@@ -186,7 +496,7 @@ fn fetch_secret_inner(
         .secret_store
         .get(Some(secret_ns.as_str()), &secret_ref.name)
     {
-        Some(s) => FetchOutcome::Ok(s),
+        Some(s) => FetchOutcome::Ok(super::ca_refs::ordinary_secret_material(s)),
         None => FetchOutcome::Pending(PendingReason::SecretNotFound {
             namespace: secret_ns,
             name: secret_ref.name.clone(),
@@ -294,6 +604,20 @@ fn map_parse_error(err: ResolveError) -> InvalidCredentialError {
     }
 }
 
+fn validate_secret<R: SecretMaterialResolver>(
+    secret: &Secret,
+    resolver: &R,
+) -> Result<R::Material, InvalidCredentialError> {
+    if let Some(error) = check_secret_type(secret, resolver) {
+        return Err(error);
+    }
+    let data = secret
+        .data
+        .as_ref()
+        .ok_or_else(|| InvalidCredentialError::MissingKeys(resolver.required_keys().to_vec()))?;
+    resolver.parse(data).map_err(map_parse_error)
+}
+
 /// Shared body for `resolve_secret` and `resolve_credential`.
 /// Runs the full pipeline (fetch + type check + parse) and returns the
 /// validated `(Secret, Material)` pair.
@@ -322,17 +646,9 @@ fn resolve_inner_with_registration<R: SecretMaterialResolver>(
         FetchOutcome::Pending(r) => return ResolveOutcome::Pending(r),
     };
 
-    if let Some(e) = check_secret_type(&secret, resolver) {
-        return ResolveOutcome::Invalid(e);
-    }
-
-    let Some(data) = secret.data.as_ref() else {
-        return ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(resolver.required_keys().to_vec()));
-    };
-
-    match resolver.parse(data) {
+    match validate_secret(&secret, resolver) {
         Result::Ok(m) => ResolveOutcome::Ok((secret, m)),
-        Err(e) => ResolveOutcome::Invalid(map_parse_error(e)),
+        Err(e) => ResolveOutcome::Invalid(e),
     }
 }
 
@@ -357,23 +673,6 @@ pub async fn resolve_secret<R: SecretMaterialResolver>(
         ResolveOutcome::Ok((secret, _)) => ResolveOutcome::Ok(secret),
         ResolveOutcome::Pending(r) => ResolveOutcome::Pending(r),
         ResolveOutcome::Invalid(e) => ResolveOutcome::Invalid(e),
-    }
-}
-
-/// Read-only form of [`resolve_secret`] for status derivation and internal
-/// managed-Secret validation after the parse path registered dependencies.
-pub(crate) fn resolve_secret_readonly<R: SecretMaterialResolver>(
-    ctx: &HandlerContext,
-    owner: &ResourceRef,
-    owner_group: &str,
-    owner_kind: &str,
-    secret_ref: &SecretObjectReference,
-    resolver: &R,
-) -> ResolveOutcome<Secret> {
-    match resolve_inner_with_registration(ctx, owner, owner_group, owner_kind, secret_ref, resolver, false) {
-        ResolveOutcome::Ok((secret, _)) => ResolveOutcome::Ok(secret),
-        ResolveOutcome::Pending(reason) => ResolveOutcome::Pending(reason),
-        ResolveOutcome::Invalid(error) => ResolveOutcome::Invalid(error),
     }
 }
 

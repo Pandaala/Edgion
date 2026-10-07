@@ -104,15 +104,25 @@ spec:
                                   group:
                                     type: string
                                     description: "Group of the referent; defaults to empty string (core)"
+                                    maxLength: 253
+                                    pattern: '^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
                                   kind:
                                     type: string
                                     description: "Kind of the referent; e.g. Secret or ConfigMap"
+                                    minLength: 1
+                                    maxLength: 63
+                                    pattern: '^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$'
                                   name:
                                     type: string
                                     description: "Name of the referent"
+                                    minLength: 1
+                                    maxLength: 253
                                   namespace:
                                     type: string
                                     description: "Namespace of the referent. Cross-namespace refs require a ReferenceGrant"
+                                    minLength: 1
+                                    maxLength: 63
+                                    pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
                                 required: [kind, name]
                             wellKnownCACertificates:
                               type: string

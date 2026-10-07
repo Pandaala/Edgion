@@ -30,8 +30,13 @@ with independent plan and corrected-code review. The same authoritative HTTP bod
 rules now require one bounded message, structural admission, an explicit memory
 ledger, process admission, outstanding output ownership and absolute Hold timeout.
 Streaming RPC responses use canonical per-message RawWindow windows. This exception
-adds no general response-body cache or whole-response plugin API. Implementation and
-verification are recorded in the [transcoder acceptance record](../../../../tasks/pending/grpc-json-transcoding/04-verification.md).
+adds no general response-body cache or whole-response plugin API. The historical
+implementation and verification reference is
+`tasks/pending/grpc-json-transcoding/04-verification.md`
+(the task file is absent from the current tree). The
+[current runtime overview](../../../01-architecture/02-gateway/00-overview.md#httproute-grpc-json-transcoding)
+describes transport and ownership boundaries; it does not replace the missing
+acceptance record or provide fresh verification.
 
 ## Core Rationale
 

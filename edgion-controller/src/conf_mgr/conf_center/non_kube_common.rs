@@ -275,7 +275,9 @@ impl CenterBase {
 
             // Persist-off acquisition on FS/etcd: always-leader (this iteration is
             // already gated). Kubernetes starts its own kube-backed worker instead.
-            crate::services::credential_manager::start_memory_credential_manager_service(self.runtime.clone());
+            if leadership.as_ref().is_none_or(|leader| leader.is_leader()) {
+                crate::services::credential_manager::start_memory_credential_manager_service(self.runtime.clone());
+            }
 
             // 8. Wait for shutdown, reload, or controller error.
             let mut global_shutdown = shutdown_handle.signal();

@@ -71,7 +71,7 @@ mod resolve_probe_host_tests {
             spec: EdgionBackendTrafficPolicySpec {
                 current_status: None,
                 target_refs: vec![PolicyTargetRef {
-                    group: String::new(),
+                    group: Some(String::new()),
                     kind: "Service".to_string(),
                     name: svc.to_string(),
                 }],

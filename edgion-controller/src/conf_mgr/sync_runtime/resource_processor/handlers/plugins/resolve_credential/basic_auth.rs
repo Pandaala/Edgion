@@ -3,11 +3,16 @@
 use std::collections::HashMap;
 
 use super::read_secret_utf8;
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
-use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{
+    fetch_bound_secret, BoundFetchOutcome, PendingReason,
+};
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::resources::edgion_plugins::plugin_configs::ResolvedBasicAuthUser;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::resources::refs::plugin_fields::{
+    BoundPluginEntryMut, PreparedPluginReferences, SecretGroupReferences,
+};
 
 /// Pure helper for first-wins duplicate-username detection.
 ///
@@ -36,19 +41,23 @@ fn first_wins_insert(
 /// usernames follow first-wins.
 #[allow(clippy::too_many_arguments)]
 fn resolve_group(
-    group_name: &str,
-    secret_refs: &[edgion_resources::resources::gateway::SecretObjectReference],
+    group: &SecretGroupReferences<'_>,
     all_users: &mut HashMap<String, ResolvedBasicAuthUser>,
     seen: &mut HashMap<String, String>,
-    ep_namespace: Option<&String>,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    for sor in secret_refs {
-        let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_namespace), &sor.name);
-        let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", sor) {
-            FetchOutcome::Ok(s) => s,
-            FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+    let group_name = group.name();
+    for token in group.references() {
+        let Ok(reference) = token.validated() else {
+            continue;
+        };
+        let target = reference.target();
+        let secret_key = format!("{}/{}", target.scope().namespace().unwrap_or_default(), target.name());
+        let secret = match fetch_bound_secret(ctx, resource_ref, token) {
+            BoundFetchOutcome::Ok(authorized) => authorized.secret,
+            BoundFetchOutcome::Invalid(_) => continue,
+            BoundFetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
                 tracing::info!(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,
@@ -57,7 +66,7 @@ fn resolve_group(
                 );
                 continue;
             }
-            FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
                 ref from_ns,
                 ref to_ns,
                 ref secret_name,
@@ -123,49 +132,47 @@ fn resolve_group(
 /// Resolve BasicAuth users from Secrets and register references to SecretRefManager.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
+    prepared: &PreparedPluginReferences,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    if let Some(ref mut plugins) = ep.spec.request_plugins {
-        for entry in plugins.iter_mut() {
-            if let EdgionPlugin::BasicAuth(ref mut config) = entry.plugin {
-                config.resolved_users = None;
+    let Ok(mut bindings) = prepared.bind_mut(ep) else {
+        return;
+    };
+    for entry in bindings.request_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_body_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+}
 
-                let Some(ref groups) = config.secret_groups else {
-                    continue;
-                };
-
-                let mut all_users: HashMap<String, ResolvedBasicAuthUser> = HashMap::new();
-                let mut seen: HashMap<String, String> = HashMap::new();
-
-                for g in groups {
-                    resolve_group(
-                        &g.name,
-                        &g.secret_refs,
-                        &mut all_users,
-                        &mut seen,
-                        ep.metadata.namespace.as_ref(),
-                        resource_ref,
-                        ctx,
-                    );
-                }
-
-                if !all_users.is_empty() {
-                    tracing::info!(
-                        edgion_plugins = %resource_ref.key(),
-                        user_count = all_users.len(),
-                        group_count = groups.len(),
-                        "BasicAuth: Resolved users from Secret groups"
-                    );
-                    config.resolved_users = Some(all_users);
-                } else {
-                    tracing::warn!(
-                        edgion_plugins = %resource_ref.key(),
-                        "BasicAuth: No users resolved from Secret groups"
-                    );
-                }
-            }
+fn resolve_entry(mut entry: BoundPluginEntryMut<'_>, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+    let EdgionPlugin::BasicAuth(config) = entry.config_mut() else {
+        return;
+    };
+    config.resolved_users = None;
+    if !entry.is_enabled() {
+        return;
+    }
+    let mut all_users = HashMap::new();
+    let mut seen = HashMap::new();
+    {
+        let Ok(references) = entry.references() else {
+            return;
+        };
+        for group in references.secret_groups() {
+            resolve_group(&group, &mut all_users, &mut seen, resource_ref, ctx);
         }
+    }
+    if let EdgionPlugin::BasicAuth(config) = entry.config_mut() {
+        config.resolved_users = (!all_users.is_empty()).then_some(all_users);
     }
 }
 

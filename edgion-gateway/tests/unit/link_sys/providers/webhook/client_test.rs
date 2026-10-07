@@ -6,6 +6,7 @@ use edgion_resources::resources::common::WebhookTarget;
 use edgion_resources::resources::common::{
     ExternalHttpConnection, MethodSpec, OutboundRequestSpec, PathSpec, WebhookServiceRef,
 };
+use edgion_resources::resources::link_sys::{webhook::WebhookServiceConfig, LinkSysSpec};
 
 fn config() -> WebhookServiceConfig {
     WebhookServiceConfig {
@@ -25,7 +26,272 @@ fn config() -> WebhookServiceConfig {
 }
 
 fn prepare(config: WebhookServiceConfig) -> anyhow::Result<WebhookLinkClient> {
-    WebhookLinkClient::prepare("ns/wh", config, Some("ns"), RuntimeFingerprint::unspecified())
+    WebhookCandidate::with_snapshot(owner(config), Arc::new(GlobalOutboundTlsSnapshot::from_configs([])))
+        .unwrap()
+        .prepare("ns/wh")
+}
+
+fn owner(config: WebhookServiceConfig) -> Arc<LinkSys> {
+    let mut owner = LinkSys::new(
+        "wh",
+        LinkSysSpec {
+            config: SystemConfig::Webhook(config),
+            current_status: None,
+            unknown_fields: Vec::new(),
+        },
+    );
+    owner.metadata.namespace = Some("ns".into());
+    Arc::new(owner)
+}
+
+fn candidate(owner: Arc<LinkSys>) -> WebhookCandidate {
+    WebhookCandidate::with_snapshot(owner, Arc::new(GlobalOutboundTlsSnapshot::from_configs([]))).unwrap()
+}
+
+#[test]
+fn owning_source_proof_precedes_both_reuse_shortcuts_without_tls() {
+    let mut valid = (*owner(config())).clone();
+    valid.metadata.resource_version = Some("42".into());
+    let valid = Arc::new(valid);
+    let ready = candidate(Arc::clone(&valid)).prepare("ns/wh").unwrap();
+    assert!(candidate(Arc::clone(&valid)).can_reuse(&ready, false));
+    assert!(!candidate(Arc::clone(&valid)).can_reuse(&ready, true));
+    for field in ["name", "empty-namespace", "bad-namespace"] {
+        let mut bad = (*valid).clone();
+        match field {
+            "name" => bad.metadata.name = None,
+            "empty-namespace" => bad.metadata.namespace = Some("".into()),
+            _ => bad.metadata.namespace = Some("Bad".into()),
+        }
+        let incoming = candidate(Arc::new(bad));
+        assert!(!incoming.can_reuse(&ready, false), "{field}");
+        assert!(incoming.prepare("ns/wh").is_err(), "{field}");
+    }
+    let mut wrong = (*valid).clone();
+    wrong.spec.config = SystemConfig::Unsupported;
+    assert!(WebhookCandidate::from_link_sys(Arc::new(wrong)).is_none());
+    let binding = PreparedLinkSysReferences::from_link_sys(&valid);
+    let binding = binding.bind(&valid).unwrap();
+    assert!(ManagedOutboundClient::from_webhook(&binding, &GlobalOutboundTlsSnapshot::from_configs([]), "x").is_ok());
+    let wrong: LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"dns"},"spec":{"type":"httpDns","config":{"preset":"google"}}
+    }))
+    .unwrap();
+    let references = PreparedLinkSysReferences::from_link_sys(&wrong);
+    let binding = references.bind(&wrong).unwrap();
+    assert!(ManagedOutboundClient::from_webhook(&binding, &GlobalOutboundTlsSnapshot::from_configs([]), "x").is_err());
+}
+
+#[test]
+fn omitted_owner_namespace_defaults_service_target_and_explicit_empty_fails() {
+    let mut actual = (*owner(config())).clone();
+    actual.metadata.namespace = None;
+    let ready = candidate(Arc::new(actual.clone())).prepare("default/wh").unwrap();
+    assert!(matches!(&ready.client.resolved_target,
+        ResolvedTarget::Service { service_key, .. } if service_key == "default/example-svc"));
+    actual.metadata.namespace = Some("".into());
+    assert!(candidate(Arc::new(actual)).prepare("default/wh").is_err());
+}
+
+#[test]
+fn disabled_tls_with_dormant_invalid_material_reuses_absent_tls_across_versions() {
+    let mut actual = (*owner(config())).clone();
+    actual.metadata.resource_version = Some("1".into());
+    let ready = candidate(Arc::new(actual.clone())).prepare("ns/wh").unwrap();
+    actual.metadata.resource_version = Some("2".into());
+    let SystemConfig::Webhook(config) = &mut actual.spec.config else {
+        unreachable!()
+    };
+    config.conn.tls = Some(
+        serde_json::from_value(serde_json::json!({
+            "enabled":false,
+            "validation":{"caCertificateRefs":[{"group":"foreign.example","kind":"Secret","name":"bad"}]},
+            "resolvedCaCertificates":[{"metadata":{"name":"wrong","namespace":"wrong"}}]
+        }))
+        .unwrap(),
+    );
+    let incoming = candidate(Arc::new(actual));
+    assert!(incoming.can_reuse(&ready, false));
+    assert!(!incoming.can_reuse(&ready, true));
+}
+
+fn active_ca_config() -> WebhookServiceConfig {
+    let mut config = config();
+    config.conn.tls = Some(
+        serde_json::from_value(serde_json::json!({
+            "enabled":true,"verify":false,
+            "validation":{"caCertificateRefs":[{"kind":"Secret","name":"ca"}]},
+            "resolvedCaCertificates":[{"metadata":{"name":"ca","namespace":"ns"},"data":{"ca.crt":"Y2VydGlmaWNhdGU="}}]
+        }))
+        .unwrap(),
+    );
+    config
+}
+
+#[test]
+fn active_reference_material_proof_precedes_same_rv_and_verify_false() {
+    let mut valid = (*owner(active_ca_config())).clone();
+    valid.metadata.resource_version = Some("42".into());
+    let valid = Arc::new(valid);
+    let ready = candidate(Arc::clone(&valid)).prepare("ns/wh").unwrap();
+    for field in ["foreign-group", "missing", "namespace", "name", "extra", "provenance"] {
+        let mut bad = (*valid).clone();
+        let SystemConfig::Webhook(config) = &mut bad.spec.config else {
+            unreachable!()
+        };
+        let tls = config.conn.tls.as_mut().unwrap();
+        match field {
+            "foreign-group" => {
+                tls.outbound
+                    .validation
+                    .as_mut()
+                    .unwrap()
+                    .ca_certificate_refs
+                    .as_mut()
+                    .unwrap()[0]
+                    .group = Some("foreign.example".into())
+            }
+            "missing" => tls.resolved_ca_certificates = None,
+            "namespace" => tls.resolved_ca_certificates.as_mut().unwrap()[0].metadata.namespace = Some("other".into()),
+            "name" => tls.resolved_ca_certificates.as_mut().unwrap()[0].metadata.name = Some("other".into()),
+            "extra" => tls.resolved_ca_certificates.as_mut().unwrap().push(Default::default()),
+            _ => {
+                tls.resolved_ca_certificates.as_mut().unwrap()[0].metadata.annotations =
+                    Some(std::collections::BTreeMap::from([(
+                        edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE.into(),
+                        "ConfigMap".into(),
+                    )]))
+            }
+        }
+        let incoming = candidate(Arc::new(bad.clone()));
+        assert!(!incoming.can_reuse(&ready, false), "{field}");
+        assert!(incoming.prepare("ns/wh").is_err(), "{field}");
+        let SystemConfig::Webhook(config) = &mut bad.spec.config else {
+            unreachable!()
+        };
+        config.conn.tls.as_mut().unwrap().enabled = false;
+        assert!(candidate(Arc::new(bad)).prepare("ns/wh").is_ok(), "inactive {field}");
+    }
+    assert!(candidate(valid).can_reuse(&ready, false));
+}
+
+#[test]
+fn captured_inheritance_masks_overrides_and_unmasked_changes_prevent_same_rv_reuse() {
+    use edgion_common::link_sys_core::outbound_tls::test_util;
+    use edgion_resources::resources::common::OutboundTlsConfig;
+    let a = test_util::snapshot(OutboundTlsConfig::default());
+    let b = test_util::snapshot(OutboundTlsConfig {
+        verify: false,
+        ..Default::default()
+    });
+    let mut config = config();
+    config.conn.tls = Some(serde_json::from_value(serde_json::json!({"enabled":true})).unwrap());
+    let mut actual = (*owner(config.clone())).clone();
+    actual.metadata.resource_version = Some("42".into());
+    let actual = Arc::new(actual);
+    let captured = WebhookCandidate::with_snapshot(Arc::clone(&actual), Arc::clone(&a)).unwrap();
+    let ready = captured.prepare("ns/wh").unwrap();
+    assert!(WebhookCandidate::with_snapshot(Arc::clone(&actual), Arc::clone(&a))
+        .unwrap()
+        .can_reuse(&ready, false));
+    assert!(!WebhookCandidate::with_snapshot(Arc::clone(&actual), Arc::clone(&b))
+        .unwrap()
+        .can_reuse(&ready, false));
+    config.conn.tls.as_mut().unwrap().outbound.verify = Some(false);
+    let actual = owner(config);
+    let ready = WebhookCandidate::with_snapshot(Arc::clone(&actual), Arc::clone(&a))
+        .unwrap()
+        .prepare("ns/wh")
+        .unwrap();
+    assert!(WebhookCandidate::with_snapshot(Arc::clone(&actual), b)
+        .unwrap()
+        .can_reuse(&ready, false));
+    assert!(Arc::ptr_eq(&ready.managed_client(), &ready.managed_client()));
+}
+
+#[test]
+fn candidate_comparison_does_not_parse_material_or_emit_tls_audit() {
+    use std::sync::atomic::AtomicUsize;
+    use tracing_subscriber::{layer::SubscriberExt, Layer};
+    struct AuditCounter(Arc<AtomicUsize>);
+    impl<S: tracing::Subscriber> Layer<S> for AuditCounter {
+        fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+            if event.metadata().target() == "edgion_common::link_sys_core::outbound_tls"
+                && *event.metadata().level() == tracing::Level::WARN
+            {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    let count = Arc::new(AtomicUsize::new(0));
+    let subscriber = tracing_subscriber::registry().with(AuditCounter(Arc::clone(&count)));
+    let _guard = tracing::subscriber::set_default(subscriber);
+    // Deliberately non-PEM CA bytes: verify=false proves the complete pair but
+    // never parses the unused CA body, including during equality comparisons.
+    let actual = owner(active_ca_config());
+    let ready = candidate(Arc::clone(&actual)).prepare("ns/wh").unwrap();
+    assert_eq!(count.load(Ordering::Relaxed), 1);
+    for _ in 0..3 {
+        assert!(candidate(Arc::clone(&actual)).can_reuse(&ready, false));
+    }
+    assert_eq!(count.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn captured_actual_snapshot_survives_global_publication() {
+    use edgion_common::link_sys_core::outbound_tls::{set_outbound_global_default, test_util};
+    use edgion_resources::resources::common::OutboundTlsConfig;
+    const CHILD_ENV: &str = "EDGION_WEBHOOK_CAPTURE_TLS_CHILD";
+    const TEST_NAME: &str =
+        "link_sys::providers::webhook::client::tests::captured_actual_snapshot_survives_global_publication";
+    // Other Gateway TLS tests also publish global defaults. Run this deliberate
+    // publication interleaving in its own process, retaining unwind restoration.
+    if std::env::var(CHILD_ENV).as_deref() != Ok(TEST_NAME) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env(CHILD_ENV, TEST_NAME)
+            .output()
+            .expect("isolated Webhook TLS capture test must start");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("1 passed; 0 failed"),
+            "the child must execute its exact test: {stdout}"
+        );
+        return;
+    }
+    struct Restore(Arc<GlobalOutboundTlsSnapshot>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_outbound_global_default(Arc::clone(&self.0));
+        }
+    }
+    let _restore = Restore(outbound_global_default());
+    let a = test_util::snapshot(OutboundTlsConfig::default());
+    set_outbound_global_default(Arc::clone(&a));
+    let mut config = config();
+    config.conn.tls = Some(serde_json::from_value(serde_json::json!({"enabled":true})).unwrap());
+    let actual = owner(config);
+    let captured = WebhookCandidate::from_link_sys(Arc::clone(&actual)).unwrap();
+    let invalid: edgion_resources::EdgionGatewayConfig = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"invalid","namespace":"apps"},"spec":{}
+    }))
+    .unwrap();
+    let b = Arc::new(GlobalOutboundTlsSnapshot::from_configs([Arc::new(invalid)]));
+    set_outbound_global_default(Arc::clone(&b));
+    let ready = captured
+        .prepare("ns/wh")
+        .expect("captured usable A must construct after invalid B is published");
+    let fresh = WebhookCandidate::from_link_sys(Arc::clone(&actual)).unwrap();
+    assert!(!fresh.can_reuse(&ready, false));
+    assert!(fresh.prepare("ns/wh").is_err(), "a new capture must consume invalid B");
+    assert!(WebhookCandidate::with_snapshot(actual, a)
+        .unwrap()
+        .can_reuse(&ready, false));
 }
 
 #[test]

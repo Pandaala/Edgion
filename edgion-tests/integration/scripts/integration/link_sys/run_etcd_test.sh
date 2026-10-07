@@ -744,10 +744,9 @@ assert_json_failure "GET on non-existent client returns error" "$RESP"
 # ── 11.4 Outbound TLS verify=false is always rejected for Etcd ──────────────
 # etcd-client's TLS stack always verifies; the outbound-TLS resolver rejects
 # verify=false unconditionally (provider_can_disable=false). Unlike Redis, Etcd
-# resolves TLS lazily in the background init() (from_config does not), so the
-# client IS registered but init() fails with the reject and the client never
-# connects. The gateway log carries the reject error keyed by the client name —
-# that log line is the distinguishing proof (vs. a plain unreachable endpoint).
+# resolves and rejects the unsupported policy at cold connector construction.
+# The client never connects. A keyed construction-failure log distinguishes the
+# TLS policy rejection from an unreachable endpoint.
 # Fixture: conf/LinkSys/Etcd/04_LinkSys_default_etcd-tls-reject.yaml
 log_info "─── 11.4 TLS verify=false reject ───"
 ETCD_REJECT_CLIENT="default_etcd-tls-reject"
@@ -755,16 +754,16 @@ ETCD_REJECT_CLIENT="default_etcd-tls-reject"
 RESP=$(gw_api GET "/configclient/LinkSys?namespace=default&name=etcd-tls-reject")
 assert_json_success "etcd-tls-reject CRD synced to Gateway (controller admission is lenient)" "$RESP"
 
-# The client never reaches a connected state: init() returns the reject error.
+# The client never reaches a connected state: construction rejects the policy.
 RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/${ETCD_REJECT_CLIENT}/health")
 ETCD_REJECT_CONNECTED=$(echo "$RESP" | jq -r '.data.connected // false')
-assert_ne "etcd-tls-reject never connects (verify=false reject in init)" "true" "$ETCD_REJECT_CONNECTED"
+assert_ne "etcd-tls-reject never connects (verify=false reject at construction)" "true" "$ETCD_REJECT_CONNECTED"
 
 RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/${ETCD_REJECT_CLIENT}/ping")
 assert_json_failure "PING etcd-tls-reject fails (TLS verify=false rejected)" "$RESP"
 
 # Distinguishing proof: the gateway log shows the verify=false reject for this
-# client (not merely an unreachable endpoint). The "init failed" line carries
+# client (not merely an unreachable endpoint). The construction-failure line carries
 # key=default/etcd-tls-reject and the resolver's "skip-verify" error text.
 TESTS_TOTAL=$((TESTS_TOTAL + 1))
 if grep "etcd-tls-reject" "${LOG_DIR}/gateway.log" 2>/dev/null | grep -q "skip-verify"; then

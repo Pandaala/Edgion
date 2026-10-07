@@ -2,7 +2,7 @@ use super::EdgionPluginsHandler;
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler, ResourceRef};
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::EdgionConfigData;
-use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::edgion_config_data::{
     ConfigEntry, EdgionConfigDataRef, EdgionConfigDataSpec, RegionRouteOverride,
 };
@@ -19,6 +19,351 @@ use k8s_openapi::ByteString;
 use kube::api::ObjectMeta;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+
+fn descriptor_owner(stage: &str, enabled: bool, name: &str, key: &str) -> EdgionPlugins {
+    let mut wire = serde_json::json!({"metadata":{"name":"descriptor-owner","namespace":"apps"},"spec":{}});
+    wire["spec"][stage] = serde_json::json!([{"type":"GrpcJsonTranscoder","enable":enabled,"config":{
+        "descriptor":{"type":"configMapRef","name":name,"key":key},"services":["test.TestService"],
+        "resolvedDescriptor":[1,2,3],"descriptorError":"forged"
+    }}]);
+    serde_json::from_value(wire).unwrap()
+}
+
+#[tokio::test]
+async fn descriptor_owning_resolution_rejects_invalid_identity_and_selector_without_edges() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::plugins::grpc_descriptor;
+    use crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError;
+    for case in ["name", "namespace", "owner", "empty-key", "long-key"] {
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ep = descriptor_owner("requestPlugins", true, "schema", "test.pb");
+        let EdgionPlugin::GrpcJsonTranscoder(config) = &mut ep.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+            panic!()
+        };
+        let edgion_resources::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef { name, key } =
+            &mut config.descriptor
+        else {
+            panic!()
+        };
+        match case {
+            "name" => *name = "Bad_Name".into(),
+            "namespace" => ep.metadata.namespace = Some("Bad_Namespace".into()),
+            "owner" => ep.metadata.name = Some("Bad_Owner".into()),
+            "empty-key" => key.clear(),
+            _ => *key = "x".repeat(254),
+        }
+        // Even a stored object under the authored malformed spelling cannot grant authority.
+        runtime.configmap_store.replace_all(HashMap::from([(
+            "apps/Bad_Name".into(),
+            ConfigMap {
+                binary_data: Some(BTreeMap::from([(
+                    "test.pb".into(),
+                    ByteString(
+                        include_bytes!("../../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb")
+                            .to_vec(),
+                    ),
+                )])),
+                ..Default::default()
+            },
+        )]));
+        let resource = ResourceRef::new(
+            edgion_resources::ResourceKind::EdgionPlugins,
+            ep.metadata.namespace.clone(),
+            ep.metadata.name.clone().unwrap(),
+        );
+        let readonly = grpc_descriptor::status_errors(&ep, &resource, &ctx);
+        assert_eq!(!readonly.is_empty(), !case.ends_with("key"));
+        if !case.ends_with("key") {
+            assert!(matches!(readonly[0], ResolvedRefsError::InvalidReference { .. }));
+        }
+        assert!(ctx.secret_ref_manager().get_dependencies(&resource.key()).is_empty());
+        let mut parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(ep) => ep,
+            ProcessResult::Skip { reason } => panic!("{reason}"),
+        };
+        let EdgionPlugin::GrpcJsonTranscoder(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!()
+        };
+        assert!(
+            config.resolved_descriptor.is_none() && config.descriptor_error.is_some(),
+            "{case}"
+        );
+        assert!(
+            ctx.secret_ref_manager().get_dependencies(&resource.key()).is_empty(),
+            "{case}"
+        );
+        assert!(runtime.cross_ns_ref_mgr.get_dependencies(&resource.key()).is_empty());
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+        let status = parsed.status.as_ref().unwrap().as_local().unwrap();
+        let accepted = status.conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "False");
+        let resolved = status.conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+        assert_eq!(resolved.status == "False", !case.ends_with("key"));
+    }
+}
+
+#[tokio::test]
+async fn descriptor_owning_resolution_clears_every_inactive_stage_and_inline_material() {
+    for stage in [
+        "requestPlugins",
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        for enabled in [true, false] {
+            if stage == "requestPlugins" && enabled {
+                continue;
+            }
+            let (ctx, _) = make_ctx_with_secrets(HashMap::new());
+            let mut ep = descriptor_owner(stage, enabled, "schema", "test.pb");
+            // Ingest and parse must both discard unsupported/disabled resolved fields.
+            EdgionPluginsHandler.preparse(&mut ep, &ctx);
+            let wire = serde_json::to_value(&ep).unwrap();
+            assert!(wire["spec"][stage][0]["config"]["resolvedDescriptor"].is_null());
+            let parsed = match EdgionPluginsHandler
+                .parse(descriptor_owner(stage, enabled, "schema", "test.pb"), &ctx)
+                .await
+            {
+                ProcessResult::Continue(ep) => ep,
+                ProcessResult::Skip { reason } => panic!("{reason}"),
+            };
+            let wire = serde_json::to_value(&parsed).unwrap();
+            assert!(wire["spec"][stage][0]["config"]["resolvedDescriptor"].is_null());
+            assert!(wire["spec"][stage][0]["config"]["descriptorError"].is_null());
+            let resource = ResourceRef::new(
+                edgion_resources::ResourceKind::EdgionPlugins,
+                Some("apps".into()),
+                "descriptor-owner".into(),
+            );
+            assert!(ctx.secret_ref_manager().get_dependencies(&resource.key()).is_empty());
+        }
+    }
+    let (ctx, _) = make_ctx_with_secrets(HashMap::new());
+    let mut ep = descriptor_owner("requestPlugins", true, "schema", "test.pb");
+    let EdgionPlugin::GrpcJsonTranscoder(config) = &mut ep.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        panic!()
+    };
+    config.descriptor = edgion_resources::grpc_transcoding::GrpcDescriptorSource::Inline {
+        base64: "invalid".into(),
+    };
+    let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+        ProcessResult::Continue(ep) => ep,
+        ProcessResult::Skip { reason } => panic!("{reason}"),
+    };
+    let EdgionPlugin::GrpcJsonTranscoder(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+        panic!()
+    };
+    assert!(config.resolved_descriptor.is_none() && config.descriptor_error.is_none());
+}
+
+#[tokio::test]
+async fn descriptor_status_is_readonly_and_selected_binary_data_has_no_text_fallback() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::plugins::grpc_descriptor;
+    use crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError;
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let mut ep = descriptor_owner("requestPlugins", true, "schema", "test.pb");
+    ep.metadata.namespace = None;
+    let resource = ResourceRef::new(
+        edgion_resources::ResourceKind::EdgionPlugins,
+        None,
+        "descriptor-owner".into(),
+    );
+    let errors = grpc_descriptor::status_errors(&ep, &resource, &ctx);
+    assert!(
+        matches!(&errors[..],[ResolvedRefsError::ConfigMapNotFound { namespace,name }] if namespace=="default" && name=="schema")
+    );
+    assert!(ctx.secret_ref_manager().get_dependencies(&resource.key()).is_empty());
+    runtime.configmap_store.replace_all(HashMap::from([(
+        "default/schema".into(),
+        ConfigMap {
+            metadata: ObjectMeta {
+                name: Some("schema".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            data: Some(BTreeMap::from([(
+                "test.pb".into(),
+                "text is not descriptor binaryData".into(),
+            )])),
+            binary_data: Some(BTreeMap::from([(
+                "other.pb".into(),
+                ByteString(
+                    include_bytes!("../../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb").to_vec(),
+                ),
+            )])),
+            ..Default::default()
+        },
+    )]));
+    assert!(grpc_descriptor::status_errors(&ep, &resource, &ctx).is_empty());
+    ep = match EdgionPluginsHandler.parse(ep, &ctx).await {
+        ProcessResult::Continue(ep) => ep,
+        ProcessResult::Skip { reason } => panic!("{reason}"),
+    };
+    let EdgionPlugin::GrpcJsonTranscoder(config) = &ep.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+        panic!()
+    };
+    assert!(config.resolved_descriptor.is_none() && config.descriptor_error.is_some());
+    assert_eq!(ctx.secret_ref_manager().get_dependencies(&resource.key()).len(), 1);
+    let EdgionPlugin::GrpcJsonTranscoder(config) = &mut ep.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        panic!()
+    };
+    let edgion_resources::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef { key, .. } = &mut config.descriptor
+    else {
+        panic!()
+    };
+    *key = "other.pb".into();
+    ep = match EdgionPluginsHandler.parse(ep, &ctx).await {
+        ProcessResult::Continue(ep) => ep,
+        ProcessResult::Skip { reason } => panic!("{reason}"),
+    };
+    let EdgionPlugin::GrpcJsonTranscoder(config) = &ep.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+        panic!()
+    };
+    assert!(config.resolved_descriptor.is_some() && config.compile().is_ok());
+}
+
+fn managed_http_plugins(variant: &str, stage: &str, enabled: bool, tls_enabled: bool, template: &str) -> EdgionPlugins {
+    let connection = serde_json::json!({"target":{"url":"https://check.example"},
+        "tls":{"enabled":tls_enabled,"validation":{"caCertificateRefs":[{"group":"core","kind":"Secret","name":"ca"}]},
+            "clientCertificateRef":{"name":"client"},
+            "resolvedCaCertificates":[{"metadata":{"name":"forged","namespace":"default"}}],
+            "resolvedClientCertificate":{"metadata":{"name":"forged","namespace":"default"}}},
+        "request":{"headers":{"custom":[{"name":"Authorization","template":template}]}},
+        "resolvedSecrets":{"forged":"value"}});
+    let config = match variant {
+        "ForwardAuth" => {
+            let mut config = connection;
+            config["decision"] = serde_json::json!({});
+            config
+        }
+        "Guardrail" => connection,
+        "AiGuard" => serde_json::json!({"evaluator":connection}),
+        _ => panic!("unexpected fixture variant"),
+    };
+    let mut wire = serde_json::json!({"metadata":{"name":"managed","namespace":"default","generation":1},"spec":{}});
+    wire["spec"][stage] = serde_json::json!([{"type":variant,"enable":enabled,"config":config}]);
+    serde_json::from_value(wire).unwrap()
+}
+
+#[tokio::test]
+async fn managed_http_owning_resolution_clears_inactive_stages_and_keeps_templates_independent_of_tls() {
+    for variant in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        for (stage, enabled, tls_enabled, active) in [
+            ("requestPlugins", true, true, true),
+            ("requestPlugins", true, false, true),
+            ("requestPlugins", false, true, false),
+            ("upstreamResponsePlugins", true, true, false),
+            ("upstreamResponseFilterPlugins", true, true, false),
+            ("upstreamResponseBodyFilterPlugins", true, true, false),
+        ] {
+            let secrets = HashMap::from([
+                (
+                    "default/token".into(),
+                    build_secret("default", "token", "key", "actual"),
+                ),
+                (
+                    "default/ca".into(),
+                    build_secret("default", "ca", "ca.crt", "ca-material"),
+                ),
+                (
+                    "default/client".into(),
+                    build_secret("default", "client", "tls.crt", "client-material"),
+                ),
+            ]);
+            let (ctx, runtime) = make_ctx_with_secrets(secrets);
+            let owner = managed_http_plugins(variant, stage, enabled, tls_enabled, "${secretRef:default/token:key}");
+            let parsed = match EdgionPluginsHandler.parse(owner, &ctx).await {
+                ProcessResult::Continue(value) => value,
+                ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+            };
+            let wire = serde_json::to_value(&parsed).unwrap();
+            let config = &wire["spec"][stage][0]["config"];
+            let config = if variant == "AiGuard" {
+                &config["evaluator"]
+            } else {
+                config
+            };
+            assert_eq!(
+                config["resolvedSecrets"].is_object(),
+                active,
+                "{variant}/{stage}/{enabled}"
+            );
+            if active {
+                assert_eq!(config["resolvedSecrets"]["default/token:key"], "actual");
+            }
+            assert_eq!(
+                config["tls"]["resolvedCaCertificates"].is_array(),
+                active && tls_enabled
+            );
+            assert_eq!(
+                config["tls"]["resolvedClientCertificate"].is_object(),
+                active && tls_enabled
+            );
+            let dependency = ResourceRef::new(
+                edgion_resources::ResourceKind::EdgionPlugins,
+                Some("default".into()),
+                "managed".into(),
+            );
+            let dependencies = runtime.secret_ref_manager.get_dependencies(&dependency.key());
+            assert_eq!(dependencies.contains(&"default/token".into()), active);
+            assert_eq!(dependencies.contains(&"default/ca".into()), active && tls_enabled);
+            assert_eq!(dependencies.contains(&"default/client".into()), active && tls_enabled);
+        }
+    }
+}
+
+#[tokio::test]
+async fn forward_auth_owning_status_reports_decode_denial_and_tls_reference_failures() {
+    for (template, reason) in [
+        ("${secretRef:default/token:absent}", "DecodeError"),
+        ("${secretRef:policy/token:key}", "RefNotPermitted"),
+        ("${secretRef:missing-slash:key}", "DecodeError"),
+    ] {
+        let (ctx, _) = make_ctx_with_secrets(HashMap::from([(
+            "default/token".into(),
+            build_secret("default", "token", "key", "actual"),
+        )]));
+        let owner = managed_http_plugins("ForwardAuth", "requestPlugins", true, false, template);
+        let mut parsed = match EdgionPluginsHandler.parse(owner, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+        let condition = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(condition.status, "False");
+        assert_eq!(condition.reason, reason);
+        assert!(!condition.message.contains("actual"));
+    }
+    let (ctx, _) = make_ctx_with_secrets(HashMap::new());
+    let owner = managed_http_plugins("ForwardAuth", "requestPlugins", true, true, "literal");
+    let mut parsed = match EdgionPluginsHandler.parse(owner, &ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+    let condition = parsed
+        .status
+        .as_ref()
+        .unwrap()
+        .as_local()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == "ResolvedRefs")
+        .unwrap();
+    assert_eq!(condition.status, "False");
+    assert_eq!(condition.reason, "SecretNotFound");
+    assert!(condition.message.contains("default/ca"));
+    assert!(condition.message.contains("default/client"));
+}
 
 fn make_ctx_with_secrets(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
     let runtime = Arc::new(ControllerRuntime::default());
@@ -38,6 +383,432 @@ fn build_secret(namespace: &str, name: &str, key: &str, value: &str) -> Secret {
         },
         data: Some(data),
         ..Default::default()
+    }
+}
+
+fn owning_condition_fixture(stage: &str, enabled: bool, reference: serde_json::Value) -> EdgionPlugins {
+    let secret_match = serde_json::json!({"type":"secretMatch","key":{"type":"header","name":"X-Token"},
+        "secretKey":"token","secretRef":reference,"resolvedValues":["forged"]});
+    let hmac = serde_json::json!({"type":"hmacAuth","secretGroups":[{"name":"condition","secretRefs":[reference]}],
+        "resolvedCredentials":{"forged":{"secret":b"forged".to_vec(),"group":"forged"}}});
+    let set = serde_json::json!({"allOf":[secret_match,hmac]});
+    let mut wire = serde_json::json!({"metadata":{"name":"condition-plugins","namespace":"apps"},"spec":{}});
+    wire["spec"][stage] = serde_json::json!([
+        {"type":"HmacAuth","enable":enabled,"config":{"secretGroups":[{"name":"standalone","secretRefs":[reference]}]}},
+        {"type":"RequestRestriction","enable":enabled,"config":{"mode":"Deny","conditions":set}},
+        {"type":"RequestAccessPolicy","enable":enabled,"config":{"defaultProfile":"p","profiles":{"p":{"requiredRuleGroups":[
+            {"name":"gate","anyOfRules":[{"name":"source","type":"directPeerIp","config":{"ips":["192.0.2.1"],"conditions":set}}]}
+        ]}},"resolvedProfiles":{"p":{"requiredRuleGroups":[
+            {"name":"gate","anyOfRules":[{"name":"source","type":"directPeerIp","config":{"ips":["192.0.2.1"],"conditions":set}}]}
+        ]}}}}
+    ]);
+    serde_json::from_value(wire).unwrap()
+}
+
+#[tokio::test]
+async fn bound_condition_and_standalone_hmac_validate_before_dependencies_and_preserve_secret_bytes() {
+    use edgion_resources::resources::edgion_plugins::plugin_configs::Condition;
+    use edgion_resources::resources::refs::condition_fields::PreparedConditionReferences;
+    let cases = [
+        (serde_json::json!({"name":"credentials"}), true),
+        (serde_json::json!({"group":"","name":"credentials"}), true),
+        (serde_json::json!({"group":"core","name":"credentials"}), true),
+        (
+            serde_json::json!({"group":"foreign.example","name":"credentials"}),
+            false,
+        ),
+        (serde_json::json!({"kind":"ConfigMap","name":"credentials"}), false),
+        (serde_json::json!({"kind":"","name":"credentials"}), false),
+        (serde_json::json!({"namespace":"","name":"credentials"}), false),
+        (serde_json::json!({"name":""}), false),
+    ];
+    for (reference, valid) in cases {
+        let mut secret = build_secret("apps", "credentials", "token", "  exact-token\n");
+        secret.data.as_mut().unwrap().insert(
+            "credentials.yaml".into(),
+            ByteString(b"- username: alice\n  secret: valid-secret-with-more-than-32-bytes\n".to_vec()),
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([("apps/credentials".into(), secret)]));
+        let ep = owning_condition_fixture("requestPlugins", true, reference.clone());
+        let ProcessResult::Continue(mut parsed) = EdgionPluginsHandler.parse(ep, &ctx).await else {
+            panic!("unexpected skip")
+        };
+        let EdgionPlugin::HmacAuth(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            unreachable!()
+        };
+        assert_eq!(
+            config
+                .resolved_credentials
+                .as_ref()
+                .is_some_and(|credentials| credentials.contains_key("alice")),
+            valid,
+            "{reference}"
+        );
+        let prepared = PreparedConditionReferences::from_plugins(&parsed);
+        let mut checked = 0;
+        prepared
+            .visit(&parsed, |leaf| match leaf.config() {
+                Condition::SecretMatch(config) => {
+                    checked += 1;
+                    if valid {
+                        assert_eq!(
+                            config.resolved_values.as_deref(),
+                            Some(["  exact-token\n".to_string()].as_slice())
+                        );
+                    } else {
+                        assert!(config.resolved_values.is_none(), "{reference}");
+                    }
+                }
+                Condition::HmacAuth(config) => {
+                    checked += 1;
+                    assert_eq!(
+                        config
+                            .resolved_credentials
+                            .as_ref()
+                            .is_some_and(|credentials| credentials.contains_key("alice")),
+                        valid,
+                        "{reference}"
+                    );
+                }
+                _ => {}
+            })
+            .unwrap();
+        assert_eq!(checked, 4);
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+        let condition = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(
+            condition.status,
+            if valid { "True" } else { "False" },
+            "{reference}: {condition:?}"
+        );
+        if !valid {
+            assert_eq!(condition.reason, "InvalidKind", "{reference}: {condition:?}");
+        }
+        assert_eq!(
+            ctx.secret_ref_manager().get_refs("apps/credentials").len(),
+            usize::from(valid),
+            "{reference}"
+        );
+        assert!(runtime.cross_ns_ref_mgr.get_refs("").is_empty());
+    }
+}
+
+#[tokio::test]
+async fn bound_conditions_clear_disabled_and_wrong_stage_restriction_and_effective_rap() {
+    use edgion_resources::resources::edgion_plugins::plugin_configs::Condition;
+    use edgion_resources::resources::refs::condition_fields::PreparedConditionReferences;
+    for (stage, enabled) in [
+        ("requestPlugins", false),
+        ("upstreamResponseFilterPlugins", true),
+        ("upstreamResponseBodyFilterPlugins", true),
+        ("upstreamResponsePlugins", true),
+    ] {
+        let (ctx, _) = make_ctx_with_secrets(HashMap::from([(
+            "apps/credentials".into(),
+            build_secret("apps", "credentials", "token", "present"),
+        )]));
+        let ep = owning_condition_fixture(stage, enabled, serde_json::json!({"name":"credentials"}));
+        let ProcessResult::Continue(mut parsed) = EdgionPluginsHandler.parse(ep, &ctx).await else {
+            panic!("unexpected skip")
+        };
+        let prepared = PreparedConditionReferences::from_plugins(&parsed);
+        let mut checked = 0;
+        prepared
+            .visit(&parsed, |leaf| {
+                checked += 1;
+                assert!(!leaf.is_active(), "{stage}");
+                match leaf.config() {
+                    Condition::SecretMatch(config) => assert!(config.resolved_values.is_none(), "{stage}"),
+                    Condition::HmacAuth(config) => assert!(config.resolved_credentials.is_none(), "{stage}"),
+                    _ => {}
+                }
+            })
+            .unwrap();
+        assert!(checked >= 2, "{stage}");
+        assert!(
+            ctx.secret_ref_manager().get_refs("apps/credentials").is_empty(),
+            "{stage}"
+        );
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+        let status = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(status.status, "True", "{stage}: {status:?}");
+    }
+}
+
+fn owning_tls_fixture(variant: &str, stage: &str, enabled: bool, ca_refs: serde_json::Value) -> EdgionPlugins {
+    let secret = serde_json::json!({"metadata":{"name":"shared","namespace":"default"},"data":{"ca.crt":"Zm9yZ2Vk"}});
+    let local = serde_json::json!({
+        "validation":{"caCertificateRefs":ca_refs},
+        "clientCertificateRef":{"name":"shared"}
+    });
+    let mut full_tls = local.clone();
+    full_tls["enabled"] = serde_json::json!(true);
+    full_tls["resolvedCaCertificates"] = serde_json::json!([secret]);
+    full_tls["resolvedClientCertificate"] = secret.clone();
+    let config = match variant {
+        "OpenidConnect" => serde_json::json!({
+            "discovery":"https://idp.example/.well-known/openid-configuration", "clientId":"client",
+            "clientSecretRef":{"name":"shared"}, "sessionSecretRef":{"name":"shared"},
+            "resolvedOidcClientSecret":"forged", "resolvedSessionSecret":"forged", "tls":local,
+            "resolvedCaCertificates":[secret],"resolvedClientCertificate":secret
+        }),
+        "LdapAuth" => serde_json::json!({
+            "ldapHost":"ldap.example", "baseDn":"dc=example", "attribute":"uid", "tls":local,
+            "resolvedCaCertificates":[secret],"resolvedClientCertificate":secret
+        }),
+        "ExtProc" => serde_json::json!({"grpcService":{"target":"processor.example:9000","tls":full_tls}}),
+        _ => panic!("unsupported fixture variant"),
+    };
+    let mut wire = serde_json::json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins",
+        "metadata":{"name":"tls-plugins","namespace":"default"}, "spec":{}});
+    wire["spec"][stage] = serde_json::json!([{"type":variant,"enable":enabled,"config":config}]);
+    serde_json::from_value(wire).unwrap()
+}
+
+fn owning_tls_material(plugin: &EdgionPlugin) -> (Option<&[Secret]>, Option<&Secret>) {
+    match plugin {
+        EdgionPlugin::OpenidConnect(config) => (
+            config.resolved_ca_certificates.as_deref(),
+            config.resolved_client_certificate.as_ref(),
+        ),
+        EdgionPlugin::LdapAuth(config) => (
+            config.resolved_ca_certificates.as_deref(),
+            config.resolved_client_certificate.as_ref(),
+        ),
+        EdgionPlugin::ExtProc(config) => (
+            config.grpc_service.tls.resolved_ca_certificates.as_deref(),
+            config.grpc_service.tls.resolved_client_certificate.as_ref(),
+        ),
+        _ => panic!("unexpected fixture variant"),
+    }
+}
+
+#[tokio::test]
+async fn owning_tls_handler_clears_forged_material_on_inactive_and_wrong_stages() {
+    for variant in ["OpenidConnect", "LdapAuth", "ExtProc"] {
+        for (stage, enabled) in [
+            ("requestPlugins", false),
+            ("upstreamResponseFilterPlugins", true),
+            ("upstreamResponseBodyFilterPlugins", true),
+            ("upstreamResponsePlugins", true),
+        ] {
+            let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([(
+                "default/shared".into(),
+                build_secret("default", "shared", "ca.crt", "present"),
+            )]));
+            let ep = owning_tls_fixture(
+                variant,
+                stage,
+                enabled,
+                serde_json::json!([{"kind":"Secret","name":"shared"}]),
+            );
+            let ProcessResult::Continue(parsed) = EdgionPluginsHandler::new().parse(ep, &ctx).await else {
+                panic!("unexpected skip")
+            };
+            macro_rules! assert_cleared {
+                ($entries:expr) => {
+                    for entry in $entries.iter().flatten() {
+                        let (ca, client) = owning_tls_material(&entry.plugin);
+                        assert!(ca.is_none(), "{variant}/{stage}");
+                        assert!(client.is_none(), "{variant}/{stage}");
+                        if let EdgionPlugin::OpenidConnect(config) = &entry.plugin {
+                            assert!(config.resolved_oidc_client_secret.is_none());
+                            assert!(config.resolved_session_secret.is_none());
+                        }
+                    }
+                };
+            }
+            assert_cleared!(parsed.spec.request_plugins);
+            assert_cleared!(parsed.spec.upstream_response_filter_plugins);
+            assert_cleared!(parsed.spec.upstream_response_body_filter_plugins);
+            assert_cleared!(parsed.spec.upstream_response_plugins);
+            assert!(runtime
+                .secret_ref_manager
+                .get_dependencies("EdgionPlugins/default/tls-plugins")
+                .is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn owning_tls_handler_keeps_kind_order_and_revalidates_exact_configmap_grant() {
+    use edgion_resources::constants::annotations::edgion::{CONTROLLER_CA_SOURCE, CONTROLLER_CA_SOURCE_CONFIG_MAP};
+    for variant in ["OpenidConnect", "LdapAuth", "ExtProc"] {
+        let mut secret = build_secret("default", "shared", "ca.crt", "secret-ca");
+        secret.metadata.annotations = Some(BTreeMap::from([(CONTROLLER_CA_SOURCE.into(), "ConfigMap".into())]));
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([("default/shared".into(), secret)]));
+        runtime.configmap_store.replace_all(HashMap::from([(
+            "ops/shared".into(),
+            ConfigMap {
+                metadata: ObjectMeta {
+                    name: Some("shared".into()),
+                    namespace: Some("ops".into()),
+                    ..Default::default()
+                },
+                data: Some(BTreeMap::from([("ca.crt".into(), "configmap-ca".into())])),
+                ..Default::default()
+            },
+        )]));
+        let authored = owning_tls_fixture(
+            variant,
+            "requestPlugins",
+            true,
+            serde_json::json!([
+                {"kind":"Secret","name":"shared"},
+                {"group":"core","kind":"ConfigMap","name":"shared","namespace":"ops"}
+            ]),
+        );
+        for granted_kind in [None, Some("Secret"), Some("ConfigMap"), None] {
+            runtime.ref_grant_store.remove("ops/allow");
+            if let Some(kind) = granted_kind {
+                let grant = serde_json::from_value::<edgion_resources::resources::ReferenceGrant>(serde_json::json!({
+                    "apiVersion":"gateway.networking.k8s.io/v1","kind":"ReferenceGrant",
+                    "metadata":{"name":"allow","namespace":"ops"}, "spec":{
+                        "from":[{"group":"edgion.io","kind":"EdgionPlugins","namespace":"default"}],
+                        "to":[{"group":"","kind":kind,"name":"shared"}]
+                    }
+                }))
+                .unwrap();
+                runtime.ref_grant_store.upsert("ops/allow".into(), Arc::new(grant));
+            }
+            let handler = EdgionPluginsHandler::new();
+            let ProcessResult::Continue(mut parsed) = handler.parse(authored.clone(), &ctx).await else {
+                panic!("unexpected skip")
+            };
+            let (ca, client) = owning_tls_material(&parsed.spec.request_plugins.as_ref().unwrap()[0].plugin);
+            let ca = ca.unwrap();
+            let permitted = granted_kind == Some("ConfigMap");
+            assert_eq!(ca.len(), if permitted { 2 } else { 1 }, "{variant}/{granted_kind:?}");
+            assert_eq!(ca[0].data.as_ref().unwrap()["ca.crt"].0, b"secret-ca");
+            assert!(!ca[0]
+                .metadata
+                .annotations
+                .as_ref()
+                .is_some_and(|annotations| annotations.contains_key(CONTROLLER_CA_SOURCE)));
+            assert!(!client
+                .unwrap()
+                .metadata
+                .annotations
+                .as_ref()
+                .is_some_and(|annotations| annotations.contains_key(CONTROLLER_CA_SOURCE)));
+            if permitted {
+                assert_eq!(ca[1].metadata.namespace.as_deref(), Some("ops"));
+                assert_eq!(ca[1].data.as_ref().unwrap()["ca.crt"].0, b"configmap-ca");
+                assert_eq!(
+                    ca[1].metadata.annotations.as_ref().unwrap()[CONTROLLER_CA_SOURCE],
+                    CONTROLLER_CA_SOURCE_CONFIG_MAP
+                );
+            }
+            let dependencies = runtime
+                .secret_ref_manager
+                .get_dependencies("EdgionPlugins/default/tls-plugins");
+            assert!(dependencies.contains(&"ConfigMap/ops/shared".into()));
+            assert!(dependencies.contains(&"default/shared".into()));
+            let owner = ResourceRef::new(
+                edgion_resources::ResourceKind::EdgionPlugins,
+                Some("default".into()),
+                "tls-plugins".into(),
+            );
+            assert!(runtime.cross_ns_ref_mgr.get_refs("ops").contains(&owner));
+            handler.update_status(&mut parsed, &ctx, &[]);
+            let conditions = &parsed.status.as_ref().unwrap().as_local().unwrap().conditions;
+            let condition = conditions
+                .iter()
+                .find(|condition| condition.type_ == "ResolvedRefs")
+                .unwrap();
+            assert_eq!(
+                condition.status,
+                if permitted { "True" } else { "False" },
+                "{variant}/{granted_kind:?}: {}",
+                condition.message
+            );
+            if !permitted {
+                assert_eq!(condition.reason, "RefNotPermitted");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn credential_injector_link_sys_grant_denial_is_reported_by_handler_status() {
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let authored = crate::reference_test_support::injector_owner("apps", "injector", "consumer-uid", 1, "ops/source");
+    for revoked in [false, true] {
+        if revoked {
+            let grant = serde_json::from_value::<edgion_resources::resources::ReferenceGrant>(serde_json::json!({
+                "apiVersion": "gateway.networking.k8s.io/v1", "kind": "ReferenceGrant",
+                "metadata": { "namespace": "ops", "name": "allow" },
+                "spec": { "from": [{ "group": "edgion.io", "kind": "EdgionPlugins", "namespace": "apps" }],
+                    "to": [{ "group": "edgion.io", "kind": "LinkSys", "name": "source" }] }
+            }))
+            .unwrap();
+            runtime.ref_grant_store.upsert("ops/allow".to_string(), Arc::new(grant));
+            let mut allowed = match EdgionPluginsHandler.parse(authored.clone(), &ctx).await {
+                ProcessResult::Continue(value) => value,
+                ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+            };
+            EdgionPluginsHandler.update_status(&mut allowed, &ctx, &[]);
+            assert_eq!(
+                allowed
+                    .status
+                    .as_ref()
+                    .unwrap()
+                    .as_local()
+                    .unwrap()
+                    .conditions
+                    .iter()
+                    .find(|condition| condition.type_ == "ResolvedRefs")
+                    .unwrap()
+                    .reason,
+                "BackendNotFound"
+            );
+            runtime.ref_grant_store.remove("ops/allow");
+        }
+        let mut parsed = match EdgionPluginsHandler.parse(authored.clone(), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+        let condition = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(condition.status, "False");
+        assert_eq!(condition.reason, "RefNotPermitted");
+        let EdgionPlugin::CredentialInjector(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected Injector");
+        };
+        assert!(config.resolved_credential.is_none());
+        let owner = ResourceRef::new(
+            edgion_resources::ResourceKind::EdgionPlugins,
+            Some("apps".to_string()),
+            "injector".to_string(),
+        );
+        assert!(runtime.cross_ns_ref_mgr.get_refs("ops").contains(&owner));
     }
 }
 
@@ -1088,6 +1859,163 @@ fn build_secret_typed(namespace: &str, name: &str, type_: Option<&str>, data: &[
     }
 }
 
+fn wasm_status_errors_for_test(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let owner = ResourceRef::new(
+        edgion_resources::ResourceKind::EdgionPlugins,
+        ep.metadata.namespace.clone(),
+        ep.metadata.name.clone().unwrap(),
+    );
+    super::cred::wasm_status_errors(ep, &owner, ctx)
+}
+
+#[tokio::test]
+async fn wasm_handler_activity_preserves_auth_and_pull_independently_of_tls() {
+    use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
+    for mode in ["fetch", "oci"] {
+        for stage in [
+            "requestPlugins",
+            "upstreamResponseFilterPlugins",
+            "upstreamResponseBodyFilterPlugins",
+            "upstreamResponsePlugins",
+        ] {
+            for (enabled, tls_enabled) in [(false, true), (true, false), (true, true)] {
+                let mut ep = if mode == "fetch" {
+                    wasm_ep_with_fetch_auth("default", None, "auth", "authorization")
+                } else {
+                    wasm_ep_with_oci("default", None, "pull")
+                };
+                let EdgionPlugin::Wasm(config) = &mut ep.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+                    panic!("wrong fixture")
+                };
+                if let Some(fetch) = config.source.fetch.as_mut() {
+                    fetch.resolved_auth_header = Some("forged".into());
+                    fetch.tls = Some(TlsConfig {
+                        enabled: tls_enabled,
+                        outbound: OutboundTlsLocal {
+                            validation: Some(OutboundTlsValidation {
+                                ca_certificate_refs: Some(vec![ca_ref("Secret", "ca", None)]),
+                                ..Default::default()
+                            }),
+                            client_certificate_ref: Some(SecretObjectReference {
+                                name: "client".into(),
+                                group: None,
+                                kind: None,
+                                namespace: None,
+                            }),
+                            ..Default::default()
+                        },
+                        resolved_ca_certificates: Some(vec![build_secret("default", "forged", "ca.crt", "forged")]),
+                        resolved_client_certificate: Some(build_secret("default", "forged", "tls.crt", "forged")),
+                    });
+                }
+                if let Some(oci) = config.source.oci.as_mut() {
+                    oci.resolved_pull_secret = Some("forged".into());
+                }
+                let mut wire = serde_json::to_value(ep).unwrap();
+                let mut entries = wire["spec"]["requestPlugins"].take();
+                entries[0]["enable"] = serde_json::json!(enabled);
+                wire["spec"][stage] = entries;
+                let ep: EdgionPlugins = serde_json::from_value(wire).unwrap();
+                let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([
+                    (
+                        "default/auth".into(),
+                        build_secret("default", "auth", "authorization", "Bearer actual"),
+                    ),
+                    (
+                        "default/ca".into(),
+                        build_secret("default", "ca", "ca.crt", "actual-ca"),
+                    ),
+                    (
+                        "default/client".into(),
+                        build_secret("default", "client", "tls.crt", "actual-cert"),
+                    ),
+                    (
+                        "default/pull".into(),
+                        build_secret_typed(
+                            "default",
+                            "pull",
+                            Some("kubernetes.io/dockerconfigjson"),
+                            &[(".dockerconfigjson", br#"{"auths":{}}"#)],
+                        ),
+                    ),
+                ]));
+                let ProcessResult::Continue(parsed) = EdgionPluginsHandler::new().parse(ep, &ctx).await else {
+                    panic!("unexpected skip")
+                };
+                let active = enabled && stage != "upstreamResponsePlugins";
+                macro_rules! assert_material {
+                    ($entries:expr) => {
+                        for entry in $entries.iter().flatten() {
+                            let EdgionPlugin::Wasm(config) = &entry.plugin else {
+                                panic!("wrong fixture")
+                            };
+                            if let Some(fetch) = config.source.fetch.as_ref() {
+                                assert_eq!(
+                                    fetch.resolved_auth_header.as_deref(),
+                                    active.then_some("Bearer actual"),
+                                    "{stage}/{enabled}/{tls_enabled}"
+                                );
+                                let tls = fetch.tls.as_ref().unwrap();
+                                assert_eq!(
+                                    tls.resolved_ca_certificates.is_some(),
+                                    active && tls_enabled
+                                );
+                                assert_eq!(
+                                    tls.resolved_client_certificate.is_some(),
+                                    active && tls_enabled
+                                );
+                                if active && tls_enabled {
+                                    assert_eq!(
+                                        tls.resolved_ca_certificates.as_ref().unwrap()[0]
+                                            .metadata
+                                            .name
+                                            .as_deref(),
+                                        Some("ca")
+                                    );
+                                    assert_eq!(
+                                        tls.resolved_client_certificate
+                                            .as_ref()
+                                            .unwrap()
+                                            .metadata
+                                            .name
+                                            .as_deref(),
+                                        Some("client")
+                                    );
+                                }
+                            }
+                            if let Some(oci) = config.source.oci.as_ref() {
+                                assert_eq!(
+                                    oci.resolved_pull_secret.as_deref(),
+                                    active.then_some(r#"{"auths":{}}"#)
+                                );
+                            }
+                        }
+                    };
+                }
+                assert_material!(parsed.spec.request_plugins);
+                assert_material!(parsed.spec.upstream_response_filter_plugins);
+                assert_material!(parsed.spec.upstream_response_body_filter_plugins);
+                assert_material!(parsed.spec.upstream_response_plugins);
+                let mut dependencies = runtime
+                    .secret_ref_manager
+                    .get_dependencies("EdgionPlugins/default/wasm-ep");
+                dependencies.sort();
+                let expected: Vec<String> = if !active {
+                    vec![]
+                } else if mode == "oci" {
+                    vec!["default/pull".into()]
+                } else if tls_enabled {
+                    vec!["default/auth".into(), "default/ca".into(), "default/client".into()]
+                } else {
+                    vec!["default/auth".into()]
+                };
+                assert_eq!(dependencies, expected, "{mode}/{stage}/{enabled}/{tls_enabled}");
+                assert!(wasm_status_errors_for_test(&parsed, &ctx).is_empty());
+            }
+        }
+    }
+}
+
 fn wasm_ep_with_fetch_auth(ns: &str, secret_ns: Option<&str>, secret_name: &str, key: &str) -> EdgionPlugins {
     let mut ep = EdgionPlugins::new("wasm-ep", EdgionPluginsSpec::default());
     ep.metadata.namespace = Some(ns.to_string());
@@ -1144,7 +2072,7 @@ fn test_wasm_auth_header_missing_key_reports_decode_error() {
     let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("default/wasm-auth".to_string(), secret)]));
     let ep = wasm_ep_with_fetch_auth("default", None, "wasm-auth", "authorization");
 
-    let errors = super::resolve_wasm_refs(&ep, &ctx);
+    let errors = wasm_status_errors_for_test(&ep, &ctx);
     assert_eq!(errors.len(), 1, "got {errors:?}");
     match &errors[0] {
         ResolvedRefsError::DecodeError { key, detail } => {
@@ -1161,16 +2089,19 @@ fn test_wasm_auth_header_usable_reports_no_error() {
     let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("default/wasm-auth".to_string(), secret)]));
     let ep = wasm_ep_with_fetch_auth("default", None, "wasm-auth", "authorization");
 
-    assert!(super::resolve_wasm_refs(&ep, &ctx).is_empty());
+    assert!(wasm_status_errors_for_test(&ep, &ctx).is_empty());
 }
 
 #[test]
-fn test_wasm_auth_header_missing_secret_defers_to_generic_path() {
-    // Absent Secret object must NOT be double-reported here.
+fn test_wasm_auth_header_missing_secret_reports_not_found() {
+    // Owning status reports absence even when no parse dependency was registered.
     let (ctx, _rt) = make_ctx_with_secrets(HashMap::new());
     let ep = wasm_ep_with_fetch_auth("default", None, "wasm-auth", "authorization");
 
-    assert!(super::resolve_wasm_refs(&ep, &ctx).is_empty());
+    assert!(matches!(
+        wasm_status_errors_for_test(&ep, &ctx).as_slice(),
+        [ResolvedRefsError::SecretNotFound { .. }]
+    ));
 }
 
 #[test]
@@ -1179,7 +2110,7 @@ fn test_wasm_pull_secret_wrong_type_reports_invalid_secret_type() {
     let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("default/pull".to_string(), secret)]));
     let ep = wasm_ep_with_oci("default", None, "pull");
 
-    let errors = super::resolve_wasm_refs(&ep, &ctx);
+    let errors = wasm_status_errors_for_test(&ep, &ctx);
     assert_eq!(errors.len(), 1, "got {errors:?}");
     match &errors[0] {
         ResolvedRefsError::InvalidSecretType { got, .. } => assert_eq!(got, "Opaque"),
@@ -1198,7 +2129,7 @@ fn test_wasm_pull_secret_missing_dockerconfig_key_reports_decode_error() {
     let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("default/pull".to_string(), secret)]));
     let ep = wasm_ep_with_oci("default", None, "pull");
 
-    let errors = super::resolve_wasm_refs(&ep, &ctx);
+    let errors = wasm_status_errors_for_test(&ep, &ctx);
     assert_eq!(errors.len(), 1, "got {errors:?}");
     match &errors[0] {
         ResolvedRefsError::DecodeError { key, .. } => assert_eq!(*key, ".dockerconfigjson"),
@@ -1217,7 +2148,7 @@ fn test_wasm_pull_secret_usable_reports_no_error() {
     let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("default/pull".to_string(), secret)]));
     let ep = wasm_ep_with_oci("default", None, "pull");
 
-    assert!(super::resolve_wasm_refs(&ep, &ctx).is_empty());
+    assert!(wasm_status_errors_for_test(&ep, &ctx).is_empty());
 }
 
 #[test]
@@ -1228,7 +2159,7 @@ fn test_wasm_cross_ns_grant_missing_reports_ref_not_permitted() {
     let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("other-ns/wasm-auth".to_string(), secret)]));
     let ep = wasm_ep_with_fetch_auth("default", Some("other-ns"), "wasm-auth", "authorization");
 
-    let errors = super::resolve_wasm_refs(&ep, &ctx);
+    let errors = wasm_status_errors_for_test(&ep, &ctx);
     assert_eq!(errors.len(), 1, "got {errors:?}");
     match &errors[0] {
         ResolvedRefsError::RefNotPermitted {
@@ -1245,9 +2176,9 @@ fn test_wasm_cross_ns_grant_missing_reports_ref_not_permitted() {
     }
 }
 
-fn ca_ref(kind: &str, name: &str, ns: Option<&str>) -> BackendTLSPolicyCACertificateRef {
-    BackendTLSPolicyCACertificateRef {
-        group: String::new(),
+fn ca_ref(kind: &str, name: &str, ns: Option<&str>) -> CustomCACertificateRef {
+    CustomCACertificateRef {
+        group: Some(String::new()),
         kind: kind.to_string(),
         name: name.to_string(),
         namespace: ns.map(str::to_string),
@@ -1256,7 +2187,7 @@ fn ca_ref(kind: &str, name: &str, ns: Option<&str>) -> BackendTLSPolicyCACertifi
 
 fn wasm_ep_with_fetch_tls(
     ns: &str,
-    ca_refs: Vec<BackendTLSPolicyCACertificateRef>,
+    ca_refs: Vec<CustomCACertificateRef>,
     client_cert: Option<SecretObjectReference>,
 ) -> EdgionPlugins {
     use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
@@ -1297,7 +2228,7 @@ fn test_wasm_tls_ca_ref_cross_ns_grant_missing_reports_ref_not_permitted() {
     let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("other-ns/wasm-ca".to_string(), secret)]));
     let ep = wasm_ep_with_fetch_tls("default", vec![ca_ref("Secret", "wasm-ca", Some("other-ns"))], None);
 
-    let errors = super::resolve_wasm_refs(&ep, &ctx);
+    let errors = wasm_status_errors_for_test(&ep, &ctx);
     assert_eq!(errors.len(), 1, "got {errors:?}");
     match &errors[0] {
         ResolvedRefsError::RefNotPermitted {
@@ -1322,7 +2253,7 @@ fn test_wasm_tls_ca_configmap_cross_ns_grant_missing_reports_ref_not_permitted()
         None,
     );
 
-    let errors = super::resolve_wasm_refs(&ep, &ctx);
+    let errors = wasm_status_errors_for_test(&ep, &ctx);
     assert_eq!(errors.len(), 1, "got {errors:?}");
     assert!(
         matches!(&errors[0], ResolvedRefsError::RefNotPermitted { target_name, .. } if target_name == "wasm-ca-cm")
@@ -1434,15 +2365,24 @@ fn test_wasm_tls_client_cert_cross_ns_grant_missing_reports_ref_not_permitted() 
     };
     let ep = wasm_ep_with_fetch_tls("default", vec![], Some(cc));
 
-    let errors = super::resolve_wasm_refs(&ep, &ctx);
+    let errors = wasm_status_errors_for_test(&ep, &ctx);
     assert_eq!(errors.len(), 1, "got {errors:?}");
     assert!(matches!(&errors[0], ResolvedRefsError::RefNotPermitted { target_name, .. } if target_name == "wasm-cc"));
 }
 
 #[test]
 fn test_wasm_tls_refs_same_ns_report_no_error() {
-    // Same-namespace CA + client-cert refs are never grant-gated → no status error.
-    let (ctx, _rt) = make_ctx_with_secrets(HashMap::new());
+    // Present same-namespace CA and client refs need no ReferenceGrant.
+    let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([
+        (
+            "default/wasm-ca".into(),
+            build_secret("default", "wasm-ca", "ca.crt", "certificate"),
+        ),
+        (
+            "default/wasm-cc".into(),
+            build_secret("default", "wasm-cc", "tls.crt", "certificate"),
+        ),
+    ]));
     let cc = SecretObjectReference {
         group: None,
         kind: None,
@@ -1451,7 +2391,7 @@ fn test_wasm_tls_refs_same_ns_report_no_error() {
     };
     let ep = wasm_ep_with_fetch_tls("default", vec![ca_ref("Secret", "wasm-ca", None)], Some(cc));
 
-    assert!(super::resolve_wasm_refs(&ep, &ctx).is_empty());
+    assert!(wasm_status_errors_for_test(&ep, &ctx).is_empty());
 }
 
 // ── RegionRoute + overrideRef resolution tests ────────────────────────
@@ -5048,7 +5988,7 @@ async fn extproc_resolver_fills_resolved_secrets() {
                     outbound: OutboundTlsLocal {
                         validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
                             ca_certificate_refs: Some(vec![
-                                edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef {
+                                edgion_resources::resources::common::CustomCACertificateRef {
                                     kind: "Secret".to_string(),
                                     name: "extproc-ca".to_string(),
                                     ..Default::default()
@@ -5137,7 +6077,7 @@ async fn guardrail_resolver_fills_request_and_tls_secrets() {
                 enabled: true,
                 outbound: OutboundTlsLocal {
                     validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
-                        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                        ca_certificate_refs: Some(vec![CustomCACertificateRef {
                             kind: "Secret".to_string(),
                             name: "guard-ca".to_string(),
                             ..Default::default()
@@ -5494,7 +6434,7 @@ async fn extproc_with_san_rejected_phase1() {
 /// A plugin without SAN pinning (only CA refs) must NOT be rejected.
 #[tokio::test]
 async fn oidc_ca_only_no_san_accepted() {
-    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::CustomCACertificateRef;
     use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation};
 
     let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
@@ -5507,7 +6447,7 @@ async fn oidc_ca_only_no_san_accepted() {
             client_id: "my-client".to_string(),
             tls: OutboundTlsLocal {
                 validation: Some(OutboundTlsValidation {
-                    ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                    ca_certificate_refs: Some(vec![CustomCACertificateRef {
                         kind: "Secret".to_string(),
                         name: "idp-ca".to_string(),
                         namespace: None,

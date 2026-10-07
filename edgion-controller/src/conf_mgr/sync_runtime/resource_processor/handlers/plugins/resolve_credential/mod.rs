@@ -8,55 +8,150 @@
 //! (`resolve_basic_auth`, `resolve_jwt`, ...) so call sites remain greppable
 //! even though each submodule exports a locally simple `resolve`.
 
-mod ai_guard;
 mod basic_auth;
 mod credential_injector;
 mod csrf;
 mod ext_proc;
-mod forward_auth;
-mod guardrail;
 mod header_cert_auth;
 mod hmac;
 mod jwe;
 mod jwt;
 mod key_auth;
 mod ldap_auth;
+mod managed_http;
 mod openid_connect;
 mod wasm;
 
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ai_guard::resolve as resolve_ai_guard;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use basic_auth::resolve as resolve_basic_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use credential_injector::{
     resolve as resolve_credential_injector, status_errors as credential_injector_status_errors,
 };
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use csrf::resolve as resolve_csrf;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ext_proc::resolve as resolve_ext_proc;
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use forward_auth::resolve as resolve_forward_auth;
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use guardrail::resolve as resolve_guardrail;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use header_cert_auth::resolve as resolve_header_cert_auth;
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use hmac::resolve as resolve_hmac;
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use hmac::{
+    resolve as resolve_hmac, resolve_condition as resolve_condition_hmac,
+};
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwe::{
     resolve as resolve_jwe, status_errors as jwe_status_errors,
 };
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwt::resolve as resolve_jwt;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use key_auth::resolve as resolve_key_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ldap_auth::resolve as resolve_ldap_auth;
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use managed_http::resolve as resolve_managed_http;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use openid_connect::resolve as resolve_openid_connect;
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use wasm::resolve as resolve_wasm;
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use wasm::{
+    resolve as resolve_wasm, status_errors as wasm_status_errors,
+};
 
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
 
-/// Resolve HMAC credentials for a `Condition::HmacAuth` leaf.
-///
-/// Condition-tree HMAC ignores credential metadata (same as the former RAP
-/// walker). Calls into `hmac.rs`; do not duplicate that resolver.
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve_hmac_config(
-    config: &mut edgion_resources::resources::edgion_plugins::plugin_configs::HmacMatchConfig,
-    ep_namespace: Option<&String>,
-    resource_ref: &ResourceRef,
+/// Report bound fields even when invalid identity prevented dependency creation.
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn bound_credential_status_errors(
+    ep: &edgion_resources::EdgionPlugins,
+    owner: &ResourceRef,
     ctx: &HandlerContext,
-) {
-    hmac::resolve_config(config, hmac::MetadataPolicy::Ignore, ep_namespace, resource_ref, ctx);
+) -> Vec<crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError> {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::bound_secret_status_error;
+    use crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError;
+    use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+    let prepared = PreparedPluginReferences::from_plugins(ep);
+    let bindings = match prepared.bind(ep) {
+        Ok(bindings) => bindings,
+        Err(error) => return vec![ResolvedRefsError::InvalidReference { error }],
+    };
+    let mut errors = Vec::new();
+    for entry in bindings
+        .request_entries()
+        .chain(bindings.response_filter_entries())
+        .chain(bindings.response_body_filter_entries())
+        .chain(bindings.response_entries())
+    {
+        if !entry.is_enabled() {
+            continue;
+        }
+        let references = match entry.references() {
+            Ok(references) => references,
+            Err(error) => {
+                errors.push(ResolvedRefsError::InvalidReference { error });
+                continue;
+            }
+        };
+        match entry.config() {
+            EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::KeyAuth(_)
+            | EdgionPlugin::JwtAuth(_)
+            | EdgionPlugin::HmacAuth(_) => {
+                for group in references.secret_groups() {
+                    errors.extend(
+                        group
+                            .references()
+                            .filter_map(|token| bound_secret_status_error(ctx, owner, token)),
+                    );
+                }
+            }
+            EdgionPlugin::Csrf(_) => {
+                errors.extend(
+                    references
+                        .csrf_secret()
+                        .and_then(|token| bound_secret_status_error(ctx, owner, token)),
+                );
+            }
+            EdgionPlugin::JweDecrypt(_) => {
+                errors.extend(
+                    references
+                        .jwe_secret()
+                        .and_then(|token| bound_secret_status_error(ctx, owner, token)),
+                );
+            }
+            EdgionPlugin::HeaderCertAuth(_) => {
+                errors.extend(
+                    references
+                        .header_ca_secrets()
+                        .filter_map(|token| bound_secret_status_error(ctx, owner, token)),
+                );
+            }
+            EdgionPlugin::OpenidConnect(_) => {
+                for token in references
+                    .oidc_client_secret()
+                    .into_iter()
+                    .chain(references.oidc_session_secret())
+                {
+                    errors.extend(bound_secret_status_error(ctx, owner, token));
+                }
+            }
+            EdgionPlugin::ForwardAuth(_) | EdgionPlugin::Guardrail(_) | EdgionPlugin::AiGuard(_) => {
+                errors.extend(super::super::super::credential::request_secret_errors_readonly(
+                    ctx,
+                    owner,
+                    references.request_secrets(),
+                ));
+            }
+            _ => {}
+        }
+        if matches!(
+            entry.config(),
+            EdgionPlugin::OpenidConnect(_)
+                | EdgionPlugin::LdapAuth(_)
+                | EdgionPlugin::ExtProc(_)
+                | EdgionPlugin::ForwardAuth(_)
+                | EdgionPlugin::Guardrail(_)
+                | EdgionPlugin::AiGuard(_)
+        ) {
+            if let Some(tls) = references.tls() {
+                for token in tls.ca_certificates() {
+                    errors.extend(super::super::super::credential::ca_refs::bound_ca_status_error(
+                        ctx, owner, token,
+                    ));
+                }
+                if let Some(token) = tls.client_certificate() {
+                    errors.extend(bound_secret_status_error(ctx, owner, token));
+                }
+            }
+        }
+    }
+    errors
 }
 
 /// Read a UTF-8 value from a Secret's `data` map. Returns the first non-empty
@@ -67,7 +162,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve_h
 /// `string_data == None`; only the `data` map needs to be inspected.
 ///
 /// Visible to the whole `handlers` module so `edgion_plugins.rs`'s status
-/// derivation (`resolve_wasm_refs`) can re-run the *exact* same usable-material
+/// derivation (`wasm::status_errors`) can re-run the *exact* same usable-material
 /// check the Wasm resolver used at `parse` time — sharing this one function is
 /// what guarantees status and the resolver never disagree.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn read_secret_utf8<'a>(

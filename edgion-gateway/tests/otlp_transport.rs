@@ -12,8 +12,8 @@ use bytes::Bytes;
 use edgion_common::dns::ResolverSpec;
 use edgion_gateway::link_sys::providers::otlp::OtlpLinkClient;
 use edgion_gateway::link_sys::LogMeta;
-use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
 use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::common::{SecretObjectReference, SecretSlot, TlsConfig};
 use edgion_resources::resources::link_sys::otlp::{OtlpAuth, OtlpClientConfig};
 use edgion_resources::resources::link_sys::LinkSys;
@@ -234,10 +234,11 @@ fn otlp_resource(key: &str, config: OtlpClientConfig) -> LinkSys {
     resource
 }
 fn build_client(key: &str, config: OtlpClientConfig) -> Arc<OtlpLinkClient> {
-    OtlpLinkClient::from_linksys(key, &otlp_resource(key, config)).expect("OTLP generation")
+    OtlpLinkClient::from_link_sys(Arc::new(otlp_resource(key, config))).expect("OTLP generation")
 }
 fn build_client_with_resolver(key: &str, config: OtlpClientConfig, resolver: ResolverSpec) -> Arc<OtlpLinkClient> {
-    OtlpLinkClient::from_linksys_with_resolver(key, &otlp_resource(key, config), resolver).expect("OTLP generation")
+    OtlpLinkClient::from_link_sys_with_resolver(Arc::new(otlp_resource(key, config)), resolver)
+        .expect("OTLP generation")
 }
 fn emit(client: &OtlpLinkClient, count: usize) {
     for _ in 0..count {
@@ -298,8 +299,8 @@ fn client_tls(ca: &str, identity: Option<(&str, &str)>) -> TlsConfig {
         ..Default::default()
     };
     tls.outbound.validation = Some(OutboundTlsValidation {
-        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-            group: String::new(),
+        ca_certificate_refs: Some(vec![CustomCACertificateRef {
+            group: Some(String::new()),
             kind: "Secret".into(),
             name: "ca".into(),
             namespace: None,
@@ -307,6 +308,11 @@ fn client_tls(ca: &str, identity: Option<(&str, &str)>) -> TlsConfig {
         ..Default::default()
     });
     tls.resolved_ca_certificates = Some(vec![Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some("ca".into()),
+            namespace: Some("transport".into()),
+            ..Default::default()
+        },
         data: Some(
             [(
                 String::from(edgion_resources::constants::secret_keys::tls::CA_CERT),
@@ -317,7 +323,18 @@ fn client_tls(ca: &str, identity: Option<(&str, &str)>) -> TlsConfig {
         ..Default::default()
     }]);
     if let Some((cert, key)) = identity {
+        tls.outbound.client_certificate_ref = Some(edgion_resources::resources::common::SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "client".into(),
+            namespace: None,
+        });
         tls.resolved_client_certificate = Some(Secret {
+            metadata: kube::core::ObjectMeta {
+                name: Some("client".into()),
+                namespace: Some("transport".into()),
+                ..Default::default()
+            },
             data: Some(
                 [
                     (String::from("tls.crt"), ByteString(cert.as_bytes().to_vec())),
@@ -993,4 +1010,85 @@ fn trace_logging_redacts_real_tls_and_hostile_grpc_failures() {
         "logging child failed: {}",
         String::from_utf8_lossy(&result.stderr)
     );
+}
+
+async fn captured_global_ca_case() {
+    use edgion_common::link_sys_core::outbound_tls::{
+        outbound_global_default, set_outbound_global_default, GlobalOutboundTlsSnapshot,
+    };
+    use edgion_resources::resources::common::OutboundTlsConfig;
+    struct Restore(Arc<GlobalOutboundTlsSnapshot>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_outbound_global_default(self.0.clone());
+        }
+    }
+    let _restore = Restore(outbound_global_default());
+    edgion_common::test_mode::init_integration_testing_mode(true);
+    let (ca, cert, key) = tls_material();
+    let collector = Collector::start(
+        Ipv4Addr::LOCALHOST,
+        Mode::Success,
+        Some(server_tls(&ca, &cert, &key, false)),
+    )
+    .await;
+    let material = client_tls(&ca, None);
+    let mut validation = material.outbound.validation.unwrap();
+    validation.ca_certificate_refs.as_mut().unwrap()[0].namespace = Some("transport".into());
+    let mut global: edgion_resources::EdgionGatewayConfig =
+        serde_json::from_value(serde_json::json!({"metadata":{"name":"captured"},"spec":{}})).unwrap();
+    global.spec.outbound_tls = Some(OutboundTlsConfig {
+        validation: Some(validation),
+        resolved_ca_certificates: material.resolved_ca_certificates,
+        ..Default::default()
+    });
+    set_outbound_global_default(Arc::new(GlobalOutboundTlsSnapshot::from_configs([Arc::new(global)])));
+    let actual = Arc::new(otlp_resource(
+        "transport/captured",
+        config(format!("https://localhost:{}", collector.address.port()), 1_000),
+    ));
+    let client = OtlpLinkClient::from_link_sys(actual.clone()).unwrap();
+    let bad: edgion_resources::EdgionGatewayConfig = serde_json::from_value(serde_json::json!({"metadata":{"name":"invalid","namespace":"transport"},"spec":{"outboundTls":{"verify":true}}})).unwrap();
+    set_outbound_global_default(Arc::new(GlobalOutboundTlsSnapshot::from_configs([Arc::new(bad)])));
+    assert!(
+        OtlpLinkClient::from_link_sys(actual).is_err(),
+        "new input must reject invalid inherited source"
+    );
+    client.init().await.unwrap();
+    emit(&client, 1);
+    client.shutdown().await.unwrap();
+    assert_eq!(collector.observations.records.load(Ordering::SeqCst), 1);
+    assert!(collector
+        .observations
+        .snis
+        .lock()
+        .iter()
+        .any(|name| name == "localhost"));
+    collector.shutdown().await;
+}
+
+#[test]
+fn real_https_delivery_retains_captured_global_ca_after_invalid_publication() {
+    const CHILD: &str = "EDGION_OTLP_CAPTURED_CA_CHILD";
+    const TEST: &str = "real_https_delivery_retains_captured_global_ca_after_invalid_publication";
+    if std::env::var(CHILD).as_deref() == Ok(TEST) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(captured_global_ca_case());
+        return;
+    }
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", TEST, "--nocapture"])
+        .env(CHILD, TEST)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        result.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(stdout.contains("1 passed; 0 failed"), "{stdout}");
 }

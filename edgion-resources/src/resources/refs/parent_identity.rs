@@ -1,6 +1,6 @@
 //! Canonical parent attachment and controller-owned status identities.
 
-use super::ParentReference;
+use crate::resources::common::ParentReference;
 use crate::resources::http_route::{RouteParentStatus, GATEWAY_API_GROUP};
 
 /// Borrowed attachment identity, independent of its representation in YAML.
@@ -52,5 +52,5 @@ impl RouteParentStatus {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/resources/common/parent_identity_test.rs"]
+#[path = "../../../tests/unit/resources/refs/parent_identity_test.rs"]
 mod tests;

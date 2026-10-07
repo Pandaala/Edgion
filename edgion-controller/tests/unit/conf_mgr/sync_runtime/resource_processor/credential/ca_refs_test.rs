@@ -14,6 +14,50 @@ use edgion_resources::ResourceKind;
 
 // ── Test fixture helpers ─────────────────────────────────────────────────
 
+#[test]
+fn configmap_material_preserves_fetched_identity_and_replaces_markers() {
+    let (_, mut configmap) = make_configmap("material-ns", "actual-name", "certificate");
+    configmap.metadata.uid = Some("cm-uid".into());
+    configmap.metadata.resource_version = Some("42".into());
+    configmap.metadata.annotations = Some(BTreeMap::from([
+        (CONTROLLER_CA_SOURCE.into(), "Secret".into()),
+        ("operator.example/annotation".into(), "ignored".into()),
+    ]));
+    let material = configmap_ca_material(&configmap).unwrap();
+    assert_eq!(material.metadata.name, configmap.metadata.name);
+    assert_eq!(material.metadata.namespace, configmap.metadata.namespace);
+    assert_eq!(material.metadata.uid, configmap.metadata.uid);
+    assert_eq!(material.metadata.resource_version, configmap.metadata.resource_version);
+    assert_eq!(
+        material.metadata.annotations,
+        Some(BTreeMap::from([(
+            CONTROLLER_CA_SOURCE.into(),
+            CONTROLLER_CA_SOURCE_CONFIG_MAP.into()
+        ),]))
+    );
+    assert_eq!(material.data.unwrap()[CA_CERT].0, b"certificate");
+    for value in [None, Some(""), Some(" \n\t")] {
+        configmap.data = value.map(|value| BTreeMap::from([(CA_CERT.into(), value.into())]));
+        assert!(configmap_ca_material(&configmap).is_none());
+    }
+}
+
+#[test]
+fn ordinary_secret_cannot_supply_configmap_source_marker() {
+    for value in ["ConfigMap", "Secret", "unknown", ""] {
+        let (_, mut secret) = make_secret("material-ns", "same-name", b"certificate");
+        secret.metadata.annotations = Some(BTreeMap::from([
+            (CONTROLLER_CA_SOURCE.into(), value.into()),
+            ("operator.example/annotation".into(), "preserved".into()),
+        ]));
+        let material = ordinary_secret_material(secret);
+        let annotations = material.metadata.annotations.unwrap();
+        assert!(!annotations.contains_key(CONTROLLER_CA_SOURCE));
+        assert_eq!(annotations["operator.example/annotation"], "preserved");
+        assert_eq!(material.data.unwrap()[CA_CERT].0, b"certificate");
+    }
+}
+
 fn make_ctx(
     secrets: HashMap<String, Secret>,
     configmaps: HashMap<String, ConfigMap>,
@@ -55,9 +99,9 @@ fn make_configmap(namespace: &str, name: &str, ca_pem: &str) -> (String, ConfigM
     (format!("{}/{}", namespace, name), cm)
 }
 
-fn secret_ref(kind: &str, name: &str, namespace: Option<&str>) -> BackendTLSPolicyCACertificateRef {
-    BackendTLSPolicyCACertificateRef {
-        group: String::new(),
+fn secret_ref(kind: &str, name: &str, namespace: Option<&str>) -> CustomCACertificateRef {
+    CustomCACertificateRef {
+        group: Some(String::new()),
         kind: kind.to_string(),
         name: name.to_string(),
         namespace: namespace.map(str::to_string),

@@ -5,8 +5,8 @@ use edgion_common::ext_proc::proto::{
     processing_request, BodyResponse, HeadersResponse, HttpBody, HttpHeaders, ImmediateResponse,
 };
 use edgion_resources::plugin_configs::GrpcServiceConfig;
-use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
 use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
 
 fn install_test_crypto_provider() {
@@ -179,10 +179,10 @@ fn supported_effective_tls_policies_build_without_global_state_changes() {
     let mut local = OutboundTlsLocal {
         verify: Some(true),
         validation: Some(OutboundTlsValidation {
-            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+            ca_certificate_refs: Some(vec![CustomCACertificateRef {
                 kind: "Secret".to_string(),
                 name: "processor-ca".to_string(),
-                group: String::new(),
+                group: Some(String::new()),
                 namespace: None,
             }]),
             ..Default::default()
@@ -372,12 +372,16 @@ async fn inherited_tls_hot_change_changes_target_runtime_identity() {
     let _guard = GLOBAL_TLS_TEST.lock();
     install_test_crypto_provider();
     let original = outbound_global_default();
-    set_outbound_global_default(OutboundTlsConfig::default());
+    set_outbound_global_default(edgion_common::link_sys_core::outbound_tls::test_util::snapshot(
+        OutboundTlsConfig::default(),
+    ));
     let inherited_verified = ExtProcClient::new(&tls_cfg()).unwrap();
-    set_outbound_global_default(OutboundTlsConfig {
-        verify: false,
-        ..Default::default()
-    });
+    set_outbound_global_default(edgion_common::link_sys_core::outbound_tls::test_util::snapshot(
+        OutboundTlsConfig {
+            verify: false,
+            ..Default::default()
+        },
+    ));
     let inherited_unverified = ExtProcClient::new(&tls_cfg()).unwrap();
     set_outbound_global_default(original);
     assert!(!Arc::ptr_eq(&inherited_verified.runtime, &inherited_unverified.runtime));
@@ -870,10 +874,10 @@ async fn extproc_custom_inline_ca_builds() {
     // Declare a caCertificateRef so the resolver picks up the custom CA.
     cfg.grpc_service.tls.outbound = OutboundTlsLocal {
         validation: Some(OutboundTlsValidation {
-            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+            ca_certificate_refs: Some(vec![CustomCACertificateRef {
                 kind: "Secret".to_string(),
                 name: "test-ca-secret".to_string(),
-                group: String::new(),
+                group: Some(String::new()),
                 namespace: None,
             }]),
             ..Default::default()

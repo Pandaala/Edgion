@@ -1,11 +1,25 @@
-use super::build_kafka_tls_config;
+use super::*;
 use edgion_resources::constants::secret_keys::tls as tls_keys;
-use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
 use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
+
+fn build_kafka_tls_config(tls: &TlsConfig) -> Result<rustls::ClientConfig> {
+    let owner = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"kafka","namespace":"default"},
+        "spec":{"type":"kafka","config":{"brokers":["kafka.example:9093"],"tls":tls}}
+    }))
+    .unwrap();
+    let prepared = PreparedLinkSysTls::with_snapshot(
+        Arc::new(owner),
+        Arc::new(edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot::from_configs([])),
+    )?;
+    edgion_common::link_sys_core::tls::build_kafka_rustls_client_config(&prepared)?
+        .ok_or_else(|| anyhow::anyhow!("test requires an enabled connector"))
+}
 
 fn install_provider() {
     static ONCE: std::sync::Once = std::sync::Once::new();
@@ -26,6 +40,18 @@ fn secret(data: &[(&str, &[u8])]) -> Secret {
         .map(|(k, v)| (k.to_string(), ByteString(v.to_vec())))
         .collect::<BTreeMap<_, _>>();
     Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some(
+                if data.iter().any(|(key, _)| *key == tls_keys::CA_CERT) {
+                    "my-ca"
+                } else {
+                    "client"
+                }
+                .into(),
+            ),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(m),
         type_: Some("kubernetes.io/tls".to_string()),
         ..Default::default()
@@ -38,8 +64,8 @@ fn ca_ref(name: &str) -> OutboundTlsLocal {
         // process-global outbound default that other tests may mutate.
         verify: Some(true),
         validation: Some(OutboundTlsValidation {
-            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                group: String::new(),
+            ca_certificate_refs: Some(vec![CustomCACertificateRef {
+                group: Some(String::new()),
                 kind: "Secret".into(),
                 name: name.into(),
                 namespace: None,
@@ -50,7 +76,15 @@ fn ca_ref(name: &str) -> OutboundTlsLocal {
     }
 }
 
-fn tls_with(outbound: OutboundTlsLocal, ca: Option<Vec<Secret>>, client: Option<Secret>) -> TlsConfig {
+fn tls_with(mut outbound: OutboundTlsLocal, ca: Option<Vec<Secret>>, client: Option<Secret>) -> TlsConfig {
+    if client.is_some() {
+        outbound.client_certificate_ref = Some(edgion_resources::resources::common::SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "client".into(),
+            namespace: None,
+        });
+    }
     TlsConfig {
         enabled: true,
         outbound,

@@ -42,36 +42,49 @@ impl EtcdClientConfig {
     /// Canonical pure validation, shared by ingest and runtime construction.
     /// Diagnostics identify fields, never endpoint text or credential material.
     pub fn validation_errors(&self) -> Vec<String> {
-        let mut errors = Vec::new();
-        if self.endpoints.is_empty() {
-            errors.push("Etcd configuration has no endpoints".to_owned());
-        } else if self.endpoints.len() > MAX_ETCD_ENDPOINTS {
-            errors.push(format!(
-                "Etcd endpoints must contain at most {MAX_ETCD_ENDPOINTS} entries"
-            ));
-        }
-        for (index, endpoint) in self.endpoints.iter().enumerate() {
-            if let Err(reason) = normalize_etcd_endpoint(endpoint) {
-                errors.push(format!("Etcd endpoints[{index}]: {reason}"));
-            }
-        }
-        if let Some(timeout) = &self.timeout {
-            if timeout.dial == Some(0) {
-                errors.push("Etcd timeout.dial must be positive".to_owned());
-            }
-            if timeout.request == Some(0) {
-                errors.push("Etcd timeout.request must be positive".to_owned());
-            }
-        }
-        if let Some(keep_alive) = &self.keep_alive {
-            match (keep_alive.time, keep_alive.timeout) {
-                (None, None) if keep_alive.permit_without_stream.is_none() => {},
-                (Some(time), Some(timeout)) if (1..=86_400).contains(&time) && (1..=86_400).contains(&timeout) => {},
-                _ => errors.push("Etcd keepAlive requires time and timeout in 1..=86400 seconds; permitWithoutStream requires the pair".to_owned()),
-            }
-        }
-        errors
+        validate_etcd_connection_fields(&self.endpoints, self.timeout.as_ref(), self.keep_alive.as_ref())
     }
+}
+
+/// Canonical connection validation for resource and trusted bootstrap inputs.
+/// This validates scalar connection fields and establishes no reference authority.
+pub fn validate_etcd_connection_fields(
+    endpoints: &[String],
+    timeout: Option<&EtcdTimeout>,
+    keep_alive: Option<&EtcdKeepAlive>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if endpoints.is_empty() {
+        errors.push("Etcd configuration has no endpoints".to_owned());
+    } else if endpoints.len() > MAX_ETCD_ENDPOINTS {
+        errors.push(format!(
+            "Etcd endpoints must contain at most {MAX_ETCD_ENDPOINTS} entries"
+        ));
+    }
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        if let Err(reason) = normalize_etcd_endpoint(endpoint) {
+            errors.push(format!("Etcd endpoints[{index}]: {reason}"));
+        }
+    }
+    if let Some(timeout) = timeout {
+        if timeout.dial == Some(0) {
+            errors.push("Etcd timeout.dial must be positive".to_owned());
+        }
+        if timeout.request == Some(0) {
+            errors.push("Etcd timeout.request must be positive".to_owned());
+        }
+    }
+    if let Some(keep_alive) = keep_alive {
+        match (keep_alive.time, keep_alive.timeout) {
+            (None, None) if keep_alive.permit_without_stream.is_none() => {}
+            (Some(time), Some(timeout)) if (1..=86_400).contains(&time) && (1..=86_400).contains(&timeout) => {}
+            _ => errors.push(
+                "Etcd keepAlive requires time and timeout in 1..=86400 seconds; permitWithoutStream requires the pair"
+                    .to_owned(),
+            ),
+        }
+    }
+    errors
 }
 
 /// Validate and normalize an authority-only client URL. Does not resolve DNS or

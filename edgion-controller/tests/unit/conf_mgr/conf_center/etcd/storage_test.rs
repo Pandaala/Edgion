@@ -1,13 +1,12 @@
 use super::*;
 use crate::conf_mgr::conf_center::etcd::leadership_gate::{LeaderState, LeadershipGate};
-use edgion_common::link_sys_core::credential::CredentialState;
-use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
+use edgion_common::link_sys_core::providers::etcd::EtcdBootstrapConfig;
 use std::time::Duration;
 
 /// Build + connect an `EtcdLinkClient` against a local etcd, mirroring the
 /// `leader_election.rs` test helper.
 async fn test_link_client() -> EtcdLinkClient {
-    let config = EtcdClientConfig {
+    let config = EtcdBootstrapConfig {
         endpoints: vec!["http://localhost:2379".to_string()],
         auth: None,
         tls: None,
@@ -15,8 +14,8 @@ async fn test_link_client() -> EtcdLinkClient {
         keep_alive: None,
         namespace: None,
     };
-    let client = EtcdLinkClient::from_config("default/etcd-storage-test", &config, &CredentialState::NotRequired)
-        .expect("from_config must succeed");
+    let client = EtcdLinkClient::from_bootstrap("default/etcd-storage-test", config)
+        .expect("bootstrap construction must succeed");
     client.init().await.expect("etcd init must connect");
     client
 }

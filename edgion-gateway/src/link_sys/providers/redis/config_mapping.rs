@@ -10,10 +10,7 @@ use fred::types::Builder;
 
 use crate::link_sys::credential::CredentialState;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
-use edgion_resources::resources::common::TlsConfig;
-use edgion_resources::resources::link_sys::redis::{
-    RedisClientConfig, RedisTopologyMode, RedisTransport, REDIS_DEFAULT_POOL_SIZE,
-};
+use edgion_resources::resources::link_sys::redis::{RedisClientConfig, RedisTopologyMode, REDIS_DEFAULT_POOL_SIZE};
 
 // ============================================================================
 // Config mapping (CRD → fred Config)
@@ -106,7 +103,11 @@ fn build_server_config(crd: &RedisClientConfig) -> Result<ServerConfig> {
 /// - Connection timeout + TCP settings
 /// - Command timeout (performance config)
 /// - TLS (when required by a `rediss://` endpoint or explicitly enabled)
-pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Builder, usize)> {
+pub(super) fn build_fred_pool(
+    crd: &RedisClientConfig,
+    config: Config,
+    connector: Option<fred::types::config::TlsConnector>,
+) -> Result<(Builder, usize)> {
     let mut builder = Builder::from_config(config);
 
     // Reconnect indefinitely so a published client can recover, but do not
@@ -145,43 +146,7 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
         perf.default_command_timeout = command_timeout;
     });
 
-    let explicit_tls = crd.tls.as_ref().is_some_and(|tls| tls.enabled);
-    let scheme_requires_tls = if explicit_tls {
-        false
-    } else {
-        implicit_tls_required(crd)?
-    };
-    if scheme_requires_tls || explicit_tls {
-        let default_tls = TlsConfig::default();
-        // A disabled TLS block cannot customize an implicitly secure rediss://
-        // transport. Only an explicitly enabled block contributes CA, mTLS,
-        // and verification policy; implicit TLS uses the library defaults.
-        let tls = crd.tls.as_ref().filter(|tls| tls.enabled).unwrap_or(&default_tls);
-
-        // fred's rustls connector always verifies; reject verify=false up front
-        // (provider_can_disable=false → rejected even outside production).
-        crate::link_sys::outbound_tls::resolve_outbound_tls(
-            &tls.outbound,
-            tls.resolved_ca_certificates.as_deref(),
-            tls.resolved_client_certificate.as_ref(),
-            false,
-            "Redis",
-        )
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Redis TLS configuration error: {e:?}. fred does not support skip-verify; \
-                 use a proper CA certificate or connect without TLS."
-            )
-        })?;
-        // Prefer a custom rustls `ClientConfig` built from CRD / Secret
-        // material (private CA, client mTLS). Falls back to fred's default
-        // rustls connector (system CA roots, no client auth) when the CRD
-        // carries no TLS material at all.
-        let tls_connector = match crate::link_sys::tls::build_rustls_client_config(tls)? {
-            Some(client_config) => fred::types::config::TlsConnector::from(client_config),
-            None => fred::types::config::TlsConnector::default_rustls()
-                .map_err(|e| anyhow::anyhow!("Failed to create default rustls TLS config: {:?}", e))?,
-        };
+    if let Some(tls_connector) = connector {
         builder.with_config(|config| {
             config.tls = Some(tls_connector.into());
         });
@@ -194,24 +159,6 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
         .unwrap_or(REDIS_DEFAULT_POOL_SIZE) as usize;
 
     Ok((builder, pool_size))
-}
-
-// ============================================================================
-// URL / address parsing helpers
-// ============================================================================
-
-/// Determine whether endpoint schemes require implicit TLS.
-///
-/// fred applies one TLS connector to the whole client configuration, so a
-/// topology cannot safely combine secure and plaintext active endpoints unless
-/// the operator explicitly enables TLS for the complete topology.
-fn implicit_tls_required(crd: &RedisClientConfig) -> Result<bool> {
-    let endpoints = crd
-        .parsed_active_endpoints()
-        .map_err(|errors| anyhow::anyhow!(errors.join("; ")))?;
-    Ok(endpoints
-        .first()
-        .is_some_and(|endpoint| endpoint.transport == RedisTransport::Tls))
 }
 
 // ============================================================================

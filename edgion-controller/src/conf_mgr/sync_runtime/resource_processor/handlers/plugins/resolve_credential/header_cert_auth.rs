@@ -1,83 +1,62 @@
-//! HeaderCertAuth CA secret resolution.
+//! HeaderCertAuth CA resolution from actual active owning fields.
 
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
-use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
-use edgion_resources::prelude_resources::EdgionPlugins;
-use edgion_resources::resources::edgion_plugins::plugin_configs::CertSourceMode;
-use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_bound_secret, BoundFetchOutcome};
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
+use edgion_resources::resources::edgion_plugins::{CertSourceMode, EdgionPlugin};
+use edgion_resources::resources::refs::plugin_fields::{BoundPluginEntryMut, PreparedPluginReferences};
+use edgion_resources::EdgionPlugins;
 
-/// Resolve HeaderCertAuth CA secrets and register secret references.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
+    prepared: &PreparedPluginReferences,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    if let Some(ref mut plugins) = ep.spec.request_plugins {
-        for entry in plugins.iter_mut() {
-            if let EdgionPlugin::HeaderCertAuth(ref mut config) = entry.plugin {
-                config.resolved_ca_secrets = None;
+    let Ok(mut bindings) = prepared.bind_mut(ep) else {
+        return;
+    };
+    for entry in bindings.request_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_body_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+}
 
-                if config.mode != CertSourceMode::Header {
-                    continue;
-                }
-                if config.ca_secret_refs.is_empty() {
-                    continue;
-                }
-
-                let mut resolved = Vec::new();
-                for sor in &config.ca_secret_refs {
-                    let secret_key =
-                        format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
-                    let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", sor) {
-                        FetchOutcome::Ok(s) => s,
-                        FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
-                            tracing::info!(
-                                edgion_plugins = %resource_ref.key(),
-                                secret_key = %secret_key,
-                                "HeaderCertAuth: CA secret not found yet, will be reprocessed when Secret arrives"
-                            );
-                            continue;
-                        }
-                        FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
-                            ref from_ns,
-                            ref to_ns,
-                            ref secret_name,
-                        }) => {
-                            tracing::warn!(
-                                edgion_plugins = %resource_ref.key(),
-                                from_ns = %from_ns,
-                                to_ns = %to_ns,
-                                secret_name = %secret_name,
-                                "HeaderCertAuth: cross-namespace CA Secret reference denied (ReferenceGrant missing)"
-                            );
-                            continue;
-                        }
-                    };
-
-                    // SecretHandler::parse normalizes stringData into data, so only
-                    // `secret.data` needs to be inspected here.
-                    let has_ca = secret.data.as_ref().is_some_and(|data| data.contains_key("ca.crt"));
-                    if !has_ca {
-                        tracing::warn!(
-                            edgion_plugins = %resource_ref.key(),
-                            secret_key = %secret_key,
-                            "HeaderCertAuth: Secret missing ca.crt"
-                        );
-                        continue;
-                    }
-
-                    resolved.push(secret);
-                }
-
-                if !resolved.is_empty() {
-                    tracing::info!(
-                        edgion_plugins = %resource_ref.key(),
-                        ca_secret_count = resolved.len(),
-                        "HeaderCertAuth: Resolved CA secrets"
-                    );
-                    config.resolved_ca_secrets = Some(resolved);
-                }
+fn resolve_entry(mut entry: BoundPluginEntryMut<'_>, owner: &ResourceRef, ctx: &HandlerContext) {
+    let EdgionPlugin::HeaderCertAuth(config) = entry.config_mut() else {
+        return;
+    };
+    config.resolved_ca_secrets = None;
+    if config.mode != CertSourceMode::Header || !entry.is_enabled() {
+        return;
+    }
+    let mut resolved = Vec::new();
+    {
+        let Ok(references) = entry.references() else {
+            return;
+        };
+        for token in references.header_ca_secrets() {
+            let BoundFetchOutcome::Ok(authorized) = fetch_bound_secret(ctx, owner, token) else {
+                continue;
+            };
+            if authorized
+                .secret
+                .data
+                .as_ref()
+                .is_some_and(|data| data.contains_key("ca.crt"))
+            {
+                resolved.push(authorized.secret);
             }
         }
+    }
+    if let EdgionPlugin::HeaderCertAuth(config) = entry.config_mut() {
+        config.resolved_ca_secrets = (!resolved.is_empty()).then_some(resolved);
     }
 }

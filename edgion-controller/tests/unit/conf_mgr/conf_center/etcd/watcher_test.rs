@@ -1,13 +1,16 @@
 use super::*;
-use edgion_common::link_sys_core::credential::CredentialState;
-use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
+use edgion_common::link_sys_core::providers::etcd::EtcdBootstrapConfig;
 
 fn watcher_without_connection() -> EtcdWatcher {
-    let config: EtcdClientConfig = serde_json::from_value(serde_json::json!({
-        "endpoints": ["http://127.0.0.1:2379"]
-    }))
-    .unwrap();
-    let client = EtcdLinkClient::from_config("test/retention", &config, &CredentialState::NotRequired).unwrap();
+    let config = EtcdBootstrapConfig {
+        endpoints: vec!["http://127.0.0.1:2379".into()],
+        auth: None,
+        tls: None,
+        timeout: None,
+        keep_alive: None,
+        namespace: None,
+    };
+    let client = EtcdLinkClient::from_bootstrap("test/retention", config).unwrap();
     EtcdWatcher::new(Arc::new(client), "/edgion")
 }
 

@@ -4,6 +4,31 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 
 use crate::link_sys::credential::{CredentialState, InvalidReason, ResolvedCredential};
 use edgion_resources::credentials::materials::{BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial};
+use edgion_resources::resources::link_sys::{LinkSys, LinkSysSpec};
+use std::sync::Arc;
+
+// Auth-shape fixtures exercise the shared pure header helper; their transport
+// is built from an actual named TLS owner through the canonical owning factory.
+fn build_es_client(
+    crd: &ElasticsearchClientConfig,
+    auth: &CredentialState<ResolvedCredential>,
+) -> Result<(Client, HeaderMap)> {
+    let headers = es_default_headers(crd, auth)?;
+    let mut owner = LinkSys::new(
+        "es-mapping",
+        LinkSysSpec {
+            config: SystemConfig::Elasticsearch(crd.clone()),
+            current_status: None,
+            unknown_fields: Vec::new(),
+        },
+    );
+    owner.metadata.namespace = Some("mapping".into());
+    let prepared = PreparedLinkSysTls::from_link_sys(Arc::new(owner))?;
+    let client = prepared.with_tls_selection(|proof, defaults| {
+        build_outbound_client_with_tls_selection_and_headers(es_client_config(crd), proof, defaults, headers.clone())
+    })?;
+    Ok((client, headers))
+}
 
 /// Shorthand: `NotRequired` state.
 fn no_auth() -> CredentialState<ResolvedCredential> {

@@ -17,6 +17,11 @@ pub const MAX_DESCRIPTOR_BYTES: usize = 512 * 1024;
 pub const MAX_JSON_BYTES: usize = 1024 * 1024;
 pub const MAX_PROTO_RESPONSE_BYTES: usize = 512 * 1024;
 
+/// Preserve the descriptor field's existing exact binaryData selector bounds.
+pub(crate) fn valid_descriptor_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 253
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum GrpcDescriptorSource {
@@ -263,7 +268,7 @@ impl PluginValidation for GrpcJsonTranscoderConfig {
             return Some(e);
         }
         if let GrpcDescriptorSource::ConfigMapRef { name, key } = &self.descriptor {
-            if name.is_empty() || key.is_empty() || name.len() > 253 || key.len() > 253 {
+            if name.is_empty() || name.len() > 253 || !valid_descriptor_key(key) {
                 return Some("invalid descriptor ConfigMap reference".into());
             }
             // Ingest validation precedes store resolution. Gateway compilation

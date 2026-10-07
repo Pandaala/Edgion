@@ -15,7 +15,6 @@ use etcd_client::{
 };
 
 use super::client::EtcdLinkClient;
-use super::config_mapping::health_probe_timeout;
 use crate::link_sys_core::LinkSysHealth;
 
 /// Raw view of an etcd KeyValue exposing the fields leader election needs.
@@ -538,7 +537,7 @@ impl EtcdLinkClient {
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
 
-        let d = health_probe_timeout(self.config());
+        let d = self.probe_timeout();
         match tokio::time::timeout(d, client.status()).await {
             Ok(Ok(_)) => Ok(start.elapsed().as_millis() as u64),
             Ok(Err(e)) => Err(anyhow::anyhow!("Etcd STATUS: {:?}", e)),

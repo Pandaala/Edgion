@@ -245,7 +245,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             .secret_store
             .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
         {
-            tls.spec.secret = Some(secret);
+            tls.spec.secret = Some(super::super::credential::ca_refs::ordinary_secret_material(secret));
             tracing::debug!(
                 edgion_tls = %resource_ref.key(),
                 secret_key = %secret_key,
@@ -296,7 +296,8 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                     .secret_store
                     .get(ca_ns.map(|s| s.as_str()), &ca_secret_ref.name)
                 {
-                    client_auth.ca_secret = Some(ca_secret);
+                    client_auth.ca_secret =
+                        Some(super::super::credential::ca_refs::ordinary_secret_material(ca_secret));
                     tracing::debug!(
                         edgion_tls = %resource_ref.key(),
                         ca_secret_key = %ca_secret_key,

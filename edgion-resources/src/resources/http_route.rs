@@ -636,14 +636,8 @@ pub fn logical_backend_slot_identities(
     let mut occurrences: HashMap<(String, String, String, String, Option<String>), u16> = HashMap::new();
     refs.iter()
         .map(|backend| {
-            let group = match backend.group.as_deref() {
-                None | Some("") => "core".to_string(),
-                Some(group) => group.to_string(),
-            };
-            let kind = match backend.kind.as_deref() {
-                None | Some("") => "Service".to_string(),
-                Some(kind) => kind.to_string(),
-            };
+            let group = super::refs::targets::backend_group(backend.group.as_deref()).to_string();
+            let kind = super::refs::targets::backend_kind(backend.kind.as_deref()).to_string();
             let namespace = backend.namespace.as_deref().unwrap_or(route_namespace).to_string();
             let tuple = (
                 group.clone(),
@@ -679,7 +673,7 @@ mod logical_slot_identity_tests;
 pub enum HTTPBackendRefKind {
     /// A Kubernetes Service backend (Gateway API default or an Edgion Service-family
     /// kind such as `ServiceExternalName` / `ServiceClusterIp`). Peer selection still
-    /// uses the concrete `kind` string via `ServiceBackendKind::from_kind`.
+    /// Transport selection follows the actual Service and its endpoints.
     Service,
     /// An Edgion AI provider-service resource.
     EdgionBackend,
@@ -689,27 +683,12 @@ pub enum HTTPBackendRefKind {
     Unsupported,
 }
 
-/// True when `kind` is the Gateway API Service default or an Edgion Service-family
-/// extension that still resolves through the Service store / peer path.
-fn is_service_family_kind(kind: Option<&str>) -> bool {
-    matches!(
-        kind,
-        None | Some("")
-            | Some("Service")
-            | Some("ServiceClusterIp")
-            | Some("ServiceImport")
-            | Some("ServiceExternalName")
-            | Some("ServiceEndpointSlice")
-            | Some("EndpointSlice")
-    )
-}
-
 impl HTTPBackendRef {
     /// Classify this backendRef using Gateway API defaults and Edgion's exact
     /// extension groups/kinds.
     pub fn backend_kind(&self) -> HTTPBackendRefKind {
         match (self.group.as_deref(), self.kind.as_deref()) {
-            (None | Some("") | Some("core"), kind) if is_service_family_kind(kind) => HTTPBackendRefKind::Service,
+            (group, kind) if super::refs::targets::is_standard_service(group, kind) => HTTPBackendRefKind::Service,
             (Some(EDGION_API_GROUP), Some("EdgionBackend")) => HTTPBackendRefKind::EdgionBackend,
             (Some(GATEWAY_API_GROUP), Some("HTTPRoute")) => HTTPBackendRefKind::RouteDelegation,
             _ => HTTPBackendRefKind::Unsupported,
@@ -1387,8 +1366,8 @@ impl HTTPCORSFilter {
 #[serde(rename_all = "camelCase")]
 pub struct BackendObjectReference {
     /// Group is the group of the referent
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub group: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 
     /// Kind is kind of the referent (defaults to "Service")
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1416,7 +1395,7 @@ pub struct BackendObjectReference {
 impl BackendObjectReference {
     /// Mirror endpoint selection supports only core Service references.
     pub fn is_service(&self) -> bool {
-        self.group.is_empty() && self.kind.as_deref().unwrap_or("Service") == "Service"
+        super::refs::targets::is_standard_service(self.group.as_deref(), self.kind.as_deref())
     }
 }
 
@@ -1436,8 +1415,7 @@ pub struct Fraction {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalObjectReference {
-    /// Group is the group of the referent (defaults to empty string for core API group)
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// Required group of the referent. An explicit empty group denotes core.
     pub group: String,
 
     /// Kind is kind of the referent

@@ -37,6 +37,38 @@ so pre-escaping it would double-escape. Outbound JSON escapes substitutions only
 The budget limits rendered bytes, not source allocations or allocator rounding.
 No generic Secret lookup, new schema limit, tracing or metric is warranted.
 
+## Owning resource-reference binding
+
+Controller Secret acquisition now consumes opaque `TemplateSecretReference`
+loans from actual ForwardAuth, Guardrail, AiGuard evaluator and LinkSys Webhook
+request fields. Admission, legacy collection and binding share the private
+OutboundRequestSpec position walker. It covers path/method, Template custom
+args/headers/cookies and JSON/raw/form bodies; literal Value and origin fields
+are excluded. Snapshots retain positions and ordered SecretRef descriptors,
+never template literal bodies or resolved values. Literal-only and non-Secret
+variable changes preserve reference authority; key, order, container, owner,
+activity and placement drift invalidate it.
+
+The canonical `parse_secret_ref` grammar remains lexical: split the last colon
+and first slash and require explicit nonempty namespace, name and data key.
+Only this private fixed-core-Secret adapter retains that grammar at preparation,
+loan and frozen-query boundaries. Ordinary object references and actual resource
+owners retain strict Kubernetes identity validation. Template target namespaces
+never default to the owner namespace. Authorization and dependency registration
+use the actual owner and exact same canonical GrantQuery as other bound fields.
+Malformed compiled SecretRef segments report fixed DecodeError and create no
+edge/read. Whole-template compiler failures contribute no Secret descriptors;
+Accepted validation diagnoses those failures separately.
+
+One managed HTTP resolver replaces the three raw-name plugin loops and clears
+template/TLS materials in all four stage arrays before activity gates. Templates
+remain active independently of disabled local TLS. ForwardAuth now shares local
+CA/client acquisition and readonly template/TLS status with Guardrail/AiGuard.
+Readonly status registers no dependencies and preserves present-empty values,
+string_data fallback and non-UTF-8/missing-key errors. This implementation is one
+slice of the open resource-reference contract task; complete transport/global
+TLS preparation and final task verification remain separate work.
+
 ## Deep-review corrections
 
 A second independent review found two regressions in the uncommitted migration:

@@ -2,11 +2,10 @@
 //!
 //! Handles BackendTLSPolicy resources with Gateway API standard status management.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-use k8s_openapi::ByteString;
 
 use crate::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::make_target_conflict_key;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::backend_capability::classify_raw_backend;
@@ -24,7 +23,7 @@ use edgion_resources::resources::backend_tls_policy::{
     parse_client_certificate_option, BackendTLSPolicyCACertificateRef, BackendTLSPolicySpec, BackendTLSPolicyStatus,
     BackendTLSPolicyTargetRef,
 };
-use edgion_resources::resources::common::{is_core_api_group, ParentReference, PolicyAncestorStatus};
+use edgion_resources::resources::common::{ParentReference, PolicyAncestorStatus};
 use edgion_resources::resources::edgion_backend_traffic_policy::{
     PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
 };
@@ -168,17 +167,7 @@ impl BackendTlsPolicyHandler {
         if let Some(refs) = &validation.ca_certificate_refs {
             let mut seen_refs = BTreeSet::new();
             for ca_ref in refs {
-                if ca_ref.namespace.is_some() {
-                    errors.push(format!(
-                        "caCertificateRef {}/{} must not specify namespace; BackendTLSPolicy references are same-namespace",
-                        ca_ref.kind, ca_ref.name
-                    ));
-                }
-                let canonical_group = if is_core_api_group(&ca_ref.group) {
-                    ""
-                } else {
-                    ca_ref.group.as_str()
-                };
+                let canonical_group = ca_ref.group.as_str();
                 if !seen_refs.insert((canonical_group, ca_ref.kind.as_str(), ca_ref.name.as_str())) {
                     errors.push(format!(
                         "duplicate caCertificateRef {}/{} is not allowed",
@@ -255,7 +244,6 @@ impl BackendTlsPolicyHandler {
                 !refs.is_empty()
                     && refs.iter().all(|ca_ref| {
                         (Self::is_secret_ref(ca_ref) || Self::is_configmap_ref(ca_ref))
-                            && ca_ref.namespace.is_none()
                             && Self::is_ca_resolved(spec, &ca_ref.name)
                     })
             });
@@ -341,9 +329,6 @@ impl BackendTlsPolicyHandler {
 
         if let Some(refs) = &btp.spec.validation.ca_certificate_refs {
             for ca_ref in refs {
-                if ca_ref.namespace.is_some() {
-                    continue;
-                }
                 if Self::is_secret_ref(ca_ref) {
                     let secret_key = format_secret_key(policy_ns, &ca_ref.name);
                     ctx.secret_ref_manager()
@@ -354,7 +339,7 @@ impl BackendTlsPolicyHandler {
                         .secret_store
                         .get(policy_ns.map(|s| s.as_str()), &ca_ref.name)
                     {
-                        resolved_ca_secrets.push(secret);
+                        resolved_ca_secrets.push(super::super::credential::ca_refs::ordinary_secret_material(secret));
                     } else {
                         tracing::info!(
                             policy = %resource_ref.key(),
@@ -371,25 +356,8 @@ impl BackendTlsPolicyHandler {
                         .configmap_store
                         .get(policy_ns.map(|s| s.as_str()), &ca_ref.name)
                     {
-                        let ca_pem = cm
-                            .data
-                            .as_ref()
-                            .and_then(|d| d.get(CA_CERT))
-                            .filter(|v| !v.trim().is_empty());
-
-                        if let Some(ca_pem) = ca_pem {
-                            let mut secret_data = BTreeMap::new();
-                            secret_data.insert(CA_CERT.to_string(), ByteString(ca_pem.as_bytes().to_vec()));
-                            let synthetic_secret = k8s_openapi::api::core::v1::Secret {
-                                metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-                                    name: Some(ca_ref.name.clone()),
-                                    namespace: policy_ns.cloned(),
-                                    ..Default::default()
-                                },
-                                data: Some(secret_data),
-                                ..Default::default()
-                            };
-                            resolved_ca_secrets.push(synthetic_secret);
+                        if let Some(material) = super::super::credential::ca_refs::configmap_ca_material(&cm) {
+                            resolved_ca_secrets.push(material);
                         }
                     } else {
                         tracing::info!(
@@ -418,7 +386,8 @@ impl BackendTlsPolicyHandler {
                     .secret_store
                     .get(client_ns.map(|s| s.as_str()), &client_ref.name)
                 {
-                    btp.spec.resolved_client_certificate = Some(secret);
+                    btp.spec.resolved_client_certificate =
+                        Some(super::super::credential::ca_refs::ordinary_secret_material(secret));
                 } else {
                     tracing::info!(
                         policy = %resource_ref.key(),
@@ -814,12 +783,12 @@ impl BackendTlsPolicyHandler {
 
     #[inline]
     fn is_secret_ref(ca_ref: &BackendTLSPolicyCACertificateRef) -> bool {
-        is_core_api_group(&ca_ref.group) && ca_ref.kind == "Secret"
+        ca_ref.group.is_empty() && ca_ref.kind == "Secret"
     }
 
     #[inline]
     fn is_configmap_ref(ca_ref: &BackendTLSPolicyCACertificateRef) -> bool {
-        is_core_api_group(&ca_ref.group) && ca_ref.kind == "ConfigMap"
+        ca_ref.group.is_empty() && ca_ref.kind == "ConfigMap"
     }
 
     #[inline]

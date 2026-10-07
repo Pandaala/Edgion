@@ -10,7 +10,10 @@ use std::time::Duration;
 use edgion_resources::resources::common::TlsConfig;
 use reqwest::{Client, ClientBuilder};
 
+use super::outbound_tls::{GlobalOutboundTlsSnapshot, ValidatedLocalTlsSelection};
 use super::tls::apply_resolved_outbound_tls;
+
+type OwnedTls<'a, 'owner> = Option<(&'a ValidatedLocalTlsSelection<'owner>, &'a GlobalOutboundTlsSnapshot)>;
 
 /// Default decoded HTTP/2 response-header-list limit for canonical outbound clients.
 pub const DEFAULT_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE: u32 = 16 * 1024;
@@ -87,7 +90,7 @@ pub struct OutboundClientConfig {
     pub tls: Option<TlsConfig>,
     /// Optional preparation snapshot, so runtime identity and TLS construction
     /// consume the same inherited policy. Absent uses the process default.
-    pub tls_defaults: Option<edgion_resources::resources::common::OutboundTlsConfig>,
+    pub tls_defaults: Option<std::sync::Arc<super::outbound_tls::GlobalOutboundTlsSnapshot>>,
     /// Fully prepared rustls configuration for shared custom-verifier support.
     /// Mutually exclusive with `tls`; resolution remains the caller's responsibility.
     pub preconfigured_tls: Option<rustls::ClientConfig>,
@@ -107,7 +110,19 @@ pub struct OutboundClientConfig {
 /// callers that need extra builder customization (e.g. `default_headers`) can
 /// chain onto the returned builder before `build()`.
 pub fn apply_outbound_policy(builder: ClientBuilder, cfg: OutboundClientConfig) -> anyhow::Result<ClientBuilder> {
+    apply_outbound_policy_core(builder, cfg, None)
+}
+
+fn apply_outbound_policy_core(
+    builder: ClientBuilder,
+    cfg: OutboundClientConfig,
+    owned: OwnedTls<'_, '_>,
+) -> anyhow::Result<ClientBuilder> {
     let mut builder = builder;
+    anyhow::ensure!(
+        owned.is_none() || (cfg.tls.is_none() && cfg.tls_defaults.is_none() && cfg.preconfigured_tls.is_none()),
+        "OutboundClient: proved local TLS cannot be replaced by raw TLS inputs"
+    );
     anyhow::ensure!(
         cfg.tls.is_none() || cfg.preconfigured_tls.is_none(),
         "OutboundClient: tls and preconfigured_tls are mutually exclusive"
@@ -149,12 +164,56 @@ pub fn apply_outbound_policy(builder: ClientBuilder, cfg: OutboundClientConfig) 
     if let Some(tls) = cfg.preconfigured_tls {
         builder = builder.use_preconfigured_tls(tls);
     }
+    if let Some((proof, defaults)) = owned {
+        if proof.active_field().is_some() {
+            builder = super::tls::apply_validated_outbound_tls(
+                builder,
+                proof,
+                cfg.tls_context.unwrap_or("OutboundClient"),
+                defaults,
+            )?;
+        }
+    }
     Ok(builder)
 }
 
 /// Build a `reqwest::Client` from `cfg`. Convenience over [`apply_outbound_policy`].
 pub fn build_outbound_client(cfg: OutboundClientConfig) -> anyhow::Result<Client> {
-    Ok(apply_outbound_policy(Client::builder(), cfg)?.build()?)
+    build_client(cfg, None, None)
+}
+
+/// Build from the actual validated local selection and captured inheritance.
+/// Inactive/absent policy retains native defaults without global inheritance.
+/// Raw TLS overrides in cfg are rejected before client construction.
+pub fn build_outbound_client_with_tls_selection(
+    cfg: OutboundClientConfig,
+    proof: &ValidatedLocalTlsSelection<'_>,
+    defaults: &GlobalOutboundTlsSnapshot,
+) -> anyhow::Result<Client> {
+    build_client(cfg, Some((proof, defaults)), None)
+}
+
+/// Build with typed default headers and actual TLS selection. The canonical
+/// factory owns builder creation; callers cannot substitute builder TLS state.
+pub fn build_outbound_client_with_tls_selection_and_headers(
+    cfg: OutboundClientConfig,
+    proof: &ValidatedLocalTlsSelection<'_>,
+    defaults: &GlobalOutboundTlsSnapshot,
+    headers: reqwest::header::HeaderMap,
+) -> anyhow::Result<Client> {
+    build_client(cfg, Some((proof, defaults)), Some(headers))
+}
+
+fn build_client(
+    cfg: OutboundClientConfig,
+    owned: OwnedTls<'_, '_>,
+    headers: Option<reqwest::header::HeaderMap>,
+) -> anyhow::Result<Client> {
+    let mut builder = apply_outbound_policy_core(Client::builder(), cfg, owned)?;
+    if let Some(headers) = headers {
+        builder = builder.default_headers(headers);
+    }
+    Ok(builder.build()?)
 }
 
 #[cfg(test)]

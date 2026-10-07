@@ -18,7 +18,7 @@ use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigD
 use edgion_resources::resources::edgion_plugins::conditions::{ConditionSet, PluginConditions};
 use edgion_resources::resources::edgion_plugins::dye::DyeSuite;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
-    Condition, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessRuleType, SecretMatchCondition,
+    Condition, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessRuleType,
 };
 use edgion_resources::resources::edgion_plugins::{
     EdgionPlugin, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
@@ -26,11 +26,13 @@ use edgion_resources::resources::edgion_plugins::{
 };
 use edgion_resources::ResourceKind;
 
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_bound_secret, BoundFetchOutcome};
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::plugins::request_access_policy_data;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::plugins::resolve_credential as cred;
-use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
+
+use edgion_resources::resources::refs::condition_fields::{BoundConditionMut, PreparedConditionReferences};
 
 /// How a missing `ipRefs` target is reported.
 #[derive(Clone, Copy)]
@@ -87,8 +89,14 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve_c
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    let owner_namespace = ep.metadata.namespace.clone();
-    walk_all_credentials(ep, owner_namespace.as_ref(), resource_ref, ctx);
+    let prepared = PreparedConditionReferences::from_plugins(ep);
+    if let Err(error) = prepared.visit_mut(ep, |leaf| match leaf.config() {
+        Condition::HmacAuth(_) => cred::resolve_condition_hmac(leaf, resource_ref, ctx),
+        Condition::SecretMatch(_) => resolve_secret_match(leaf, resource_ref, ctx),
+        _ => {}
+    }) {
+        tracing::warn!(component="condition_tree",error=?error,"Condition reference binding failed");
+    }
 }
 
 fn walk_all_ip_refs(ep: &mut EdgionPlugins, resolve_ctx: &ResolveCtx<'_>) {
@@ -394,343 +402,115 @@ fn register_ref(reference: &EdgionConfigDataRef, resolve_ctx: &ResolveCtx<'_>) {
     }
 }
 
-fn walk_all_credentials(
-    ep: &mut EdgionPlugins,
-    owner_namespace: Option<&String>,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    if let Some(entries) = ep.spec.request_plugins.as_mut() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
-            walk_plugin_conditions_credentials(
-                entry.body.as_mut().and_then(|body| body.conditions.as_mut()),
-                owner_namespace,
-                resource_ref,
-                ctx,
-            );
-            walk_dye_credentials(entry.dye.as_mut(), owner_namespace, resource_ref, ctx);
-            match &mut entry.plugin {
-                EdgionPlugin::RequestAccessPolicy(config) => {
-                    walk_rap_resolved_credentials(config, owner_namespace, resource_ref, ctx);
-                }
-                EdgionPlugin::RequestRestriction(config) => {
-                    walk_conditions_credentials(&mut config.conditions, owner_namespace, resource_ref, ctx);
-                }
-                _ => {}
-            }
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_mut() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
-            walk_dye_credentials(entry.dye.as_mut(), owner_namespace, resource_ref, ctx);
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_mut() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
-            walk_dye_credentials(entry.dye.as_mut(), owner_namespace, resource_ref, ctx);
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_plugins.as_mut() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
-            walk_plugin_conditions_credentials(
-                entry.body.as_mut().and_then(|body| body.conditions.as_mut()),
-                owner_namespace,
-                resource_ref,
-                ctx,
-            );
-            walk_dye_credentials(entry.dye.as_mut(), owner_namespace, resource_ref, ctx);
-        }
-    }
-}
-
-fn walk_dye_credentials(
-    dye: Option<&mut DyeSuite>,
-    owner_namespace: Option<&String>,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    let Some(dye) = dye else {
+fn resolve_secret_match(mut leaf: BoundConditionMut<'_>, owner: &ResourceRef, ctx: &HandlerContext) {
+    let Condition::SecretMatch(config) = leaf.config_mut() else {
         return;
     };
-    for rule in dye.request.iter_mut().chain(dye.response.iter_mut()) {
-        walk_plugin_conditions_credentials(rule.conditions.as_mut(), owner_namespace, resource_ref, ctx);
-    }
-}
-
-fn walk_plugin_conditions_credentials(
-    conditions: Option<&mut PluginConditions>,
-    owner_namespace: Option<&String>,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    let Some(conditions) = conditions else {
-        return;
-    };
-    if let Some(skip) = conditions.skip.as_mut() {
-        walk_conditions_credentials(skip, owner_namespace, resource_ref, ctx);
-    }
-    if let Some(run) = conditions.run.as_mut() {
-        walk_conditions_credentials(run, owner_namespace, resource_ref, ctx);
-    }
-}
-
-fn walk_rap_resolved_credentials(
-    config: &mut RequestAccessPolicyConfig,
-    owner_namespace: Option<&String>,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    let Some(profiles) = config.resolved_profiles.as_mut() else {
-        return;
-    };
-    for profile in profiles.values_mut() {
-        for group in &mut profile.required_rule_groups {
-            for rule in &mut group.any_of_rules {
-                match &mut rule.rule {
-                    RequestAccessRuleType::DirectPeerIp(ip) | RequestAccessRuleType::RemoteIp(ip) => {
-                        if let Some(conditions) = ip.conditions.as_mut() {
-                            walk_conditions_credentials(conditions, owner_namespace, resource_ref, ctx);
-                        }
-                    }
-                    RequestAccessRuleType::Url(url) => {
-                        if let Some(candidates) = url.resolved_candidates.as_mut() {
-                            for candidate in candidates {
-                                if let Some(conditions) = candidate.conditions.as_mut() {
-                                    walk_conditions_credentials(conditions, owner_namespace, resource_ref, ctx);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn walk_conditions_credentials(
-    conditions: &mut ConditionSet,
-    owner_namespace: Option<&String>,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    for condition in conditions.iter_conditions_mut() {
-        match condition {
-            Condition::SecretMatch(condition) => {
-                resolve_secret_match(condition, owner_namespace, resource_ref, ctx);
-            }
-            Condition::HmacAuth(config) => {
-                cred::resolve_hmac_config(config, owner_namespace, resource_ref, ctx);
-            }
-            Condition::KeyExist(_)
-            | Condition::KeyMatch(_)
-            | Condition::TimeRange(_)
-            | Condition::Probability(_)
-            | Condition::DirectPeerIpMatch(_)
-            | Condition::RemoteIpMatch(_)
-            | Condition::JwtClaimMatch(_)
-            | Condition::MtlsMatch(_)
-            | Condition::RateLimitExceeded(_) => {}
-        }
-    }
-}
-
-fn resolve_secret_match(
-    condition: &mut SecretMatchCondition,
-    owner_namespace: Option<&String>,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    condition.resolved_values = None;
-    let reference = condition.secret_ref.clone();
-    let secret_key = format_secret_key(reference.namespace.as_ref().or(owner_namespace), &reference.name);
-    let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &reference) {
-        FetchOutcome::Ok(secret) => secret,
-        FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
-            tracing::info!(
-                edgion_plugins = %resource_ref.key(),
-                secret_key = %secret_key,
-                "Condition tree: Secret not found yet"
-            );
+    config.resolved_values = None;
+    let value = {
+        let Condition::SecretMatch(config) = leaf.config() else {
             return;
-        }
-        FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
-            ref from_ns,
-            ref to_ns,
-            ref secret_name,
-        }) => {
-            tracing::warn!(
-                edgion_plugins = %resource_ref.key(),
-                from_ns = %from_ns,
-                to_ns = %to_ns,
-                secret_name = %secret_name,
-                "Condition tree: cross-namespace Secret reference denied"
-            );
+        };
+        let Ok(references) = leaf.references() else { return };
+        let Some(token) = references.secret_match_secret() else {
             return;
-        }
+        };
+        let BoundFetchOutcome::Ok(authorized) = fetch_bound_secret(ctx, owner, token) else {
+            return;
+        };
+        authorized
+            .secret
+            .data
+            .as_ref()
+            .and_then(|data| data.get(&config.secret_key))
+            .and_then(|bytes| std::str::from_utf8(&bytes.0).ok())
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
     };
-    let Some(value) = secret.data.as_ref().and_then(|data| data.get(&condition.secret_key)) else {
-        tracing::warn!(
-            edgion_plugins = %resource_ref.key(),
-            secret_key = %secret_key,
-            selected_key = %condition.secret_key,
-            "Condition tree: referenced Secret is missing the selected data key"
-        );
-        return;
-    };
-    let Ok(value) = String::from_utf8(value.0.clone()) else {
-        tracing::warn!(
-            edgion_plugins = %resource_ref.key(),
-            secret_key = %secret_key,
-            selected_key = %condition.secret_key,
-            "Condition tree: selected Secret data value is not UTF-8"
-        );
-        return;
-    };
-    if value.trim().is_empty() {
-        tracing::warn!(
-            edgion_plugins = %resource_ref.key(),
-            secret_key = %secret_key,
-            selected_key = %condition.secret_key,
-            "Condition tree: selected Secret data value is empty"
-        );
-        return;
+    if let Condition::SecretMatch(config) = leaf.config_mut() {
+        config.resolved_values = value.map(|value| vec![value]);
     }
-    condition.resolved_values = Some(vec![value]);
 }
 
-/// Visit every SecretMatch condition that the credential pass resolves.
-///
-/// This read-only mirror feeds status classification after parse. Keep its
-/// consumer coverage aligned with [`walk_all_credentials`].
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_secret_match(
+/// Readonly condition status uses the same effective owning roots as parse.
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn credential_status_errors(
     ep: &EdgionPlugins,
-    mut visit: impl FnMut(&SecretMatchCondition),
-) {
-    if let Some(entries) = ep.spec.request_plugins.as_ref() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
-            visit_plugin_conditions_secret_matches(
-                entry.body.as_ref().and_then(|body| body.conditions.as_ref()),
-                &mut visit,
-            );
-            visit_dye_secret_matches(entry.dye.as_ref(), &mut visit);
-            match &entry.plugin {
-                EdgionPlugin::RequestAccessPolicy(config) => {
-                    if let Some(profiles) = config.resolved_profiles.as_ref() {
-                        for profile in profiles.values() {
-                            for group in &profile.required_rule_groups {
-                                for rule in &group.any_of_rules {
-                                    match &rule.rule {
-                                        RequestAccessRuleType::DirectPeerIp(ip)
-                                        | RequestAccessRuleType::RemoteIp(ip) => {
-                                            if let Some(conditions) = ip.conditions.as_ref() {
-                                                visit_conditions_secret_matches(conditions, &mut visit);
-                                            }
-                                        }
-                                        RequestAccessRuleType::Url(url) => {
-                                            if let Some(candidates) = url.resolved_candidates.as_ref() {
-                                                for candidate in candidates {
-                                                    if let Some(conditions) = candidate.conditions.as_ref() {
-                                                        visit_conditions_secret_matches(conditions, &mut visit);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                EdgionPlugin::RequestRestriction(config) => {
-                    visit_conditions_secret_matches(&config.conditions, &mut visit);
-                }
-                _ => {}
-            }
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_ref() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
-            visit_dye_secret_matches(entry.dye.as_ref(), &mut visit);
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_ref() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
-            visit_dye_secret_matches(entry.dye.as_ref(), &mut visit);
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_plugins.as_ref() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
-            visit_plugin_conditions_secret_matches(
-                entry.body.as_ref().and_then(|body| body.conditions.as_ref()),
-                &mut visit,
-            );
-            visit_dye_secret_matches(entry.dye.as_ref(), &mut visit);
-        }
-    }
-}
-
-fn visit_plugin_conditions_secret_matches(
-    conditions: Option<&PluginConditions>,
-    visit: &mut impl FnMut(&SecretMatchCondition),
-) {
-    let Some(conditions) = conditions else {
-        return;
+    owner: &ResourceRef,
+    ctx: &HandlerContext,
+) -> Vec<crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError> {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::{
+        bound_secret_status_error, bound_secret_status_result,
     };
-    for set in [conditions.skip.as_ref(), conditions.run.as_ref()]
-        .into_iter()
-        .flatten()
-    {
-        visit_conditions_secret_matches(set, visit);
-    }
-}
-
-fn visit_dye_secret_matches(dye: Option<&DyeSuite>, visit: &mut impl FnMut(&SecretMatchCondition)) {
-    let Some(dye) = dye else {
-        return;
-    };
-    for rule in dye.request.iter().chain(dye.response.iter()) {
-        visit_plugin_conditions_secret_matches(rule.conditions.as_ref(), visit);
-    }
-}
-
-fn visit_conditions_secret_matches(conditions: &ConditionSet, visit: &mut impl FnMut(&SecretMatchCondition)) {
-    for condition in conditions.iter_conditions() {
-        if let Condition::SecretMatch(condition) = condition {
-            visit(condition);
+    use crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError;
+    let prepared = PreparedConditionReferences::from_plugins(ep);
+    let mut errors = Vec::new();
+    let result = prepared.visit(ep, |leaf| {
+        let references = match leaf.references() {
+            Ok(references) => references,
+            Err(error) => {
+                errors.push(ResolvedRefsError::InvalidReference { error });
+                return;
+            }
+        };
+        for group in references.hmac_secret_groups() {
+            for token in group.references() {
+                errors.extend(bound_secret_status_error(ctx, owner, token));
+            }
         }
+        let Some(token) = references.secret_match_secret() else {
+            return;
+        };
+        let Condition::SecretMatch(config) = leaf.config() else {
+            return;
+        };
+        let authorized = match bound_secret_status_result(ctx, owner, token) {
+            Ok(authorized) => authorized,
+            Err(error) => {
+                errors.push(error);
+                return;
+            }
+        };
+        let reference = match token.validated() {
+            Ok(reference) => reference,
+            Err(error) => {
+                errors.push(ResolvedRefsError::InvalidReference { error });
+                return;
+            }
+        };
+        let target = reference.target();
+        let namespace = target.scope().namespace().unwrap_or_default().to_string();
+        let name = target.name().to_string();
+        let Some(value) = authorized
+            .secret
+            .data
+            .as_ref()
+            .and_then(|data| data.get(&config.secret_key))
+        else {
+            errors.push(ResolvedRefsError::SecretMatchKeyMissing {
+                namespace,
+                name,
+                key: config.secret_key.clone(),
+            });
+            return;
+        };
+        let detail = match std::str::from_utf8(&value.0) {
+            Err(_) => Some("value is not valid UTF-8"),
+            Ok(value) if value.trim().is_empty() => Some("value is empty or whitespace-only"),
+            Ok(_) => None,
+        };
+        if let Some(detail) = detail {
+            errors.push(ResolvedRefsError::SecretMatchValueInvalid {
+                namespace,
+                name,
+                key: config.secret_key.clone(),
+                detail,
+            });
+        }
+    });
+    if let Err(error) = result {
+        errors.push(ResolvedRefsError::InvalidReference { error });
     }
+    errors
 }
 
 /// Collect operator-authored (non-RAP-sidecar) `ipRefs` for `ResolvedRefs`.

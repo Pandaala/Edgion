@@ -161,10 +161,7 @@ fn load_backend_tls_policies(ctx: &HandlerContext) -> Vec<BackendTlsPolicyRecord
 }
 
 /// Every `(policy key, validation.hostname)` pair for BackendTLSPolicies in `records` that
-/// target `namespace/service` via a core-group `Service` targetRef. The group check mirrors
-/// `EdgionBackendTrafficPolicySpec::get_validation_errors`'s own targetRef acceptance
-/// (`edgion-resources/src/resources/edgion_backend_traffic_policy.rs`): `group.is_empty() ||
-/// group == "core"`.
+/// target `namespace/service` via an exact standard core-group `Service` targetRef.
 fn backend_tls_hostnames_for_service<'a>(
     namespace: &str,
     service: &str,
@@ -177,7 +174,7 @@ fn backend_tls_hostnames_for_service<'a>(
         .filter(|r| {
             r.target_refs
                 .iter()
-                .any(|tr| tr.kind == "Service" && (tr.group.is_empty() || tr.group == "core") && tr.name == service)
+                .any(|tr| tr.kind == "Service" && tr.group.is_empty() && tr.name == service)
         })
         .map(|r| (r.key.as_str(), r.hostname.as_str()))
         .collect()

@@ -1,4 +1,8 @@
 use super::*;
+
+fn build_resolved_target(target: &WebhookTarget, tls_enabled: bool) -> Result<ResolvedTarget, String> {
+    build_resolved_target_in_namespace(target, tls_enabled, None)
+}
 use edgion_resources::resources::common::external_http::WebhookServiceRef;
 
 fn url_target(url: &str) -> WebhookTarget {
@@ -561,7 +565,7 @@ fn service_pool_client_gets_pinned_resolver_before_authority_policy_exists() {
             spec: EdgionBackendTrafficPolicySpec {
                 current_status: None,
                 target_refs: vec![PolicyTargetRef {
-                    group: String::new(),
+                    group: Some(String::new()),
                     kind: "Service".to_string(),
                     name: svc.to_string(),
                 }],
@@ -641,7 +645,7 @@ fn resolve_probe_base_uses_authority_health_check_host() {
             spec: EdgionBackendTrafficPolicySpec {
                 current_status: None,
                 target_refs: vec![PolicyTargetRef {
-                    group: String::new(),
+                    group: Some(String::new()),
                     kind: "Service".to_string(),
                     name: svc.to_string(),
                 }],

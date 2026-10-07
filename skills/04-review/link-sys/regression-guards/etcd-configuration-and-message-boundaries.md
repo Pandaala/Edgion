@@ -66,3 +66,25 @@ separate Etcd real-service evidence above. Earlier local-SDK verification remain
 historical only. Re-evaluate dependency changes,
 supported fields, unknown-field diagnostics, TLS/timeout mapping and retirement.
 Do not restore a local SDK or the withdrawn features without explicit scope.
+
+## Actual-owner TLS preparation
+
+The resource-reference implementation replaces detached client/config mapping
+entries with actual `Arc<LinkSys>` / `PreparedLinkSysTls` construction. Etcd's
+candidate proves source, whole active local pairing and consumed inherited axes
+before fingerprint/RV reuse and zero-live planning. Inherited axes enter the
+secret/material digest; a same resourceVersion does not hide global TLS changes.
+Absent/disabled local TLS consumes no global axes even for HTTPS endpoints,
+leaving endpoint TLS handling to the upstream SDK. Enabled TLS rejects
+unsupported verify/hostname/SAN policies during cold construction before dialing.
+
+One immutable connection input retains prepared ordinary/election options and
+actual owner across init, probe recovery and dedicated election connections.
+Election excludes unary request timeout; ordinary request-only options retain
+SDK-native absent dial timeout, and an otherwise empty election uses the existing
+bounded dial fallback. The SDK may internally clone/parse PEM during dialing.
+Controller uses an explicit trusted disk/YAML bootstrap input through the same
+private TLS core, without fabricated Secret/reference authority. See
+[ConfCenter bootstrap boundary](../../conf-sync/intentional-design/conf-center-etcd-abstraction.md).
+This migration does not add SDK guarantees, live handshake evidence or new
+Gateway API conformance claims.

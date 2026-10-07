@@ -157,3 +157,32 @@ hostnames; those are not covered by the OTLP transport-target filter. This was
 observed during the 2026-09-12 closure test and remains a separate custom-DNS
 observability review item. Exposing operator-selected OTLP DNS requires revisiting
 that boundary before claiming the same diagnostic contract.
+
+## Actual-owner replay and captured HTTPS defaults
+
+Common's `PreparedOtlpTls` retains actual LinkSys ownership, reference topology,
+validated destination and one global TLS snapshot. It preserves full existing
+OTLP identity/config validation before reuse, including explicit valid namespace
+and name. Source proof runs even for HTTP and absent/disabled TLS; whole local
+CA/client pairing runs only for active local TLS. Disabled local references stay
+inert. HTTPS absent/disabled local TLS still consumes captured global defaults;
+HTTP consumes none and continues rejecting enabled local TLS policy.
+
+The private OtlpCandidate computes its fingerprint only after those proofs.
+Consumed inherited axes enter the canonical secret/material digest, so an
+unchanged resourceVersion cannot mask global TLS changes. The same candidate
+supplies comparison and construction. Public construction starts from an actual
+resource Arc; detached key/config/TLS/material entries are unavailable. Auth
+parsing and sensitive metadata retain their existing contract; this migration
+alone does not establish auth Secret reference authority.
+
+PreparedTransport retains the owning TLS input alongside the single constructed
+native tonic014 Endpoint and metadata. Initialization retries, exporter channels
+and reconnects do not re-read global policy or clone TLS config/Secret objects.
+Common owns canonical resolution and capability checks; Gateway keeps the sole
+native conversion with explicit webpki System roots, custom CA replacement,
+mTLS, destination SNI, deadlines, H2 and canonical dial-time egress unchanged.
+Pure preparation/hash checks do not parse PEM or emit TLS audit. Cold TLS
+construction uses the audited canonical resolver. Live transport evidence must
+come from the current `otlp_transport` target; historical results above do not
+verify the reference migration by themselves.

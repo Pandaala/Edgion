@@ -361,20 +361,7 @@ fn backend_ref(group: Option<&str>, kind: Option<&str>) -> HTTPBackendRef {
 
 #[test]
 fn backend_ref_classification_is_canonical() {
-    for (group, kind) in [
-        (None, None),
-        (None, Some("Service")),
-        (Some(""), Some("Service")),
-        (Some("core"), Some("Service")),
-        // Edgion Service-family kinds still own the Service peer path.
-        (None, Some("ServiceExternalName")),
-        (None, Some("ServiceClusterIp")),
-        (None, Some("ServiceImport")),
-        (None, Some("ServiceEndpointSlice")),
-        (None, Some("EndpointSlice")),
-        (Some("core"), Some("ServiceExternalName")),
-        (Some(""), Some("ServiceClusterIp")),
-    ] {
+    for (group, kind) in [(None, None), (None, Some("Service")), (Some(""), Some("Service"))] {
         assert_eq!(backend_ref(group, kind).backend_kind(), HTTPBackendRefKind::Service);
     }
 
@@ -388,13 +375,22 @@ fn backend_ref_classification_is_canonical() {
     );
 
     for (group, kind) in [
+        (None, Some("")),
+        (Some("core"), Some("Service")),
+        (None, Some("ServiceExternalName")),
+        (None, Some("ServiceClusterIp")),
+        (None, Some("ServiceImport")),
+        (None, Some("ServiceEndpointSlice")),
+        (None, Some("EndpointSlice")),
+        (Some("core"), Some("ServiceExternalName")),
+        (Some(""), Some("ServiceClusterIp")),
         (Some(EDGION_API_GROUP), None),
         (None, Some("EdgionBackend")),
         (Some("core"), Some("EdgionBackend")),
         (Some(GATEWAY_API_GROUP), Some("Service")),
         (Some(EDGION_API_GROUP), Some("HTTPRoute")),
         (Some("example.io"), Some("Widget")),
-        // Service-family kinds under a non-core group stay Unsupported.
+        // Pseudo-kinds also remain unsupported under extension groups.
         (Some(EDGION_API_GROUP), Some("ServiceExternalName")),
         (Some(GATEWAY_API_GROUP), Some("ServiceClusterIp")),
     ] {

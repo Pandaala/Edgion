@@ -56,7 +56,6 @@ fn mixed_valid_and_empty_ca_maps_to_generic_probe_configuration_error() {
                             group: String::new(),
                             kind: "Secret".to_string(),
                             name: name.to_string(),
-                            namespace: None,
                         })
                         .to_vec(),
                 ),

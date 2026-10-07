@@ -20,11 +20,9 @@ use reqwest::Client;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
-use crate::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
 use crate::link_sys::runtime::health_probe::new_published_health;
 use edgion_common::link_sys_core::PublishedHealth;
-use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
 use super::bulk::bulk_ingest_loop;
@@ -34,6 +32,13 @@ use super::config_mapping::{build_es_client, EsBulkConfig};
 ///
 /// One published generation. The runner may hold a second retiring Arc during
 /// Handover; callers always go through `get_es_client`.
+/// Detached production configuration cannot construct a client.
+/// ```compile_fail
+/// use edgion_gateway::link_sys::providers::elasticsearch::EsLinkClient;
+/// use edgion_gateway::link_sys::credential::CredentialState;
+/// let config = serde_json::from_value(serde_json::json!({"endpoints":["https://es.example:9200"]})).unwrap();
+/// let _ = EsLinkClient::from_config("apps/es", &config, &CredentialState::NotRequired);
+/// ```
 pub struct EsLinkClient {
     /// reqwest HTTP client (with internal pool and auth headers)
     client: Client,
@@ -67,17 +72,27 @@ pub struct EsLinkClient {
 }
 
 impl EsLinkClient {
-    /// Create from CRD config. Does NOT connect — call `init()` next.
-    pub fn from_config(
-        name: &str,
-        config: &ElasticsearchClientConfig,
-        auth: &CredentialState<ResolvedCredential>,
-    ) -> Result<Self> {
+    /// Create from the actual resolved resource. Call init to start background work.
+    pub fn from_link_sys(owner: Arc<LinkSys>) -> Result<Self> {
+        let candidate = super::apply::EsCandidate::new(owner)?;
+        let owner = candidate.tls.owner();
+        let key = format!(
+            "{}/{}",
+            owner.metadata.namespace.as_deref().unwrap_or("default"),
+            owner.metadata.name.as_deref().unwrap_or_default()
+        );
+        Self::from_candidate(&key, &candidate)
+    }
+
+    pub(super) fn from_candidate(name: &str, candidate: &super::apply::EsCandidate) -> Result<Self> {
+        let SystemConfig::Elasticsearch(config) = &candidate.tls.owner().spec.config else {
+            anyhow::bail!("Elasticsearch construction requires an actual Elasticsearch owner");
+        };
         if config.endpoints.is_empty() {
             anyhow::bail!("Elasticsearch endpoints list is empty for '{}'", name);
         }
 
-        let (client, _headers) = build_es_client(config, auth)?;
+        let client = build_es_client(&candidate.tls)?;
         let bulk_config = EsBulkConfig::from_crd(config);
 
         Ok(Self {
@@ -92,22 +107,10 @@ impl EsLinkClient {
             bulk_task: parking_lot::Mutex::new(None),
             last_flip_log_ms: Arc::new(AtomicU64::new(0)),
             probe_handle: parking_lot::Mutex::new(None),
-            fingerprint: RuntimeFingerprint::unspecified(),
+            fingerprint: candidate.fingerprint().clone(),
             retired: Arc::new(AtomicBool::new(false)),
             shutdown_started: AtomicBool::new(false),
         })
-    }
-
-    /// Build from a resolved Elasticsearch LinkSys, including the apply fingerprint.
-    pub(crate) fn from_linksys(name: &str, ls: &LinkSys) -> Result<Arc<Self>> {
-        let SystemConfig::Elasticsearch(config) = &ls.spec.config else {
-            anyhow::bail!("Elasticsearch from_linksys called with a non-Elasticsearch LinkSys");
-        };
-        let auth = crate::link_sys::credential::resolved_state(ls);
-        let fingerprint = super::apply::fingerprint_es(ls)?;
-        let mut client = Self::from_config(name, config, &auth)?;
-        client.fingerprint = fingerprint;
-        Ok(Arc::new(client))
     }
 
     pub(crate) fn runtime_fingerprint(&self) -> &RuntimeFingerprint {

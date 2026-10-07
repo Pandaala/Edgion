@@ -233,13 +233,13 @@ pub(crate) fn effective_hostnames(resolved: Option<&[String]>, spec: Option<&[St
 }
 
 /// A BackendRef is routable only when it targets a core Kubernetes Service:
-/// group is `""` / `"core"` / omitted and kind is `"Service"` / omitted.
+/// group is `""` / omitted and kind is `"Service"` / omitted.
 ///
 /// Single source of truth shared by all L4 route modules (TCP, TLS termination,
 /// TLS passthrough, UDP). Struct-based callers pass
 /// `br.group.as_deref(), br.kind.as_deref()`.
 pub(crate) fn is_core_service_backend_ref(group: Option<&str>, kind: Option<&str>) -> bool {
-    matches!(group, None | Some("") | Some("core")) && matches!(kind, None | Some("Service"))
+    edgion_resources::resources::refs::targets::is_standard_service(group, kind)
 }
 
 /// Resolve the stream plugin store key from a route's metadata annotations.

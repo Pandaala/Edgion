@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use edgion_common::link_sys_core::outbound_tls::PreparedRedisTls;
 use edgion_resources::resources::link_sys::redis::{
     RedisClientConfig, RedisTopologyMode, RedisTransport, REDIS_DEFAULT_POOL_SIZE,
 };
@@ -16,14 +17,41 @@ use crate::link_sys::runtime::runner::ApplyOwner;
 
 use super::client::RedisLinkClient;
 
-pub struct RedisApply;
+pub(crate) struct RedisApply;
+
+/// One actual owner and captured TLS generation for replay and every retry.
+pub(crate) struct RedisCandidate {
+    pub(super) tls: PreparedRedisTls,
+    fingerprint: RuntimeFingerprint,
+}
+
+impl RedisCandidate {
+    pub(super) fn new(owner: Arc<LinkSys>) -> anyhow::Result<Self> {
+        let tls = PreparedRedisTls::from_link_sys(owner)?;
+        Self::from_prepared(tls)
+    }
+
+    pub(super) fn from_prepared(tls: PreparedRedisTls) -> anyhow::Result<Self> {
+        let fingerprint = fingerprint_redis_prepared(&tls)?;
+        Ok(Self { tls, fingerprint })
+    }
+
+    pub(super) fn fingerprint(&self) -> &RuntimeFingerprint {
+        &self.fingerprint
+    }
+}
 
 #[async_trait]
 impl ApplyOwner for RedisApply {
     type Client = RedisLinkClient;
+    type Candidate = RedisCandidate;
 
-    fn fingerprint(incoming: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
-        fingerprint_redis(incoming)
+    fn prepare(incoming: Arc<LinkSys>) -> anyhow::Result<Self::Candidate> {
+        RedisCandidate::new(incoming)
+    }
+
+    fn fingerprint(incoming: &Self::Candidate) -> anyhow::Result<RuntimeFingerprint> {
+        Ok(incoming.fingerprint.clone())
     }
 
     fn fingerprint_live(client: &Self::Client) -> RuntimeFingerprint {
@@ -38,8 +66,8 @@ impl ApplyOwner for RedisApply {
         Some(client.published_health())
     }
 
-    fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
-        RedisLinkClient::from_linksys(key, incoming)
+    fn build(key: &str, incoming: &Self::Candidate) -> anyhow::Result<Arc<Self::Client>> {
+        RedisLinkClient::from_candidate(key, incoming).map(Arc::new)
     }
 
     async fn init(client: &Self::Client) -> anyhow::Result<()> {
@@ -61,7 +89,10 @@ impl ApplyOwner for RedisApply {
     }
 }
 
-pub fn fingerprint_redis(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
+fn fingerprint_redis_fields(
+    ls: &LinkSys,
+    inherited: impl FnOnce(&mut FingerprintHasher),
+) -> anyhow::Result<RuntimeFingerprint> {
     let SystemConfig::Redis(cfg) = &ls.spec.config else {
         anyhow::bail!("fingerprint_redis called with a non-Redis LinkSys");
     };
@@ -73,12 +104,17 @@ pub fn fingerprint_redis(ls: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
     let mut secret = FingerprintHasher::new();
     hash_auth_material(&mut secret, ls);
     hash_tls_material(&mut secret, cfg.tls.as_ref());
+    inherited(&mut secret);
 
     Ok(RuntimeFingerprint::from_parts(
         rebuild.finish(),
         secret.finish(),
         ls.metadata.resource_version.clone(),
     ))
+}
+
+fn fingerprint_redis_prepared(prepared: &PreparedRedisTls) -> anyhow::Result<RuntimeFingerprint> {
+    fingerprint_redis_fields(prepared.owner(), |hasher| prepared.hash_inheritance(hasher))
 }
 
 fn hash_rebuild_fields(h: &mut FingerprintHasher, cfg: &RedisClientConfig) -> anyhow::Result<()> {

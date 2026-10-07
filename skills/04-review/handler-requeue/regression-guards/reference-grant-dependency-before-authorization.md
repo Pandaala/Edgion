@@ -20,8 +20,11 @@ followed the same rule and now uses the shared ordering helper. TCPRoute,
 TLSRoute, and UDPRoute register their complete direct backend dependency sets
 before authorization. Gateway, Service, EdgionTls, EdgionAcme, and shared
 credential resolution also register their applicable dependencies before grant
-reads. The grant-gated ConfigMap CA path covers EdgionGatewayConfig and
-EdgionPlugins while preserving the cluster-scoped EdgionGatewayConfig identity.
+reads. Namespaced EdgionPlugins ConfigMap CA references follow the same ordering.
+The two outbound TLS fields of cluster-scoped EdgionGatewayConfig instead use
+administrative material selection: they register Secret/ConfigMap recovery
+dependencies without a source namespace, Grant read, or Grant dependency. See
+the [current EGC authority boundary](../../../01-architecture/05-resources/03-edgion-gateway-config.md).
 
 ## Rationale and evidence
 
@@ -37,11 +40,13 @@ that late pass. A deletion between the successful read and registration could
 therefore miss the Route, after which the Route could publish stale
 `ref_denied = None` and `ResolvedRefs=True`.
 
-The same audit found that grant-gated ConfigMap CA resolution registered only
+The same historical audit found that grant-gated ConfigMap CA resolution registered only
 the material dependency, and Service DNS resolver authorization had no
 cross-namespace dependency lifecycle. Both could miss grant revocation. The
-ConfigMap fetch path now registers the owning EdgionGatewayConfig or
-EdgionPlugins before its grant read. Service clears its old set at parse entry,
+correction registered the owning EdgionGatewayConfig or EdgionPlugins before its
+grant read. The later EGC reference migration replaced that former grant-gated
+path with administrative selection; the ordering correction remains current for
+namespaced EdgionPlugins. Service clears its old set at parse entry,
 registers before the DNS grant read, and clears on delete; Gateway uses the same
 DNS helper within its existing lifecycle.
 
@@ -79,9 +84,11 @@ The deterministic unit test
 the protected read closure and confirms that the owner is already visible in
 `CrossNsRefManager`. HTTPRoute and GRPCRoute delegation tests confirm that
 denied authored siblings are copied into the effective rules with `ref_denied`
-intact. ConfigMap CA and Service DNS tests confirm exact owner registration,
-replacement cleanup, and delete cleanup, including the cluster-scoped
-EdgionGatewayConfig owner.
+intact. Namespaced ConfigMap CA and Service DNS tests confirm exact owner
+registration, replacement cleanup, and delete cleanup. Current EGC handler tests
+instead confirm administrative material selection, canonical cluster owner
+recovery dependencies, and no Grant edges; grants do not alter its TLS material
+selection. The older EGC grant-ordering verification is historical evidence only.
 
 Re-evaluate when adding a new `ReferenceGrantStore` reader, changing event
 dispatch granularity, replacing `CrossNsRefManager`, or adding a new derived

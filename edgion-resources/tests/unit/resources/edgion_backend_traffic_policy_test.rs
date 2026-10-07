@@ -83,14 +83,14 @@ fn resolved_target_class_is_transport_only_and_not_schema_visible() {
 #[test]
 fn canonical_target_keys_preserve_target_type() {
     let service = PolicyTargetRef {
-        group: "core".to_string(),
+        group: Some("core".to_string()),
         kind: "Service".to_string(),
         name: "shared".to_string(),
     }
     .canonical_key("app")
     .expect("core Service target");
     let ai_backend = PolicyTargetRef {
-        group: "edgion.io".to_string(),
+        group: Some("edgion.io".to_string()),
         kind: "EdgionBackend".to_string(),
         name: "shared".to_string(),
     }
@@ -388,7 +388,7 @@ fn upstream_authority_validation_flows_through_spec() {
     let base = |ua: Option<UpstreamAuthorityConfig>, hc: bool| EdgionBackendTrafficPolicySpec {
         current_status: None,
         target_refs: vec![PolicyTargetRef {
-            group: String::new(),
+            group: Some(String::new()),
             kind: "Service".to_string(),
             name: "sandbox-gw".to_string(),
         }],

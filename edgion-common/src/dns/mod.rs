@@ -13,7 +13,12 @@ pub mod system;
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use crate::link_sys_core::outbound_tls::{
+    validate_active_tls_inheritance, validate_local_tls_selection, GlobalOutboundTlsSnapshot, TlsMaterialProofError,
+};
 use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
+use edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences;
+use edgion_resources::LinkSys;
 
 /// Configuration-owned HTTP DNS generation. Querying never builds clients or
 /// reads inherited TLS policy; an unusable generation retains its own fallback.
@@ -32,47 +37,147 @@ impl std::fmt::Debug for PreparedHttpDns {
     }
 }
 
+/// Cold actual-owner input shared by reuse comparison and construction.
+/// No policy, material, owner identity or provider branch can be replaced.
+/// ```compile_fail
+/// use std::sync::Arc;
+/// use edgion_resources::{LinkSys, resources::refs::link_sys_fields::PreparedLinkSysReferences};
+/// use edgion_common::{dns::HttpDnsCandidate, link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot};
+/// fn forge(owner: Arc<LinkSys>, references: PreparedLinkSysReferences, defaults: Arc<GlobalOutboundTlsSnapshot>) -> HttpDnsCandidate {
+///     HttpDnsCandidate { owner, references, defaults, authority: Ok(()), runtime_identity: [0; 32] }
+/// }
+/// ```
+/// A detached provider config cannot supply owning provenance.
+/// ```compile_fail
+/// use std::sync::Arc;
+/// use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
+/// use edgion_common::dns::HttpDnsCandidate;
+/// fn detached(config: HttpDnsResolverConfig) {
+///     HttpDnsCandidate::from_link_sys(Arc::new(config));
+/// }
+/// ```
+pub struct HttpDnsCandidate {
+    owner: Arc<LinkSys>,
+    references: PreparedLinkSysReferences,
+    defaults: Arc<GlobalOutboundTlsSnapshot>,
+    authority: Result<(), TlsMaterialProofError>,
+    runtime_identity: [u8; 32],
+}
+
+impl std::fmt::Debug for HttpDnsCandidate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("HttpDnsCandidate").finish_non_exhaustive()
+    }
+}
 impl PreparedHttpDns {
-    /// Cold configuration preparation. Even invalid input publishes a new state.
-    pub fn prepare(mut config: HttpDnsResolverConfig) -> Arc<Self> {
-        let defaults = crate::link_sys_core::outbound_tls::outbound_global_default();
-        let runtime_identity = Self::identity_for(&config, &defaults);
-        let address_fingerprint = {
-            let _redact = edgion_resources::redact::AdminRedactGuard::new();
-            format!("httpdns:{}", serde_json::to_string(&config).unwrap_or_default())
+    pub fn is_ready(&self) -> bool {
+        self.fetcher.is_some()
+    }
+}
+impl HttpDnsCandidate {
+    /// Only another provider is absent. Invalid HTTPDNS retains its fallback.
+    pub fn from_link_sys(owner: Arc<LinkSys>) -> Option<Self> {
+        Self::with_snapshot(owner, crate::link_sys_core::outbound_tls::outbound_global_default())
+    }
+
+    pub fn with_snapshot(owner: Arc<LinkSys>, defaults: Arc<GlobalOutboundTlsSnapshot>) -> Option<Self> {
+        let config = owner.spec.config.as_http_dns()?;
+        let references = PreparedLinkSysReferences::from_link_sys(&owner);
+        let authority = {
+            references
+                .bind(&owner)
+                .map_err(TlsMaterialProofError::Reference)
+                .and_then(|binding| {
+                    let selection = binding
+                        .outbound_tls_selection()
+                        .map_err(TlsMaterialProofError::Reference)?;
+                    let proof = validate_local_tls_selection(selection)?;
+                    validate_active_tls_inheritance(&proof, &defaults)
+                })
         };
-        let fetcher = if config.validate().is_empty() {
-            http_fetcher::ReqwestHttpDnsFetcher::with_defaults(config.connection.as_ref(), defaults).ok()
-        } else {
-            None
-        };
-        // Connection policy and resolved Secret bodies are consumed only by the
-        // native client. Do not retain another copy in the query generation.
-        config.connection = None;
-        Arc::new(Self {
-            config,
-            fetcher,
-            address_fingerprint,
+        let runtime_identity = Self::identity_for(config, &defaults, authority);
+        Some(Self {
+            owner,
+            references,
+            defaults,
+            authority,
             runtime_identity,
         })
     }
 
-    pub fn is_ready(&self) -> bool {
-        self.fetcher.is_some()
+    /// Pure incoming-authority gate before material/equality replay shortcuts.
+    pub fn matches(&self, previous: &PreparedHttpDns) -> bool {
+        if previous.is_ready() && self.authority.is_err() {
+            return false;
+        }
+        // Reuse a matching failed outcome without rebuilding/auditing each tick.
+        self.runtime_identity == previous.runtime_identity
     }
 
-    /// Called only on configuration publication or Controller refresh ticks.
-    pub fn matches_config(&self, config: &HttpDnsResolverConfig) -> bool {
-        self.runtime_identity
-            == Self::identity_for(config, &crate::link_sys_core::outbound_tls::outbound_global_default())
+    /// Even failed preparation publishes the actual configuration's fallback.
+    pub fn prepare(self) -> Arc<PreparedHttpDns> {
+        let config = self.config();
+        let address_fingerprint = {
+            let _redact = edgion_resources::redact::AdminRedactGuard::new();
+            format!("httpdns:{}", serde_json::to_string(config).unwrap_or_default())
+        };
+        let fetcher = self.build_fetcher().ok();
+        // Clone only query policy: never copy connection/Secret bodies to discard.
+        let query = HttpDnsResolverConfig {
+            preset: config.preset.clone(),
+            url_template: config.url_template.clone(),
+            response: config.response.clone(),
+            fallback: config.fallback.clone(),
+            connection: None,
+        };
+        Arc::new(PreparedHttpDns {
+            config: query,
+            fetcher,
+            address_fingerprint,
+            runtime_identity: self.runtime_identity,
+        })
+    }
+
+    fn config(&self) -> &HttpDnsResolverConfig {
+        self.owner
+            .spec
+            .config
+            .as_http_dns()
+            .expect("private HTTPDNS candidate retains its fixed provider")
+    }
+
+    fn build_fetcher(&self) -> Result<http_fetcher::ReqwestHttpDnsFetcher, DnsError> {
+        let config = self.config();
+        if !config.validate().is_empty() {
+            return Err(DnsError::Http("invalid HTTP DNS configuration".into()));
+        }
+        let binding = self
+            .references
+            .bind(&self.owner)
+            .map_err(|_| DnsError::Http("invalid HTTP DNS owning reference".into()))?;
+        let selection = binding
+            .outbound_tls_selection()
+            .map_err(|_| DnsError::Http("invalid HTTP DNS owning reference".into()))?;
+        let proof = validate_local_tls_selection(selection)
+            .map_err(|_| DnsError::Http("invalid HTTP DNS TLS reference or material".into()))?;
+        http_fetcher::ReqwestHttpDnsFetcher::from_bound(config.connection.as_ref(), &proof, &self.defaults)
     }
 
     fn identity_for(
         config: &HttpDnsResolverConfig,
-        defaults: &edgion_resources::resources::common::OutboundTlsConfig,
+        defaults: &GlobalOutboundTlsSnapshot,
+        authority: Result<(), TlsMaterialProofError>,
     ) -> [u8; 32] {
-        use crate::link_sys_core::fingerprint::{hash_tls_material, hash_tls_policy, FingerprintHasher};
+        use crate::link_sys_core::fingerprint::{hash_tls_inheritance, hash_tls_material, FingerprintHasher};
         let mut hash = FingerprintHasher::new();
+        match authority {
+            Ok(()) => hash.tag(0),
+            Err(error) => {
+                hash.tag(1);
+                // Fixed diagnostics carry neither authored identity nor material.
+                hash.bytes(error.to_string().as_bytes());
+            }
+        }
         {
             let _redact = edgion_resources::redact::AdminRedactGuard::new();
             hash.bytes(&serde_json::to_vec(config).unwrap_or_default());
@@ -82,21 +187,11 @@ impl PreparedHttpDns {
             .as_ref()
             .and_then(|connection| connection.tls.as_ref());
         hash_tls_material(&mut hash, local);
-        if local.is_some_and(|tls| tls.enabled) {
-            let global = defaults.clone();
-            let inherited = edgion_resources::resources::common::TlsConfig {
-                enabled: true,
-                outbound: edgion_resources::resources::common::OutboundTlsLocal {
-                    verify: Some(global.verify),
-                    validation: global.validation,
-                    client_certificate_ref: global.client_certificate_ref,
-                },
-                resolved_ca_certificates: global.resolved_ca_certificates,
-                resolved_client_certificate: global.resolved_client_certificate,
-            };
-            hash_tls_policy(&mut hash, Some(&inherited));
-            hash_tls_material(&mut hash, Some(&inherited));
-        }
+        hash_tls_inheritance(
+            &mut hash,
+            local.filter(|tls| tls.enabled).map(|tls| &tls.outbound),
+            defaults,
+        );
         hash.finish()
     }
 }

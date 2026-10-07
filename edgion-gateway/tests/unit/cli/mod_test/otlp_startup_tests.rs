@@ -26,14 +26,18 @@ fn startup_error_drains_active_otlp_before_runtime_drop() {
         .build()
         .unwrap();
     let client = runtime.block_on(async {
-        let resource = serde_json::from_value(serde_json::json!({
+        let resource: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
             "apiVersion": "edgion.io/v1", "kind": "LinkSys",
             "metadata": {"namespace": "startup-test", "name": "collector"},
             "spec": {"type": "otlp", "config": {"endpoint": "http://collector.example.test:4317"}}
         }))
         .unwrap();
         let key = "startup-test/collector".to_string();
-        let client = OtlpApply::build(&key, &resource).unwrap();
+        let client = OtlpApply::build(
+            &key,
+            &OtlpApply::prepare(std::sync::Arc::new(resource.clone())).unwrap(),
+        )
+        .unwrap();
         client.publish_lazy_test_pipeline().unwrap();
         seed_published_otlp(key, client.clone());
         client

@@ -11,6 +11,14 @@ static FAKE_BUILD_FAILS: AtomicUsize = AtomicUsize::new(0);
 
 struct FakeOwner;
 
+impl FakeOwner {
+    // Existing lifecycle fixtures bypass no production boundary: retain their
+    // actual resource input while adapting to the candidate factory signature.
+    fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<FakeClient>> {
+        <Self as ApplyOwner>::build(key, &Arc::new(incoming.clone()))
+    }
+}
+
 struct FakeClient {
     fingerprint: RuntimeFingerprint,
     live: usize,
@@ -44,8 +52,13 @@ fn fp_for(ls: &LinkSys) -> RuntimeFingerprint {
 #[async_trait]
 impl ApplyOwner for FakeOwner {
     type Client = FakeClient;
+    type Candidate = Arc<LinkSys>;
 
-    fn fingerprint(incoming: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
+    fn prepare(incoming: Arc<LinkSys>) -> anyhow::Result<Self::Candidate> {
+        Ok(incoming)
+    }
+
+    fn fingerprint(incoming: &Self::Candidate) -> anyhow::Result<RuntimeFingerprint> {
         Ok(fp_for(incoming))
     }
 
@@ -64,7 +77,7 @@ impl ApplyOwner for FakeOwner {
         Some(client.healthy.as_ref())
     }
 
-    fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
+    fn build(key: &str, incoming: &Self::Candidate) -> anyhow::Result<Arc<Self::Client>> {
         let endpoint = match &incoming.spec.config {
             edgion_resources::resources::link_sys::SystemConfig::Redis(cfg) => {
                 cfg.endpoints.first().cloned().unwrap_or_default()
@@ -120,6 +133,140 @@ async fn wait_until(mut pred: impl FnMut() -> bool) {
         tokio::task::yield_now().await;
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+struct ProvedOwner;
+struct ProvedCandidate {
+    tls: edgion_common::link_sys_core::outbound_tls::PreparedRedisTls,
+    attempts: AtomicUsize,
+}
+static PROVED_PREPARES: AtomicUsize = AtomicUsize::new(0);
+static PROVED_FINGERPRINTS: AtomicUsize = AtomicUsize::new(0);
+static PROVED_BUILDS: AtomicUsize = AtomicUsize::new(0);
+
+#[async_trait]
+impl ApplyOwner for ProvedOwner {
+    type Client = FakeClient;
+    type Candidate = ProvedCandidate;
+    fn prepare(owner: Arc<LinkSys>) -> anyhow::Result<Self::Candidate> {
+        PROVED_PREPARES.fetch_add(1, Ordering::Relaxed);
+        Ok(ProvedCandidate {
+            tls: edgion_common::link_sys_core::outbound_tls::PreparedRedisTls::with_snapshot(
+                owner,
+                Arc::new(edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot::from_configs([])),
+            )?,
+            attempts: AtomicUsize::new(0),
+        })
+    }
+    fn fingerprint(candidate: &Self::Candidate) -> anyhow::Result<RuntimeFingerprint> {
+        PROVED_FINGERPRINTS.fetch_add(1, Ordering::Relaxed);
+        Ok(fp_for(candidate.tls.owner()))
+    }
+    fn fingerprint_live(client: &Self::Client) -> RuntimeFingerprint {
+        client.fingerprint.clone()
+    }
+    fn coverage(client: &Self::Client) -> ConnectionCoverage {
+        <FakeOwner as ApplyOwner>::coverage(client)
+    }
+    fn published_health(client: &Self::Client) -> Option<&PublishedHealth> {
+        Some(&client.healthy)
+    }
+    fn build(key: &str, candidate: &Self::Candidate) -> anyhow::Result<Arc<Self::Client>> {
+        PROVED_BUILDS.fetch_add(1, Ordering::Relaxed);
+        let mut client = FakeOwner::build(key, candidate.tls.owner())?;
+        if key == "runner/proof-retry" {
+            Arc::get_mut(&mut client).unwrap().init_ok = candidate.attempts.fetch_add(1, Ordering::Relaxed) > 0;
+        }
+        Ok(client)
+    }
+    async fn init(client: &Self::Client) -> anyhow::Result<()> {
+        <FakeOwner as ApplyOwner>::init(client).await
+    }
+    async fn shutdown(client: Arc<Self::Client>) {
+        <FakeOwner as ApplyOwner>::shutdown(client).await
+    }
+    fn mark_retired(client: &Self::Client) {
+        <FakeOwner as ApplyOwner>::mark_retired(client)
+    }
+    fn label() -> &'static str {
+        "Proved fixture"
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn owning_preparation_precedes_reuse_and_zero_live_then_survives_init_retry() {
+    for endpoint in ["redis://up:6379", "redis://down:6379"] {
+        let valid = redis_ls("proof", endpoint, "42");
+        let current = FakeOwner::build("runner/proof", &valid).unwrap();
+        let runner = PersistentRunner::<ProvedOwner>::spawn_with_published("runner/proof".into(), Arc::clone(&current));
+        for field in ["source", "group", "pair"] {
+            let mut invalid = valid.clone();
+            if field == "source" {
+                invalid.metadata.namespace = Some("Bad".into());
+            } else {
+                let edgion_resources::resources::link_sys::SystemConfig::Redis(config) = &mut invalid.spec.config
+                else {
+                    unreachable!()
+                };
+                config.tls = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "enabled":true,"validation":{"caCertificateRefs":[{"kind":"Secret","name":"ca"}]},
+                        "resolvedCaCertificates":[{"metadata":{"name":"ca","namespace":"runner"}}]
+                    }))
+                    .unwrap(),
+                );
+                let tls = config.tls.as_mut().unwrap();
+                if field == "group" {
+                    tls.outbound
+                        .validation
+                        .as_mut()
+                        .unwrap()
+                        .ca_certificate_refs
+                        .as_mut()
+                        .unwrap()[0]
+                        .group = Some("foreign.example".into());
+                } else {
+                    tls.resolved_ca_certificates.as_mut().unwrap()[0].metadata.name = Some("wrong".into());
+                }
+            }
+            let before = PROVED_PREPARES.load(Ordering::Relaxed);
+            let fingerprints = PROVED_FINGERPRINTS.load(Ordering::Relaxed);
+            let builds = PROVED_BUILDS.load(Ordering::Relaxed);
+            runner.post_ready(Arc::new(invalid.clone()), false);
+            wait_until(|| PROVED_PREPARES.load(Ordering::Relaxed) > before).await;
+            assert_eq!(PROVED_FINGERPRINTS.load(Ordering::Relaxed), fingerprints, "{field}");
+            assert_eq!(PROVED_BUILDS.load(Ordering::Relaxed), builds, "{field}");
+            assert!(Arc::ptr_eq(&runner.current().unwrap(), &current));
+            assert!(!current.retired.load(Ordering::Relaxed));
+            if field == "pair" {
+                let before = PROVED_PREPARES.load(Ordering::Relaxed);
+                runner.post_ready(Arc::new(invalid), true);
+                wait_until(|| PROVED_PREPARES.load(Ordering::Relaxed) > before).await;
+                assert!(runner.current().is_none());
+                assert!(current.retired.load(Ordering::Relaxed));
+                runner.post_ready(Arc::new(valid.clone()), false);
+                wait_until(|| runner.current().is_some()).await;
+                assert!(!Arc::ptr_eq(&runner.current().unwrap(), &current));
+            }
+        }
+        runner.begin_delete();
+        runner.await_join().await;
+    }
+    let before = PROVED_PREPARES.load(Ordering::Relaxed);
+    let builds = PROVED_BUILDS.load(Ordering::Relaxed);
+    let runner = PersistentRunner::<ProvedOwner>::spawn("runner/proof-retry".into());
+    runner.post_ready(Arc::new(redis_ls("proof-retry", "redis://up:6379", "1")), false);
+    tokio::time::timeout(Duration::from_secs(6), async {
+        while runner.current().is_none() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("same prepared candidate must succeed on its second init attempt");
+    assert_eq!(PROVED_PREPARES.load(Ordering::Relaxed), before + 1);
+    assert_eq!(PROVED_BUILDS.load(Ordering::Relaxed), builds + 2);
+    runner.begin_delete();
+    runner.await_join().await;
 }
 
 #[tokio::test]

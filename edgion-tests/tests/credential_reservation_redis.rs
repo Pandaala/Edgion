@@ -95,7 +95,7 @@ async fn remove(client: &RedisLinkClient, key_sets: &[&CredentialReservationKeys
 #[ignore = "requires the integration Redis fixture"]
 async fn credential_reservation_lifecycle_uses_real_redis() -> Result<()> {
     let (config, auth) = redis_config();
-    let client = RedisLinkClient::from_config("integration/credential-reservation", &config, &auth)?;
+    let client = RedisLinkClient::from_test_config("integration/credential-reservation", &config, &auth)?;
     client
         .init_for_test()
         .await

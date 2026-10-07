@@ -15,7 +15,7 @@ use edgion_resources::path_normalization::get_path_normalization_config;
 use edgion_resources::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
 };
-use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
+use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::{CorsConfig, HTTPRouteFilter, HTTPRouteFilterType};
 use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
 use pingora_http::{RequestHeader, ResponseHeader};

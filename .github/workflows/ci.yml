@@ -37,6 +37,8 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-yaml
           python3 cicd/checks/test_generate_gateway_api_transform_contract.py
           python3 cicd/checks/generate_gateway_api_transform_contract.py --check
+          python3 cicd/checks/test_generate_gateway_api_reference_contract.py
+          python3 cicd/checks/generate_gateway_api_reference_contract.py --check
 
       - name: Run cargo check
         run: cargo check --locked --workspace --all-targets

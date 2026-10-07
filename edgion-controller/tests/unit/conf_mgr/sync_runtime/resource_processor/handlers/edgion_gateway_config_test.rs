@@ -1,6 +1,6 @@
 use super::*;
 use crate::conf_mgr::ControllerRuntime;
-use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::common::{OutboundTlsConfig, OutboundTlsValidation};
 use edgion_resources::resources::edgion_gateway_config::{EdgionGatewayConfigSpec, MAX_RETRY_ATTEMPTS};
 use k8s_openapi::api::core::v1::Secret;
@@ -12,6 +12,199 @@ fn make_ctx_with_secrets(secrets: HashMap<String, Secret>) -> HandlerContext {
     let runtime = Arc::new(ControllerRuntime::default());
     runtime.secret_store.replace_all(secrets);
     HandlerContext::new(None, None, Default::default(), 5, 20, runtime)
+}
+
+#[tokio::test]
+async fn administrative_tls_keeps_order_provenance_and_independent_axes_without_grants() {
+    use edgion_resources::constants::annotations::edgion::{CONTROLLER_CA_SOURCE, CONTROLLER_CA_SOURCE_CONFIG_MAP};
+    let mut secret = Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("shared".into()),
+            namespace: Some("certs".into()),
+            annotations: Some(BTreeMap::from([(
+                CONTROLLER_CA_SOURCE.into(),
+                CONTROLLER_CA_SOURCE_CONFIG_MAP.into(),
+            )])),
+            ..Default::default()
+        },
+        data: Some(BTreeMap::from([("ca.crt".into(), ByteString(b"secret-ca".to_vec()))])),
+        ..Default::default()
+    };
+    let ctx = make_ctx_with_secrets(HashMap::from([("certs/shared".into(), secret.clone())]));
+    let configmap: k8s_openapi::api::core::v1::ConfigMap = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"shared","namespace":"certs","uid":"actual-cm"},"data":{"ca.crt":"configmap-ca"}}))
+    .unwrap();
+    ctx.runtime()
+        .configmap_store
+        .replace_all(HashMap::from([("certs/shared".into(), configmap)]));
+    let owner = ResourceRef::new(ResourceKind::EdgionGatewayConfig, None, "global".into());
+    let config: EdgionGatewayConfig = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"global"},"spec":{"outboundTls":{
+            "validation":{"caCertificateRefs":[
+                {"kind":"Secret","name":"shared","namespace":"certs"},
+                {"kind":"Secret","name":"bad"},
+                {"group":"core","kind":"ConfigMap","name":"shared","namespace":"certs"},
+                {"kind":"Secret","name":"shared","namespace":"certs"},
+                {"kind":"Secret","name":"missing","namespace":"certs"}]},
+            "clientCertificateRef":{"name":"shared","namespace":"certs"}}}}))
+    .unwrap();
+    let prepared = PreparedEgcTlsReferences::from_config(&config);
+    let binding = prepared.bind(&config).unwrap();
+    let references = binding.references().unwrap();
+    let selection = references.client_certificate().unwrap().unwrap();
+    // An ordinary namespaced acquisition cannot turn a cluster token into
+    // administrative authority; only the private EGC selection path can read.
+    assert!(matches!(
+        crate::conf_mgr::sync_runtime::resource_processor::credential::fetch_bound_secret(
+            &ctx,
+            &owner,
+            *selection.reference()
+        ),
+        crate::conf_mgr::sync_runtime::resource_processor::credential::BoundFetchOutcome::Invalid(_)
+    ));
+    assert!(ctx.secret_ref_manager().get_dependencies(&owner.key()).is_empty());
+    let parsed = parse_client_identity(config, &ctx).await;
+    let field = parsed.spec.outbound_tls.as_ref().unwrap();
+    let ca = field.resolved_ca_certificates.as_ref().unwrap();
+    assert_eq!(ca.len(), 3);
+    assert_eq!(
+        ca[0]
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.get(CONTROLLER_CA_SOURCE)),
+        None
+    );
+    assert_eq!(
+        ca[1].metadata.annotations.as_ref().unwrap()[CONTROLLER_CA_SOURCE],
+        CONTROLLER_CA_SOURCE_CONFIG_MAP
+    );
+    assert_eq!(ca[1].metadata.uid.as_deref(), Some("actual-cm"));
+    assert_eq!(ca[0].data, ca[2].data);
+    assert_eq!(
+        field
+            .resolved_client_certificate
+            .as_ref()
+            .unwrap()
+            .metadata
+            .name
+            .as_deref(),
+        Some("shared")
+    );
+    assert!(field
+        .resolved_client_certificate
+        .as_ref()
+        .unwrap()
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(CONTROLLER_CA_SOURCE))
+        .is_none());
+    assert!(ctx.secret_ref_manager().get_refs("certs/missing").contains(&owner));
+    assert!(ctx.secret_ref_manager().get_refs("bad").is_empty());
+    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("certs").is_empty());
+    secret.metadata.annotations = None;
+    ctx.runtime()
+        .secret_store
+        .replace_all(HashMap::from([("certs/shared".into(), secret)]));
+    let mut changed = parsed;
+    changed
+        .spec
+        .outbound_tls
+        .as_mut()
+        .unwrap()
+        .client_certificate_ref
+        .as_mut()
+        .unwrap()
+        .name = "missing-client".into();
+    let changed = parse_client_identity(changed, &ctx).await;
+    assert!(changed
+        .spec
+        .outbound_tls
+        .as_ref()
+        .unwrap()
+        .resolved_client_certificate
+        .is_none());
+    assert_eq!(
+        changed
+            .spec
+            .outbound_tls
+            .as_ref()
+            .unwrap()
+            .resolved_ca_certificates
+            .as_ref()
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn malformed_cluster_namespace_clears_prior_canonical_owner_dependencies_and_materials() {
+    let ctx = make_ctx_with_secrets(HashMap::new());
+    let owner = ResourceRef::new(ResourceKind::EdgionGatewayConfig, None, "global-client".into());
+    let mut config = parse_client_identity(client_identity_config(Some("certs")), &ctx).await;
+    assert!(ctx.secret_ref_manager().get_refs("certs/client").contains(&owner));
+    ctx.runtime().cross_ns_ref_mgr.add_ref("certs".into(), owner.clone());
+    config.metadata.namespace = Some("fake".into());
+    config.spec.outbound_tls.as_mut().unwrap().resolved_client_certificate = Some(Secret::default());
+    let mut parsed = parse_client_identity(config, &ctx).await;
+    assert!(ctx.secret_ref_manager().get_dependencies(&owner.key()).is_empty());
+    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("certs").is_empty());
+    assert!(parsed
+        .spec
+        .outbound_tls
+        .as_ref()
+        .unwrap()
+        .resolved_client_certificate
+        .is_none());
+    assert!(!EdgionGatewayConfigHandler.preparse(&mut parsed, &ctx).is_empty());
+    parsed.spec.outbound_tls = None;
+    assert!(!EdgionGatewayConfigHandler.preparse(&mut parsed, &ctx).is_empty());
+}
+
+#[test]
+fn intrinsic_cluster_tls_acceptance_is_independent_of_material_visibility_and_has_no_io() {
+    let visible = make_ctx_with_secrets(HashMap::from([("certs/client".into(), Secret::default())]));
+    let hidden = make_ctx_with_secrets(HashMap::new());
+    for invalid in [false, true] {
+        let mut original = client_identity_config(Some("certs"));
+        if invalid {
+            original
+                .spec
+                .outbound_tls
+                .as_mut()
+                .unwrap()
+                .client_certificate_ref
+                .as_mut()
+                .unwrap()
+                .namespace = None;
+        }
+        for ctx in [&visible, &hidden] {
+            let mut config = original.clone();
+            let errors = EdgionGatewayConfigHandler.preparse(&mut config, ctx);
+            assert_eq!(errors.is_empty(), !invalid);
+            EdgionGatewayConfigHandler.update_status(&mut config, ctx, &errors);
+            let condition = config
+                .status
+                .as_ref()
+                .unwrap()
+                .conditions
+                .iter()
+                .find(|condition| condition.type_ == "Accepted")
+                .unwrap();
+            assert_eq!(condition.status, if invalid { "False" } else { "True" });
+            assert!(config
+                .status
+                .as_ref()
+                .unwrap()
+                .conditions
+                .iter()
+                .all(|condition| condition.type_ != "ResolvedRefs"));
+            let owner = ResourceRef::new(ResourceKind::EdgionGatewayConfig, None, "global-client".into());
+            assert!(ctx.secret_ref_manager().get_dependencies(&owner.key()).is_empty());
+        }
+    }
 }
 
 #[test]
@@ -60,12 +253,17 @@ async fn parse_resolves_global_outbound_ca_secret() {
         ByteString(b"-----BEGIN CERTIFICATE-----\nMIIBglobal\n-----END CERTIFICATE-----\n".to_vec()),
     );
     let ca_secret = Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("global-ca".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(data),
         type_: Some("kubernetes.io/tls".to_string()),
         ..Default::default()
     };
     let mut secrets = HashMap::new();
-    // EGC is cluster-scoped; owner namespace falls back to "default".
+    // The cluster owner selects this explicit target namespace administratively.
     secrets.insert("default/global-ca".to_string(), ca_secret);
 
     let ctx = make_ctx_with_secrets(secrets);
@@ -74,7 +272,7 @@ async fn parse_resolves_global_outbound_ca_secret() {
         current_status: None,
         outbound_tls: Some(OutboundTlsConfig {
             validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                ca_certificate_refs: Some(vec![CustomCACertificateRef {
                     kind: "Secret".to_string(),
                     name: "global-ca".to_string(),
                     namespace: Some("default".to_string()),
@@ -117,6 +315,11 @@ async fn on_delete_clears_secret_refs() {
         ByteString(b"-----BEGIN CERTIFICATE-----\nMIIBglobal\n-----END CERTIFICATE-----\n".to_vec()),
     );
     let ca_secret = Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("global-ca".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(data),
         type_: Some("kubernetes.io/tls".to_string()),
         ..Default::default()
@@ -130,7 +333,7 @@ async fn on_delete_clears_secret_refs() {
         current_status: None,
         outbound_tls: Some(OutboundTlsConfig {
             validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                ca_certificate_refs: Some(vec![CustomCACertificateRef {
                     kind: "Secret".to_string(),
                     name: "global-ca".to_string(),
                     namespace: Some("default".to_string()),
@@ -172,7 +375,7 @@ async fn assert_cross_namespace_ca_refs_replace_dependencies_and_clear_on_delete
         current_status: None,
         outbound_tls: Some(OutboundTlsConfig {
             validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                ca_certificate_refs: Some(vec![CustomCACertificateRef {
                     kind: kind.to_string(),
                     name: "global-ca".to_string(),
                     namespace: Some("first-target".to_string()),
@@ -195,7 +398,7 @@ async fn assert_cross_namespace_ca_refs_replace_dependencies_and_clear_on_delete
     };
 
     let _ = handler.parse(egc.clone(), &ctx).await;
-    assert!(ctx
+    assert!(!ctx
         .runtime()
         .cross_ns_ref_mgr
         .get_refs("first-target")
@@ -225,7 +428,7 @@ async fn assert_cross_namespace_ca_refs_replace_dependencies_and_clear_on_delete
         .secret_ref_manager()
         .get_refs(&material_key("first-target"))
         .is_empty());
-    assert!(ctx
+    assert!(!ctx
         .runtime()
         .cross_ns_ref_mgr
         .get_refs("second-target")
@@ -427,7 +630,7 @@ async fn egc_ca_only_no_san_accepted() {
         current_status: None,
         outbound_tls: Some(OutboundTlsConfig {
             validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                ca_certificate_refs: Some(vec![CustomCACertificateRef {
                     kind: "Secret".to_string(),
                     name: "global-ca".to_string(),
                     namespace: Some("default".to_string()),
@@ -478,7 +681,7 @@ async fn parse_client_identity(egc: EdgionGatewayConfig, ctx: &HandlerContext) -
 #[tokio::test]
 async fn global_client_identity_tracks_material_grants_and_removal() {
     let ctx = make_ctx_with_secrets(HashMap::new());
-    let owner = ResourceRef::new(ResourceKind::EdgionGatewayConfig, None, "global-client".to_string());
+    let owner = ResourceRef::new(ResourceKind::EdgionGatewayConfig, None, "global-client".into());
     let mut egc = client_identity_config(Some("certs"));
     egc.spec.outbound_tls.as_mut().unwrap().resolved_client_certificate = Some(Secret::default());
     egc = parse_client_identity(egc, &ctx).await;
@@ -490,39 +693,25 @@ async fn global_client_identity_tracks_material_grants_and_removal() {
         .resolved_client_certificate
         .is_none());
     assert!(ctx.secret_ref_manager().get_refs("certs/client").contains(&owner));
-    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("certs").contains(&owner));
-
-    let grant = serde_json::from_value(serde_json::json!({
-        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "ReferenceGrant",
-        "metadata": {"name": "client", "namespace": "certs"},
-        "spec": {"from": [{"group": "edgion.io", "kind": "EdgionGatewayConfig", "namespace": "default"}],
-                 "to": [{"group": "", "kind": "Secret", "name": "client"}]}
-    }))
-    .unwrap();
-    ctx.runtime()
-        .ref_grant_store
-        .upsert("certs/client".to_string(), Arc::new(grant));
-    egc = parse_client_identity(egc, &ctx).await;
-    assert!(egc
-        .spec
-        .outbound_tls
-        .as_ref()
-        .unwrap()
-        .resolved_client_certificate
-        .is_none());
+    assert!(!ctx.runtime().cross_ns_ref_mgr.get_refs("certs").contains(&owner));
 
     for generation in ["first", "rotated"] {
         let secret = Secret {
-            type_: Some("kubernetes.io/tls".to_string()),
+            metadata: kube::api::ObjectMeta {
+                name: Some("client".into()),
+                namespace: Some("certs".into()),
+                ..Default::default()
+            },
+            type_: Some("kubernetes.io/tls".into()),
             data: Some(BTreeMap::from([(
-                "tls.crt".to_string(),
+                "tls.crt".into(),
                 ByteString(generation.as_bytes().to_vec()),
             )])),
             ..Default::default()
         };
         ctx.runtime()
             .secret_store
-            .replace_all(HashMap::from([("certs/client".to_string(), secret.clone())]));
+            .replace_all(HashMap::from([("certs/client".into(), secret.clone())]));
         egc = parse_client_identity(egc, &ctx).await;
         assert_eq!(
             egc.spec
@@ -534,6 +723,33 @@ async fn global_client_identity_tracks_material_grants_and_removal() {
             Some(&secret)
         );
     }
+    let grant = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"irrelevant","namespace":"certs"},"spec":{
+            "from":[{"group":"edgion.io","kind":"EdgionGatewayConfig","namespace":"default"}],
+            "to":[{"group":"","kind":"Secret","name":"client"}]}}))
+    .unwrap();
+    ctx.runtime()
+        .ref_grant_store
+        .upsert("certs/irrelevant".into(), Arc::new(grant));
+    egc = parse_client_identity(egc, &ctx).await;
+    assert!(egc
+        .spec
+        .outbound_tls
+        .as_ref()
+        .unwrap()
+        .resolved_client_certificate
+        .is_some());
+    ctx.runtime().ref_grant_store.remove("certs/irrelevant");
+    egc = parse_client_identity(egc, &ctx).await;
+    assert!(egc
+        .spec
+        .outbound_tls
+        .as_ref()
+        .unwrap()
+        .resolved_client_certificate
+        .is_some());
+    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("certs").is_empty());
+
     ctx.runtime().secret_store.replace_all(HashMap::new());
     egc = parse_client_identity(egc, &ctx).await;
     assert!(egc
@@ -543,27 +759,6 @@ async fn global_client_identity_tracks_material_grants_and_removal() {
         .unwrap()
         .resolved_client_certificate
         .is_none());
-    ctx.runtime()
-        .secret_store
-        .replace_all(HashMap::from([("certs/client".to_string(), Secret::default())]));
-    egc = parse_client_identity(egc, &ctx).await;
-    assert!(egc
-        .spec
-        .outbound_tls
-        .as_ref()
-        .unwrap()
-        .resolved_client_certificate
-        .is_some());
-    ctx.runtime().ref_grant_store.remove("certs/client");
-    egc = parse_client_identity(egc, &ctx).await;
-    assert!(egc
-        .spec
-        .outbound_tls
-        .as_ref()
-        .unwrap()
-        .resolved_client_certificate
-        .is_none());
-
     egc.spec
         .outbound_tls
         .as_mut()
@@ -571,20 +766,28 @@ async fn global_client_identity_tracks_material_grants_and_removal() {
         .client_certificate_ref
         .as_mut()
         .unwrap()
-        .namespace = Some("other".to_string());
+        .namespace = Some("other".into());
     egc = parse_client_identity(egc, &ctx).await;
     assert!(ctx.secret_ref_manager().get_refs("certs/client").is_empty());
-    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("certs").is_empty());
     assert!(ctx.secret_ref_manager().get_refs("other/client").contains(&owner));
-    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("other").contains(&owner));
+    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("other").is_empty());
     EdgionGatewayConfigHandler.on_delete(&egc, &ctx).await;
     assert!(ctx.secret_ref_manager().get_refs("other/client").is_empty());
-    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("other").is_empty());
 }
 
 #[tokio::test]
 async fn global_client_identity_requires_explicit_namespace_and_core_secret_kind() {
-    let ctx = make_ctx_with_secrets(HashMap::from([("default/client".to_string(), Secret::default())]));
+    let ctx = make_ctx_with_secrets(HashMap::from([(
+        "default/client".to_string(),
+        Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some("client".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )]));
     for (namespace, group, kind, expected) in [
         (None, None, None, false),
         (Some(""), None, None, false),

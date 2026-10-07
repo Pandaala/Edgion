@@ -5,7 +5,7 @@ use crate::routes::http::proxy_http::preflight_handler::ResolvedPreflightPolicy;
 use crate::routes::http::proxy_http::ParsedTimeouts;
 use crate::util::RealIpExtractor;
 use arc_swap::ArcSwap;
-use edgion_common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_common::dns::resolver_select::{candidate_from_egc_default, ResolverCandidate};
 use edgion_resources::duration::parse_duration;
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
@@ -219,13 +219,13 @@ impl ResolvedDnsResolverDefault {
 }
 
 struct EdgionGatewayConfigSnapshot {
-    configs: HashMap<String, EdgionGatewayConfig>,
+    configs: HashMap<String, Arc<EdgionGatewayConfig>>,
     runtime_configs: HashMap<String, Arc<ResolvedGatewayConfig>>,
     dns_resolver_default: Option<Arc<ResolvedDnsResolverDefault>>,
 }
 
 impl EdgionGatewayConfigSnapshot {
-    fn new(configs: HashMap<String, EdgionGatewayConfig>) -> Self {
+    fn new(configs: HashMap<String, Arc<EdgionGatewayConfig>>) -> Self {
         let dns_resolver_default = configs
             .iter()
             .filter(|(_, config)| config.spec.dns_resolver.is_some())
@@ -320,7 +320,7 @@ pub fn bind_gateway_config(name: Option<&str>) -> Arc<GatewayConfigHandle> {
 /// removal/recreation; expired bindings retain no runtime and are pruned here.
 /// Atomicity is per EGC, not across resources or the raw-resource/admin view.
 fn publish_snapshot(
-    configs: HashMap<String, EdgionGatewayConfig>,
+    configs: HashMap<String, Arc<EdgionGatewayConfig>>,
     bindings: &mut HashMap<String, Weak<GatewayConfigHandle>>,
 ) {
     let snapshot = Arc::new(EdgionGatewayConfigSnapshot::new(configs));
@@ -431,7 +431,7 @@ const DEFAULT_LB_DEGRADE_THRESHOLD: u8 = 0;
 ///   - webhook response cap: `min` — the strictest cap wins.
 ///   - LinkSys instances per kind: `min` — the strictest cap wins.
 ///   - LB degrade threshold:   `max` — degrade mode engages as early as any config asks.
-fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) -> bool {
+fn recompute_global_config(store: &HashMap<String, Arc<EdgionGatewayConfig>>) -> bool {
     #[cfg(test)]
     let _cap = crate::link_sys::runtime::store::LINK_SYS_CAP_TEST_LOCK.lock();
     let webhook_max = store
@@ -470,70 +470,23 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) -> bool
     // are each adopted only when exactly one config declares that axis.
     // Configs that do not set outbound_tls at all default to verify=true (the safe
     // default), so the verify aggregate is true whenever any config omits the block.
-    let outbound_blocks: Vec<_> = store
-        .values()
-        .map(|c| c.spec.outbound_tls.clone().unwrap_or_default())
-        .collect();
-    let mut agg = edgion_common::link_sys_core::outbound_tls::aggregate_verify(&outbound_blocks);
-    let ca_blocks: Vec<_> = outbound_blocks
-        .iter()
-        .filter(|b| {
-            b.validation.as_ref().is_some_and(|v| {
-                v.ca_certificate_refs.as_ref().is_some_and(|r| !r.is_empty()) || v.well_known_ca_certificates.is_some()
-            })
-        })
-        .collect();
-    match ca_blocks.as_slice() {
-        [one] => {
-            // A single non-empty validation (refs or wellKnown) is adopted as
-            // the cluster-wide default. The Controller has already resolved the CA
-            // Secrets into `resolved_ca_certificates` and shipped them via conf_sync,
-            // so the per-call resolver can read them for inheriting calls.
-            agg.validation = one.validation.clone();
-            agg.resolved_ca_certificates = one.resolved_ca_certificates.clone();
-        }
-        [] => {}
-        _ => {
-            crate::observe::metrics::record_config_conflict("outbound_ca");
-            tracing::warn!(
-                component = "outbound_tls",
-                "multiple EdgionGatewayConfig declare conflicting outbound CA defaults; falling back to System"
-            );
-        }
+    use edgion_common::link_sys_core::outbound_tls::{set_outbound_global_default, GlobalOutboundTlsSnapshot};
+    let snapshot = Arc::new(GlobalOutboundTlsSnapshot::from_configs(store.values().cloned()));
+    if snapshot.ca_conflict() {
+        crate::observe::metrics::record_config_conflict("outbound_ca");
+        tracing::warn!(
+            component = "outbound_tls",
+            "multiple EdgionGatewayConfig declare conflicting outbound CA defaults; falling back to System"
+        );
     }
-    let mut client_identity_blocks: Vec<_> = outbound_blocks
-        .iter()
-        .filter(|block| block.client_certificate_ref.is_some())
-        .collect();
-    client_identity_blocks.sort_by_key(|block| {
-        block.client_certificate_ref.as_ref().map(|reference| {
-            (
-                reference.namespace.clone().unwrap_or_default(),
-                reference.name.clone(),
-                reference.group.clone().unwrap_or_default(),
-                reference.kind.clone().unwrap_or_else(|| "Secret".to_string()),
-            )
-        })
-    });
-    match client_identity_blocks.as_slice() {
-        [one] => {
-            agg.client_certificate_ref = one.client_certificate_ref.clone();
-            agg.resolved_client_certificate = one.resolved_client_certificate.clone();
-        }
-        [] => {}
-        [first, ..] => {
-            // Keep a declared ref but no resolved material so every inheriting
-            // resolver fails closed instead of silently sending no client cert.
-            agg.client_certificate_ref = first.client_certificate_ref.clone();
-            agg.resolved_client_certificate = None;
-            crate::observe::metrics::record_config_conflict("outbound_client_identity");
-            tracing::warn!(
-                component = "outbound_tls",
-                "multiple EdgionGatewayConfig declare conflicting outbound client identities; inherited outbound TLS is disabled"
-            );
-        }
+    if snapshot.client_conflict() {
+        crate::observe::metrics::record_config_conflict("outbound_client_identity");
+        tracing::warn!(
+            component = "outbound_tls",
+            "multiple EdgionGatewayConfig declare conflicting outbound client identities; inherited outbound TLS is disabled"
+        );
     }
-    edgion_common::link_sys_core::outbound_tls::set_outbound_global_default(agg)
+    set_outbound_global_default(snapshot)
 }
 
 impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
@@ -544,7 +497,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             "EdgionGatewayConfig full_set: received {} EdgionGatewayConfig resources",
             data.len()
         );
-        let configs = arc_map_to_owned(data);
+        let configs = data.clone();
         let outbound_tls_changed = recompute_global_config(&configs);
         publish_snapshot(configs, &mut bindings);
         drop(bindings);
@@ -577,7 +530,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             );
             for (key, config) in add {
                 tracing::debug!(key = %key, name = %config.name_any(), "EdgionGatewayConfig added");
-                configs.insert(key, (*config).clone());
+                configs.insert(key, config);
             }
         }
 
@@ -589,7 +542,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             );
             for (key, config) in update {
                 tracing::debug!(key = %key, name = %config.name_any(), "EdgionGatewayConfig updated");
-                if configs.insert(key.clone(), (*config).clone()).is_none() {
+                if configs.insert(key.clone(), config).is_none() {
                     tracing::warn!(key = %key, "EdgionGatewayConfig update: key not found in store, inserting");
                 }
             }

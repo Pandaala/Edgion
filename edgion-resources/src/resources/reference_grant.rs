@@ -8,7 +8,7 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::common::api_groups_match;
+use super::refs::grants::allows_reference;
 
 /// ReferenceGrant identifies kinds of resources in other namespaces that are
 /// trusted to reference the specified kinds of resources in the same namespace.
@@ -83,7 +83,7 @@ pub struct ReferenceGrantTo {
     /// * Service
     pub kind: String,
 
-    /// Name is the name of the referent. When unspecified or empty, this policy
+    /// Name is the name of the referent. When unspecified, this policy
     /// refers to all resources of the specified Group and Kind in the local
     /// namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,22 +128,7 @@ impl ReferenceGrant {
         to_kind: &str,
         to_name: Option<&str>,
     ) -> bool {
-        // Check if from matches
-        let from_matches =
-            self.spec.from.iter().any(|f| {
-                f.namespace == from_namespace && api_groups_match(&f.group, from_group) && f.kind == from_kind
-            });
-
-        if !from_matches {
-            return false;
-        }
-
-        // Check if to matches
-        self.spec.to.iter().any(|t| {
-            api_groups_match(&t.group, to_group)
-                && t.kind == to_kind
-                && (t.name.is_none() || t.name.as_deref() == to_name)
-        })
+        allows_reference(self, from_namespace, from_group, from_kind, to_group, to_kind, to_name)
     }
 }
 

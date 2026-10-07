@@ -83,6 +83,15 @@ The ordering is the security property: a missing `Role` still returns `401` befo
 
 ### CenterPolicy semantics
 
+Writing EdgionGatewayConfig grants administrative material-selection authority for
+the exact `spec.outboundTls.validation.caCertificateRefs[]` and
+`spec.outboundTls.clientCertificateRef` fields. Their targets require explicit
+namespaces; the source remains Cluster and no ReferenceGrant is consulted. Scope
+EGC create/update permission with this material access in mind. This authority
+does not upgrade namespaced plugin/LinkSys references or globalPluginsRef and
+does not change the RBAC engine or default policies. See the
+[EGC processing contract](../05-resources/03-edgion-gateway-config.md).
+
 `CenterPolicy` is **default-deny**: an empty policy authorizes nothing. A request is permitted when *any* allow rule matches both the verb and the kind:
 
 ```

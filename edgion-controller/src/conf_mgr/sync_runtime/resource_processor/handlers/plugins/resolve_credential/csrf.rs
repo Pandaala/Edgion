@@ -1,63 +1,58 @@
-//! CSRF signing-key resolution.
+//! CSRF signing-key resolution from the actual owning field.
 
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
-use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_bound_secret, BoundFetchOutcome};
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::resources::refs::plugin_fields::{BoundPluginEntryMut, PreparedPluginReferences};
 
 use super::read_secret_utf8;
 
-/// Resolve CSRF signing keys from Secrets and register references.
+/// Rebuild material using one prepared owner snapshot shared by the resolvers.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
+    prepared: &PreparedPluginReferences,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    if let Some(ref mut plugins) = ep.spec.request_plugins {
-        for entry in plugins.iter_mut() {
-            if let EdgionPlugin::Csrf(ref mut config) = entry.plugin {
-                config.resolved_key = None;
+    let Ok(mut bindings) = prepared.bind_mut(ep) else {
+        return;
+    };
+    for entry in bindings.request_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_body_filter_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+    for entry in bindings.response_entries() {
+        resolve_entry(entry, resource_ref, ctx);
+    }
+}
 
-                let Some(sor) = config.secret_ref.clone() else {
-                    continue;
-                };
-                let secret_key =
-                    format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
-                let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
-                    FetchOutcome::Ok(s) => s,
-                    FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
-                        tracing::info!(
-                            edgion_plugins = %resource_ref.key(),
-                            secret_key = %secret_key,
-                            "Csrf: Secret not found yet, will be reprocessed when Secret arrives"
-                        );
-                        continue;
-                    }
-                    FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
-                        ref from_ns,
-                        ref to_ns,
-                        ref secret_name,
-                    }) => {
-                        tracing::warn!(
-                            edgion_plugins = %resource_ref.key(),
-                            from_ns = %from_ns,
-                            to_ns = %to_ns,
-                            secret_name = %secret_name,
-                            "Csrf: cross-namespace Secret reference denied (ReferenceGrant missing)"
-                        );
-                        continue;
-                    }
-                };
-
-                if let Some(key) = read_secret_utf8(&secret, &["key"]) {
-                    config.resolved_key = Some(key.to_owned());
-                    tracing::debug!(
-                        edgion_plugins = %resource_ref.key(),
-                        secret_key = %secret_key,
-                        "Csrf: signing key resolved"
-                    );
-                }
-            }
+fn resolve_entry(mut entry: BoundPluginEntryMut<'_>, owner: &ResourceRef, ctx: &HandlerContext) {
+    let EdgionPlugin::Csrf(config) = entry.config_mut() else {
+        return;
+    };
+    config.resolved_key = None;
+    if !entry.is_enabled() {
+        return;
+    }
+    let resolved_key = {
+        let Ok(references) = entry.references() else {
+            return;
+        };
+        let Some(token) = references.csrf_secret() else {
+            return;
+        };
+        match fetch_bound_secret(ctx, owner, token) {
+            BoundFetchOutcome::Ok(authorized) => read_secret_utf8(&authorized.secret, &["key"]).map(str::to_owned),
+            BoundFetchOutcome::Pending(_) | BoundFetchOutcome::Invalid(_) => None,
         }
+    };
+    if let EdgionPlugin::Csrf(config) = entry.config_mut() {
+        config.resolved_key = resolved_key;
     }
 }

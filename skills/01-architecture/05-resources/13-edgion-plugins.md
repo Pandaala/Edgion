@@ -33,6 +33,17 @@ The EdgionPluginsHandler parse stage performs extensive Secret-reference resolut
 9. **Every Secret reference** is registered in SecretRefManager so that Secret changes automatically requeue this resource
 10. **Enabled RequestMirror Service references** are registered under mirror-qualified ServiceRefManager keys so Service and EndpointSlice changes requeue this resource without treating the mirror as a forwarding backend-policy ancestor
 
+GrpcJsonTranscoder descriptor ConfigMap references use the shared owning plugin
+reference walker. The field fixes core ConfigMap and the actual plugin namespace
+(default only when the owner namespace is omitted), selects exact binaryData[key],
+and has no cross-namespace mode or CA conversion. Only enabled request-stage entries
+acquire descriptors. All four stage arrays clear prior resolved bytes/errors before
+binding; inline, disabled and unsupported-stage entries acquire no object. Malformed
+owner/name and invalid key shape create no dependency/read. Valid missing targets
+retain recovery dependencies. Readonly status reports invalid identities and missing
+objects directly without registering edges; a present object missing the selected
+binary key remains an Accepted compile failure, preserving existing status behavior.
+
 ### on_delete
 
 Clear all references for this EdgionPlugins in SecretRefManager and ServiceRefManager.

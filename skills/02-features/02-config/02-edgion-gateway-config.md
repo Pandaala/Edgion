@@ -134,8 +134,8 @@ spec:
     validation:
       wellKnownCACertificates: System
       # hostname: api.example.com
-      # caCertificateRefs: [{ kind: ConfigMap, name: corporate-ca }]
-    # clientCertificateRef: { kind: Secret, name: outbound-client }
+      # caCertificateRefs: [{ kind: ConfigMap, name: corporate-ca, namespace: edgion-system }]
+    # clientCertificateRef: { kind: Secret, name: outbound-client, namespace: edgion-system }
 
   # ─── Data-plane ExternalName DNS fallback ───
   dnsResolver:
@@ -289,6 +289,15 @@ Cluster-wide default for plugin and LinkSys outbound TLS. `verify` defaults to `
 add hostname/SAN constraints. `clientCertificateRef` supplies an outbound mTLS identity.
 Controller-resolved certificate material stays out of the CRD schema and is redacted in
 Admin output while remaining available to conf_sync.
+
+Both material-reference fields require an explicit nonempty namespace because EGC
+is cluster-scoped. CA kind is required and supports Secret/ConfigMap; the client
+kind defaults to Secret. Omitted group, `group: ""` and custom `group: core` mean
+the core API for these exact fields. Their EGC write permission authorizes named
+material selection without ReferenceGrant. Namespaced plugin/LinkSys TLS references
+retain their own Grant checks; globalPluginsRef retains its separate contract.
+Missing/unwatched materials do not change the shared intrinsic EGC Accepted status.
+Hostname/SAN pinning remains rejected by the existing Phase1 validation guard.
 
 ### spec.dnsResolver
 

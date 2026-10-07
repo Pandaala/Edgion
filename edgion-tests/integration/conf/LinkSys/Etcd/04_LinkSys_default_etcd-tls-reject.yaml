@@ -3,7 +3,7 @@
 # etcd-client's TLS stack always verifies the server certificate; it exposes no
 # skip-verify API. The outbound-TLS resolver therefore rejects `verify: false`
 # for Etcd unconditionally (provider_can_disable=false) — independent of any
-# environment. The Gateway logs "from_config failed" and never registers the
+# environment. The Gateway logs a keyed construction failure and never publishes the
 # client, so:
 #   - the LinkSys CRD still syncs to the Gateway (controller admission is lenient)
 #   - NO runtime client appears under /api/v1/testing/link-sys/etcd/clients

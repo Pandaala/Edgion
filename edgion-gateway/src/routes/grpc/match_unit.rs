@@ -140,15 +140,15 @@ impl CompiledGrpcBackend {
         if schema.ref_denied.is_some() {
             return None;
         }
-        if !matches!(schema.group.as_deref(), None | Some("") | Some("core"))
-            || !matches!(schema.kind.as_deref(), None | Some("Service"))
-        {
+        let edgion_resources::resources::refs::targets::BackendTarget::Service(identity) =
+            schema.validated_target(route_namespace).ok()?
+        else {
             return None;
-        }
+        };
         Some(PolicyTargetKey {
             target_kind: PolicyTargetKind::Service,
-            namespace: schema.namespace.as_deref().unwrap_or(route_namespace).to_string(),
-            name: schema.name.clone(),
+            namespace: identity.scope().namespace()?.to_string(),
+            name: identity.name().to_string(),
         })
     }
 }

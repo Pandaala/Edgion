@@ -11,7 +11,7 @@ pub mod resolver;
 pub mod runtime;
 
 // Re-export key types for external consumers
-pub(crate) use apply::fingerprint_webhook;
+pub(crate) use client::WebhookCandidate;
 pub use client::WebhookLinkClient;
 pub use manager::{configure_webhook_global_max, get_webhook_call_handle, get_webhook_global_max, WebhookCallHandle};
 pub use resolver::resolve_webhook_key;

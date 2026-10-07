@@ -150,7 +150,7 @@ async fn partial_refill_sequence(core: &RedisRateLimiter, client: &RedisLinkClie
 #[ignore = "requires the integration Redis fixture"]
 async fn token_bucket_accumulates_partial_refills_across_denials() -> Result<()> {
     let (config, auth) = redis_config();
-    let client = RedisLinkClient::from_config("integration/token-bucket-partial-refill", &config, &auth)?;
+    let client = RedisLinkClient::from_test_config("integration/token-bucket-partial-refill", &config, &auth)?;
     client
         .init_for_test()
         .await

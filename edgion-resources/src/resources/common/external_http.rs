@@ -53,8 +53,8 @@ impl std::fmt::Debug for ResolvedSecrets {
 #[serde(rename_all = "camelCase")]
 pub struct WebhookServiceRef {
     /// Group of the referent. Empty = core.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub group: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     /// Kind of the referent. `None` / `""` defaults to `Service`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -131,7 +131,7 @@ impl WebhookTarget {
     /// delegates here, so the schema layer and the gateway cannot disagree.
     pub fn kind(&self) -> Result<TargetKind<'_>, String> {
         let svc = &self.service;
-        let has_service = !svc.group.is_empty()
+        let has_service = svc.group.as_deref().is_some_and(|group| !group.is_empty())
             || svc.kind.is_some()
             || svc.name.is_some()
             || svc.namespace.is_some()

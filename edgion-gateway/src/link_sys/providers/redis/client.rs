@@ -19,12 +19,9 @@ use fred::types::Resolve;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::link_sys::credential::CredentialState;
 use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
 use crate::link_sys::runtime::health_probe::{new_published_health, spawn_health_probe, ProbeConfig};
 use edgion_common::link_sys_core::PublishedHealth;
-use edgion_resources::credentials::materials::BasicAuthMaterial;
-use edgion_resources::resources::link_sys::redis::RedisClientConfig;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
 use super::config_mapping::{build_fred_config, build_fred_pool};
@@ -39,6 +36,13 @@ use super::resolver::redis_egress_resolver_for_test;
 ///
 /// One published generation. The runner may hold a second retiring Arc during
 /// Handover; callers always go through `get_redis_client`.
+/// Detached production configuration cannot construct a client.
+/// ```compile_fail
+/// use edgion_gateway::link_sys::providers::redis::RedisLinkClient;
+/// use edgion_gateway::link_sys::credential::CredentialState;
+/// let config = serde_json::from_value(serde_json::json!({"endpoints":["redis://redis.example:6379"]})).unwrap();
+/// let _ = RedisLinkClient::from_config("apps/redis", &config, &CredentialState::NotRequired);
+/// ```
 pub struct RedisLinkClient {
     /// fred connection pool (round-robin across connections)
     pool: Pool,
@@ -69,14 +73,34 @@ fn any_connected(states: impl IntoIterator<Item = bool>) -> bool {
 }
 
 impl RedisLinkClient {
-    /// Create from CRD config. Does NOT connect — call `init()` next.
-    pub fn from_config(
-        name: &str,
-        config: &RedisClientConfig,
-        auth: &CredentialState<BasicAuthMaterial>,
-    ) -> Result<Self> {
-        let fred_config = build_fred_config(config, auth)?;
-        let (builder, pool_size) = build_fred_pool(config, fred_config)?;
+    /// Create from the actual resolved resource. Does not connect; call init next.
+    pub fn from_link_sys(owner: Arc<LinkSys>) -> Result<Self> {
+        let candidate = super::apply::RedisCandidate::new(owner)?;
+        let owner = candidate.tls.owner();
+        let name = format!(
+            "{}/{}",
+            owner.metadata.namespace.as_deref().unwrap_or("default"),
+            owner.metadata.name.as_deref().unwrap_or_default(),
+        );
+        Self::from_candidate(&name, &candidate)
+    }
+
+    pub(super) fn from_candidate(name: &str, candidate: &super::apply::RedisCandidate) -> Result<Self> {
+        let SystemConfig::Redis(config) = &candidate.tls.owner().spec.config else {
+            anyhow::bail!("Redis construction requires an actual Redis owner");
+        };
+        let auth = crate::link_sys::credential::basic_state(candidate.tls.owner());
+        let fred_config = build_fred_config(config, &auth)?;
+        let connector = if candidate.tls.uses_tls() {
+            Some(match candidate.tls.rustls_client_config()? {
+                Some(config) => fred::types::config::TlsConnector::from(config),
+                None => fred::types::config::TlsConnector::default_rustls()
+                    .map_err(|error| anyhow::anyhow!("Failed to create default rustls TLS config: {error:?}"))?,
+            })
+        } else {
+            None
+        };
+        let (builder, pool_size) = build_fred_pool(config, fred_config, connector)?;
 
         let pool = builder
             .build_pool(pool_size)
@@ -86,25 +110,13 @@ impl RedisLinkClient {
             pool,
             name: name.to_string(),
             pool_size,
-            fingerprint: RuntimeFingerprint::unspecified(),
+            fingerprint: candidate.fingerprint().clone(),
             retired: Arc::new(AtomicBool::new(false)),
             shutdown_started: AtomicBool::new(false),
             healthy: new_published_health(name, false),
             probe_shutdown: parking_lot::Mutex::new(None),
             probe_handle: parking_lot::Mutex::new(None),
         })
-    }
-
-    /// Build from a resolved Redis LinkSys, including the apply fingerprint.
-    pub(crate) fn from_linksys(name: &str, ls: &LinkSys) -> Result<Arc<Self>> {
-        let SystemConfig::Redis(config) = &ls.spec.config else {
-            anyhow::bail!("Redis from_linksys called with a non-Redis LinkSys");
-        };
-        let auth = crate::link_sys::credential::basic_state(ls);
-        let fingerprint = super::apply::fingerprint_redis(ls)?;
-        let mut client = Self::from_config(name, config, &auth)?;
-        client.fingerprint = fingerprint;
-        Ok(Arc::new(client))
     }
 
     pub(crate) fn runtime_fingerprint(&self) -> &RuntimeFingerprint {
@@ -131,7 +143,7 @@ impl RedisLinkClient {
         }
     }
 
-    /// Initialize connection. Must be called after `from_config()`.
+    /// Initialize the already prepared actual-resource generation.
     ///
     /// Connects all pool clients to Redis, records aggregate health, and starts
     /// the background connection-state probe.
@@ -246,3 +258,10 @@ impl RedisLinkClient {
 #[cfg(test)]
 #[path = "../../../../tests/unit/link_sys/providers/redis/client_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/link_sys/providers/redis/client_test/test_util.rs"]
+mod test_util;
+#[cfg(all(not(test), feature = "test-util"))]
+#[path = "../../../../tests/unit/link_sys/providers/redis/client_test/test_util.rs"]
+mod test_util;

@@ -1,11 +1,100 @@
 use super::*;
 use edgion_resources::constants::secret_keys::tls as tls_keys;
-use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
 use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
+
+fn kafka_input(
+    tls: Option<serde_json::Value>,
+    defaults: std::sync::Arc<outbound_tls::GlobalOutboundTlsSnapshot>,
+) -> outbound_tls::PreparedLinkSysTls {
+    let owner = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"kafka","namespace":"apps"},
+        "spec":{"type":"kafka","config":{"brokers":["kafka.example:9093"],"tls":tls}}
+    }))
+    .unwrap();
+    outbound_tls::PreparedLinkSysTls::with_snapshot(std::sync::Arc::new(owner), defaults).unwrap()
+}
+
+#[test]
+fn owning_kafka_converter_requires_explicit_system_tls_but_keeps_native_fred_fallback() {
+    install_test_crypto_provider();
+    let defaults = std::sync::Arc::new(outbound_tls::GlobalOutboundTlsSnapshot::from_configs([]));
+    for tls in [
+        None,
+        Some(serde_json::json!({"enabled":false,
+        "validation":{"caCertificateRefs":[{"kind":"Secret","name":"missing","namespace":""}]}})),
+    ] {
+        assert!(build_kafka_rustls_client_config(&kafka_input(tls, defaults.clone()))
+            .unwrap()
+            .is_none());
+    }
+    let active = kafka_input(Some(serde_json::json!({"enabled":true})), defaults);
+    assert!(build_kafka_rustls_client_config(&active).unwrap().is_some());
+    active
+        .with_tls_selection(|proof, defaults| {
+            assert!(build_validated_rustls_client_config(proof, defaults, "Redis")?.is_none());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn owning_kafka_entry_checks_variant_and_ignores_global_policy_only_when_inactive() {
+    install_test_crypto_provider();
+    let invalid: edgion_resources::EdgionGatewayConfig = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"invalid","namespace":"apps"},"spec":{"outboundTls":{"verify":true}}
+    }))
+    .unwrap();
+    let defaults = std::sync::Arc::new(outbound_tls::GlobalOutboundTlsSnapshot::from_configs([
+        std::sync::Arc::new(invalid),
+    ]));
+    let inactive = kafka_input(None, defaults.clone());
+    assert!(build_kafka_rustls_client_config(&inactive).unwrap().is_none());
+    let active = kafka_input(Some(serde_json::json!({"enabled":true})), defaults.clone());
+    assert!(build_kafka_rustls_client_config(&active).is_err());
+    let wrong = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"es"},"spec":{"type":"elasticsearch","config":{"endpoints":["https://es.example:9200"]}}
+    }))
+    .unwrap();
+    let wrong = outbound_tls::PreparedLinkSysTls::with_snapshot(std::sync::Arc::new(wrong), defaults).unwrap();
+    assert!(build_kafka_rustls_client_config(&wrong).is_err());
+}
+
+#[test]
+fn owning_kafka_converter_rejects_local_and_inherited_unsupported_capabilities() {
+    use edgion_resources::resources::common::OutboundTlsConfig;
+    install_test_crypto_provider();
+    for policy in [
+        serde_json::json!({"verify":false}),
+        serde_json::json!({"verify":true,"validation":{"hostname":"kafka.example"}}),
+        serde_json::json!({"verify":true,"validation":{"subjectAltNames":[{"type":"Hostname","hostname":"kafka.example"}]}}),
+    ] {
+        let mut inherited_policy = policy.clone();
+        if inherited_policy.get("validation").is_some() {
+            inherited_policy["validation"]["wellKnownCACertificates"] = "System".into();
+        }
+        let global: OutboundTlsConfig = serde_json::from_value(inherited_policy).unwrap();
+        let defaults = outbound_tls::test_util::snapshot(global);
+        let inherited = kafka_input(Some(serde_json::json!({"enabled":true})), defaults.clone());
+        assert!(build_kafka_rustls_client_config(&inherited).is_err());
+        let masked = kafka_input(
+            Some(serde_json::json!({"enabled":true,"verify":true,"validation":{}})),
+            defaults,
+        );
+        assert!(build_kafka_rustls_client_config(&masked).unwrap().is_some());
+        let mut local = policy;
+        local["enabled"] = true.into();
+        let local = kafka_input(
+            Some(local),
+            std::sync::Arc::new(outbound_tls::GlobalOutboundTlsSnapshot::from_configs([])),
+        );
+        assert!(build_kafka_rustls_client_config(&local).is_err());
+    }
+}
 
 fn secret_with(data: &[(&str, &[u8])]) -> Secret {
     let data = data
@@ -36,8 +125,8 @@ fn outbound_with_ca_refs(names: &[&str]) -> OutboundTlsLocal {
             ca_certificate_refs: Some(
                 names
                     .iter()
-                    .map(|name| BackendTLSPolicyCACertificateRef {
-                        group: String::new(),
+                    .map(|name| CustomCACertificateRef {
+                        group: Some(String::new()),
                         kind: "Secret".into(),
                         name: (*name).into(),
                         namespace: None,
@@ -363,14 +452,14 @@ fn apply_resolved_outbound_tls_multi_bundle_reqwest() {
         outbound: OutboundTlsLocal {
             validation: Some(OutboundTlsValidation {
                 ca_certificate_refs: Some(vec![
-                    BackendTLSPolicyCACertificateRef {
-                        group: String::new(),
+                    CustomCACertificateRef {
+                        group: Some(String::new()),
                         kind: "Secret".into(),
                         name: "ca-a".into(),
                         namespace: None,
                     },
-                    BackendTLSPolicyCACertificateRef {
-                        group: String::new(),
+                    CustomCACertificateRef {
+                        group: Some(String::new()),
                         kind: "Secret".into(),
                         name: "ca-b".into(),
                         namespace: None,
@@ -459,10 +548,17 @@ fn incapable_builders_reject_local_and_inherited_identity_policy() {
         },
     ] {
         for inherited in [false, true] {
-            outbound_tls::set_outbound_global_default(OutboundTlsConfig {
-                validation: inherited.then(|| validation.clone()),
-                ..Default::default()
-            });
+            outbound_tls::set_outbound_global_default(crate::link_sys_core::outbound_tls::test_util::snapshot(
+                OutboundTlsConfig {
+                    validation: inherited.then(|| OutboundTlsValidation {
+                        well_known_ca_certificates: Some(
+                            edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::System,
+                        ),
+                        ..validation.clone()
+                    }),
+                    ..Default::default()
+                },
+            ));
             let mut tls = TlsConfig {
                 enabled: true,
                 outbound: OutboundTlsLocal {

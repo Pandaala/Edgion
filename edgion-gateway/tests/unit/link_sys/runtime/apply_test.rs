@@ -4,6 +4,13 @@ use edgion_resources::resources::common::outbound_tls::{OutboundTlsLocal, Outbou
 use k8s_openapi::ByteString;
 
 use super::*;
+
+impl RuntimeFingerprint {
+    /// Test-only placeholder for fixtures built outside the runner.
+    pub fn unspecified() -> Self {
+        Self::from_parts([0; 32], [0; 32], None)
+    }
+}
 use edgion_resources::resources::backend_tls_policy::WellKnownCACertificates;
 use edgion_resources::resources::common::TlsConfig;
 use k8s_openapi::api::core::v1::Secret;
@@ -44,7 +51,7 @@ fn shared_tls_policy_distinguishes_validation_variants() {
 }
 
 #[test]
-fn shared_tls_material_hashes_only_enabled_secret_data_in_key_order() {
+fn shared_tls_material_hashes_consumed_identity_and_enabled_data_in_key_order() {
     let mut first = TlsConfig {
         enabled: true,
         ..Default::default()
@@ -57,8 +64,14 @@ fn shared_tls_material_hashes_only_enabled_secret_data_in_key_order() {
         ..Default::default()
     }]);
     let mut second = first.clone();
-    second.resolved_ca_certificates.as_mut().unwrap()[0].metadata.name = Some("ignored".to_string());
+    second.resolved_ca_certificates.as_mut().unwrap()[0]
+        .metadata
+        .resource_version = Some("ignored".to_string());
     assert_eq!(tls_digest(Some(&first), false), tls_digest(Some(&second), false));
+
+    second.resolved_ca_certificates.as_mut().unwrap()[0].metadata.name = Some("changed".to_string());
+    assert_ne!(tls_digest(Some(&first), false), tls_digest(Some(&second), false));
+    second.resolved_ca_certificates.as_mut().unwrap()[0].metadata.name = None;
 
     second.resolved_ca_certificates.as_mut().unwrap()[0]
         .data

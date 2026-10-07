@@ -28,19 +28,78 @@ provider:
     .expect("valid credentialSource config")
 }
 
+fn source_owner(persist: bool) -> edgion_resources::resources::link_sys::LinkSys {
+    let mut config = credential_source_config();
+    config.publication.persist = persist;
+    let mut owner = edgion_resources::resources::link_sys::LinkSys::new(
+        "source",
+        edgion_resources::resources::link_sys::LinkSysSpec {
+            config: edgion_resources::resources::link_sys::SystemConfig::CredentialSource(config),
+            current_status: None,
+            unknown_fields: Vec::new(),
+        },
+    );
+    owner.metadata.namespace = Some("ops".to_string());
+    owner.metadata.uid = Some("source-uid".to_string());
+    owner.metadata.generation = Some(2);
+    owner
+}
+
+fn bootstrap_secret() -> Secret {
+    Secret {
+        metadata: ObjectMeta {
+            namespace: Some("ops".to_string()),
+            name: Some("oauth-client".to_string()),
+            uid: Some("bootstrap-uid".to_string()),
+            resource_version: Some("1".to_string()),
+            ..Default::default()
+        },
+        data: Some(BTreeMap::from([
+            ("clientId".to_string(), ByteString(b"client".to_vec())),
+            ("clientSecret".to_string(), ByteString(b"bootstrap".to_vec())),
+        ])),
+        ..Default::default()
+    }
+}
+
 fn persist_source(persist: bool) -> DesiredCredentialSource {
+    let owner = source_owner(persist);
+    let prepared = edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences::from_link_sys(&owner);
+    let bound = prepared.bind(&owner).unwrap();
+    let references = bound.references().unwrap();
+    let reference = references.active_bootstrap_secret().unwrap().freeze().unwrap();
+    let edgion_resources::resources::link_sys::SystemConfig::CredentialSource(config) = &owner.spec.config else {
+        unreachable!()
+    };
     DesiredCredentialSource {
         resource: ResourceRef::new(ResourceKind::LinkSys, Some("ops".to_string()), "source".to_string()),
         uid: "source-uid".to_string(),
         generation: 2,
         persist,
-        config: ControllerCredentialSourceConfig::new(credential_source_config()),
-        secret_inputs: Vec::new(),
+        config: ControllerCredentialSourceConfig::new(config.clone()),
+        secret_inputs: vec![
+            crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::CredentialSecretInput {
+                reference,
+                role: "active-bootstrap",
+                namespace: "ops".to_string(),
+                name: "oauth-client".to_string(),
+                uid: Some("bootstrap-uid".to_string()),
+                resource_version: Some("1".to_string()),
+                authorization_revision: "same-namespace".to_string(),
+            },
+        ],
     }
 }
 
 fn memory_consumer(name: &str) -> DesiredCredentialConsumer {
     DesiredCredentialConsumer {
+        reference: crate::reference_test_support::injector_reference(&crate::reference_test_support::injector_owner(
+            "apps",
+            name,
+            &format!("uid-{name}"),
+            1,
+            "ops/source",
+        )),
         resource: ResourceRef::new(ResourceKind::EdgionPlugins, Some("apps".to_string()), name.to_string()),
         uid: format!("uid-{name}"),
         generation: 1,
@@ -99,8 +158,16 @@ fn recoverable_secret(
                     consumer.target_secret_name.clone(),
                 ),
                 (secret_io::ANNOTATION_CONSUMER_UID.to_string(), consumer.uid.clone()),
+                (
+                    secret_io::ANNOTATION_CONSUMER_GENERATION.to_string(),
+                    consumer.generation.to_string(),
+                ),
                 (secret_io::ANNOTATION_SOURCE_NAME.to_string(), source.logical_key()),
                 (secret_io::ANNOTATION_SOURCE_UID.to_string(), source.uid.clone()),
+                (
+                    secret_io::ANNOTATION_SOURCE_GENERATION.to_string(),
+                    source.generation.to_string(),
+                ),
                 (
                     secret_io::ANNOTATION_PUBLICATION_GENERATION.to_string(),
                     "recovered-pub".to_string(),
@@ -228,22 +295,61 @@ fn publish_to_memory_skips_insert_when_live_source_flipped_to_persist_on() {
     );
 }
 
-#[test]
-fn recover_source_state_does_not_retain_when_persist_is_off() {
-    let runtime = ControllerRuntime::new();
+#[tokio::test]
+async fn recover_source_state_does_not_retain_when_persist_is_off() {
+    let runtime = Arc::new(ControllerRuntime::new());
+    let stores = crate::reference_test_support::install_owner_stores(&runtime);
     let persist_on = persist_source(true);
-    let consumer = memory_consumer("plugin");
-    let input_revision = "input-rev";
+    stores
+        .sources
+        .upsert("ops/source".to_string(), Arc::new(source_owner(true)));
+    stores.consumers.upsert(
+        "apps/plugin".to_string(),
+        Arc::new(crate::reference_test_support::injector_owner(
+            "apps",
+            "plugin",
+            "uid-plugin",
+            1,
+            "ops/source",
+        )),
+    );
+    let mut consumer = memory_consumer("plugin");
+    let grant = serde_json::from_value::<edgion_resources::resources::ReferenceGrant>(serde_json::json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "ReferenceGrant",
+        "metadata": { "namespace": "ops", "name": "allow", "uid": "grant-uid", "resourceVersion": "1" },
+        "spec": { "from": [{ "group": "edgion.io", "kind": "EdgionPlugins", "namespace": "apps" }],
+            "to": [{ "group": "edgion.io", "kind": "LinkSys", "name": "source" }] }
+    }))
+    .unwrap();
+    runtime.ref_grant_store.upsert("ops/allow".to_string(), Arc::new(grant));
+    consumer.authorization_revision = runtime
+        .ref_grant_store
+        .query_authorization_revision(consumer.reference.grant_query().unwrap())
+        .unwrap();
+    runtime.credential_source_registry.replace_source(persist_on.clone());
+    runtime.credential_source_registry.replace_consumer(consumer.clone());
+    let input_revision = &source_input_revision(&persist_on);
     let secret = recoverable_secret(&persist_on, &consumer, input_revision);
-    runtime.secret_store.replace_all(HashMap::from([(
-        format!("{}/{}", consumer.target_secret_namespace, consumer.target_secret_name),
-        secret,
-    )]));
+    runtime.secret_store.replace_all(HashMap::from([
+        ("ops/oauth-client".to_string(), bootstrap_secret()),
+        (
+            format!("{}/{}", consumer.target_secret_namespace, consumer.target_secret_name),
+            secret,
+        ),
+    ]));
 
     let recovered_on = recover_source_state(&runtime, &persist_on, std::slice::from_ref(&consumer), input_revision);
     assert!(
         recovered_on.retained.is_some(),
         "fixture must recover a persist-on publication from the leftover Secret"
+    );
+    runtime.ref_grant_store.remove("ops/allow");
+    let unauthorized = recover_source_state(&runtime, &persist_on, std::slice::from_ref(&consumer), input_revision);
+    assert!(unauthorized.retained.is_none());
+    assert_eq!(
+        unauthorized.publications.len(),
+        1,
+        "revocation rejects material while retaining exact old cleanup authority"
     );
 
     let persist_off = persist_source(false);
@@ -252,6 +358,7 @@ fn recover_source_state_does_not_retain_when_persist_is_off() {
         recovered_off.retained.is_none(),
         "persist-off must always reacquire and must not adopt leftover Secrets"
     );
+    assert_eq!(recovered_off.publications.len(), 1);
 }
 
 #[tokio::test]
@@ -433,7 +540,7 @@ fn persist_on_to_off_reuses_retained_token_for_memory_insert() {
         previous.persist,
         next.persist,
         true,
-        false,
+        true,
         false,
         Some(retained.clone()),
     );
@@ -460,6 +567,209 @@ fn persist_unchanged_does_not_reuse_retained_when_input_revision_changes() {
         retained_for_attempt(source.persist, source.persist, true, false, true, Some(retained)).is_none(),
         "an ordinary input-revision change must still reacquire"
     );
+}
+
+#[test]
+fn persist_transition_does_not_reuse_retained_when_frozen_input_changes() {
+    assert!(retained_for_attempt(true, false, true, false, false, Some(retained_publication())).is_none());
+    assert!(retained_for_attempt(false, true, true, false, true, Some(retained_publication())).is_none());
+}
+
+#[tokio::test]
+async fn source_currentness_requires_actual_owner_and_unchanged_frozen_inputs() {
+    let runtime = Arc::new(ControllerRuntime::new());
+    let source = persist_source(false);
+    runtime.credential_source_registry.replace_source(source.clone());
+    runtime
+        .secret_store
+        .replace_all(HashMap::from([("ops/oauth-client".to_string(), bootstrap_secret())]));
+    assert!(
+        !source_is_current(&runtime, &source),
+        "registry data cannot replace the real owning resource"
+    );
+    let stores = crate::reference_test_support::install_owner_stores(&runtime);
+    let owner = source_owner(false);
+    stores.sources.upsert("ops/source".to_string(), Arc::new(owner.clone()));
+    assert!(source_is_current(&runtime, &source));
+    let mut changed = owner.clone();
+    let edgion_resources::resources::link_sys::SystemConfig::CredentialSource(config) = &mut changed.spec.config else {
+        unreachable!()
+    };
+    let CredentialSourceProvider::OAuth2ClientCredentials(config) = &mut config.provider;
+    config.client_authentication.active_secret_ref.name = "another-bootstrap".to_string();
+    stores.sources.upsert("ops/source".to_string(), Arc::new(changed));
+    assert!(
+        !source_is_current(&runtime, &source),
+        "same UID and generation do not hide a changed authored field"
+    );
+    stores.sources.upsert("ops/source".to_string(), Arc::new(owner));
+    let mut secret = bootstrap_secret();
+    secret.metadata.resource_version = Some("2".to_string());
+    runtime
+        .secret_store
+        .replace_all(HashMap::from([("ops/oauth-client".to_string(), secret)]));
+    assert!(
+        !source_is_current(&runtime, &source),
+        "the captured Secret version is required"
+    );
+    runtime
+        .secret_store
+        .replace_all(HashMap::from([("ops/oauth-client".to_string(), bootstrap_secret())]));
+    assert!(source_is_current(&runtime, &source));
+    stores.sources.remove("ops/source");
+    publish_to_memory(&runtime, &source, &retained_publication());
+    assert!(take_current_for_reconciled(
+        &runtime,
+        &source.logical_key(),
+        &source.identity_key(),
+        &source_input_revision(&source)
+    )
+    .is_none());
+    assert!(runtime.credential_memory.active(&source.identity_key()).is_none());
+}
+
+#[tokio::test]
+async fn consumer_currentness_requires_real_field_and_live_exact_grant() {
+    let runtime = Arc::new(ControllerRuntime::new());
+    let stores = crate::reference_test_support::install_owner_stores(&runtime);
+    let owner = crate::reference_test_support::injector_owner("apps", "plugin", "uid-plugin", 1, "ops/source");
+    stores
+        .consumers
+        .upsert("apps/plugin".to_string(), Arc::new(owner.clone()));
+    let mut consumer = memory_consumer("plugin");
+    runtime.credential_source_registry.replace_consumer(consumer.clone());
+    assert!(
+        !consumer_is_current(&runtime, &consumer),
+        "a missing Grant cannot acquire authority via an empty revision"
+    );
+    let grant = serde_json::from_value::<edgion_resources::resources::ReferenceGrant>(serde_json::json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "ReferenceGrant",
+        "metadata": { "namespace": "ops", "name": "allow", "uid": "grant-uid", "resourceVersion": "1" },
+        "spec": { "from": [{ "group": "edgion.io", "kind": "EdgionPlugins", "namespace": "apps" }],
+            "to": [{ "group": "edgion.io", "kind": "LinkSys", "name": "source" }] }
+    }))
+    .unwrap();
+    runtime.ref_grant_store.upsert("ops/allow".to_string(), Arc::new(grant));
+    consumer.authorization_revision = runtime
+        .ref_grant_store
+        .query_authorization_revision(consumer.reference.grant_query().unwrap())
+        .unwrap();
+    runtime.credential_source_registry.replace_consumer(consumer.clone());
+    assert!(consumer_is_current(&runtime, &consumer));
+    let mut moved = owner.clone();
+    moved.spec.request_plugins.as_mut().unwrap().insert(
+        0,
+        edgion_resources::resources::edgion_plugins::RequestFilterEntry::new(
+            edgion_resources::resources::edgion_plugins::EdgionPlugin::CredentialInjector(
+                serde_json::from_value(serde_json::json!({"credentialRef": {"name": "static-key"}})).unwrap(),
+            ),
+        ),
+    );
+    stores.consumers.upsert("apps/plugin".to_string(), Arc::new(moved));
+    assert!(
+        !consumer_is_current(&runtime, &consumer),
+        "moving the same field within its owner invalidates the captured slot"
+    );
+    stores.consumers.upsert("apps/plugin".to_string(), Arc::new(owner));
+    runtime.ref_grant_store.remove("ops/allow");
+    assert!(
+        !consumer_is_current(&runtime, &consumer),
+        "Grant revocation invalidates the frozen publication binding"
+    );
+}
+
+#[test]
+fn completed_memory_publication_survives_its_own_notification_epoch() {
+    let _guard = lock_test_service();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    rt.block_on(async {
+        stop_credential_manager_service();
+        let generation = install_test_generation();
+        let runtime = Arc::new(ControllerRuntime::new());
+        let stores = crate::reference_test_support::install_owner_stores(&runtime);
+        let source = persist_source(false);
+        stores
+            .sources
+            .upsert("ops/source".to_string(), Arc::new(source_owner(false)));
+        runtime
+            .secret_store
+            .replace_all(HashMap::from([("ops/oauth-client".to_string(), bootstrap_secret())]));
+        runtime.credential_source_registry.replace_source(source.clone());
+        let owner = crate::reference_test_support::injector_owner("ops", "plugin", "uid-plugin", 1, "ops/source");
+        stores
+            .consumers
+            .upsert("ops/plugin".to_string(), Arc::new(owner.clone()));
+        let mut consumer = memory_consumer("plugin");
+        consumer.resource.namespace = Some("ops".to_string());
+        consumer.target_secret_namespace = "ops".to_string();
+        consumer.reference = crate::reference_test_support::injector_reference(&owner);
+        consumer.authorization_revision = "same-namespace".to_string();
+        runtime.credential_source_registry.replace_consumer(consumer.clone());
+        let old_revision = consumer_revision(std::slice::from_ref(&consumer), 0);
+        let job = reconcile_source(
+            source.clone(),
+            vec![consumer],
+            HashMap::new(),
+            CredentialManagerBackend::MemoryOnly,
+            runtime.clone(),
+            generation,
+            source_input_revision(&source),
+            old_revision.clone(),
+            Some(retained_publication()),
+        )
+        .await;
+        let JobResult::Reconciled {
+            input_revision,
+            consumer_binding_revision,
+            result,
+            ..
+        } = job
+        else {
+            panic!("expected completion");
+        };
+        assert!(result.is_ok(), "real persist-off reconcile must complete");
+        let consumers = runtime.credential_source_registry.consumers_for_source("ops/source");
+        let notification_epoch = runtime
+            .credential_source_registry
+            .reconcile_epoch_for_source("ops/source");
+        assert!(notification_epoch > 0);
+        assert_ne!(consumer_revision(&consumers, notification_epoch), old_revision);
+        assert!(reconciled_consumers_current(
+            &runtime,
+            "ops/source",
+            &consumer_binding_revision
+        ));
+        assert!(take_current_for_reconciled(&runtime, "ops/source", &source.identity_key(), &input_revision).is_some());
+        assert!(runtime.credential_memory.active(&source.identity_key()).is_some());
+        stores.consumers.remove("ops/plugin");
+        assert!(!reconciled_consumers_current(
+            &runtime,
+            "ops/source",
+            &consumer_binding_revision
+        ));
+        stop_credential_manager_service();
+    });
+}
+
+#[test]
+fn stale_success_and_partial_failure_keep_cleanup_only_metadata() {
+    for succeeded in [false, true] {
+        let expected = leftover_delete_expectation();
+        let publications = HashMap::from([("apps/plugin".to_string(), expected.clone())]);
+        let result = if succeeded {
+            Ok(reconcile_ok(Duration::ZERO, retained_publication(), publications))
+        } else {
+            Err(ReconcileFailure::transient(None).with_partial_publication(publications, retained_publication()))
+        };
+        let mut states = HashMap::new();
+        preserve_reconciled_cleanup(&mut states, "ops/source".to_string(), result);
+        let state = states.get("ops/source").unwrap();
+        assert!(state.retained.is_none());
+        assert_eq!(state.publications.get("apps/plugin"), Some(&expected));
+    }
 }
 
 fn leftover_delete_expectation() -> DeleteExpectation {
@@ -524,7 +834,14 @@ fn kube_less_persist_off_publish_inserts_without_client() {
     rt.block_on(async {
         stop_credential_manager_service();
         let generation = install_test_generation();
-        let runtime = ControllerRuntime::new();
+        let runtime = Arc::new(ControllerRuntime::new());
+        let owners = crate::reference_test_support::install_owner_stores(&runtime);
+        owners
+            .sources
+            .upsert("ops/source".to_string(), Arc::new(source_owner(false)));
+        runtime
+            .secret_store
+            .replace_all(HashMap::from([("ops/oauth-client".to_string(), bootstrap_secret())]));
         let source = persist_source(false);
         runtime.credential_source_registry.replace_source(source.clone());
         assert!(

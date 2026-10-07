@@ -3,6 +3,20 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::LinkSysRef;
 use edgion_resources::resources::link_sys::httpdns::{HttpDnsFallback, HttpDnsResponseFormat};
 use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
 
+fn prepare_provider(config: edgion_resources::resources::link_sys::SystemConfig) -> Option<Arc<PreparedHttpDns>> {
+    use edgion_resources::resources::link_sys::LinkSysSpec;
+    let mut owner = edgion_resources::LinkSys::new(
+        "aliyun",
+        LinkSysSpec {
+            config,
+            current_status: None,
+            unknown_fields: vec![],
+        },
+    );
+    owner.metadata.namespace = Some("dns".into());
+    super::super::HttpDnsCandidate::from_link_sys(Arc::new(owner)).map(super::super::HttpDnsCandidate::prepare)
+}
+
 fn ann(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
@@ -20,7 +34,9 @@ fn dummy_httpdns() -> HttpDnsResolverConfig {
 /// lookup that resolves only the key `dns/aliyun`.
 fn lookup_aliyun(key: &LinkSysKey) -> Option<Arc<PreparedHttpDns>> {
     if key.namespace == "dns" && key.name == "aliyun" {
-        Some(PreparedHttpDns::prepare(dummy_httpdns()))
+        prepare_provider(edgion_resources::resources::link_sys::SystemConfig::HttpDns(
+            dummy_httpdns(),
+        ))
     } else {
         None
     }
@@ -179,9 +195,9 @@ fn unsupported_linksys_does_not_reuse_httpdns_and_falls_back_to_system() {
         SystemConfig::Unsupported,
         SystemConfig::HttpDns(dummy_httpdns()),
     ] {
-        // This is the same typed projection used by Gateway's raw LinkSys lookup.
+        // The actual provider candidate must not recreate a retired HTTPDNS handle.
         let spec = resolve_effective_spec(&[reference.clone(), fallback.clone()], |_| {
-            config.as_http_dns().cloned().map(PreparedHttpDns::prepare)
+            prepare_provider(config.clone())
         });
         match config {
             SystemConfig::Unsupported => {
@@ -192,10 +208,7 @@ fn unsupported_linksys_does_not_reuse_httpdns_and_falls_back_to_system() {
         }
     }
     assert!(matches!(
-        resolve_effective_spec(&[reference], |_| SystemConfig::Unsupported
-            .as_http_dns()
-            .cloned()
-            .map(PreparedHttpDns::prepare)),
+        resolve_effective_spec(&[reference], |_| prepare_provider(SystemConfig::Unsupported)),
         ResolverSpec::System
     ));
 }

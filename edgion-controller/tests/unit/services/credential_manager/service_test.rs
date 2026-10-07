@@ -3,6 +3,13 @@ use edgion_resources::ResourceKind;
 
 fn consumer(name: &str, generation: i64) -> DesiredCredentialConsumer {
     DesiredCredentialConsumer {
+        reference: crate::reference_test_support::injector_reference(&crate::reference_test_support::injector_owner(
+            "apps",
+            name,
+            &format!("uid-{name}"),
+            generation,
+            "ops/source",
+        )),
         resource: crate::conf_mgr::sync_runtime::resource_processor::ResourceRef::new(
             ResourceKind::EdgionPlugins,
             Some("apps".to_string()),

@@ -77,7 +77,18 @@ impl ProbeTransport {
         let local = OutboundTlsLocal {
             verify: Some(true),
             validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: spec.validation.ca_certificate_refs.clone(),
+                ca_certificate_refs: spec.validation.ca_certificate_refs.as_ref().map(|refs| {
+                    refs.iter()
+                        .map(
+                            |reference| edgion_resources::resources::common::CustomCACertificateRef {
+                                group: Some(reference.group.clone()),
+                                kind: reference.kind.clone(),
+                                name: reference.name.clone(),
+                                namespace: effective.policy.metadata.namespace.clone(),
+                            },
+                        )
+                        .collect()
+                }),
                 hostname: Some(spec.validation.hostname.clone()),
                 subject_alt_names: spec.validation.subject_alt_names.clone(),
                 well_known_ca_certificates: spec.validation.well_known_ca_certificates.clone(),
