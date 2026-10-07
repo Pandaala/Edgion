@@ -20,9 +20,6 @@ use edgion_resources::resources::http_route::{LocalObjectReference, RouteParentS
 use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::ResourceKind;
 
-pub(super) type BackendRefTuple<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>, &'a str);
-pub(super) type OwnedBackendRefTuple = (Option<String>, Option<String>, Option<String>, String);
-
 /// Result of validating a parentRef for acceptance.
 pub struct AcceptedResult {
     /// Acceptance errors. Non-empty means the route is rejected.
@@ -286,44 +283,6 @@ pub fn service_exists(namespace: &str, name: &str, runtime: &ControllerRuntime) 
         return true;
     };
     processor.contains_key(&format!("{}/{}", namespace, name))
-}
-
-/// Validate backend refs: check group/kind target core Service and the Service exists.
-///
-/// Each tuple is `(kind, namespace, name)` extracted from the route's backend refs.
-/// Returns typed errors for ResolvedRefs condition generation.
-pub fn validate_backend_refs(
-    route_ns: &str,
-    backend_refs: &[BackendRefTuple<'_>],
-    runtime: &ControllerRuntime,
-) -> Vec<ResolvedRefsError> {
-    let mut errors = Vec::new();
-    for &(group, kind, namespace, name) in backend_refs {
-        let group_str = group.unwrap_or("");
-        if !group_str.is_empty() && group_str != "core" {
-            errors.push(ResolvedRefsError::InvalidKind {
-                kind: format!("{group_str}/{}", kind.unwrap_or("Service")),
-                name: name.to_string(),
-            });
-            continue;
-        }
-        let kind_str = kind.unwrap_or("Service");
-        if kind_str != "Service" {
-            errors.push(ResolvedRefsError::InvalidKind {
-                kind: kind_str.to_string(),
-                name: name.to_string(),
-            });
-            continue;
-        }
-        let backend_ns = namespace.unwrap_or(route_ns);
-        if !service_exists(backend_ns, name, runtime) {
-            errors.push(ResolvedRefsError::BackendNotFound {
-                namespace: backend_ns.to_string(),
-                name: name.to_string(),
-            });
-        }
-    }
-    errors
 }
 
 /// Collect RefNotPermitted errors from ref_denied fields on backend refs.
@@ -648,11 +607,11 @@ pub fn update_tracker_accepted_only(
 /// skips `on_delete`'s requeue for the previous generation, and even a plain
 /// update that drops a backend Service would otherwise never notify that
 /// Service's policies to re-resolve their ancestor Gateways.
-pub fn register_service_backend_refs(
+pub(super) fn register_service_backend_refs(
     route_kind: edgion_resources::ResourceKind,
     route_ns: &str,
     route_name: &str,
-    backend_refs: &[BackendRefTuple<'_>], // (group, kind, namespace, name)
+    backend_refs: &[super::route_backend_refs::BackendDependencyReceipt],
     runtime: &ControllerRuntime,
 ) -> Vec<String> {
     use crate::conf_mgr::sync_runtime::resource_processor::ResourceRef;
@@ -674,19 +633,11 @@ pub fn register_service_backend_refs(
     manager.clear_value_refs(&resource_ref);
 
     let mut new_service_keys = HashSet::new();
-    for &(group, kind, namespace, name) in backend_refs {
-        let group_str = group.unwrap_or("");
-        if !group_str.is_empty() && group_str != "core" {
-            continue;
+    for receipt in backend_refs {
+        if let Some(service_key) = receipt.service_key() {
+            manager.add_ref(service_key.to_string(), resource_ref.clone());
+            new_service_keys.insert(service_key.to_string());
         }
-        let kind_str = kind.unwrap_or("Service");
-        if kind_str != "Service" {
-            continue;
-        }
-        let backend_ns = namespace.unwrap_or(route_ns);
-        let service_key = format!("{}/{}", backend_ns, name);
-        manager.add_ref(service_key.clone(), resource_ref.clone());
-        new_service_keys.insert(service_key);
     }
 
     old_service_keys.difference(&new_service_keys).cloned().collect()

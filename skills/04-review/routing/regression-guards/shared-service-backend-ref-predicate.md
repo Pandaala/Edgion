@@ -6,9 +6,24 @@ knowledge_type: regression-guards
 
 # Shared service backend ref predicate
 
-## Recorded conclusion
+## Current reference contract
 
-The `is_service_backend_ref` predicate (a BackendRef targets a core Service when group is `""`/`"core"`/omitted and kind is `"Service"`/omitted) was duplicated across five L4 route modules with two signatures — struct-based in `{tcp,tls,udp}/conf_handler_impl.rs`, raw-field in `tls/{proxy,passthrough_proxy}.rs` — with no compiler-enforced link. Consolidated into a single `pub(crate) fn is_core_service_backend_ref(group: Option<&str>, kind: Option<&str>)` in `routes/common.rs`; all five sites now call it (struct callers pass `br.group.as_deref(), br.kind.as_deref()`), and the three per-module unit tests were merged into one shared test in `common.rs`. Pure refactor, zero behavior change (filter semantics bit-identical: `None`/`""`/`"core"` group, `None`/`"Service"` kind). Re-reports of the five-copy duplication form are not accepted; verify `routes/common.rs::is_core_service_backend_ref` is the single definition before re-reporting.
+`edgion-resources::resources::refs::targets::is_standard_service` is the canonical
+classifier. Omitted or empty group and omitted or exact `Service` kind identify a
+standard Service. Literal `core`, case variants, ServiceImport, ServiceExternalName,
+and other pseudo kinds are unsupported. Native Route fields additionally validate
+source/target names and namespaces and require a Service port in `1..=65535` before
+creating dependencies or reading authorization/material. The Gateway's
+`routes/common.rs::is_core_service_backend_ref` delegates to the shared predicate;
+its name does not imply acceptance of a literal `core` group.
+
+## Historical consolidation
+
+The `path-norm-F006` change consolidated five duplicated L4 predicates into one
+Gateway helper. That historical implementation accepted the `core` alias. The
+later canonical reference contract supersedes that alias; the earlier report's
+claim of unchanged behavior applies only to the original consolidation. It is
+not evidence that the alias remains supported today.
 
 ## Evidence boundary
 

@@ -14,6 +14,7 @@ pub mod outbound_tls;
 mod owned;
 mod parent_identity;
 pub mod plugin_fields;
+pub mod route_fields;
 pub mod source_contract;
 pub mod targets;
 mod template_fields;

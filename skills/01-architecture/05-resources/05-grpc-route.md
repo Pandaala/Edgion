@@ -24,7 +24,32 @@ GRPCRoute defines gRPC-layer routing rules. Its Controller-side processing is hi
 1. Calls `validate_grpc_route_if_enabled()` for header matcher enum/regex validation; cross-namespace validation is handled via `ref_denied` in the parse stage.
    Method validation uses the shared `GRPCRouteMatch::compile_method()` via `GRPCRouteRule::method_match_error()` in per-rule classification, status, and delegation filtering. Invalid method predicates drop their whole rule; valid siblings survive, and all-invalid effective rules reject attachment with `Accepted=False / UnsupportedValue`. These errors never enter route-wide advisory validation. Missing outer method is unconstrained; omitted type is Exact; method-only Exact and regex are supported outside delegation. Explicit empty matchers, invalid Exact names, and invalid regexes fail closed with bounded static errors.
    Per-rule header modifier validation uses the shared `GRPCRouteRule::header_modifier_error()`, including backend filters and delegation source rules. Invalid rules are excluded while valid siblings survive; all-invalid header rules reject attachment. See [header modifier validation](../../04-review/plugin-runtime/regression-guards/header-modifier-validation.md).
-2. Calls `validate_backend_refs()` to validate all backendRefs
+2. Validates the actual Route source; backend target/status checks run through the effective target-only view in `update_status`.
+
+### Native backend reference ownership
+
+`refs::route_fields::GrpcRouteBackendRefs` borrows the actual typed Route. Only an authored,
+validated terminal loan can construct a Grant query; effective/status/AI loans,
+named/wildcard delegation selectors, and owned dependency receipts cannot. The
+canonical `refs::targets` classifier requires omitted/empty group and omitted/exact
+`Service` kind plus port `1..=65535`; literal `core` and pseudo Service kinds are
+unsupported. Exact same-family delegation uses the Gateway API group and no port;
+`*` is a namespace selector, not an object identity. HTTP alone also supports exact
+`edgion.io/EdgionBackend` without a backend port.
+
+Source namespace omission defaults to `default`; an explicitly invalid namespace
+or missing/invalid source name closes the existing Accepted gate, including direct
+status calls, and empties derived executable rules/listeners. No native target is
+looked up or registered for that invalid source. A valid parent selection of an
+invalid child retains its named/wildcard recovery edge but drops the child before
+native backend reads, Grant checks, or rule cloning.
+
+Delegation authorizes each original child terminal before cloning, using the
+child's source namespace even when its target is the root namespace. The root
+Route owns wakeups. Valid terminal receipts survive later rule filtering and
+missing/denied targets. Service manager owners retain their explicit canonical
+namespace while root Grant wakeups retain raw metadata namespace representation.
+Apply replaces all prior dependencies and requeues dropped policy keys.
 
 ### parse
 
@@ -47,7 +72,7 @@ Same as HTTPRoute: clear all reference and index registrations, including this r
 ### update_status
 
 Same as HTTPRoute: produce a RouteParentStatus for each parentRef and set the Accepted and ResolvedRefs Conditions, plus delegation-specific status surfaces:
-- `ResolvedRefs`: delegation refs (`kind: GRPCRoute`) are **excluded** from Service backendRef validation (they are not Service refs; including them would spuriously flag `InvalidKind`); a missing named delegation child surfaces as `BackendNotFound` via `DelegationIssue::MissingChild`.
+- `ResolvedRefs`: canonical target validation scans `effective_rules()`, including delegated missing or invalid terminals. Valid delegation selectors are excluded from Service existence reads; malformed selectors are invalid references. A missing named child surfaces as `BackendNotFound` via `DelegationIssue::MissingChild`. Valid denied terminals retain `RefNotPermitted` without a Service existence read.
 - `PartiallyInvalid`: own invalid rules plus every delegation-dropped rule message (`DelegationIssue::RuleDropped`).
 - Child-side delegation status: each `kind: GRPCRoute` parentRef (reverse lock) gets its own `Accepted` condition — True iff that parent currently delegates to this route (`DelegationAccepted` / `NoMatchingParent`, from `grpc_route_delegation_index`). The Gateway-acceptance loop must gate on `is_gateway_parent_ref` so this doesn't run `validate_parent_ref_accepted` against reverse-lock parentRefs.
 - `collect_ref_denied_list`-equivalent status folding scans `effective_rules()` so flattened children's ReferenceGrant denials surface on the parent.

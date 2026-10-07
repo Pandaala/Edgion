@@ -44,16 +44,19 @@ impl DelegationLookup for FakeLookup {
         keys.sort_unstable();
         keys
     }
-    fn cross_ns_ref_allowed(
-        &self,
-        from_ns: &str,
-        _group: Option<&str>,
-        _kind: Option<&str>,
-        _name: &str,
-        to_ns: &str,
-    ) -> bool {
-        self.allowed_cross_ns
-            .contains(&(from_ns.to_string(), to_ns.to_string()))
+    fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
+        let query = terminal.grant_query();
+        let source = query.source().scope().namespace().unwrap();
+        let target = query.target().scope().namespace().unwrap();
+        (source != target
+            && !self
+                .allowed_cross_ns
+                .contains(&(source.to_string(), target.to_string())))
+        .then(|| RefDenied {
+            target_namespace: target.to_string(),
+            target_name: query.target().name().to_string(),
+            reason: Some("NoMatchingReferenceGrant".into()),
+        })
     }
 }
 
@@ -1091,9 +1094,9 @@ fn child_backend_ns_made_explicit_and_grant_checked_from_child_ns() {
     assert_eq!(denied.target_namespace, "secret-ns");
 
     assert!(outcome
-        .service_backend_tuples
+        .backend_dependencies
         .iter()
-        .any(|(_, _, ns, name)| ns.as_deref() == Some("billing") && name == "svc-local"));
+        .any(|receipt| receipt.service_key() == Some("billing/svc-local")));
 }
 
 // =====================================================================
@@ -1279,4 +1282,152 @@ fn child_backend_ref_filter_cannot_smuggle_mandatory_override() {
     let drops = dropped_messages(&outcome);
     assert_eq!(drops.len(), 1);
     assert!(drops[0].contains("RequestHeaderModifier"));
+}
+
+struct NativeReadSpy {
+    inner: FakeLookup,
+    reads: std::cell::Cell<usize>,
+    lists: std::cell::Cell<usize>,
+    queries: std::cell::Cell<usize>,
+}
+impl NativeReadSpy {
+    fn new(inner: FakeLookup) -> Self {
+        Self {
+            inner,
+            reads: Default::default(),
+            lists: Default::default(),
+            queries: Default::default(),
+        }
+    }
+}
+impl DelegationLookup for NativeReadSpy {
+    fn get_route(&self, key: &str) -> Option<Arc<GRPCRoute>> {
+        self.reads.set(self.reads.get() + 1);
+        self.inner.get_route(key)
+    }
+    fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String> {
+        self.lists.set(self.lists.get() + 1);
+        self.inner.list_route_keys_in_namespace(ns)
+    }
+    fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
+        self.queries.set(self.queries.get() + 1);
+        let source = terminal.source();
+        let key = format!("{}/{}", source.scope().namespace().unwrap(), terminal.source_name());
+        let original = &self.inner.routes[&key];
+        let actual = GrpcRouteBackendRefs::from_route(original)
+            .unwrap()
+            .authored_at(terminal.slot().rule(), terminal.slot().backend())
+            .unwrap()
+            .target_view();
+        assert!(
+            std::ptr::eq(actual.name().as_ptr(), terminal.grant_query().target().name().as_ptr()),
+            "authorize original child field before clone"
+        );
+        assert_eq!(terminal.source_uid(), original.metadata.uid.as_deref());
+        assert_eq!(terminal.source_generation(), original.metadata.generation);
+        self.inner.terminal_ref_denied(terminal)
+    }
+}
+
+#[test]
+fn native_invalid_sources_and_selectors_do_not_authorize_or_discover_targets() {
+    let mut parent = simple_parent("svc.Billing", "billing", "child");
+    let lookup = NativeReadSpy::new(FakeLookup::new(vec![]));
+    parent.metadata.name = Some("bad/name".into());
+    let outcome = flatten_route(&parent, &lookup);
+    assert!(outcome.resolved_rules.unwrap().is_empty());
+    assert_eq!(lookup.reads.get(), 0);
+    assert_eq!(lookup.lists.get(), 0);
+    assert_eq!(lookup.queries.get(), 0);
+    assert!(outcome.backend_dependencies.is_empty());
+    for (name, namespace, port) in [
+        ("bad/name", "billing", None),
+        ("child", "", None),
+        ("child", "billing", Some(80)),
+        ("*", "billing", Some(80)),
+    ] {
+        let mut parent = simple_parent("svc.Billing", namespace, name);
+        parent.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].port = port;
+        let outcome = flatten_route(&parent, &lookup);
+        assert_eq!(lookup.reads.get(), 0);
+        assert_eq!(lookup.lists.get(), 0);
+        assert_eq!(lookup.queries.get(), 0);
+        assert!(outcome.named_children.is_empty());
+        assert!(outcome.wildcard_namespaces.is_empty());
+        assert!(outcome.backend_dependencies.is_empty());
+        assert!(!outcome.issues.is_empty());
+    }
+    // A valid selection remains a recovery edge even if its current child owner is invalid.
+    for selector in ["child", "*"] {
+        let parent = simple_parent("svc.Billing", "billing", selector);
+        let mut child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules":[service_rule("svc.Billing","service"),delegating_rule("svc.Billing","hidden","grandchild")]}),
+        );
+        child.metadata.name = Some("bad/name".into());
+        let mut fake = FakeLookup::new(vec![]);
+        fake.routes.insert("billing/child".into(), Arc::new(child));
+        let lookup = NativeReadSpy::new(fake);
+        let outcome = flatten_route(&parent, &lookup);
+        assert_eq!(lookup.reads.get(), 1);
+        assert_eq!(lookup.queries.get(), 0);
+        assert!(outcome.resolved_rules.unwrap().is_empty());
+        assert!(outcome.backend_dependencies.is_empty());
+        assert!(outcome.expanded_children.is_empty());
+        if selector == "*" {
+            assert!(outcome.wildcard_namespaces.contains("billing"));
+        } else {
+            assert!(outcome.named_children.contains("billing/child"));
+        }
+        assert!(!outcome.named_children.contains("hidden/grandchild"));
+    }
+}
+
+#[test]
+fn native_child_to_root_authority_and_invalid_weight_slots_preserve_declaring_owner() {
+    let parent = simple_parent("svc.Billing", "billing", "child");
+    for allowed in [false, true] {
+        let mut child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules":[{"backendRefs":[
+                {"name":"root-service","namespace":"infra","port":80,"weight":3},
+                {"name":"root-service","namespace":"infra","port":0,"weight":7},
+                {"name":"root-service","namespace":"infra","port":443,"weight":2}
+            ]}]}),
+        );
+        child.metadata.uid = Some("original-child-uid".into());
+        child.metadata.generation = Some(9);
+        let mut fake = FakeLookup::new(vec![child]);
+        if allowed {
+            fake = fake.allow_cross_ns("billing", "infra");
+        } else {
+            fake = fake.allow_cross_ns("infra", "infra");
+        }
+        let lookup = NativeReadSpy::new(fake);
+        let outcome = flatten_route(&parent, &lookup);
+        assert_eq!(lookup.queries.get(), 2, "invalid port must not reach Grant callback");
+        assert_eq!(
+            outcome.backend_dependencies.len(),
+            2,
+            "same key, separate valid port/slot receipts"
+        );
+        assert!(outcome.cross_ns_target_namespaces.contains("infra"));
+        let refs = outcome.resolved_rules.as_ref().unwrap()[0]
+            .backend_refs
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            refs.iter().map(|reference| reference.weight).collect::<Vec<_>>(),
+            vec![Some(3), Some(7), Some(2)]
+        );
+        assert_eq!(
+            refs.iter().map(|reference| reference.port).collect::<Vec<_>>(),
+            vec![Some(80), Some(0), Some(443)]
+        );
+        assert_eq!(refs[0].ref_denied.is_some(), !allowed);
+        assert_eq!(refs[2].ref_denied.is_some(), !allowed);
+        assert!(refs[1].ref_denied.is_none());
+    }
 }

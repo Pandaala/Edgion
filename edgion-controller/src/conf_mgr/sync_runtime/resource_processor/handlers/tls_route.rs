@@ -2,7 +2,8 @@
 //!
 //! Handles TLSRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
-use super::super::ref_grant::{is_cross_ns_ref_allowed, validate_tls_route_if_enabled};
+use super::super::ref_grant::validate_tls_route_if_enabled;
+use super::route_backend_refs;
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_route,
     requeue_backend_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
@@ -12,6 +13,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 };
 use edgion_resources::prelude_resources::TLSRoute;
 use edgion_resources::resources::common::RefDenied;
+use edgion_resources::resources::refs::route_fields::TlsRouteBackendRefs;
 use edgion_resources::resources::tls_route::TLSRouteStatus;
 use edgion_resources::ResourceKind;
 
@@ -39,21 +41,9 @@ impl TlsRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
-        let mut backend_refs_list = Vec::new();
-        if let Some(rules) = &route.spec.rules {
-            for rule in rules {
-                if let Some(backend_refs) = &rule.backend_refs {
-                    for br in backend_refs {
-                        backend_refs_list.push((
-                            br.group.as_deref(),
-                            br.kind.as_deref(),
-                            br.namespace.as_deref(),
-                            br.name.as_str(),
-                        ));
-                    }
-                }
-            }
-        }
+        let backend_refs_list = TlsRouteBackendRefs::from_route(route)
+            .map(|references| route_backend_refs::collect_dependencies(references.authored()))
+            .unwrap_or_default();
 
         super::route_utils::register_service_backend_refs(
             ResourceKind::TLSRoute,
@@ -66,26 +56,12 @@ impl TlsRouteHandler {
 
     /// Record cross-namespace references from backend_refs
     fn record_cross_ns_refs(route: &TLSRoute, ctx: &HandlerContext) {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let resource_ref = Self::create_resource_ref(route);
-        let manager = &ctx.runtime().cross_ns_ref_mgr;
-
-        // Clear old references first (handles updates)
-        manager.clear_value_refs(&resource_ref);
-
-        if let Some(rules) = &route.spec.rules {
-            for rule in rules {
-                if let Some(backend_refs) = &rule.backend_refs {
-                    for backend_ref in backend_refs {
-                        if let Some(backend_ns) = &backend_ref.namespace {
-                            if backend_ns != route_ns {
-                                manager.add_ref(backend_ns.clone(), resource_ref.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
+        let receipts = TlsRouteBackendRefs::from_route(route)
+            .map(|references| route_backend_refs::collect_dependencies(references.authored()))
+            .unwrap_or_default();
+        route_backend_refs::register_cross_namespace(&receipts, &resource_ref, ctx.runtime());
     }
 }
 
@@ -98,23 +74,30 @@ impl Default for TlsRouteHandler {
 impl TlsRouteHandler {
     fn validate_route(&self, route: &TLSRoute) -> Vec<String> {
         // Hostname errors are classified separately as UnsupportedValue in status.
-        validate_tls_route_if_enabled(route)
+        let mut errors = validate_tls_route_if_enabled(route);
+        if let Err(error) = TlsRouteBackendRefs::from_route(route) {
+            errors.push(route_backend_refs::source_error_message(error));
+        }
+        errors
     }
 
     async fn parse_route(&self, mut route: TLSRoute, ctx: &HandlerContext) -> ProcessResult<TLSRoute> {
+        let source_valid = TlsRouteBackendRefs::from_route(&route).is_ok();
         // Install new parent edges before reading a Gateway snapshot, so a
         // concurrent Gateway publication cannot miss this route. on_change
         // removes old edges and requeues dropped parents after tracker updates.
-        ctx.runtime().gateway_route_index.register_route_dependencies(
-            ResourceKind::TLSRoute,
-            &format!(
-                "{}/{}",
+        if source_valid {
+            ctx.runtime().gateway_route_index.register_route_dependencies(
+                ResourceKind::TLSRoute,
+                &format!(
+                    "{}/{}",
+                    route.metadata.namespace.as_deref().unwrap_or("default"),
+                    route.metadata.name.as_deref().unwrap_or("")
+                ),
+                route.spec.parent_refs.as_deref().unwrap_or_default(),
                 route.metadata.namespace.as_deref().unwrap_or("default"),
-                route.metadata.name.as_deref().unwrap_or("")
-            ),
-            route.spec.parent_refs.as_deref().unwrap_or_default(),
-            route.metadata.namespace.as_deref().unwrap_or("default"),
-        );
+            );
+        }
         Self::record_cross_ns_refs(&route, ctx);
         // Register Service backend references, then requeue BTPs bound to any
         // Service dropped from backendRefs (the apply path otherwise only
@@ -123,38 +106,30 @@ impl TlsRouteHandler {
         requeue_backend_policies_for_services(&dropped_service_keys, ctx).await;
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        if let Some(rules) = &mut route.spec.rules {
-            for rule in rules {
-                if let Some(backend_refs) = &mut rule.backend_refs {
-                    for backend_ref in backend_refs {
-                        if let Some(backend_ns) = &backend_ref.namespace {
-                            if backend_ns != route_ns {
-                                let allowed = is_cross_ns_ref_allowed(
-                                    route_ns,
-                                    "TLSRoute",
-                                    backend_ns,
-                                    backend_ref.group.as_ref(),
-                                    backend_ref.kind.as_ref(),
-                                    &backend_ref.name,
-                                    ctx.runtime(),
-                                );
-                                if !allowed {
-                                    backend_ref.ref_denied = Some(RefDenied {
-                                        target_namespace: backend_ns.clone(),
-                                        target_name: backend_ref.name.clone(),
-                                        reason: Some("NoMatchingReferenceGrant".to_string()),
-                                    });
-                                } else {
-                                    backend_ref.ref_denied = None;
-                                }
-                            } else {
-                                backend_ref.ref_denied = None;
-                            }
-                        } else {
-                            backend_ref.ref_denied = None;
-                        }
-                    }
-                }
+        let decisions = TlsRouteBackendRefs::from_route(&route)
+            .map(|references| {
+                route_backend_refs::resolve_denials(
+                    references.authored(),
+                    &Self::create_resource_ref(&route),
+                    ctx.runtime(),
+                )
+            })
+            .unwrap_or_default();
+        for rule in route.spec.rules.iter_mut().flatten() {
+            for backend in rule.backend_refs.iter_mut().flatten() {
+                backend.ref_denied = None;
+            }
+        }
+        for (slot, denial) in decisions {
+            if let Some(backend) = route
+                .spec
+                .rules
+                .as_mut()
+                .and_then(|rules| rules.get_mut(slot.rule()))
+                .and_then(|rule| rule.backend_refs.as_mut())
+                .and_then(|backends| backends.get_mut(slot.backend()))
+            {
+                backend.ref_denied = denial;
             }
         }
 
@@ -164,7 +139,7 @@ impl TlsRouteHandler {
             .spec
             .parent_refs
             .as_ref()
-            .filter(|_| route.spec.validate_hostnames().is_ok())
+            .filter(|_| source_valid && route.spec.validate_hostnames().is_ok())
         {
             let listeners = super::route_utils::resolve_tls_listener_hostnames(
                 parent_refs,
@@ -226,15 +201,25 @@ impl TlsRouteHandler {
     }
 
     fn update_route_status(&self, route: &mut TLSRoute, ctx: &HandlerContext, validation_errors: &[String]) {
+        if TlsRouteBackendRefs::from_route(route).is_err() {
+            route.spec.resolved_listeners = None;
+        }
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
         let hostname_error = route.spec.validate_hostnames().err();
-        let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+        let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+        if let Err(error) = TlsRouteBackendRefs::from_route(route) {
+            let message = route_backend_refs::source_error_message(error);
+            if !validation_errors.contains(&message) {
+                validation_accepted_errors.push(AcceptedError::Invalid { message });
+            }
+        }
 
-        let backend_ref_tuples = collect_backend_ref_tuples(route);
-        let mut resolved_refs_errors =
-            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples, ctx.runtime());
+        let mut resolved_refs_errors = route_backend_refs::validate_targets(
+            TlsRouteBackendRefs::from_route(route).map(|references| references.effective()),
+            ctx.runtime(),
+        );
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
             route_ns,
@@ -291,11 +276,9 @@ impl TlsRouteHandler {
 
         // Globally rejected routes must not contribute to attachedRoutes.
         // Passing no parents also removes attachments from the prior generation.
-        let accepted_parents = route
-            .spec
-            .parent_refs
-            .as_ref()
-            .filter(|_| validation_errors.is_empty() && hostname_error.is_none());
+        let accepted_parents = route.spec.parent_refs.as_ref().filter(|_| {
+            TlsRouteBackendRefs::from_route(route).is_ok() && validation_errors.is_empty() && hostname_error.is_none()
+        });
         super::route_utils::update_tracker_accepted_only(
             ResourceKind::TLSRoute,
             route_ns,
@@ -332,25 +315,6 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
     fn update_status(&self, route: &mut TLSRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
         self.update_route_status(route, _ctx, validation_errors);
     }
-}
-
-fn collect_backend_ref_tuples(route: &TLSRoute) -> Vec<super::route_utils::BackendRefTuple<'_>> {
-    let mut tuples = Vec::new();
-    if let Some(rules) = &route.spec.rules {
-        for rule in rules {
-            if let Some(backend_refs) = &rule.backend_refs {
-                for br in backend_refs {
-                    tuples.push((
-                        br.group.as_deref(),
-                        br.kind.as_deref(),
-                        br.namespace.as_deref(),
-                        br.name.as_str(),
-                    ));
-                }
-            }
-        }
-    }
-    tuples
 }
 
 fn collect_ref_denied_list(route: &TLSRoute) -> Vec<Option<&RefDenied>> {

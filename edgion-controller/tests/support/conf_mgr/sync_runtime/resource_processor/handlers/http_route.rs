@@ -1,4 +1,5 @@
 use super::*;
+use edgion_resources::resources::http_route::HTTPBackendRefKind;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[cfg(test)]
@@ -83,7 +84,7 @@ pub(super) fn protocol_rule_invalid_reason_with_runtime(
     let resolved = match rule.resolved_ai_admission.as_ref() {
         Some(resolved) => resolved,
         None => {
-            fallback = resolve_ai_admission(rule, route_namespace, runtime);
+            fallback = fixture_ai_admission(rule, route_namespace, runtime);
             &fallback
         }
     };
@@ -114,7 +115,7 @@ pub(super) fn backend_variant_invalid_reason(
     namespace: &str,
     runtime: &ControllerRuntime,
 ) -> Option<String> {
-    shared_ai_admission::backend_variant_invalid_reason(rule, &resolve_ai_admission(rule, namespace, runtime))
+    shared_ai_admission::backend_variant_invalid_reason(rule, &fixture_ai_admission(rule, namespace, runtime))
 }
 
 #[cfg(test)]
@@ -127,7 +128,7 @@ pub(super) fn model_route_context_invalid_reason_for_config(
     shared_ai_admission::model_route_context_invalid_reason(
         rule,
         namespace,
-        &resolve_ai_admission(rule, namespace, runtime),
+        &fixture_ai_admission(rule, namespace, runtime),
         config,
     )
 }
@@ -167,4 +168,21 @@ pub(super) fn ai_rule_invalid_reason(
             missing_reference: missing.as_deref(),
         },
     )
+}
+
+/// Drive the actual owner-based fact resolver for existing rule-only fixtures.
+fn fixture_ai_admission(rule: &HTTPRouteRule, namespace: &str, runtime: &ControllerRuntime) -> ResolvedAiAdmission {
+    let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "test-route", "namespace": namespace}, "spec": {}
+    }))
+    .expect("fixture metadata and an empty optional HTTPRoute spec deserialize");
+    route.spec.rules = Some(vec![rule.clone()]);
+    populate_ai_admission(&mut route, runtime);
+    route
+        .spec
+        .rules
+        .expect("fixture contains its one authored rule")
+        .remove(0)
+        .resolved_ai_admission
+        .expect("populate_ai_admission sets every authored rule sidecar")
 }

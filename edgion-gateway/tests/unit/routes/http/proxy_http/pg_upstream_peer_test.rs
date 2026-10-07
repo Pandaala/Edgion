@@ -2141,14 +2141,13 @@ fn noop_decision_clears_stale_upstream_authority() {
 
 // ── named-jump backend selection (`pick_backend_ref`) ────────────────────
 
-/// Minimal `HTTPBackendRef` for route-unit fixtures (only `name`,
-/// `weight` and `ref_denied` matter here — the rest are the schema's
-/// non-operator defaults).
+/// Valid standard Service reference for route-unit fixtures. A Service port is
+/// required by canonical target validation; tests vary name, weight and denial.
 fn jump_backend_ref(name: &str) -> HTTPBackendRef {
     HTTPBackendRef {
         name: name.to_string(),
         namespace: None,
-        port: None,
+        port: Some(80),
         weight: None,
         group: None,
         kind: None,
@@ -2319,6 +2318,11 @@ fn denied_named_jump_fails_closed_instead_of_selecting_sibling() {
         reason: Some("NoMatchingReferenceGrant".to_string()),
     });
     let unit = jump_route_unit(vec![jump_backend_ref("app-v1"), denied]);
+    assert_eq!(unit.backends.len(), 2);
+    assert!(
+        unit.backends.iter().all(|backend| backend.is_service()),
+        "named-jump denial fixture must contain valid Service targets"
+    );
 
     let err = pick_backend_ref(&unit, "test-ns", Some(&internal_jump("app-v2")))
         .expect_err("denied named jump must not resolve to its legal sibling");

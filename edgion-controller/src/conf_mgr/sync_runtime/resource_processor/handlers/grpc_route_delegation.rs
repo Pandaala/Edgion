@@ -30,6 +30,11 @@
 //!    whole child rule (v1 rejects the match outright rather than proving a
 //!    regex service cannot escape the scope).
 
+use super::route_backend_refs::{self, BackendDependencyReceipt};
+use edgion_resources::resources::refs::route_fields::{
+    AuthoredBackendReference, AuthoredRouteTarget, GrpcRouteBackendRefs, TerminalBackendReference,
+};
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -42,9 +47,6 @@ use edgion_resources::resources::http_route::{DelegationIssue, SessionPersistenc
 
 use super::route_delegation::MAX_DELEGATION_DEPTH;
 
-/// `(group, kind, namespace(explicit), name)` of a Service backendRef.
-pub type ServiceBackendTuple = (Option<String>, Option<String>, Option<String>, String);
-
 /// Store abstraction so flattening is unit-testable without a ControllerRuntime.
 pub trait DelegationLookup {
     /// Look up a GRPCRoute by `"ns/name"` key.
@@ -52,22 +54,14 @@ pub trait DelegationLookup {
     /// All GRPCRoute keys in a namespace, sorted (for deterministic wildcard
     /// expansion order).
     fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String>;
-    /// ReferenceGrant check for a flattened Service backendRef. `from_ns` is
-    /// the namespace of the child route that declares the ref.
-    fn cross_ns_ref_allowed(
-        &self,
-        from_ns: &str,
-        group: Option<&str>,
-        kind: Option<&str>,
-        name: &str,
-        to_ns: &str,
-    ) -> bool;
+    /// Authorize only the original declaring Route's validated terminal field.
+    fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied>;
 }
 
 /// Result of flattening one parent route.
 pub struct FlattenOutcome {
-    /// `None` ⇔ the route has no delegating rule (gateway keeps compiling
-    /// `spec.rules`).
+    /// `None` for a valid source without delegation (Gateway uses `spec.rules`).
+    /// Invalid sources return an empty effective rule set.
     pub resolved_rules: Option<Vec<GRPCRouteRule>>,
     pub issues: Vec<DelegationIssue>,
     /// Every named child key referenced anywhere in the delegation tree
@@ -75,9 +69,8 @@ pub struct FlattenOutcome {
     pub named_children: HashSet<String>,
     /// Every wildcard-delegated namespace anywhere in the delegation tree.
     pub wildcard_namespaces: HashSet<String>,
-    /// `(group, kind, namespace(explicit), name)` of every Service backendRef
-    /// in `resolved_rules`.
-    pub service_backend_tuples: Vec<ServiceBackendTuple>,
+    /// Valid authored terminal dependencies, retained even when a rule is dropped.
+    pub(super) backend_dependencies: Vec<BackendDependencyReceipt>,
     /// Namespaces referenced cross-namespace by flattened Service backendRefs
     /// (target ns ≠ declaring child ns), for CrossNsRefManager registration on
     /// the parent so ReferenceGrant changes requeue it.
@@ -97,7 +90,7 @@ impl FlattenOutcome {
             issues: Vec::new(),
             named_children: HashSet::new(),
             wildcard_namespaces: HashSet::new(),
-            service_backend_tuples: Vec::new(),
+            backend_dependencies: Vec::new(),
             cross_ns_target_namespaces: HashSet::new(),
             expanded_children: HashSet::new(),
         }
@@ -140,7 +133,7 @@ struct FlattenCtx<'a> {
     issues: Vec<DelegationIssue>,
     named_children: HashSet<String>,
     wildcard_namespaces: HashSet<String>,
-    service_backend_tuples: Vec<ServiceBackendTuple>,
+    backend_dependencies: Vec<BackendDependencyReceipt>,
     cross_ns_target_namespaces: HashSet<String>,
     expanded_children: HashSet<String>,
     /// Route keys on the current DFS path (root first), for cycle detection.
@@ -150,8 +143,19 @@ struct FlattenCtx<'a> {
 /// Flatten the delegation tree rooted at `parent`.
 ///
 /// Pure over `lookup`; does not touch any runtime index (the caller registers
-/// `named_children` / `wildcard_namespaces` / `service_backend_tuples`).
+/// `named_children` / `wildcard_namespaces` / `backend_dependencies`).
 pub fn flatten_route(parent: &GRPCRoute, lookup: &dyn DelegationLookup) -> FlattenOutcome {
+    let parent_refs = match GrpcRouteBackendRefs::from_route(parent) {
+        Ok(references) => references,
+        Err(error) => {
+            let mut outcome = FlattenOutcome::no_delegation();
+            outcome.resolved_rules = Some(Vec::new());
+            outcome.issues.push(DelegationIssue::RuleDropped {
+                message: route_backend_refs::source_error_message(error),
+            });
+            return outcome;
+        }
+    };
     let parent_ns = parent.metadata.namespace.as_deref().unwrap_or("default");
     let parent_name = parent.metadata.name.as_deref().unwrap_or("");
     let parent_key = format!("{parent_ns}/{parent_name}");
@@ -173,7 +177,7 @@ pub fn flatten_route(parent: &GRPCRoute, lookup: &dyn DelegationLookup) -> Flatt
         issues: Vec::new(),
         named_children: HashSet::new(),
         wildcard_namespaces: HashSet::new(),
-        service_backend_tuples: Vec::new(),
+        backend_dependencies: route_backend_refs::collect_dependencies(parent_refs.authored()),
         cross_ns_target_namespaces: HashSet::new(),
         expanded_children: HashSet::new(),
         path: vec![parent_key],
@@ -201,14 +205,14 @@ pub fn flatten_route(parent: &GRPCRoute, lookup: &dyn DelegationLookup) -> Flatt
             .is_some_and(|brs| brs.iter().any(GRPCBackendRef::is_route_delegation_ref));
         if !is_delegating {
             let copied = rule.clone();
-            collect_service_tuples(&mut ctx, parent_ns, &copied);
+
             out_rules.push(copied);
             continue;
         }
 
         match validate_delegating_rule(rule, idx) {
             Err(message) => ctx.issues.push(DelegationIssue::RuleDropped { message }),
-            Ok((dref, scopes)) => {
+            Ok((_dref, scopes)) => {
                 let inherited = InheritedFilters {
                     standard: rule
                         .filters
@@ -233,8 +237,7 @@ pub fn flatten_route(parent: &GRPCRoute, lookup: &dyn DelegationLookup) -> Flatt
                 };
                 expand_delegation_ref(
                     &mut ctx,
-                    parent_ns,
-                    dref,
+                    parent_refs.authored_at(idx, 0),
                     &scopes,
                     &inherited,
                     &attrs,
@@ -250,7 +253,7 @@ pub fn flatten_route(parent: &GRPCRoute, lookup: &dyn DelegationLookup) -> Flatt
         issues: ctx.issues,
         named_children: ctx.named_children,
         wildcard_namespaces: ctx.wildcard_namespaces,
-        service_backend_tuples: ctx.service_backend_tuples,
+        backend_dependencies: ctx.backend_dependencies,
         cross_ns_target_namespaces: ctx.cross_ns_target_namespaces,
         expanded_children: ctx.expanded_children,
     }
@@ -337,26 +340,43 @@ fn validate_delegating_rule(
 #[allow(clippy::too_many_arguments)]
 fn expand_delegation_ref(
     ctx: &mut FlattenCtx,
-    referrer_ns: &str,
-    dref: &GRPCBackendRef,
+    reference: Option<AuthoredBackendReference<'_>>,
     scopes: &[DelegatedScope],
     inherited: &InheritedFilters,
     attrs: &InheritedAttrs,
     depth: usize,
     out_rules: &mut Vec<GRPCRouteRule>,
 ) {
-    let target_ns = dref.namespace.as_deref().unwrap_or(referrer_ns);
+    let selection = reference.map(AuthoredBackendReference::validated);
+    let (target_ns, target_name) = match selection {
+        Some(Ok(AuthoredRouteTarget::NamedRoute(reference))) => (
+            reference.target().scope().namespace().unwrap_or_default(),
+            reference.target().name(),
+        ),
+        Some(Ok(AuthoredRouteTarget::NamespaceRoutes(reference))) => (reference.selector().namespace(), "*"),
+        Some(Err(error)) => {
+            ctx.issues.push(DelegationIssue::RuleDropped {
+                message: format!("Invalid delegation reference: {error}"),
+            });
+            return;
+        }
+        _ => {
+            ctx.issues.push(DelegationIssue::RuleDropped {
+                message: "Invalid delegation reference".to_string(),
+            });
+            return;
+        }
+    };
     let current_key = ctx.path.last().expect("DFS path is never empty").clone();
-
-    let child_keys: Vec<String> = if dref.name == "*" {
+    let child_keys: Vec<String> = if target_name == "*" {
         ctx.wildcard_namespaces.insert(target_ns.to_string());
         ctx.lookup
             .list_route_keys_in_namespace(target_ns)
             .into_iter()
-            .filter(|k| *k != current_key)
+            .filter(|key| *key != current_key)
             .collect()
     } else {
-        let key = format!("{target_ns}/{}", dref.name);
+        let key = format!("{target_ns}/{target_name}");
         ctx.named_children.insert(key.clone());
         vec![key]
     };
@@ -378,8 +398,8 @@ fn expand_delegation_ref(
             continue;
         }
         let Some(child) = ctx.lookup.get_route(&child_key) else {
-            if dref.name != "*" {
-                let (ns, name) = child_key.split_once('/').unwrap_or((target_ns, dref.name.as_str()));
+            if target_name != "*" {
+                let (ns, name) = child_key.split_once('/').unwrap_or((target_ns, target_name));
                 ctx.issues.push(DelegationIssue::MissingChild {
                     namespace: ns.to_string(),
                     name: name.to_string(),
@@ -388,6 +408,15 @@ fn expand_delegation_ref(
             continue;
         };
 
+        if let Err(error) = GrpcRouteBackendRefs::from_route(&child) {
+            ctx.issues.push(DelegationIssue::RuleDropped {
+                message: format!(
+                    "child '{child_key}' dropped: {}",
+                    route_backend_refs::source_error_message(error)
+                ),
+            });
+            continue;
+        }
         if child.spec.hostnames.is_some() {
             ctx.issues.push(DelegationIssue::RuleDropped {
                 message: format!("child '{child_key}' skipped: child routes must not set spec.hostnames"),
@@ -422,6 +451,16 @@ fn flatten_child_rules(
     depth: usize,
     out_rules: &mut Vec<GRPCRouteRule>,
 ) {
+    let Ok(child_refs) = GrpcRouteBackendRefs::from_route(child) else {
+        return;
+    };
+    let receipts = route_backend_refs::collect_dependencies(child_refs.authored());
+    ctx.cross_ns_target_namespaces.extend(
+        receipts
+            .iter()
+            .filter_map(|receipt| receipt.cross_namespace().map(str::to_string)),
+    );
+    ctx.backend_dependencies.extend(receipts);
     let child_ns = child.metadata.namespace.as_deref().unwrap_or("default");
     let child_name = child.metadata.name.as_deref().unwrap_or("");
     let Some(rules) = &child.spec.rules else {
@@ -438,6 +477,23 @@ fn flatten_child_rules(
             });
             continue;
         }
+
+        let denials: Vec<Option<RefDenied>> = rule
+            .backend_refs
+            .iter()
+            .flatten()
+            .enumerate()
+            .map(|(backend, _)| {
+                match child_refs
+                    .authored_at(idx, backend)
+                    .expect("indices enumerate this borrowed child rule and backend vector")
+                    .validated()
+                {
+                    Ok(AuthoredRouteTarget::Terminal(terminal)) => ctx.lookup.terminal_ref_denied(terminal),
+                    _ => None,
+                }
+            })
+            .collect();
 
         let is_delegating = rule
             .backend_refs
@@ -480,7 +536,7 @@ fn flatten_child_rules(
                 Err(message) => ctx.issues.push(DelegationIssue::RuleDropped {
                     message: format!("child '{child_key}' {message}"),
                 }),
-                Ok((dref, own_scopes)) => {
+                Ok((_dref, own_scopes)) => {
                     let mut merged_scopes = Vec::new();
                     let mut fit_error: Option<String> = None;
                     for own in &own_scopes {
@@ -553,8 +609,7 @@ fn flatten_child_rules(
                     };
                     expand_delegation_ref(
                         ctx,
-                        child_ns,
-                        dref,
+                        child_refs.authored_at(idx, 0),
                         &merged_scopes,
                         &next_inherited,
                         &next_attrs,
@@ -654,7 +709,7 @@ fn flatten_child_rules(
         // the namespace explicit and run the ReferenceGrant check with the
         // CHILD namespace as referrer.
         if let Some(backend_refs) = flattened.backend_refs.as_mut() {
-            for br in backend_refs.iter_mut() {
+            for (backend_index, br) in backend_refs.iter_mut().enumerate() {
                 for filter in br.filters.iter_mut().flatten() {
                     if filter.filter_type == GRPCRouteFilterType::ExtensionRef {
                         if let Some(extension_ref) = filter.extension_ref.as_mut() {
@@ -662,31 +717,13 @@ fn flatten_child_rules(
                         }
                     }
                 }
-                let target_ns = br.namespace.clone().unwrap_or_else(|| child_ns.to_string());
-                br.namespace = Some(target_ns.clone());
-                if target_ns != child_ns {
-                    ctx.cross_ns_target_namespaces.insert(target_ns.clone());
+                if br.namespace.is_none() {
+                    br.namespace = Some(child_ns.to_string());
                 }
-                if target_ns != child_ns
-                    && !ctx.lookup.cross_ns_ref_allowed(
-                        child_ns,
-                        br.group.as_deref(),
-                        br.kind.as_deref(),
-                        &br.name,
-                        &target_ns,
-                    )
-                {
-                    br.ref_denied = Some(RefDenied {
-                        target_namespace: target_ns,
-                        target_name: br.name.clone(),
-                        reason: Some("NoMatchingReferenceGrant".to_string()),
-                    });
-                } else {
-                    br.ref_denied = None;
-                }
+                br.ref_denied = denials.get(backend_index).cloned().flatten();
             }
         }
-        collect_service_tuples(ctx, child_ns, &flattened);
+
         out_rules.push(flattened);
     }
 }
@@ -801,29 +838,6 @@ fn reverse_lock_allows(child: &GRPCRoute, parent_key: &str) -> bool {
         }
     }
     !has_lock
-}
-
-/// Record Service backendRef tuples of a flattened/copied rule for
-/// ServiceRefManager registration under the parent route.
-fn collect_service_tuples(ctx: &mut FlattenCtx, implicit_ns: &str, rule: &GRPCRouteRule) {
-    for br in rule.backend_refs.iter().flatten() {
-        if br.is_route_delegation_ref() {
-            continue;
-        }
-        let group = br.group.as_deref().unwrap_or("");
-        if !group.is_empty() && group != "core" {
-            continue;
-        }
-        if br.kind.as_deref().unwrap_or("Service") != "Service" {
-            continue;
-        }
-        ctx.service_backend_tuples.push((
-            br.group.clone(),
-            br.kind.clone(),
-            Some(br.namespace.clone().unwrap_or_else(|| implicit_ns.to_string())),
-            br.name.clone(),
-        ));
-    }
 }
 
 #[cfg(test)]

@@ -128,3 +128,119 @@ async fn coalesced_recreate_requeues_dropped_parent_gateway() {
         seen
     );
 }
+
+#[tokio::test]
+async fn coalesced_service_ai_retarget_requeues_dropped_policies_and_restores_mirror_role() {
+    use crate::conf_mgr::sync_runtime::resource_processor::service_ref::{
+        forwarding_service_dependencies, mirror_service_key,
+    };
+    use crate::conf_mgr::sync_runtime::resource_processor::{ProcessResult, ResourceRef};
+    use edgion_resources::{EdgionBackendTrafficPolicy, ResourceKind};
+    struct PolicyNoop;
+    #[async_trait::async_trait]
+    impl ProcessorHandler<EdgionBackendTrafficPolicy> for PolicyNoop {}
+    let runtime = Arc::new(ControllerRuntime::default());
+    let policies = Arc::new(ResourceProcessor::<EdgionBackendTrafficPolicy>::new(
+        "EdgionBackendTrafficPolicy",
+        16,
+        Arc::new(PolicyNoop),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(policies.clone());
+    let service_policy = ResourceRef::new(
+        ResourceKind::EdgionBackendTrafficPolicy,
+        Some("default".into()),
+        "service-policy".into(),
+    );
+    let ai_policy = ResourceRef::new(
+        ResourceKind::EdgionBackendTrafficPolicy,
+        Some("default".into()),
+        "ai-policy".into(),
+    );
+    runtime
+        .service_ref_mgr
+        .add_ref("default/service".into(), service_policy);
+    runtime
+        .backend_ref_mgr
+        .add_ref("edgion.io/EdgionBackend/default/models".into(), ai_policy);
+    let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
+    let handler = HttpRouteHandler::default();
+    let owner = ResourceRef::new(ResourceKind::HTTPRoute, Some("default".into()), "route".into());
+    let route = |ai: bool| -> HTTPRoute {
+        serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"route","namespace":"default"},
+            "spec":{"rules":[{"backendRefs":[if ai {
+                serde_json::json!({"group":"edgion.io","kind":"EdgionBackend","name":"models"})
+            }else{serde_json::json!({"name":"service","port":80})}],
+                "filters":[{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"mirror","port":8080}}}]
+            }]}
+        }))
+        .unwrap()
+    };
+    assert!(matches!(
+        handler.parse(route(false), &ctx).await,
+        ProcessResult::Continue(_)
+    ));
+    assert_eq!(
+        forwarding_service_dependencies(&runtime.service_ref_mgr, &owner.key()),
+        vec!["default/service"]
+    );
+    assert_eq!(
+        runtime
+            .service_ref_mgr
+            .get_refs(&mirror_service_key("default", "mirror")),
+        vec![owner.clone()]
+    );
+    assert!(matches!(
+        handler.parse(route(true), &ctx).await,
+        ProcessResult::Continue(_)
+    ));
+    let mut seen = std::collections::HashSet::new();
+    while seen.len() < 2 {
+        let item = tokio::time::timeout(std::time::Duration::from_secs(3), policies.workqueue().dequeue())
+            .await
+            .expect("retarget must requeue both affected policies")
+            .expect("queue remains open");
+        seen.insert(item.key.clone());
+        policies.workqueue().done(&item.key);
+    }
+    assert_eq!(
+        seen,
+        std::collections::HashSet::from(["default/service-policy".into(), "default/ai-policy".into()])
+    );
+    assert!(forwarding_service_dependencies(&runtime.service_ref_mgr, &owner.key()).is_empty());
+    assert_eq!(
+        runtime
+            .service_ref_mgr
+            .get_refs(&mirror_service_key("default", "mirror")),
+        vec![owner.clone()]
+    );
+    assert!(runtime
+        .backend_ref_mgr
+        .get_refs("edgion.io/EdgionBackend/default/models")
+        .contains(&owner));
+    assert!(matches!(
+        handler.parse(route(false), &ctx).await,
+        ProcessResult::Continue(_)
+    ));
+    let item = tokio::time::timeout(std::time::Duration::from_secs(3), policies.workqueue().dequeue())
+        .await
+        .expect("dropped AI policy must requeue")
+        .unwrap();
+    assert_eq!(item.key, "default/ai-policy");
+    policies.workqueue().done(&item.key);
+    assert!(!runtime
+        .backend_ref_mgr
+        .get_refs("edgion.io/EdgionBackend/default/models")
+        .contains(&owner));
+    assert_eq!(
+        forwarding_service_dependencies(&runtime.service_ref_mgr, &owner.key()),
+        vec!["default/service"]
+    );
+    assert_eq!(
+        runtime
+            .service_ref_mgr
+            .get_refs(&mirror_service_key("default", "mirror")),
+        vec![owner]
+    );
+}

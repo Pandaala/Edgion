@@ -6,10 +6,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::super::ref_grant::{
-    is_cross_ns_ref_allowed, read_after_registering_cross_ns_dependency, validate_grpc_route_if_enabled,
-};
+use super::super::ref_grant::validate_grpc_route_if_enabled;
 use super::grpc_route_delegation::{flatten_route, DelegationLookup};
+use super::route_backend_refs::{self, BackendDependencyReceipt};
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_route,
     requeue_backend_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
@@ -26,6 +25,7 @@ use edgion_resources::resources::http_route::{DelegationIssue, GATEWAY_API_GROUP
 use edgion_resources::resources::refs::extension_ref::{
     is_supported_edgion_plugins_ref, validate_extension_ref_filter,
 };
+use edgion_resources::resources::refs::route_fields::{GrpcRouteBackendRefs, TerminalBackendReference};
 use edgion_resources::ResourceKind;
 
 /// True for parentRef entries that attach the route to a Gateway listener
@@ -76,30 +76,10 @@ impl DelegationLookup for RuntimeDelegationLookup<'_> {
         keys
     }
 
-    fn cross_ns_ref_allowed(
-        &self,
-        from_ns: &str,
-        group: Option<&str>,
-        kind: Option<&str>,
-        name: &str,
-        to_ns: &str,
-    ) -> bool {
-        let group = group.map(str::to_string);
-        let kind = kind.map(str::to_string);
-        let read = || {
-            is_cross_ns_ref_allowed(
-                from_ns,
-                "GRPCRoute",
-                to_ns,
-                group.as_ref(),
-                kind.as_ref(),
-                name,
-                self.runtime,
-            )
-        };
-        self.grant_owner.as_ref().map_or_else(read, |owner| {
-            read_after_registering_cross_ns_dependency(self.runtime, to_ns, owner, read)
-        })
+    fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
+        self.grant_owner
+            .as_ref()
+            .and_then(|owner| route_backend_refs::authorize_terminal(terminal, owner, self.runtime))
     }
 }
 
@@ -123,37 +103,23 @@ impl GrpcRouteHandler {
 
     /// Register Service backend references for cross-resource requeue.
     ///
-    /// `extra_tuples` carries the flattened delegation backendRefs (with
+    /// `extra_dependencies` carries the flattened delegation backendRefs (with
     /// explicit namespaces) so Service changes under delegated children
     /// requeue this parent route directly. Registration replaces the
     /// resource's whole ref set, so own-rule and flattened refs must land in
     /// this single call.
     fn register_service_refs(
         route: &GRPCRoute,
-        extra_tuples: &[super::grpc_route_delegation::ServiceBackendTuple],
+        extra_dependencies: &[BackendDependencyReceipt],
         ctx: &HandlerContext,
     ) -> Vec<String> {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
-        let mut backend_refs_list = Vec::new();
-        if let Some(rules) = &route.spec.rules {
-            for rule in rules {
-                if let Some(backend_refs) = &rule.backend_refs {
-                    for br in backend_refs {
-                        backend_refs_list.push((
-                            br.group.as_deref(),
-                            br.kind.as_deref(),
-                            br.namespace.as_deref(),
-                            br.name.as_str(),
-                        ));
-                    }
-                }
-            }
-        }
-        for (group, kind, namespace, name) in extra_tuples {
-            backend_refs_list.push((group.as_deref(), kind.as_deref(), namespace.as_deref(), name.as_str()));
-        }
+        let mut backend_refs_list = GrpcRouteBackendRefs::from_route(route)
+            .map(|references| route_backend_refs::collect_dependencies(references.authored()))
+            .unwrap_or_default();
+        backend_refs_list.extend_from_slice(extra_dependencies);
 
         super::route_utils::register_service_backend_refs(
             ResourceKind::GRPCRoute,
@@ -171,26 +137,12 @@ impl GrpcRouteHandler {
     /// requeue this parent route. Parse entry replaces the resource's whole
     /// ref set; this later pass only extends it with authored and flattened targets.
     fn record_cross_ns_refs(route: &GRPCRoute, extra_namespaces: &HashSet<String>, ctx: &HandlerContext) {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let resource_ref = Self::create_resource_ref(route);
-        let manager = &ctx.runtime().cross_ns_ref_mgr;
-
-        // Collect cross-namespace references from rules
-        if let Some(rules) = &route.spec.rules {
-            for rule in rules {
-                if let Some(backend_refs) = &rule.backend_refs {
-                    for backend_ref in backend_refs {
-                        if let Some(backend_ns) = &backend_ref.namespace {
-                            if backend_ns != route_ns {
-                                manager.add_ref(backend_ns.clone(), resource_ref.clone());
-                            }
-                        }
-                    }
-                }
-            }
+        if GrpcRouteBackendRefs::from_route(route).is_err() {
+            return;
         }
-        for ns in extra_namespaces {
-            manager.add_ref(ns.clone(), resource_ref.clone());
+        let owner = Self::create_resource_ref(route);
+        for namespace in extra_namespaces {
+            ctx.runtime().cross_ns_ref_mgr.add_ref(namespace.clone(), owner.clone());
         }
     }
 
@@ -202,6 +154,9 @@ impl GrpcRouteHandler {
         let resource_ref = Self::create_resource_ref(route);
         let manager = &ctx.runtime().plugin_ref_mgr;
         manager.clear_value_refs(&resource_ref);
+        if GrpcRouteBackendRefs::from_route(route).is_err() {
+            return;
+        }
 
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         for rules in [route.spec.rules.as_deref(), route.spec.resolved_rules.as_deref()]
@@ -245,13 +200,17 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
     }
 
     fn validate(&self, route: &GRPCRoute, _ctx: &HandlerContext) -> Vec<String> {
-        let errors = validate_grpc_route_if_enabled(route);
+        let mut errors = validate_grpc_route_if_enabled(route);
         // Note: backend ref validation (service existence, kind check) is handled by
         // update_status() via ResolvedRefs condition and per-rule invalid_rule_indices.
+        if let Err(error) = GrpcRouteBackendRefs::from_route(route) {
+            errors.push(route_backend_refs::source_error_message(error));
+        }
         errors
     }
 
     async fn parse(&self, mut route: GRPCRoute, _ctx: &HandlerContext) -> ProcessResult<GRPCRoute> {
+        let source_valid = GrpcRouteBackendRefs::from_route(&route).is_ok();
         let grant_owner = Self::create_resource_ref(&route);
         _ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&grant_owner);
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
@@ -274,61 +233,25 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             }
         }
 
-        // Mark denied cross-namespace references on the operator-authored rules.
-        // MUST run BEFORE the delegation flatten: flatten clones non-delegating
-        // sibling rules verbatim into resolved_rules, and the gateway compiles
-        // resolved_rules INSTEAD of spec.rules — marking afterwards would leave
-        // the compiled copies with ref_denied=None (ReferenceGrant bypass).
-        if let Some(rules) = &mut route.spec.rules {
-            for rule in rules {
-                if let Some(backend_refs) = &mut rule.backend_refs {
-                    for backend_ref in backend_refs {
-                        // Delegation refs (kind: GRPCRoute) are not Service
-                        // backends: cross-namespace delegation is authorized
-                        // by the parent itself (no ReferenceGrant), so they
-                        // must never be marked ref_denied.
-                        if backend_ref.is_route_delegation_ref() {
-                            backend_ref.ref_denied = None;
-                            continue;
-                        }
-                        if let Some(backend_ns) = &backend_ref.namespace {
-                            if backend_ns != route_ns {
-                                let allowed = read_after_registering_cross_ns_dependency(
-                                    _ctx.runtime(),
-                                    backend_ns,
-                                    &grant_owner,
-                                    || {
-                                        is_cross_ns_ref_allowed(
-                                            route_ns,
-                                            "GRPCRoute",
-                                            backend_ns,
-                                            backend_ref.group.as_ref(),
-                                            backend_ref.kind.as_ref(),
-                                            &backend_ref.name,
-                                            _ctx.runtime(),
-                                        )
-                                    },
-                                );
-                                if !allowed {
-                                    backend_ref.ref_denied = Some(RefDenied {
-                                        target_namespace: backend_ns.clone(),
-                                        target_name: backend_ref.name.clone(),
-                                        reason: Some("NoMatchingReferenceGrant".to_string()),
-                                    });
-                                } else {
-                                    // Clear ref_denied if now allowed (e.g., ReferenceGrant was added)
-                                    backend_ref.ref_denied = None;
-                                }
-                            } else {
-                                // Same namespace - always allowed
-                                backend_ref.ref_denied = None;
-                            }
-                        } else {
-                            // No namespace specified - same namespace assumed
-                            backend_ref.ref_denied = None;
-                        }
-                    }
-                }
+        // Authorize actual authored loans before cloning any effective rules.
+        let decisions = GrpcRouteBackendRefs::from_route(&route)
+            .map(|references| route_backend_refs::resolve_denials(references.authored(), &grant_owner, _ctx.runtime()))
+            .unwrap_or_default();
+        for rule in route.spec.rules.iter_mut().flatten() {
+            for backend in rule.backend_refs.iter_mut().flatten() {
+                backend.ref_denied = None;
+            }
+        }
+        for (slot, denial) in decisions {
+            if let Some(backend) = route
+                .spec
+                .rules
+                .as_mut()
+                .and_then(|rules| rules.get_mut(slot.rule()))
+                .and_then(|rule| rule.backend_refs.as_mut())
+                .and_then(|backends| backends.get_mut(slot.backend()))
+            {
+                backend.ref_denied = denial;
             }
         }
 
@@ -373,8 +296,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         // Register Service backend references, then requeue BTPs bound to any
         // Service dropped from backendRefs (the apply path otherwise only
         // requeues BTPs for the route's current backends).
-        let dropped_service_keys =
-            Self::register_service_refs(&route, &delegation_outcome.service_backend_tuples, _ctx);
+        let dropped_service_keys = Self::register_service_refs(&route, &delegation_outcome.backend_dependencies, _ctx);
         requeue_backend_policies_for_services(&dropped_service_keys, _ctx).await;
 
         // Maintain the delegation index (also clears stale edges when the
@@ -436,7 +358,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         if let Some(annotations) = route.metadata.annotations.as_mut() {
             annotations.remove("edgion.io/hostname-resolution");
         }
-        let valid_hostnames = route.spec.validate_hostnames().is_ok();
+        let valid_hostnames = source_valid && route.spec.validate_hostnames().is_ok();
 
         // Resolve effective hostnames (intersection with Gateway listener hostnames)
         if let Some(parent_refs) = route.spec.parent_refs.as_ref().filter(|_| valid_hostnames) {
@@ -562,18 +484,35 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
     }
 
     fn update_status(&self, route: &mut GRPCRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
+        let source_error = GrpcRouteBackendRefs::from_route(route).err();
+        if source_error.is_some() {
+            route.spec.resolved_rules = Some(Vec::new());
+            route.spec.resolved_listeners = None;
+            route.spec.resolved_hostnames = None;
+        }
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
         let hostname_error = route.spec.validate_hostnames().err();
         let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
-        let plugin_scope_errors = backend_route_wide_scope_errors(route, route_ns, _ctx.runtime());
+        if let Some(error) = source_error {
+            let message = route_backend_refs::source_error_message(error);
+            if !validation_errors.contains(&message) {
+                validation_accepted_errors.push(AcceptedError::Invalid { message });
+            }
+        }
+        let plugin_scope_errors = if source_error.is_none() {
+            backend_route_wide_scope_errors(route, route_ns, _ctx.runtime())
+        } else {
+            Vec::new()
+        };
         validation_accepted_errors.extend(plugin_scope_errors.clone());
         let plugin_scope_rejects_route = !plugin_scope_errors.is_empty();
 
-        let backend_ref_tuples = collect_backend_ref_tuples(route);
-        let mut resolved_refs_errors =
-            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples, _ctx.runtime());
+        let mut resolved_refs_errors = route_backend_refs::validate_targets(
+            GrpcRouteBackendRefs::from_route(route).map(|references| references.effective()),
+            _ctx.runtime(),
+        );
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
             route_ns,
@@ -599,7 +538,11 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         }
 
         // Per-rule validation: find rules where ALL backend refs are invalid
-        let invalid_indices = find_controller_invalid_rule_indices(route, route_ns, _ctx.runtime());
+        let invalid_indices = if source_error.is_none() {
+            find_controller_invalid_rule_indices(route, route_ns, _ctx.runtime())
+        } else {
+            Vec::new()
+        };
         let total_rules = route.spec.rules.as_ref().map_or(0, |r| r.len());
         let valid_rules = total_rules - invalid_indices.len();
         let serves_no_rule = match &route.spec.resolved_rules {
@@ -618,7 +561,12 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                 rule.method_match_error()
                     .or_else(|| rule.header_modifier_error())
                     .map(str::to_string)
-                    .or_else(|| backend_plugin_scope_invalid_reason(rule, route_ns, _ctx.runtime(), false))
+                    .or_else(|| {
+                        source_error
+                            .is_none()
+                            .then(|| backend_plugin_scope_invalid_reason(rule, route_ns, _ctx.runtime(), false))
+                            .flatten()
+                    })
                     .map(|message| (index, message))
             })
             .collect();
@@ -637,7 +585,10 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                     .map(|message| AcceptedError::UnsupportedValue { message }),
             );
         }
-        let route_rejected = hostname_error.is_some() || plugin_scope_rejects_route || attachment_rejects_route;
+        let route_rejected = source_error.is_some()
+            || hostname_error.is_some()
+            || plugin_scope_rejects_route
+            || attachment_rejects_route;
 
         route.spec.invalid_rule_indices = if invalid_indices.is_empty() {
             None
@@ -735,7 +686,16 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                     parent_ref.namespace.as_deref().unwrap_or(route_ns),
                     parent_ref.name
                 );
-                let condition = delegation_accepted_condition(&parent_key, &delegating_parents, generation);
+                let condition = if source_error.is_some() {
+                    condition_false(
+                        condition_types::ACCEPTED,
+                        condition_reasons::INVALID,
+                        "Invalid route reference source",
+                        generation,
+                    )
+                } else {
+                    delegation_accepted_condition(&parent_key, &delegating_parents, generation)
+                };
                 // Match on kind too: a route can carry both a `kind: Gateway`
                 // and a `kind: GRPCRoute` parentRef with the same name/ns/
                 // section, and the delegation Accepted condition must not
@@ -769,40 +729,20 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             ResourceKind::GRPCRoute,
             route_ns,
             route.metadata.name.as_deref().unwrap_or(""),
-            route.spec.parent_refs.as_ref().filter(|_| hostname_error.is_none()),
+            route
+                .spec
+                .parent_refs
+                .as_ref()
+                .filter(|_| source_error.is_none() && hostname_error.is_none()),
             route.spec.hostnames.as_ref(),
             _ctx.runtime(),
         );
     }
 }
 
-/// Extract (group, kind, namespace, name) tuples from all backend refs for shared validation.
-///
 /// Delegation backendRefs (`kind: GRPCRoute`) are excluded — they are not
 /// Service backends; their resolution problems are reported through
 /// `DelegationIssue` (MissingChild → ResolvedRefs, drops → PartiallyInvalid).
-fn collect_backend_ref_tuples(route: &GRPCRoute) -> Vec<super::route_utils::BackendRefTuple<'_>> {
-    let mut tuples = Vec::new();
-    if let Some(rules) = &route.spec.rules {
-        for rule in rules {
-            if let Some(backend_refs) = &rule.backend_refs {
-                for br in backend_refs {
-                    if br.is_route_delegation_ref() {
-                        continue;
-                    }
-                    tuples.push((
-                        br.group.as_deref(),
-                        br.kind.as_deref(),
-                        br.namespace.as_deref(),
-                        br.name.as_str(),
-                    ));
-                }
-            }
-        }
-    }
-    tuples
-}
-
 /// Collect Option<&RefDenied> from all backend refs for shared error collection.
 ///
 /// Scans `effective_rules()` (resolved_rules when present, else spec.rules):

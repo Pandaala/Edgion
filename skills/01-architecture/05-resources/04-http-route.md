@@ -39,6 +39,31 @@ Plugin runtimes and match regexes are compiled later by the Gateway route
 builder. Regex indexes, predicates, and header specificity all consume the
 same decoded header vector. See the [header normalization guard](../../04-review/routing/regression-guards/http-header-match-first-name-wins.md).
 
+### Native backend reference ownership
+
+`refs::route_fields::HttpRouteBackendRefs` borrows the actual typed Route. Only an authored,
+validated terminal loan can construct a Grant query; effective/status/AI loans,
+named/wildcard delegation selectors, and owned dependency receipts cannot. The
+canonical `refs::targets` classifier requires omitted/empty group and omitted/exact
+`Service` kind plus port `1..=65535`; literal `core` and pseudo Service kinds are
+unsupported. Exact same-family delegation uses the Gateway API group and no port;
+`*` is a namespace selector, not an object identity. HTTP alone also supports exact
+`edgion.io/EdgionBackend` without a backend port.
+
+Source namespace omission defaults to `default`; an explicitly invalid namespace
+or missing/invalid source name closes the existing Accepted gate, including direct
+status calls, and empties derived executable rules/listeners. No native target is
+looked up or registered for that invalid source. A valid parent selection of an
+invalid child retains its named/wildcard recovery edge but drops the child before
+native backend reads, Grant checks, or rule cloning.
+
+Delegation authorizes each original child terminal before cloning, using the
+child's source namespace even when its target is the root namespace. The root
+Route owns wakeups. Valid terminal receipts survive later rule filtering and
+missing/denied targets. Service manager owners retain their explicit canonical
+namespace while root Grant wakeups retain raw metadata namespace representation.
+Apply replaces all prior dependencies and requeues dropped policy keys.
+
 ### parse
 
 0. **Replace ReferenceGrant dependencies, mark denials, then flatten delegation**: clear the prior CrossNsRefManager set once at parse entry. Before every ReferenceGrant store read, register the target namespace under the root Route owner; this applies to ordinary backendRefs, RequestMirror, and child-declared flattened backends. Then mark `ref_denied` on spec.rules before flattening (flatten clones non-delegating sibling rules verbatim into resolved_rules, which the gateway compiles instead of spec.rules — marking afterwards would leave the compiled copies un-denied). If any rule delegates (`backendRef {group: gateway.networking.k8s.io, kind: HTTPRoute}`), `route_delegation::flatten_route()` DFS-expands the delegation tree into `spec.resolved_rules` (schemars-skip, serialized for conf_sync) and stores diagnostics in the in-process `spec.delegation_issues`. `RouteDelegationIndex` (child → parents) is updated; edge deltas requeue affected children so their child-side status stays fresh. Canonical user semantics: [`docs/en/user-guide/http-route/delegation.md`](../../../docs/en/user-guide/http-route/delegation.md); module: `handlers/route_delegation.rs`
@@ -69,7 +94,7 @@ same decoded header vector. See the [header normalization guard](../../04-review
 
 Generate an independent RouteParentStatus for each parentRef:
 - `Accepted`: validates whether the Gateway/Listener corresponding to parentRef exists and admits this route (non-empty hostname intersection, namespace policy permits). Only `kind: Gateway` parentRefs enter this path
-- `ResolvedRefs`: validates whether all backendRef-targeted Services exist and whether cross-namespace references are rejected (delegation refs are excluded from Service validation; a missing named delegation child surfaces as `BackendNotFound` via `DelegationIssue::MissingChild`)
+- `ResolvedRefs`: canonical effective target views validate Service/EdgionBackend identity and existence. Invalid references map through the existing `InvalidKind` reason. Valid denied terminals retain `RefNotPermitted` without an existence read. Valid delegation selectors are excluded from terminal existence reads; missing named children surface as `BackendNotFound` via `DelegationIssue::MissingChild`.
 - `PartiallyInvalid`: own invalid rules plus every delegation-dropped rule message (`DelegationIssue::RuleDropped` — out-of-prefix child rules, filter conflicts, cycles, depth, malformed delegating rules)
 - Native CORS on any backendRef invalidates the entire owning rule through
   `HTTPRouteRule::unsupported_backend_cors_reason`. The same check is used during
@@ -95,6 +120,9 @@ See the [credentialed exposure policy](../../04-review/cors/intentional-design/n
 
 After resolving references and delegated rules, the Controller attaches bounded
 `resolved_ai_admission` backend facts to both authored and flattened rules.
+There is one fact per original backend slot in both vectors; invalid or denied
+targets produce `Missing` without reading Service/EdgionBackend state or changing
+weights. Only same-namespace or authorized valid targets reach those stores.
 These transport-only fields are hidden from CRD schema and carry no backend
 credentials. Shared pure AI validation produces intrinsic source diagnostics;
 those findings do not drop the matched rule or flip parent acceptance merely

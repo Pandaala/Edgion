@@ -1042,12 +1042,15 @@ fn ai_and_plugin_reverse_refs_replace_old_effective_dependencies() {
     .unwrap();
     let route_ref = HttpRouteHandler::create_resource_ref(&route);
 
-    let first_tuples = vec![(
-        Some("edgion.io".to_string()),
-        Some("EdgionBackend".to_string()),
-        Some("child".to_string()),
-        "models-a".to_string(),
-    )];
+    let child: HTTPRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"namespace": "child", "name": "declaring-child"},
+        "spec": {"rules": [{"backendRefs": [{
+            "group": "edgion.io", "kind": "EdgionBackend", "name": "models-a"
+        }]}]}
+    }))
+    .unwrap();
+    let first_tuples =
+        route_backend_refs::collect_dependencies(HttpRouteBackendRefs::from_route(&child).unwrap().authored());
     let first = HttpRouteHandler::register_backend_refs(&route, &first_tuples, &ctx);
     assert_eq!(
         first.affected,
@@ -1069,12 +1072,15 @@ fn ai_and_plugin_reverse_refs_replace_old_effective_dependencies() {
     resolved[0].backend_refs.as_mut().unwrap()[0].name = "models-b".to_string();
     resolved[0].backend_refs.as_mut().unwrap()[0].filters = None;
     resolved[0].filters = None;
-    let second_tuples = vec![(
-        Some("edgion.io".to_string()),
-        Some("EdgionBackend".to_string()),
-        Some("child".to_string()),
-        "models-b".to_string(),
-    )];
+    let child: HTTPRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"namespace": "child", "name": "declaring-child"},
+        "spec": {"rules": [{"backendRefs": [{
+            "group": "edgion.io", "kind": "EdgionBackend", "name": "models-b"
+        }]}]}
+    }))
+    .unwrap();
+    let second_tuples =
+        route_backend_refs::collect_dependencies(HttpRouteBackendRefs::from_route(&child).unwrap().authored());
     let second = HttpRouteHandler::register_backend_refs(&route, &second_tuples, &ctx);
     assert_eq!(
         second.dropped,
@@ -1235,12 +1241,15 @@ fn flattened_backend_refs_remain_registered_after_rule_withdrawal() {
         "spec": {"resolvedRules": []}
     }))
     .unwrap();
-    let flattened_tuples = vec![(
-        Some("edgion.io".to_string()),
-        Some("EdgionBackend".to_string()),
-        Some("child".to_string()),
-        "missing-or-denied".to_string(),
-    )];
+    let child: HTTPRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"namespace": "child", "name": "declaring-child"},
+        "spec": {"rules": [{"backendRefs": [{
+            "group": "edgion.io", "kind": "EdgionBackend", "name": "missing-or-denied"
+        }]}]}
+    }))
+    .unwrap();
+    let flattened_tuples =
+        route_backend_refs::collect_dependencies(HttpRouteBackendRefs::from_route(&child).unwrap().authored());
 
     let delta = HttpRouteHandler::register_backend_refs(&route, &flattened_tuples, &ctx);
 
@@ -1353,7 +1362,7 @@ async fn parse_never_marks_delegation_refs_ref_denied() {
         br.ref_denied
     );
     // And HTTP-specific validation excludes it (no InvalidKind on status path).
-    assert!(validate_http_backend_refs(&parsed, "infra", ctx.runtime()).is_empty());
+    assert!(validate_http_backend_refs(&parsed, ctx.runtime()).is_empty());
 }
 
 #[test]
@@ -2088,7 +2097,7 @@ fn extension_ref_empty_group_is_not_edgion_io() {
         "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
         "metadata": {"name": "r", "namespace": "default"},
         "spec": {"rules": [{"filters": [{"type": "ExtensionRef", "extensionRef": {
-            "kind": "EdgionPlugins", "name": "plugins"
+            "group": "", "kind": "EdgionPlugins", "name": "plugins"
         }}]}]}
     }))
     .expect("HTTPRoute fixture must deserialize");
@@ -2343,4 +2352,69 @@ fn invalid_request_mirror_fields_drop_only_the_owning_rules() {
             && condition.status == "True"
             && condition.message.contains("1 of 3 rules active")
     }));
+}
+
+#[test]
+fn native_ai_facts_keep_slots_and_skip_invalid_or_denied_target_reads() {
+    let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"route","namespace":"apps"},
+        "spec":{"rules":[{"backendRefs":[
+            {"name":"service","port":80,"weight":3},
+            {"name":"service","port":0,"weight":7},
+            {"group":"core","name":"service","port":80,"weight":5},
+            {"group":"edgion.io","kind":"EdgionBackend","name":"models","namespace":"other","weight":2,
+             "refDenied":{"targetNamespace":"other","targetName":"models"}},
+            {"group":"edgion.io","kind":"EdgionBackend","name":"models","port":80,"weight":4},
+            {"group":"edgion.io","kind":"EdgionBackend","name":"bad/name","weight":6}
+        ]}]}
+    }))
+    .unwrap();
+    let refs = HttpRouteBackendRefs::from_route(&route).unwrap();
+    let mut reads = 0;
+    for reference in refs.effective() {
+        let slot = reference.slot();
+        let fact = resolve_ai_admission_with(reference, |_| {
+            reads += 1;
+            ResolvedForwardingTarget::Service
+        });
+        assert_eq!(matches!(fact, ResolvedForwardingTarget::Service), slot.backend() == 0);
+    }
+    assert_eq!(reads, 1);
+    route.spec.resolved_rules = route.spec.rules.clone();
+    populate_ai_admission(&mut route, &ControllerRuntime::default());
+    for rule in [
+        &route.spec.rules.as_ref().unwrap()[0],
+        &route.spec.resolved_rules.as_ref().unwrap()[0],
+    ] {
+        let facts = &rule.resolved_ai_admission.as_ref().unwrap().backends;
+        assert_eq!(facts.len(), 6);
+        assert!(matches!(facts[0], ResolvedForwardingTarget::Service));
+        assert!(facts[1..]
+            .iter()
+            .all(|fact| matches!(fact, ResolvedForwardingTarget::Missing)));
+        assert_eq!(
+            rule.backend_refs
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|reference| reference.weight)
+                .collect::<Vec<_>>(),
+            vec![Some(3), Some(7), Some(5), Some(2), Some(4), Some(6)]
+        );
+    }
+    route.metadata.name = Some("bad/name".into());
+    populate_ai_admission(&mut route, &ControllerRuntime::default());
+    for rule in [
+        &route.spec.rules.as_ref().unwrap()[0],
+        &route.spec.resolved_rules.as_ref().unwrap()[0],
+    ] {
+        assert_eq!(rule.resolved_ai_admission.as_ref().unwrap().backends.len(), 6);
+        assert!(rule
+            .resolved_ai_admission
+            .as_ref()
+            .unwrap()
+            .backends
+            .iter()
+            .all(|fact| matches!(fact, ResolvedForwardingTarget::Missing)));
+    }
 }

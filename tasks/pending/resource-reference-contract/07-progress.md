@@ -32,15 +32,19 @@ or historical conformance. Record commit hashes only after successful commits.
   Redis, Elasticsearch, Kafka, Etcd and OTLP. Detailed original reviews and fresh
   test logs are recorded in 04-implementation.md. Their completion is not proof
   of Basic/auth Secret authority or every downstream consumer.
-- The native five-Route backend/Grant plan has independent Astra PASS; its
-  implementation has not started. The first checkpoint audit and workspace
-  commit gates are in progress. The user committed the accumulated code snapshot
+- The native five-Route backend/Grant implementation has fresh independent Astra
+  scoped PASS and warning-free workspace gates. Its local commit gate is next.
+  The first checkpoint audit and workspace commit gates passed. The user
+  committed the accumulated code snapshot
   as 0f40e2708496e9aacafb0dc2fbd2cdd786ffa9e8 (`tmp commit`) while verification
-  was running. This workflow has not made a commit yet and will not amend or
-  reset the user's commit. It will commit the verified remaining documentation
-  and execution records before starting the next batch.
-- HEAD advanced externally to 4dbcc5495. Revalidate scope against current HEAD;
-  retain unrelated changes and do not stage unverified artifacts indiscriminately.
+  was running. The coordinator completed C0 in local closing commit
+  8dab81bc69cd33094e12962809bb3c0cca7e1c19, including the final test correction,
+  documentation and execution records. No push occurred. The user's commit
+  remains unchanged.
+- The earlier external baseline was 4dbcc5495; current HEAD is the completed
+  closing commit 8dab81bc6. Revalidate each batch against its current HEAD.
+  The independently owned, untracked `review-results/` artifacts remain outside
+  this task's mutation and staging scope.
 
 ## Current checkpoint gate
 
@@ -74,9 +78,108 @@ independent result reviewer returned C0 scoped PASS after reproducing the frozen
 279-path digest and checking the cumulative base-to-user-commit plus closing
 worktree. Its runtime model is unknown and this is not labeled an Astra PASS.
 All final r2/r3 guards pass; unchanged CRD and generator inputs retain their passed
-28/eight and three-test evidence. The coordinator's closing commit is ready.
-The later native Route slice has not begun, and full-manifest/conformance closure
-remains open.
+28/eight and three-test evidence. The coordinator's closing commit is complete.
+The next native Route implementer is revalidating the concrete plan against
+that commit without production edits until independent plan approval.
+Full-manifest/conformance closure remains open.
+
+R1's concrete ten-part plan and amendments A1-A5 received independent Astra
+scoped PASS from `/root/checkpoint_astra_audit`: thirteen production paths,
+twelve mirrored test paths and seven documentation paths. The delegated
+implementer is now authorized to execute that frozen scope. Invalid owners use
+this controller's Accepted=False and empty derived execution content; invalid
+children are rejected before clone while valid named/wildcard recovery edges
+remain. Denied backend status and AI facts do not read new targets. Necessary
+cleanup of old valid dependencies is distinct from prohibited invalid-target
+discovery. A separately reserved fresh Astra result reviewer has loaded the
+original rules and scope but has not issued an implementation verdict. R2
+inventory may proceed read-only; its plan review and implementation wait for the
+R1 commit gate.
+
+F1 documentation follow-up: `11-reference-grant.md` still describes EGC selection
+as a Grant reference with an empty source namespace. Reconcile that relationship
+table with the current administrative selection contract; it is outside R1's
+frozen documentation scope.
+
+F2 read-only environment preflight found working Docker and Kubernetes tools and
+a Ready OrbStack node. Its shared cluster already contains Edgion and unrelated
+workloads; the running Edgion images are historical dynamic-parity artifacts.
+Their readiness is not current verification. Before final admission/conformance,
+prepare an isolated test deployment with freshly built Controller/Gateway
+artifacts and explicit CRD channels rather than mutating existing shared tests.
+
+Read-only R2 inventory identified shared cold Service targets, native context
+fallbacks, L4 invalid-port reselection, and unreachable standard-Service
+ExternalName dispatch. Tentative serial splits are HTTP/GRPC final selection,
+L4 compiled slots, then coherent Service transport/DNS consumption. Each needs
+its own concrete reviewed plan and commit. Preserve custom plugin outbound field
+contracts until their actual-owner migration; do not remove a shared fallback
+without proving every caller's replacement.
+
+Read-only R3 inventory identified detached ExtensionRef compilation, invalid
+runtime lookups and per-request key formatting across runtime, CORS and access
+logs; mirror still needs actual-owner authorization and disabled-entry handling.
+Descriptor adapters already bind actual EdgionPlugins owners, but their complete
+ConfigMap event-to-runtime repair chain needs verification. Tentative separate
+plans are ExtensionRef, mirror, and descriptor lifecycle coverage. The mirror
+plan must explicitly reconcile historical existence-first status with the
+approved authorize-before-discovery contract and current vendored semantics.
+Neither inventory authorizes implementation; revalidate overlapping files after
+the R1 commit.
+
+R1 implementation evidence so far: Resources references 70 passed; doctests
+22 passed with ten existing ignored cases; Controller production library check
+passed without warnings. Controller test compilation is still being corrected;
+initial helper r1/r2 failures remain in separate logs. This is not final batch
+acceptance. The first allowlist amendment adds the existing private HTTP test
+support fixture path (33 total): an actual Route with a valid fixed name,
+verbatim namespace and unchanged cloned rule feeds the new owning admission
+function. Independent review first passed with unknown runtime, then the original
+confirmed Astra plan reviewer independently returned scoped PASS before edits.
+No production compatibility API or visibility expansion is approved. The original
+182 test identities and the support baseline are retained under
+`/tmp/edgion-ref-native-before-8dab81bc`.
+
+The full handler first run passed 648 and failed four tests. Independent Astra
+amendment 2 approval permits explicit empty group in two existing ExtensionRef
+negative fixtures, a Tokio runtime for the new gRPC status test, and an exact
+canonical error assertion in the existing BackendTLSPolicy mirror. That mirror
+is the sole additional path (34 total); policy and ExtensionRef production code
+remain outside the batch. Preserve the failed run and all original assertions
+except the stale error literal; fresh corrected suite results remain pending.
+
+Corrected handler results passed 652/652 and the broader resource-processor
+subset passed 909/909. Gateway weight tests passed eleven and direct denial
+passed one. The additional named-jump guard exposed a pre-existing helper whose
+Service port was absent; canonical classification was unchanged from 8dab81bc6.
+Independent Astra amendment 3 permits the sole Gateway test mirror as path 35:
+use a valid port 80, preserve original assertions, and assert both relevant slots
+compile as Service. Rerun its entire module and existing guards before acceptance.
+No Gateway production change is authorized. The owning
+`denied-named-jump-fails-closed.md` still describes pseudo kinds as valid Service
+targets; reconcile it in the separately reviewed R2/F1 documentation scope.
+
+R1 final acceptance: `/root/native_route_astra_result` independently reviewed the
+actual diff, original rules and knowledge, source/child authority, root wakeups,
+dependency ordering, coalesced replacement and invalid/denied lookup boundaries.
+It returned scoped PASS after the sole introduced `manual_let_else` warning was
+corrected. The final 35-path manifest matches scope SHA-256
+`82ea5f599c026ca6a1201d395205f6a69ddb655ba2c746347f087a69e7be648d`;
+29 implementation paths changed, plus this coordinator-owned ledger. All 294
+original test identities remain and 16 were added.
+
+Fresh focused evidence: Resources references 70; doctests 22 with ten existing
+ignored; Controller owner helper six; handlers 652; broader resource processor
+909 (includes handlers); Gateway peers 98; weighted selector eleven; gRPC routes
+66; selected-Service context three. Counts overlap and are not cumulative.
+Failed initial fixture/compile logs remain available. Final check-r2 and
+clippy-r2 pass without warnings in 27.18s and 42.75s respectively. Formatting,
+docs, SSA, metrics, Pingora source, transform and reference contract drift,
+unit-test layout (999), Gateway tracing, English and diff guards pass. Unchanged
+CRD/plugin-condition and generator inputs retain C0's 28/eight and three-test
+evidence; these were not new R1 runs. Logs use `/tmp/edgion-ref-native-`.
+This scoped acceptance does not establish whole-manifest or live conformance
+completion. R2 plan review and implementation begin only after R1 is committed.
 
 ## Serial batch queue
 
@@ -87,8 +190,8 @@ requires it; do not silently expand an approved allowlist.
 
 | Batch | Required result and critical acceptance | State | Commit |
 | --- | --- | --- | --- |
-| C0: current checkpoint | Independent accumulated-diff audit, resolve immediate introduced blockers, run required pre-commit gates, stage only verified task changes; describe partial completion honestly | scoped final PASS; all gates passed; ready for closing commit | user snapshot 0f40e2708; closing hash recorded in the next batch |
-| R1: native Route backends and delegation | Actual five-Route owners; authored terminal loans alone mint Grant; invalid descriptors cause no lookup/edge; child authorizes delegated targets, root owns wakeup; dependencies precede Grant reads; preserve slots/weights, AI facts and coalesced recovery | plan approved, implementation pending; exact scope in 04 | pending |
+| C0: current checkpoint | Independent accumulated-diff audit, resolve immediate introduced blockers, run required pre-commit gates, stage only verified task changes; describe partial completion honestly | complete; scoped final PASS and all gates passed | user snapshot 0f40e2708; closing 8dab81bc6 |
+| R1: native Route backends and delegation | Actual five-Route owners; authored terminal loans alone mint Grant; invalid descriptors cause no lookup/edge; child authorizes delegated targets, root owns wakeup; dependencies precede Grant reads; preserve slots/weights, AI facts and coalesced recovery | fresh independent Astra scoped PASS; all gates passed; ready for local commit | pending |
 | R2: final Gateway backend selection | Consume cold canonical targets through HTTP/GRPC/L4 final dial; retain weighted invalid slots and denial behavior; no new request allocations, locks or duplicate classifier; preserve direct endpoint/retry semantics | pending | pending |
 | R3: filters, ExtensionRef and mirror | Actual HTTP/GRPC filter owners and child namespaces; authored/resolved coverage; correct runtime compilation, local descriptor ownership and recovery; mirror denial affects only mirror with role-qualified dependencies | pending | pending |
 | R4: generic dependency and status | Replace remaining raw plugin credential/ConfigMap dependency and status paths with actual-owner authority; exact generation/disabled/delete/recreate handling; readonly status agrees with acquisition and runtime | pending | pending |

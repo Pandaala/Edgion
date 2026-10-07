@@ -293,3 +293,73 @@ only to attach the test-only module at
 `edgion-controller/tests/unit/lib_test/reference_test_support.rs`. The shared fixture
 constructs real typed owners and installs existing LocalRawStore-backed
 processors; it adds no production visibility or permissive owner fallback.
+
+### R1 native Route implementation checkpoint
+
+Independent Astra plan review approved the concrete actual-owner Route plan and
+invalid-owner/denied-read amendments on baseline `8dab81bc6`. The initial scope was
+13 production, 12 mirrored test and seven documentation paths; the coordinator
+owns 07-progress.md separately. Only valid authored terminal loans mint Grant
+queries. Invalid owners remain visible with rejected parent status and empty
+derived execution state; denied targets retain dependencies without fresh
+backend reads. Existing legal dependency cleanup and policy requeues remain.
+Baseline and test identities: `/tmp/edgion-ref-native-before-8dab81bc`.
+Implementation and focused verification are complete; independent final acceptance
+and workspace gates remain with the coordinator. Gateway production, Grant-store,
+worker, CRD and Cargo paths remain outside this slice.
+
+R1 test-support amendment: independent Astra plan review approved the sole extra
+`edgion-controller/tests/support/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs`
+path (32 to 33 total). Its private fixture adapter preserves the full original rule
+and explicit namespace while driving the actual owner-based AI resolver; no
+production compatibility API is added. The first Controller helper compile failure
+is retained in `/tmp/edgion-ref-native-helper-r1.log`; retry evidence follows below.
+
+R1 fixture amendment: independent Astra review approved adding only the existing
+`edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy_test.rs`
+path (34 total): its wrong-group assertion now matches the canonical exact error.
+Two existing empty-group Route fixtures explicitly provide the required empty
+group, preserving their rejection assertions. The new effective-status test uses
+Tokio for its processor queue. Handler run 1 (648 passed, 4 failed) is retained in
+`/tmp/edgion-ref-native-handlers-r1.log`; no policy or ExtensionRef production code
+changes were required.
+
+R1 Gateway fixture amendment: independent Astra review approved the sole extra
+`edgion-gateway/tests/unit/routes/http/proxy_http/pg_upstream_peer_test.rs` path
+(35 total). The shared valid-Service fixture now supplies required port 80; the
+existing named-jump denial test asserts both compiled targets are Services before
+its unchanged denial checks. The prior absent port compiled both slots Invalid;
+`/tmp/edgion-ref-native-gateway-jump-denial-r1.log` preserves that failure. Gateway
+production and the separate R2 selector/peer scope remain unchanged.
+
+
+R1 review handoff: the three independently approved test-only amendments bring the
+allowlist to 35 paths (13 production, 15 test/support, seven documentation).
+The baseline comparison preserves all 294 existing test identities and adds 16;
+no original test was removed. Final scope, SHA-256 manifest, patch and identity
+comparison are under `/tmp/edgion-ref-native-before-8dab81bc`.
+
+Focused PASS results (log prefix `/tmp/edgion-ref-native-`): Resources refs 70
+(`resources-r1`), Resources doctests 22 with 10 existing ignored
+(`resources-docs-r1`), Controller owner helper 6 (`helper-r3`), handlers 652
+(`handlers-r2`), resource processor 909 (`resource-processor-r1`), Gateway peer
+98 (`gateway-peer-r1`, includes named-jump and direct denial regressions), and
+Gateway selector 11 (`gateway-weight-r2`), gRPC routes 66 (`gateway-grpc-r1`),
+and selected-Service context guards three (`gateway-context-r1`). The first helper compile failures
+(`helper-r1` and `helper-r2`), handler fixture failures (`handlers-r1`), and the
+old missing-port jump fixture failure remain in their original logs. Formatting
+passed through `fmt-r8`; layout passed with 999 mounted files. The coordinator
+owns final workspace check/Clippy/guards, fresh independent result review, and
+the serial commit gate. This handoff does not close the whole reference task.
+
+
+R1 final-review correction: the independent Astra review and workspace Clippy
+identified one `manual_let_else` warning in the terminal Grant-query projection.
+The equivalent `let ... else` retains the same private-constructor invariant and
+changes no authority or API. Fresh `resources-r2` passed 70 tests and
+`resources-docs-r2` passed 22 with 10 existing ignored; `fmt-r9` passed. Workspace
+check r1 passed in 1m 48s; Clippy r1 exited zero in 1m 40s but contained that one
+warning (also repeated for lib tests), so it is not a warning-free gate. The
+coordinator owns check/Clippy r2 and final acceptance. The current root AGENTS was
+re-read; no applicable nested AGENTS exists. No other source or test changed in
+this correction. The final manifest, patch and identity comparison are refreshed.

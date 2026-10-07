@@ -2,7 +2,8 @@
 //!
 //! Handles TCPRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
-use super::super::ref_grant::{is_cross_ns_ref_allowed, validate_tcp_route_if_enabled};
+use super::super::ref_grant::validate_tcp_route_if_enabled;
+use super::route_backend_refs;
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_route,
     requeue_backend_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
@@ -12,6 +13,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 };
 use edgion_resources::prelude_resources::TCPRoute;
 use edgion_resources::resources::common::RefDenied;
+use edgion_resources::resources::refs::route_fields::TcpRouteBackendRefs;
 use edgion_resources::resources::tcp_route::TCPRouteStatus;
 use edgion_resources::ResourceKind;
 
@@ -39,21 +41,9 @@ impl TcpRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
-        let mut backend_refs_list = Vec::new();
-        if let Some(rules) = &route.spec.rules {
-            for rule in rules {
-                if let Some(backend_refs) = &rule.backend_refs {
-                    for br in backend_refs {
-                        backend_refs_list.push((
-                            br.group.as_deref(),
-                            br.kind.as_deref(),
-                            br.namespace.as_deref(),
-                            br.name.as_str(),
-                        ));
-                    }
-                }
-            }
-        }
+        let backend_refs_list = TcpRouteBackendRefs::from_route(route)
+            .map(|references| route_backend_refs::collect_dependencies(references.authored()))
+            .unwrap_or_default();
 
         super::route_utils::register_service_backend_refs(
             ResourceKind::TCPRoute,
@@ -66,26 +56,12 @@ impl TcpRouteHandler {
 
     /// Record cross-namespace references from backend_refs
     fn record_cross_ns_refs(route: &TCPRoute, ctx: &HandlerContext) {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let resource_ref = Self::create_resource_ref(route);
-        let manager = &ctx.runtime().cross_ns_ref_mgr;
-
-        // Clear old references first (handles updates)
-        manager.clear_value_refs(&resource_ref);
-
-        if let Some(rules) = &route.spec.rules {
-            for rule in rules {
-                if let Some(backend_refs) = &rule.backend_refs {
-                    for backend_ref in backend_refs {
-                        if let Some(backend_ns) = &backend_ref.namespace {
-                            if backend_ns != route_ns {
-                                manager.add_ref(backend_ns.clone(), resource_ref.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
+        let receipts = TcpRouteBackendRefs::from_route(route)
+            .map(|references| route_backend_refs::collect_dependencies(references.authored()))
+            .unwrap_or_default();
+        route_backend_refs::register_cross_namespace(&receipts, &resource_ref, ctx.runtime());
     }
 }
 
@@ -102,7 +78,11 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
     }
 
     fn validate(&self, route: &TCPRoute, _ctx: &HandlerContext) -> Vec<String> {
-        validate_tcp_route_if_enabled(route)
+        let mut errors = validate_tcp_route_if_enabled(route);
+        if let Err(error) = TcpRouteBackendRefs::from_route(route) {
+            errors.push(route_backend_refs::source_error_message(error));
+        }
+        errors
     }
 
     fn should_publish(&self, route: &TCPRoute, _ctx: &HandlerContext) -> bool {
@@ -110,7 +90,8 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
     }
 
     async fn parse(&self, mut route: TCPRoute, _ctx: &HandlerContext) -> ProcessResult<TCPRoute> {
-        if !validate_tcp_route_if_enabled(&route).is_empty() {
+        let source_valid = TcpRouteBackendRefs::from_route(&route).is_ok();
+        if source_valid && !validate_tcp_route_if_enabled(&route).is_empty() {
             return ProcessResult::Continue(route);
         }
         // Record cross-namespace references for revalidation when ReferenceGrant changes
@@ -124,38 +105,30 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
 
         // Mark denied cross-namespace references
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        if let Some(rules) = &mut route.spec.rules {
-            for rule in rules {
-                if let Some(backend_refs) = &mut rule.backend_refs {
-                    for backend_ref in backend_refs {
-                        if let Some(backend_ns) = &backend_ref.namespace {
-                            if backend_ns != route_ns {
-                                let allowed = is_cross_ns_ref_allowed(
-                                    route_ns,
-                                    "TCPRoute",
-                                    backend_ns,
-                                    backend_ref.group.as_ref(),
-                                    backend_ref.kind.as_ref(),
-                                    &backend_ref.name,
-                                    _ctx.runtime(),
-                                );
-                                if !allowed {
-                                    backend_ref.ref_denied = Some(RefDenied {
-                                        target_namespace: backend_ns.clone(),
-                                        target_name: backend_ref.name.clone(),
-                                        reason: Some("NoMatchingReferenceGrant".to_string()),
-                                    });
-                                } else {
-                                    backend_ref.ref_denied = None;
-                                }
-                            } else {
-                                backend_ref.ref_denied = None;
-                            }
-                        } else {
-                            backend_ref.ref_denied = None;
-                        }
-                    }
-                }
+        let decisions = TcpRouteBackendRefs::from_route(&route)
+            .map(|references| {
+                route_backend_refs::resolve_denials(
+                    references.authored(),
+                    &Self::create_resource_ref(&route),
+                    _ctx.runtime(),
+                )
+            })
+            .unwrap_or_default();
+        for rule in route.spec.rules.iter_mut().flatten() {
+            for backend in rule.backend_refs.iter_mut().flatten() {
+                backend.ref_denied = None;
+            }
+        }
+        for (slot, denial) in decisions {
+            if let Some(backend) = route
+                .spec
+                .rules
+                .as_mut()
+                .and_then(|rules| rules.get_mut(slot.rule()))
+                .and_then(|rule| rule.backend_refs.as_mut())
+                .and_then(|backends| backends.get_mut(slot.backend()))
+            {
+                backend.ref_denied = denial;
             }
         }
 
@@ -165,7 +138,7 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         route.spec.resolved_listener_attachments = None;
 
         // Resolve listener keys from parentRefs for per-listener route isolation
-        if let Some(parent_refs) = &route.spec.parent_refs {
+        if let Some(parent_refs) = route.spec.parent_refs.as_ref().filter(|_| source_valid) {
             let attachments =
                 super::route_utils::resolve_route_listener_attachments(parent_refs, route_ns, _ctx.runtime());
             if !attachments.is_empty() {
@@ -231,14 +204,25 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
     }
 
     fn update_status(&self, route: &mut TCPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
+        if TcpRouteBackendRefs::from_route(route).is_err() {
+            route.spec.resolved_listeners = None;
+            route.spec.resolved_listener_attachments = None;
+        }
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
-        let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+        let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+        if let Err(error) = TcpRouteBackendRefs::from_route(route) {
+            let message = route_backend_refs::source_error_message(error);
+            if !validation_errors.contains(&message) {
+                validation_accepted_errors.push(AcceptedError::Invalid { message });
+            }
+        }
 
-        let backend_ref_tuples = collect_backend_ref_tuples(route);
-        let mut resolved_refs_errors =
-            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples, _ctx.runtime());
+        let mut resolved_refs_errors = route_backend_refs::validate_targets(
+            TcpRouteBackendRefs::from_route(route).map(|references| references.effective()),
+            _ctx.runtime(),
+        );
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
             route_ns,
@@ -284,36 +268,21 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
             );
         }
 
-        if validation_errors.is_empty() {
+        if validation_errors.is_empty() || TcpRouteBackendRefs::from_route(route).is_err() {
             super::route_utils::update_tracker_accepted_only(
                 ResourceKind::TCPRoute,
                 route_ns,
                 route.metadata.name.as_deref().unwrap_or(""),
-                route.spec.parent_refs.as_ref(),
+                route
+                    .spec
+                    .parent_refs
+                    .as_ref()
+                    .filter(|_| TcpRouteBackendRefs::from_route(route).is_ok()),
                 None,
                 _ctx.runtime(),
             );
         }
     }
-}
-
-fn collect_backend_ref_tuples(route: &TCPRoute) -> Vec<super::route_utils::BackendRefTuple<'_>> {
-    let mut tuples = Vec::new();
-    if let Some(rules) = &route.spec.rules {
-        for rule in rules {
-            if let Some(backend_refs) = &rule.backend_refs {
-                for br in backend_refs {
-                    tuples.push((
-                        br.group.as_deref(),
-                        br.kind.as_deref(),
-                        br.namespace.as_deref(),
-                        br.name.as_str(),
-                    ));
-                }
-            }
-        }
-    }
-    tuples
 }
 
 fn collect_ref_denied_list(route: &TCPRoute) -> Vec<Option<&RefDenied>> {

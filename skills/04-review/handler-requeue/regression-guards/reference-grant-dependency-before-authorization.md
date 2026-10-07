@@ -56,6 +56,21 @@ read, and pass the root owner into delegation flattening so child-declared
 backend authorization registers the parent before reading. The later collection
 pass is idempotent and does not clear dependencies.
 
+Native HTTP/GRPC/TCP/TLS/UDP backendRefs now reach that helper only through
+`refs::route_fields` authored terminal loans and Controller `route_backend_refs`.
+Canonical source/target validation precedes dependency creation. The target
+namespace is registered before reading even the validation-enable flag. L4 installs
+its complete valid namespace set before the first authorization read. Effective
+status/AI views and owned receipts cannot mint Grant queries; denied terminals
+retain their dependencies but do not cause status/AI target reads.
+
+Delegation borrows the original child field for authorization before cloning and
+pins its namespace/denial on the effective copy. Its source remains the child even
+for a child-to-root-namespace target, while the root remains the requeue owner.
+Valid receipts are collected before later rule filtering. Invalid source/target
+zero-read assertions concern discovery from the new descriptor; necessary cleanup
+and requeue enumeration of existing legal old dependencies still runs.
+
 The workqueue discipline in the repository-root `AGENTS.md` remains authoritative:
 grant changes requeue the existing per-kind worker; this correction adds no
 queue, wait, polling path, or handler IO.

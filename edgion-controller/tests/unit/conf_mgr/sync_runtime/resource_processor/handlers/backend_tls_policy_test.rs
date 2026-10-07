@@ -195,7 +195,7 @@ fn ai_target_rejects_section_and_wrong_variant_identity() {
     assert!(handler
         .validate(&policy, &ctx)
         .iter()
-        .any(|error| error.contains("supported targets")));
+        .any(|error| error == "unsupported reference target"));
 }
 
 #[test]

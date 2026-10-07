@@ -574,7 +574,7 @@ fn extension_ref_pairing_errors_drop_only_the_affected_grpc_rules() {
 fn extension_ref_empty_group_is_not_edgion_io() {
     let route = route_with_rules(json!([{
         "filters": [{"type": "ExtensionRef", "extensionRef": {
-            "kind": "EdgionPlugins", "name": "plugins"
+            "group": "", "kind": "EdgionPlugins", "name": "plugins"
         }}]
     }]));
     assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
@@ -715,7 +715,10 @@ fn collect_backend_ref_tuples_excludes_delegation_refs() {
         }
     }))
     .expect("route should deserialize");
-    assert!(super::collect_backend_ref_tuples(&route).is_empty());
+    assert!(
+        route_backend_refs::collect_dependencies(GrpcRouteBackendRefs::from_route(&route).unwrap().authored())
+            .is_empty()
+    );
 }
 
 #[test]
@@ -868,7 +871,10 @@ async fn parse_never_marks_delegation_refs_ref_denied() {
         br.ref_denied
     );
     // And the tuple collection excludes it (no InvalidKind on status path).
-    assert!(collect_backend_ref_tuples(&parsed).is_empty());
+    assert!(
+        route_backend_refs::collect_dependencies(GrpcRouteBackendRefs::from_route(&parsed).unwrap().authored())
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -917,4 +923,50 @@ async fn parse_updates_grpc_route_delegation_index_and_on_delete_removes_it() {
             .is_empty(),
         "on_delete must remove the parent's delegation edges"
     );
+}
+
+#[tokio::test]
+async fn delegated_effective_targets_drive_missing_invalid_and_denied_status() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{handlers::ServiceHandler, ResourceProcessor};
+    use k8s_openapi::api::core::v1::Service;
+    let runtime = Arc::new(ControllerRuntime::default());
+    runtime
+        .processor_registry
+        .register(Arc::new(ResourceProcessor::<Service>::new(
+            "Service",
+            16,
+            Arc::new(ServiceHandler::new()),
+            runtime.clone(),
+        )));
+    let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime);
+    let mut route:GRPCRoute=serde_json::from_value(json!({
+        "metadata":{"namespace":"apps","name":"root"},
+        "spec":{"parentRefs":[{"name":"gateway"}],
+            "rules":[{"backendRefs":[{"group":"gateway.networking.k8s.io","kind":"GRPCRoute","name":"child"}]}],
+            "resolvedRules":[{"backendRefs":[
+                {"name":"delegated-missing","namespace":"apps","port":80},
+                {"name":"delegated-invalid","namespace":"apps","port":0},
+                {"name":"delegated-denied","namespace":"other","port":80,"refDenied":{"targetNamespace":"other","targetName":"delegated-denied"}}
+            ]}]}
+    })).unwrap();
+    let errors = route_backend_refs::validate_targets(
+        GrpcRouteBackendRefs::from_route(&route).map(|references| references.effective()),
+        ctx.runtime(),
+    );
+    assert_eq!(errors.len(), 2);
+    assert!(errors
+        .iter()
+        .any(|error| matches!(error,ResolvedRefsError::BackendNotFound{name,..} if name=="delegated-missing")));
+    assert!(errors
+        .iter()
+        .any(|error| matches!(error, ResolvedRefsError::InvalidReference { .. })));
+    GrpcRouteHandler::default().update_status(&mut route, &ctx, &[]);
+    let condition = route.status.as_ref().unwrap().parents[0]
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == "ResolvedRefs")
+        .unwrap();
+    assert_eq!(condition.status, "False");
+    assert!(condition.message.contains("delegated-missing"));
+    assert!(condition.message.contains("delegated-denied"));
 }
