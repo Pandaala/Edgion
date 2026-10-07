@@ -16,13 +16,13 @@ fn target(name: &str) -> DynUpstreamTarget {
     }
 }
 
-/// Minimal `HTTPBackendRef` for route-unit fixtures (only `name` matters to
-/// the plugins under test — the rest are the schema's non-operator defaults).
+/// A standard Service fixture with its required numeric section. Names,
+/// namespaces, weights and denials remain independently controlled by each test.
 fn test_backend_ref(name: &str) -> HTTPBackendRef {
     HTTPBackendRef {
         name: name.to_string(),
         namespace: None,
-        port: None,
+        port: Some(80),
         weight: None,
         group: None,
         kind: None,
@@ -52,7 +52,7 @@ fn test_route_unit(backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRuleUnit {
         parsed_allow_non_idempotent_retry: None,
         parsed_mirror_tuning: None,
     });
-    let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "test-ns").unwrap();
+    let runtime = crate::routes::http::match_unit::compile_http_fixture(&rule, "test-ns").unwrap();
     let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
 
     HttpRouteRuleUnit {
@@ -474,4 +474,35 @@ async fn canary_records_fallback_outcome_on_invalid_backend() {
     let mut log = PluginLog::new("Canary");
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
+}
+
+#[tokio::test]
+async fn canary_rejects_missing_service_port_before_setting_jump() {
+    let plugin = canary_with_key(base_config(), None);
+    let mut schema = test_backend_ref("app-v1");
+    schema.port = None;
+    let ctx = ctx_with_backend_refs(vec![schema]);
+    let compiled = &ctx.route_unit.as_ref().unwrap().backends[0];
+    assert!(!compiled.is_service());
+    assert!(matches!(
+        compiled.target(),
+        crate::backends::runtime::CompiledBackendTarget::Invalid { .. }
+    ));
+    let mut session = MockPluginSession::new();
+    session.expect_ctx().return_const(ctx);
+    session.expect_set_upstream_jump().times(0);
+    session
+        .expect_record_outcome()
+        .withf(|outcome, value| *outcome == DyeOutcome::Reject && value == "on-invalid")
+        .times(1)
+        .return_const(());
+    let mut log = PluginLog::new("Canary");
+    let result = plugin.run_request(&mut session, &mut log).await;
+    assert_eq!(
+        result,
+        PluginRunningResult::ErrResponse {
+            status: 403,
+            body: Some(Bytes::from_static(b"Target backend not allowed"))
+        }
+    );
 }

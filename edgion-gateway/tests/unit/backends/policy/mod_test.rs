@@ -1,6 +1,6 @@
 use super::*;
 use edgion_resources::resources::backend_tls_policy::*;
-use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKind, ResolvedPolicyTargetClass};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use std::sync::Arc;
 

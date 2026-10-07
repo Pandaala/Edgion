@@ -1,7 +1,7 @@
 use crate::routes::common::{
     effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs, resolve_parent_refs,
 };
-use crate::routes::grpc::match_unit::{GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo, GrpcRuleRuntime};
+use crate::routes::grpc::match_unit::{GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo};
 use crate::routes::grpc::routes_mgr::{resolved_listeners_for_grpc_route, GlobalGrpcRouteManagers};
 use crate::routes::grpc::{get_global_grpc_route_managers, GrpcRouteRuleUnit};
 use edgion_common::conf_sync::traits::ConfHandler;
@@ -149,6 +149,9 @@ include!("../../../tests/support/routes/grpc/conf_handler_impl_test/147_function
 
 /// Parse a single GRPCRoute into route rule units.
 fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<GrpcRouteRuleUnit>> {
+    if edgion_resources::resources::refs::route_fields::GrpcRouteBackendRefs::from_route(route).is_err() {
+        return Vec::new();
+    }
     if let Err(error) = route.spec.validate_hostnames() {
         tracing::warn!(component = "grpc_route_manager", route = resource_key, %error,
             "Invalid GRPCRoute hostnames; skipping the complete route");
@@ -235,7 +238,9 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
                 continue;
             }
             let rule_arc = Arc::new(rule.clone());
-            let rule_runtime: GrpcRuleRuntime = GrpcRouteRuleUnit::compile_grpc_rule(rule, route_namespace);
+            let Some(rule_runtime) = GrpcRouteRuleUnit::compile_grpc_rule(route, rule_id) else {
+                continue;
+            };
             let backend_finder = GrpcRouteRuleUnit::build_backend_selector(&rule_runtime.backends);
             let metric_handles = Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
                 &attached_gateways,

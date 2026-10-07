@@ -129,3 +129,30 @@ fn delegation_selectors_and_ai_targets_keep_distinct_contracts() {
         .validated()
         .is_err());
 }
+
+#[test]
+fn indexed_effective_loans_keep_actual_owner_rule_and_backend_positions() {
+    macro_rules! check {
+        ($route:ty, $facade:ident) => {{
+            let route: $route = serde_json::from_value(json!({"metadata":{"name":"owner"},"spec":{
+                "rules":[{"backendRefs":[{"name":"authored","port":80}]}],
+                "resolvedRules":[{}, {"backendRefs":[{"name":"child","namespace":"children","port":65535,"weight":0}]}]
+            }})).unwrap();
+            let refs = $facade::from_route(&route).unwrap();
+            assert!(refs.effective_at(0,0).is_none());
+            assert!(refs.effective_at(2,0).is_none());
+            assert!(refs.effective_at(1,1).is_none());
+            let loan = refs.effective_at(1,0).unwrap();
+            assert_eq!(loan.slot().rule(), 1);
+            assert_eq!(loan.slot().backend(), 0);
+            assert_eq!(loan.weight(), Some(0));
+            assert_eq!(loan.port(), Some(65535));
+            let BackendTarget::Service(target) = loan.target().unwrap() else { panic!("expected Service") };
+            assert_eq!(target.scope().namespace(), Some("children"));
+            assert_eq!(target.name(), "child");
+            assert_eq!(refs.authored_at(0,0).unwrap().target_view().name(), "authored");
+        }};
+    }
+    check!(HTTPRoute, HttpRouteBackendRefs);
+    check!(GRPCRoute, GrpcRouteBackendRefs);
+}

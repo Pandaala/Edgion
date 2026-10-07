@@ -9,10 +9,11 @@ use crate::ai::runtime::dispatch::AiDispatchError;
 use crate::ai::{render_openai_error, AiProxyError};
 use crate::backends::policy::backend_traffic::authority::AuthorityError;
 use crate::backends::policy::backend_traffic::RetryBudget;
+use crate::backends::runtime::CompiledBackendTarget;
 use crate::backends::ServiceBackendKind;
 use crate::ctx::BackendSource;
 use crate::plugins::PluginRuntime;
-use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget, HttpRouteRuleUnit, MatchSpecificity};
+use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
 use crate::{BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, UpstreamInfo};
 use crate::{PeerTimeoutSource, SessionPersistenceState};
 use edgion_resources::resources::common::RefDenied;
@@ -174,10 +175,15 @@ fn invalid_group_service_kind_stays_unsupported_after_selection() {
         "port": 8080
     }))
     .unwrap();
-    let backend = CompiledBackend::compile(schema, "route-ns", 0, Arc::new(PluginRuntime::new()));
+    let backend = crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema,
+        "route-ns",
+        0,
+        Arc::new(PluginRuntime::new()),
+    );
     assert_eq!(
-        backend.target,
-        CompiledBackendTarget::Invalid {
+        backend.target(),
+        &CompiledBackendTarget::Invalid {
             classified_kind: edgion_resources::HTTPBackendRefKind::Unsupported
         }
     );
@@ -196,7 +202,7 @@ fn invalid_group_service_kind_stays_unsupported_after_selection() {
 #[test]
 fn direct_backend_metadata_uses_the_exact_service_slot() {
     let compile = |name: &str, namespace: &str, slot| {
-        CompiledBackend::compile(
+        crate::routes::http::match_unit::compile_http_backend_fixture(
             HTTPBackendRef {
                 name: name.to_string(),
                 namespace: Some(namespace.to_string()),
@@ -229,7 +235,7 @@ fn direct_backend_metadata_uses_the_exact_service_slot() {
 
 #[test]
 fn direct_backend_metadata_rejects_non_service_slots() {
-    let backend = CompiledBackend::compile(
+    let backend = crate::routes::http::match_unit::compile_http_backend_fixture(
         HTTPBackendRef {
             name: "provider".to_string(),
             namespace: Some("ai-ns".to_string()),
@@ -251,7 +257,7 @@ fn direct_backend_metadata_rejects_non_service_slots() {
 
 #[test]
 fn direct_backend_metadata_rejects_referencegrant_denied_services() {
-    let backend = CompiledBackend::compile(
+    let backend = crate::routes::http::match_unit::compile_http_backend_fixture(
         HTTPBackendRef {
             name: "cross-namespace".to_string(),
             namespace: Some("other-ns".to_string()),
@@ -891,18 +897,36 @@ fn backend_bound_zero_global_treated_as_disabled() {
 use super::{choose_typed_connect_deadline, resolve_connect_deadline};
 use crate::backends::policy::backend_traffic::store::{get_backend_traffic_policy_store, GLOBAL_STORE_TEST_LOCK};
 
-fn capture_service_ctx(service_key: &str) -> EdgionHttpContext {
+fn unstarted_service_ctx(service_key: &str) -> EdgionHttpContext {
+    let (namespace, name) = service_key.split_once('/').unwrap();
+    let mut schema = jump_backend_ref(name);
+    schema.namespace = Some(namespace.to_owned());
+    let compiled = crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema,
+        namespace,
+        0,
+        Arc::new(PluginRuntime::new()),
+    );
+    let logical = crate::backends::LogicalBackendHandle::new(Arc::from(vec![compiled]), 0).unwrap();
     let mut ctx = EdgionHttpContext::new();
+    ctx.selected_backend = Some(crate::backends::SelectedHttpBackend::Service(
+        crate::backends::SelectedServiceBackend::new(logical, crate::backends::BackendTlsPolicyLookup::Absent).unwrap(),
+    ));
     ctx.backend_context = Some(BackendContext {
         source: None,
         rsc: None,
         service_key: Some(service_key.to_string()),
-        service_kind: None,
+        service_kind: Some(ServiceBackendKind::Service),
         upstreams: Vec::new(),
         current_upstream_id: None,
-        backend_ref_idx: None,
+        backend_ref_idx: Some(0),
         effective_policy: None,
     });
+    ctx
+}
+
+fn capture_service_ctx(service_key: &str) -> EdgionHttpContext {
+    let mut ctx = unstarted_service_ctx(service_key);
     super::begin_upstream_attempt(&mut ctx);
     ctx
 }
@@ -1153,17 +1177,7 @@ fn begin_upstream_attempt_does_not_recapture_on_retry() {
     });
     store.full_set_policies(std::collections::HashMap::from([("cap/p1".to_string(), first)]));
 
-    let mut ctx = EdgionHttpContext::new();
-    ctx.backend_context = Some(BackendContext {
-        source: None,
-        rsc: None,
-        service_key: Some("cap/svc".to_string()),
-        service_kind: None,
-        upstreams: Vec::new(),
-        current_upstream_id: None,
-        backend_ref_idx: None,
-        effective_policy: None,
-    });
+    let mut ctx = unstarted_service_ctx("cap/svc");
     super::begin_upstream_attempt(&mut ctx);
     let captured = ctx
         .backend_context
@@ -1269,18 +1283,19 @@ fn grpc_begin_upstream_attempt_captures_without_selected_backend() {
     });
     store.full_set_policies(std::collections::HashMap::from([("grpc-cap/p1".to_string(), policy)]));
 
-    let mut ctx = EdgionHttpContext::new();
+    let mut ctx = unstarted_service_ctx("grpc-cap/svc");
     ctx.selected_backend = None;
-    ctx.backend_context = Some(BackendContext {
-        source: None,
-        rsc: None,
-        service_key: Some("grpc-cap/svc".to_string()),
-        service_kind: None,
-        upstreams: Vec::new(),
-        current_upstream_id: None,
-        backend_ref_idx: None,
-        effective_policy: None,
-    });
+    let route: edgion_resources::GRPCRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name":"test-route", "namespace":"grpc-cap"},
+        "spec": {"rules":[{"backendRefs":[{"name":"svc", "port":80}]}]}
+    }))
+    .unwrap();
+    let runtime = crate::routes::grpc::GrpcRouteRuleUnit::compile_grpc_rule(&route, 0).unwrap();
+    let logical = crate::routes::grpc::GrpcBackendHandle::new(runtime.backends, 0).unwrap();
+    ctx.selected_grpc_backend = Some(
+        crate::routes::grpc::SelectedGrpcBackend::new(logical, crate::backends::BackendTlsPolicyLookup::Absent)
+            .unwrap(),
+    );
     super::begin_upstream_attempt(&mut ctx);
     assert!(ctx
         .backend_context
@@ -1803,7 +1818,7 @@ fn invalid_backend_with_service_key_still_captures() {
         "port": 8080
     }))
     .unwrap();
-    let backend = crate::routes::http::match_unit::CompiledBackend::compile(
+    let backend = crate::routes::http::match_unit::compile_http_backend_fixture(
         schema,
         "inv-cap",
         0,
@@ -1823,12 +1838,27 @@ fn invalid_backend_with_service_key_still_captures() {
         backend_ref_idx: None,
         effective_policy: None,
     });
+    // The historical test name is retained; the unsafe context-only capture
+    // expectation is superseded by the actual selected-target contract.
+    let mut reads = 0;
+    super::capture_service_effective_policy_with(&mut ctx, |target| {
+        reads += 1;
+        store.snapshot().get_effective(target)
+    });
+    assert_eq!(reads, 0);
     super::begin_upstream_attempt(&mut ctx);
     assert!(ctx
         .backend_context
         .as_ref()
         .and_then(|bc| bc.effective_policy.as_ref())
-        .is_some());
+        .is_none());
+    ctx.backend_context.as_mut().unwrap().service_kind = Some(ServiceBackendKind::Service);
+    super::capture_service_effective_policy_with(&mut ctx, |target| {
+        reads += 1;
+        store.snapshot().get_effective(target)
+    });
+    assert_eq!(reads, 0, "even a forged Service kind cannot restore an Invalid target");
+    assert!(ctx.backend_context.as_ref().unwrap().effective_policy.is_none());
     store.full_set_policies(std::collections::HashMap::new());
 }
 
@@ -1852,17 +1882,18 @@ fn direct_endpoint_finish_static_peer_captures_when_service_key_set() {
             Some(4),
         ),
     )]));
-    let mut ctx = EdgionHttpContext::new();
-    ctx.backend_context = Some(BackendContext {
-        source: Some(BackendSource::DirectEndpoint),
-        rsc: None,
-        service_key: Some("de-cap/svc".to_string()),
-        service_kind: None,
-        upstreams: Vec::new(),
-        current_upstream_id: None,
-        backend_ref_idx: None,
-        effective_policy: None,
-    });
+    let mut ctx = unstarted_service_ctx("de-cap/svc");
+    ctx.selected_backend = None;
+    ctx.backend_context.as_mut().unwrap().source = Some(BackendSource::DirectEndpoint);
+    let mut schema = jump_backend_ref("svc");
+    schema.namespace = Some("de-cap".to_owned());
+    ctx.route_unit = Some(jump_route_unit(vec![schema]));
+    ctx.jump = Some(Box::new(crate::UpstreamJumpTarget::Direct(DirectEndpointPreset {
+        addr: "10.0.0.1:8080".parse().unwrap(),
+        tls_policy: crate::backends::BackendTlsPolicyLookup::Absent,
+        backend_ref_idx: 0,
+        app_protocol: None,
+    })));
     super::begin_upstream_attempt(&mut ctx);
     let captured = captured_policy(&ctx);
     assert_eq!(
@@ -2249,7 +2280,7 @@ fn jump_route_unit(backend_refs: Vec<HTTPBackendRef>) -> Arc<HttpRouteRuleUnit> 
         parsed_allow_non_idempotent_retry: None,
         parsed_mirror_tuning: None,
     });
-    let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "test-ns").unwrap();
+    let runtime = crate::routes::http::match_unit::compile_http_fixture(&rule, "test-ns").unwrap();
     let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
 
     Arc::new(HttpRouteRuleUnit {
@@ -2324,7 +2355,7 @@ fn denied_named_jump_fails_closed_instead_of_selecting_sibling() {
         "named-jump denial fixture must contain valid Service targets"
     );
 
-    let err = pick_backend_ref(&unit, "test-ns", Some(&internal_jump("app-v2")))
+    let err = pick_backend_ref(&unit, Some(&internal_jump("app-v2")))
         .expect_err("denied named jump must not resolve to its legal sibling");
     assert!(matches!(err, EdError::RefDenied { .. }));
     assert_eq!(backend_select_status(&err), EdgionErrorCode::RefDenied);
@@ -2345,8 +2376,8 @@ fn weighted_selection_reaches_the_legal_sibling_without_a_jump() {
     });
     let unit = jump_route_unit(vec![jump_backend_ref("app-v1"), denied]);
 
-    let backend = pick_backend_ref(&unit, "test-ns", None).expect("weighted selection must resolve");
-    assert_eq!(backend.compiled().schema.name, "app-v1");
+    let backend = pick_backend_ref(&unit, None).expect("weighted selection must resolve");
+    assert_eq!(backend.compiled().schema().name, "app-v1");
 }
 
 /// A genuinely absent named target keeps the documented weighted fallback.
@@ -2354,9 +2385,9 @@ fn weighted_selection_reaches_the_legal_sibling_without_a_jump() {
 fn missing_named_jump_falls_back_to_weighted_selection() {
     let unit = jump_route_unit(vec![jump_backend_ref("app-v1")]);
 
-    let backend = pick_backend_ref(&unit, "test-ns", Some(&internal_jump("absent-svc")))
+    let backend = pick_backend_ref(&unit, Some(&internal_jump("absent-svc")))
         .expect("a missing named target must fall back to weighted selection");
-    assert_eq!(backend.compiled().schema.name, "app-v1");
+    assert_eq!(backend.compiled().schema().name, "app-v1");
 }
 
 /// The "hidden backend" contract at the layer that enforces it: weighted
@@ -2370,15 +2401,15 @@ fn weight_zero_named_jump_is_selectable_but_never_weighted() {
     };
     let unit = jump_route_unit(vec![jump_backend_ref("app-v1"), hidden]);
 
-    let named = pick_backend_ref(&unit, "test-ns", Some(&internal_jump("app-debug")))
+    let named = pick_backend_ref(&unit, Some(&internal_jump("app-debug")))
         .expect("an explicit weight-zero named target must resolve");
-    assert_eq!(named.compiled().schema.name, "app-debug");
+    assert_eq!(named.compiled().schema().name, "app-debug");
 
     // Three rounds, not one: a single call would only prove the weight-zero
     // slot is not selected *first*, which is weaker than "never".
     for _ in 0..3 {
-        let weighted = pick_backend_ref(&unit, "test-ns", None).expect("weighted selection must resolve");
-        assert_eq!(weighted.compiled().schema.name, "app-v1");
+        let weighted = pick_backend_ref(&unit, None).expect("weighted selection must resolve");
+        assert_eq!(weighted.compiled().schema().name, "app-v1");
     }
 }
 
@@ -2388,7 +2419,150 @@ fn weight_zero_named_jump_is_selectable_but_never_weighted() {
 fn allowed_named_jump_selects_the_named_backend() {
     let unit = jump_route_unit(vec![jump_backend_ref("app-v1"), jump_backend_ref("app-v2")]);
 
-    let backend = pick_backend_ref(&unit, "test-ns", Some(&internal_jump("app-v2")))
-        .expect("an allowed named target must resolve");
-    assert_eq!(backend.compiled().schema.name, "app-v2");
+    let backend =
+        pick_backend_ref(&unit, Some(&internal_jump("app-v2"))).expect("an allowed named target must resolve");
+    assert_eq!(backend.compiled().schema().name, "app-v2");
+}
+
+#[tokio::test]
+async fn malformed_and_denied_slots_fail_before_backend_plugins_or_peer_resolution() {
+    use serde_json::json;
+    use tokio::io::AsyncReadExt;
+    let cases = [
+        (
+            json!({"group":"example.io","name":"api","port":80}),
+            500,
+            EdgionErrorCode::BackendUnsupportedKind,
+        ),
+        (json!({"name":"api"}), 500, EdgionErrorCode::BackendUnsupportedKind),
+        (
+            json!({"name":"api","port":0}),
+            500,
+            EdgionErrorCode::BackendUnsupportedKind,
+        ),
+        (
+            json!({"name":"api","port":65536}),
+            500,
+            EdgionErrorCode::BackendUnsupportedKind,
+        ),
+        (
+            json!({"name":"api","port":80,"refDenied":{"targetNamespace":"test-ns","targetName":"api"}}),
+            500,
+            EdgionErrorCode::RefDenied,
+        ),
+        (
+            json!({"group":"edgion.io","kind":"EdgionBackend","name":"ai"}),
+            503,
+            EdgionErrorCode::UpstreamNotBackendRefs,
+        ),
+    ];
+    for (mut schema, status, error) in cases {
+        schema["filters"] = json!([{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"x-backend-ran","value":"yes"}]}}]);
+        let mut ctx = EdgionHttpContext::new();
+        ctx.route_unit = Some(jump_route_unit(vec![serde_json::from_value(schema).unwrap()]));
+        let (mut session, mut client) = live_h1_session("/").await;
+        assert!(super::select_http_backend(&direct_peer_proxy(), &mut session, &mut ctx)
+            .await
+            .is_err());
+        assert!(ctx.diagnostics.contains_error(error));
+        assert!(session.req_header().headers.get("x-backend-ran").is_none());
+        assert_eq!(ctx.try_cnt, 0);
+        assert!(ctx
+            .backend_context
+            .as_ref()
+            .is_none_or(|context| context.upstreams.is_empty() && context.effective_policy.is_none()));
+        let mut wire = vec![0; 4096];
+        let count = client.read(&mut wire).await.unwrap();
+        assert!(std::str::from_utf8(&wire[..count])
+            .unwrap()
+            .starts_with(&format!("HTTP/1.1 {status}")));
+        if matches!(
+            ctx.selected_backend,
+            Some(crate::backends::SelectedHttpBackend::Invalid(_))
+        ) {
+            let context = ctx.backend_context.as_mut().unwrap();
+            context.service_key = Some("test-ns/api".to_owned());
+            context.service_kind = Some(ServiceBackendKind::Service);
+            assert_eq!(
+                crate::backends::try_get_peer(&mut ctx, &session, false, None)
+                    .await
+                    .unwrap_err(),
+                EdgionErrorCode::BackendUnsupportedKind
+            );
+        }
+    }
+    let mut schema = jump_backend_ref("r2a-missing-service");
+    schema.filters = Some(serde_json::from_value(json!([{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"x-backend-ran","value":"yes"}]}}])).unwrap());
+    let mut ctx = EdgionHttpContext::new();
+    ctx.route_unit = Some(jump_route_unit(vec![schema]));
+    let (mut session, _client) = live_h1_session("/").await;
+    super::select_http_backend(&direct_peer_proxy(), &mut session, &mut ctx)
+        .await
+        .unwrap();
+    assert_eq!(session.req_header().headers.get("x-backend-ran").unwrap(), "yes");
+    init_backend_context_if_needed(&mut ctx).unwrap();
+    let selected = ctx.selected_backend.as_ref().unwrap().routed().unwrap();
+    assert_eq!(
+        crate::backends::try_get_peer(&mut ctx, &session, false, Some(&selected))
+            .await
+            .unwrap_err(),
+        EdgionErrorCode::BackendServiceNotFound
+    );
+}
+
+#[test]
+fn policy_lookup_requires_matching_permitted_selected_proof() {
+    for mismatch in [true, false] {
+        let mut ctx = unstarted_service_ctx("typed-policy/api");
+        if mismatch {
+            ctx.backend_context.as_mut().unwrap().service_key = Some("typed-policy/other".to_owned());
+        }
+        let mut reads = 0;
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            super::capture_service_effective_policy_with(&mut ctx, |target| {
+                reads += 1;
+                assert_eq!(target.namespace, "typed-policy");
+                assert_eq!(target.name, "api");
+                None
+            });
+        });
+        assert_eq!(reads, usize::from(!mismatch));
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+}
+
+#[tokio::test]
+async fn invalid_grpc_backend_keeps_terminal_unavailable_wire_mapping() {
+    use serde_json::json;
+    use tokio::io::AsyncReadExt;
+    for backend in [
+        json!({"name":"api","port":0}),
+        json!({"name":"api","port":80,"refDenied":{"targetNamespace":"route-ns","targetName":"api"}}),
+    ] {
+        let route = crate::test_current_status::from_value(json!({
+            "metadata":{"name":"owner","namespace":"route-ns"},
+            "spec":{"resolvedStatusController":"edgion.io/gateway-controller","parentRefs":[{"name":"gateway"}],"rules":[{"backendRefs":[backend]}]}
+        })).unwrap();
+        let units = crate::routes::grpc::parse_route_to_units_for_test("route-ns/owner", &Arc::new(route));
+        assert_eq!(units.len(), 1);
+        let mut ctx = EdgionHttpContext::new();
+        ctx.grpc_route_unit = Some(Arc::clone(&units[0]));
+        let (mut session, mut client) = live_h1_session("/test/Get").await;
+        let error = super::upstream_peer_grpc(&direct_peer_proxy(), &mut session, &mut ctx)
+            .await
+            .unwrap_err();
+        assert_eq!(error.etype(), &ErrorType::HTTPStatus(200));
+        assert!(ctx
+            .diagnostics
+            .contains_error(EdgionErrorCode::GrpcUpstreamNotBackendRefs));
+        assert!(ctx.selected_grpc_backend.is_none());
+        assert!(ctx.backend_context.is_none());
+        assert_eq!(ctx.try_cnt, 0);
+        let mut wire = vec![0; 4096];
+        let count = client.read(&mut wire).await.unwrap();
+        let wire = std::str::from_utf8(&wire[..count]).unwrap().to_ascii_lowercase();
+        assert!(wire.starts_with("http/1.1 200"));
+        assert!(wire.contains("grpc-status: 14"));
+    }
 }

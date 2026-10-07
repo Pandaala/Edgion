@@ -22,7 +22,12 @@ fn compiled(name: &str, slot: usize, weight: Option<i32>) -> CompiledBackend {
         backend_tls_policy: None,
         ref_denied: None,
     };
-    CompiledBackend::compile(schema, "route-ns", slot, Arc::new(PluginRuntime::new()))
+    crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema,
+        "route-ns",
+        slot,
+        Arc::new(PluginRuntime::new()),
+    )
 }
 
 fn logical(compiled: CompiledBackend) -> LogicalBackendHandle {
@@ -71,14 +76,14 @@ fn logical_handle_preserves_slot_identity_target_and_declared_weight() {
     assert!(logical.is_authorized());
     assert!(matches!(
         logical.target(),
-        CompiledBackendTarget::Service { namespace, name }
-            if namespace == "backend-ns" && name == "api"
+        CompiledBackendTarget::Service(target)
+            if target.namespace() == "backend-ns" && target.name() == "api"
     ));
     assert_eq!(logical.identity().namespace, "backend-ns");
     assert_eq!(logical.identity().name, "api");
     assert_eq!(
         logical.policy_target_key(),
-        Some(PolicyTargetKey {
+        Some(&PolicyTargetKey {
             target_kind: PolicyTargetKind::Service,
             namespace: "backend-ns".to_string(),
             name: "api".to_string(),
@@ -88,21 +93,31 @@ fn logical_handle_preserves_slot_identity_target_and_declared_weight() {
 
 #[test]
 fn invalid_slot_cannot_materialize_selected_service() {
-    let mut backend = compiled("api", 0, None);
-    backend.target = CompiledBackendTarget::Invalid {
-        classified_kind: edgion_resources::HTTPBackendRefKind::Unsupported,
-    };
+    let mut schema = compiled("api", 0, None).schema().clone();
+    schema.group = Some("example.io".to_owned());
+    let backend = crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema,
+        "route-ns",
+        0,
+        Arc::new(PluginRuntime::new()),
+    );
     assert!(SelectedServiceBackend::new(logical(backend), BackendTlsPolicyLookup::Absent).is_none());
 }
 
 #[test]
 fn denied_service_cannot_materialize_selected_service() {
-    let mut backend = compiled("api", 0, Some(1));
-    backend.schema.ref_denied = Some(edgion_resources::resources::common::RefDenied {
+    let mut schema = compiled("api", 0, Some(1)).schema().clone();
+    schema.ref_denied = Some(edgion_resources::resources::common::RefDenied {
         target_namespace: "backend-ns".to_string(),
         target_name: "api".to_string(),
         reason: Some("NoMatchingReferenceGrant".to_string()),
     });
+    let backend = crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema,
+        "route-ns",
+        0,
+        Arc::new(PluginRuntime::new()),
+    );
     let logical = logical(backend);
     assert!(logical.policy_target_key().is_none());
     assert!(SelectedServiceBackend::new(logical, BackendTlsPolicyLookup::Absent).is_none());
@@ -136,7 +151,7 @@ fn service_selection_and_runtime_projection_are_allocation_free() {
         selected
     });
 
-    assert_eq!(selected.slot, 0);
+    assert_eq!(selected.slot(), 0);
     assert_eq!(allocations.calls, 0);
     assert_eq!(allocations.requested_bytes, 0);
 }
@@ -144,7 +159,7 @@ fn service_selection_and_runtime_projection_are_allocation_free() {
 #[test]
 fn logical_handle_pins_generation_and_plugin_runtime() {
     let old_runtime = Arc::new(PluginRuntime::new());
-    let old_generation = Arc::from(vec![CompiledBackend::compile(
+    let old_generation = Arc::from(vec![crate::routes::http::match_unit::compile_http_backend_fixture(
         HTTPBackendRef {
             name: "old".to_string(),
             namespace: Some("backend-ns".to_string()),
@@ -183,7 +198,7 @@ fn selected_service_pins_tls_policy_without_mutating_compiled_schema() {
 
     let generation = Arc::from(vec![compiled("api", 0, None)]);
     let logical = LogicalBackendHandle::new(Arc::clone(&generation), 0).unwrap();
-    let target = logical.policy_target_key().unwrap();
+    let target = logical.policy_target_key().unwrap().clone();
     let captured = store.snapshot().lookup(&target, None);
     let selected = SelectedServiceBackend::new(logical, captured).unwrap();
 
@@ -204,7 +219,7 @@ fn selected_service_pins_tls_policy_without_mutating_compiled_schema() {
     assert!(Arc::ptr_eq(&current.policy, &new_policy));
     assert_eq!(retained.policy.spec.validation.hostname, "old.example.com");
     assert_eq!(current.policy.spec.validation.hostname, "new.example.com");
-    assert!(selected.logical().compiled().schema.backend_tls_policy.is_none());
+    assert!(selected.logical().compiled().schema().backend_tls_policy.is_none());
 }
 
 #[test]

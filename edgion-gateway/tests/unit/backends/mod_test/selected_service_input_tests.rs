@@ -1,10 +1,9 @@
 use super::*;
 use crate::plugins::PluginRuntime;
-use crate::routes::http::match_unit::CompiledBackend;
 use edgion_resources::HTTPBackendRef;
 
 fn selected_service(name: &str) -> SelectedServiceBackend {
-    let compiled = CompiledBackend::compile(
+    let compiled = crate::routes::http::match_unit::compile_http_backend_fixture(
         HTTPBackendRef {
             name: name.to_string(),
             namespace: Some("tenant".to_string()),
@@ -45,9 +44,15 @@ fn selected_identity_is_the_http_service_resolution_source() {
 
     let input = selected_http_service_input(&selected, Some(&context)).unwrap();
 
-    assert_eq!(input.port, Some(8080));
-    assert_eq!(input.service_key, "tenant/service-a");
-    assert_eq!(input.service_type, ServiceBackendKind::Service);
+    assert_eq!(
+        input.service.section(),
+        &crate::backends::ServiceSectionKey::Number(std::num::NonZeroU16::new(8080).unwrap())
+    );
+    assert_eq!(input.service.key(), "tenant/service-a");
+    assert_eq!(
+        input.service.policy_target().target_kind,
+        edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::Service
+    );
 }
 
 #[test]
@@ -63,15 +68,11 @@ fn mismatched_context_cannot_redirect_selected_service() {
 
 #[test]
 fn grpc_context_must_match_the_selected_service_identity_exactly() {
-    use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind;
     use ServiceBackendKind::{Service, ServiceImport};
 
-    let target = PolicyTargetKey {
-        target_kind: PolicyTargetKind::Service,
-        namespace: "tenant".to_string(),
-        name: "service-a".to_string(),
-    };
-    assert!(!grpc_service_context_matches(None, &target));
+    let selected = selected_service("service-a");
+    let target = selected.logical().service_target().unwrap();
+    assert!(!service_context_matches(None, target));
     for (case, key, kind, expected) in [
         ("exact", Some("tenant/service-a"), Some(Service), true),
         ("missing key", None, Some(Service), false),
@@ -89,10 +90,26 @@ fn grpc_context_must_match_the_selected_service_identity_exactly() {
         let mut context = backend_context("tenant/service-a");
         context.service_key = key.map(str::to_string);
         context.service_kind = kind;
-        assert_eq!(
-            grpc_service_context_matches(Some(&context), &target),
-            expected,
-            "{case}"
-        );
+        assert_eq!(service_context_matches(Some(&context), target), expected, "{case}");
     }
+}
+
+#[test]
+fn selected_service_identity_and_final_input_borrow_without_allocations() {
+    let selected = selected_service("service-a");
+    let context = backend_context("tenant/service-a");
+    let stored = selected.logical().service_target().unwrap();
+    let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+        for _ in 0..16 {
+            let input = selected_http_service_input(&selected, Some(&context)).unwrap();
+            assert!(std::ptr::eq(input.service, stored));
+            assert!(std::ptr::eq(
+                selected.logical().policy_target_key().unwrap(),
+                stored.policy_target()
+            ));
+            std::hint::black_box(input);
+        }
+    });
+    assert_eq!(allocations.calls, 0);
+    assert_eq!(allocations.requested_bytes, 0);
 }

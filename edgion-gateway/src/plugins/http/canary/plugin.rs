@@ -138,7 +138,6 @@ impl RequestFilter for Canary {
             log.push("no route");
             return PluginRunningResult::GoodNext;
         };
-        let route_ns = &route_unit.matched_info.rsc.ns;
         match route_unit.rule.backend_refs.as_ref() {
             Some(refs) if !refs.is_empty() => {}
             _ => {
@@ -147,7 +146,7 @@ impl RequestFilter for Canary {
             }
         };
 
-        if RouteRules::find_backend_by_name(route_unit, &target.name, target.namespace.as_deref(), route_ns).is_err() {
+        if RouteRules::find_backend_by_name(route_unit, &target.name, target.namespace.as_deref()).is_err() {
             log.push_err("backend ref not found");
             return match self.config.on_invalid {
                 UpstreamFallback::Reject => {

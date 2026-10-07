@@ -1,6 +1,6 @@
 use super::*;
 use crate::backends::discovery::ServiceDiscoveryCoordinator;
-use crate::backends::BackendTLSPolicyStore;
+use crate::backends::{BackendTLSPolicyStore, ServiceSectionKey};
 use crate::plugins::PluginRuntime;
 use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
 use edgion_resources::resources::BackendTLSPolicy;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 fn backend(port: Option<i32>) -> CompiledBackend {
     let schema = serde_json::from_value(json!({"name": "app", "port": port})).unwrap();
-    CompiledBackend::compile(schema, "default", 3, Arc::new(PluginRuntime::new()))
+    crate::routes::http::match_unit::compile_http_backend_fixture(schema, "default", 3, Arc::new(PluginRuntime::new()))
 }
 
 fn publish(coordinator: &ServiceDiscoveryCoordinator, target_port: i32) {
@@ -73,19 +73,33 @@ fn policy_store(valid: bool) -> BackendTLSPolicyStore {
 #[test]
 fn direct_authorization_rejects_invalid_ports_and_denied_refs_before_requests() {
     for port in [None, Some(0), Some(-1), Some(65536), Some(65979)] {
-        assert!(backend(port).direct_endpoint.is_none());
+        assert!(backend(port).permitted_service().is_none());
     }
-    let mut schema = backend(Some(443)).schema;
+    let mut schema = backend(Some(443)).schema().clone();
     schema.ref_denied = Some(
         serde_json::from_value(json!({
             "targetNamespace": "default", "targetName": "app", "reason": "NoMatchingReferenceGrant"
         }))
         .unwrap(),
     );
-    assert!(DirectEndpointAuthorization::compile(&schema, "default").is_none());
+    assert!(crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema.clone(),
+        "default",
+        0,
+        Arc::new(PluginRuntime::new())
+    )
+    .permitted_service()
+    .is_none());
     schema.ref_denied = None;
     schema.kind = Some("EdgionBackend".to_owned());
-    assert!(DirectEndpointAuthorization::compile(&schema, "default").is_none());
+    assert!(crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema.clone(),
+        "default",
+        0,
+        Arc::new(PluginRuntime::new())
+    )
+    .permitted_service()
+    .is_none());
 }
 
 #[test]

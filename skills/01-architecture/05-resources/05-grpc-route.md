@@ -99,6 +99,21 @@ GRPCRoute delegation is a parallel module (`handlers/grpc_route_delegation.rs`),
 3. A valid child match whose `method.service` is absent (missing matcher or method-only) **inherits** the delegated service as `{type: Exact, service: S}`, preserving its method name. Shared rule validation rejects explicit empty matchers and empty/invalid Exact names before inheritance.
 4. Any child match with `method.type: RegularExpression` **invalidates that whole child rule** (v1 rejects the match outright rather than proving a regex service cannot escape the scope).
 
+### Compiled native backend ownership
+
+`GrpcRouteRuleUnit::compile_grpc_rule` takes the actual GRPCRoute and effective rule
+index. The source-validated effective loan compiles the canonical Service key,
+policy target and checked numeric section once. Private compiled schema and target
+prevent detached construction. Invalid owners call no rule/backend runtime factory;
+invalid or denied slots retain their original weights and indexes but call no
+backend factory, sticky lookup, policy lookup or backend plugin dispatch.
+
+Sticky candidates and the selected generation borrow permitted Service targets.
+Final peer resolution checks the diagnostic context against that target instead
+of cloning or trusting its key. Invalid/denied selections retain the existing
+HTTP 200 with gRPC status 14 wrapper. First-attempt traffic-policy capture also
+requires the selected target, and retries preserve the captured Arc or absence.
+
 ## Cross-resource relationships
 
 | Direction | Target resource | Mechanism | Notes |

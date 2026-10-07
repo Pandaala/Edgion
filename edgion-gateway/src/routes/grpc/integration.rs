@@ -4,7 +4,7 @@
 //! encapsulating all gRPC-specific logic within the `grpc` module.
 
 use crate::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
-use crate::routes::http::session_persistence::{sp_extract_token, sp_resolve_target_rule_scoped};
+use crate::routes::http::session_persistence::{sp_extract_token, sp_resolve_typed_candidates, StickyCandidate};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::EdgionHttpContext;
 use edgion_resources::err::EdError;
@@ -85,18 +85,26 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     // weights govern only new sessions; an established session keeps routing
     // to its original Service/endpoint even at weight 0). Mirrors
     // select_http_backend; gRPC has no InternalJump, so no jump precedence arm.
-    let sp_idx = sp_resolve_target_rule_scoped(
+    let sp_idx = sp_resolve_typed_candidates(
         ctx,
         grpc_route_unit
             .backends
             .iter()
-            .map(|b| (b.schema.name.as_str(), b.schema.namespace.as_deref(), b.schema.port)),
-        &grpc_route_unit.matched_info.rsc.ns,
+            .enumerate()
+            .filter_map(|(slot, backend)| {
+                let service = backend.permitted_service()?;
+                Some(StickyCandidate {
+                    slot,
+                    service_key: service.key(),
+                    section: service.section(),
+                    scope: None,
+                })
+            }),
         sp_token.as_deref(),
     );
     let sticky_backend = sp_idx.and_then(|idx| {
         let cb = &grpc_route_unit.backends[idx];
-        if cb.schema.ref_denied.is_none() {
+        if cb.ref_denied.is_none() {
             Some(idx)
         } else {
             // The sticky backendRef's cross-namespace reference is now denied:
@@ -137,8 +145,8 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         });
     }
 
-    let target = logical.policy_target_key().ok_or_else(EdError::BackendNotFound)?;
-    let backend_tls_policy = crate::backends::policy::query_backend_tls_policy_for_target(target, backend_ref.port);
+    let service = backend_ref.permitted_service().ok_or_else(EdError::BackendNotFound)?;
+    let backend_tls_policy = crate::backends::policy::query_backend_tls_policy_for_service(service);
 
     // Run backend-level request plugins.
     // TODO: evaluate whether backend plugins should run before route-level plugins
@@ -153,7 +161,12 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     }
 
     // Backend context is initialized in upstream_peer_grpc by init_backend_context_if_needed
-    ctx.selected_grpc_backend = Some(super::SelectedGrpcBackend::new(logical, backend_tls_policy));
+    ctx.selected_grpc_backend =
+        Some(super::SelectedGrpcBackend::new(logical, backend_tls_policy).ok_or_else(EdError::BackendNotFound)?);
 
     Ok(Some(())) // Handled
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/routes/grpc/integration_test.rs"]
+mod tests;

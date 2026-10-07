@@ -142,7 +142,7 @@ backend WAF/native CORS/delegation rejection behavior remains unchanged.
 HTTPRoute's ConfHandler implements route compilation and registration:
 
 0. **Effective rules**: compiles `route.effective_rules()` — `spec.resolved_rules` (controller-flattened delegation result) when present, else `spec.rules`. `invalid_rule_indices` applies only to `spec.rules` (flattening already dropped invalid rules). Delegation children have no Gateway parentRefs / `resolved_listeners`, so they register nothing and are inert on the data plane. Flattening stamps every rule- and backend-level ExtensionRef with the Namespace of the HTTPRoute that declared it, preserving parent-local and child-local EdgionPlugins resolution in the shared Gateway runtime. Authored `resolvedNamespace` values are cleared before flattening in filesystem/etcd modes
-1. **parentRef filtering**: only compile parentRefs with `Accepted=True` (when status is not yet present, optimistically compile all)
+1. **parentRef filtering**: require a nonempty processed Controller stamp and a current owned parent status with `Accepted=True`; missing or stale status admits no parent
 2. **Per-listener route management**: based on resolved_listeners, register route rules into the `HttpRouteManager` of the corresponding `ListenerKey`
 3. **Domain route table**: each physical Listener maintains authored hostname groups; only omitted/empty hostname lists create a separate internal catch-all. Both planes reject a bare `*` or any other invalid hostname entry for the complete Route.
 4. **Multi-level match engine**:
@@ -156,6 +156,23 @@ HTTP Route deltas replace touched hostname contents while retaining untouched
 path engines. The shared hostname tree is reused whenever final keys agree,
 including full-list/Gateway rebuilds; the table is published through one outer
 snapshot. See the [hostname algorithm contract](../../12-algorithms/route-hostname-matching.md).
+
+### Compiled native backend ownership
+
+`HttpRouteRuleUnit::compile_http_rule` takes the actual HTTPRoute and effective rule
+index. Its source-validated `HttpRouteBackendRefs::effective_at` loan supplies the
+canonical target. Private compiled schema, slot, identity and target cannot be
+reconstructed from a detached backend schema or mutable request context. Invalid
+owners create no plugin runtime; invalid or denied backend slots retain their
+weight and position with an inert backend runtime.
+
+A permitted Service carries one cold key, policy target and checked numeric section.
+Selection, sticky candidates, named jumps, DirectEndpoint authorization, TLS policy
+and final peer selection borrow that same target. `BackendContext` is a checked
+diagnostic projection and cannot restore authority for an Invalid slot. Invalid
+descriptors fail with `BackendUnsupportedKind`/500 before backend plugins; denied
+slots retain `RefDenied`/500. Ordinary AI selection retains its separate 503 failure.
+Live failures of a valid Service section/endpoints retain their existing 503 mapping.
 
 ## Cross-resource relationships
 

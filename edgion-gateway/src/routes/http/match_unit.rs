@@ -1,3 +1,4 @@
+use crate::backends::runtime::{CompiledBackendTarget, CompiledServiceTarget};
 use crate::ctx::EdgionHttpContext;
 use crate::lb::BackendSelector;
 use crate::plugins::PluginRuntime;
@@ -6,7 +7,8 @@ use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use crate::MatchInfo;
 use edgion_resources::err::EdError;
-use edgion_resources::{HTTPBackendRef, HTTPBackendRefKind, HTTPRoute, HTTPRouteRule};
+use edgion_resources::resources::refs::route_fields::HttpRouteBackendRefs;
+use edgion_resources::{HTTPBackendRef, HTTPRoute, HTTPRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use std::cmp::Ordering;
@@ -77,46 +79,44 @@ pub struct RouteMatchResult {
 /// only original slot indexes; request handles borrow this object from the
 /// immutable per-rule generation. This keeps the gateway-compiled
 /// `PluginRuntime` off the `HTTPBackendRef` schema (two-type split).
+/// Only the actual Route compiler can construct a compiled slot.
+/// ```compile_fail
+/// use edgion_gateway::routes::http::match_unit::CompiledBackend;
+/// fn overwrite(compiled: &mut CompiledBackend) {
+///     compiled.schema.name = "replacement".into();
+/// }
+/// ```
 #[derive(Clone)]
 pub struct CompiledBackend {
     /// The pure backend-ref schema (name, port, weight, …). Owned by the
     /// immutable compiled generation. Per-request policy winners are stored on
     /// selected handles and never mutate this schema.
-    pub schema: HTTPBackendRef,
+    schema: HTTPBackendRef,
     /// Original position in `HTTPRouteRule.backendRefs`. This remains stable
     /// across typed filtering and is the conformance/metrics slot identity.
-    pub slot: usize,
+    slot: usize,
     /// Canonical typed identity shared with Controller contextual admission.
-    pub identity: edgion_resources::LogicalBackendSlotIdentity,
+    identity: edgion_resources::LogicalBackendSlotIdentity,
     /// Cold-path classification. Service-only consumers must explicitly match
     /// `Service`; AI routing consumes the full ordered slot list separately.
-    pub target: CompiledBackendTarget,
-    /// Precompiled Service authorization for direct endpoint overrides.
-    pub direct_endpoint: Option<crate::backends::validation::DirectEndpointAuthorization>,
+    target: CompiledBackendTarget,
     /// Compiled backend-level plugin chain (built from `schema.filters`).
     pub plugin_runtime: Arc<PluginRuntime>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CompiledBackendTarget {
-    Service { namespace: String, name: String },
-    EdgionBackend { namespace: String, name: String },
-    Invalid { classified_kind: HTTPBackendRefKind },
-}
-
 impl CompiledBackend {
     pub fn is_service(&self) -> bool {
-        matches!(self.target, CompiledBackendTarget::Service { .. })
+        matches!(self.target, CompiledBackendTarget::Service(_))
     }
 
     /// Whether this slot participates in ordinary HTTP backend selection.
     /// Invalid refs retain their declared Gateway API traffic share and fail
-    /// after selection; valid AI refs are owned by the AI dispatch path.
+    /// after selection. AI dispatch is separate; ordinary HTTP rejects an AI slot.
     fn is_generic_selectable(&self) -> bool {
         matches!(
             self.target,
-            CompiledBackendTarget::Service { .. }
-                | CompiledBackendTarget::EdgionBackend { .. }
+            CompiledBackendTarget::Service(_)
+                | CompiledBackendTarget::EdgionBackend(_)
                 | CompiledBackendTarget::Invalid { .. }
         )
     }
@@ -127,57 +127,28 @@ impl CompiledBackend {
     /// use this predicate rather than kind-only matching to preserve the
     /// Controller's ReferenceGrant decision.
     pub fn is_permitted_ai_backend(&self) -> bool {
-        self.schema.ref_denied.is_none() && matches!(self.target, CompiledBackendTarget::EdgionBackend { .. })
+        self.schema.ref_denied.is_none() && matches!(self.target, CompiledBackendTarget::EdgionBackend(_))
     }
 
-    pub fn compile(
-        schema: HTTPBackendRef,
-        route_namespace: &str,
-        slot: usize,
-        plugin_runtime: Arc<PluginRuntime>,
-    ) -> Self {
-        let identity =
-            edgion_resources::logical_backend_slot_identities(std::slice::from_ref(&schema), route_namespace)
-                .into_iter()
-                .next()
-                .expect("one backend ref produces one identity");
-        Self::compile_with_identity(schema, route_namespace, slot, identity, plugin_runtime)
+    pub fn schema(&self) -> &HTTPBackendRef {
+        &self.schema
     }
-
-    fn compile_with_identity(
-        schema: HTTPBackendRef,
-        route_namespace: &str,
-        slot: usize,
-        identity: edgion_resources::LogicalBackendSlotIdentity,
-        plugin_runtime: Arc<PluginRuntime>,
-    ) -> Self {
-        let target = Self::compile_target(&schema, route_namespace);
-        let direct_endpoint =
-            crate::backends::validation::DirectEndpointAuthorization::compile(&schema, route_namespace);
-        Self {
-            schema,
-            slot,
-            identity,
-            target,
-            direct_endpoint,
-            plugin_runtime,
+    pub fn slot(&self) -> usize {
+        self.slot
+    }
+    pub fn identity(&self) -> &edgion_resources::LogicalBackendSlotIdentity {
+        &self.identity
+    }
+    pub fn target(&self) -> &CompiledBackendTarget {
+        &self.target
+    }
+    pub fn permitted_service(&self) -> Option<&CompiledServiceTarget> {
+        if self.ref_denied.is_some() {
+            return None;
         }
-    }
-
-    fn compile_target(schema: &HTTPBackendRef, route_namespace: &str) -> CompiledBackendTarget {
-        use edgion_resources::resources::refs::targets::BackendTarget;
-        match schema.validated_target(route_namespace) {
-            Ok(BackendTarget::Service(identity)) => CompiledBackendTarget::Service {
-                namespace: identity.scope().namespace().unwrap_or_default().to_string(),
-                name: identity.name().to_string(),
-            },
-            Ok(BackendTarget::EdgionBackend(identity)) => CompiledBackendTarget::EdgionBackend {
-                namespace: identity.scope().namespace().unwrap_or_default().to_string(),
-                name: identity.name().to_string(),
-            },
-            _ => CompiledBackendTarget::Invalid {
-                classified_kind: schema.backend_kind(),
-            },
+        match &self.target {
+            CompiledBackendTarget::Service(service) => Some(service),
+            _ => None,
         }
     }
 }
@@ -259,9 +230,16 @@ impl HttpRouteRuleUnit {
     /// (in-memory RateLimitLocal) own per-rule state, so the runtime must NOT be rebuilt
     /// per match-item/hostname.
     pub fn compile_http_rule(
-        rule: &HTTPRouteRule,
-        namespace: &str,
+        route: &HTTPRoute,
+        rule_index: usize,
     ) -> Result<HttpRuleRuntime, edgion_resources::RequestTransformViolation> {
+        let rule = route
+            .effective_rules()
+            .and_then(|rules| rules.get(rule_index))
+            .ok_or_else(|| edgion_resources::RequestTransformViolation {
+                path: "spec.rules".to_string(),
+                message: "effective rule is unavailable".to_string(),
+            })?;
         let violations = edgion_resources::effective_request_transform_violations(rule).map_err(|_| {
             edgion_resources::RequestTransformViolation {
                 path: String::new(),
@@ -271,39 +249,75 @@ impl HttpRouteRuleUnit {
         if let Some(violation) = violations.into_iter().next() {
             return Err(violation);
         }
-        Ok(Self::compile_prevalidated_http_rule(rule, namespace))
+        Self::compile_prevalidated_http_rule(route, rule_index).ok_or_else(|| {
+            edgion_resources::RequestTransformViolation {
+                path: "metadata".to_string(),
+                message: "invalid Route reference source".to_string(),
+            }
+        })
     }
 
-    /// Compile a rule immediately after its caller has applied the appropriate
-    /// authored or effective shared validation pass.
-    pub(super) fn compile_prevalidated_http_rule(rule: &HTTPRouteRule, namespace: &str) -> HttpRuleRuntime {
-        // Route-level `edgion.io/mirror-*` annotation values, pre-parsed onto
-        // the rule; defaults when no mirror annotation is present.
-        let mirror_tuning = rule.parsed_mirror_tuning.clone().unwrap_or_default();
-        let plugin_runtime = Arc::new(match &rule.filters {
-            Some(filters) => PluginRuntime::from_httproute_filters_for_rule(filters, namespace, &mirror_tuning),
-            None => PluginRuntime::new(),
-        });
-        let backends: Vec<CompiledBackend> = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
+    pub(super) fn compile_prevalidated_http_rule(route: &HTTPRoute, rule_index: usize) -> Option<HttpRuleRuntime> {
+        Self::compile_with_factories(
+            route,
+            rule_index,
+            |rule, namespace| {
+                let tuning = rule.parsed_mirror_tuning.clone().unwrap_or_default();
+                Arc::new(match &rule.filters {
+                    Some(filters) => PluginRuntime::from_httproute_filters_for_rule(filters, namespace, &tuning),
+                    None => PluginRuntime::new(),
+                })
+            },
+            |backend, rule, namespace| {
+                let tuning = rule.parsed_mirror_tuning.clone().unwrap_or_default();
+                Arc::new(match &backend.filters {
+                    Some(filters) => PluginRuntime::from_httproute_filters_for_backend(filters, namespace, &tuning),
+                    None => PluginRuntime::new(),
+                })
+            },
+        )
+    }
+
+    fn compile_with_factories(
+        route: &HTTPRoute,
+        rule_index: usize,
+        mut rule_factory: impl FnMut(&HTTPRouteRule, &str) -> Arc<PluginRuntime>,
+        mut backend_factory: impl FnMut(&HTTPBackendRef, &HTTPRouteRule, &str) -> Arc<PluginRuntime>,
+    ) -> Option<HttpRuleRuntime> {
+        let references = HttpRouteBackendRefs::from_route(route).ok()?;
+        let rule = route.effective_rules()?.get(rule_index)?;
+        let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+        let plugin_runtime = rule_factory(rule, namespace);
+        let backends = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
             let identities = edgion_resources::logical_backend_slot_identities(refs, namespace);
             refs.iter()
                 .zip(identities)
                 .enumerate()
-                .map(|(slot, (br, identity))| {
-                    let plugin_runtime = Arc::new(match &br.filters {
-                        Some(filters) => {
-                            PluginRuntime::from_httproute_filters_for_backend(filters, namespace, &mirror_tuning)
-                        }
-                        None => PluginRuntime::new(),
-                    });
-                    CompiledBackend::compile_with_identity(br.clone(), namespace, slot, identity, plugin_runtime)
+                .map(|(slot, (schema, identity))| {
+                    let reference = references
+                        .effective_at(rule_index, slot)
+                        .expect("the backend came from this actual effective rule");
+                    let target = CompiledBackendTarget::from_reference(reference, schema.backend_kind());
+                    let plugin_runtime =
+                        if schema.ref_denied.is_none() && !matches!(target, CompiledBackendTarget::Invalid { .. }) {
+                            backend_factory(schema, rule, namespace)
+                        } else {
+                            Arc::new(PluginRuntime::new())
+                        };
+                    CompiledBackend {
+                        schema: schema.clone(),
+                        slot,
+                        identity,
+                        target,
+                        plugin_runtime,
+                    }
                 })
-                .collect()
+                .collect::<Vec<_>>()
         });
-        HttpRuleRuntime {
+        Some(HttpRuleRuntime {
             plugin_runtime,
-            backends: Arc::from(backends),
-        }
+            backends: backends.into(),
+        })
     }
 
     /// Build a per-rule LB selector over original backend slots. Its WRR cursor
@@ -543,3 +557,9 @@ impl HttpRouteRuleUnit {
 #[cfg(test)]
 #[path = "../../../tests/unit/routes/http/match_unit_test.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../../tests/support/routes/http/match_unit_test/compiled_fixtures.rs");
+
+#[cfg(test)]
+use edgion_resources::HTTPBackendRefKind;

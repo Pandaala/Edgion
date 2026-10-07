@@ -10,7 +10,7 @@ use crate::ai::{
 };
 use crate::backends::policy::backend_traffic::{EffectiveBackendTrafficPolicy, RetryBudget};
 use crate::plugins::PluginRuntime;
-use crate::routes::http::match_unit::{CompiledBackend, HttpRouteRuleUnit, MatchSpecificity};
+use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
 use crate::{MatchInfo, Rsc};
 use edgion_resources::resources::common::RefDenied;
 use edgion_resources::resources::edgion_backend::AiCredentialLimits;
@@ -163,7 +163,7 @@ fn selectable_plan(credentials: Vec<RuntimeAiCredential>) -> ReadyAiAttemptPlan 
 }
 
 fn compiled_ai_logical(ref_denied: Option<RefDenied>) -> crate::backends::LogicalBackendHandle {
-    let compiled = CompiledBackend::compile(
+    let compiled = crate::routes::http::match_unit::compile_http_backend_fixture(
         HTTPBackendRef {
             name: "provider".to_string(),
             namespace: Some("default".to_string()),
@@ -198,7 +198,12 @@ fn denied_route_unit() -> Arc<HttpRouteRuleUnit> {
             reason: Some("NoMatchingReferenceGrant".to_string()),
         }),
     };
-    let backend = CompiledBackend::compile(schema.clone(), "tenant-a", 0, Arc::new(PluginRuntime::new()));
+    let backend = crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema.clone(),
+        "tenant-a",
+        0,
+        Arc::new(PluginRuntime::new()),
+    );
     Arc::new(HttpRouteRuleUnit {
         resource_key: "tenant-a/route".to_string(),
         matched_info: MatchInfo {
@@ -305,7 +310,7 @@ async fn header_modifier_ai_backend_matches_native_first_equivalent_operations()
             }]
         }))
         .unwrap();
-        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "default").unwrap();
+        let runtime = crate::routes::http::match_unit::compile_http_fixture(&rule, "default").unwrap();
         let backend = &runtime.backends[0];
         let mut results = Vec::new();
         for ai in [false, true] {
@@ -356,9 +361,9 @@ async fn header_modifier_ai_backend_rejects_invalid_duplicate_and_recovers() {
         }))
         .unwrap()
     };
-    let captured = HttpRouteRuleUnit::compile_http_rule(&rule_for("ignored"), "default").unwrap();
+    let captured = crate::routes::http::match_unit::compile_http_fixture(&rule_for("ignored"), "default").unwrap();
     for duplicate in ["ignored", "invalid\r\nvalue", "recovered"] {
-        let current = HttpRouteRuleUnit::compile_http_rule(&rule_for(duplicate), "default").unwrap();
+        let current = crate::routes::http::match_unit::compile_http_fixture(&rule_for(duplicate), "default").unwrap();
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::new();
         let result = apply_backend_request_headers(&mut session, &mut ctx, &current.backends[0]);
@@ -393,7 +398,7 @@ async fn header_modifier_invalid_ai_backend_is_rejected_before_header_mutation()
         }]
     }))
     .unwrap();
-    let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "default").unwrap();
+    let runtime = crate::routes::http::match_unit::compile_http_fixture(&rule, "default").unwrap();
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::new();
     assert!(matches!(
@@ -1204,7 +1209,7 @@ fn responses_continuation_retry_cap_cannot_be_reinitialized_from_global_policy()
 async fn native_responses_dispatch_strips_client_and_backend_principal_selectors() {
     use pingora_core::protocols::http::RequestBodyBuffer;
     let rule:HTTPRouteRule=serde_json::from_value(serde_json::json!({"backendRefs":[{"group":"edgion.io","kind":"EdgionBackend","name":"provider","filters":[{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"OpenAI-Organization","value":"org-backend-selector"},{"name":"openai-project","value":"proj-backend-selector"},{"name":"x-native-extension","value":"preserved"}]}}]}]})).unwrap();
-    let compiled = HttpRouteRuleUnit::compile_http_rule(&rule, "default").unwrap();
+    let compiled = crate::routes::http::match_unit::compile_http_fixture(&rule, "default").unwrap();
     for continuation in [false, true] {
         let mut session = test_session().await;
         session

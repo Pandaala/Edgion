@@ -43,18 +43,21 @@ fail-closed projection.
 Canonical section keys are only Service port number or name. Every valid section contains exact
 all/ready endpoint slots plus eagerly compiled RoundRobin, ConsistentHash, LeastConn, and EWMA
 selectors. Equivalent same-socket origins merge into a deterministic sorted origin set. The
-request path calls `select_service_endpoint` with `ServiceSectionKey::Number` from
-`backendRef.port`; missing or non-`NonZeroU16` ports fail closed as
-`BackendPortResolutionFailed` and never pick the Service's first port, a leftover slice port, or
-another section. FileSystem/etcd have no CEL "must have port" rule, so this path is reachable
-outside Kubernetes. The selected slot already carries `serving_port` on `backend.addr`; there is
+native HTTP/GRPC compiler takes an actual Route's effective field loan and stores
+one `CompiledServiceTarget` containing the canonical policy target, Service key and
+checked `ServiceSectionKey::Number`. Missing or invalid declared ports produce an
+Invalid slot before request plugins or discovery; HTTP returns
+`BackendUnsupportedKind`/500 for that slot. A valid declared section that becomes
+unavailable at runtime still returns `BackendPortResolutionFailed`/503. Other
+protocol selectors retain their existing section validation. No selector may pick
+the Service's first port, a leftover slice port or another section. The selected slot already carries `serving_port` on `backend.addr`; there is
 no request-path port rewriter. `appProtocol` is published on `ServicePortIdentity` and read from
 the proven section, not a live ServiceStore scan. Health probes use
 `AvailableServiceProjection::canonical_probe_backends()` (union of Resolved `all_slots`,
 deduped by runtime identity). Session persistence is keyed per section.
 
-DirectEndpoint uses `CompiledBackend.direct_endpoint`, a route-compiled permission containing
-the Service key, checked section key, and TLS policy target. Denied refs and invalid/missing
+DirectEndpoint borrows `CompiledBackend::permitted_service()`, the same private
+compiled Service target used by ordinary HTTP selection and final peer resolution. Denied refs and invalid/missing
 Service ports have no permission. One captured discovery generation supplies the section's
 precompiled numeric IP/port index. An explicit endpoint port must match that section; an omitted
 port requires one serving port for the IP. This lookup does not read raw Kubernetes resources,
@@ -253,7 +256,9 @@ effective}` together. Equivalent effective-policy `Arc`s (retry budget,
 logical CB, AI outlier handle) are retained across no-op resyncs. AI planning
 captures one effective Arc before candidate iteration. HTTP/gRPC Service
 requests capture the same Arc at first `begin_upstream_attempt` onto
-`BackendContext.effective_policy` and do **not** re-read the store on later
+`BackendContext.effective_policy`, only after obtaining the permitted selected
+HTTP/GRPC target (or DirectEndpoint's pinned route slot) and verifying the
+context projection. A context key alone performs no policy lookup. They do **not** re-read the store on later
 attempts. A missing capture means “no policy”, not “read the live generation”.
 The store is also the **sole writer** of `HealthCheckConfigStore`, Service
 outlier configuration, and the `DegradeThresholdStore` per-service override.
@@ -330,10 +335,11 @@ policy/
   (`ServiceSectionKey::Number` → `identity.name`), not `resolve_port_name`.
   A number-only resolved port (`identity.name = None`) uses whole-target only
   and does not apply the `any_section_scoped ⇒ Invalid` penalty. An unproven
-  mapping (missing/unavailable Service, invalid section, missing port, or
-  `port is None`) is `Invalid` when any section-scoped candidate names that
-  target. `port is None` is reachable on FileSystem/etcd because those modes
-  have no CEL "must have port" rule; guessing a section from the Service spec
+  mapping means a valid declared numeric port whose Service is unavailable or
+  whose live section cannot be proven. It is `Invalid` when any section-scoped
+  candidate names that target. Missing or invalid declared ports receive no
+  native Service target or TLS lookup capability during cold compilation,
+  including FileSystem/etcd input. Guessing a section from the Service spec
   would validate a different port than the one actually dialed.
 - EdgionBackend AI targets ignore port and look up whole-target only.
 - HTTP, gRPC, and AI carry `BackendTlsPolicyLookup` on the selected backend.
@@ -366,8 +372,12 @@ rechecks both the published generation and membership before installing its snap
 
 - Verifies that the target IP is a legitimate endpoint within the route's BackendRefs.
 - Prevents SSRF: ensures requests can only be routed to endpoints the route has authorized.
-- Parameters: target IP, optional port, the route's backend_refs, the route's namespace.
-- Returns: `Ok((backend_ref_index, port))` or `Err(reason)`.
+- Parameters: target IP, optional endpoint port, compiled route backend slots,
+  the captured discovery generation, TLS policy snapshot, and `inherit_tls`.
+  Target authority comes from each slot's permitted compiled Service target;
+  there is no detached raw-reference or route-namespace input.
+- Returns: `ValidatedDirectEndpoint` with the original backend slot, proven address,
+  captured TLS policy and appProtocol, or `Err(reason)`.
 - Used by `DirectEndpoint`, which selects a backend by endpoint address. Name-addressed jumps
   (`DynamicInternalUpstream`, `Canary`) do NOT use this function — they resolve through
   `RouteRules::find_backend_by_name`, the single name matcher; see

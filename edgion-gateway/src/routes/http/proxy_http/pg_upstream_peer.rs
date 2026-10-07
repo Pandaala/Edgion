@@ -10,6 +10,7 @@ use crate::backends::peer_builder::{
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 use crate::backends::policy::backend_traffic::RetryBudget;
+use crate::backends::runtime::{CompiledBackendTarget, CompiledServiceTarget};
 use crate::backends::ServiceBackendKind;
 use crate::backends::{get_peer, try_get_peer};
 use crate::backends::{SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend};
@@ -19,7 +20,6 @@ use crate::plugins::http::common::outbound::egress::{default_block_private, filt
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::grpc::handle_grpc_upstream;
-use crate::routes::http::match_unit::CompiledBackendTarget;
 use crate::routes::http::routes_mgr::RouteRules;
 use crate::routes::http::session_persistence;
 use crate::util::net::{classify_backend_addr, resolve_domain, BlockedBackendReason};
@@ -747,14 +747,13 @@ pub async fn select_http_backend(
         let candidates = route_unit
             .backends
             .iter()
-            .filter(|backend| backend.schema.ref_denied.is_none())
-            .filter_map(sticky_candidate)
-            .collect::<Vec<_>>();
-        session_persistence::sp_resolve_typed_candidates(ctx, &candidates, sp_token.as_deref())
+            .filter(|backend| backend.ref_denied.is_none())
+            .filter_map(sticky_candidate);
+        session_persistence::sp_resolve_typed_candidates(ctx, candidates, sp_token.as_deref())
     };
     let sticky_backend = sp_idx.and_then(|idx| {
         let cb = &route_unit.backends[idx];
-        if cb.schema.ref_denied.is_none() {
+        if cb.ref_denied.is_none() {
             crate::backends::LogicalBackendHandle::new(Arc::clone(&route_unit.backends), idx)
         } else {
             // The sticky backendRef's cross-namespace reference is now denied:
@@ -774,7 +773,7 @@ pub async fn select_http_backend(
     // round-robin.
     let backend_ref = match sticky_backend {
         Some(b) => b,
-        None => match pick_backend_ref(&route_unit, &route_unit.matched_info.rsc.ns, ctx.jump.as_deref()) {
+        None => match pick_backend_ref(&route_unit, ctx.jump.as_deref()) {
             Ok(b) => b,
             Err(e) => {
                 ctx.record_error(backend_select_status(&e));
@@ -784,10 +783,33 @@ pub async fn select_http_backend(
         },
     };
 
-    // Project policy identity from the selected WP2 logical slot. Route-local
-    // occurrence remains proof of selection but is not part of attachment.
-    let service_port = backend_ref.compiled().port;
-    let backend_tls_policy = crate::backends::query_backend_tls_policy_for_logical_backend(&backend_ref, service_port);
+    // Preserve a rejected slot's diagnostic index without fabricating a Service.
+    match backend_ref.target() {
+        CompiledBackendTarget::Invalid { .. } => {
+            let slot = backend_ref.slot();
+            ctx.selected_backend = Some(SelectedHttpBackend::Invalid(backend_ref));
+            ctx.backend_context = Some(crate::BackendContext {
+                source: None,
+                rsc: None,
+                service_key: None,
+                service_kind: None,
+                upstreams: Vec::new(),
+                current_upstream_id: None,
+                backend_ref_idx: Some(slot),
+                effective_policy: None,
+            });
+            ctx.record_error(EdgionErrorCode::BackendUnsupportedKind);
+            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+            return Err(PingoraError::new(ErrorType::InternalError));
+        }
+        CompiledBackendTarget::EdgionBackend(_) => {
+            ctx.record_error(EdgionErrorCode::UpstreamNotBackendRefs);
+            end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
+            return Err(PingoraError::new(ErrorType::InternalError));
+        }
+        CompiledBackendTarget::Service(_) => {}
+    }
+    let backend_tls_policy = crate::backends::query_backend_tls_policy_for_logical_backend(&backend_ref);
 
     let backend_plugin_runtime = Arc::clone(&backend_ref.compiled().plugin_runtime);
     backend_plugin_runtime.run_backend_request_plugins(session, ctx).await;
@@ -796,37 +818,22 @@ pub async fn select_http_backend(
         return Err(PingoraError::new(ErrorType::InternalError));
     }
 
-    ctx.selected_backend = Some(match backend_ref.target() {
-        CompiledBackendTarget::Service { .. } => {
-            let selected = SelectedServiceBackend::new(backend_ref, backend_tls_policy)
-                .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
-            SelectedHttpBackend::Service(selected)
-        }
-        CompiledBackendTarget::Invalid { .. } => SelectedHttpBackend::Invalid(backend_ref),
-        CompiledBackendTarget::EdgionBackend { .. } => {
-            ctx.record_error(EdgionErrorCode::UpstreamNotBackendRefs);
-            end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
-            return Err(PingoraError::new(ErrorType::InternalError));
-        }
-    });
+    let selected = SelectedServiceBackend::new(backend_ref, backend_tls_policy)
+        .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
+    ctx.selected_backend = Some(SelectedHttpBackend::Service(selected));
     Ok(())
 }
 
 fn sticky_candidate(
     backend: &crate::routes::http::match_unit::CompiledBackend,
-) -> Option<session_persistence::StickyCandidate> {
-    match &backend.target {
-        CompiledBackendTarget::Service { namespace, name } => {
-            let section = crate::backends::service_section_key_from_port(backend.schema.port).ok()?;
-            Some(session_persistence::StickyCandidate {
-                slot: backend.slot,
-                service_key: format!("{namespace}/{name}"),
-                section,
-                scope: None,
-            })
-        }
-        CompiledBackendTarget::EdgionBackend { .. } | CompiledBackendTarget::Invalid { .. } => None,
-    }
+) -> Option<session_persistence::StickyCandidate<'_>> {
+    let service = backend.permitted_service()?;
+    Some(session_persistence::StickyCandidate {
+        slot: backend.slot(),
+        service_key: service.key(),
+        section: service.section(),
+        scope: None,
+    })
 }
 
 /// Get peer when session persistence resolved a sticky target (`target_addr` is set).
@@ -957,12 +964,10 @@ fn sp_repin_on_strict_retry(ctx: &mut EdgionHttpContext) {
 #[inline]
 fn pick_backend_ref(
     unit: &std::sync::Arc<crate::routes::http::HttpRouteRuleUnit>,
-    route_ns: &str,
     jump: Option<&crate::UpstreamJumpTarget>,
 ) -> Result<crate::backends::LogicalBackendHandle, EdError> {
     if let Some(crate::UpstreamJumpTarget::Internal(j)) = jump {
-        match RouteRules::find_backend_by_name(unit, &j.backend_ref_name, j.backend_ref_namespace.as_deref(), route_ns)
-        {
+        match RouteRules::find_backend_by_name(unit, &j.backend_ref_name, j.backend_ref_namespace.as_deref()) {
             Ok(b) => return Ok(b),
             // Only a genuine miss falls through to weighted RR. Every other
             // outcome — notably `RefDenied` — stays typed and fails closed:
@@ -1241,27 +1246,23 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
     // Retry-budget denominator (D1a): every upstream attempt to a Service — the
     // first attempt AND every retry (connect-fail, status-code, per-try timeout,
     // keepalive reuse) — counts toward the per-backend request volume, so the
-    // percentage cap is `retries <= percent% * total_attempts`. The service key
-    // is read from `backend_context` (set by `init_backend_context_if_needed`,
-    // which always runs before this) rather than the just-pushed upstream entry,
-    // whose `service_key` is not populated until LB peer construction happens
-    // later. DirectEndpoint retains its pinned Service key and captured policy,
-    // so it participates in the Service retry budget; ExternalJump has no
-    // Service identity and therefore no budget.
+    // percentage cap is `retries <= percent% * total_attempts`. The first
+    // attempt captures policy through the permitted selected Service proof
+    // and checks the context projection. Later attempts reuse the captured
+    // Arc or absence in backend_context. DirectEndpoint uses its pinned route
+    // slot's Service proof; ExternalJump has no Service budget.
     if let Some(budget) = retry_budget_for(ctx) {
         budget.on_attempt();
     }
 }
 
-/// Look up the retry budget (if any) installed for the current attempt's target
-/// Service. Reads the service key from `backend_context` — the canonical source
-/// (`apply_upstream_authority` uses the same) — because the per-attempt upstream
-/// entry's `service_key` is not populated until LB peer construction, which runs
-/// after `begin_upstream_attempt`. DirectEndpoint retains its pinned Service key
-/// and captured policy; ExternalJump carries no Service key and therefore no
-/// budget. Shared by the denominator hook here and the three retry gates
-/// (`pg_fail_to_connect`, `pg_error_while_proxy` Case 1.5,
-/// `pg_upstream_response_filter`).
+/// Borrow the retry budget captured for this request's selected target.
+/// Service policy was captured from the permitted HTTP/GRPC proof, or the
+/// DirectEndpoint pinned route slot, after checking its context projection.
+/// `backend_context` stores that result; its key does not authorize a lookup.
+/// AI uses its separately captured policy and ExternalJump has no Service budget.
+/// Shared by the denominator hook and the three retry gates (`pg_fail_to_connect`,
+/// `pg_error_while_proxy` Case 1.5, and `pg_upstream_response_filter`).
 #[inline]
 pub(super) fn retry_budget_for(ctx: &EdgionHttpContext) -> Option<std::sync::Arc<RetryBudget>> {
     selected_effective_policy(ctx)
@@ -1269,22 +1270,56 @@ pub(super) fn retry_budget_for(ctx: &EdgionHttpContext) -> Option<std::sync::Arc
         .map(std::sync::Arc::clone)
 }
 
+fn selected_service_target(ctx: &EdgionHttpContext) -> Option<&CompiledServiceTarget> {
+    match ctx.jump.as_deref() {
+        Some(UpstreamJumpTarget::External(_)) => return None,
+        Some(UpstreamJumpTarget::Direct(preset)) => {
+            return ctx
+                .route_unit
+                .as_ref()?
+                .backends
+                .get(preset.backend_ref_idx)?
+                .permitted_service()
+        }
+        _ => {}
+    }
+    if let Some(grpc) = ctx.selected_grpc_backend.as_ref() {
+        return grpc.compiled().permitted_service();
+    }
+    match ctx.selected_backend.as_ref()? {
+        SelectedHttpBackend::Service(selected) => selected.logical().service_target(),
+        SelectedHttpBackend::Ai(_) | SelectedHttpBackend::Invalid(_) => None,
+    }
+}
+
 fn capture_service_effective_policy(ctx: &mut EdgionHttpContext) {
-    if ctx.selected_backend.as_ref().is_some_and(SelectedHttpBackend::is_ai) {
-        return;
-    }
-    let Some(backend_context) = ctx.backend_context.as_mut() else {
+    capture_service_effective_policy_with(ctx, |target| {
+        get_backend_traffic_policy_store().snapshot().get_effective(target)
+    });
+}
+
+fn capture_service_effective_policy_with(
+    ctx: &mut EdgionHttpContext,
+    mut lookup: impl FnMut(
+        &edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey,
+    ) -> Option<Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>>,
+) {
+    let Some(context) = ctx.backend_context.as_ref() else {
         return;
     };
-    if backend_context.effective_policy.is_some() {
+    if context.effective_policy.is_some() {
         return;
     }
-    let Some(service_key) = backend_context.service_key.as_deref() else {
+    let Some(service) = selected_service_target(ctx) else {
         return;
     };
-    let target =
-        crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore::service_target(service_key);
-    backend_context.effective_policy = get_backend_traffic_policy_store().snapshot().get_effective(&target);
+    if !crate::backends::service_context_matches(Some(context), service) {
+        return;
+    }
+    let policy = lookup(service.policy_target());
+    if let Some(context) = ctx.backend_context.as_mut() {
+        context.effective_policy = policy;
+    }
 }
 
 fn selected_effective_policy(
@@ -1326,8 +1361,8 @@ async fn try_ai_backend_peer(
     let endpoint = &target.selected.backend.endpoint;
     let addr = resolve_ai_endpoint(ctx, &endpoint.domain, endpoint.port).await?;
     let (namespace, name) = match target.selected.logical().target() {
-        CompiledBackendTarget::EdgionBackend { namespace, name } => (namespace.as_str(), name.as_str()),
-        CompiledBackendTarget::Service { .. } | CompiledBackendTarget::Invalid { .. } => {
+        CompiledBackendTarget::EdgionBackend(target) => (target.namespace.as_str(), target.name.as_str()),
+        CompiledBackendTarget::Service(_) | CompiledBackendTarget::Invalid { .. } => {
             return Err(AiPeerPredispatchFailure::Endpoint);
         }
     };
@@ -1542,59 +1577,54 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
         return Ok(());
     }
 
-    let (name, namespace, service_kind, backend_ref_idx) =
-        if let Some(UpstreamJumpTarget::Direct(preset)) = ctx.jump.as_deref() {
-            let (name, namespace, service_kind, slot) = ctx
-                .route_unit
-                .as_ref()
-                .and_then(|unit| direct_backend_metadata(&unit.backends, preset.backend_ref_idx))
-                .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
-            (name, namespace, service_kind, Some(slot))
-        } else if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
-            let route_ns = ctx
-                .grpc_route_unit
-                .as_ref()
-                .map(|unit| unit.matched_info.rsc.ns.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let ns = grpc_br.namespace.clone().unwrap_or(route_ns);
-            (
-                grpc_br.name.clone(),
-                ns,
-                if grpc_br.logical().policy_target_key().is_some() {
-                    ServiceBackendKind::Service
-                } else {
-                    ServiceBackendKind::Unsupported("invalid gRPC backend reference".to_string())
-                },
-                Some(grpc_br.slot()),
-            )
-        } else if let Some(http_br) = ctx.selected_backend.as_ref() {
-            let route_ns = ctx
-                .route_unit
-                .as_ref()
-                .map(|unit| unit.matched_info.rsc.ns.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let ns = http_br.namespace.clone().unwrap_or(route_ns);
-            let service_kind = match &http_br.target {
-                CompiledBackendTarget::Service { .. } => ServiceBackendKind::Service,
-                CompiledBackendTarget::EdgionBackend { .. } | CompiledBackendTarget::Invalid { .. } => {
-                    ServiceBackendKind::Unsupported(
-                        http_br
-                            .kind
-                            .clone()
-                            .unwrap_or_else(|| "unsupported backend reference".to_string()),
-                    )
-                }
-            };
-            (http_br.name.clone(), ns, service_kind, Some(http_br.slot))
-        } else {
-            return Err(PingoraError::new(ErrorType::InternalError));
-        };
-
-    let service_key = format!("{}/{}", namespace, name);
-    let rsc = crate::Rsc::new("Service", namespace, name);
-    ctx.init_backend_context(rsc, service_key, service_kind, backend_ref_idx);
+    if let Some(UpstreamJumpTarget::Direct(preset)) = ctx.jump.as_deref() {
+        let (name, namespace, kind, slot) = ctx
+            .route_unit
+            .as_ref()
+            .and_then(|unit| direct_backend_metadata(&unit.backends, preset.backend_ref_idx))
+            .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
+        let key = format!("{namespace}/{name}");
+        ctx.init_backend_context(crate::Rsc::new("Service", namespace, name), key, kind, Some(slot));
+        return Ok(());
+    }
+    if let Some(SelectedHttpBackend::Invalid(logical)) = ctx.selected_backend.as_ref() {
+        // Keep descriptor diagnostics without minting a Service resource identity.
+        ctx.backend_context = Some(crate::BackendContext {
+            source: None,
+            rsc: None,
+            service_key: None,
+            service_kind: Some(ServiceBackendKind::Unsupported(
+                logical
+                    .compiled()
+                    .kind
+                    .clone()
+                    .unwrap_or_else(|| "unsupported backend reference".to_string()),
+            )),
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: Some(logical.slot()),
+            effective_policy: None,
+        });
+        return Ok(());
+    }
+    let service = selected_service_target(ctx).ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
+    let name = service.name().to_owned();
+    let namespace = service.namespace().to_owned();
+    let key = service.key().to_owned();
+    let slot = match ctx.jump.as_deref() {
+        Some(UpstreamJumpTarget::Direct(preset)) => Some(preset.backend_ref_idx),
+        _ => ctx
+            .selected_grpc_backend
+            .as_ref()
+            .map(|backend| backend.slot())
+            .or_else(|| ctx.selected_backend.as_ref().map(|backend| backend.slot())),
+    };
+    ctx.init_backend_context(
+        crate::Rsc::new("Service", namespace, name),
+        key,
+        ServiceBackendKind::Service,
+        slot,
+    );
     Ok(())
 }
 
@@ -1602,15 +1632,14 @@ fn direct_backend_metadata(
     backends: &[crate::routes::http::match_unit::CompiledBackend],
     slot: usize,
 ) -> Option<(String, String, ServiceBackendKind, usize)> {
-    let compiled = backends.get(slot)?;
-    if compiled.ref_denied.is_some() {
-        return None;
-    }
-    let (namespace, name) = match &compiled.target {
-        CompiledBackendTarget::Service { namespace, name } => (namespace.clone(), name.clone()),
-        CompiledBackendTarget::EdgionBackend { .. } | CompiledBackendTarget::Invalid { .. } => return None,
-    };
-    Some((name, namespace, ServiceBackendKind::Service, compiled.slot))
+    let backend = backends.get(slot)?;
+    let service = backend.permitted_service()?;
+    Some((
+        service.name().to_owned(),
+        service.namespace().to_owned(),
+        ServiceBackendKind::Service,
+        backend.slot(),
+    ))
 }
 
 fn validate_resolved_domain_addr(

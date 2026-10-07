@@ -1760,3 +1760,62 @@ warning (also repeated for lib tests), so it is not a warning-free gate. The
 coordinator owns check/Clippy r2 and final acceptance. The current root AGENTS was
 re-read; no applicable nested AGENTS exists. No other source or test changed in
 this correction. The final manifest, patch and identity comparison are refreshed.
+
+
+### R2a owning HTTP and GRPC backend execution
+
+Independent Astra plan review approved the concrete ten-part plan and explicit
+factory, policy-capture, and error-mapping amendments: 51 paths (19 production,
+23 test/support, nine documentation). Baseline originals and all 347 existing
+test identities are preserved under `/tmp/edgion-ref-r2a-before-0fea0a618`.
+The coordinator owns 07-progress.md, final workspace gates and commits.
+
+Actual Route effective fields produce private cold Service targets with canonical
+key, policy identity and checked port section. Selected handles, sticky candidates,
+DirectEndpoint and final peer construction borrow these targets. Invalid owners
+invoke no plugin factory; invalid or denied slots retain weights but invoke no
+backend factory, policy/affinity lookup or backend dispatch. Context is a checked
+diagnostic projection, never a source of identity. Captured absence, old request
+Arcs, retry budgets, direct endpoint proofs and the ordinary AI 503 remain intact.
+
+Malformed HTTP descriptors, including invalid required Service ports, fail with
+BackendUnsupportedKind/500 before side effects; valid Service runtime section or
+endpoint failures retain their existing 503 mapping. This deliberately corrects
+the old invalid-port 503 path under the vendored weighted-invalid contract.
+The historical `invalid_backend_with_service_key_still_captures` test keeps its
+identity and adversarial inputs but changes the unsafe capture expectation to
+None and zero actual policy reads. No L4, Service.type/DNS, filter implementation,
+plugin outbound, schema, Controller, Common, Grant-store or worker changes.
+Focused verification and fresh independent result review remain pending.
+
+R2a test amendment: independent Astra plan review approved correcting the existing
+DIU (seven helper-driven cases) and Canary (four) standard-Service fixture port
+from absent to 80. These cases exercise valid named jumps, namespace/weight or
+denial behavior; their identities and other inputs/assertions remain intact. Each
+module adds an explicit absent-port, matching-name Invalid case proving zero jump
+publication and the plugin's existing onInvalid Reject 403. The frozen 51 paths
+are unchanged. The sole AI detached TLS helper caller now uses its existing
+logical handle; the unused detached Service branch is removed, leaving one native
+Service section lookup and the same permitted EdgionBackend whole-target lookup.
+
+R2a implementation verification: Resources refs 71 passed; Resources doctests
+22 passed plus 10 existing ignored. Final Gateway HTTP 482, backends 275, GRPC 68,
+AI HTTP/dispatch/model 16/30/4, DirectEndpoint 11, DIU 10 and Canary 14 passed.
+Gateway doctests passed 8 plus 7 existing ignored, including two new private
+compiled-identity compile-fail cases. HTTP wire tests distinguish malformed
+500/denied 500/ordinary AI 503 and preserve gRPC HTTP 200/status 14. Factory,
+policy-read and sticky lookup counters cover rejected inputs with positive
+controls; borrowing/allocation tests pass. Unit layout passed 1000 mounted files,
+and agent-doc validation passed 1447 files. Final reviewer requested only
+owning-source comment corrections after these behavior tests; no logic changed.
+
+Logs use `/tmp/edgion-ref-r2a-*.log`: retained library/test compile failures r1/r2
+were repaired before test-check-r3 passed; HTTP-r1 passed 481 before the final
+wire case, and HTTP-r2 passed 482 on the completed behavior. Gateway-doc-r1 hit
+ENOSPC; the coordinator removed only stale ws3 incremental caches and the r2
+retry passed. The immutable baseline remains unchanged. Final scope has 49 changed
+files within the approved 51, preserving all 347 original test identities and
+adding 11. Explicit assertion/input amendments are the unsafe policy capture
+expectation and the two named-jump fixture ports described above. Full workspace
+gates and independent final result review remain coordinator-owned and pending;
+this is not closure of later L4, Service.type/DNS, filter or outbound slices.

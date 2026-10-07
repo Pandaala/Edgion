@@ -17,6 +17,13 @@ creating dependencies or reading authorization/material. The Gateway's
 `routes/common.rs::is_core_service_backend_ref` delegates to the shared predicate;
 its name does not imply acceptance of a literal `core` group.
 
+HTTP/GRPC cold compilation obtains targets from the actual owner's effective
+field loan, then keeps the Service key, checked section and policy target private.
+Selection, SP, DirectEndpoint and final peer construction borrow that compiled
+target; they do not reclassify raw fields or use context as reference authority.
+Invalid/denied slots retain weights while skipping backend factories and material
+lookups. Effective loans are target projections and cannot mint Grant queries.
+
 ## Historical consolidation
 
 The `path-norm-F006` change consolidated five duplicated L4 predicates into one

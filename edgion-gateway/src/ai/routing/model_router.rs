@@ -105,7 +105,7 @@ impl ModelRouteTable {
                 identity_model: requested_model.to_string(),
                 weights: backends
                     .iter()
-                    .map(|backend| backend.schema.weight.unwrap_or(1))
+                    .map(|backend| backend.schema().weight.unwrap_or(1))
                     .collect(),
                 rewrite_requires_canonical: false,
             });
@@ -113,7 +113,7 @@ impl ModelRouteTable {
 
         let mut weights: Vec<i32> = backends
             .iter()
-            .map(|backend| backend.schema.weight.unwrap_or(1))
+            .map(|backend| backend.schema().weight.unwrap_or(1))
             .collect();
         if let Some(candidates) = &winner.action.candidates {
             let overrides: HashMap<usize, Option<i32>> = candidates
@@ -126,10 +126,10 @@ impl ModelRouteTable {
                 .collect::<Result<_, _>>()?;
             for backend in backends {
                 if backend.is_permitted_ai_backend() {
-                    weights[backend.slot] = match overrides.get(&backend.slot) {
+                    weights[backend.slot()] = match overrides.get(&backend.slot()) {
                         Some(Some(weight)) if *weight >= 0 => *weight,
                         Some(Some(_)) => return Err(ModelRouteDecisionError::InvalidWeight),
-                        Some(None) => backend.schema.weight.unwrap_or(1),
+                        Some(None) => backend.schema().weight.unwrap_or(1),
                         None => 0,
                     };
                 }
@@ -186,8 +186,8 @@ impl ModelRouteTable {
 fn resolve_selector(selector: &AiBackendSlotSelector, backends: &[CompiledBackend]) -> Option<usize> {
     let mut matching = backends
         .iter()
-        .filter(|backend| backend.identity.matches_ai_selector(selector));
-    let slot = matching.next()?.slot;
+        .filter(|backend| backend.identity().matches_ai_selector(selector));
+    let slot = matching.next()?.slot();
     matching.next().is_none().then_some(slot)
 }
 

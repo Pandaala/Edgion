@@ -24,8 +24,8 @@ use crate::ai::{
     AiProxyError, ReadyAiAttemptPlan,
 };
 use crate::backends::policy::backend_traffic::get_backend_traffic_policy_store;
+use crate::backends::runtime::CompiledBackendTarget;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::routes::http::match_unit::CompiledBackendTarget;
 
 const DEFAULT_MAXIMUM_REQUEST_DURATION: Duration = Duration::from_secs(300);
 
@@ -33,13 +33,13 @@ fn ai_candidate_spec(backend: &crate::routes::http::match_unit::CompiledBackend)
     if !backend.is_permitted_ai_backend() {
         return None;
     }
-    match &backend.target {
-        CompiledBackendTarget::EdgionBackend { namespace, name } => Some((
-            backend.slot,
-            backend.schema.weight.unwrap_or(1),
-            format!("{namespace}/{name}"),
+    match backend.target() {
+        CompiledBackendTarget::EdgionBackend(target) => Some((
+            backend.slot(),
+            backend.schema().weight.unwrap_or(1),
+            format!("{}/{}", target.namespace, target.name),
         )),
-        CompiledBackendTarget::Service { .. } | CompiledBackendTarget::Invalid { .. } => None,
+        CompiledBackendTarget::Service(_) | CompiledBackendTarget::Invalid { .. } => None,
     }
 }
 
@@ -49,9 +49,9 @@ fn gate_candidate(
     runtime_available: bool,
 ) -> Result<RouteCandidate, ()> {
     Ok(RouteCandidate {
-        slot: u8::try_from(backend.slot).map_err(|_| ())?,
+        slot: u8::try_from(backend.slot()).map_err(|_| ())?,
         order: u8::try_from(order).map_err(|_| ())?,
-        weight: backend.schema.weight.unwrap_or(1),
+        weight: backend.schema().weight.unwrap_or(1),
         eligibility: CandidateEligibility {
             valid_ref: backend.is_permitted_ai_backend() && runtime_available,
             ..CandidateEligibility::default()
@@ -88,7 +88,7 @@ fn visible_model_ids(
                 return false;
             };
             backends.iter().any(|backend| {
-                let weight = decision.weights.get(backend.slot).copied().unwrap_or(0);
+                let weight = decision.weights.get(backend.slot()).copied().unwrap_or(0);
                 if weight <= 0 || !backend.is_permitted_ai_backend() {
                     return false;
                 }
@@ -136,7 +136,7 @@ fn unknown_model_passthrough_allowed(
 
 fn has_positive_weight_service_backend(backends: &[crate::routes::http::match_unit::CompiledBackend]) -> bool {
     backends.iter().any(|backend| {
-        backend.schema.weight.unwrap_or(1) > 0 && matches!(backend.target, CompiledBackendTarget::Service { .. })
+        backend.schema().weight.unwrap_or(1) > 0 && matches!(backend.target(), CompiledBackendTarget::Service(_))
     })
 }
 
@@ -153,10 +153,10 @@ fn captured_backend_contract_valid(
             .iter()
             .flat_map(|route| route.action.candidates.iter().flatten())
             .any(|candidate| {
-                backend.identity.matches_ai_selector(&candidate.backend)
-                    && candidate.weight.unwrap_or(backend.schema.weight.unwrap_or(1)) > 0
+                backend.identity().matches_ai_selector(&candidate.backend)
+                    && candidate.weight.unwrap_or(backend.schema().weight.unwrap_or(1)) > 0
             });
-        if backend.schema.weight.unwrap_or(1) <= 0 && !promoted {
+        if backend.schema().weight.unwrap_or(1) <= 0 && !promoted {
             continue;
         }
         if let Some((_, _, key)) = ai_candidate_spec(backend) {
@@ -406,7 +406,11 @@ impl AiProxy {
             // Otherwise the filter would silently normalize onto healthy
             // candidates during publication skew.
             if runtime_available {
-                candidate.weight = decision.weights.get(backend.slot).copied().unwrap_or(candidate.weight);
+                candidate.weight = decision
+                    .weights
+                    .get(backend.slot())
+                    .copied()
+                    .unwrap_or(candidate.weight);
             }
             gate_candidates.push(candidate);
         }
@@ -450,10 +454,8 @@ impl AiProxy {
             .map(|(order, ((logical, slot, weight, backend_key), backend))| {
                 let target = logical.policy_target_key();
                 let effective_policy = target.as_ref().and_then(|target| policy_snapshot.get_effective(target));
-                let backend_tls_policy = target
-                    .as_ref()
-                    .map(|target| crate::backends::policy::query_backend_tls_policy_for_target(target, None))
-                    .unwrap_or(crate::backends::policy::BackendTlsPolicyLookup::Absent);
+                let backend_tls_policy =
+                    crate::backends::policy::query_backend_tls_policy_for_logical_backend(&logical);
                 let outlier_generation = effective_policy
                     .as_ref()
                     .and_then(|policy| policy.ai_credential_outlier.clone())

@@ -18,7 +18,7 @@ fn headers(pairs: &[(&str, &str)]) -> http::HeaderMap {
 }
 
 fn backend(name: &str, slot: usize, weight: i32) -> CompiledBackend {
-    CompiledBackend::compile(
+    crate::routes::http::match_unit::compile_http_backend_fixture(
         HTTPBackendRef {
             name: name.to_string(),
             namespace: Some("ai".to_string()),
@@ -179,14 +179,18 @@ fn specificity_is_exact_then_longest_prefix_then_header_count() {
 
 #[test]
 fn typed_occurrence_and_weight_overrides_preserve_unselected_invalid_share() {
-    let mut first = backend("same", 0, 7);
-    let mut second = backend("same", 1, 0);
-    second.identity.occurrence = 1;
-    first.schema.ref_denied = Some(edgion_resources::resources::common::RefDenied {
+    let mut first_schema = backend("same", 0, 7).schema().clone();
+    let second_schema = backend("same", 1, 0).schema().clone();
+    first_schema.ref_denied = Some(edgion_resources::resources::common::RefDenied {
         target_namespace: "ai".to_string(),
         target_name: "same".to_string(),
         reason: Some("denied".to_string()),
     });
+    let mut rule: edgion_resources::HTTPRouteRule = serde_json::from_value(serde_json::json!({})).unwrap();
+    rule.backend_refs = Some(vec![first_schema, second_schema]);
+    let compiled = crate::routes::http::match_unit::compile_http_fixture(&rule, "ai").unwrap();
+    let first = compiled.backends[0].clone();
+    let second = compiled.backends[1].clone();
     let mut second_selector = selector("same");
     second_selector.occurrence = 1;
     let table = ModelRouteTable::compile(&[AiModelRoute {

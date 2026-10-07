@@ -21,7 +21,7 @@ instead of becoming a jump the selector has to reject later.
 
 Fix suggestions of the form "treat any named-lookup failure as a miss and fall back to
 weighted selection", "scan `rule.backend_refs` directly for the target name", or "add a
-second name matcher next to `find_backend_by_name`" are **not accepted**.
+second name matcher next to `find_backend_by_name`" would violate the typed-error and single-matcher contract; re-evaluate against current code and new evidence.
 
 ## Core Rationale
 
@@ -45,19 +45,21 @@ published, and `DyeOutcome::Success` was recorded with the denied name — the c
 `onInvalid` policy could never fire. `find_backend_by_name` reads the compiled backend view,
 which carries `schema.ref_denied`, and B0066 had already moved Canary onto it. DIU was the last
 raw scanner **on the named-jump path** — `validate_endpoint_in_route` (DirectEndpoint) now
-uses route-compiled `CompiledBackend.direct_endpoint` authorization, which excludes denied refs
+borrows the route-compiled `CompiledBackend::permitted_service()` target, which excludes denied refs
 before requests and resolves addresses through the published Service section. It is not a second
 name matcher; see [Service port proofs](../../backends/regression-guards/named-port-resolve-against-originating-slice.md).
 
-**3. Kind matching did NOT change**
+**3. Current native target classification supersedes the historical family aliases**
 
-Matching moved from schema `backend_kind() == Service` to compiled `is_service()`, but these
-select exactly the same set: `CompiledBackend::compile_target` maps `HTTPBackendRefKind::Service`
-to `CompiledBackendTarget::Service` unconditionally, and `backend_kind()` already folds the whole
-Service family (`ServiceClusterIp`, `ServiceImport`, `ServiceExternalName`, `EndpointSlice`, …)
-into that one kind. Only `EdgionBackend`-with-a-port, `RouteDelegation` and `Unsupported` compile
-to `Invalid`, and the old scan rejected those too. Do not read this change as a tightening, and do
-not "fix" an `ExternalName` / `ServiceImport` / `EndpointSlice` jump target on that basis.
+The original named-jump fix used a broader classifier. The canonical reference
+contract now accepts omitted/empty group with omitted/exact `Service` kind and a
+valid required port. Literal `core`, ServiceImport, ServiceExternalName, EndpointSlice
+and other pseudo kinds are Invalid. `find_backend_by_name` compares the actual
+compiled target name/namespace; an omitted jump namespace still matches across
+namespaces. The same target comes from the effective Route loan, so neither a
+schema-only scan nor a mutable context key can restore a rejected target. A standard
+Service object's actual transport type is separate work; the existence of old
+transport arms does not prove native reachability.
 
 **4. What deliberately did not change**
 

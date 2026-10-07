@@ -2,6 +2,7 @@ use super::*;
 use edgion_resources::resources::backend_tls_policy::{
     BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
 };
+use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind;
 use edgion_resources::resources::{BackendTLSPolicy, RefDenied};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
@@ -19,7 +20,7 @@ fn malformed_backend_filter_remains_backend_scoped() {
     }))
     .unwrap();
 
-    let runtime = GrpcRouteRuleUnit::compile_grpc_rule(&rule, "route-ns");
+    let runtime = crate::routes::grpc::match_unit::compile_grpc_fixture(&rule, "route-ns");
 
     assert!(runtime.backends[0].plugin_runtime.rejects_invalid_config());
     assert!(!runtime.backends[1].plugin_runtime.rejects_invalid_config());
@@ -27,7 +28,7 @@ fn malformed_backend_filter_remains_backend_scoped() {
 }
 
 fn compiled(name: &str, weight: i32, runtime: Arc<PluginRuntime>) -> CompiledGrpcBackend {
-    CompiledGrpcBackend::compile(
+    crate::routes::grpc::match_unit::compile_grpc_backend_fixture(
         GRPCBackendRef {
             name: name.to_string(),
             namespace: Some("backend-ns".to_string()),
@@ -45,7 +46,7 @@ fn compiled(name: &str, weight: i32, runtime: Arc<PluginRuntime>) -> CompiledGrp
 }
 
 fn compile_one_backend(schema: GRPCBackendRef, route_namespace: &str) -> Arc<[CompiledGrpcBackend]> {
-    GrpcRouteRuleUnit::compile_grpc_rule(
+    crate::routes::grpc::match_unit::compile_grpc_fixture(
         &GRPCRouteRule {
             name: None,
             matches: None,
@@ -127,7 +128,7 @@ fn handle_projects_exact_duplicate_slot_and_pins_generation_runtime() {
         compiled("api", 1, Arc::clone(&old_runtime)),
     ]);
     let logical = GrpcBackendHandle::new(Arc::clone(&generation), 1).unwrap();
-    let selected = SelectedGrpcBackend::new(logical, BackendTlsPolicyLookup::Absent);
+    let selected = SelectedGrpcBackend::new(logical, BackendTlsPolicyLookup::Absent).unwrap();
     let replacement = Arc::from(vec![compiled("new", 1, Arc::new(PluginRuntime::new()))]);
     drop(generation);
 
@@ -290,7 +291,7 @@ fn compiled_policy_target_key_accepts_only_authorized_service_refs() {
 #[test]
 fn handle_policy_target_projection_is_borrowed_stable_and_allocation_free() {
     let generation = compile_one_backend(backend_ref(None, None, None, false), "route-ns");
-    let stored = generation[0].policy_target_key.as_ref().unwrap() as *const PolicyTargetKey;
+    let stored = generation[0].permitted_service().unwrap().policy_target() as *const PolicyTargetKey;
 
     let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
         let handle = GrpcBackendHandle::new(Arc::clone(&generation), 0).unwrap();
@@ -314,10 +315,10 @@ fn selected_backend_pins_tls_policy_and_selection_is_allocation_free() {
 
     let captured = BackendTlsPolicyLookup::effective_from_policy(Arc::clone(&old_policy));
     let logical = GrpcBackendHandle::new(Arc::clone(&generation), 0).unwrap();
-    let selected = SelectedGrpcBackend::new(logical, captured);
+    let selected = SelectedGrpcBackend::new(logical, captured).unwrap();
     let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
         let logical = GrpcBackendHandle::new(Arc::clone(&generation), 0).unwrap();
-        let selected = SelectedGrpcBackend::new(logical, BackendTlsPolicyLookup::Absent);
+        let selected = SelectedGrpcBackend::new(logical, BackendTlsPolicyLookup::Absent).unwrap();
         let projected_runtime = selected.plugin_runtime();
         drop(projected_runtime);
         selected
@@ -333,4 +334,132 @@ fn selected_backend_pins_tls_policy_and_selection_is_allocation_free() {
     assert!(selected.logical().compiled().schema.backend_tls_policy.is_none());
     assert_eq!(allocations.calls, 0);
     assert_eq!(allocations.requested_bytes, 0);
+}
+
+#[test]
+fn actual_owner_gates_factories_and_effective_backend_proofs() {
+    use serde_json::json;
+    let baseline =
+        json!({"metadata":{"name":"owner"},"spec":{"rules":[{"backendRefs":[{"name":"api","port":80,"weight":7}]}]}});
+    for (field, value) in [
+        ("name", json!(null)),
+        ("name", json!("")),
+        ("name", json!("bad/name")),
+        ("namespace", json!("")),
+        ("namespace", json!("UPPER")),
+    ] {
+        let mut input = baseline.clone();
+        input["metadata"][field] = value;
+        let route: GRPCRoute = serde_json::from_value(input).unwrap();
+        let mut rule_reads = 0;
+        let mut backend_reads = 0;
+        assert!(GrpcRouteRuleUnit::compile_with_factories(
+            &route,
+            0,
+            |_, _| {
+                rule_reads += 1;
+                Arc::new(PluginRuntime::new())
+            },
+            |_, _| {
+                backend_reads += 1;
+                Arc::new(PluginRuntime::new())
+            }
+        )
+        .is_none());
+        assert_eq!((rule_reads, backend_reads), (0, 0));
+    }
+    for (field, value) in [
+        ("group", json!("core")),
+        ("group", json!("example.io")),
+        ("kind", json!("ServiceImport")),
+        ("kind", json!("ServiceExternalName")),
+        ("kind", json!("service")),
+        ("name", json!("bad/name")),
+        ("namespace", json!("")),
+        ("port", json!(null)),
+        ("port", json!(0)),
+        ("port", json!(-1)),
+        ("port", json!(65536)),
+        ("refDenied", json!({"targetNamespace":"default","targetName":"api"})),
+    ] {
+        let mut input = baseline.clone();
+        input["spec"]["rules"][0]["backendRefs"][0][field] = value;
+        let route: GRPCRoute = serde_json::from_value(input).unwrap();
+        let mut rule_reads = 0;
+        let mut backend_reads = 0;
+        let compiled = GrpcRouteRuleUnit::compile_with_factories(
+            &route,
+            0,
+            |_, _| {
+                rule_reads += 1;
+                Arc::new(PluginRuntime::new())
+            },
+            |_, _| {
+                backend_reads += 1;
+                Arc::new(PluginRuntime::new())
+            },
+        )
+        .unwrap();
+        assert_eq!((rule_reads, backend_reads), (1, 0), "{field}");
+        assert_eq!(compiled.backends.len(), 1);
+        assert_eq!(compiled.backends[0].weight, Some(7));
+        assert!(compiled.backends[0].permitted_service().is_none());
+        assert_eq!(
+            GrpcRouteRuleUnit::build_backend_selector(&compiled.backends)
+                .select()
+                .unwrap(),
+            0
+        );
+    }
+    let mut route: GRPCRoute = serde_json::from_value(baseline).unwrap();
+    let mut calls = 0;
+    let authored = GrpcRouteRuleUnit::compile_with_factories(
+        &route,
+        0,
+        |_, ns| {
+            assert_eq!(ns, "default");
+            Arc::new(PluginRuntime::new())
+        },
+        |_, ns| {
+            assert_eq!(ns, "default");
+            calls += 1;
+            Arc::new(PluginRuntime::new())
+        },
+    )
+    .unwrap();
+    assert_eq!(calls, 1);
+    assert_eq!(authored.backends[0].permitted_service().unwrap().key(), "default/api");
+    route.spec.resolved_rules = Some(vec![serde_json::from_value(json!({"backendRefs":[
+        {"name":"api","namespace":"child","port":1,"weight":0},
+        {"name":"api","namespace":"child","port":65535,"weight":3},
+        {"name":"denied","namespace":"child","port":80,"weight":5,"refDenied":{"targetNamespace":"child","targetName":"denied"}}
+    ]})).unwrap()]);
+    calls = 0;
+    let effective = GrpcRouteRuleUnit::compile_with_factories(
+        &route,
+        0,
+        |_, _| Arc::new(PluginRuntime::new()),
+        |_, _| {
+            calls += 1;
+            Arc::new(PluginRuntime::new())
+        },
+    )
+    .unwrap();
+    assert_eq!(calls, 2);
+    assert_eq!(
+        effective
+            .backends
+            .iter()
+            .enumerate()
+            .map(|(slot, b)| (slot, b.weight))
+            .collect::<Vec<_>>(),
+        vec![(0, Some(0)), (1, Some(3)), (2, Some(5))]
+    );
+    assert_eq!(effective.backends[0].permitted_service().unwrap().key(), "child/api");
+    assert_ne!(
+        effective.backends[0].permitted_service().unwrap().section(),
+        effective.backends[1].permitted_service().unwrap().section()
+    );
+    assert!(effective.backends[2].permitted_service().is_none());
+    assert_eq!(authored.backends[0].permitted_service().unwrap().key(), "default/api");
 }

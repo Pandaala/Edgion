@@ -14,7 +14,7 @@ fn malformed_backend_filter_remains_backend_scoped() {
     }))
     .unwrap();
 
-    let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "route-ns").unwrap();
+    let runtime = crate::routes::http::match_unit::compile_http_fixture(&rule, "route-ns").unwrap();
 
     assert!(runtime.backends[0].plugin_runtime.rejects_invalid_config());
     assert!(!runtime.backends[1].plugin_runtime.rejects_invalid_config());
@@ -35,19 +35,16 @@ fn compile_http_rule_preserves_slots_and_types_backends() {
     }))
     .unwrap();
 
-    let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "route-ns").unwrap();
+    let runtime = crate::routes::http::match_unit::compile_http_fixture(&rule, "route-ns").unwrap();
     assert_eq!(runtime.backends.len(), 6);
     assert_eq!(
         runtime.backends.iter().map(|backend| backend.slot).collect::<Vec<_>>(),
         vec![0, 1, 2, 3, 4, 5]
     );
     assert_eq!(runtime.backends[0].schema.weight, Some(7));
-    assert_eq!(
-        runtime.backends[0].target,
-        CompiledBackendTarget::Service {
-            namespace: "route-ns".to_string(),
-            name: "service-a".to_string()
-        }
+    assert!(
+        matches!(&runtime.backends[0].target, CompiledBackendTarget::Service(target)
+        if target.namespace() == "route-ns" && target.name() == "service-a")
     );
     assert_eq!(
         runtime.backends[1].target,
@@ -61,12 +58,9 @@ fn compile_http_rule_preserves_slots_and_types_backends() {
             classified_kind: HTTPBackendRefKind::Unsupported
         }
     );
-    assert_eq!(
-        runtime.backends[3].target,
-        CompiledBackendTarget::EdgionBackend {
-            namespace: "route-ns".to_string(),
-            name: "ai-a".to_string()
-        }
+    assert!(
+        matches!(&runtime.backends[3].target, CompiledBackendTarget::EdgionBackend(target)
+        if target.namespace == "route-ns" && target.name == "ai-a")
     );
     assert_eq!(
         runtime.backends[4].target,
@@ -182,4 +176,132 @@ fn test_specificity_method_trumps_headers() {
     let with_method = make_specificity(true, 0, 0, 1000, "ns/a", 0, 0);
     let many_headers = make_specificity(false, 10, 10, 100, "ns/a", 0, 0);
     assert_eq!(with_method.cmp_precedence(&many_headers), Ordering::Less);
+}
+
+#[test]
+fn actual_owner_gates_factories_and_effective_backend_proofs() {
+    use serde_json::json;
+    let baseline =
+        json!({"metadata":{"name":"owner"},"spec":{"rules":[{"backendRefs":[{"name":"api","port":80,"weight":7}]}]}});
+    for (field, value) in [
+        ("name", json!(null)),
+        ("name", json!("")),
+        ("name", json!("bad/name")),
+        ("namespace", json!("")),
+        ("namespace", json!("UPPER")),
+    ] {
+        let mut input = baseline.clone();
+        input["metadata"][field] = value;
+        let route: HTTPRoute = serde_json::from_value(input).unwrap();
+        let mut rule_reads = 0;
+        let mut backend_reads = 0;
+        assert!(HttpRouteRuleUnit::compile_with_factories(
+            &route,
+            0,
+            |_, _| {
+                rule_reads += 1;
+                Arc::new(PluginRuntime::new())
+            },
+            |_, _, _| {
+                backend_reads += 1;
+                Arc::new(PluginRuntime::new())
+            }
+        )
+        .is_none());
+        assert_eq!((rule_reads, backend_reads), (0, 0));
+    }
+    for (field, value) in [
+        ("group", json!("core")),
+        ("group", json!("example.io")),
+        ("kind", json!("ServiceImport")),
+        ("kind", json!("ServiceExternalName")),
+        ("kind", json!("service")),
+        ("name", json!("bad/name")),
+        ("namespace", json!("")),
+        ("port", json!(null)),
+        ("port", json!(0)),
+        ("port", json!(-1)),
+        ("port", json!(65536)),
+        ("refDenied", json!({"targetNamespace":"default","targetName":"api"})),
+    ] {
+        let mut input = baseline.clone();
+        input["spec"]["rules"][0]["backendRefs"][0][field] = value;
+        let route: HTTPRoute = serde_json::from_value(input).unwrap();
+        let mut rule_reads = 0;
+        let mut backend_reads = 0;
+        let compiled = HttpRouteRuleUnit::compile_with_factories(
+            &route,
+            0,
+            |_, _| {
+                rule_reads += 1;
+                Arc::new(PluginRuntime::new())
+            },
+            |_, _, _| {
+                backend_reads += 1;
+                Arc::new(PluginRuntime::new())
+            },
+        )
+        .unwrap();
+        assert_eq!((rule_reads, backend_reads), (1, 0), "{field}");
+        assert_eq!(compiled.backends.len(), 1);
+        assert_eq!(compiled.backends[0].slot(), 0);
+        assert_eq!(compiled.backends[0].weight, Some(7));
+        assert!(compiled.backends[0].permitted_service().is_none());
+        assert_eq!(
+            HttpRouteRuleUnit::build_backend_selector(&compiled.backends)
+                .select()
+                .unwrap(),
+            0
+        );
+    }
+    let mut route: HTTPRoute = serde_json::from_value(baseline).unwrap();
+    let mut calls = 0;
+    let authored = HttpRouteRuleUnit::compile_with_factories(
+        &route,
+        0,
+        |_, ns| {
+            assert_eq!(ns, "default");
+            Arc::new(PluginRuntime::new())
+        },
+        |_, _, ns| {
+            assert_eq!(ns, "default");
+            calls += 1;
+            Arc::new(PluginRuntime::new())
+        },
+    )
+    .unwrap();
+    assert_eq!(calls, 1);
+    assert_eq!(authored.backends[0].permitted_service().unwrap().key(), "default/api");
+    route.spec.resolved_rules = Some(vec![serde_json::from_value(json!({"backendRefs":[
+        {"name":"api","namespace":"child","port":1,"weight":0},
+        {"name":"api","namespace":"child","port":65535,"weight":3},
+        {"name":"denied","namespace":"child","port":80,"weight":5,"refDenied":{"targetNamespace":"child","targetName":"denied"}}
+    ]})).unwrap()]);
+    calls = 0;
+    let effective = HttpRouteRuleUnit::compile_with_factories(
+        &route,
+        0,
+        |_, _| Arc::new(PluginRuntime::new()),
+        |_, _, _| {
+            calls += 1;
+            Arc::new(PluginRuntime::new())
+        },
+    )
+    .unwrap();
+    assert_eq!(calls, 2);
+    assert_eq!(
+        effective
+            .backends
+            .iter()
+            .map(|b| (b.slot(), b.weight))
+            .collect::<Vec<_>>(),
+        vec![(0, Some(0)), (1, Some(3)), (2, Some(5))]
+    );
+    assert_eq!(effective.backends[0].permitted_service().unwrap().key(), "child/api");
+    assert_ne!(
+        effective.backends[0].permitted_service().unwrap().section(),
+        effective.backends[1].permitted_service().unwrap().section()
+    );
+    assert!(effective.backends[2].permitted_service().is_none());
+    assert_eq!(authored.backends[0].permitted_service().unwrap().key(), "default/api");
 }

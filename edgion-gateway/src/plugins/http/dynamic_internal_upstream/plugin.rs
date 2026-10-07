@@ -112,7 +112,6 @@ impl RequestFilter for DynamicInternalUpstream {
             log.push("no route");
             return PluginRunningResult::GoodNext; // No route matched, skip
         };
-        let route_ns = &route_unit.matched_info.rsc.ns;
         // Kept ahead of the lookup on purpose: a rule that declares no
         // backendRefs at all is not a target the operator got wrong, so it
         // passes through without engaging `on_invalid` or recording an
@@ -130,7 +129,7 @@ impl RequestFilter for DynamicInternalUpstream {
         // Controller's `ref_denied` decision, so a denied cross-namespace
         // target follows `on_invalid` here instead of being published as a
         // jump the upstream selector would have to reject later.
-        if let Err(err) = RouteRules::find_backend_by_name(route_unit, target_name, target_namespace, route_ns) {
+        if let Err(err) = RouteRules::find_backend_by_name(route_unit, target_name, target_namespace) {
             // Both causes take `on_invalid`, but they are diagnosed apart: a
             // shared "not found" line sends an operator debugging a missing
             // ReferenceGrant hunting for a Service that exists.

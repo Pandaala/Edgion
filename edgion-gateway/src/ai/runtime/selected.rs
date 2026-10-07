@@ -3,8 +3,8 @@
 use crate::ai::{AdaptiveTelemetryState, AiCredentialOutlierHandle, RuntimeAiBackend};
 use crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy;
 use crate::backends::policy::BackendTlsPolicyLookup;
+use crate::backends::runtime::CompiledBackendTarget;
 use crate::backends::LogicalBackendHandle;
-use crate::routes::http::match_unit::CompiledBackendTarget;
 use std::fmt;
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ impl SelectedAiBackend {
         credential_alias: String,
         effective_weight: i32,
     ) -> Option<Self> {
-        (logical.is_authorized() && matches!(logical.target(), CompiledBackendTarget::EdgionBackend { .. })).then_some(
+        (logical.is_authorized() && matches!(logical.target(), CompiledBackendTarget::EdgionBackend(_))).then_some(
             Self {
                 logical,
                 backend,

@@ -33,7 +33,7 @@ fn config() -> AiProxyConfig {
 }
 
 fn compiled_ai_backend(ref_denied: Option<RefDenied>) -> CompiledBackend {
-    CompiledBackend::compile(
+    crate::routes::http::match_unit::compile_http_backend_fixture(
         HTTPBackendRef {
             name: "provider".to_string(),
             namespace: Some("tenant-b".to_string()),
@@ -52,7 +52,7 @@ fn compiled_ai_backend(ref_denied: Option<RefDenied>) -> CompiledBackend {
 }
 
 fn compiled_service_backend(weight: i32) -> CompiledBackend {
-    CompiledBackend::compile(
+    crate::routes::http::match_unit::compile_http_backend_fixture(
         HTTPBackendRef {
             name: "service".to_string(),
             namespace: None,
@@ -98,7 +98,7 @@ fn denied_ai_backend_is_invalid_and_never_materialized() {
     assert_eq!((slot, weight, key), (0, 1, "tenant-b/provider".to_string()));
     let generation = Arc::from(vec![allowed.clone()]);
     let logical = crate::backends::LogicalBackendHandle::new(generation, 0).unwrap();
-    assert_eq!(logical.identity(), &allowed.identity);
+    assert_eq!(logical.identity(), allowed.identity());
 }
 
 #[test]
@@ -572,9 +572,19 @@ fn captured_backend_skew_cannot_hide_unresolved_tpm_or_provider_changes() {
         std::slice::from_ref(&backend),
         &current
     ));
-    let mut zero = backend;
-    zero.schema.weight = Some(0);
-    assert!(captured_backend_contract_valid(&config, &[zero.clone()], &current));
+    let mut schema = backend.schema().clone();
+    schema.weight = Some(0);
+    let zero = crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema,
+        "tenant-b",
+        backend.slot(),
+        Arc::new(PluginRuntime::new()),
+    );
+    assert!(captured_backend_contract_valid(
+        &config,
+        std::slice::from_ref(&zero),
+        &current
+    ));
     config.model_routes = serde_json::from_value(serde_json::json!([{"match":{"model":"virtual"},"action":{"candidates":[{"backend":{"group":"edgion.io","kind":"EdgionBackend","namespace":"tenant-b","name":"provider","occurrence":0},"weight":1}]}}])).unwrap();
     assert!(!captured_backend_contract_valid(&config, &[zero], &current));
 }
@@ -618,8 +628,14 @@ fn responses_continuation_uses_raw_slots_and_bindings_before_filtering() {
         ),
         Err(AiProxyError::UnsupportedParameter)
     );
-    let mut duplicate = backend.clone();
-    duplicate.schema.weight = Some(0);
+    let mut schema = backend.schema().clone();
+    schema.weight = Some(0);
+    let duplicate = crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema,
+        "tenant-b",
+        backend.slot(),
+        Arc::new(PluginRuntime::new()),
+    );
     assert_eq!(
         validate_continuation(&cfg, &[backend.clone(), duplicate], &store.snapshot(), "model"),
         Err(AiProxyError::UnsupportedParameter)

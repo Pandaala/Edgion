@@ -210,8 +210,12 @@ fn backend_ref(name: &str) -> HTTPBackendRef {
 }
 
 fn selected_http_backend(runtime: Arc<PluginRuntime>) -> crate::backends::SelectedHttpBackend {
-    let compiled =
-        crate::routes::http::match_unit::CompiledBackend::compile(backend_ref("http-backend"), "default", 0, runtime);
+    let compiled = crate::routes::http::match_unit::compile_http_backend_fixture(
+        backend_ref("http-backend"),
+        "default",
+        0,
+        runtime,
+    );
     let logical = crate::backends::LogicalBackendHandle::new(Arc::from(vec![compiled]), 0).unwrap();
     crate::backends::SelectedHttpBackend::Invalid(logical)
 }
@@ -229,10 +233,15 @@ fn selected_grpc_backend(runtime: Arc<PluginRuntime>) -> SelectedGrpcBackend {
         backend_tls_policy: None,
         ref_denied: None,
     }]);
-    let mut compiled = GrpcRouteRuleUnit::compile_grpc_rule(&rule, "default").backends;
+    let mut route: edgion_resources::GRPCRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "test-route", "namespace": "default"}, "spec": {}
+    }))
+    .unwrap();
+    route.spec.rules = Some(vec![rule]);
+    let mut compiled = GrpcRouteRuleUnit::compile_grpc_rule(&route, 0).unwrap().backends;
     Arc::get_mut(&mut compiled).unwrap()[0].plugin_runtime = runtime;
     let logical = GrpcBackendHandle::new(compiled, 0).unwrap();
-    SelectedGrpcBackend::new(logical, crate::backends::policy::BackendTlsPolicyLookup::Absent)
+    SelectedGrpcBackend::new(logical, crate::backends::policy::BackendTlsPolicyLookup::Absent).unwrap()
 }
 
 async fn read_only_delay(ctx: &mut EdgionHttpContext) -> Option<Duration> {

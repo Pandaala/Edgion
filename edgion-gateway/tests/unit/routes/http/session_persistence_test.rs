@@ -377,3 +377,65 @@ fn test_build_set_cookie_secure_flag_when_tls() {
         "edgion-session-affinity=abcd1234; Path=/; HttpOnly; SameSite=Lax; Secure"
     );
 }
+
+#[test]
+fn typed_sticky_lookup_skips_invalid_denied_slots_without_allocating() {
+    let refs = serde_json::json!([
+        {"name":"wrong","group":"core","port":80},
+        {"name":"denied","port":80,"refDenied":{"targetNamespace":"default","targetName":"denied"}},
+        {"name":"api","port":80,"weight":0},
+        {"name":"api","port":443,"weight":3},
+        {"name":"missing-port"}
+    ]);
+    let http: edgion_resources::HTTPRoute = serde_json::from_value(
+        serde_json::json!({"metadata":{"name":"owner"},"spec":{"rules":[{"backendRefs":refs}]}}),
+    )
+    .unwrap();
+    let grpc: edgion_resources::GRPCRoute = serde_json::from_value(
+        serde_json::json!({"metadata":{"name":"owner"},"spec":{"rules":[{"backendRefs":refs}]}}),
+    )
+    .unwrap();
+    let http = crate::routes::http::match_unit::HttpRouteRuleUnit::compile_http_rule(&http, 0).unwrap();
+    let grpc = crate::routes::grpc::GrpcRouteRuleUnit::compile_grpc_rule(&grpc, 0).unwrap();
+    let addr = "10.0.0.1:8443".parse().unwrap();
+    for candidates in [
+        http.backends
+            .iter()
+            .enumerate()
+            .map(|(slot, b)| (slot, b.permitted_service()))
+            .collect::<Vec<_>>(),
+        grpc.backends
+            .iter()
+            .enumerate()
+            .map(|(slot, b)| (slot, b.permitted_service()))
+            .collect::<Vec<_>>(),
+    ] {
+        let mut slots = [usize::MAX; 2];
+        let mut reads = 0;
+        let (result, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            sp_lookup_typed_candidates(
+                candidates.iter().filter_map(|(slot, target)| {
+                    let target = target.as_ref()?;
+                    Some(StickyCandidate {
+                        slot: *slot,
+                        service_key: target.key(),
+                        section: target.section(),
+                        scope: None,
+                    })
+                }),
+                "token",
+                |candidate, _| {
+                    assert_eq!(candidate.service_key, "default/api");
+                    slots[reads] = candidate.slot;
+                    reads += 1;
+                    (candidate.slot == 3).then_some(addr)
+                },
+            )
+        });
+        assert_eq!(reads, 2);
+        assert_eq!(slots, [2, 3]);
+        assert_eq!(result, Some((3, addr, None)));
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+}

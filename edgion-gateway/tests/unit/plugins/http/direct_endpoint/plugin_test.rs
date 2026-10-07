@@ -86,7 +86,7 @@ fn test_route_unit(ns: &str, backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRule
         .iter()
         .enumerate()
         .map(|(slot, backend)| {
-            CompiledBackend::compile(
+            crate::routes::http::match_unit::compile_http_backend_fixture(
                 backend.clone(),
                 ns,
                 slot,

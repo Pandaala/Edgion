@@ -758,7 +758,7 @@ fn apply_backend_request_headers(
         return Err(AiDispatchError::InvalidConfiguration);
     }
     let mut adapter = PingoraSessionAdapter::new(session, ctx);
-    for filter in backend.schema.filters.as_deref().unwrap_or_default() {
+    for filter in backend.schema().filters.as_deref().unwrap_or_default() {
         match filter.filter_type {
             HTTPRouteFilterType::RequestHeaderModifier => {
                 let plan = backend

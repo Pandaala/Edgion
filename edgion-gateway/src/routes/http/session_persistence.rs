@@ -10,11 +10,11 @@ use sha2::{Digest, Sha256};
 use crate::plugins::runtime::session_adapter::cookie_value;
 use crate::{EdgionHttpContext, SessionPersistenceState};
 
-pub(crate) struct StickyCandidate {
+pub(crate) struct StickyCandidate<'a> {
     pub slot: usize,
-    pub service_key: String,
-    pub section: crate::backends::discovery::ServiceSectionKey,
-    pub scope: Option<String>,
+    pub service_key: &'a str,
+    pub section: &'a crate::backends::discovery::ServiceSectionKey,
+    pub scope: Option<&'a str>,
 }
 
 /// Current Unix time in whole seconds (call edge; pure logic takes `now`).
@@ -180,93 +180,48 @@ fn sp_apply_extracted_token(raw: Option<String>, sp_state: &mut SessionPersisten
 /// - Token misses every backendRef (endpoint or backendRef gone) → flip state
 ///   to `InjectNew` so the caller falls back to weighted selection and the
 ///   response refreshes the token.
-pub(crate) fn sp_resolve_target_rule_scoped<'a>(
+pub(crate) fn sp_resolve_typed_candidates<'a>(
     ctx: &mut EdgionHttpContext,
-    backends: impl Iterator<Item = (&'a str, Option<&'a str>, Option<i32>)>,
-    route_ns: &str,
-    token: Option<&str>,
-) -> Option<usize> {
-    sp_resolve_target_rule_scoped_indexed(
-        ctx,
-        backends
-            .enumerate()
-            .map(|(index, (name, namespace, port))| (index, name, namespace, port)),
-        route_ns,
-        token,
-    )
-}
-
-/// Indexed form used when a typed backend list filters non-Service slots but
-/// must still return the original `backendRefs` position.
-pub(crate) fn sp_resolve_target_rule_scoped_indexed<'a>(
-    ctx: &mut EdgionHttpContext,
-    backends: impl Iterator<Item = (usize, &'a str, Option<&'a str>, Option<i32>)>,
-    route_ns: &str,
+    candidates: impl Iterator<Item = StickyCandidate<'a>>,
     token: Option<&str>,
 ) -> Option<usize> {
     let token = token?;
-    match sp_lookup_rule_scoped_indexed(backends, route_ns, token) {
-        Some((idx, addr)) => {
-            let persistence = ctx.ensure_session_persistence();
-            persistence.target_addr = Some(addr);
-            persistence.sticky_addr = Some(addr);
-            Some(idx)
-        }
-        None => {
-            ctx.ensure_session_persistence().state = SessionPersistenceState::InjectNew;
-            None
+    let found = sp_lookup_typed_candidates(candidates, token, |candidate, token| {
+        let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_scoped(
+            candidate.service_key,
+            candidate.section,
+            candidate.scope,
+            || crate::backends::selector::backends_for_service_section(candidate.service_key, candidate.section),
+        );
+        affinity_map.get(token).copied()
+    });
+    if let Some((slot, addr, scope)) = found {
+        let persistence = ctx.ensure_session_persistence();
+        persistence.target_addr = Some(addr);
+        persistence.sticky_addr = Some(addr);
+        persistence.token_scope = scope.map(str::to_owned);
+        Some(slot)
+    } else {
+        ctx.ensure_session_persistence().state = SessionPersistenceState::InjectNew;
+        None
+    }
+}
+
+fn sp_lookup_typed_candidates<'a>(
+    candidates: impl Iterator<Item = StickyCandidate<'a>>,
+    token: &str,
+    mut lookup: impl FnMut(&StickyCandidate<'a>, &str) -> Option<std::net::SocketAddr>,
+) -> Option<(usize, std::net::SocketAddr, Option<&'a str>)> {
+    for candidate in candidates {
+        if let Some(addr) = lookup(&candidate, token) {
+            return Some((candidate.slot, addr, candidate.scope));
         }
     }
+    None
 }
 
 #[cfg(test)]
 include!("../../../tests/support/routes/http/session_persistence_test/230_function_item.rs");
-
-fn sp_lookup_rule_scoped_indexed<'a>(
-    backends: impl Iterator<Item = (usize, &'a str, Option<&'a str>, Option<i32>)>,
-    route_ns: &str,
-    token: &str,
-) -> Option<(usize, std::net::SocketAddr)> {
-    for (idx, name, ns, port) in backends {
-        let ns = ns.unwrap_or(route_ns);
-        let service_key = format!("{}/{}", ns, name);
-        let Ok(section) = crate::backends::service_section_key_from_port(port) else {
-            continue;
-        };
-        let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, &section, || {
-            crate::backends::selector::backends_for_service_section(&service_key, &section)
-        });
-        if let Some(&addr) = affinity_map.get(token) {
-            return Some((idx, addr));
-        }
-    }
-    None
-}
-
-pub(crate) fn sp_resolve_typed_candidates(
-    ctx: &mut EdgionHttpContext,
-    candidates: &[StickyCandidate],
-    token: Option<&str>,
-) -> Option<usize> {
-    let token = token?;
-    for candidate in candidates {
-        let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_scoped(
-            &candidate.service_key,
-            &candidate.section,
-            candidate.scope.as_deref(),
-            || crate::backends::selector::backends_for_service_section(&candidate.service_key, &candidate.section),
-        );
-        if let Some(&addr) = affinity_map.get(token) {
-            let persistence = ctx.ensure_session_persistence();
-            persistence.target_addr = Some(addr);
-            persistence.sticky_addr = Some(addr);
-            persistence.token_scope = candidate.scope.clone();
-            return Some(candidate.slot);
-        }
-    }
-    ctx.ensure_session_persistence().state = SessionPersistenceState::InjectNew;
-    None
-}
 
 /// Build the wire token. `<addrhash>` alone when no lifetime is configured;
 /// `<addrhash>.<now+ttl_secs>` (absolute expiry epoch, frozen at issuance) when

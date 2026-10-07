@@ -18,8 +18,9 @@ consume the section instead of retaining or rewriting an unrelated first port.
 AllEndpointStatus consumes ready slots and section-scoped TLS policy as described in
 [its owning rule](all-endpoint-status-tls-identity.md).
 
-DirectEndpoint now uses route-compiled `CompiledBackend.direct_endpoint` authorization
-(Service key, checked port section, policy target). The section's numeric IP/port index is
+DirectEndpoint borrows `CompiledBackend::permitted_service()` from the actual
+Route compiler: the same private Service key, checked port section and policy
+target used by ordinary native HTTP selection, with no second classifier. The section's numeric IP/port index is
 compiled from `all_slots` in both initial compilation and runtime materialization.
 Explicit endpoint ports must belong to the authorized section; absent explicit ports require
 a unique serving port for that IP. Missing Service/section, zero/overflow/negative backendRef

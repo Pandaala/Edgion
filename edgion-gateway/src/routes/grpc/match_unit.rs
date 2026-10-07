@@ -1,12 +1,14 @@
 use crate::backends::policy::BackendTlsPolicyLookup;
+use crate::backends::runtime::{CompiledBackendTarget, CompiledServiceTarget};
 use crate::lb::BackendSelector;
 use crate::plugins::PluginRuntime;
 use crate::runtime::matching::route::{check_gateway_listener_match, hostname_matches_listener, ResolvedParentRef};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use edgion_resources::err::EdError;
-use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey;
 use edgion_resources::resources::grpc_route::CompiledGrpcMethodMatch;
+use edgion_resources::resources::refs::route_fields::GrpcRouteBackendRefs;
 use edgion_resources::{GRPCBackendRef, GRPCRoute, GRPCRouteMatch, GRPCRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
@@ -21,10 +23,11 @@ use std::sync::Arc;
 pub struct CompiledGrpcBackend {
     /// Pure backend-ref schema owned by the immutable per-rule generation.
     /// Request-specific policy winners are stored on `SelectedGrpcBackend`.
-    pub schema: GRPCBackendRef,
-    /// Canonical policy identity proven once from the authorized Service ref.
-    /// `None` for denied, delegated, or otherwise unsupported backend refs.
-    policy_target_key: Option<PolicyTargetKey>,
+    schema: GRPCBackendRef,
+    /// Canonical effective-field classification. A denied Service retains its
+    /// target and slot; only permitted_service exposes it to material consumers.
+    /// Delegated or otherwise unsupported terminal descriptors are Invalid.
+    target: CompiledBackendTarget,
     /// Compiled backend-level plugin chain (built from `schema.filters`).
     pub plugin_runtime: Arc<PluginRuntime>,
 }
@@ -57,7 +60,9 @@ impl GrpcBackendHandle {
 
     #[inline]
     pub fn policy_target_key(&self) -> Option<&PolicyTargetKey> {
-        self.compiled().policy_target_key.as_ref()
+        self.compiled()
+            .permitted_service()
+            .map(CompiledServiceTarget::policy_target)
     }
 }
 
@@ -78,11 +83,12 @@ pub struct SelectedGrpcBackend {
 }
 
 impl SelectedGrpcBackend {
-    pub(crate) fn new(logical: GrpcBackendHandle, backend_tls_policy: BackendTlsPolicyLookup) -> Self {
-        Self {
+    pub(crate) fn new(logical: GrpcBackendHandle, backend_tls_policy: BackendTlsPolicyLookup) -> Option<Self> {
+        logical.compiled().permitted_service()?;
+        Some(Self {
             logical,
             backend_tls_policy,
-        }
+        })
     }
 
     #[inline]
@@ -127,29 +133,17 @@ impl std::ops::Deref for CompiledGrpcBackend {
 }
 
 impl CompiledGrpcBackend {
-    fn compile(schema: GRPCBackendRef, route_namespace: &str, plugin_runtime: Arc<PluginRuntime>) -> Self {
-        let policy_target_key = Self::compile_policy_target_key(&schema, route_namespace);
-        Self {
-            schema,
-            policy_target_key,
-            plugin_runtime,
-        }
+    pub fn schema(&self) -> &GRPCBackendRef {
+        &self.schema
     }
-
-    fn compile_policy_target_key(schema: &GRPCBackendRef, route_namespace: &str) -> Option<PolicyTargetKey> {
-        if schema.ref_denied.is_some() {
+    pub fn permitted_service(&self) -> Option<&CompiledServiceTarget> {
+        if self.ref_denied.is_some() {
             return None;
         }
-        let edgion_resources::resources::refs::targets::BackendTarget::Service(identity) =
-            schema.validated_target(route_namespace).ok()?
-        else {
-            return None;
-        };
-        Some(PolicyTargetKey {
-            target_kind: PolicyTargetKind::Service,
-            namespace: identity.scope().namespace()?.to_string(),
-            name: identity.name().to_string(),
-        })
+        match &self.target {
+            CompiledBackendTarget::Service(service) => Some(service),
+            _ => None,
+        }
     }
 }
 
@@ -384,26 +378,63 @@ impl GrpcRouteRuleUnit {
     /// Compile a rule's runtime ONCE (rule plugin chain + compiled backends).
     /// Call once per rule, above the match-item fan-out, and share the Arc
     /// fields into every unit — RateLimitLocal CMS state must not be split.
-    pub fn compile_grpc_rule(rule: &GRPCRouteRule, namespace: &str) -> GrpcRuleRuntime {
-        let plugin_runtime = Arc::new(match &rule.filters {
-            Some(filters) => PluginRuntime::from_grpcroute_filters_for_rule(filters, namespace),
-            None => PluginRuntime::new(),
-        });
-        let backends: Vec<CompiledGrpcBackend> = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
-            refs.iter()
-                .map(|br| {
-                    let plugin_runtime = Arc::new(match &br.filters {
-                        Some(filters) => PluginRuntime::from_grpcroute_filters_for_backend(filters, namespace),
-                        None => PluginRuntime::new(),
-                    });
-                    CompiledGrpcBackend::compile(br.clone(), namespace, plugin_runtime)
+    pub fn compile_grpc_rule(route: &GRPCRoute, rule_index: usize) -> Option<GrpcRuleRuntime> {
+        Self::compile_with_factories(
+            route,
+            rule_index,
+            |rule, namespace| {
+                Arc::new(match &rule.filters {
+                    Some(filters) => PluginRuntime::from_grpcroute_filters_for_rule(filters, namespace),
+                    None => PluginRuntime::new(),
                 })
-                .collect()
-        });
-        GrpcRuleRuntime {
+            },
+            |backend, namespace| {
+                Arc::new(match &backend.filters {
+                    Some(filters) => PluginRuntime::from_grpcroute_filters_for_backend(filters, namespace),
+                    None => PluginRuntime::new(),
+                })
+            },
+        )
+    }
+
+    fn compile_with_factories(
+        route: &GRPCRoute,
+        rule_index: usize,
+        mut rule_factory: impl FnMut(&GRPCRouteRule, &str) -> Arc<PluginRuntime>,
+        mut backend_factory: impl FnMut(&GRPCBackendRef, &str) -> Arc<PluginRuntime>,
+    ) -> Option<GrpcRuleRuntime> {
+        let references = GrpcRouteBackendRefs::from_route(route).ok()?;
+        let rule = route.effective_rules()?.get(rule_index)?;
+        let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+        let plugin_runtime = rule_factory(rule, namespace);
+        let backends = rule
+            .backend_refs
+            .iter()
+            .flatten()
+            .enumerate()
+            .map(|(slot, schema)| {
+                let reference = references
+                    .effective_at(rule_index, slot)
+                    .expect("the backend came from this actual effective rule");
+                let target =
+                    CompiledBackendTarget::from_reference(reference, edgion_resources::HTTPBackendRefKind::Unsupported);
+                let plugin_runtime =
+                    if schema.ref_denied.is_none() && matches!(target, CompiledBackendTarget::Service(_)) {
+                        backend_factory(schema, namespace)
+                    } else {
+                        Arc::new(PluginRuntime::new())
+                    };
+                CompiledGrpcBackend {
+                    schema: schema.clone(),
+                    target,
+                    plugin_runtime,
+                }
+            })
+            .collect::<Vec<_>>();
+        Some(GrpcRuleRuntime {
             plugin_runtime,
-            backends: Arc::from(backends),
-        }
+            backends: backends.into(),
+        })
     }
 
     /// Build a WRR selector over original backend slot indexes.
@@ -528,3 +559,6 @@ impl GrpcRouteRuleUnit {
 #[cfg(test)]
 #[path = "../../../tests/unit/routes/grpc/match_unit_test/backend_handle_tests.rs"]
 mod backend_handle_tests;
+
+#[cfg(test)]
+include!("../../../tests/support/routes/grpc/match_unit_test/compiled_fixtures.rs");

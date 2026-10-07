@@ -307,6 +307,18 @@ macro_rules! route_facade {
                     field: BackendField::$variant(field),
                 })
             }
+            pub fn effective_at(&self, rule: usize, backend: usize) -> Option<EffectiveBackendReference<'a>> {
+                let field = ($effective)(self.route)?
+                    .get(rule)?
+                    .backend_refs
+                    .as_ref()?
+                    .get(backend)?;
+                Some(EffectiveBackendReference {
+                    owner: RouteOwner::$variant(self.route),
+                    slot: RouteBackendSlot { rule, backend },
+                    field: BackendField::$variant(field),
+                })
+            }
             pub fn effective(&self) -> impl Iterator<Item = EffectiveBackendReference<'a>> + 'a {
                 let owner = RouteOwner::$variant(self.route);
                 ($effective)(self.route)

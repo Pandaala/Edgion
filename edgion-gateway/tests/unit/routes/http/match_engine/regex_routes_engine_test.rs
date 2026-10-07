@@ -40,7 +40,7 @@ fn create_test_route_unit(namespace: &str, name: &str, regex_pattern: &str, rule
 
     let (chr, cqr) = HttpRouteRuleUnit::compile_match_regexes(&match_item);
     let has_qm = match_item.query_params.as_ref().is_some_and(|qp| !qp.is_empty());
-    let rule_rt = HttpRouteRuleUnit::compile_http_rule(&rule, namespace)
+    let rule_rt = crate::routes::http::match_unit::compile_http_fixture(&rule, namespace)
         .expect("synthetic regex route has no request transforms");
     let backend_finder = HttpRouteRuleUnit::build_backend_selector(&rule_rt.backends);
     let backends = rule_rt.backends;

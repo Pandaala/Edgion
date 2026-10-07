@@ -584,7 +584,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
                     return None;
                 }
                 // Share one runtime across every hostname and match of this rule.
-                let runtime = HttpRouteRuleUnit::compile_prevalidated_http_rule(rule, &validated.namespace);
+                let runtime = HttpRouteRuleUnit::compile_prevalidated_http_rule(route, rule_id)?;
                 let rule = Arc::new(rule.clone());
                 let metric_handles = Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
                     &attached_gateways,
@@ -627,6 +627,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
 
 /// Validate HTTPRoute and extract required fields, returning None if any required field is missing.
 fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
+    edgion_resources::resources::refs::route_fields::HttpRouteBackendRefs::from_route(route).ok()?;
     // Controller status is advisory; malformed explicit lists never become catch-all.
     route.spec.validate_hostnames().ok()?;
     match &route.spec.parent_refs {
@@ -647,21 +648,12 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
         }
     };
 
-    let route_namespace = match &route.metadata.namespace {
-        Some(ns) if !ns.is_empty() => ns.clone(),
-        _ => {
-            tracing::warn!(route=%route.key_name(),"no namespace");
-            return None;
-        }
-    };
-
-    let route_name = match &route.metadata.name {
-        Some(name) if !name.is_empty() => name.clone(),
-        _ => {
-            tracing::warn!(route=%route.key_name(),"no name");
-            return None;
-        }
-    };
+    let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default").to_owned();
+    let route_name = route
+        .metadata
+        .name
+        .clone()
+        .expect("the actual Route source was validated");
 
     let (route_labels_meta, route_annotations_meta) = crate::ctx::extract_route_meta(&route.metadata);
 

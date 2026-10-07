@@ -80,7 +80,7 @@ impl RouteRules {
 
         // Check if this backend reference is denied (no matching ReferenceGrant)
         let backend = unit.backends.get(index).ok_or_else(EdError::BackendNotFound)?;
-        if let Some(err) = ref_denied_error(&backend.schema) {
+        if let Some(err) = ref_denied_error(backend.schema()) {
             return Err(err);
         }
 
@@ -110,29 +110,22 @@ impl RouteRules {
         unit: &Arc<HttpRouteRuleUnit>,
         target_name: &str,
         target_namespace: Option<&str>,
-        route_namespace: &str,
     ) -> Result<LogicalBackendHandle, EdError> {
         if unit.backends.is_empty() {
             return Err(EdError::BackendNotFound());
         }
 
         for (index, cb) in unit.backends.iter().enumerate() {
-            if !cb.is_service() {
+            let crate::backends::runtime::CompiledBackendTarget::Service(target) = cb.target() else {
+                continue;
+            };
+            if target.name() != target_name {
                 continue;
             }
-            let br = &cb.schema;
-            // Match by name
-            if br.name != target_name {
+            if target_namespace.is_some_and(|namespace| namespace != target.namespace()) {
                 continue;
             }
-
-            // If namespace is specified in jump target, verify it matches
-            if let Some(ns) = target_namespace {
-                let br_ns = br.namespace.as_deref().unwrap_or(route_namespace);
-                if br_ns != ns {
-                    continue;
-                }
-            }
+            let br = cb.schema();
 
             // Check cross-namespace reference denial
             if let Some(err) = ref_denied_error(br) {
