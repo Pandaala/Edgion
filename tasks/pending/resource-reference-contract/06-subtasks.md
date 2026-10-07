@@ -422,3 +422,59 @@ adding 11. Explicit assertion/input amendments are the unsafe policy capture
 expectation and the two named-jump fixture ports described above. Full workspace
 gates and independent final result review remain coordinator-owned and pending;
 this is not closure of later L4, Service.type/DNS, filter or outbound slices.
+
+
+### R2b approved L4 implementation
+
+Independent Astra plan review approved 56 paths (19 production, 21 tests, 16
+documents) at d37b890a8. The immutable baseline and 185 source test identities
+are under `/tmp/edgion-ref-r2b-before-d37b890a8`; the coordinator also captured
+5110 compiled Gateway test identities. The coordinator owns 07, final gates
+and commits. No source outside this scope is authorized.
+
+Actual TCP/TLS/UDP owners compile first-rule effective loans into private Service
+targets and original weighted slots. Selected loans gate discovery, preserving
+denial priority and making malformed descriptors terminal. TLS valid live
+endpoint/connect retries remain; the shared actual-unit one-attempt helper has
+resolver positive/negative controls, while final review checks both real loops'
+terminal returns. Existing stream route stages still precede backend selection.
+
+Invalid owners create no executable unit or publication demand. Full publication
+uses successful units; partial publication removes every touched key and adds
+only final surviving units. Shared same-key add clears before initialization.
+Raw manager/publication keys preserve an omitted namespace as a bare name; only
+canonical backend identity defaults the namespace. Old selected Arcs and pinned
+UDP sessions retain their existing lifetime. No policy/TLS capture, new retry
+policy, Controller/schema changes or Service.type/DNS work is included.
+
+Focused verification passed on the completed source: Gateway runtime 12
+(overlaps backends), TCP 24, UDP 51, TLS 83, common helpers 37, shared delta 2,
+stream bridge 6, backends 278 and selector 25. Gateway doctests passed 11 with
+seven existing ignored, including three new private-unit compile-fail cases.
+Logs use `/tmp/edgion-ref-r2b-*-r1.log`; fmt-r2 passed. The initial library
+check passed with one unused legacy-predicate warning; the obsolete raw helper
+was removed before final tests. No focused test failed and no existing fixture
+input/assertion correction was needed beyond the approved actual-owner wrappers.
+
+All 185 original scoped source test identities remain (195 now); the actual
+Gateway binary listing retains all 5110 original identities (5120 now). Ignored
+attributes are unchanged. The 55-file delta stays inside the 56-path allowlist:
+19 production, 20 test and 16 documentation files changed. Final scope hashes,
+reproducible digest algorithm, baseline checks, patch and identity comparison are
+under `/tmp/edgion-ref-r2b-final`. No baseline files were changed.
+
+Resolver counts test the actual shared closure boundary; the TLS tests exercise
+the actual one-attempt helper and retry-delay decision. They are not connector
+or wire-conformance tests; independent result review must inspect both real
+loops' terminal returns. UDP lifecycle tests preserve existing session semantics.
+Workspace gates, fresh independent Astra result acceptance and commit remain
+coordinator-owned; R2c and later reference consumers are still excluded.
+
+The coordinator's first diff and unit-layout guards found trailing task-document
+blank lines and four test-only accessors in production source. The EOF whitespace
+was removed; independently approved accessor moves put the unchanged methods in
+their existing mirrored test modules. The failed guard logs remain under the
+`/tmp/edgion-ref-r2b-guard-*-r1.log` names. Fresh fmt-r3 and layout-r2 passed;
+runtime/TCP/UDP/TLS-r2 passed 12/24/51/83. Earlier final artifacts are archived as
+`/tmp/edgion-ref-r2b-final-r1` and `-r2`; the refreshed final snapshot supersedes
+their hashes. No test identities, assertions, inputs or production behavior changed.

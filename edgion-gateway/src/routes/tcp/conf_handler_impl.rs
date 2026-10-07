@@ -1,3 +1,8 @@
+use crate::plugins::publication::{
+    global_publisher,
+    inputs::{RouteInput, RouteKind},
+    PluginPublisher,
+};
 use crate::routes::l4_partial_update::apply_l4_partial_update;
 use crate::routes::tcp::route_unit::TcpRouteUnit;
 use crate::routes::tcp::routes_mgr::{
@@ -16,16 +21,32 @@ pub fn create_tcp_route_handler() -> Box<dyn ConfHandler<TCPRoute> + Send + Sync
 
 impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<TCPRoute>>) {
+        self.full_set_with_publisher(data, global_publisher());
+    }
+    fn partial_update(
+        &self,
+        add: HashMap<String, Arc<TCPRoute>>,
+        update: HashMap<String, Arc<TCPRoute>>,
+        remove: HashSet<String>,
+    ) {
+        self.partial_update_with_publisher(add, update, remove, global_publisher());
+    }
+}
+
+impl GlobalTcpRouteManagers {
+    fn full_set_with_publisher(&self, data: &HashMap<String, Arc<TCPRoute>>, publisher: &PluginPublisher) {
         // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
         let _guard = self.lock_rebuild();
         let start_time = Instant::now();
         tracing::info!(component = "tcp_route_manager", cnt = data.len(), "full set start");
 
         self.clear_route_cache();
+        let mut policy_inputs = HashMap::new();
 
         for (key, route) in data {
             match self.initialize_route(Arc::clone(route)) {
                 Ok(initialized) => {
+                    policy_inputs.insert(key.clone(), RouteInput::from_tcp(initialized.route()));
                     self.insert_route(initialized);
                 }
                 Err(e) => {
@@ -45,36 +66,17 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
             "full set done"
         );
         drop(_guard);
-        crate::plugins::publication::global_publisher().replace_routes(
-            crate::plugins::publication::inputs::RouteKind::Tcp,
-            data.iter()
-                .map(|(key, route)| {
-                    (
-                        key.clone(),
-                        crate::plugins::publication::inputs::RouteInput::from_tcp(route),
-                    )
-                })
-                .collect(),
-        );
+        publisher.replace_routes(RouteKind::Tcp, policy_inputs);
     }
 
-    fn partial_update(
+    fn partial_update_with_publisher(
         &self,
         add: HashMap<String, Arc<TCPRoute>>,
         update: HashMap<String, Arc<TCPRoute>>,
         remove: HashSet<String>,
+        publisher: &PluginPublisher,
     ) {
-        let policy_inputs = add
-            .iter()
-            .chain(update.iter())
-            .map(|(key, route)| {
-                (
-                    key.clone(),
-                    crate::plugins::publication::inputs::RouteInput::from_tcp(route),
-                )
-            })
-            .collect();
-        let policy_removed = remove.clone();
+        let policy_removed: HashSet<_> = remove.iter().chain(update.keys()).chain(add.keys()).cloned().collect();
         // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
         let _guard = self.lock_rebuild();
         tracing::info!(
@@ -91,23 +93,27 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
             update,
             remove,
             |key| self.get_route(key),
-            |u| resolved_listeners_for_route(&u.route).to_vec(),
+            |u| resolved_listeners_for_route(u.route()).to_vec(),
             |key| self.remove_route(key),
             |route| {
                 self.initialize_route(route).map(|unit| {
-                    let lks = resolved_listeners_for_route(&unit.route).to_vec();
+                    let lks = resolved_listeners_for_route(unit.route()).to_vec();
                     self.insert_route(unit);
                     lks
                 })
             },
             |affected| self.rebuild_affected_listener_managers(affected),
         );
+        // Publish only the final surviving units, respecting remove/update/add order.
+        let policy_inputs = policy_removed
+            .iter()
+            .filter_map(|key| {
+                self.get_route(key)
+                    .map(|unit| (key.clone(), RouteInput::from_tcp(unit.route())))
+            })
+            .collect();
         drop(_guard);
-        crate::plugins::publication::global_publisher().update_routes(
-            crate::plugins::publication::inputs::RouteKind::Tcp,
-            policy_inputs,
-            &policy_removed,
-        );
+        publisher.update_routes(RouteKind::Tcp, policy_inputs, &policy_removed);
     }
 }
 
@@ -120,7 +126,9 @@ impl GlobalTcpRouteManagers {
     /// runtime (BackendSelector, stream-plugin store key, keepalive config) lives
     /// on the unit, not on the schema — see [`TcpRouteUnit::from_route`].
     fn initialize_route(&self, route: Arc<TCPRoute>) -> Result<Arc<TcpRouteUnit>, String> {
-        Ok(Arc::new(TcpRouteUnit::from_route(route)))
+        TcpRouteUnit::from_route(route)
+            .map(Arc::new)
+            .map_err(|error| error.to_string())
     }
 }
 

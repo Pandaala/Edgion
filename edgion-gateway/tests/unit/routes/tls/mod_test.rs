@@ -4,6 +4,7 @@ use super::*;
 use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
 use crate::plugins::stream::plugin_generation::{StreamPluginGeneration, StreamStages};
 use crate::plugins::stream::{StreamPluginRuntime, TlsRoutePlugin, TlsRoutePluginRuntime};
+use edgion_resources::resources::common::RefDenied;
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugins, StreamPluginEntry, TlsRoutePluginEntry};
 use edgion_resources::resources::plugin_policy::{PluginPolicyConfig, PluginPolicyEntryConfig, PolicyActionKind};
 use edgion_resources::{Gateway, GatewayClass};
@@ -53,7 +54,7 @@ fn selection_unit(name: &str, hostname: &str, parents: &[&str], port: u16) -> Ar
         "spec": {"hostnames": [hostname], "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": parent_refs, "resolvedListeners": attachments}
     }))
     .unwrap();
-    Arc::new(TlsRouteUnit::from_route(Arc::new(route)))
+    Arc::new(TlsRouteUnit::from_route(Arc::new(route)).unwrap())
 }
 
 #[test]
@@ -532,7 +533,7 @@ fn apply_tls_l4_post_select_denied_sets_status_and_is_terminal() {
         target_name: "svc".to_string(),
         reason: Some("NoMatchingReferenceGrant".to_string()),
     };
-    assert!(apply_tls_l4_post_select(
+    assert!(apply_fixture_post_select(
         &mut ctx,
         Some(&denied),
         Some("apps"),
@@ -551,7 +552,7 @@ fn apply_tls_l4_post_select_denied_sets_status_and_is_terminal() {
 #[test]
 fn apply_tls_l4_post_select_unsupported_kind_sets_status_and_is_terminal() {
     let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
-    assert!(apply_tls_l4_post_select(
+    assert!(apply_fixture_post_select(
         &mut ctx,
         None,
         Some("apps"),
@@ -573,9 +574,90 @@ fn apply_tls_l4_post_select_unsupported_kind_sets_status_and_is_terminal() {
 #[test]
 fn apply_tls_l4_post_select_core_service_is_not_terminal() {
     let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
-    assert!(!apply_tls_l4_post_select(&mut ctx, None, None, None));
+    assert!(!apply_fixture_post_select(&mut ctx, None, None, None));
     assert!(ctx.status.is_none());
     assert!(ctx.err_log.is_none());
     let json = serde_json::to_value(&ctx).expect("TlsContext serializes");
     assert!(json.get("status").is_none());
+}
+
+fn apply_fixture_post_select(
+    ctx: &mut TlsContext,
+    denied: Option<&RefDenied>,
+    group: Option<&str>,
+    kind: Option<&str>,
+) -> bool {
+    let route = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "gate-fixture", "namespace": "default"},
+        "spec": {"rules": [{"backendRefs": [{"name": "svc", "port": 80, "group": group, "kind": kind, "refDenied": denied}]}]}
+    })).unwrap();
+    let unit = TlsRouteUnit::from_route(Arc::new(route)).unwrap();
+    super::apply_tls_l4_post_select(ctx, unit.select_backend().unwrap())
+}
+#[test]
+fn actual_tls_attempt_distinguishes_terminal_descriptors_from_live_retry() {
+    for denied in [false, true] {
+        for port in [serde_json::Value::Null, json!(0), json!(65536)] {
+            let route = serde_json::from_value(json!({
+                "metadata": {"name": "attempt", "namespace": "apps"},
+                "spec": {"rules": [{"backendRefs": [
+                    {"name": "bad", "port": port, "weight": 1,
+                     "refDenied": denied.then(|| json!({"targetNamespace": "other", "targetName": "bad"}))},
+                    {"name": "good", "port": 80, "weight": 1}
+                ]}]}
+            }))
+            .unwrap();
+            let unit = TlsRouteUnit::from_route(Arc::new(route)).unwrap();
+            let mut ctx = TlsContext::new(443, "127.0.0.1".into(), 50000, "127.0.0.1".into(), 50000);
+            let reads = std::cell::Cell::new(0);
+            let attempt = resolve_tls_backend_attempt(&unit, &mut ctx, |_| {
+                reads.set(reads.get() + 1);
+                Ok::<_, ()>(())
+            });
+            assert!(matches!(attempt, TlsBackendAttempt::Terminal));
+            assert_eq!(reads.get(), 0);
+            assert_eq!(
+                ctx.status,
+                Some(if denied { "RefDenied" } else { "UnsupportedBackend" })
+            );
+            // Inspect the next selection independently: the actual attempt consumed
+            // just the bad slot. Both production loops return on its Terminal result.
+            assert_eq!(unit.select_backend().unwrap().service().unwrap().name(), "good");
+        }
+    }
+    let route = serde_json::from_value(json!({
+        "metadata": {"name": "attempt"},
+        "spec": {"rules": [{"backendRefs": [{"name": "good", "port": 80}]}]}
+    }))
+    .unwrap();
+    let unit = TlsRouteUnit::from_route(Arc::new(route)).unwrap();
+    let mut ctx = TlsContext::new(443, "127.0.0.1".into(), 50000, "127.0.0.1".into(), 50000);
+    let reads = std::cell::Cell::new(0);
+    let failed = resolve_tls_backend_attempt(&unit, &mut ctx, |target| {
+        reads.set(reads.get() + 1);
+        assert_eq!(target.key(), "default/good");
+        Err::<(), _>("live endpoint unavailable")
+    });
+    assert!(matches!(failed, TlsBackendAttempt::Retryable(_)));
+    let ready = resolve_tls_backend_attempt(&unit, &mut ctx, |_| {
+        reads.set(reads.get() + 1);
+        Ok::<_, ()>(42)
+    });
+    assert!(matches!(ready, TlsBackendAttempt::Ready(_, 42)));
+    assert_eq!(reads.get(), 2);
+    assert!(ctx.status.is_none());
+    assert!(ctx.err_log.is_none());
+}
+
+#[test]
+fn actual_tls_connect_retry_delay_preserves_bounds_and_exhaustion() {
+    assert_eq!(tls_connect_retry_delay(0, 1), None);
+    assert_eq!(tls_connect_retry_delay(0, 2), Some(Duration::from_millis(25)));
+    assert_eq!(tls_connect_retry_delay(1, 2), None);
+    assert_eq!(tls_connect_retry_delay(3, 5), Some(Duration::from_millis(200)));
+    assert_eq!(tls_connect_retry_delay(4, 5), None);
+    assert_eq!(tls_connect_retry_delay(u32::MAX, 5), None);
+    assert_eq!(tls_connect_retry_backoff(31), Duration::from_millis(250));
+    assert_eq!(cap_tls_connect_retries(0), 1);
+    assert_eq!(cap_tls_connect_retries(100), 5);
 }

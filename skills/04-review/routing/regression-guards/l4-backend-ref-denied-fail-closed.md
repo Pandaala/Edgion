@@ -11,15 +11,15 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-TCPRoute, UDPRoute, TLS terminate, and TLS passthrough must inspect the
-Controller-stamped `ref_denied` marker immediately after backend selection and
-fail closed before Service-key construction, EndpointSlice lookup, policy
-lookup, target logging, or dialing. Preload filtering of denied refs is a
+TCPRoute, UDPRoute, TLS terminate, and TLS passthrough compile their actual owning Route into a private generation and inspect its
+Controller-stamped denial immediately after index selection. The selected loan
+fails closed before EndpointSlice lookup, backend policy lookup, target logging,
+or dialing; canonical Service keys are prepared on the cold path. Preload filtering of denied refs is a
 startup optimization only and is not an authorization boundary.
 
 Fix suggestions of the form "drop denied refs from the L4 selector", "retry
 TLS onto another backend after a denied pick", or "treat preload exclusion as
-enforcement" are **not accepted**.
+enforcement" violate the weighted selected-failure contract.
 
 ## Core Rationale
 
@@ -38,12 +38,14 @@ them from `build_backend_selector` would redistribute weight onto allowed
 siblings and diverge from
 [weighted-invalid-backendrefs-retain-traffic-share.md](weighted-invalid-backendrefs-retain-traffic-share.md).
 The shared helper `classify_l4_selected_backend` / `l4_post_select` is
-the post-select gate. Denied wins over kind. Non-Service kinds stay in
-the selector and fail as `UnsupportedBackend`.
+the compiled post-select mapping; `SelectedL4Backend::with_service` gates the
+actual resolver closure. Denied wins over malformed targets. Invalid names,
+namespaces, groups, kinds and declared ports stay in the selector and fail as
+`UnsupportedBackend`.
 
 **3. TLS retries are for connect failure, not authorization**
 
-A denied pick must `return`, not `continue` the TLS connect-retry loop.
+A denied or malformed pick must `return`, not `continue` the TLS connect-retry loop.
 Retrying would satisfy a denied weight with a legal sibling.
 
 **4. Logs stay fixed and low sensitivity**
@@ -87,7 +89,7 @@ group, kind, or endpoint list. TLS retries must `return` on both
 
 ## Re-evaluation Triggers
 
-Re-open this decision only if:
+Re-evaluate against current source and new evidence, including:
 
 - L4 routes gain a named-jump publisher that must address a specific
   backendRef, in which case the jump must validate through a compiled view
@@ -95,8 +97,7 @@ Re-open this decision only if:
   [denied-named-jump-fails-closed.md](denied-named-jump-fails-closed.md)).
 - Gateway API weighted-invalid-backend semantics change so a denied slot must
   be removed from the selector rather than fail its share.
-- A new L4 proxy mode is added that builds a Service key from a selected
-  backendRef.
+- A new L4 proxy mode is added that consumes a selected backend identity or changes the cold-owner boundary.
 
 ## Reference Cases
 

@@ -30,6 +30,7 @@ pub use policy::{
     query_backend_tls_policy_for_logical_backend, BackendTLSPolicyStore, BackendTlsPolicyLookup,
     EffectiveBackendTlsPolicy,
 };
+pub(crate) use runtime::{CompiledL4Backends, L4BackendRejection, L4ResolveError, SelectedL4Backend};
 pub use runtime::{
     CompiledServiceTarget, LogicalBackendHandle, SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend,
 };

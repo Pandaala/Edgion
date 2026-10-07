@@ -1,6 +1,8 @@
 use super::*;
 use edgion_resources::resources::common::Condition;
+use edgion_resources::resources::common::RefDenied;
 use edgion_resources::resources::http_route::GATEWAY_API_GROUP;
+use edgion_resources::resources::refs::targets::is_standard_service;
 use std::collections::BTreeMap;
 
 fn parent_ref(name: &str, namespace: Option<&str>) -> ParentReference {
@@ -307,13 +309,13 @@ fn resolve_parent_refs_preserves_declared_port_constraints() {
 #[test]
 fn is_core_service_backend_ref_accepts_core_service_and_rejects_others() {
     // Omitted group + kind defaults to a core Service.
-    assert!(is_core_service_backend_ref(None, None));
+    assert!(is_standard_service(None, None));
     // Explicit empty group with the Service kind.
-    assert!(is_core_service_backend_ref(Some(""), Some("Service")));
-    assert!(!is_core_service_backend_ref(Some("core"), Some("Service")));
+    assert!(is_standard_service(Some(""), Some("Service")));
+    assert!(!is_standard_service(Some("core"), Some("Service")));
     // Unknown group or non-Service kind is not routable.
-    assert!(!is_core_service_backend_ref(Some("example.com"), Some("Foo")));
-    assert!(!is_core_service_backend_ref(Some(""), Some("Deployment")));
+    assert!(!is_standard_service(Some("example.com"), Some("Foo")));
+    assert!(!is_standard_service(Some(""), Some("Deployment")));
 }
 
 #[test]
@@ -340,12 +342,9 @@ fn sample_denied() -> RefDenied {
 #[test]
 fn classify_l4_selected_backend_denied_is_terminal_and_wins_over_kind() {
     let denied = sample_denied();
+    assert_eq!(classify_fixture(Some(&denied), None, None), L4SelectedBackend::Denied);
     assert_eq!(
-        classify_l4_selected_backend(Some(&denied), None, None),
-        L4SelectedBackend::Denied
-    );
-    assert_eq!(
-        classify_l4_selected_backend(Some(&denied), Some("apps"), Some("Deployment")),
+        classify_fixture(Some(&denied), Some("apps"), Some("Deployment")),
         L4SelectedBackend::Denied
     );
     assert_ne!(L4SelectedBackend::Denied, L4SelectedBackend::Proceed);
@@ -355,27 +354,24 @@ fn classify_l4_selected_backend_denied_is_terminal_and_wins_over_kind() {
 #[test]
 fn classify_l4_selected_backend_rejects_non_core_service_kind() {
     assert_eq!(
-        classify_l4_selected_backend(None, Some("apps"), Some("Deployment")),
+        classify_fixture(None, Some("apps"), Some("Deployment")),
         L4SelectedBackend::UnsupportedKind
     );
     assert_eq!(
-        classify_l4_selected_backend(None, Some("example.com"), Some("Service")),
+        classify_fixture(None, Some("example.com"), Some("Service")),
         L4SelectedBackend::UnsupportedKind
     );
 }
 
 #[test]
 fn classify_l4_selected_backend_allows_core_service() {
+    assert_eq!(classify_fixture(None, None, None), L4SelectedBackend::Proceed);
     assert_eq!(
-        classify_l4_selected_backend(None, None, None),
+        classify_fixture(None, Some(""), Some("Service")),
         L4SelectedBackend::Proceed
     );
     assert_eq!(
-        classify_l4_selected_backend(None, Some(""), Some("Service")),
-        L4SelectedBackend::Proceed
-    );
-    assert_eq!(
-        classify_l4_selected_backend(None, Some("core"), Some("Service")),
+        classify_fixture(None, Some("core"), Some("Service")),
         L4SelectedBackend::UnsupportedKind
     );
 }
@@ -385,7 +381,7 @@ fn l4_post_select_denied_and_unsupported_are_fail_closed_not_retryable() {
     // Exhaustive: FailClosed | Proceed. A third Retry variant would
     // re-open the TLS continue-after-deny / continue-after-kind bug.
     let denied = sample_denied();
-    let denied_action = l4_post_select(Some(&denied), None, None);
+    let denied_action = post_select_fixture(Some(&denied), None, None);
     assert_eq!(
         denied_action,
         L4PostSelect::FailClosed {
@@ -394,7 +390,7 @@ fn l4_post_select_denied_and_unsupported_are_fail_closed_not_retryable() {
         }
     );
 
-    let kind_action = l4_post_select(None, Some("apps"), Some("Deployment"));
+    let kind_action = post_select_fixture(None, Some("apps"), Some("Deployment"));
     assert_eq!(
         kind_action,
         L4PostSelect::FailClosed {
@@ -403,9 +399,9 @@ fn l4_post_select_denied_and_unsupported_are_fail_closed_not_retryable() {
         }
     );
 
-    assert_eq!(l4_post_select(None, None, None), L4PostSelect::Proceed);
+    assert_eq!(post_select_fixture(None, None, None), L4PostSelect::Proceed);
     assert!(!matches!(
-        l4_post_select(None, None, None),
+        post_select_fixture(None, None, None),
         L4PostSelect::FailClosed { .. }
     ));
 }
@@ -640,4 +636,26 @@ fn resolve_tcp_keepalive_partial_field_defaults() {
     let got = resolve_tcp_keepalive(Some(&a), "r").unwrap();
     assert_eq!(got.interval, std::time::Duration::from_secs(75));
     assert_eq!(got.count, 5);
+}
+
+fn with_selected_fixture<T>(
+    denied: Option<&RefDenied>,
+    group: Option<&str>,
+    kind: Option<&str>,
+    f: impl FnOnce(SelectedL4Backend<'_>) -> T,
+) -> T {
+    let route: edgion_resources::TCPRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "gate-fixture", "namespace": "default"},
+        "spec": {"rules": [{"backendRefs": [{"name": "svc", "port": 80, "group": group, "kind": kind, "refDenied": denied}]}]}
+    })).unwrap();
+    let unit = crate::routes::tcp::TcpRouteUnit::from_route(std::sync::Arc::new(route)).unwrap();
+    f(unit.select_backend().unwrap())
+}
+
+fn classify_fixture(denied: Option<&RefDenied>, group: Option<&str>, kind: Option<&str>) -> L4SelectedBackend {
+    with_selected_fixture(denied, group, kind, super::classify_l4_selected_backend)
+}
+
+fn post_select_fixture(denied: Option<&RefDenied>, group: Option<&str>, kind: Option<&str>) -> L4PostSelect {
+    with_selected_fixture(denied, group, kind, super::l4_post_select)
 }

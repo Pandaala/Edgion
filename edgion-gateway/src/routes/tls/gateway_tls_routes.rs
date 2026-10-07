@@ -22,12 +22,12 @@ pub struct TlsRouteTable {
 }
 
 fn tls_route_precedence(a: &Arc<TlsRouteUnit>, b: &Arc<TlsRouteUnit>) -> std::cmp::Ordering {
-    a.route
+    a.route()
         .metadata
         .creation_timestamp
-        .cmp(&b.route.metadata.creation_timestamp)
-        .then_with(|| a.route.metadata.namespace.cmp(&b.route.metadata.namespace))
-        .then_with(|| a.route.metadata.name.cmp(&b.route.metadata.name))
+        .cmp(&b.route().metadata.creation_timestamp)
+        .then_with(|| a.route().metadata.namespace.cmp(&b.route().metadata.namespace))
+        .then_with(|| a.route().metadata.name.cmp(&b.route().metadata.name))
 }
 
 impl TlsRouteTable {
@@ -71,15 +71,15 @@ impl TlsRouteTable {
     pub fn with_units(&self, listener_key: &ListenerKey, units: &HashMap<String, Arc<TlsRouteUnit>>) -> Self {
         let mut groups: HashMap<RadixHostnamePattern, Vec<TlsRouteCandidate>> = HashMap::new();
         for unit in units.values() {
-            if unit.route.spec.validate_hostnames().is_err() {
+            if unit.route().spec.validate_hostnames().is_err() {
                 continue;
             }
-            let records = unit.route.spec.resolved_listeners.as_deref().unwrap_or_default();
-            for declared in unit.route.spec.hostnames.as_deref().unwrap_or_default() {
+            let records = unit.route().spec.resolved_listeners.as_deref().unwrap_or_default();
+            for declared in unit.route().spec.hostnames.as_deref().unwrap_or_default() {
                 let pattern =
                     RadixHostnamePatternRef::parse(declared).expect("the entire Route hostname list was validated");
                 let attachment_indices: Vec<_> = unit
-                    .accepted_attachments
+                    .accepted_attachments()
                     .iter()
                     .enumerate()
                     .filter(|(_, accepted)| {
@@ -133,7 +133,7 @@ impl TlsRouteTable {
                 std::slice::from_ref(parent),
                 index,
                 hostname,
-                unit.route.metadata.namespace.as_deref().unwrap_or("default"),
+                unit.route().metadata.namespace.as_deref().unwrap_or("default"),
                 "TLSRoute",
             )
         })
@@ -149,9 +149,9 @@ impl TlsRouteTable {
         for group in self.hosts.matching_values(query) {
             for candidate in group {
                 let unit = &candidate.unit;
-                let records = unit.route.spec.resolved_listeners.as_deref().unwrap_or_default();
+                let records = unit.route().spec.resolved_listeners.as_deref().unwrap_or_default();
                 for &index in &candidate.attachment_indices {
-                    let accepted = &unit.accepted_attachments[index];
+                    let accepted = &unit.accepted_attachments()[index];
                     let attachment = &records[accepted.schema_index];
                     if !attachment
                         .hostnames

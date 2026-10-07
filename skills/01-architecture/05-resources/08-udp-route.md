@@ -68,6 +68,20 @@ UDPRoute's ConfHandler compiles routes into `GlobalUdpRouteManagers`:
 
 Operationally, fd, task, and memory usage must be sized against the expected concurrent client count; sessions are not pure stateless forwarding — backend responses must be associated back to the client through their corresponding upstream socket.
 
+The Gateway compiles the actual immutable UDPRoute's first-rule effective
+references through the canonical owning adapter. Private compiled slots retain
+original weights, including invalid and denied references. A selected malformed
+reference fails as `UnsupportedBackend`; denial takes precedence as `RefDenied`.
+Neither reaches backend discovery. Required Service ports are validated before
+selection; unavailable live sections remain runtime failures.
+
+Invalid owners remain visible through the Controller's existing raw/status
+contract, but create no executable unit or plugin publication demand. Full and
+incremental replacements clear stale cache/listener/publication state; an existing
+key in the add bucket is cleared before initialization too. Omitted source
+namespace preserves the bare manager key while backend identity defaults to
+`default`. Retained in-flight units keep their original generation.
+
 ## Cross-resource relationships
 
 | Direction | Target resource | Mechanism | Notes |

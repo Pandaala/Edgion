@@ -9,7 +9,7 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::backends::{
-    select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
+    select_service_endpoint, validate_endpoint_backend_addr, L4BackendRejection, L4ResolveError, ServiceDegradePolicy,
 };
 use crate::config::ResolvedGatewayConfig;
 use crate::observe::{log_tcp, TcpLogEntry};
@@ -18,8 +18,8 @@ use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
 use crate::plugins::stream::CompiledStreamPlugins;
 use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult};
 use crate::routes::common::{
-    classify_l4_selected_backend, L4SelectedBackend, L4_BACKEND_REF_DENIED_LOG, L4_BACKEND_REF_DENIED_STATUS,
-    L4_BACKEND_UNSUPPORTED_KIND_LOG, L4_BACKEND_UNSUPPORTED_KIND_STATUS, UNSAFE_UPSTREAM_ADDRESS_LOG,
+    L4_BACKEND_REF_DENIED_LOG, L4_BACKEND_REF_DENIED_STATUS, L4_BACKEND_UNSUPPORTED_KIND_LOG,
+    L4_BACKEND_UNSUPPORTED_KIND_STATUS, UNSAFE_UPSTREAM_ADDRESS_LOG,
 };
 use crate::routes::l4_duplex::{bidirectional_relay, DuplexError, DuplexHooks};
 use crate::routes::tcp::route_unit::TcpRouteUnit;
@@ -155,7 +155,7 @@ impl EdgionTcpProxy {
             ctx.status = TcpStatus::NoRouteMatched;
             return;
         };
-        let tcp_route = &unit.route;
+        let tcp_route = unit.route();
 
         // 2. Require at least one rule. The compiled runtime (backend_finder,
         // stream-plugin store key, keepalive) lives on the unit and is built
@@ -169,7 +169,7 @@ impl EdgionTcpProxy {
         let Some(scope) = resolve_route_scope(
             &publication,
             &self.listener_key,
-            &unit.resolved_parent_refs,
+            unit.resolved_parent_refs(),
             "",
             tcp_route.metadata.namespace.as_deref().unwrap_or("default"),
             "TCPRoute",
@@ -178,15 +178,12 @@ impl EdgionTcpProxy {
             ctx.deny_reason = Some("plugin policy unavailable");
             return;
         };
-        let resource = unit
-            .stream_plugin_store_key
-            .as_deref()
-            .and_then(|key| scope.stream(key));
+        let resource = unit.stream_plugin_store_key().and_then(|key| scope.stream(key));
         // Admission pins only the selected executable view across the await.
         drop(scope);
         drop(publication);
         if let StreamPluginCheck::Deny(reason) = check_stream_plugins(
-            unit.stream_plugin_store_key.as_deref(),
+            unit.stream_plugin_store_key(),
             resource.as_deref(),
             &ctx.direct_peer_ip,
             self.listener_port,
@@ -201,42 +198,36 @@ impl EdgionTcpProxy {
         drop(resource);
 
         // 4. Select backend
-        let Ok(backend_ref) = unit.backend_finder.select() else {
+        let Ok(selected) = unit.select_backend() else {
             ctx.status = TcpStatus::NoBackendSelected;
             return;
         };
-        match classify_l4_selected_backend(
-            backend_ref.ref_denied.as_ref(),
-            backend_ref.group.as_deref(),
-            backend_ref.kind.as_deref(),
-        ) {
-            L4SelectedBackend::Denied => {
+        let endpoint = match selected.with_service(|target| {
+            select_service_endpoint(
+                target.key(),
+                target.section().clone(),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+        }) {
+            Ok((_, endpoint)) => endpoint,
+            Err(L4ResolveError::Rejected(L4BackendRejection::Denied)) => {
                 ctx.status = TcpStatus::RefDenied;
                 ctx.deny_reason = Some(L4_BACKEND_REF_DENIED_LOG);
                 return;
             }
-            L4SelectedBackend::UnsupportedKind => {
+            Err(L4ResolveError::Rejected(L4BackendRejection::Invalid)) => {
                 ctx.status = TcpStatus::UnsupportedBackend;
                 ctx.deny_reason = Some(L4_BACKEND_UNSUPPORTED_KIND_LOG);
                 return;
             }
-            L4SelectedBackend::Proceed => {}
-        }
-
-        // 5. Resolve backend address via EndpointSlice
-        let route_ns = tcp_route.metadata.namespace.as_deref().unwrap_or("default");
-        let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
-        let service_key = format!("{}/{}", backend_ns, backend_ref.name);
-
-        let Ok(section) = service_section_key_from_port(backend_ref.port) else {
-            ctx.status = TcpStatus::NoBackendResolved;
-            return;
-        };
-        let Ok(endpoint) =
-            select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
-        else {
-            ctx.status = TcpStatus::NoBackendResolved;
-            return;
+            Err(L4ResolveError::Unavailable(_)) => {
+                ctx.status = TcpStatus::NoBackendResolved;
+                return;
+            }
         };
         let backend = endpoint.backend;
 
@@ -260,8 +251,7 @@ impl EdgionTcpProxy {
         // 7. Connect to upstream
         let mut peer = BasicPeer::new(upstream_addr_str);
         peer.options.tcp_keepalive = unit
-            .tcp_keepalive
-            .as_ref()
+            .tcp_keepalive()
             .map(crate::routes::common::to_pingora_tcp_keepalive);
         // Bound the connect (TCP handshake) so an unreachable backend fails fast
         // instead of stranding the downstream connection until the OS TCP

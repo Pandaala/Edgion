@@ -49,11 +49,11 @@ fn select_tls_route(
     Some(SelectedTlsRoute { unit, scope })
 }
 
+use crate::backends::{CompiledServiceTarget, L4ResolveError, SelectedL4Backend};
 use crate::plugins::stream::CompiledStreamPlugins;
 use crate::plugins::{StreamPluginResult, TlsRouteContext};
 use crate::routes::common::{l4_post_select, L4PostSelect};
 use crate::routes::l4_duplex::{DuplexError, DuplexHooks};
-use edgion_resources::resources::common::RefDenied;
 use proxy::TlsContext;
 
 /// Render the known destination once under the log policy, including copies
@@ -69,13 +69,8 @@ fn format_connect_error(address: &str, error: &pingora_core::Error) -> String {
 /// Shared TLS retry-loop gate. Both terminate and passthrough must
 /// `return` when this is true. The helper has no retry/continue outcome:
 /// authorization and kind misses are not connect failures.
-pub(super) fn apply_tls_l4_post_select(
-    ctx: &mut TlsContext,
-    ref_denied: Option<&RefDenied>,
-    group: Option<&str>,
-    kind: Option<&str>,
-) -> bool {
-    match l4_post_select(ref_denied, group, kind) {
+pub(super) fn apply_tls_l4_post_select(ctx: &mut TlsContext, selected: SelectedL4Backend<'_>) -> bool {
+    match l4_post_select(selected) {
         L4PostSelect::FailClosed { status, log } => {
             ctx.status = Some(status);
             ctx.err_log = Some(log.to_string());
@@ -83,6 +78,37 @@ pub(super) fn apply_tls_l4_post_select(
         }
         L4PostSelect::Proceed => false,
     }
+}
+
+/// One real selection/lookup attempt shared by both proxy loops.
+/// Terminal results must return from the connection, never reselect a sibling.
+pub(super) enum TlsBackendAttempt<'a, T> {
+    Ready(&'a CompiledServiceTarget, T),
+    Retryable(&'a CompiledServiceTarget),
+    Terminal,
+}
+
+pub(super) fn resolve_tls_backend_attempt<'a, T, E>(
+    unit: &'a TlsRouteUnit,
+    ctx: &mut TlsContext,
+    resolve: impl FnOnce(&'a CompiledServiceTarget) -> Result<T, E>,
+) -> TlsBackendAttempt<'a, T> {
+    let Ok(selected) = unit.select_backend() else {
+        ctx.err_log = Some("no backend".to_string());
+        return TlsBackendAttempt::Terminal;
+    };
+    match selected.with_service(|target| resolve(target).map_err(|_| target)) {
+        Ok((target, endpoint)) => TlsBackendAttempt::Ready(target, endpoint),
+        Err(L4ResolveError::Unavailable(target)) => TlsBackendAttempt::Retryable(target),
+        Err(L4ResolveError::Rejected(_)) => {
+            apply_tls_l4_post_select(ctx, selected);
+            TlsBackendAttempt::Terminal
+        }
+    }
+}
+
+pub(super) fn tls_connect_retry_delay(attempt: u32, max_attempts: u32) -> Option<Duration> {
+    (attempt.saturating_add(1) < max_attempts).then(|| tls_connect_retry_backoff(attempt))
 }
 
 pub(super) const MAX_TLS_CONNECT_RETRIES: u32 = 5;

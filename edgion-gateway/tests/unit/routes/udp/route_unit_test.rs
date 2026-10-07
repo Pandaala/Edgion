@@ -43,20 +43,20 @@ fn make_route(annotations: Option<std::collections::BTreeMap<String, String>>) -
 fn test_stream_plugin_store_key_resolved_on_unit() {
     let mut a = std::collections::BTreeMap::new();
     a.insert("edgion.io/edgion-stream-plugins".to_string(), "ns/plugins".to_string());
-    let unit = UdpRouteUnit::from_route(make_route(Some(a)));
+    let unit = UdpRouteUnit::from_route(make_route(Some(a))).unwrap();
     assert_eq!(unit.stream_plugin_store_key, Some("ns/plugins".to_string()));
 }
 
 #[test]
 fn test_no_annotation_leaves_store_key_none() {
-    let unit = UdpRouteUnit::from_route(make_route(None));
+    let unit = UdpRouteUnit::from_route(make_route(None)).unwrap();
     assert!(unit.stream_plugin_store_key.is_none());
 }
 
 #[test]
 fn test_backend_finder_built_from_first_rule() {
-    let unit = UdpRouteUnit::from_route(make_route(None));
-    assert!(unit.backend_finder.select().is_ok());
+    let unit = UdpRouteUnit::from_route(make_route(None)).unwrap();
+    assert!(unit.backend_generation().select().is_ok());
 }
 
 #[test]
@@ -78,12 +78,17 @@ fn denied_core_service_ref_remains_selectable() {
             reason: Some("NoMatchingReferenceGrant".to_string()),
         });
     }
-    let unit = UdpRouteUnit::from_route(route);
+    let unit = UdpRouteUnit::from_route(route).unwrap();
     let selected = unit
-        .backend_finder
+        .backend_generation()
         .select()
         .expect("denied core Service stays selectable");
-    assert!(selected.ref_denied.is_some());
+    assert!(unit.route().spec.rules.as_ref().unwrap()[0]
+        .backend_refs
+        .as_ref()
+        .unwrap()[selected.slot()]
+    .ref_denied
+    .is_some());
 }
 
 fn udp_backend(name: &str, group: Option<&str>, kind: Option<&str>, denied: bool) -> UDPBackendRef {
@@ -125,18 +130,20 @@ fn mixed_weight_route() -> Arc<UDPRoute> {
 #[test]
 fn mixed_denied_and_unsupported_keep_declared_weight() {
     use crate::routes::common::{classify_l4_selected_backend, L4SelectedBackend};
-    let unit = UdpRouteUnit::from_route(mixed_weight_route());
+    let unit = UdpRouteUnit::from_route(mixed_weight_route()).unwrap();
     let mut allowed = 0;
     let mut denied = 0;
     let mut invalid = 0;
     for _ in 0..3 {
-        let selected = unit.backend_finder.select().expect("three equal-weight slots");
-        let outcome = classify_l4_selected_backend(
-            selected.ref_denied.as_ref(),
-            selected.group.as_deref(),
-            selected.kind.as_deref(),
-        );
-        match selected.name.as_str() {
+        let selected = unit.backend_generation().select().expect("three equal-weight slots");
+        let outcome = classify_l4_selected_backend(selected);
+        match unit.route().spec.rules.as_ref().unwrap()[0]
+            .backend_refs
+            .as_ref()
+            .unwrap()[selected.slot()]
+        .name
+        .as_str()
+        {
             "allowed" => {
                 allowed += 1;
                 assert_eq!(outcome, L4SelectedBackend::Proceed);
@@ -153,4 +160,10 @@ fn mixed_denied_and_unsupported_keep_declared_weight() {
         }
     }
     assert_eq!((allowed, denied, invalid), (1, 1, 1));
+}
+
+impl UdpRouteUnit {
+    pub(crate) fn backend_generation(&self) -> &Arc<CompiledL4Backends> {
+        &self.backend_finder
+    }
 }

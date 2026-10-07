@@ -14,12 +14,11 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::backends::{
-    select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
+    select_service_endpoint, validate_endpoint_backend_addr, L4BackendRejection, L4ResolveError, ServiceDegradePolicy,
 };
 use crate::observe::{log_udp, UdpLogEntry};
 use crate::routes::common::{
-    classify_l4_selected_backend, L4SelectedBackend, L4_BACKEND_REF_DENIED_STATUS, L4_BACKEND_UNSUPPORTED_KIND_STATUS,
-    UNSAFE_UPSTREAM_ADDRESS_LOG,
+    L4_BACKEND_REF_DENIED_STATUS, L4_BACKEND_UNSUPPORTED_KIND_STATUS, UNSAFE_UPSTREAM_ADDRESS_LOG,
 };
 use crate::routes::tcp::edgion_tcp::{check_stream_plugins, StreamPluginCheck};
 use crate::routes::udp::UdpPortRouteManager;
@@ -271,7 +270,7 @@ impl EdgionUdpProxy {
             .await;
             return;
         };
-        let udp_route = &unit.route;
+        let udp_route = unit.route();
 
         // Require at least one rule. The compiled runtime (backend_finder,
         // stream-plugin store key) lives on the unit and is built from the
@@ -292,9 +291,9 @@ impl EdgionUdpProxy {
         let Some(scope) = resolve_route_scope(
             &publication,
             &self.listener_key,
-            &unit.resolved_parent_refs,
+            unit.resolved_parent_refs(),
             "",
-            unit.route.metadata.namespace.as_deref().unwrap_or("default"),
+            unit.route().metadata.namespace.as_deref().unwrap_or("default"),
             "UDPRoute",
         ) else {
             log_udp(&UdpLogEntry::failure(
@@ -306,14 +305,11 @@ impl EdgionUdpProxy {
             .await;
             return;
         };
-        let resource = unit
-            .stream_plugin_store_key
-            .as_deref()
-            .and_then(|key| scope.stream(key));
+        let resource = unit.stream_plugin_store_key().and_then(|key| scope.stream(key));
         drop(scope);
         drop(publication);
         if let StreamPluginCheck::Deny(reason) = check_stream_plugins(
-            unit.stream_plugin_store_key.as_deref(),
+            unit.stream_plugin_store_key(),
             resource.as_deref(),
             &direct_peer_ip,
             self.listener_port,
@@ -332,7 +328,7 @@ impl EdgionUdpProxy {
 
         drop(resource);
 
-        let Ok(backend_ref) = unit.backend_finder.select() else {
+        let Ok(selected) = unit.select_backend() else {
             log_udp(&UdpLogEntry::failure(
                 self.listener_port,
                 direct_peer_ip,
@@ -342,59 +338,33 @@ impl EdgionUdpProxy {
             .await;
             return;
         };
-        match classify_l4_selected_backend(
-            backend_ref.ref_denied.as_ref(),
-            backend_ref.group.as_deref(),
-            backend_ref.kind.as_deref(),
-        ) {
-            L4SelectedBackend::Denied => {
+        let endpoint = match selected.with_service(|target| {
+            select_service_endpoint(
+                target.key(),
+                target.section().clone(),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+        }) {
+            Ok((_, endpoint)) => endpoint,
+            Err(error) => {
+                let status = match error {
+                    L4ResolveError::Rejected(L4BackendRejection::Denied) => UdpStatus::RefDenied,
+                    L4ResolveError::Rejected(L4BackendRejection::Invalid) => UdpStatus::UnsupportedBackend,
+                    L4ResolveError::Unavailable(_) => UdpStatus::NoBackendResolved,
+                };
                 log_udp(&UdpLogEntry::failure(
                     self.listener_port,
                     direct_peer_ip,
                     direct_peer_port,
-                    UdpStatus::RefDenied.as_str(),
+                    status.as_str(),
                 ))
                 .await;
                 return;
             }
-            L4SelectedBackend::UnsupportedKind => {
-                log_udp(&UdpLogEntry::failure(
-                    self.listener_port,
-                    direct_peer_ip,
-                    direct_peer_port,
-                    UdpStatus::UnsupportedBackend.as_str(),
-                ))
-                .await;
-                return;
-            }
-            L4SelectedBackend::Proceed => {}
-        }
-
-        let route_ns = udp_route.metadata.namespace.as_deref().unwrap_or("default");
-        let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
-        let service_key = format!("{}/{}", backend_ns, backend_ref.name);
-
-        let Ok(section) = service_section_key_from_port(backend_ref.port) else {
-            log_udp(&UdpLogEntry::failure(
-                self.listener_port,
-                direct_peer_ip,
-                direct_peer_port,
-                UdpStatus::NoBackendResolved.as_str(),
-            ))
-            .await;
-            return;
-        };
-        let Ok(endpoint) =
-            select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
-        else {
-            log_udp(&UdpLogEntry::failure(
-                self.listener_port,
-                direct_peer_ip,
-                direct_peer_port,
-                UdpStatus::NoBackendResolved.as_str(),
-            ))
-            .await;
-            return;
         };
 
         let upstream_pingora_addr = endpoint.backend.inner().addr.clone();

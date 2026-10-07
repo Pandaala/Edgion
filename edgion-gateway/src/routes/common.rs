@@ -1,10 +1,11 @@
+use crate::backends::{L4BackendRejection, SelectedL4Backend};
 use crate::runtime::matching::route::ResolvedParentRef;
 use crate::runtime::store::listener_gateway_info::format_gateway_key;
 use edgion_resources::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
 use edgion_resources::constants::annotations::edgion::{
     TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_PROBES, TCP_KEEPALIVE_TIME,
 };
-use edgion_resources::resources::common::{ParentReference, RefDenied, TcpKeepaliveConfig};
+use edgion_resources::resources::common::{ParentReference, TcpKeepaliveConfig};
 use edgion_resources::resources::http_route::RouteParentStatus;
 use kube::api::ObjectMeta;
 use std::collections::BTreeMap;
@@ -27,7 +28,7 @@ pub(crate) const L4_BACKEND_REF_DENIED_STATUS: &str = "RefDenied";
 pub(crate) const L4_BACKEND_REF_DENIED_LOG: &str = "backend ref denied";
 
 /// TCP `status` / UDP failure-status / TLS `status` token when a selected
-/// L4 backendRef is not a core Service. Fixed and non-identifying.
+/// L4 backendRef is not a valid standard Service reference. Fixed and non-identifying.
 pub(crate) const L4_BACKEND_UNSUPPORTED_KIND_STATUS: &str = "UnsupportedBackend";
 
 /// TLS `err_log` / TCP `deny_reason` literal for an unsupported L4
@@ -48,27 +49,21 @@ pub(crate) enum L4SelectedBackend {
 
 /// Final pre-dial authorization and kind gate for a selected L4 backendRef.
 ///
-/// Controller-stamped `ref_denied` wins over kind. Preload filtering of
+/// Controller-stamped denial wins over target validity. Preload filtering of
 /// denied or unsupported refs is a startup optimization only and is not
 /// this boundary. Denied and unsupported slots keep their declared WRR
 /// weight and fail after selection.
 #[inline]
-pub(crate) fn classify_l4_selected_backend(
-    ref_denied: Option<&RefDenied>,
-    group: Option<&str>,
-    kind: Option<&str>,
-) -> L4SelectedBackend {
-    if ref_denied.is_some() {
-        L4SelectedBackend::Denied
-    } else if !is_core_service_backend_ref(group, kind) {
-        L4SelectedBackend::UnsupportedKind
-    } else {
-        L4SelectedBackend::Proceed
+pub(crate) fn classify_l4_selected_backend(selected: SelectedL4Backend<'_>) -> L4SelectedBackend {
+    match selected.service() {
+        Err(L4BackendRejection::Denied) => L4SelectedBackend::Denied,
+        Err(L4BackendRejection::Invalid) => L4SelectedBackend::UnsupportedKind,
+        Ok(_) => L4SelectedBackend::Proceed,
     }
 }
 
 /// Shared post-select action for every L4 dial path, including TLS retry
-/// loops. There is no retry variant: authorization and kind misses must
+/// loops. There is no retry variant: authorization and descriptor misses must
 /// `return`, never `continue`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum L4PostSelect {
@@ -78,8 +73,8 @@ pub(crate) enum L4PostSelect {
 
 /// Map a selected L4 backendRef to the shared dial-path action.
 #[inline]
-pub(crate) fn l4_post_select(ref_denied: Option<&RefDenied>, group: Option<&str>, kind: Option<&str>) -> L4PostSelect {
-    match classify_l4_selected_backend(ref_denied, group, kind) {
+pub(crate) fn l4_post_select(selected: SelectedL4Backend<'_>) -> L4PostSelect {
+    match classify_l4_selected_backend(selected) {
         L4SelectedBackend::Denied => L4PostSelect::FailClosed {
             status: L4_BACKEND_REF_DENIED_STATUS,
             log: L4_BACKEND_REF_DENIED_LOG,
@@ -230,16 +225,6 @@ pub(crate) fn effective_hostnames(resolved: Option<&[String]>, spec: Option<&[St
         }
     }
     vec!["*".to_string()]
-}
-
-/// A BackendRef is routable only when it targets a core Kubernetes Service:
-/// group is `""` / omitted and kind is `"Service"` / omitted.
-///
-/// Single source of truth shared by all L4 route modules (TCP, TLS termination,
-/// TLS passthrough, UDP). Struct-based callers pass
-/// `br.group.as_deref(), br.kind.as_deref()`.
-pub(crate) fn is_core_service_backend_ref(group: Option<&str>, kind: Option<&str>) -> bool {
-    edgion_resources::resources::refs::targets::is_standard_service(group, kind)
 }
 
 /// Resolve the stream plugin store key from a route's metadata annotations.

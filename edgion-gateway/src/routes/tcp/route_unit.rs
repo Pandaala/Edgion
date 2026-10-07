@@ -2,10 +2,10 @@ use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs};
 use crate::runtime::matching::route::ResolvedParentRef;
 use std::sync::Arc;
 
-use crate::lb::BackendSelector;
+use crate::backends::{CompiledL4Backends, SelectedL4Backend};
 use crate::routes::common::{resolve_stream_plugin_store_key, resolve_tcp_keepalive};
 use edgion_resources::resources::common::TcpKeepaliveConfig;
-use edgion_resources::resources::tcp_route::TCPBackendRef;
+use edgion_resources::resources::refs::ReferenceError;
 use edgion_resources::resources::TCPRoute;
 use edgion_resources::ResourceMeta;
 
@@ -19,16 +19,21 @@ use edgion_resources::ResourceMeta;
 /// Per-protocol note: TCP has no hostname fan-out — one unit per route
 /// suffices. `backend_finder` is built for the first rule only, matching the
 /// data-plane read path (`rules.first()`).
+/// The schema and compiled selection cannot be replaced independently.
+/// ```compile_fail
+/// use edgion_gateway::routes::tcp::TcpRouteUnit;
+/// fn replace(unit: &mut TcpRouteUnit) { unit.route = unit.route().clone(); }
+/// ```
 pub struct TcpRouteUnit {
     /// Accepted parent identities resolved once for logical Gateway admission.
-    pub resolved_parent_refs: Vec<ResolvedParentRef>,
-    pub route: Arc<TCPRoute>,
+    resolved_parent_refs: Vec<ResolvedParentRef>,
+    route: Arc<TCPRoute>,
     /// WRR selector over the first rule's backends.
-    pub backend_finder: Arc<BackendSelector<TCPBackendRef>>,
+    backend_finder: Arc<CompiledL4Backends>,
     /// Store key for dynamic stream-plugin lookup (from route annotations).
-    pub stream_plugin_store_key: Option<String>,
+    stream_plugin_store_key: Option<String>,
     /// Resolved TCP keepalive config (from route annotations).
-    pub tcp_keepalive: Option<TcpKeepaliveConfig>,
+    tcp_keepalive: Option<TcpKeepaliveConfig>,
 }
 
 impl TcpRouteUnit {
@@ -38,7 +43,8 @@ impl TcpRouteUnit {
     /// route's metadata/annotations (single source of truth shared with the
     /// HTTP/TLS conf-handlers) and builds the WRR selector from the first
     /// rule's backend refs. None of this state lives on the schema.
-    pub fn from_route(route: Arc<TCPRoute>) -> Self {
+    pub fn from_route(route: Arc<TCPRoute>) -> Result<Self, ReferenceError> {
+        let backend_finder = Arc::new(CompiledL4Backends::from_tcp(&route)?);
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         let accepted = filter_accepted_parent_refs(
             route.spec.parent_refs.as_deref(),
@@ -56,37 +62,39 @@ impl TcpRouteUnit {
         let route_key = route.key_name();
         let stream_plugin_store_key = resolve_stream_plugin_store_key(&route.metadata);
         let tcp_keepalive = resolve_tcp_keepalive(route.metadata.annotations.as_ref(), &route_key);
-        let backend_finder = build_backend_selector(&route);
-        TcpRouteUnit {
+        Ok(TcpRouteUnit {
             route,
             resolved_parent_refs,
             backend_finder,
             stream_plugin_store_key,
             tcp_keepalive,
-        }
+        })
+    }
+
+    pub fn route(&self) -> &Arc<TCPRoute> {
+        &self.route
+    }
+
+    pub(crate) fn select_backend(&self) -> Result<SelectedL4Backend<'_>, u32> {
+        self.backend_finder.select()
+    }
+
+    pub(crate) fn stream_plugin_store_key(&self) -> Option<&str> {
+        self.stream_plugin_store_key.as_deref()
+    }
+
+    pub(crate) fn resolved_parent_refs(&self) -> &[ResolvedParentRef] {
+        &self.resolved_parent_refs
+    }
+
+    pub(crate) fn tcp_keepalive(&self) -> Option<&TcpKeepaliveConfig> {
+        self.tcp_keepalive.as_ref()
     }
 
     /// Delegate to the inner route's resource key (e.g. `"default/my-route"`).
     pub fn key_name(&self) -> String {
         self.route.key_name()
     }
-}
-
-/// Build a WRR selector over the first rule's backend refs.
-///
-/// Denied and non-Service refs keep their declared weight. Fail-close is
-/// the post-select dial gate, not selector construction.
-fn build_backend_selector(route: &TCPRoute) -> Arc<BackendSelector<TCPBackendRef>> {
-    let selector = BackendSelector::new();
-    if let Some(rule) = route.spec.rules.as_ref().and_then(|r| r.first()) {
-        if let Some(backend_refs) = &rule.backend_refs {
-            let (backends, weights): (Vec<_>, Vec<_>) = backend_refs.iter().map(|br| (br.clone(), br.weight)).unzip();
-            if !backends.is_empty() {
-                selector.init(backends, weights);
-            }
-        }
-    }
-    Arc::new(selector)
 }
 
 #[cfg(test)]

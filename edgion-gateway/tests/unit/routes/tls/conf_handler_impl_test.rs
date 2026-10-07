@@ -26,7 +26,7 @@ fn owner_and_status_updates_replace_acceptance_with_unchanged_listeners() {
     route.spec.current_status.as_mut().unwrap().parents[0].controller_name = "example.net/other".into();
     managers.full_set(&HashMap::from([(key.clone(), Arc::new(route.clone()))]));
     let original = managers.get_route(&key).unwrap();
-    assert_eq!(original.accepted_attachments.len(), 1);
+    assert_eq!(original.accepted_attachments().len(), 1);
 
     // The current owner rejects while the complete status reports acceptance.
     route.spec.resolved_status_controller = Some("example.net/owner".into());
@@ -37,9 +37,9 @@ fn owner_and_status_updates_replace_acceptance_with_unchanged_listeners() {
         HashMap::from([(key.clone(), Arc::new(route.clone()))]),
         HashSet::new(),
     );
-    assert!(managers.get_route(&key).unwrap().accepted_attachments.is_empty());
+    assert!(managers.get_route(&key).unwrap().accepted_attachments().is_empty());
     assert_eq!(
-        original.accepted_attachments.len(),
+        original.accepted_attachments().len(),
         1,
         "in-flight snapshot stays immutable"
     );
@@ -53,10 +53,10 @@ fn owner_and_status_updates_replace_acceptance_with_unchanged_listeners() {
         HashMap::from([(key.clone(), Arc::new(route.clone()))]),
         HashSet::new(),
     );
-    assert_eq!(managers.get_route(&key).unwrap().accepted_attachments.len(), 1);
+    assert_eq!(managers.get_route(&key).unwrap().accepted_attachments().len(), 1);
     route.spec.resolved_status_controller = None;
     managers.full_set(&HashMap::from([(key.clone(), Arc::new(route))]));
-    assert!(managers.get_route(&key).unwrap().accepted_attachments.is_empty());
+    assert!(managers.get_route(&key).unwrap().accepted_attachments().is_empty());
     managers.partial_update(HashMap::new(), HashMap::new(), HashSet::from([key.clone()]));
     assert!(managers.get_route(&key).is_none());
 }
@@ -136,7 +136,7 @@ fn test_tls_route_full_set() {
     let mgr = managers.get_or_create_listener_manager(&key443);
     let table = mgr.load_route_table();
     for (key, schema) in &data {
-        assert!(Arc::ptr_eq(&managers.get_route(key).unwrap().route, schema));
+        assert!(Arc::ptr_eq(managers.get_route(key).unwrap().route(), schema));
     }
     assert!(table.match_route("test.example.com").is_some());
     assert!(table.match_route("api.example.com").is_some());
@@ -191,7 +191,7 @@ fn test_sibling_route_add_preserves_route_a_unit_arc() {
         Arc::ptr_eq(&a_before, &a_after),
         "sibling add must not rebuild route A's unit (WRR cursor must be preserved)"
     );
-    assert!(Arc::ptr_eq(&a_before.backend_finder, &a_after.backend_finder));
+    assert!(Arc::ptr_eq(a_before.backend_generation(), a_after.backend_generation()));
     assert!(
         mgr.load_route_table().match_route("b.example.com").is_some(),
         "sibling route B must be routable after the add"
@@ -217,11 +217,17 @@ fn test_schema_sharing_preserves_generations_across_listener_migration() {
     let old_table = Arc::clone(&old_manager.load_route_table());
     let old_unit = old_table.match_route("old.example.com").unwrap();
     let alias_unit = old_table.match_route("alias.example.com").unwrap();
-    assert!(Arc::ptr_eq(&old_unit.route, &original));
+    assert!(Arc::ptr_eq(old_unit.route(), &original));
     assert!(Arc::ptr_eq(&old_unit, &alias_unit));
-    assert!(Arc::ptr_eq(&old_unit.backend_finder, &alias_unit.backend_finder));
+    assert!(Arc::ptr_eq(
+        old_unit.backend_generation(),
+        alias_unit.backend_generation()
+    ));
     assert!(old_table.match_route("unresolved.example.com").is_none());
-    assert_eq!(old_unit.backend_finder.select().unwrap().name, "test-service");
+    assert_eq!(
+        old_unit.select_backend().unwrap().service().unwrap().name(),
+        "test-service"
+    );
 
     let mut replacement = create_test_tls_route("default", "shared", "gw", "new.example.com", 11443, new_key.clone());
     replacement.spec.rules.as_mut().unwrap()[0]
@@ -245,10 +251,13 @@ fn test_schema_sharing_preserves_generations_across_listener_migration() {
     let new_manager = managers.get_or_create_listener_manager(&new_key);
     let new_table = new_manager.load_route_table();
     let new_unit = new_table.match_route("new.example.com").unwrap();
-    assert!(Arc::ptr_eq(&new_unit.route, &replacement));
+    assert!(Arc::ptr_eq(new_unit.route(), &replacement));
     assert!(Arc::ptr_eq(&managers.get_route("default/shared").unwrap(), &new_unit));
     assert!(!Arc::ptr_eq(&old_unit, &new_unit));
-    assert_eq!(new_unit.backend_finder.select().unwrap().name, "new-service");
+    assert_eq!(
+        new_unit.select_backend().unwrap().service().unwrap().name(),
+        "new-service"
+    );
     assert!(new_table.match_route("old.example.com").is_none());
 
     // In-flight connections holding the prior snapshot retain the prior schema and runtime.
@@ -261,7 +270,10 @@ fn test_schema_sharing_preserves_generations_across_listener_migration() {
         original.spec.resolved_listeners.as_ref().unwrap()[0].listener_key,
         old_key
     );
-    assert_eq!(old_unit.backend_finder.select().unwrap().name, "test-service");
+    assert_eq!(
+        old_unit.select_backend().unwrap().service().unwrap().name(),
+        "test-service"
+    );
 }
 
 #[test]
@@ -476,4 +488,146 @@ fn test_update_nonexistent_key_is_safe() {
         mgr.load_route_table().match_route("ghost.example.com").is_some(),
         "update of nonexistent key should insert the new route"
     );
+}
+
+#[test]
+fn invalid_source_withdraws_units_listener_and_publication_and_repairs_bare_key() {
+    use crate::plugins::publication::inputs::GatewayInput;
+    use edgion_resources::ResourceMeta;
+    use serde_json::json;
+    for operation in ["full", "update", "add", "overlap"] {
+        let publisher = PluginPublisher::new();
+        publisher.replace_gateway_classes(HashMap::from([(
+            "class".into(),
+            Arc::new(
+                serde_json::from_value(json!({
+                    "metadata": {"name": "class"}, "spec": {"controllerName": "edgion.io/gateway-controller"}
+                }))
+                .unwrap(),
+            ),
+        )]));
+        let gateway: edgion_resources::Gateway = crate::test_current_status::from_value(json!({
+            "metadata": {"name": "gateway", "namespace": "default"},
+            "spec": {"gatewayClassName": "class", "listeners": [{"name": "tls", "port": 19876, "protocol": "TLS", "tls": {"mode": "Passthrough"}}]}
+        })).unwrap();
+        publisher.replace_gateways(HashMap::from([(
+            "default/gateway".into(),
+            GatewayInput::from_gateway(&gateway),
+        )]));
+        publisher.replace_stream_plugins(HashMap::from([("default/policy".into(), Arc::new(serde_json::from_value(json!({
+            "metadata": {"name": "policy", "namespace": "default"},
+            "spec": {"tlsRoutePlugins": [{"type": "IpRestriction", "config": {"ipSource": "DirectPeerIp", "deny": [{"name": "blocked", "cidrs": ["192.0.2.0/24"]}]}}]}
+        })).unwrap()))]));
+        assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+        let managers = GlobalTlsRouteManagers::new();
+        let listener = make_listener_key(19876, "TLS");
+        let mut route = create_test_tls_route("default", "route", "gateway", "example.com", 19876, listener.clone());
+        route.metadata.namespace = None;
+        route.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            "edgion.io/edgion-stream-plugins".into(),
+            "policy".into(),
+        )]));
+        route.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].namespace = None;
+        let key = route.key_name();
+        assert_eq!(
+            key, "route",
+            "manager identity stays raw while target defaults to default"
+        );
+        let valid = Arc::new(route.clone());
+        route.metadata.name = Some(String::new());
+        let invalid = Arc::new(route);
+        managers.full_set_with_publisher(&HashMap::from([(key.clone(), invalid.clone())]), &publisher);
+        assert!(managers.get_route(&key).is_none());
+        assert_eq!(
+            publisher.snapshot().stats().stream_cached_entries,
+            0,
+            "invalid owner creates no executable plugin demand"
+        );
+        managers.full_set_with_publisher(&HashMap::from([(key.clone(), valid.clone())]), &publisher);
+        let original = managers.get_route(&key).unwrap();
+        assert!(managers.get_route("default/route").is_none());
+        assert!(Arc::ptr_eq(original.route(), &valid));
+        assert_eq!(
+            original.select_backend().unwrap().service().unwrap().key(),
+            "default/test-service"
+        );
+        assert_eq!(
+            publisher.snapshot().stats().stream_cached_entries,
+            1,
+            "positive control compiles the demanded stream entry"
+        );
+        assert!(publisher
+            .snapshot()
+            .gateway("default/gateway")
+            .unwrap()
+            .scope
+            .stream("default/policy")
+            .is_some());
+        let retained_manager = managers.get_or_create_listener_manager(&listener);
+        let table = retained_manager.load_route_table();
+        assert!(table.match_route("example.com").is_some());
+        drop(table);
+        match operation {
+            "full" => managers.full_set_with_publisher(&HashMap::from([(key.clone(), invalid)]), &publisher),
+            "update" => managers.partial_update_with_publisher(
+                HashMap::new(),
+                HashMap::from([(key.clone(), invalid)]),
+                HashSet::new(),
+                &publisher,
+            ),
+            "add" => managers.partial_update_with_publisher(
+                HashMap::from([(key.clone(), invalid)]),
+                HashMap::new(),
+                HashSet::new(),
+                &publisher,
+            ),
+            "overlap" => managers.partial_update_with_publisher(
+                HashMap::from([(key.clone(), invalid)]),
+                HashMap::from([(key.clone(), valid.clone())]),
+                HashSet::from([key.clone()]),
+                &publisher,
+            ),
+            _ => unreachable!(),
+        }
+        assert!(managers.get_route(&key).is_none());
+        let table = retained_manager.load_route_table();
+        assert!(
+            table.match_route("example.com").is_none(),
+            "current retained listener must be empty"
+        );
+        drop(table);
+        assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+        assert!(publisher
+            .snapshot()
+            .gateway("default/gateway")
+            .unwrap()
+            .scope
+            .stream("default/policy")
+            .is_none());
+        assert_eq!(
+            original.select_backend().unwrap().service().unwrap().key(),
+            "default/test-service",
+            "old selected generation remains immutable"
+        );
+        managers.partial_update_with_publisher(
+            HashMap::new(),
+            HashMap::from([(key.clone(), valid)]),
+            HashSet::new(),
+            &publisher,
+        );
+        let repaired = managers.get_route(&key).unwrap();
+        assert!(!Arc::ptr_eq(&original, &repaired));
+        assert_eq!(publisher.snapshot().stats().stream_cached_entries, 1);
+        let repaired_manager = managers.get_or_create_listener_manager(&listener);
+        managers.partial_update_with_publisher(
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::from([key.clone()]),
+            &publisher,
+        );
+        assert!(managers.get_route(&key).is_none());
+        let table = repaired_manager.load_route_table();
+        assert!(table.match_route("example.com").is_none());
+        assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+    }
 }

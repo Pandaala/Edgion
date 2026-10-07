@@ -43,8 +43,8 @@ fn make_route(annotations: Option<std::collections::BTreeMap<String, String>>) -
 fn test_keepalive_annotation_resolved_on_unit() {
     let mut annotations = std::collections::BTreeMap::new();
     annotations.insert("edgion.io/tcp-keepalive-time".to_string(), "90".to_string());
-    let unit = TcpRouteUnit::from_route(make_route(Some(annotations)));
-    let ka = unit.tcp_keepalive.as_ref().expect("keepalive enabled");
+    let unit = TcpRouteUnit::from_route(make_route(Some(annotations))).unwrap();
+    let ka = unit.tcp_keepalive().expect("keepalive enabled");
     assert_eq!(ka.idle, std::time::Duration::from_secs(90));
     assert_eq!(ka.interval, std::time::Duration::from_secs(75)); // default
     assert_eq!(ka.count, 9); // default
@@ -52,15 +52,15 @@ fn test_keepalive_annotation_resolved_on_unit() {
 
 #[test]
 fn test_no_keepalive_annotation_leaves_unit_field_none() {
-    let unit = TcpRouteUnit::from_route(make_route(None));
-    assert!(unit.tcp_keepalive.is_none());
+    let unit = TcpRouteUnit::from_route(make_route(None)).unwrap();
+    assert!(unit.tcp_keepalive().is_none());
 }
 
 #[test]
 fn test_backend_finder_built_from_first_rule() {
-    let unit = TcpRouteUnit::from_route(make_route(None));
+    let unit = TcpRouteUnit::from_route(make_route(None)).unwrap();
     // A single core-service backend ref is selectable.
-    assert!(unit.backend_finder.select().is_ok());
+    assert!(unit.backend_generation().select().is_ok());
 }
 
 #[test]
@@ -84,12 +84,17 @@ fn denied_core_service_ref_remains_selectable() {
             reason: Some("NoMatchingReferenceGrant".to_string()),
         });
     }
-    let unit = TcpRouteUnit::from_route(route);
+    let unit = TcpRouteUnit::from_route(route).unwrap();
     let selected = unit
-        .backend_finder
+        .backend_generation()
         .select()
         .expect("denied core Service stays selectable");
-    assert!(selected.ref_denied.is_some());
+    assert!(unit.route().spec.rules.as_ref().unwrap()[0]
+        .backend_refs
+        .as_ref()
+        .unwrap()[selected.slot()]
+    .ref_denied
+    .is_some());
 }
 
 fn tcp_backend(name: &str, group: Option<&str>, kind: Option<&str>, denied: bool) -> TCPBackendRef {
@@ -131,18 +136,20 @@ fn mixed_weight_route() -> Arc<TCPRoute> {
 #[test]
 fn mixed_denied_and_unsupported_keep_declared_weight() {
     use crate::routes::common::{classify_l4_selected_backend, L4SelectedBackend};
-    let unit = TcpRouteUnit::from_route(mixed_weight_route());
+    let unit = TcpRouteUnit::from_route(mixed_weight_route()).unwrap();
     let mut allowed = 0;
     let mut denied = 0;
     let mut invalid = 0;
     for _ in 0..3 {
-        let selected = unit.backend_finder.select().expect("three equal-weight slots");
-        let outcome = classify_l4_selected_backend(
-            selected.ref_denied.as_ref(),
-            selected.group.as_deref(),
-            selected.kind.as_deref(),
-        );
-        match selected.name.as_str() {
+        let selected = unit.backend_generation().select().expect("three equal-weight slots");
+        let outcome = classify_l4_selected_backend(selected);
+        match unit.route().spec.rules.as_ref().unwrap()[0]
+            .backend_refs
+            .as_ref()
+            .unwrap()[selected.slot()]
+        .name
+        .as_str()
+        {
             "allowed" => {
                 allowed += 1;
                 assert_eq!(outcome, L4SelectedBackend::Proceed);
@@ -159,4 +166,10 @@ fn mixed_denied_and_unsupported_keep_declared_weight() {
         }
     }
     assert_eq!((allowed, denied, invalid), (1, 1, 1));
+}
+
+impl TcpRouteUnit {
+    pub(crate) fn backend_generation(&self) -> &Arc<CompiledL4Backends> {
+        &self.backend_finder
+    }
 }

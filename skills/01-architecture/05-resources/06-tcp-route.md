@@ -47,12 +47,26 @@ Produce a RouteParentStatus for each parentRef and set the Accepted and Resolved
 
 TCPRoute's ConfHandler compiles routes into `GlobalTcpRouteManagers`:
 
-1. **Route compilation**: call `initialize_route()` to compile the shared `Arc<TCPRoute>` schema into a `TcpRouteUnit`; this initializer builds runtime state, not a route-validation gate
+1. **Route compilation**: call `initialize_route()` to compile the shared `Arc<TCPRoute>` schema into a `TcpRouteUnit`; invalid source identity rejects executable compilation before runtime or plugin demand is built
 2. **Per-listener management**: based on resolved_listeners, register into the route manager of the corresponding `ListenerKey`
 3. **Full / incremental updates**: full_set clears and rebuilds all route caches and listener managers; partial_update collects affected listeners (old + new) and rebuilds only those listeners' route tables
 4. **First-match semantics**: sort compiled units by resource key (`namespace/name`) at table-build time and select the first unit. This is a deterministic fallback for an over-bound listener, not registration order or full Gateway API conflict arbitration
 
 See [Gateway TCP route details](../02-gateway/03-routes/03-tcp-route.md) for the canonical table, compilation, and snapshot ownership description.
+
+The Gateway compiles the actual immutable TCPRoute's first-rule effective
+references through the canonical owning adapter. Private compiled slots retain
+original weights, including invalid and denied references. A selected malformed
+reference fails as `UnsupportedBackend`; denial takes precedence as `RefDenied`.
+Neither reaches backend discovery. Required Service ports are validated before
+selection; unavailable live sections remain runtime failures.
+
+Invalid owners remain visible through the Controller's existing raw/status
+contract, but create no executable unit or plugin publication demand. Full and
+incremental replacements clear stale cache/listener/publication state; an existing
+key in the add bucket is cleared before initialization too. Omitted source
+namespace preserves the bare manager key while backend identity defaults to
+`default`. Retained in-flight units keep their original generation.
 
 ## Cross-resource relationships
 

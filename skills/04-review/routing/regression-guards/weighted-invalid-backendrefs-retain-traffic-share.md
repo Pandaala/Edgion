@@ -54,6 +54,17 @@ preserved, but its unsafe context-only policy-capture expectation is replaced by
 None and a zero actual-lookup counter using the same malicious input and installed
 policy. An Invalid slot can no longer recover Service authority from request context.
 
+## L4 selected failure boundary
+
+TCP, UDP and both retained TLS proxy implementations select original indices from
+a private actual-Route generation. Invalid and denied slots keep their weights,
+but the selected loan cannot call the discovery resolver. Denial wins over
+malformation. Missing or out-of-range declared Service ports now fail terminally
+as `UnsupportedBackend`; the former TLS `continue` transferred that failure share
+to a sibling and is superseded. Valid live section/endpoint failure still permits
+the existing TLS retry; connect retry limits/backoff remain unchanged. TCP/UDP
+gain no retries. Existing UDP sessions remain pinned until removal or idle expiry.
+
 ## Historical evidence and re-evaluation
 
 The `gw-12` resolution (2026-08-09) preserved weighted-invalid failure shares. Its

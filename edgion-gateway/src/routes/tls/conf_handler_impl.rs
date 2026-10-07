@@ -1,3 +1,8 @@
+use crate::plugins::publication::{
+    global_publisher,
+    inputs::{RouteInput, RouteKind},
+    PluginPublisher,
+};
 use crate::routes::l4_partial_update::apply_l4_partial_update;
 use crate::routes::tls::route_unit::TlsRouteUnit;
 use crate::routes::tls::routes_mgr::resolved_listeners_for_route;
@@ -15,6 +20,20 @@ pub fn create_tls_route_handler() -> Box<dyn ConfHandler<TLSRoute> + Send + Sync
 
 impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<TLSRoute>>) {
+        self.full_set_with_publisher(data, global_publisher());
+    }
+    fn partial_update(
+        &self,
+        add: HashMap<String, Arc<TLSRoute>>,
+        update: HashMap<String, Arc<TLSRoute>>,
+        remove: HashSet<String>,
+    ) {
+        self.partial_update_with_publisher(add, update, remove, global_publisher());
+    }
+}
+
+impl GlobalTlsRouteManagers {
+    fn full_set_with_publisher(&self, data: &HashMap<String, Arc<TLSRoute>>, publisher: &PluginPublisher) {
         // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
         let _guard = self.lock_rebuild();
         let start_time = Instant::now();
@@ -25,10 +44,12 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
         );
 
         self.clear_route_cache();
+        let mut policy_inputs = HashMap::new();
 
         for (key, route) in data {
             match self.initialize_route(Arc::clone(route)) {
                 Ok(initialized) => {
+                    policy_inputs.insert(key.clone(), RouteInput::from_tls(initialized.route()));
                     self.insert_route(initialized);
                 }
                 Err(e) => {
@@ -48,36 +69,17 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             "full set done"
         );
         drop(_guard);
-        crate::plugins::publication::global_publisher().replace_routes(
-            crate::plugins::publication::inputs::RouteKind::Tls,
-            data.iter()
-                .map(|(key, route)| {
-                    (
-                        key.clone(),
-                        crate::plugins::publication::inputs::RouteInput::from_tls(route),
-                    )
-                })
-                .collect(),
-        );
+        publisher.replace_routes(RouteKind::Tls, policy_inputs);
     }
 
-    fn partial_update(
+    fn partial_update_with_publisher(
         &self,
         add: HashMap<String, Arc<TLSRoute>>,
         update: HashMap<String, Arc<TLSRoute>>,
         remove: HashSet<String>,
+        publisher: &PluginPublisher,
     ) {
-        let policy_inputs = add
-            .iter()
-            .chain(update.iter())
-            .map(|(key, route)| {
-                (
-                    key.clone(),
-                    crate::plugins::publication::inputs::RouteInput::from_tls(route),
-                )
-            })
-            .collect();
-        let policy_removed = remove.clone();
+        let policy_removed: HashSet<_> = remove.iter().chain(update.keys()).chain(add.keys()).cloned().collect();
         // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
         let _guard = self.lock_rebuild();
         tracing::info!(
@@ -94,23 +96,27 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             update,
             remove,
             |key| self.get_route(key),
-            |u| resolved_listeners_for_route(&u.route),
+            |u| resolved_listeners_for_route(u.route()),
             |key| self.remove_route(key),
             |route| {
                 self.initialize_route(route).map(|unit| {
-                    let lks = resolved_listeners_for_route(&unit.route);
+                    let lks = resolved_listeners_for_route(unit.route());
                     self.insert_route(unit);
                     lks
                 })
             },
             |affected| self.rebuild_affected_listener_managers(affected),
         );
+        // Publish only the final surviving units, respecting remove/update/add order.
+        let policy_inputs = policy_removed
+            .iter()
+            .filter_map(|key| {
+                self.get_route(key)
+                    .map(|unit| (key.clone(), RouteInput::from_tls(unit.route())))
+            })
+            .collect();
         drop(_guard);
-        crate::plugins::publication::global_publisher().update_routes(
-            crate::plugins::publication::inputs::RouteKind::Tls,
-            policy_inputs,
-            &policy_removed,
-        );
+        publisher.update_routes(RouteKind::Tls, policy_inputs, &policy_removed);
     }
 }
 
@@ -125,7 +131,9 @@ impl GlobalTlsRouteManagers {
     /// stream-plugin store key) lives on [`TlsRouteUnit`], not the schema; see
     /// [`TlsRouteUnit::from_route`].
     fn initialize_route(&self, route: Arc<TLSRoute>) -> Result<Arc<TlsRouteUnit>, String> {
-        Ok(Arc::new(TlsRouteUnit::from_route(route)))
+        TlsRouteUnit::from_route(route)
+            .map(Arc::new)
+            .map_err(|error| error.to_string())
     }
 }
 

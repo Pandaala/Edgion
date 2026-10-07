@@ -6,11 +6,15 @@ use std::sync::Arc;
 
 use crate::backends::discovery::ServiceSectionKey;
 use crate::backends::policy::BackendTlsPolicyLookup;
+use crate::lb::BackendSelector;
 use crate::routes::http::match_unit::CompiledBackend;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
-use edgion_resources::resources::refs::route_fields::EffectiveBackendReference;
+use edgion_resources::resources::refs::route_fields::{
+    EffectiveBackendReference, TcpRouteBackendRefs, TlsRouteBackendRefs, UdpRouteBackendRefs,
+};
 use edgion_resources::resources::refs::targets::BackendTarget;
-use edgion_resources::HTTPBackendRefKind;
+use edgion_resources::resources::refs::ReferenceError;
+use edgion_resources::{HTTPBackendRefKind, TCPRoute, TLSRoute, UDPRoute};
 
 /// A canonical Service section compiled from an actual Route's effective field.
 /// Its identity is a target projection, never ReferenceGrant authority.
@@ -89,6 +93,111 @@ impl CompiledBackendTarget {
             Self::EdgionBackend(target) => Some(target),
             Self::Invalid { .. } => None,
         }
+    }
+}
+
+/// One immutable first-rule generation. Only actual L4 owners can construct it.
+pub(crate) struct CompiledL4Backends {
+    slots: Box<[CompiledL4Backend]>,
+    selector: BackendSelector<usize>,
+}
+
+struct CompiledL4Backend {
+    slot: usize,
+    weight: Option<i32>,
+    denied: bool,
+    target: CompiledBackendTarget,
+}
+
+impl CompiledL4Backends {
+    pub(crate) fn from_tcp(route: &TCPRoute) -> Result<Self, ReferenceError> {
+        Ok(Self::from_references(
+            TcpRouteBackendRefs::from_route(route)?.effective(),
+        ))
+    }
+
+    pub(crate) fn from_tls(route: &TLSRoute) -> Result<Self, ReferenceError> {
+        Ok(Self::from_references(
+            TlsRouteBackendRefs::from_route(route)?.effective(),
+        ))
+    }
+
+    pub(crate) fn from_udp(route: &UDPRoute) -> Result<Self, ReferenceError> {
+        Ok(Self::from_references(
+            UdpRouteBackendRefs::from_route(route)?.effective(),
+        ))
+    }
+
+    fn from_references<'a>(references: impl Iterator<Item = EffectiveBackendReference<'a>>) -> Self {
+        let slots: Box<[_]> = references
+            .take_while(|reference| reference.slot().rule() == 0)
+            .map(|reference| CompiledL4Backend {
+                slot: reference.slot().backend(),
+                weight: reference.weight(),
+                denied: reference.ref_denied().is_some(),
+                target: CompiledBackendTarget::from_reference(reference, HTTPBackendRefKind::Unsupported),
+            })
+            .collect();
+        let selector = BackendSelector::new();
+        selector.init(
+            (0..slots.len()).collect(),
+            slots.iter().map(|slot| slot.weight).collect(),
+        );
+        Self { slots, selector }
+    }
+
+    #[inline]
+    pub(crate) fn select(&self) -> Result<SelectedL4Backend<'_>, u32> {
+        let index = self.selector.select()?;
+        self.slots
+            .get(index)
+            .filter(|slot| slot.slot == index)
+            .map(|slot| SelectedL4Backend { slot })
+            .ok_or(crate::lb::backend_selector::ERR_NO_BACKEND_REFS)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum L4BackendRejection {
+    Denied,
+    Invalid,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum L4ResolveError<E> {
+    Rejected(L4BackendRejection),
+    Unavailable(E),
+}
+
+/// Borrowed selection from one sealed generation; it cannot be reconstructed
+/// from a raw reference, target, index, or namespace by a transport caller.
+#[derive(Clone, Copy)]
+pub(crate) struct SelectedL4Backend<'a> {
+    slot: &'a CompiledL4Backend,
+}
+
+impl<'a> SelectedL4Backend<'a> {
+    #[inline]
+    pub(crate) fn service(self) -> Result<&'a CompiledServiceTarget, L4BackendRejection> {
+        if self.slot.denied {
+            return Err(L4BackendRejection::Denied);
+        }
+        match &self.slot.target {
+            CompiledBackendTarget::Service(target) => Ok(target),
+            _ => Err(L4BackendRejection::Invalid),
+        }
+    }
+
+    /// The closure is the actual discovery boundary in every L4 dial path.
+    #[inline]
+    pub(crate) fn with_service<T, E>(
+        self,
+        resolve: impl FnOnce(&'a CompiledServiceTarget) -> Result<T, E>,
+    ) -> Result<(&'a CompiledServiceTarget, T), L4ResolveError<E>> {
+        let target = self.service().map_err(L4ResolveError::Rejected)?;
+        resolve(target)
+            .map(|resolved| (target, resolved))
+            .map_err(L4ResolveError::Unavailable)
     }
 }
 

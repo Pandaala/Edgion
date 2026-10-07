@@ -64,6 +64,30 @@ for bucketing and clear-pass mechanics, and the
 - Selects a backend through the unit's compiled `backend_finder` and establishes an upstream TCP connection after the existing backend checks.
 - Forwards data transparently in both directions, never parsing the application layer.
 
+## Compiled backend boundary
+
+The unit privately couples its actual schema Arc, cold compiled Service targets
+and original-index selector. Only the owning Route adapter constructs that
+generation; the connection path borrows a selected slot and its checked numeric
+Service section, without raw reference cloning or Service-key formatting. All
+original weights and occurrences remain, including invalid/denied failure slots.
+Denial is checked first. Invalid descriptors (including missing or invalid declared
+ports) terminate with `UnsupportedBackend` before discovery; a valid Service whose
+live section/endpoints are unavailable retains the existing runtime failure.
+
+Compilation rejects malformed source name/namespace before annotation-derived
+runtime or plugin demand. Full publication uses successful units only. Deltas
+remove every touched publication key and add only final surviving cache entries,
+matching the shared remove/update/add order. Same-key add vacates the old unit
+before initialization. Current listener handles are cleared when their route is
+withdrawn, while selected old Arcs retain their generation. Raw manager keys keep
+omitted namespaces as bare names; canonical backend namespaces default to
+`default`. This does not claim atomicity across separate stores or listeners.
+
+The endpoint selector retains live degradation and existing address-safety,
+connect timeout, outlier accounting and relay behavior. No retry or upstream TLS
+is added. Route-stage stream-plugin evaluation retains its existing ordering.
+
 ## Key source files
 
 | File | Responsibility |

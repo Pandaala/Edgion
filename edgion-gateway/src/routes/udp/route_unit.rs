@@ -2,9 +2,9 @@ use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs};
 use crate::runtime::matching::route::ResolvedParentRef;
 use std::sync::Arc;
 
-use crate::lb::BackendSelector;
+use crate::backends::{CompiledL4Backends, SelectedL4Backend};
 use crate::routes::common::resolve_stream_plugin_store_key;
-use edgion_resources::resources::udp_route::UDPBackendRef;
+use edgion_resources::resources::refs::ReferenceError;
 use edgion_resources::resources::UDPRoute;
 use edgion_resources::ResourceMeta;
 
@@ -18,14 +18,19 @@ use edgion_resources::ResourceMeta;
 /// Per-protocol note: UDP is port-based with no hostname fan-out — one unit per
 /// route suffices. `backend_finder` is built for the first rule only, matching
 /// the data-plane read path (`rules.first()`).
+/// The schema and compiled selection cannot be replaced independently.
+/// ```compile_fail
+/// use edgion_gateway::routes::udp::UdpRouteUnit;
+/// fn replace(unit: &mut UdpRouteUnit) { unit.route = unit.route().clone(); }
+/// ```
 pub struct UdpRouteUnit {
     /// Accepted parent identities resolved once for logical Gateway admission.
-    pub resolved_parent_refs: Vec<ResolvedParentRef>,
-    pub route: Arc<UDPRoute>,
+    resolved_parent_refs: Vec<ResolvedParentRef>,
+    route: Arc<UDPRoute>,
     /// WRR selector over the first rule's backends.
-    pub backend_finder: Arc<BackendSelector<UDPBackendRef>>,
+    backend_finder: Arc<CompiledL4Backends>,
     /// Store key for dynamic stream-plugin lookup (from route annotations).
-    pub stream_plugin_store_key: Option<String>,
+    stream_plugin_store_key: Option<String>,
 }
 
 impl UdpRouteUnit {
@@ -35,7 +40,8 @@ impl UdpRouteUnit {
     /// source of truth shared with the HTTP/TCP/TLS conf-handlers) and builds
     /// the WRR selector from the first rule's backend refs. None of this state
     /// lives on the schema.
-    pub fn from_route(route: Arc<UDPRoute>) -> Self {
+    pub fn from_route(route: Arc<UDPRoute>) -> Result<Self, ReferenceError> {
+        let backend_finder = Arc::new(CompiledL4Backends::from_udp(&route)?);
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         let accepted = filter_accepted_parent_refs(
             route.spec.parent_refs.as_deref(),
@@ -51,36 +57,34 @@ impl UdpRouteUnit {
         let resolved_parent_refs = resolve_parent_refs(&accepted, namespace);
 
         let stream_plugin_store_key = resolve_stream_plugin_store_key(&route.metadata);
-        let backend_finder = build_backend_selector(&route);
-        UdpRouteUnit {
+        Ok(UdpRouteUnit {
             route,
             resolved_parent_refs,
             backend_finder,
             stream_plugin_store_key,
-        }
+        })
+    }
+
+    pub fn route(&self) -> &Arc<UDPRoute> {
+        &self.route
+    }
+
+    pub(crate) fn select_backend(&self) -> Result<SelectedL4Backend<'_>, u32> {
+        self.backend_finder.select()
+    }
+
+    pub(crate) fn stream_plugin_store_key(&self) -> Option<&str> {
+        self.stream_plugin_store_key.as_deref()
+    }
+
+    pub(crate) fn resolved_parent_refs(&self) -> &[ResolvedParentRef] {
+        &self.resolved_parent_refs
     }
 
     /// Delegate to the inner route's resource key (e.g. `"default/my-route"`).
     pub fn key_name(&self) -> String {
         self.route.key_name()
     }
-}
-
-/// Build a WRR selector over the first rule's backend refs.
-///
-/// Denied and non-Service refs keep their declared weight. Fail-close is
-/// the post-select dial gate, not selector construction.
-fn build_backend_selector(route: &UDPRoute) -> Arc<BackendSelector<UDPBackendRef>> {
-    let selector = BackendSelector::new();
-    if let Some(rule) = route.spec.rules.as_ref().and_then(|r| r.first()) {
-        if let Some(backend_refs) = &rule.backend_refs {
-            let (backends, weights): (Vec<_>, Vec<_>) = backend_refs.iter().map(|br| (br.clone(), br.weight)).unzip();
-            if !backends.is_empty() {
-                selector.init(backends, weights);
-            }
-        }
-    }
-    Arc::new(selector)
 }
 
 #[cfg(test)]

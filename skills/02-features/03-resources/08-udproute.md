@@ -50,7 +50,7 @@ spec:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | `String` | Yes | Service name |
-| `port` | `i32?` | No | Target port |
+| `port` | `i32?` | Yes for Service | Declared Service port, `1..=65535`; absence remains representable for validation |
 | `weight` | `i32?` | No | Traffic weight |
 | `namespace` | `String?` | No | Namespace |
 | `kind` | `String?` | No | Default `Service` |
@@ -60,7 +60,7 @@ spec:
 
 - **No match conditions**: UDP routes forward by port only.
 - **Per-listener isolation**: each Listener (indexed by `ListenerKey`) routes independently.
-- **No connection state**: UDP is connectionless; each datagram is routed independently.
-- **StreamPlugins**: `edgion.io/edgion-stream-plugins` enables the Stage-1
-  connection filter (the IP-based pre-routing stage). UDP has no TLS plugin
+- **Pinned client sessions**: the first packet selects an upstream; later packets reuse that address until the session is removed or expires after 60 seconds of inactivity. Route changes affect newly created sessions.
+- **StreamPlugins**: `edgion.io/edgion-stream-plugins` runs the route-stage
+  stream check before a new session is created. Established sessions bypass it. UDP has no TLS plugin
   stage and does not use TCP keepalive, Proxy Protocol, or connect retries.

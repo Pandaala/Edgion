@@ -5,10 +5,10 @@ use edgion_algo::matcher::radix_hostname::RadixHostnamePatternRef;
 use std::sync::Arc;
 
 use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
-use crate::lb::BackendSelector;
+use crate::backends::{CompiledL4Backends, SelectedL4Backend};
 use crate::routes::common::{resolve_stream_plugin_store_key, resolve_tcp_keepalive};
 use edgion_resources::resources::common::TcpKeepaliveConfig;
-use edgion_resources::resources::tls_route::TLSBackendRef;
+use edgion_resources::resources::refs::ReferenceError;
 use edgion_resources::resources::TLSRoute;
 use edgion_resources::ResourceMeta;
 
@@ -28,25 +28,30 @@ pub(crate) struct AcceptedTlsAttachment {
 /// Per-protocol note: TLS routes fan out across SNI hostnames but a single
 /// route shares one rule set, so the compiled runtime is built from the first
 /// rule (matching the data-plane read path `rules.first()`).
+/// The schema and compiled selection cannot be replaced independently.
+/// ```compile_fail
+/// use edgion_gateway::routes::tls::TlsRouteUnit;
+/// fn replace(unit: &mut TlsRouteUnit) { unit.route = unit.route().clone(); }
+/// ```
 pub struct TlsRouteUnit {
     /// Each effective hostname list stays paired with its exact logical owner.
-    pub(crate) accepted_attachments: Vec<AcceptedTlsAttachment>,
-    pub route: Arc<TLSRoute>,
+    accepted_attachments: Vec<AcceptedTlsAttachment>,
+    route: Arc<TLSRoute>,
     /// WRR selector over the first rule's backends (one per route, shared
     /// across all SNI hostnames that map to this route).
-    pub backend_finder: Arc<BackendSelector<TLSBackendRef>>,
+    backend_finder: Arc<CompiledL4Backends>,
     /// Store key for dynamic stream-plugin lookup (from route annotations).
-    pub stream_plugin_store_key: Option<String>,
+    stream_plugin_store_key: Option<String>,
     /// Proxy Protocol version to send upstream (None = disabled, Some(2) = PP2).
-    pub proxy_protocol_version: Option<u8>,
+    proxy_protocol_version: Option<u8>,
     /// Max upstream connect attempts (1 = no retry).
-    pub max_connect_retries: u32,
+    max_connect_retries: u32,
     /// Resolved upstream TCP keepalive config (from route annotations).
-    pub tcp_keepalive: Option<TcpKeepaliveConfig>,
+    tcp_keepalive: Option<TcpKeepaliveConfig>,
     /// Operator log labels resolved once from the route metadata (annotations /
     /// labels) at build time, attached to `rsc.labels` in the TLS access log.
     /// Resolving here keeps the per-connection match path off the metadata scan.
-    pub log_labels: Option<crate::LogLabels>,
+    log_labels: Option<crate::LogLabels>,
 }
 
 impl TlsRouteUnit {
@@ -56,7 +61,8 @@ impl TlsRouteUnit {
     /// retry budget and keepalive config from the route's metadata/annotations
     /// (single source of truth shared with the HTTP/TCP conf-handlers) and
     /// builds the WRR selector from the first rule's backend refs.
-    pub fn from_route(route: Arc<TLSRoute>) -> Self {
+    pub fn from_route(route: Arc<TLSRoute>) -> Result<Self, ReferenceError> {
+        let backend_finder = Arc::new(CompiledL4Backends::from_tls(&route)?);
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         let accepted = filter_accepted_parent_refs(
             route.spec.parent_refs.as_deref(),
@@ -146,9 +152,8 @@ impl TlsRouteUnit {
 
         let tcp_keepalive = resolve_tcp_keepalive(annotations, &route_key);
         let log_labels = crate::extract_log_labels(&route.metadata);
-        let backend_finder = build_backend_selector(&route);
 
-        TlsRouteUnit {
+        Ok(TlsRouteUnit {
             route,
             accepted_attachments,
             backend_finder,
@@ -157,30 +162,42 @@ impl TlsRouteUnit {
             max_connect_retries,
             tcp_keepalive,
             log_labels,
-        }
+        })
+    }
+
+    pub fn route(&self) -> &Arc<TLSRoute> {
+        &self.route
+    }
+
+    pub(crate) fn select_backend(&self) -> Result<SelectedL4Backend<'_>, u32> {
+        self.backend_finder.select()
+    }
+
+    pub(crate) fn stream_plugin_store_key(&self) -> Option<&str> {
+        self.stream_plugin_store_key.as_deref()
+    }
+
+    pub(crate) fn accepted_attachments(&self) -> &[AcceptedTlsAttachment] {
+        &self.accepted_attachments
+    }
+    pub(crate) fn proxy_protocol_version(&self) -> Option<u8> {
+        self.proxy_protocol_version
+    }
+    pub(crate) fn max_connect_retries(&self) -> u32 {
+        self.max_connect_retries
+    }
+    pub(crate) fn log_labels(&self) -> Option<&crate::LogLabels> {
+        self.log_labels.as_ref()
+    }
+
+    pub(crate) fn tcp_keepalive(&self) -> Option<&TcpKeepaliveConfig> {
+        self.tcp_keepalive.as_ref()
     }
 
     /// Delegate to the inner route's resource key (e.g. `"default/my-route"`).
     pub fn key_name(&self) -> String {
         self.route.key_name()
     }
-}
-
-/// Build a WRR selector over the first rule's backend refs.
-///
-/// Denied and non-Service refs keep their declared weight. Fail-close is
-/// the post-select dial gate, not selector construction.
-fn build_backend_selector(route: &TLSRoute) -> Arc<BackendSelector<TLSBackendRef>> {
-    let selector = BackendSelector::new();
-    if let Some(rule) = route.spec.rules.as_ref().and_then(|r| r.first()) {
-        if let Some(backend_refs) = &rule.backend_refs {
-            let (backends, weights): (Vec<_>, Vec<_>) = backend_refs.iter().map(|br| (br.clone(), br.weight)).unzip();
-            if !backends.is_empty() {
-                selector.init(backends, weights);
-            }
-        }
-    }
-    Arc::new(selector)
 }
 
 #[cfg(test)]

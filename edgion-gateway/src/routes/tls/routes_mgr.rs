@@ -153,7 +153,7 @@ impl GlobalTlsRouteManagers {
             &self.by_listener,
             &self.route_cache,
             active,
-            |u| resolved_listeners_for_route(&u.route),
+            |u| resolved_listeners_for_route(u.route()),
             |k| self.get_or_create_listener_manager(k),
             |m, units| m.rebuild(units),
         );
@@ -170,7 +170,7 @@ impl GlobalTlsRouteManagers {
             &self.route_cache,
             affected_listeners,
             active,
-            |u| resolved_listeners_for_route(&u.route),
+            |u| resolved_listeners_for_route(u.route()),
             |k| self.get_or_create_listener_manager(k),
             |m, units| m.rebuild(units),
         );

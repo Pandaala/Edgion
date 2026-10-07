@@ -19,7 +19,7 @@ fn owner_and_status_updates_replace_acceptance_with_unchanged_listeners() {
     route.spec.current_status.as_mut().unwrap().parents[0].controller_name = "example.net/other".into();
     managers.full_set(&HashMap::from([(key.clone(), Arc::new(route.clone()))]));
     let original = managers.get_route(&key).unwrap();
-    assert_eq!(original.resolved_parent_refs.len(), 1);
+    assert_eq!(original.resolved_parent_refs().len(), 1);
 
     // The current owner rejects while the complete status reports acceptance.
     route.spec.resolved_status_controller = Some("example.net/owner".into());
@@ -30,9 +30,9 @@ fn owner_and_status_updates_replace_acceptance_with_unchanged_listeners() {
         HashMap::from([(key.clone(), Arc::new(route.clone()))]),
         HashSet::new(),
     );
-    assert!(managers.get_route(&key).unwrap().resolved_parent_refs.is_empty());
+    assert!(managers.get_route(&key).unwrap().resolved_parent_refs().is_empty());
     assert_eq!(
-        original.resolved_parent_refs.len(),
+        original.resolved_parent_refs().len(),
         1,
         "in-flight snapshot stays immutable"
     );
@@ -46,10 +46,10 @@ fn owner_and_status_updates_replace_acceptance_with_unchanged_listeners() {
         HashMap::from([(key.clone(), Arc::new(route.clone()))]),
         HashSet::new(),
     );
-    assert_eq!(managers.get_route(&key).unwrap().resolved_parent_refs.len(), 1);
+    assert_eq!(managers.get_route(&key).unwrap().resolved_parent_refs().len(), 1);
     route.spec.resolved_status_controller = None;
     managers.full_set(&HashMap::from([(key.clone(), Arc::new(route))]));
-    assert!(managers.get_route(&key).unwrap().resolved_parent_refs.is_empty());
+    assert!(managers.get_route(&key).unwrap().resolved_parent_refs().is_empty());
     managers.partial_update(HashMap::new(), HashMap::new(), HashSet::from([key.clone()]));
     assert!(managers.get_route(&key).is_none());
 }
@@ -118,13 +118,13 @@ fn schema_arc_is_shared_across_full_set_and_listener_snapshots() {
     managers.full_set(&data);
 
     let cached = managers.get_route("default/shared").unwrap();
-    assert!(Arc::ptr_eq(&cached.route, &route));
+    assert!(Arc::ptr_eq(cached.route(), &route));
     let first_manager = managers.get_or_create_listener_manager(&first);
     let second_manager = managers.get_or_create_listener_manager(&second);
     for manager in [&first_manager, &second_manager] {
         let selected = manager.load_route_table().match_route().unwrap();
         assert!(Arc::ptr_eq(&selected, &cached));
-        assert!(Arc::ptr_eq(&selected.backend_finder, &cached.backend_finder));
+        assert!(Arc::ptr_eq(selected.backend_generation(), cached.backend_generation()));
     }
 
     managers.full_set(&HashMap::new());
@@ -132,7 +132,7 @@ fn schema_arc_is_shared_across_full_set_and_listener_snapshots() {
     // Check the retained handles, not newly created empty managers.
     assert!(first_manager.load_route_table().match_route().is_none());
     assert!(second_manager.load_route_table().match_route().is_none());
-    assert!(Arc::ptr_eq(&cached.route, &route));
+    assert!(Arc::ptr_eq(cached.route(), &route));
 }
 
 #[test]
@@ -162,8 +162,8 @@ fn delta_schema_sharing_preserves_siblings_and_old_generations() {
     );
     let old_unit = managers.get_route("default/a").unwrap();
     let sibling_unit = managers.get_route("default/b").unwrap();
-    assert!(Arc::ptr_eq(&old_unit.route, &original));
-    assert!(Arc::ptr_eq(&sibling_unit.route, &sibling));
+    assert!(Arc::ptr_eq(old_unit.route(), &original));
+    assert!(Arc::ptr_eq(sibling_unit.route(), &sibling));
     let old_manager = managers.get_or_create_listener_manager(&old_listener);
     let old_snapshot = Arc::clone(&old_manager.load_route_table());
     assert!(Arc::ptr_eq(&old_snapshot.match_route().unwrap(), &old_unit));
@@ -185,27 +185,39 @@ fn delta_schema_sharing_preserves_siblings_and_old_generations() {
     );
     let new_unit = managers.get_route("default/a").unwrap();
     let new_manager = managers.get_or_create_listener_manager(&new_listener);
-    assert!(Arc::ptr_eq(&new_unit.route, &updated));
+    assert!(Arc::ptr_eq(new_unit.route(), &updated));
     assert!(!Arc::ptr_eq(&new_unit, &old_unit));
-    assert!(!Arc::ptr_eq(&new_unit.backend_finder, &old_unit.backend_finder));
+    assert!(!Arc::ptr_eq(
+        new_unit.backend_generation(),
+        old_unit.backend_generation()
+    ));
     assert!(Arc::ptr_eq(
         &new_manager.load_route_table().match_route().unwrap(),
         &new_unit
     ));
     let remaining = old_manager.load_route_table().match_route().unwrap();
     assert!(Arc::ptr_eq(&remaining, &sibling_unit));
-    assert!(Arc::ptr_eq(&remaining.backend_finder, &sibling_unit.backend_finder));
+    assert!(Arc::ptr_eq(
+        remaining.backend_generation(),
+        sibling_unit.backend_generation()
+    ));
     assert!(Arc::ptr_eq(&old_snapshot.match_route().unwrap(), &old_unit));
-    assert_eq!(old_unit.backend_finder.select().unwrap().name, "test-service");
-    assert_eq!(new_unit.backend_finder.select().unwrap().name, "new-service");
-    assert_eq!(old_unit.stream_plugin_store_key.as_deref(), Some("default/old-policy"));
-    assert_eq!(new_unit.stream_plugin_store_key.as_deref(), Some("other/new-policy"));
     assert_eq!(
-        old_unit.route.spec.resolved_listeners.as_ref().unwrap(),
+        old_unit.select_backend().unwrap().service().unwrap().name(),
+        "test-service"
+    );
+    assert_eq!(
+        new_unit.select_backend().unwrap().service().unwrap().name(),
+        "new-service"
+    );
+    assert_eq!(old_unit.stream_plugin_store_key(), Some("default/old-policy"));
+    assert_eq!(new_unit.stream_plugin_store_key(), Some("other/new-policy"));
+    assert_eq!(
+        old_unit.route().spec.resolved_listeners.as_ref().unwrap(),
         &[old_listener]
     );
     assert_eq!(
-        new_unit.route.spec.resolved_listeners.as_ref().unwrap(),
+        new_unit.route().spec.resolved_listeners.as_ref().unwrap(),
         &[new_listener]
     );
 
@@ -255,7 +267,7 @@ fn delta_listener_migration_clears_retained_old_manager() {
         .load_route_table()
         .match_route()
         .unwrap();
-    assert!(Arc::ptr_eq(&selected.route, &updated));
+    assert!(Arc::ptr_eq(selected.route(), &updated));
 }
 
 #[test]
@@ -469,4 +481,144 @@ fn test_partial_update_concurrent_add_and_remove() {
         .match_route()
         .is_some());
     assert_eq!(managers.stats().route_cache, 1);
+}
+
+#[test]
+fn invalid_source_withdraws_units_listener_and_publication_and_repairs_bare_key() {
+    use crate::plugins::publication::inputs::GatewayInput;
+    use edgion_resources::ResourceMeta;
+    use serde_json::json;
+    for operation in ["full", "update", "add", "overlap"] {
+        let publisher = PluginPublisher::new();
+        publisher.replace_gateway_classes(HashMap::from([(
+            "class".into(),
+            Arc::new(
+                serde_json::from_value(json!({
+                    "metadata": {"name": "class"}, "spec": {"controllerName": "edgion.io/gateway-controller"}
+                }))
+                .unwrap(),
+            ),
+        )]));
+        let gateway: edgion_resources::Gateway = crate::test_current_status::from_value(json!({
+            "metadata": {"name": "gateway", "namespace": "default"},
+            "spec": {"gatewayClassName": "class", "listeners": [{"name": "udp", "port": 19876, "protocol": "UDP"}]}
+        }))
+        .unwrap();
+        publisher.replace_gateways(HashMap::from([(
+            "default/gateway".into(),
+            GatewayInput::from_gateway(&gateway),
+        )]));
+        publisher.replace_stream_plugins(HashMap::from([("default/policy".into(), Arc::new(serde_json::from_value(json!({
+            "metadata": {"name": "policy", "namespace": "default"},
+            "spec": {"plugins": [{"type": "IpRestriction", "config": {"ipSource": "DirectPeerIp", "deny": [{"name": "blocked", "cidrs": ["192.0.2.0/24"]}]}}]}
+        })).unwrap()))]));
+        assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+        let managers = GlobalUdpRouteManagers::new();
+        let listener = make_listener_key(19876, "UDP");
+        let mut route = create_test_udp_route("default", "route", "gateway", "udp", 19876, listener.clone());
+        route.metadata.namespace = None;
+        route.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            "edgion.io/edgion-stream-plugins".into(),
+            "policy".into(),
+        )]));
+        route.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].namespace = None;
+        let key = route.key_name();
+        assert_eq!(
+            key, "route",
+            "manager identity stays raw while target defaults to default"
+        );
+        let valid = Arc::new(route.clone());
+        route.metadata.name = Some(String::new());
+        let invalid = Arc::new(route);
+        managers.full_set_with_publisher(&HashMap::from([(key.clone(), invalid.clone())]), &publisher);
+        assert!(managers.get_route(&key).is_none());
+        assert_eq!(
+            publisher.snapshot().stats().stream_cached_entries,
+            0,
+            "invalid owner creates no executable plugin demand"
+        );
+        managers.full_set_with_publisher(&HashMap::from([(key.clone(), valid.clone())]), &publisher);
+        let original = managers.get_route(&key).unwrap();
+        assert!(managers.get_route("default/route").is_none());
+        assert!(Arc::ptr_eq(original.route(), &valid));
+        assert_eq!(
+            original.select_backend().unwrap().service().unwrap().key(),
+            "default/test-service"
+        );
+        assert_eq!(
+            publisher.snapshot().stats().stream_cached_entries,
+            1,
+            "positive control compiles the demanded stream entry"
+        );
+        assert!(publisher
+            .snapshot()
+            .gateway("default/gateway")
+            .unwrap()
+            .scope
+            .stream("default/policy")
+            .is_some());
+        let retained_manager = managers.get_or_create_listener_manager(&listener);
+        let table = retained_manager.load_route_table();
+        assert!(table.match_route().is_some());
+        drop(table);
+        match operation {
+            "full" => managers.full_set_with_publisher(&HashMap::from([(key.clone(), invalid)]), &publisher),
+            "update" => managers.partial_update_with_publisher(
+                HashMap::new(),
+                HashMap::from([(key.clone(), invalid)]),
+                HashSet::new(),
+                &publisher,
+            ),
+            "add" => managers.partial_update_with_publisher(
+                HashMap::from([(key.clone(), invalid)]),
+                HashMap::new(),
+                HashSet::new(),
+                &publisher,
+            ),
+            "overlap" => managers.partial_update_with_publisher(
+                HashMap::from([(key.clone(), invalid)]),
+                HashMap::from([(key.clone(), valid.clone())]),
+                HashSet::from([key.clone()]),
+                &publisher,
+            ),
+            _ => unreachable!(),
+        }
+        assert!(managers.get_route(&key).is_none());
+        let table = retained_manager.load_route_table();
+        assert!(table.match_route().is_none(), "current retained listener must be empty");
+        drop(table);
+        assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+        assert!(publisher
+            .snapshot()
+            .gateway("default/gateway")
+            .unwrap()
+            .scope
+            .stream("default/policy")
+            .is_none());
+        assert_eq!(
+            original.select_backend().unwrap().service().unwrap().key(),
+            "default/test-service",
+            "old selected generation remains immutable"
+        );
+        managers.partial_update_with_publisher(
+            HashMap::new(),
+            HashMap::from([(key.clone(), valid)]),
+            HashSet::new(),
+            &publisher,
+        );
+        let repaired = managers.get_route(&key).unwrap();
+        assert!(!Arc::ptr_eq(&original, &repaired));
+        assert_eq!(publisher.snapshot().stats().stream_cached_entries, 1);
+        let repaired_manager = managers.get_or_create_listener_manager(&listener);
+        managers.partial_update_with_publisher(
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::from([key.clone()]),
+            &publisher,
+        );
+        assert!(managers.get_route(&key).is_none());
+        let table = repaired_manager.load_route_table();
+        assert!(table.match_route().is_none());
+        assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+    }
 }

@@ -38,8 +38,8 @@ fn test_match_route_is_deterministic() {
     let route_a = Arc::new(create_test_tcp_route("a", "route", 9000));
 
     let mut units = HashMap::new();
-    units.insert(route_b.key_name(), Arc::new(TcpRouteUnit::from_route(route_b)));
-    units.insert(route_a.key_name(), Arc::new(TcpRouteUnit::from_route(route_a)));
+    units.insert(route_b.key_name(), Arc::new(TcpRouteUnit::from_route(route_b).unwrap()));
+    units.insert(route_a.key_name(), Arc::new(TcpRouteUnit::from_route(route_a).unwrap()));
 
     let table = TcpRouteTable::from_units(&units);
     assert_eq!(table.route_count(), 2);

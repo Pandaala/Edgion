@@ -13,9 +13,7 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::tls::ssl::NameType;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::backends::{
-    select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
-};
+use crate::backends::{select_service_endpoint, validate_endpoint_backend_addr, ServiceDegradePolicy};
 use crate::config::ResolvedGatewayConfig;
 use crate::observe::log_tls;
 use crate::observe::logs::LogBuffer;
@@ -30,7 +28,7 @@ use crate::{MatchedInfo, Rsc, TlsConnMeta};
 use edgion_resources::{ListenerKey, ResourceMeta};
 use serde::Serialize;
 
-use super::{tls_connect_retry_backoff, TlsDuplexHooks};
+use super::{tls_connect_retry_delay, TlsDuplexHooks};
 
 fn is_zero_u64(v: &u64) -> bool {
     *v == 0
@@ -275,14 +273,14 @@ impl EdgionTlsTcpProxy {
         };
         drop(publication);
         let unit = selected.unit;
-        let tls_route = &unit.route;
+        let tls_route = unit.route();
 
         ctx.matched = Some(MatchedInfo {
             rsc: Rsc {
                 kind: "TLSRoute".to_string(),
                 ns: tls_route.metadata.namespace.clone().unwrap_or_default(),
                 name: tls_route.metadata.name.clone().unwrap_or_default(),
-                labels: unit.log_labels.clone(),
+                labels: unit.log_labels().cloned(),
             },
             section: None,
             sv: tls_route.get_sync_version(),
@@ -300,13 +298,10 @@ impl EdgionTlsTcpProxy {
             ctx.err_log = Some("plugin policy unavailable".to_string());
             return;
         };
-        let resource = unit
-            .stream_plugin_store_key
-            .as_deref()
-            .and_then(|key| scope.stream(key));
+        let resource = unit.stream_plugin_store_key().and_then(|key| scope.stream(key));
         drop(scope);
         if !super::run_tls_route_plugins(
-            unit.stream_plugin_store_key.as_deref(),
+            unit.stream_plugin_store_key(),
             resource.as_deref(),
             ctx,
             sni,
@@ -321,41 +316,29 @@ impl EdgionTlsTcpProxy {
         drop(resource);
 
         // 4. Connect upstream with retry
-        let max_attempts = unit.max_connect_retries;
+        let max_attempts = unit.max_connect_retries();
         let mut upstream = None;
         let mut last_err = String::new();
 
         for attempt in 0..max_attempts {
             // 4a. Select backend (re-select on each retry for load-balancing rotation)
-            let Ok(backend_ref) = unit.backend_finder.select() else {
-                ctx.err_log = Some("no backend".to_string());
-                return;
-            };
-            if super::apply_tls_l4_post_select(
-                ctx,
-                backend_ref.ref_denied.as_ref(),
-                backend_ref.group.as_deref(),
-                backend_ref.kind.as_deref(),
-            ) {
-                // Authorization or kind miss is terminal: do not retry onto
-                // another backend and do not look up or dial the Service.
-                return;
-            }
-
-            // 4b. Resolve backend address via EndpointSlice
-            let route_ns = tls_route.metadata.namespace.as_deref().unwrap_or("default");
-            let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
-            let service_key = format!("{}/{}", backend_ns, backend_ref.name);
-
-            let Ok(section) = service_section_key_from_port(backend_ref.port) else {
-                last_err = format!("no proven section: {}", service_key);
-                continue;
-            };
-            let Ok(endpoint) =
-                select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
-            else {
-                last_err = format!("no endpoint: {}", service_key);
-                continue;
+            let (target, endpoint) = match super::resolve_tls_backend_attempt(&unit, ctx, |target| {
+                select_service_endpoint(
+                    target.key(),
+                    target.section().clone(),
+                    &None,
+                    ServiceDegradePolicy::Live,
+                    None,
+                    "",
+                    None,
+                )
+            }) {
+                super::TlsBackendAttempt::Ready(target, endpoint) => (target, endpoint),
+                super::TlsBackendAttempt::Terminal => return,
+                super::TlsBackendAttempt::Retryable(target) => {
+                    last_err = format!("no endpoint: {}", target.key());
+                    continue;
+                }
             };
             let backend = endpoint.backend;
 
@@ -370,9 +353,9 @@ impl EdgionTlsTcpProxy {
                 port: parsed_upstream_addr.as_ref().map(|addr| addr.port()),
                 backend: Some(MatchedInfo {
                     rsc: Rsc {
-                        kind: backend_ref.kind.clone().unwrap_or_else(|| "Service".to_string()),
-                        ns: backend_ns.to_string(),
-                        name: backend_ref.name.clone(),
+                        kind: "Service".to_string(),
+                        ns: target.namespace().to_string(),
+                        name: target.name().to_string(),
                         labels: None,
                     },
                     section: None,
@@ -393,8 +376,7 @@ impl EdgionTlsTcpProxy {
             // 4c. TCP connect
             let mut peer = BasicPeer::new(&upstream_addr_str);
             peer.options.tcp_keepalive = unit
-                .tcp_keepalive
-                .as_ref()
+                .tcp_keepalive()
                 .map(crate::routes::common::to_pingora_tcp_keepalive);
             // Bound the upstream TCP connect so an unreachable backend fails
             // fast instead of stranding the downstream connection until the OS
@@ -431,9 +413,9 @@ impl EdgionTlsTcpProxy {
                         );
                     }
                     last_err = super::format_connect_error(&upstream_addr_str, &e);
-                    if attempt + 1 < max_attempts {
+                    if let Some(delay) = tls_connect_retry_delay(attempt, max_attempts) {
                         ctx.push_log(&format!("retry {}/{max_attempts}: {last_err}", attempt + 1));
-                        tokio::time::sleep(tls_connect_retry_backoff(attempt)).await;
+                        tokio::time::sleep(delay).await;
                     }
                 }
             }
@@ -446,7 +428,7 @@ impl EdgionTlsTcpProxy {
 
         // 5. Send Proxy Protocol v2 header if configured
         if !send_proxy_protocol_v2(
-            unit.proxy_protocol_version,
+            unit.proxy_protocol_version(),
             ctx,
             sni,
             &upstream_addr_str,

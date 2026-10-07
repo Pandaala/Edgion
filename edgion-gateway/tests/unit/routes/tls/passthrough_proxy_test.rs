@@ -22,7 +22,7 @@ fn route_unit(name: &str, hostname: &str) -> Arc<TlsRouteUnit> {
             }
         }))
         .unwrap();
-    Arc::new(TlsRouteUnit::from_route(Arc::new(route)))
+    Arc::new(TlsRouteUnit::from_route(Arc::new(route)).unwrap())
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn selected_unit_survives_reload_without_retaining_old_table() {
     let old_unit = route_unit("a", "a.example.com");
     let sibling = route_unit("b", "b.example.com");
     let old_unit_weak = Arc::downgrade(&old_unit);
-    let selector_weak = Arc::downgrade(&old_unit.backend_finder);
+    let selector_weak = Arc::downgrade(old_unit.backend_generation());
     let sibling_weak = Arc::downgrade(&sibling);
     manager.rebuild(&HashMap::from([
         ("default/a".to_string(), old_unit),
@@ -51,7 +51,10 @@ fn selected_unit_survives_reload_without_retaining_old_table() {
         sibling_weak.upgrade().is_none(),
         "unselected hostname winner is released"
     );
-    assert!(Arc::ptr_eq(&selected.backend_finder, &selector_weak.upgrade().unwrap()));
+    assert!(Arc::ptr_eq(
+        selected.backend_generation(),
+        &selector_weak.upgrade().unwrap()
+    ));
     assert!(Arc::ptr_eq(
         &select_route_unit(&manager, "a.example.com").unwrap(),
         &new_unit

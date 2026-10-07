@@ -12,9 +12,10 @@ review. Root checks the diff, gates, staged scope and commit result.
 
 C0 checkpoint reviewer capacity note: creation briefly returned `agent thread limit
 reached`. Reusing existing agents restored separate implementation, plan review
-and fresh result review roles. The current fresh result reviewer's runtime model
-is unknown and its outcome must be described as independent review, never as an
-Astra PASS. The confirmed Astra checkpoint audit/plan review and required later
+and fresh result review roles. C0's fresh result reviewer's runtime model
+is unknown and that checkpoint outcome must be described as independent review,
+never as an Astra PASS. R1/R2 use confirmed Astra reviewers. The confirmed Astra
+checkpoint audit/plan review and required later
 multiple confirmed Astra whole-task reviews remain distinct gates.
 
 The original issue remains open. Do not report total completion from scoped tests
@@ -35,7 +36,14 @@ or historical conformance. Record commit hashes only after successful commits.
 - The native five-Route backend/Grant implementation has fresh independent Astra
   scoped PASS and warning-free workspace gates. Its local commit is
   0fea0a618cec55d740719e4bbbb433c3c1438c11. No push occurred.
-  The first checkpoint audit and workspace commit gates passed. The user
+- HTTP/GRPC final backend selection, SP, DirectEndpoint and policy/TLS lookup
+  consume cold owning-Route targets in R2a, with fresh independent Astra scoped
+  PASS and warning-free workspace gates. Its local commit is
+  d37b890a8b448710d78fab5d587a2a5306e4b8cc. Post-commit status contained only
+  unrelated untracked review-results, left untouched. R2b implementation at this
+  HEAD has passed focused tests, final workspace gates and a fresh independent
+  Astra scoped result review. Its local commit gate is ready; R2c remains open.
+- The first checkpoint audit and workspace commit gates passed. The user
   committed the accumulated code snapshot
   as 0f40e2708496e9aacafb0dc2fbd2cdd786ffa9e8 (`tmp commit`) while verification
   was running. The coordinator completed C0 in local closing commit
@@ -43,7 +51,7 @@ or historical conformance. Record commit hashes only after successful commits.
   documentation and execution records. No push occurred. The user's commit
   remains unchanged.
 - The earlier external baseline was 4dbcc5495; current HEAD is the completed
-  R1 commit 0fea0a618. Revalidate each batch against its current HEAD.
+  R2a commit d37b890a8. Revalidate each batch against its current HEAD.
   The independently owned, untracked `review-results/` artifacts remain outside
   this task's mutation and staging scope.
 
@@ -146,6 +154,23 @@ need same-batch updates. Raw pipeline callers outside EP and CredentialSource
 async publication remain R7/R8 work. Neither candidate has an approved plan or
 fresh runtime verification; revalidate after R2/R3 commits.
 
+Supplementary namespace inventory at d37b890a8 confirms that absent source
+namespace remains a bare processing/wakeup key, while reference scope defaults
+to `default`. FS and etcd ingestion preserve metadata and reject storage-key
+mismatches; these paths do not authorize global namespace normalization. Bound
+credential and Grant recovery preserve the distinction. R4 lifecycle tests
+should exercise an actual namespace-less EP owner through target/Grant events,
+queue processing, generation replacement and material/status repair. Existing
+descriptor and bare-key tests do not prove the complete event chain. This is
+read-only evidence, not a new runtime PASS or R2b scope expansion.
+
+Outside this task, the inventory identified a deferred candidate: namespaced
+Admin create/update permits omitted body namespace without supplying the URL
+namespace, but FS/etcd ingest subsequently requires matching resource identity.
+The related Admin knowledge claim that omission defers to the URL needs
+independent confirmation against an actual write/read scenario. No Admin,
+filename, or global metadata change is authorized by this reference batch.
+
 Read-only R5 inventory at 0fea0a618 identified tentative independent boundaries:
 GatewayClass parameters, parent/allowedRoutes attachments, policy target owners,
 and three ConfigData consumer groups (EP/conditions/RAP, Stream, WAF/ProxyProtocol).
@@ -246,6 +271,39 @@ C0's unchanged CRD/plugin/generator evidence is reused, not a new R2a run.
 This is R2a acceptance only, not L4, Service.type/DNS, later consumer migration,
 full workspace tests or live conformance. Stage only verified scope and commit
 locally; record the successful hash in the next batch. Never push.
+
+R2b concrete ten-point plan and clarifications received independent Astra scoped
+PASS from `/root/checkpoint_astra_audit` at d37b890a8. Root froze 56 paths
+(19 production, 21 tests, 16 owning documentation) and authorized delegated
+execution. Immutable originals, manifest and 185 source test identities are in
+`/tmp/edgion-ref-r2b-before-d37b890a8`; the unchanged existing R2a test binary
+listed 5110 full Gateway test identities without running test bodies or Cargo.
+Preserve both source and compiled identities and ignored attributes. Additional
+paths or material design/fixture changes need renewed approval before editing.
+
+The approved L4 runtime compiles actual TCP/UDP/TLS first-rule loans into private
+cold targets and immutable original-index slots, with borrowed sealed selection.
+Private unit getters retain actual Route Arcs and derived generation pairing.
+The real TLS one-attempt helper owns one selection from the unit and the actual
+resolver-entry closure. Invalid/Denied is terminal and makes zero resolver calls;
+valid live endpoint/connect failures retain existing retry limits and delays.
+Independent final review must inspect both real Terminal-return branches; unit
+attempt tests are not copied-loop, connector or wire evidence. Existing route-stage
+plugins retain their ordering for valid owners; there is no L4 backend plugin
+factory or backend policy capture to claim as tested.
+
+Shared partial update removes old same-key add entries before initialization.
+Full-set publication follows successful compilation; partial publication removes
+all touched raw keys then inserts final successful cached units, including phase
+overlap winners. Tests cover invalid add/update/remove/repair, former listener
+withdrawal and local publisher material demand with positive controls. Omitted
+namespace preserves the bare raw manager/publication/removal key while canonical
+Service targets use default namespace. Old selected Arcs and UDP address pins
+retain their existing lifecycle. No added L4 policy/upstream TLS, TCP/UDP retry,
+UDP revocation, Controller/Resources/publisher/WRR, R2c or parent/filter migration
+is authorized. Root owns this ledger, workspace gates and commit; the fresh Astra
+result reviewer remains `/root/native_route_astra_result`. This is plan approval
+only, not implementation acceptance or live conformance.
 
 Read-only R6 inventory at 0fea0a618 confirmed a DNS producer parity defect:
 the ordinary Service handler strips denied cross-namespace resolver annotations,
@@ -357,6 +415,32 @@ evidence; these were not new R1 runs. Logs use `/tmp/edgion-ref-native-`.
 This scoped acceptance does not establish whole-manifest or live conformance
 completion. R2 plan review and implementation begin only after R1 is committed.
 
+R2b final acceptance: `/root/native_route_astra_result` independently reviewed
+all actual production/test/knowledge changes, original rules, canonical owner
+loans, weighted slots, actual resolver boundaries, both TLS terminal/retry loops
+and invalid replacement/publication cleanup. It returned scoped PASS. The final
+56-path manifest has 55 changed paths plus this coordinator ledger; all 185
+original scoped source IDs and 5110 compiled Gateway IDs remain (195/5120 now),
+with unchanged ignored attributes. Scope SHA-256 is
+`b5f5dd8c2f11e911b0be2419d7f6f4f706acce607c050d580cd3d7eb846a0c16`;
+patch `732c1935b5e29c694fa5b505503933fee58895ea21ec8cc65b687514fcc2cb87`
+and manifest `020c01dd35c082ceb1da963091ca6564a46ad510c045b1511006e4d4c4d5925b`.
+Both root and reviewer independently reproduced the final hashes. Artifacts and
+superseded guard-failure snapshots are preserved under `/tmp/edgion-ref-r2b-`.
+
+Fresh focus passed runtime 12, TCP 24, UDP 51, TLS 83, common 37, delta two,
+bridge six, backends 278, selector 25, and Gateway docs eleven with seven existing
+ignored. Counts overlap. EOF whitespace and four test-only source accessors were
+corrected within scope after the layout correction received independent Astra
+plan PASS; fresh affected tests and layout passed. Final workspace check-r2
+passed in 14.85s, Clippy-r1 in 1m04s without warnings. Formatting, docs (1447), SSA,
+metrics (103), Pingora source, transform/reference contract drift, unit layout
+(1001), Gateway tracing, English (including scoped task records) and diff guards
+pass. No schema, CRD, generator or dependency inputs changed; their earlier C0
+checks were not rerun as R2b evidence. This does not establish live connector,
+wire-conformance, full-suite, whole-manifest or TLS Terminate product support.
+R2c plan review and implementation begin only after the R2b commit succeeds.
+
 ## Serial batch queue
 
 The eight remaining implementation batches are provisional boundaries. Before
@@ -368,7 +452,7 @@ requires it; do not silently expand an approved allowlist.
 | --- | --- | --- | --- |
 | C0: current checkpoint | Independent accumulated-diff audit, resolve immediate introduced blockers, run required pre-commit gates, stage only verified task changes; describe partial completion honestly | complete; scoped final PASS and all gates passed | user snapshot 0f40e2708; closing 8dab81bc6 |
 | R1: native Route backends and delegation | Actual five-Route owners; authored terminal loans alone mint Grant; invalid descriptors cause no lookup/edge; child authorizes delegated targets, root owns wakeup; dependencies precede Grant reads; preserve slots/weights, AI facts and coalesced recovery | complete; fresh independent Astra scoped PASS and all gates passed | 0fea0a618 |
-| R2: final Gateway backend selection | Consume cold canonical targets through HTTP/GRPC/L4 final dial; retain weighted invalid slots and denial behavior; no new request allocations, locks or duplicate classifier; preserve direct endpoint/retry semantics | R2a complete; fresh independent Astra scoped PASS and all gates passed; R2b/R2c pending | local commit gate; hash recorded after commit |
+| R2: final Gateway backend selection | Consume cold canonical targets through HTTP/GRPC/L4 final dial; retain weighted invalid slots and denial behavior; no new request allocations, locks or duplicate classifier; preserve direct endpoint/retry semantics | R2a complete; R2b final scoped PASS and all gates passed, commit ready; R2c pending | R2a d37b890a8; R2b commit pending |
 | R3: filters, ExtensionRef and mirror | Actual HTTP/GRPC filter owners and child namespaces; authored/resolved coverage; correct runtime compilation, local descriptor ownership and recovery; mirror denial affects only mirror with role-qualified dependencies | pending | pending |
 | R4: generic dependency and status | Replace remaining raw plugin credential/ConfigMap dependency and status paths with actual-owner authority; exact generation/disabled/delete/recreate handling; readonly status agrees with acquisition and runtime | pending | pending |
 | R5: attachment and policy references | parentRefs, allowedRoutes, GatewayClass parameters, GatewayRouteIndex and policy targets use appropriate object/type/selector identities; preserve namespace selectors, consent, controller ownership and ACME strictness | pending | pending |

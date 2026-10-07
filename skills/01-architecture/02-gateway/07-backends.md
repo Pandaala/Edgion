@@ -43,13 +43,17 @@ fail-closed projection.
 Canonical section keys are only Service port number or name. Every valid section contains exact
 all/ready endpoint slots plus eagerly compiled RoundRobin, ConsistentHash, LeastConn, and EWMA
 selectors. Equivalent same-socket origins merge into a deterministic sorted origin set. The
-native HTTP/GRPC compiler takes an actual Route's effective field loan and stores
+native Route compiler takes an actual Route's effective field loan and stores
 one `CompiledServiceTarget` containing the canonical policy target, Service key and
 checked `ServiceSectionKey::Number`. Missing or invalid declared ports produce an
-Invalid slot before request plugins or discovery; HTTP returns
-`BackendUnsupportedKind`/500 for that slot. A valid declared section that becomes
-unavailable at runtime still returns `BackendPortResolutionFailed`/503. Other
-protocol selectors retain their existing section validation. No selector may pick
+Invalid slot before discovery. HTTP/GRPC reject it before backend plugins; HTTP
+returns `BackendUnsupportedKind`/500 for that slot. A valid HTTP/GRPC declared
+section that becomes unavailable at runtime still returns
+`BackendPortResolutionFailed`/503. L4 cold compilation uses the same owning target and checked section. Its invalid
+slots fail terminally as `UnsupportedBackend` (denial takes precedence); valid
+live endpoint/section failures retain TCP/UDP failure and TLS retry behavior.
+L4 selectors borrow original slots and retain live degradation without capturing
+BackendTLSPolicy or backend traffic policy. No selector may pick
 the Service's first port, a leftover slice port or another section. The selected slot already carries `serving_port` on `backend.addr`; there is
 no request-path port rewriter. `appProtocol` is published on `ServicePortIdentity` and read from
 the proven section, not a live ServiceStore scan. Health probes use

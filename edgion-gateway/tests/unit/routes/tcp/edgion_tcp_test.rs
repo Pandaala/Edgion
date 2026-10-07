@@ -25,8 +25,8 @@ fn context() -> TcpContext {
 }
 
 fn route_unit(name: &str) -> Arc<TcpRouteUnit> {
-    Arc::new(TcpRouteUnit::from_route(Arc::new(
-        crate::test_current_status::processed(TCPRoute {
+    Arc::new(
+        TcpRouteUnit::from_route(Arc::new(crate::test_current_status::processed(TCPRoute {
             metadata: ObjectMeta {
                 namespace: Some("default".to_string()),
                 name: Some(name.to_string()),
@@ -41,8 +41,9 @@ fn route_unit(name: &str) -> Arc<TcpRouteUnit> {
                 resolved_listener_attachments: None,
             },
             status: None,
-        }),
-    )))
+        })))
+        .unwrap(),
+    )
 }
 
 #[test]

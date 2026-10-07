@@ -11,10 +11,17 @@ fn malformed_effective_hostname_rejects_the_entire_attachment() {
         }))
         .unwrap();
     assert!(TlsRouteUnit::from_route(Arc::new(route.clone()))
-        .accepted_attachments
+        .unwrap()
+        .accepted_attachments()
         .is_empty());
     route.spec.resolved_listeners.as_mut().unwrap()[0].hostnames.pop();
-    assert_eq!(TlsRouteUnit::from_route(Arc::new(route)).accepted_attachments.len(), 1);
+    assert_eq!(
+        TlsRouteUnit::from_route(Arc::new(route))
+            .unwrap()
+            .accepted_attachments()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -31,13 +38,13 @@ fn exact_attachment_parents_preserve_authored_owner_order() {
             ]}
     }))
     .unwrap();
-    let unit = super::TlsRouteUnit::from_route(std::sync::Arc::new(route));
+    let unit = super::TlsRouteUnit::from_route(std::sync::Arc::new(route)).unwrap();
     let key = edgion_resources::ListenerKey::new("0.0.0.0:443".parse().unwrap(), "TLS");
     let parents: Vec<_> = unit
-        .accepted_attachments
+        .accepted_attachments()
         .iter()
         .filter(|accepted| {
-            unit.route.spec.resolved_listeners.as_ref().unwrap()[accepted.schema_index].listener_key == key
+            unit.route().spec.resolved_listeners.as_ref().unwrap()[accepted.schema_index].listener_key == key
         })
         .map(|accepted| &accepted.parent)
         .collect();
@@ -104,15 +111,15 @@ fn annotated(pairs: &[(&str, &str)]) -> Arc<TLSRoute> {
 
 #[test]
 fn test_proxy_protocol_v2_resolved_on_unit() {
-    let unit = TlsRouteUnit::from_route(annotated(&[("edgion.io/proxy-protocol", "v2")]));
-    assert_eq!(unit.proxy_protocol_version, Some(2));
+    let unit = TlsRouteUnit::from_route(annotated(&[("edgion.io/proxy-protocol", "v2")])).unwrap();
+    assert_eq!(unit.proxy_protocol_version(), Some(2));
     assert!(unit.stream_plugin_store_key.is_none());
 }
 
 #[test]
 fn test_proxy_protocol_invalid_resolves_none() {
-    let unit = TlsRouteUnit::from_route(annotated(&[("edgion.io/proxy-protocol", "v1")]));
-    assert_eq!(unit.proxy_protocol_version, None);
+    let unit = TlsRouteUnit::from_route(annotated(&[("edgion.io/proxy-protocol", "v1")])).unwrap();
+    assert_eq!(unit.proxy_protocol_version(), None);
 }
 
 #[test]
@@ -120,7 +127,8 @@ fn test_stream_plugin_store_key_full_path() {
     let unit = TlsRouteUnit::from_route(annotated(&[(
         "edgion.io/edgion-stream-plugins",
         "sandbox/sandbox-stream-plugins",
-    )]));
+    )]))
+    .unwrap();
     assert_eq!(
         unit.stream_plugin_store_key,
         Some("sandbox/sandbox-stream-plugins".to_string())
@@ -132,18 +140,19 @@ fn test_combined_annotations() {
     let unit = TlsRouteUnit::from_route(annotated(&[
         ("edgion.io/proxy-protocol", "v2"),
         ("edgion.io/edgion-stream-plugins", "ns/plugins"),
-    ]));
-    assert_eq!(unit.proxy_protocol_version, Some(2));
+    ]))
+    .unwrap();
+    assert_eq!(unit.proxy_protocol_version(), Some(2));
     assert_eq!(unit.stream_plugin_store_key, Some("ns/plugins".to_string()));
 }
 
 #[test]
 fn test_no_annotations_defaults() {
-    let unit = TlsRouteUnit::from_route(make_route(None));
-    assert_eq!(unit.proxy_protocol_version, None);
+    let unit = TlsRouteUnit::from_route(make_route(None)).unwrap();
+    assert_eq!(unit.proxy_protocol_version(), None);
     assert!(unit.stream_plugin_store_key.is_none());
-    assert_eq!(unit.max_connect_retries, DEFAULT_TLS_CONNECT_RETRIES);
-    assert!(unit.tcp_keepalive.is_none());
+    assert_eq!(unit.max_connect_retries(), DEFAULT_TLS_CONNECT_RETRIES);
+    assert!(unit.tcp_keepalive().is_none());
 }
 
 #[test]
@@ -152,8 +161,9 @@ fn test_keepalive_annotation_resolved_on_unit() {
         ("edgion.io/tcp-keepalive-time", "120"),
         ("edgion.io/tcp-keepalive-interval", "20"),
         ("edgion.io/tcp-keepalive-probes", "4"),
-    ]));
-    let ka = unit.tcp_keepalive.as_ref().expect("keepalive enabled");
+    ]))
+    .unwrap();
+    let ka = unit.tcp_keepalive().expect("keepalive enabled");
     assert_eq!(ka.idle, std::time::Duration::from_secs(120));
     assert_eq!(ka.interval, std::time::Duration::from_secs(20));
     assert_eq!(ka.count, 4);
@@ -161,8 +171,8 @@ fn test_keepalive_annotation_resolved_on_unit() {
 
 #[test]
 fn test_backend_finder_built_from_first_rule() {
-    let unit = TlsRouteUnit::from_route(make_route(None));
-    assert!(unit.backend_finder.select().is_ok());
+    let unit = TlsRouteUnit::from_route(make_route(None)).unwrap();
+    assert!(unit.backend_generation().select().is_ok());
 }
 
 #[test]
@@ -184,12 +194,17 @@ fn denied_core_service_ref_remains_selectable() {
             reason: Some("NoMatchingReferenceGrant".to_string()),
         });
     }
-    let unit = TlsRouteUnit::from_route(route);
+    let unit = TlsRouteUnit::from_route(route).unwrap();
     let selected = unit
-        .backend_finder
+        .backend_generation()
         .select()
         .expect("denied core Service stays selectable");
-    assert!(selected.ref_denied.is_some());
+    assert!(unit.route().spec.rules.as_ref().unwrap()[0]
+        .backend_refs
+        .as_ref()
+        .unwrap()[selected.slot()]
+    .ref_denied
+    .is_some());
 }
 
 fn tls_backend(name: &str, group: Option<&str>, kind: Option<&str>, denied: bool) -> TLSBackendRef {
@@ -231,18 +246,20 @@ fn mixed_weight_route() -> Arc<TLSRoute> {
 #[test]
 fn mixed_denied_and_unsupported_keep_declared_weight() {
     use crate::routes::common::{classify_l4_selected_backend, L4SelectedBackend};
-    let unit = TlsRouteUnit::from_route(mixed_weight_route());
+    let unit = TlsRouteUnit::from_route(mixed_weight_route()).unwrap();
     let mut allowed = 0;
     let mut denied = 0;
     let mut invalid = 0;
     for _ in 0..3 {
-        let selected = unit.backend_finder.select().expect("three equal-weight slots");
-        let outcome = classify_l4_selected_backend(
-            selected.ref_denied.as_ref(),
-            selected.group.as_deref(),
-            selected.kind.as_deref(),
-        );
-        match selected.name.as_str() {
+        let selected = unit.backend_generation().select().expect("three equal-weight slots");
+        let outcome = classify_l4_selected_backend(selected);
+        match unit.route().spec.rules.as_ref().unwrap()[0]
+            .backend_refs
+            .as_ref()
+            .unwrap()[selected.slot()]
+        .name
+        .as_str()
+        {
             "allowed" => {
                 allowed += 1;
                 assert_eq!(outcome, L4SelectedBackend::Proceed);
@@ -259,4 +276,10 @@ fn mixed_denied_and_unsupported_keep_declared_weight() {
         }
     }
     assert_eq!((allowed, denied, invalid), (1, 1, 1));
+}
+
+impl TlsRouteUnit {
+    pub(crate) fn backend_generation(&self) -> &Arc<CompiledL4Backends> {
+        &self.backend_finder
+    }
 }

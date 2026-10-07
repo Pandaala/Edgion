@@ -75,6 +75,7 @@ pub(crate) fn apply_l4_partial_update<R, C>(
 
     // ── Phase 3: add ──────────────────────────────────────────────────────────
     for (key, route) in add {
+        remove_cached(&key);
         match init_and_insert(route) {
             Ok(new_lks) => {
                 affected.extend(new_lks);
@@ -93,3 +94,7 @@ pub(crate) fn apply_l4_partial_update<R, C>(
 
     rebuild(&affected);
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/routes/l4_partial_update_test.rs"]
+mod tests;

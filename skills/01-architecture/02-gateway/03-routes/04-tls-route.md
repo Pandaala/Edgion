@@ -108,6 +108,32 @@ TLSRoute (Terminate/Passthrough) and the HTTP/gRPC TLS subsystem (the `tls/` mod
 - **TLSRoute Passthrough**: the Gateway forwards encrypted TLS unchanged to the backend, routing by SNI.
 - **HTTP/gRPC TLS subsystem** (`HTTPS` listeners): the Gateway terminates TLS, decrypts, and routes by HTTP/gRPC.
 
+## Compiled backend boundary
+
+The unit privately couples its actual schema Arc, cold compiled Service targets
+and original-index selector. Only the owning Route adapter constructs that
+generation; the connection path borrows a selected slot and its checked numeric
+Service section, without raw reference cloning or Service-key formatting. All
+original weights and occurrences remain, including invalid/denied failure slots.
+Denial is checked first. Invalid descriptors (including missing or invalid declared
+ports) terminate with `UnsupportedBackend` before discovery; a valid Service whose
+live section/endpoints are unavailable retains the existing runtime failure.
+
+Compilation rejects malformed source name/namespace before annotation-derived
+runtime or plugin demand. Full publication uses successful units only. Deltas
+remove every touched publication key and add only final surviving cache entries,
+matching the shared remove/update/add order. Same-key add vacates the old unit
+before initialization. Current listener handles are cleared when their route is
+withdrawn, while selected old Arcs retain their generation. Raw manager keys keep
+omitted namespaces as bare names; canonical backend namespaces default to
+`default`. This does not claim atomicity across separate stores or listeners.
+
+Both real proxy loops use one actual-unit selection/resolution attempt helper.
+Terminal denial or invalidity returns from the connection; only valid live
+endpoint/connect failure can retry. Endpoint failure keeps its existing no-sleep
+behavior; connect failures retain the attempt cap and backoff. No BackendTLSPolicy
+capture or upstream TLS is added, and termination remains a deferred product mode.
+
 ## Key source files
 
 | File | Responsibility |

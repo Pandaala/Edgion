@@ -56,6 +56,30 @@ mechanics to TCPRoute. See [SKILL.md → Shared L4 per-listener management](SKIL
 - Route or backend configuration changes therefore affect an existing client after its pinned session
   expires (or is otherwise removed), not on the next datagram.
 
+## Compiled backend boundary
+
+The unit privately couples its actual schema Arc, cold compiled Service targets
+and original-index selector. Only the owning Route adapter constructs that
+generation; the connection path borrows a selected slot and its checked numeric
+Service section, without raw reference cloning or Service-key formatting. All
+original weights and occurrences remain, including invalid/denied failure slots.
+Denial is checked first. Invalid descriptors (including missing or invalid declared
+ports) terminate with `UnsupportedBackend` before discovery; a valid Service whose
+live section/endpoints are unavailable retains the existing runtime failure.
+
+Compilation rejects malformed source name/namespace before annotation-derived
+runtime or plugin demand. Full publication uses successful units only. Deltas
+remove every touched publication key and add only final surviving cache entries,
+matching the shared remove/update/add order. Same-key add vacates the old unit
+before initialization. Current listener handles are cleared when their route is
+withdrawn, while selected old Arcs retain their generation. Raw manager keys keep
+omitted namespaces as bare names; canonical backend namespaces default to
+`default`. This does not claim atomicity across separate stores or listeners.
+
+The new-session path alone consumes the compiled target. Existing sessions retain
+their pinned socket address, activity/retirement rules and expiry; they gain no
+backend proof pin or generation-triggered revocation. No retry is added.
+
 ## Key source files
 
 | File | Responsibility |

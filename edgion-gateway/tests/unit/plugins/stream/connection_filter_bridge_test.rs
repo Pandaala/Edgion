@@ -91,14 +91,14 @@ fn stream_parent_ports_preserve_scope_across_gateway_publications() {
                 "rules": [{"backendRefs": [{"name": "svc", "port": 80}]}]}
         });
         let parents = match kind {
-            "TCPRoute" => {
-                TcpRouteUnit::from_route(Arc::new(crate::test_current_status::from_value(route).unwrap()))
-                    .resolved_parent_refs
-            }
-            "UDPRoute" => {
-                UdpRouteUnit::from_route(Arc::new(crate::test_current_status::from_value(route).unwrap()))
-                    .resolved_parent_refs
-            }
+            "TCPRoute" => TcpRouteUnit::from_route(Arc::new(crate::test_current_status::from_value(route).unwrap()))
+                .unwrap()
+                .resolved_parent_refs()
+                .to_vec(),
+            "UDPRoute" => UdpRouteUnit::from_route(Arc::new(crate::test_current_status::from_value(route).unwrap()))
+                .unwrap()
+                .resolved_parent_refs()
+                .to_vec(),
             _ => unreachable!(),
         };
         let first_key = ListenerKey::new("0.0.0.0:8080".parse().unwrap(), protocol);

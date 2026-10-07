@@ -247,3 +247,168 @@ fn selected_service_debug_does_not_expose_tls_policy_secrets() {
     assert!(!debug.contains("resolved_ca_certificates"));
     assert!(!debug.contains("resolved_client_certificate"));
 }
+fn l4_generation(
+    family: &str,
+    owner: serde_json::Value,
+    backends: Vec<serde_json::Value>,
+) -> Result<CompiledL4Backends, ReferenceError> {
+    let source = serde_json::json!({
+        "metadata": owner,
+        "spec": {"rules": [{"backendRefs": backends}, {"backendRefs": [{"name": "ignored", "port": 99}]}]}
+    });
+    match family {
+        "TCP" => CompiledL4Backends::from_tcp(&serde_json::from_value(source).unwrap()),
+        "TLS" => CompiledL4Backends::from_tls(&serde_json::from_value(source).unwrap()),
+        "UDP" => CompiledL4Backends::from_udp(&serde_json::from_value(source).unwrap()),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn l4_actual_owners_default_namespace_and_reject_invalid_sources() {
+    for family in ["TCP", "TLS", "UDP"] {
+        for owner in [
+            serde_json::json!({"name": "route"}),
+            serde_json::json!({"name": "route", "namespace": "default"}),
+        ] {
+            let generation =
+                l4_generation(family, owner, vec![serde_json::json!({"name": "svc", "port": 80})]).unwrap();
+            let target = generation.select().unwrap().service().unwrap();
+            assert_eq!(target.key(), "default/svc");
+        }
+        for owner in [
+            serde_json::json!({}),
+            serde_json::json!({"name": ""}),
+            serde_json::json!({"name": "Bad/Name"}),
+            serde_json::json!({"name": "route", "namespace": ""}),
+            serde_json::json!({"name": "route", "namespace": "Bad/Namespace"}),
+        ] {
+            assert!(l4_generation(family, owner, vec![serde_json::json!({"name": "svc", "port": 80})]).is_err());
+        }
+    }
+}
+
+#[test]
+fn l4_descriptor_gate_precedes_actual_resolver_entry_with_positive_controls() {
+    use serde_json::json;
+    for family in ["TCP", "TLS", "UDP"] {
+        let owner = json!({"name": "route", "namespace": "apps"});
+        let good = json!({"name": "svc", "port": 80});
+        for (field, values) in [
+            ("group", vec![json!("core"), json!("apps"), json!("Core")]),
+            (
+                "kind",
+                vec![
+                    json!(""),
+                    json!("service"),
+                    json!("ServiceImport"),
+                    json!("ServiceExternalName"),
+                    json!("EdgionBackend"),
+                ],
+            ),
+            ("name", vec![json!(""), json!("Bad/Name")]),
+            ("namespace", vec![json!(""), json!("Bad/Namespace")]),
+            ("port", vec![json!(null), json!(0), json!(-1), json!(65536)]),
+        ] {
+            for value in values {
+                let mut reference = good.clone();
+                reference[field] = value;
+                for denied in [false, true] {
+                    let mut reference = reference.clone();
+                    if denied {
+                        reference["refDenied"] = json!({"targetNamespace": "other", "targetName": "svc", "reason": "NoMatchingReferenceGrant"});
+                    }
+                    let generation = l4_generation(family, owner.clone(), vec![reference]).unwrap();
+                    let reads = std::cell::Cell::new(0);
+                    let result = generation.select().unwrap().with_service(|_| {
+                        reads.set(reads.get() + 1);
+                        Ok::<_, ()>(())
+                    });
+                    assert_eq!(reads.get(), 0, "{family}: {field}, denied={denied}");
+                    assert_eq!(
+                        result,
+                        Err(L4ResolveError::Rejected(if denied {
+                            L4BackendRejection::Denied
+                        } else {
+                            L4BackendRejection::Invalid
+                        }))
+                    );
+                }
+            }
+        }
+        for port in [1, 65535] {
+            for explicit in [false, true] {
+                let mut reference = json!({"name": "svc", "port": port});
+                if explicit {
+                    reference["group"] = json!("");
+                    reference["kind"] = json!("Service");
+                    reference["namespace"] = json!("other");
+                }
+                let generation = l4_generation(family, owner.clone(), vec![reference]).unwrap();
+                let reads = std::cell::Cell::new(0);
+                let selected = generation.select().unwrap();
+                let (target, ()) = selected
+                    .with_service(|target| {
+                        reads.set(reads.get() + 1);
+                        assert_eq!(target.key(), if explicit { "other/svc" } else { "apps/svc" });
+                        assert_eq!(
+                            target.section(),
+                            &ServiceSectionKey::Number(std::num::NonZeroU16::new(port as u16).unwrap())
+                        );
+                        Ok::<_, ()>(())
+                    })
+                    .unwrap();
+                assert_eq!(reads.get(), 1);
+                assert!(std::ptr::eq(target, selected.service().unwrap()));
+                assert_eq!(
+                    selected.with_service(|_| Err::<(), _>("live failure")),
+                    Err(L4ResolveError::Unavailable("live failure"))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn l4_original_slots_weights_duplicates_and_allocation_free_selection() {
+    use serde_json::json;
+    for family in ["TCP", "TLS", "UDP"] {
+        let generation = l4_generation(family, json!({"name": "route"}), vec![
+            json!({"name": "same", "port": 80, "weight": 0}),
+            json!({"name": "same", "port": 81, "weight": 2}),
+            json!({"name": "invalid", "port": null, "weight": 1}),
+            json!({"name": "denied", "port": 82, "weight": 1, "refDenied": {"targetNamespace": "other", "targetName": "denied"}}),
+        ]).unwrap();
+        assert_eq!(generation.slots.len(), 4);
+        assert_eq!(
+            generation
+                .slots
+                .iter()
+                .map(|slot| (slot.slot, slot.weight))
+                .collect::<Vec<_>>(),
+            [(0, Some(0)), (1, Some(2)), (2, Some(1)), (3, Some(1))]
+        );
+        let mut counts = [0; 4];
+        for _ in 0..4 {
+            counts[generation.select().unwrap().slot()] += 1;
+        }
+        assert_eq!(counts, [0, 2, 1, 1]);
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            for _ in 0..32 {
+                let selected = generation.select().unwrap();
+                let _ = selected.with_service(|target| {
+                    assert_eq!(target.key(), "default/same");
+                    Ok::<_, ()>(())
+                });
+            }
+        });
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+}
+
+impl SelectedL4Backend<'_> {
+    pub(crate) fn slot(self) -> usize {
+        self.slot.slot
+    }
+}

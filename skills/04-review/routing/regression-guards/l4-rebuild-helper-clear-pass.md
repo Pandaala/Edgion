@@ -72,6 +72,23 @@ These invariants establish clearing, not Gateway delete/recreate recovery on a
 retained proxy. PGIS is a logical-owner inventory; it does not prove a socket has
 retired. See the [accepted restart boundary](../../listeners/intentional-design/gateway-recreation-requires-restart.md).
 
+## Source rejection and partial-add withdrawal
+
+`apply_l4_partial_update` removes an existing add key before initialization, just
+as it does for update, after precollecting all old listeners. Initialization can
+now reject an invalid actual Route source; retaining an old add generation would
+leave stale traffic active. Remove/update/add precedence and affected-listener
+union remain unchanged. Each L4 handler's full publication includes successful
+units only. Delta publication removes all touched keys, then adds inputs projected
+from final surviving cache units; rejected inputs cannot preserve old plugin
+demand. Publication still occurs after releasing the rebuild lock.
+
+Raw manager keys are not canonical backend identities: omitted source namespace
+uses the bare Route name as before, while a Service reference inherits `default`.
+Existing selected unit Arcs and pinned UDP sessions retain their old lifetime.
+The current tables and publication must withdraw the rejected generation; this
+does not establish cross-listener/store atomicity or new listener restart behavior.
+
 ## Hard boundary — do not fold gRPC or HTTP into this helper
 
 The same boundary as `apply_l4_partial_update`:

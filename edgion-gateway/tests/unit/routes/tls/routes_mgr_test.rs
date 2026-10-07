@@ -41,11 +41,7 @@ fn create_test_tls_route(namespace: &str, name: &str, listener_key: ListenerKey)
 }
 
 fn test_unit(namespace: &str, name: &str, listener_key: ListenerKey) -> Arc<TlsRouteUnit> {
-    Arc::new(TlsRouteUnit::from_route(Arc::new(create_test_tls_route(
-        namespace,
-        name,
-        listener_key,
-    ))))
+    Arc::new(TlsRouteUnit::from_route(Arc::new(create_test_tls_route(namespace, name, listener_key))).unwrap())
 }
 
 /// Drive the shared helper directly with a synthetic `active` PGIS
@@ -56,7 +52,7 @@ fn drive_rebuild_all(managers: &GlobalTlsRouteManagers, active: Vec<ListenerKey>
         &managers.by_listener,
         &managers.route_cache,
         active,
-        |u| resolved_listeners_for_route(&u.route),
+        |u| resolved_listeners_for_route(u.route()),
         |k| managers.get_or_create_listener_manager(k),
         |m, units| m.rebuild(units),
     );
@@ -73,7 +69,7 @@ fn drive_rebuild_affected(
         &managers.route_cache,
         affected,
         active,
-        |u| resolved_listeners_for_route(&u.route),
+        |u| resolved_listeners_for_route(u.route()),
         |k| managers.get_or_create_listener_manager(k),
         |m, units| m.rebuild(units),
     );
@@ -92,11 +88,11 @@ fn stats_report_empty_and_retained_candidate_entries() {
     let mut multi = create_test_tls_route("default", "multi", listener.clone());
     multi.spec.hostnames = Some(vec!["a.example.com".into(), "b.example.com".into()]);
     multi.spec.resolved_listeners.as_mut().unwrap()[0].hostnames = vec!["a.example.com".into(), "b.example.com".into()];
-    let multi = Arc::new(TlsRouteUnit::from_route(Arc::new(multi)));
+    let multi = Arc::new(TlsRouteUnit::from_route(Arc::new(multi)).unwrap());
     let mut competitor = create_test_tls_route("default", "competitor", listener);
     competitor.spec.hostnames = Some(vec!["a.example.com".into()]);
     competitor.spec.resolved_listeners.as_mut().unwrap()[0].hostnames = vec!["a.example.com".into()];
-    let competitor = Arc::new(TlsRouteUnit::from_route(Arc::new(competitor)));
+    let competitor = Arc::new(TlsRouteUnit::from_route(Arc::new(competitor)).unwrap());
     manager.rebuild(&HashMap::from([
         (multi.key_name(), multi),
         (competitor.key_name(), competitor),

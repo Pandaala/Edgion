@@ -35,11 +35,7 @@ fn create_test_tcp_route(namespace: &str, name: &str, listener_key: ListenerKey)
 }
 
 fn test_unit(namespace: &str, name: &str, listener_key: ListenerKey) -> Arc<TcpRouteUnit> {
-    Arc::new(TcpRouteUnit::from_route(Arc::new(create_test_tcp_route(
-        namespace,
-        name,
-        listener_key,
-    ))))
+    Arc::new(TcpRouteUnit::from_route(Arc::new(create_test_tcp_route(namespace, name, listener_key))).unwrap())
 }
 
 /// Drive the shared helper directly with a synthetic `active` PGIS snapshot
@@ -50,7 +46,7 @@ fn drive_rebuild_all(managers: &GlobalTcpRouteManagers, active: Vec<ListenerKey>
         &managers.by_listener,
         &managers.route_cache,
         active,
-        |u| resolved_listeners_for_route(&u.route).to_vec(),
+        |u| resolved_listeners_for_route(u.route()).to_vec(),
         |k| managers.get_or_create_listener_manager(k),
         |m, units| m.rebuild(units),
     );
@@ -67,7 +63,7 @@ fn drive_rebuild_affected(
         &managers.route_cache,
         affected,
         active,
-        |u| resolved_listeners_for_route(&u.route).to_vec(),
+        |u| resolved_listeners_for_route(u.route()).to_vec(),
         |k| managers.get_or_create_listener_manager(k),
         |m, units| m.rebuild(units),
     );

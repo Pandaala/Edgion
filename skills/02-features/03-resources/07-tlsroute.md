@@ -94,7 +94,7 @@ spec:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | `String` | Yes | Service name |
-| `port` | `i32?` | No | Target port |
+| `port` | `i32?` | Yes for Service | Declared Service port, `1..=65535`; absence remains representable for validation |
 | `weight` | `i32?` | No | Traffic weight |
 | `namespace` | `String?` | No | Namespace |
 | `kind` | `String?` | No | Default `Service` |

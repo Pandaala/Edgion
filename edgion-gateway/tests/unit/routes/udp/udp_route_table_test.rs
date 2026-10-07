@@ -29,9 +29,7 @@ fn create_test_udp_route(namespace: &str, name: &str, port: u16) -> UDPRoute {
 }
 
 fn test_unit(namespace: &str, name: &str, port: u16) -> Arc<UdpRouteUnit> {
-    Arc::new(UdpRouteUnit::from_route(Arc::new(create_test_udp_route(
-        namespace, name, port,
-    ))))
+    Arc::new(UdpRouteUnit::from_route(Arc::new(create_test_udp_route(namespace, name, port))).unwrap())
 }
 
 #[test]

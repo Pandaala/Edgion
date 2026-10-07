@@ -156,7 +156,7 @@ impl GlobalUdpRouteManagers {
             &self.by_listener,
             &self.route_cache,
             active,
-            |u| resolved_listeners_for_route(&u.route).to_vec(),
+            |u| resolved_listeners_for_route(u.route()).to_vec(),
             |k| self.get_or_create_listener_manager(k),
             |m, units| m.rebuild(units),
         );
@@ -173,7 +173,7 @@ impl GlobalUdpRouteManagers {
             &self.route_cache,
             affected_listeners,
             active,
-            |u| resolved_listeners_for_route(&u.route).to_vec(),
+            |u| resolved_listeners_for_route(u.route()).to_vec(),
             |k| self.get_or_create_listener_manager(k),
             |m, units| m.rebuild(units),
         );

@@ -63,6 +63,20 @@ TLSRoute's ConfHandler compiles routes into `GlobalTlsRouteManagers`:
 3. **SNI matching**: index only accepted attachments' hostname intersections on the table's physical key. Exact logical parents are compiled per physical key and used by both proxies' existing admission check.
 4. **Incremental updates**: partial_update collects affected listeners (old + new) and rebuilds only those listeners' route tables
 
+The Gateway compiles the actual immutable TLSRoute's first-rule effective
+references through the canonical owning adapter. Private compiled slots retain
+original weights, including invalid and denied references. A selected malformed
+reference fails as `UnsupportedBackend`; denial takes precedence as `RefDenied`.
+Neither reaches backend discovery. Required Service ports are validated before
+selection; unavailable live sections remain runtime failures.
+
+Invalid owners remain visible through the Controller's existing raw/status
+contract, but create no executable unit or plugin publication demand. Full and
+incremental replacements clear stale cache/listener/publication state; an existing
+key in the add bucket is cleared before initialization too. Omitted source
+namespace preserves the bare manager key while backend identity defaults to
+`default`. Retained in-flight units keep their original generation.
+
 ## Cross-resource relationships
 
 | Direction | Target resource | Mechanism | Notes |
