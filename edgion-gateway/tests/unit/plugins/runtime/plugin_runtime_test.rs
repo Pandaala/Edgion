@@ -539,6 +539,70 @@ fn json_schema_entry(
     entry
 }
 
+fn graphql_entry(
+    body: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
+    enabled: bool,
+) -> RequestFilterEntry {
+    let config = serde_json::from_value(serde_json::json!({
+        "schema":"type Query { name: String }",
+        "redisRef":"unit/redis",
+        "policies":[{"rate":100,"interval":"1s"}]
+    }))
+    .unwrap();
+    let mut entry = RequestFilterEntry::with_enable(EdgionPlugin::GraphqlRateLimit(config), enabled);
+    entry.body = body;
+    entry
+}
+
+#[test]
+fn graphql_body_validation_is_identical_on_controller_and_gateway() {
+    use edgion_resources::resources::edgion_plugins::{BodyReadFailureMode, BodyRequirement, EdgionPlugins};
+    for body in [
+        BodyRequirement {
+            max_body_size: Some("65k".into()),
+            ..Default::default()
+        },
+        BodyRequirement {
+            max_body_size: Some("0".into()),
+            ..Default::default()
+        },
+        BodyRequirement {
+            conditions: Some(Default::default()),
+            ..Default::default()
+        },
+        BodyRequirement {
+            on_read_failure: BodyReadFailureMode::FailOpen,
+            ..Default::default()
+        },
+    ] {
+        let entry = graphql_entry(Some(body), true);
+        let resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
+            "metadata":{"name":"test-plugins", "namespace":"default"},
+            "spec":{"requestPlugins":[entry.clone()]}
+        }))
+        .unwrap();
+        let expected = resource.validate_plugins();
+        let mut runtime = PluginRuntime::new();
+        let actual = runtime.add_from_request_filters(&[entry], "default", "test-plugins");
+        assert!(!expected.is_empty());
+        assert_eq!(actual, expected);
+        assert_sealed_invalid(&mut runtime);
+    }
+    let disabled = graphql_entry(
+        Some(BodyRequirement {
+            max_body_size: Some("invalid".into()),
+            ..Default::default()
+        }),
+        false,
+    );
+    let mut runtime = PluginRuntime::new();
+    assert!(runtime
+        .add_from_request_filters(&[disabled], "default", "test-plugins")
+        .is_empty());
+    assert_eq!(runtime.request_plugins_count(), 0);
+}
+
 fn form_json_entry(
     direction: edgion_resources::resources::edgion_plugins::FormJsonDirection,
     body: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,

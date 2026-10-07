@@ -1,0 +1,271 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      alias: cost-budget
+      type: GraphqlRateLimit
+      config:
+        schema: |
+          type Query { users(first: Int = 10): [User!]! }
+          type Mutation { users(first: Int = 10): [User!]! }
+          type User { name: String! }
+        costRules:
+          - field: Query.users
+            weight: 1
+            multipliers: [first]
+          - field: Mutation.users
+            multipliers: [first]
+        redisRef: "default/redis-test"
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 24
+            interval: "2h"
+            algorithm: FixedWindow
+        requestTimeout: "2s"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-independent
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      alias: cost-budget
+      type: GraphqlRateLimit
+      config:
+        schema: |
+          type Query { users(first: Int = 10): [User!]! }
+          type Mutation { users(first: Int = 10): [User!]! }
+          type User { name: String! }
+        costRules:
+          - field: Query.users
+            weight: 1
+            multipliers: [first]
+          - field: Mutation.users
+            multipliers: [first]
+        redisRef: "default/redis-test"
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 24
+            interval: "2h"
+            algorithm: FixedWindow
+        requestTimeout: "2s"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-small
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      alias: cost-budget
+      type: GraphqlRateLimit
+      body:
+        maxBodySize: "1k"
+      config:
+        schema: |
+          type Query { users(first: Int = 10): [User!]! }
+          type Mutation { users(first: Int = 10): [User!]! }
+          type User { name: String! }
+        costRules:
+          - field: Query.users
+            weight: 1
+            multipliers: [first]
+          - field: Mutation.users
+            multipliers: [first]
+        redisRef: "default/redis-test"
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 24
+            interval: "2h"
+            algorithm: FixedWindow
+        requestTimeout: "2s"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-fail-close
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      alias: cost-budget
+      type: GraphqlRateLimit
+      config:
+        schema: |
+          type Query { users(first: Int = 10): [User!]! }
+          type Mutation { users(first: Int = 10): [User!]! }
+          type User { name: String! }
+        costRules:
+          - field: Query.users
+            weight: 1
+            multipliers: [first]
+          - field: Mutation.users
+            multipliers: [first]
+        redisRef: "default/graphql-no-such-redis"
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 24
+            interval: "2h"
+            algorithm: FixedWindow
+        requestTimeout: "2s"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-fail-open
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      alias: cost-budget
+      type: GraphqlRateLimit
+      config:
+        schema: |
+          type Query { users(first: Int = 10): [User!]! }
+          type Mutation { users(first: Int = 10): [User!]! }
+          type User { name: String! }
+        costRules:
+          - field: Query.users
+            weight: 1
+            multipliers: [first]
+          - field: Mutation.users
+            multipliers: [first]
+        redisRef: "default/graphql-no-such-redis"
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 24
+            interval: "2h"
+            algorithm: FixedWindow
+        onRedisFailure: Allow
+        requestTimeout: "2s"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-disabled
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: false
+      alias: cost-budget
+      type: GraphqlRateLimit
+      config:
+        schema: |
+          type Query { users: Missing }
+        costRules:
+          []
+        redisRef: "default/redis-test"
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 24
+            interval: "2h"
+            algorithm: FixedWindow
+        requestTimeout: "2s"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-invalid
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      alias: cost-budget
+      type: GraphqlRateLimit
+      config:
+        schema: |
+          type Query { users: Missing }
+        costRules:
+          []
+        redisRef: "default/redis-test"
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 24
+            interval: "2h"
+            algorithm: FixedWindow
+        requestTimeout: "2s"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-wrong-stage
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      alias: cost-budget
+      type: GraphqlRateLimit
+      config:
+        schema: |
+          type Query { users(first: Int = 10): [User!]! }
+          type Mutation { users(first: Int = 10): [User!]! }
+          type User { name: String! }
+        costRules:
+          - field: Query.users
+            weight: 1
+            multipliers: [first]
+          - field: Mutation.users
+            multipliers: [first]
+        redisRef: "default/redis-test"
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 24
+            interval: "2h"
+            algorithm: FixedWindow
+        requestTimeout: "2s"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-invalid-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      alias: cost-budget
+      type: GraphqlRateLimit
+      body:
+        maxBodySize: "128k"
+      config:
+        schema: |
+          type Query { users(first: Int = 10): [User!]! }
+          type Mutation { users(first: Int = 10): [User!]! }
+          type User { name: String! }
+        costRules:
+          - field: Query.users
+            weight: 1
+            multipliers: [first]
+          - field: Mutation.users
+            multipliers: [first]
+        redisRef: "default/redis-test"
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 24
+            interval: "2h"
+            algorithm: FixedWindow
+        requestTimeout: "2s"

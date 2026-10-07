@@ -79,7 +79,7 @@ fn unique_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<
     value.to_str().map(Some).map_err(|_| ())
 }
 
-fn supported_identity_encoding(headers: &HeaderMap) -> bool {
+pub(crate) fn supported_identity_encoding(headers: &HeaderMap) -> bool {
     match unique_header_value(headers, "content-encoding") {
         Ok(None) => true,
         Ok(Some(value)) => value.trim().eq_ignore_ascii_case("identity"),

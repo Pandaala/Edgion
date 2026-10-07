@@ -41,6 +41,7 @@ Gateway 对经过该资源的请求返回 HTTP 500，包括热更新为非法值
 | [ext-proc.md](ext-proc.md) | 经 gRPC 的外部处理（兼容 Envoy ext_proc） |
 | [request-access-policy.md](request-access-policy.md) | 七层 host/path/IP 访问策略，支持 Secret/HMAC 条件和 profile 热切换 |
 | [grpc-json-transcoder.md](grpc-json-transcoder.md) | 基于 descriptor 的 REST JSON 到原生 gRPC 转码，上游强制 HTTP/2 |
+| [graphql-rate-limit.md](graphql-rate-limit.md) | 静态 SDL 查询成本与 Redis 预算限流 |
 | [header-cert-auth.md](header-cert-auth.md) | 请求头/证书认证 |
 | [hmac-auth.md](hmac-auth.md) | HMAC 签名验证 |
 | [ip-restriction.md](ip-restriction.md) | IP 黑白名单 |

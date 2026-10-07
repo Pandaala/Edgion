@@ -8,6 +8,8 @@ suite	EdgionPlugins/DslBody	body-buffering
 suite	EdgionPlugins/BodyPlugins	body-buffering
 suite	EdgionPlugins/JsonSchemaValidation	body-buffering
 dynamic	JsonSchemaValidationDynamic	body-buffering
+suite	EdgionPlugins/GraphqlRateLimit	body-buffering
+dynamic	GraphqlRateLimitDynamic	body-buffering
 dynamic	FormJsonTransformDynamic	body-buffering
 dynamic	BodyDynamic	body-buffering
 dynamic	RequestMirrorReferenceGrant	body-buffering

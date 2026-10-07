@@ -913,6 +913,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.inner.req_header().uri.query().map(|s| s.to_string())
     }
 
+    fn request_query(&self) -> Option<&str> {
+        self.inner.req_header().uri.query()
+    }
+
     fn get_method(&self) -> &str {
         self.inner.req_header().method.as_str()
     }

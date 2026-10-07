@@ -75,7 +75,7 @@ impl RateLimitRedis {
         Box::new(Self::new(config, entry_scope))
     }
 
-    fn new(config: &RateLimitRedisConfig, entry_scope: &str) -> RateLimitRedis {
+    pub(crate) fn new(config: &RateLimitRedisConfig, entry_scope: &str) -> RateLimitRedis {
         let mut validated = config.clone();
         let config_valid = validated.validate().is_ok();
         let message = validated
@@ -97,13 +97,18 @@ impl RateLimitRedis {
     }
 
     /// Check all policies against Redis. Returns aggregate result.
-    async fn check_rate_limit(&self, client: &RedisLinkClient, limit_key: &str) -> anyhow::Result<RateLimitResult> {
+    async fn check_rate_limit(
+        &self,
+        client: &RedisLinkClient,
+        limit_key: &str,
+        cost: u32,
+    ) -> anyhow::Result<RateLimitResult> {
         self.core
             .check(
                 client,
                 &self.config.policies,
                 &self.scoped_key_prefix,
-                self.config.cost,
+                cost,
                 self.config.max_key_len,
                 limit_key,
             )
@@ -222,13 +227,15 @@ impl RateLimitRedis {
 
 // ========== RequestFilter Implementation ==========
 
-#[async_trait]
-impl RequestFilter for RateLimitRedis {
-    fn name(&self) -> &str {
-        "RateLimitRedis"
-    }
-
-    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+impl RateLimitRedis {
+    /// Apply the canonical key, dependency, header and failure behavior to a
+    /// caller-computed charge without storing request state on the limiter.
+    pub(crate) async fn run_request_with_cost(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+        cost: u32,
+    ) -> PluginRunningResult {
         // PluginLog must stay short (≤40B) and must never contain the resolved
         // limit_key, the redis_ref config value, or raw Redis error text — they
         // can carry user-identifying values or deployment details. Detailed
@@ -278,11 +285,13 @@ impl RequestFilter for RateLimitRedis {
 
         // 4. Execute rate limit check (optionally bounded by request_timeout).
         let check_result = match self.config.request_timeout_duration {
-            Some(timeout) => match tokio::time::timeout(timeout, self.check_rate_limit(&client, &limit_key)).await {
-                Ok(r) => r,
-                Err(_elapsed) => Err(anyhow::anyhow!("request_timeout elapsed")),
-            },
-            None => self.check_rate_limit(&client, &limit_key).await,
+            Some(timeout) => {
+                match tokio::time::timeout(timeout, self.check_rate_limit(&client, &limit_key, cost)).await {
+                    Ok(r) => r,
+                    Err(_elapsed) => Err(anyhow::anyhow!("request_timeout elapsed")),
+                }
+            }
+            None => self.check_rate_limit(&client, &limit_key, cost).await,
         };
 
         match check_result {
@@ -307,6 +316,17 @@ impl RequestFilter for RateLimitRedis {
                 self.apply_redis_failure_policy(session).await
             }
         }
+    }
+}
+
+#[async_trait]
+impl RequestFilter for RateLimitRedis {
+    fn name(&self) -> &str {
+        "RateLimitRedis"
+    }
+
+    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        self.run_request_with_cost(session, log, self.config.cost).await
     }
 }
 

@@ -152,4 +152,5 @@ pub use edgion_backend::{
     MessagesBindingAllowedSuite, MessagesBindingRejectedSuite, MessagesCredentialBSuite, MessagesTestSuite,
     ResponsesContinuationAllowedSuite, ResponsesContinuationRejectedSuite, ResponsesTestSuite,
 };
+pub use edgion_plugins::{GraphqlRateLimitDynamicSuite, GraphqlRateLimitTestSuite};
 pub use edgion_plugins::{GrpcJsonTranscoderDynamicSuite, GrpcJsonTranscoderTestSuite};

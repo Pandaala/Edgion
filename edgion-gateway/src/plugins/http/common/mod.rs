@@ -27,6 +27,7 @@ pub use capped_writer::CappedWriter;
 pub use http_client::{
     connection_listed_hop_by_hop, get_http_client, is_hop_by_hop, is_hop_by_hop_or_listed, HOP_BY_HOP_HEADERS,
 };
+pub(crate) use json_request::supported_identity_encoding;
 pub use json_request::{form_request_headers_are_supported, json_request_headers_are_supported};
 
 /// Outcome of resolving a rate-limit key from the configured `key` sources.

@@ -47,6 +47,7 @@ rule without echoing the realm. Disabled entries remain inert.
 | [request-access-policy.md](request-access-policy.md) | L7 host/path/IP access policies with Secret/HMAC conditions and profile hot-swap |
 | [guardrail.md](guardrail.md) | Bounded unary Pass/Replace/Reject decisions for canonical semantic AI SSE windows |
 | [grpc-json-transcoder.md](grpc-json-transcoder.md) | Descriptor-backed REST JSON to native gRPC over mandatory upstream HTTP/2 |
+| [graphql-rate-limit.md](graphql-rate-limit.md) | Static SDL query-cost budgets through Redis |
 | [header-cert-auth.md](header-cert-auth.md) | Header/certificate authentication |
 | [hmac-auth.md](hmac-auth.md) | HMAC signature verification |
 | [ip-restriction.md](ip-restriction.md) | IP allowlist/denylist |

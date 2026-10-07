@@ -53,6 +53,7 @@ use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::form_json_transform::FormJsonTransform;
 use crate::plugins::http::forward_auth::ForwardAuth;
 use crate::plugins::http::geoip_location::GeoIpLocation;
+use crate::plugins::http::graphql_rate_limit::GraphqlRateLimit;
 use crate::plugins::http::grpc_json_transcoder::GrpcJsonTranscoder;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
 use crate::plugins::http::hmac_auth::HmacAuth;
@@ -912,6 +913,7 @@ impl PluginRuntime {
                     EdgionPlugin::FormJsonTransform(_)
                         | EdgionPlugin::GrpcJsonTranscoder(_)
                         | EdgionPlugin::JsonSchemaValidation(_)
+                        | EdgionPlugin::GraphqlRateLimit(_)
                         | EdgionPlugin::ProxyRewrite(edgion_resources::resources::edgion_plugins::ProxyRewriteConfig {
                             json_body: Some(_),
                             ..
@@ -923,8 +925,7 @@ impl PluginRuntime {
             let Some(body) = entry.body.as_ref() else {
                 continue;
             };
-            let body_errors =
-                edgion_resources::resources::edgion_plugins::bounded_structured_body_validation_errors(body);
+            let body_errors = entry.plugin.structured_body_validation_errors(body);
             if body_errors.is_empty() {
                 continue;
             }
@@ -1852,6 +1853,9 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(Box::new(JweDecrypt::new(config, namespace.to_string()))))
             }
             EdgionPlugin::JsonSchemaValidation(config) => CreateResult::Ok(JsonSchemaValidation::create(config)),
+            EdgionPlugin::GraphqlRateLimit(config) => {
+                CreateResult::Ok(GraphqlRateLimit::create(config, entry_scope, body_requirement))
+            }
             EdgionPlugin::GrpcJsonTranscoder(config) => CreateResult::Ok(GrpcJsonTranscoder::create(config)),
             EdgionPlugin::FormJsonTransform(config) => {
                 CreateResult::Ok(FormJsonTransform::create(config, body_requirement))
@@ -1939,6 +1943,7 @@ impl PluginRuntime {
             | EdgionPlugin::JweDecrypt(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::GraphqlRateLimit(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::HmacAuth(_)
             | EdgionPlugin::HeaderCertAuth(_)
@@ -2012,6 +2017,7 @@ impl PluginRuntime {
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::GraphqlRateLimit(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimitLocal(_)
@@ -2062,6 +2068,7 @@ impl PluginRuntime {
             | EdgionPlugin::JweDecrypt(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::GraphqlRateLimit(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::HmacAuth(_)
             | EdgionPlugin::HeaderCertAuth(_)
@@ -2116,6 +2123,7 @@ impl PluginRuntime {
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
             EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
+            EdgionPlugin::GraphqlRateLimit(_) => "GraphqlRateLimit",
             EdgionPlugin::GrpcJsonTranscoder(_) => "GrpcJsonTranscoder",
             EdgionPlugin::FormJsonTransform(_) => "FormJsonTransform",
             EdgionPlugin::HmacAuth(_) => "HmacAuth",

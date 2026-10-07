@@ -7,6 +7,7 @@ pub fn all() -> Vec<&'static Scenario> {
     vec![
         crate::dynamic::scenarios::ai_messages_binding::SCENARIO,
         crate::dynamic::scenarios::grpc_json_transcoder::SCENARIO,
+        crate::dynamic::scenarios::graphql_rate_limit::SCENARIO,
         crate::dynamic::scenarios::duplicate_host_policy_hot_reload::SCENARIO,
         crate::dynamic::scenarios::preflight_policy_hot_reload::SCENARIO,
         crate::dynamic::scenarios::egc_runtime_hot_reload::SCENARIO,

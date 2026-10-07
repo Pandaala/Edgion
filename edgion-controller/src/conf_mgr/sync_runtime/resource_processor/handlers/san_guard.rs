@@ -222,6 +222,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         | EdgionPlugin::RequestBodyBuffer(_)
                         | EdgionPlugin::GrpcJsonTranscoder(_)
                         | EdgionPlugin::JsonSchemaValidation(_)
+                        | EdgionPlugin::GraphqlRateLimit(_)
                         | EdgionPlugin::FormJsonTransform(_)
                         | EdgionPlugin::ResponseRewrite(_)
                         | EdgionPlugin::RateLimitLocal(_)

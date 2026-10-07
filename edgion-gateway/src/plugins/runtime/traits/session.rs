@@ -243,6 +243,11 @@ pub trait PluginSession: Send + Sync {
     /// Get the request query string (without leading '?')
     fn get_query(&self) -> Option<String>;
 
+    /// Borrow the current upstream-bound query so bounded parsers can check its
+    /// size before copying. Unlike get_query_param this observes trusted rewrites.
+    #[allow(clippy::needless_lifetimes)]
+    fn request_query<'a>(&'a self) -> Option<&'a str>;
+
     /// Get the HTTP method as &str (zero-copy)
     fn get_method(&self) -> &str;
 

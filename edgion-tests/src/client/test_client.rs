@@ -52,6 +52,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "CsrfSecretRotation",
     "JsonSchemaValidationDynamic",
     "GrpcJsonTranscoderDynamic",
+    "GraphqlRateLimitDynamic",
     "FormJsonTransformDynamic",
     "BasicAuthDynamic",
     "BasicAuthDynamicGrouped",
@@ -275,6 +276,44 @@ mod capability_tests {
             registrations(targeted),
             registrations(default)
         )
+    }
+
+    fn dynamic_runner_names_covered_by_default(targeted: &str, default_sweep: &str) -> BTreeSet<String> {
+        if !default_sweep.contains("run_dynamic_scenarios || test_failed=true") {
+            return BTreeSet::new();
+        }
+        let registered: BTreeSet<_> = dynamic::all().iter().map(|scenario| scenario.id).collect();
+        let marker = "run_test \"";
+        targeted
+            .match_indices(marker)
+            .filter_map(|(index, _)| {
+                let after = &targeted[index + marker.len()..];
+                let (name, command) = after.split_once('"')?;
+                // Bound the search to this invocation, so a following dynamic
+                // command cannot give an unrelated static suite coverage.
+                let command = command.split_once(marker).map_or(command, |(own, _)| own);
+                let command = command.split_once("|| test_failed=true")?.0;
+                let id = command.split_once("--dynamic-scenario ")?.1;
+                let id = id.split_whitespace().next()?.trim_end_matches('"');
+                registered.contains(id).then(|| name.to_owned())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dynamic_default_coverage_requires_registered_id_and_actual_enumeration() {
+        let targeted = r#"
+run_test "StaticBeforeDynamic" "client -r EdgionPlugins" || test_failed=true
+run_test "NamedDynamic" "client --dynamic-scenario GraphqlRateLimitDynamic" || test_failed=true
+run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_failed=true
+"#;
+        let default = "run_dynamic_scenarios || test_failed=true";
+        assert_eq!(
+            dynamic_runner_names_covered_by_default(targeted, default),
+            BTreeSet::from(["NamedDynamic".to_owned()])
+        );
+        assert!(dynamic_runner_names_covered_by_default(targeted, "").is_empty());
+        assert!(dynamic_runner_names_covered_by_default(targeted, "run_dynamic_scenarios || true").is_empty());
     }
 
     #[test]
@@ -1044,6 +1083,7 @@ mod capability_tests {
         const KNOWN_TARGETED_ONLY: &[(&str, &str)] = &[];
 
         let targeted_names = names(targeted);
+        let dynamic_covered = dynamic_runner_names_covered_by_default(targeted, default_sweep);
         assert!(
             targeted_names.len() > 50,
             "expected the targeted block to hold the bulk of the suite list, found {} — \
@@ -1056,6 +1096,7 @@ mod capability_tests {
             // `run_test "Foo_${item_safe}"` is the dynamic `-i <Item>` path, not a
             // static suite name; there is nothing for the default sweep to match.
             .filter(|n| !n.contains('$'))
+            .filter(|n| !dynamic_covered.contains(n.as_str()))
             .filter(|n| !KNOWN_TARGETED_ONLY.iter().any(|(known, _)| *known == n.as_str()))
             .filter(|n| {
                 !default_sweep.contains(&format!("run_test \"{n}\""))
@@ -1247,6 +1288,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "dsl-body" | "dslbody" => "EdgionPlugins/DslBody".to_string(),
             "body-plugins" | "bodyplugins" => "EdgionPlugins/BodyPlugins".to_string(),
             "json-schema-validation" | "jsonschemavalidation" => "EdgionPlugins/JsonSchemaValidation".to_string(),
+            "graphql-rate-limit" | "graphqlratelimit" => "EdgionPlugins/GraphqlRateLimit".to_string(),
             "EdgionConfigDataManaged" | "edgionconfigdatamanaged" | "data-managed" => {
                 "EdgionPlugins/EdgionConfigDataManaged".to_string()
             }
@@ -1452,7 +1494,9 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DslTerminate" => "EdgionPlugins",
         "EdgionPlugins/DslBody" => "EdgionPlugins",
         "EdgionPlugins/BodyPlugins" => "EdgionPlugins",
-        "EdgionPlugins/JsonSchemaValidation" | "EdgionPlugins/GrpcJsonTranscoder" => "EdgionPlugins",
+        "EdgionPlugins/JsonSchemaValidation"
+        | "EdgionPlugins/GrpcJsonTranscoder"
+        | "EdgionPlugins/GraphqlRateLimit" => "EdgionPlugins",
         "EdgionPlugins/BodyDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslTerminateDynamic" => "EdgionPlugins",
@@ -1542,6 +1586,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "DslTerminateDynamic"
         | "FormJsonTransformDynamic"
         | "GrpcJsonTranscoderDynamic"
+        | "GraphqlRateLimitDynamic"
         | "JsonSchemaValidationDynamic"
         | "PmdRefFlap"
         | "RegionRouteValidation"
@@ -2908,6 +2953,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::JsonSchemaValidationTestSuite));
+        }
+        "EdgionPlugins/GraphqlRateLimit" => {
+            if !gateway {
+                eprintln!("GraphqlRateLimit requires --gateway");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GraphqlRateLimitTestSuite));
         }
         "EdgionPlugins/BodyDynamic" => {
             if !gateway {

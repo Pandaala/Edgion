@@ -3260,6 +3260,7 @@ fn ep_ref_bearing_variants_are_classified() {
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::GraphqlRateLimit(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::RequestRestriction(_)

@@ -29,6 +29,7 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 schemars.workspace = true
 jsonschema.workspace = true
+apollo-parser.workspace = true
 cel.workspace = true
 jsonptr.workspace = true
 

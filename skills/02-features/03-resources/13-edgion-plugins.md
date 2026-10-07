@@ -90,6 +90,7 @@ generation. See
 |------|-------------|
 | `RateLimitLocal` | Local rate limiting (CMS algorithm) |
 | `RateLimitRedis` | Distributed rate limiting (Redis backend) |
+| `GraphqlRateLimit` | Request-stage static SDL query-cost budgets over the canonical Redis limiter. Default Redis failure Deny; GET/POST envelopes64KiB, depth20, maxCost10000. Place after trusted request rewrites; no final-forwarding mutation seal. See [user guide](../../../docs/en/user-guide/http-route/filters/edgion-plugins/graphql-rate-limit.md). |
 | `BandwidthLimit` | Bandwidth limiting |
 | `FaultInjection` | Probabilistic delay and abort for controlled fault testing |
 | `Canary` | Route all traffic to one named backend, switchable by Selector ConfigData |

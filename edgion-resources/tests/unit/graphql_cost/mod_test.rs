@@ -1,0 +1,273 @@
+use super::*;
+
+fn model(schema: &str, rules: &[(&str, u32, &[&str], u32)]) -> CompiledGraphqlCost {
+    let rules: Vec<_> = rules
+        .iter()
+        .map(|(field, weight, args, fallback)| GraphqlCostRule {
+            field: field.to_string(),
+            weight: *weight,
+            multipliers: args.iter().map(|s| s.to_string()).collect(),
+            default_multiplier: *fallback,
+        })
+        .collect();
+    CompiledGraphqlCost::compile(schema, &rules, 1_000_000, 32).unwrap()
+}
+fn estimate(model: &CompiledGraphqlCost, query: &str) -> Result<u32, GraphqlCostError> {
+    model.estimate_post(
+        serde_json::json!({"query":query}).to_string().as_bytes(),
+        MAX_ENVELOPE_BYTES,
+    )
+}
+
+#[test]
+fn aliases_defaults_and_nested_multipliers() {
+    let m = model(
+        "type Query { users(first: Int = 10): [User] } type User { name: String friends(first: Int): [User] }",
+        &[("Query.users", 1, &["first"], 100), ("User.friends", 1, &["first"], 5)],
+    );
+    assert_eq!(estimate(&m, "{ alias: users { name } }"), Ok(12));
+    assert_eq!(
+        estimate(&m, "{ users(first: 2) { friends(first: 3) { name } } }"),
+        Ok(10)
+    );
+    assert_eq!(estimate(&m, "{ users(first: 0) { name } }"), Ok(3));
+    assert_eq!(
+        estimate(&m, "{ users(first: -1) { name } }"),
+        Err(GraphqlCostError::Invalid)
+    );
+    assert_eq!(
+        estimate(&m, "{ users(first: 1.0) { name } }"),
+        Err(GraphqlCostError::Invalid)
+    );
+}
+
+#[test]
+fn abstract_maximum_and_concrete_default_cannot_be_bypassed() {
+    let m = model("type Query { item: I } interface I { children(first: Int = 2): [Leaf] } type A implements I { children(first: Int = 7): [Leaf] } type B implements I { children(first: Int = 3): [Leaf] } type Leaf { name: String }", &[("I.children",10,&["first"],100), ("A.children",1,&["first"],100)]);
+    assert_eq!(estimate(&m, "{ item { children { name } } }"), Ok(19));
+    assert_eq!(estimate(&m, "{ item { ... on A { children { name } } } }"), Ok(19));
+    assert_eq!(estimate(&m, "{ item { ... on B { children { name } } } }"), Ok(15));
+    let crossed = model("type Query { item: I } interface I { children(a:Int,b:Int): [Leaf] } type A implements I { children(a:Int,b:Int): [Leaf] } type Leaf { name:String }", &[("I.children",100,&["a"],2), ("A.children",1,&["b"],200)]);
+    assert_eq!(estimate(&crossed, "{ item { children { name } } }"), Ok(203));
+}
+
+#[test]
+fn variables_preserve_undefined_null_and_integer_semantics() {
+    let m = model(
+        "type Query { list(n: Int = 4): [Leaf] } type Leaf { name: String }",
+        &[("Query.list", 1, &["n"], 100)],
+    );
+    assert_eq!(estimate(&m, "query($n:Int){ list(n:$n){name} }"), Ok(6));
+    assert_eq!(estimate(&m, "query($n:Int=3){ list(n:$n){name} }"), Ok(5));
+    assert_eq!(
+        estimate(&m, "query($n:Int!){ list(n:$n){name} }"),
+        Err(GraphqlCostError::Invalid)
+    );
+    assert_eq!(
+        estimate(&m, "{ list(n:$missing){name} }"),
+        Err(GraphqlCostError::Invalid)
+    );
+    for number in ["1.0", "1e0"] {
+        let body = format!("{{\"query\":\"query($n:Int){{list(n:$n){{name}}}}\",\"variables\":{{\"n\":{number}}}}}");
+        assert_eq!(m.estimate_post(body.as_bytes(), MAX_ENVELOPE_BYTES), Ok(3));
+    }
+    for value in ["null", "-1", "2147483648", "true", "\"1\"", "[]", "1.5"] {
+        let body = format!("{{\"query\":\"query($n:Int){{list(n:$n){{name}}}}\",\"variables\":{{\"n\":{value}}}}}");
+        assert_eq!(
+            m.estimate_post(body.as_bytes(), MAX_ENVELOPE_BYTES),
+            Err(GraphqlCostError::Invalid)
+        );
+    }
+}
+
+#[test]
+fn covariance_preserves_static_fragment_validity_and_runtime_applicability() {
+    let m = model("type Query { parent: I } interface I { child: J } type A implements I { child: L } interface J { value: String } type L implements J { value: String } type R implements J { value: String }", &[("L.value",7,&[],100), ("R.value",100,&[],100)]);
+    assert_eq!(
+        estimate(&m, "{parent{child{... on L {value} ... on R {value}}}}"),
+        Ok(10)
+    );
+    assert_eq!(
+        estimate(&m, "{parent{child{... on Query {__typename}}}}"),
+        Err(GraphqlCostError::Invalid)
+    );
+    for query in [
+        "{parent{child{... on R {value @custom}}}}",
+        "{parent{child{... on R {missing}}}}",
+        "{parent{child{... on R {value(unknown:1)}}}}",
+    ] {
+        assert_eq!(estimate(&m, query), Err(GraphqlCostError::Invalid));
+    }
+    let union = model(
+        "type Query { item: U } union U = L | R type L { one:String two:String } type R { three:String }",
+        &[("L.one", 3, &[], 100), ("L.two", 5, &[], 100), ("R.three", 7, &[], 100)],
+    );
+    assert_eq!(estimate(&union, "{item{... on L{one two} ... on R{three}}}"), Ok(10));
+}
+
+#[test]
+fn operation_selection_and_strict_http_envelopes() {
+    let m = model("type Query { name:String } type Mutation { save:Boolean }", &[]);
+    assert_eq!(m.estimate_get("query=%7Bname%7D", MAX_ENVELOPE_BYTES), Ok(2));
+    assert_eq!(
+        m.estimate_get("query=mutation%7Bsave%7D", MAX_ENVELOPE_BYTES),
+        Err(GraphqlCostError::MethodNotAllowed)
+    );
+    for q in [
+        "query=%GG",
+        "query=%FF",
+        "query=%7Bname%7D&%71uery=%7Bname%7D",
+        "query=%7Bname%7D&unknown=1",
+    ] {
+        assert_eq!(m.estimate_get(q, MAX_ENVELOPE_BYTES), Err(GraphqlCostError::Invalid));
+    }
+    assert_eq!(m.estimate_get("query=%7Bname%7D", 3), Err(GraphqlCostError::TooLarge));
+    for body in [
+        r#"[{"query":"{name}"}]"#,
+        r#"{"query":"{name}","query":"{name}"}"#,
+        r#"{"query":"{name}","variables":{"a":1,"a":2}}"#,
+        r#"{"query":"{name}","extensions":{"x":1}}"#,
+        r#"{"query":"{name}","extra":1}"#,
+    ] {
+        assert_eq!(
+            m.estimate_post(body.as_bytes(), MAX_ENVELOPE_BYTES),
+            Err(GraphqlCostError::Invalid)
+        );
+    }
+    assert_eq!(
+        estimate(&m, "query A{name} query B{name}"),
+        Err(GraphqlCostError::Invalid)
+    );
+    let body = br#"{"query":"query A{name} mutation B{save}","operationName":"B"}"#;
+    assert_eq!(m.estimate_post(body, MAX_ENVELOPE_BYTES), Ok(2));
+    for q in [
+        "query A{name} query A{name}",
+        "{name} query A{name}",
+        "subscription S{name}",
+        "type Query{name:String}",
+        "{__schema}",
+        "{name{ x }}",
+        "{missing}",
+    ] {
+        assert_eq!(estimate(&m, q), Err(GraphqlCostError::Invalid));
+    }
+}
+
+#[test]
+fn fragments_directives_and_work_are_bounded() {
+    let m = model("type Query { name:String next:Query }", &[]);
+    assert_eq!(estimate(&m, "{ name @skip(if:true) name @include(if:false) }"), Ok(3));
+    assert_eq!(estimate(&m, "{ ...A ...A } fragment A on Query {name}"), Ok(3));
+    for q in [
+        "{...Missing}",
+        "{...A} fragment A on Query {...B} fragment B on Query {...A}",
+        "{name @custom}",
+        "{... on String {name}}",
+        "{name(a:1,a:2)}",
+    ] {
+        assert_eq!(estimate(&m, q), Err(GraphqlCostError::Invalid));
+    }
+    let mut query = "{...F0}".to_string();
+    for i in 0..18 {
+        query.push_str(&format!(" fragment F{i} on Query {{...F{} ...F{}}}", i + 1, i + 1));
+    }
+    query.push_str(" fragment F18 on Query {name}");
+    assert_eq!(estimate(&m, &query), Err(GraphqlCostError::Invalid));
+    assert_eq!(
+        estimate(&m, &format!("{}{{name}}{}", "{next".repeat(33), "}".repeat(33))),
+        Err(GraphqlCostError::Invalid)
+    );
+}
+
+#[test]
+fn independent_depth_cost_and_json_structural_limits() {
+    let m = CompiledGraphqlCost::compile("type Query {next: Query name: String}", &[], 10, 2).unwrap();
+    assert_eq!(estimate(&m, "{next{name}}"), Ok(3));
+    assert_eq!(estimate(&m, "{next{next{name}}}"), Err(GraphqlCostError::Invalid));
+    assert_eq!(
+        estimate(
+            &m,
+            "{...A} fragment A on Query {next{...B}} fragment B on Query {next{name}}"
+        ),
+        Err(GraphqlCostError::Invalid)
+    );
+    assert_eq!(
+        estimate(&m, &format!("{{{}}}", "name ".repeat(10))),
+        Err(GraphqlCostError::Invalid)
+    );
+    let mut body = "{\"query\":\"{name}\",\"variables\":{\"v\":".to_string();
+    body.push_str(&"[".repeat(32));
+    body.push('0');
+    body.push_str(&"]".repeat(32));
+    body.push_str("}}");
+    assert_eq!(
+        m.estimate_post(body.as_bytes(), MAX_ENVELOPE_BYTES),
+        Err(GraphqlCostError::Invalid)
+    );
+    let values = (0..4096).map(|_| "0").collect::<Vec<_>>().join(",");
+    let body = format!("{{\"query\":\"{{name}}\",\"variables\":{{\"v\":[{values}]}}}}");
+    assert_eq!(
+        m.estimate_post(body.as_bytes(), MAX_ENVELOPE_BYTES),
+        Err(GraphqlCostError::Invalid)
+    );
+    assert_eq!(
+        m.estimate_post(br#"{"query":"{name}"}"#, 3),
+        Err(GraphqlCostError::TooLarge)
+    );
+    let full_depth = model("type Query {next: Query name:String}", &[]);
+    assert_eq!(
+        estimate(
+            &full_depth,
+            &format!("{}{{name}}{}", "{next".repeat(31), "}".repeat(31))
+        ),
+        Ok(33)
+    );
+}
+
+#[test]
+fn sdl_consistency_and_cost_rule_validation() {
+    for schema in [
+        "type Query { field:Missing }",
+        "type Query { field: Input } input Input{x:Int}",
+        "type Query { f:String f:String }",
+        "type Query{f:String} extend type Query{g:Int}",
+        "type Query{f:String @x}",
+        "type Query{f:String} interface I implements J{f:String} interface J{f:String}",
+        "type Query{x:I} interface I{f:String!} type A implements I{f:String}",
+        "type Query{x:I} interface I{f(n:Int):String} type A implements I{f(n:String):String}",
+    ] {
+        assert!(
+            CompiledGraphqlCost::compile(schema, &[], 10000, 20).is_err(),
+            "{schema}"
+        );
+    }
+    assert!(CompiledGraphqlCost::compile("schema { query: Root } type Root{x:String}", &[], 10000, 20).is_ok());
+    let rule = GraphqlCostRule {
+        field: "Query.x".into(),
+        weight: 1,
+        multipliers: vec!["n".into()],
+        default_multiplier: 100,
+    };
+    assert!(CompiledGraphqlCost::compile("type Query{x(n:Int=null):String}", &[rule], 10000, 20).is_err());
+}
+
+#[test]
+fn parser_caps_and_malformed_grammar_ledger_guard() {
+    assert!(std::mem::size_of::<apollo_parser::Error>() <= 64);
+    assert!(parse_document(&format!("{{{}}}", "x".repeat(257))).is_err());
+    assert!(parse_document(&format!("{{{}}}", "x ".repeat(3000))).is_err());
+    for atom in [
+        "!", "$", "@", "query", "type", "fragment", "...", "}", "]", "(", "=", ":",
+    ] {
+        for count in [1, 4, 16, 128, 512] {
+            let source = format!("{{ {} }}", atom.repeat(count));
+            let tokens = Lexer::new(&source).count();
+            let parsed = Parser::new(&source).recursion_limit(64).token_limit(4096).parse();
+            let errors = parsed.errors().count();
+            use apollo_parser::cst::CstNode;
+            let nodes = parsed.document().syntax().descendants().count();
+            assert!(errors <= 8 * (tokens + 1), "errors={errors} tokens={tokens}");
+            assert!(nodes <= 8 * (tokens + 1), "nodes={nodes} tokens={tokens}");
+        }
+    }
+}

@@ -487,35 +487,36 @@ impl EdgionPlugins {
         // then skips the entry entirely, so Pass 2 must skip them too — otherwise
         // the two layers disagree on which entries reach the alias / dye / stage
         // checks (and on which entries claim an alias for the uniqueness rule).
-        let bounded_structured_invalid: std::collections::HashSet<usize> = self
-            .spec
-            .request_plugins
-            .as_ref()
-            .map(|entries| {
-                entries
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, entry)| {
-                        entry.is_enabled()
-                            && entry.plugin.validation_error().is_none()
-                            && matches!(
-                                entry.plugin,
-                                EdgionPlugin::FormJsonTransform(_)
-                                    | EdgionPlugin::GrpcJsonTranscoder(_)
-                                    | EdgionPlugin::JsonSchemaValidation(_)
-                                    | EdgionPlugin::ProxyRewrite(super::plugin_configs::ProxyRewriteConfig {
-                                        json_body: Some(_),
-                                        ..
-                                    })
-                            )
-                            && entry.body.as_ref().is_some_and(|body| {
-                                !super::plugin_configs::bounded_structured_body_validation_errors(body).is_empty()
-                            })
-                    })
-                    .map(|(i, _)| i)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let bounded_structured_invalid: std::collections::HashSet<usize> =
+            self.spec
+                .request_plugins
+                .as_ref()
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, entry)| {
+                            entry.is_enabled()
+                                && entry.plugin.validation_error().is_none()
+                                && matches!(
+                                    entry.plugin,
+                                    EdgionPlugin::FormJsonTransform(_)
+                                        | EdgionPlugin::GrpcJsonTranscoder(_)
+                                        | EdgionPlugin::JsonSchemaValidation(_)
+                                        | EdgionPlugin::GraphqlRateLimit(_)
+                                        | EdgionPlugin::ProxyRewrite(super::plugin_configs::ProxyRewriteConfig {
+                                            json_body: Some(_),
+                                            ..
+                                        })
+                                )
+                                && entry.body.as_ref().is_some_and(|body| {
+                                    !entry.plugin.structured_body_validation_errors(body).is_empty()
+                                })
+                        })
+                        .map(|(i, _)| i)
+                        .collect()
+                })
+                .unwrap_or_default();
 
         // Pass 2: per-entry config/alias/stage validation for active entries,
         // in stage order — mirrors the four `add_from_*` paths (minus runtime
@@ -707,9 +708,10 @@ impl EdgionPlugins {
                             EdgionPlugin::FormJsonTransform(_)
                                 | EdgionPlugin::GrpcJsonTranscoder(_)
                                 | EdgionPlugin::JsonSchemaValidation(_)
+                                | EdgionPlugin::GraphqlRateLimit(_)
                                 | EdgionPlugin::ProxyRewrite(_)
                         ) {
-                            for error in super::plugin_configs::bounded_structured_body_validation_errors(body) {
+                            for error in entry.plugin.structured_body_validation_errors(body) {
                                 errors.push(format!("{}[{}] ({}): {}", $label, i, name, error));
                             }
                         } else if let Some(err) = body.validation_error() {
