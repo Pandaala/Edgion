@@ -111,7 +111,11 @@ impl ExtensionRefFilter {
             Some(idx) => session.resolved_route_ext_ref(idx),
             None => session.pinned_backend_ext_ref(self.plugin_key()),
         }?;
-        if self.index.is_none() && (runtime.has_waf() || runtime.has_request_id() || runtime.has_upstream_jump_plugin())
+        if self.index.is_none()
+            && (runtime.has_waf()
+                || runtime.has_request_id()
+                || runtime.has_upstream_jump_plugin()
+                || runtime.has_grpc_transcoder())
         {
             return None;
         }
@@ -159,7 +163,8 @@ impl ExtensionRefFilter {
         if self.index.is_none()
             && (plugin_runtime.has_waf()
                 || plugin_runtime.has_request_id()
-                || plugin_runtime.has_upstream_jump_plugin())
+                || plugin_runtime.has_upstream_jump_plugin()
+                || plugin_runtime.has_grpc_transcoder())
         {
             log.push_err("backend-scoped WAF, RequestId, or upstream jump plugin is not supported");
             return Err(());

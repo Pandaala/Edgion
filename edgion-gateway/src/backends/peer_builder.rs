@@ -56,6 +56,10 @@ pub(crate) fn apply_backend_app_protocol(
             peer.options.set_http_version(2, 2);
         }
         Some(BackendAppProtocol::WebSocket) => {
+            if let Some(plan) = &ctx.grpc_transcoding {
+                plan.reject_mutation();
+                return;
+            }
             peer.options.set_http_version(1, 1);
             if ctx.request_info.discover_protocol.is_none() {
                 ctx.request_info.discover_protocol = Some("websocket".to_string());

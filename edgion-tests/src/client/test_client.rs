@@ -50,6 +50,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "CredentialInjectorDynamic",
     "CsrfSecretRotation",
     "JsonSchemaValidationDynamic",
+    "GrpcJsonTranscoderDynamic",
     "FormJsonTransformDynamic",
     "BasicAuthDynamic",
     "BasicAuthDynamicGrouped",
@@ -1448,7 +1449,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DslTerminate" => "EdgionPlugins",
         "EdgionPlugins/DslBody" => "EdgionPlugins",
         "EdgionPlugins/BodyPlugins" => "EdgionPlugins",
-        "EdgionPlugins/JsonSchemaValidation" => "EdgionPlugins",
+        "EdgionPlugins/JsonSchemaValidation" | "EdgionPlugins/GrpcJsonTranscoder" => "EdgionPlugins",
         "EdgionPlugins/BodyDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslTerminateDynamic" => "EdgionPlugins",
@@ -1537,6 +1538,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "DslDynamic"
         | "DslTerminateDynamic"
         | "FormJsonTransformDynamic"
+        | "GrpcJsonTranscoderDynamic"
         | "JsonSchemaValidationDynamic"
         | "PmdRefFlap"
         | "RegionRouteValidation"
@@ -2885,6 +2887,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::BodyPluginsTestSuite));
+        }
+        "EdgionPlugins/GrpcJsonTranscoder" => {
+            if !gateway {
+                eprintln!("GrpcJsonTranscoder requires --gateway");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcJsonTranscoderTestSuite));
         }
         "EdgionPlugins/JsonSchemaValidation" => {
             if !gateway {

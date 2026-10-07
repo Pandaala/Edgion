@@ -114,10 +114,10 @@ pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderC
 pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential, HmacMatchConfig};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
 pub use json_schema_validation::{
-    bounded_structured_body_validation_errors, parse_json_instance, profile_json_value, CompiledJsonSchema,
-    InstanceValidationError, JsonSchemaValidationConfig, JsonValueProfile, ParsedJsonInstance, SchemaComplexityProfile,
-    StrictJsonError, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH,
-    MAX_JSON_INSTANCE_NODES,
+    bounded_structured_body_validation_errors, parse_json_instance, parse_json_instance_with_limits,
+    profile_json_value, CompiledJsonSchema, InstanceValidationError, JsonSchemaValidationConfig, JsonValueProfile,
+    ParsedJsonInstance, SchemaComplexityProfile, StrictJsonError, ABSOLUTE_INSTANCE_MAX_BYTES,
+    DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES,
 };
 pub use jwe_decrypt::{
     JweContentEncryption, JweDecryptConfig, JweKeyManagement, ResolvedJweCredential, ResolvedJweCredentialError,
@@ -187,3 +187,5 @@ pub(super) fn validate_restricted_template(template: &str, field: &str) -> Optio
         Err(error) => Some(format!("{field}: {error}")),
     }
 }
+
+pub use crate::grpc_transcoding::{GrpcDescriptorSource, GrpcJsonStreamFormat, GrpcJsonTranscoderConfig};

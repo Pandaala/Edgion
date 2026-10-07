@@ -1156,6 +1156,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            if crate::plugins::http::grpc_json_transcoder::transport::protected(name) {
+                plan.reject_mutation();
+                return Err("sealed RPC header".into());
+            }
+        }
         self.inner
             .req_header_mut()
             .insert_header(name.to_string(), value.to_string())
@@ -1165,6 +1171,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_request_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            if crate::plugins::http::grpc_json_transcoder::transport::protected(name) {
+                plan.reject_mutation();
+                return Err("sealed RPC header".into());
+            }
+        }
         self.inner
             .req_header_mut()
             .insert_header(name.to_string(), value)
@@ -1174,11 +1186,23 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            if crate::plugins::http::grpc_json_transcoder::transport::protected(name) {
+                plan.reject_mutation();
+                return Err("sealed RPC header".into());
+            }
+        }
         let value = http::HeaderValue::from_str(value).map_err(|e| Box::new(e) as PluginSessionError)?;
         self.append_request_header_value(name, value)
     }
 
     fn append_request_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            if crate::plugins::http::grpc_json_transcoder::transport::protected(name) {
+                plan.reject_mutation();
+                return Err("sealed RPC header".into());
+            }
+        }
         // Append as a new header field line (preserves every existing field line
         // per RFC 7230 §3.2.2 list semantics; insert_header would replace all).
         self.inner
@@ -1190,6 +1214,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            if crate::plugins::http::grpc_json_transcoder::transport::protected(name) {
+                plan.reject_mutation();
+                return Err("sealed RPC header".into());
+            }
+        }
         self.inner.req_header_mut().remove_header(name);
         self.ctx.remove_deferred_credential_mutation(name);
         Ok(())
@@ -1205,11 +1235,21 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         value: Arc<http::HeaderValue>,
         valid_until: Option<std::time::Instant>,
     ) -> PluginSessionResult<()> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            if crate::plugins::http::grpc_json_transcoder::transport::protected(name.as_str()) {
+                plan.reject_mutation();
+                return Err("sealed RPC header".into());
+            }
+        }
         self.ctx.upsert_deferred_credential_mutation(name, value, valid_until);
         Ok(())
     }
 
     fn set_request_query(&mut self, query: &str) -> PluginSessionResult<()> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return Err("sealed RPC query".into());
+        }
         // Keep the raw request-target form (including an absolute-form scheme
         // and authority) while replacing only its query. Path normalization is
         // query-agnostic, and the upstream-peer stage still chooses the final
@@ -1248,6 +1288,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return Err("sealed RPC request".into());
+        }
         let parsed_uri = uri.parse::<Uri>().map_err(|e| Box::new(e) as PluginSessionError)?;
         crate::ctx::set_path_only_request_target(self.inner.req_header_mut(), parsed_uri)?;
         let cfg = edgion_resources::path_normalization::get_path_normalization_config();
@@ -1278,6 +1322,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_upstream_method(&mut self, method: &str) -> PluginSessionResult<()> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return Err("sealed RPC request".into());
+        }
         let parsed_method = method
             .parse::<http::Method>()
             .map_err(|e| Box::new(e) as PluginSessionError)?;
@@ -1488,6 +1536,40 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
         self.ctx.try_set_ai_attempt_plan(plan)
+    }
+
+    fn grpc_transcoding_allowed(&self) -> bool {
+        self.ctx.request_info.in_request_body_stage
+            && self.ctx.route_unit.is_some()
+            && !self.ctx.request_info.is_grpc_request
+            && !self.ctx.is_grpc_route_matched
+            && !matches!(
+                self.ctx.request_info.discover_protocol.as_deref(),
+                Some("grpc-web" | "websocket")
+            )
+            && self.ctx.grpc_transcoding.is_none()
+            && !self.ctx.has_request_body_stream_handlers()
+            && self.ctx.ai_state().is_none()
+            && !self.inner.req_header().headers.contains_key(http::header::UPGRADE)
+    }
+    fn install_grpc_transcoding(
+        &mut self,
+        mut plan: crate::plugins::http::grpc_json_transcoder::GrpcTranscodingPlan,
+    ) -> bool {
+        if !self.grpc_transcoding_allowed() {
+            return false;
+        }
+        plan.generation = self.ctx.request_body.generation();
+        if let Some(timeout) = self.ctx.request_timeout() {
+            plan.deadline = plan.deadline.min(self.ctx.start_time + timeout);
+        }
+        self.ctx.request_body.freeze_mutation();
+        let plan = Arc::new(plan);
+        self.ctx.push_response_stream_processor(Box::new(
+            crate::plugins::http::grpc_json_transcoder::GrpcResponseProcessor::new(plan.clone()),
+        ));
+        self.ctx.grpc_transcoding = Some(plan);
+        true
     }
 
     fn install_stream_processor(
@@ -1931,6 +2013,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         range: std::ops::Range<usize>,
         replacement: bytes::Bytes,
     ) -> BodyReadResult {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return Err(BodyReadError::GenerationConflict);
+        }
         self.ensure_bodyless_request_replay_owner().await?;
         self.ctx.replace_request_body_slice(range, replacement).await
     }
@@ -1967,6 +2053,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn overwrite_request_body(&mut self, body: bytes::Bytes) -> Result<(), BodyReadError> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return Err(BodyReadError::GenerationConflict);
+        }
         self.ensure_bodyless_request_replay_owner().await?;
         self.ctx.overwrite_request_body(body)
     }
@@ -1999,6 +2089,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn request_body_clear(&mut self) -> Result<(), BodyOperationError> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return Err(BodyReadError::GenerationConflict.into());
+        }
         if !self.ctx.request_info.in_request_body_stage {
             return Err(BodyReadError::NotBuffered.into());
         }
@@ -2007,6 +2101,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn request_body_append(&mut self, bytes: Bytes) -> Result<(), BodyOperationError> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return Err(BodyReadError::GenerationConflict.into());
+        }
         if !self.ctx.request_info.in_request_body_stage {
             return Err(BodyReadError::NotBuffered.into());
         }
@@ -2015,6 +2113,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn request_body_prepend(&mut self, bytes: Bytes) -> Result<(), BodyOperationError> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return Err(BodyReadError::GenerationConflict.into());
+        }
         if !self.ctx.request_info.in_request_body_stage {
             return Err(BodyReadError::NotBuffered.into());
         }
@@ -2023,6 +2125,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn request_body_remove(&mut self, range: std::ops::Range<u64>) -> Result<(), BodyOperationError> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return Err(BodyReadError::GenerationConflict.into());
+        }
         if !self.ctx.request_info.in_request_body_stage {
             return Err(BodyReadError::NotBuffered.into());
         }
@@ -2036,6 +2142,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         to: Bytes,
         max_scan_bytes: u64,
     ) -> Result<BodyScanResult<()>, BodyOperationError> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return Err(BodyReadError::GenerationConflict.into());
+        }
         if !self.ctx.request_info.in_request_body_stage {
             return Err(BodyReadError::NotBuffered.into());
         }
@@ -2241,6 +2351,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         handler: Box<dyn crate::plugins::runtime::traits::request_body_stream::RequestBodyStreamHandler>,
     ) -> bool {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return false;
+        }
         if self.ctx.waf_prefix_inspected {
             return false;
         }
@@ -2263,8 +2377,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         {
             return false;
         }
-        self.ctx.push_request_body_stream_handler(handler);
-        true
+        self.ctx.push_request_body_stream_handler(handler)
     }
 
     fn record_outcome(&mut self, outcome: DyeOutcome, value: &str) {

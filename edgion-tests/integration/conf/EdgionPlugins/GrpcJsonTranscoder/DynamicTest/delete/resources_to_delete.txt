@@ -1,0 +1,1 @@
+ConfigMap/edgion-default/grpc-transcoder-dynamic

@@ -109,7 +109,7 @@ ordered findings, TX/captures and later phases; its enlarged reference work cap
 is never a production override. Exact compiler/constructor budget boundaries,
 mask lifecycle and typed-control counterexamples are regression gates. Re-evaluate
 the proof when adding TX-writing actions, capture aliases, target controls,
-scheduler edges or consumers. See the [reviewed implementation record](../../../../tasks/pending/waf-demand-driven/04-verification.md).
+scheduler edges or consumers. The reviewed implementation record was `tasks/pending/waf-demand-driven/04-verification.md`; that historical task file is absent from the current tree.
 
 ## Alternatives and limits
 

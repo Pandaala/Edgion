@@ -249,6 +249,7 @@ impl EdgionPluginsHandler {
                 | EdgionPlugin::DebugAccessLogToHeader(_)
                 | EdgionPlugin::ProxyRewrite(_)
                 | EdgionPlugin::RequestBodyBuffer(_)
+                | EdgionPlugin::GrpcJsonTranscoder(_)
                 | EdgionPlugin::JsonSchemaValidation(_)
                 | EdgionPlugin::FormJsonTransform(_)
                 | EdgionPlugin::RequestRestriction(_)
@@ -310,6 +311,12 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             );
         }
 
+        for entry in ep.spec.request_plugins.iter_mut().flatten() {
+            if let EdgionPlugin::GrpcJsonTranscoder(config) = &mut entry.plugin {
+                config.resolved_descriptor = None;
+                config.descriptor_error = None;
+            }
+        }
         if let Some(waf) = ep.spec.waf.as_mut() {
             waf.policy_ref.ref_denied = None;
             if let Some(reference) = waf.active_profile_ref.as_mut() {
@@ -355,6 +362,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // EdgionConfigData pass and prevent ReferenceGrant revalidation.
         ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
 
+        super::plugins::grpc_descriptor::resolve(&mut ep, &resource_ref, ctx);
         cred::resolve_basic_auth(&mut ep, &resource_ref, ctx);
         cred::resolve_credential_injector(&mut ep, &resource_ref, ctx).await;
         cred::resolve_jwt(&mut ep, &resource_ref, ctx);
@@ -512,6 +520,15 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
     fn update_status(&self, ep: &mut EdgionPlugins, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = ep.metadata.generation;
         let mut validation_errors = validation_errors.to_vec();
+        for (index, entry) in ep.spec.request_plugins.iter().flatten().enumerate() {
+            if entry.is_enabled() {
+                if let EdgionPlugin::GrpcJsonTranscoder(config) = &entry.plugin {
+                    if let Some(error) = &config.descriptor_error {
+                        validation_errors.push(format!("requestPlugins[{index}] descriptor: {error}"));
+                    }
+                }
+            }
+        }
         if let Some(waf) = ep.spec.waf.as_ref() {
             if waf.validate_shape().is_ok() {
                 if let Some(error) = waf.validation_error() {

@@ -347,7 +347,7 @@ whether the feature needs incremental bytes or one complete document.
    release/replace/discard, flush once at EOS, and never become full-response
    aggregation. Holding bytes is not itself backpressure; an async decision
    point provides backpressure only while its processor callback is awaited.
-   The sole full-document exception is an explicitly selected non-streaming
+   One full-document exception is an explicitly selected non-streaming
    OpenAI Chat-to-Anthropic converter, owned by `ai/conversion/chat_to_anthropic`.
    It may aggregate one response in memory only under an independently reviewed
    design that enforces input/output byte caps while receiving/serializing,
@@ -365,6 +365,18 @@ whether the feature needs incremental bytes or one complete document.
    `tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md`;
    the task file is absent from the current tree). Its recorded acceptance does
    not relax these requirements or accept broader aggregation.
+   An additional full-document exception is explicitly selected unary
+   `GrpcJsonTranscoder` conversion, owned by `plugins/http/grpc_json_transcoder`.
+   It may retain exactly one gRPC response message in its private bounded
+   conversion owner, never in response BodyStorage, a disk spool, or a
+   full-response RawWindow. Enforce independent protobuf/ProtoJSON, depth/node,
+   metadata, outstanding-output, per-exchange heap and process-wide admission
+   bounds in the [reviewed plan](tasks/pending/grpc-json-transcoding/03-implementation-plan.md).
+   Validate real terminal gRPC status before final headers/body commit, preserve
+   deadlines and cancellation cleanup, and emit fixed REST errors. Server-streaming
+   conversion remains message-window streaming and gains no full-response
+   aggregation permission. Ordinary HTTP, native gRPC, AI and SSE ownership remain
+   unchanged. This creates no general plugin whole-response API.
 3. **A plugin-initiated outbound call is a separate bounded exchange.** Such a
    call may aggregate its response body only behind an explicit hard byte cap
    (normally a 1 MiB global/configured limit), enforced while streaming the

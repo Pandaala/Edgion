@@ -165,6 +165,11 @@ pub(super) fn backend_request_scope_extension_ref_error(
     extension_ref: &LocalObjectReference,
 ) -> Option<String> {
     let (plugin, _) = backend_request_scope_violation(runtime, route_namespace, extension_ref)?;
+    if plugin.starts_with("GrpcJsonTranscoder") {
+        return Some(format!(
+            "backendRefs[{backend_index}] GrpcJsonTranscoder requires HTTPRoute rule scope"
+        ));
+    }
     Some(format!(
         "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"
     ))
@@ -180,6 +185,7 @@ pub(super) fn backend_request_scope_route_wide_error(
 ) -> Option<String> {
     let (plugin, route_wide) = backend_request_scope_violation(runtime, route_namespace, extension_ref)?;
     route_wide.then(|| {
+        if plugin.starts_with("GrpcJsonTranscoder") { return format!("backendRefs[{backend_index}] GrpcJsonTranscoder requires HTTPRoute rule scope"); }
         format!(
             "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"
         )
@@ -202,6 +208,8 @@ fn backend_request_scope_violation(
         .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())?;
     if plugins.spec.waf.is_some() {
         Some(("WAF", true))
+    } else if plugins.has_active_grpc_transcoder() {
+        Some(("GrpcJsonTranscoder (HTTPRoute rule only)", true))
     } else if plugins.has_active_request_id() {
         Some(("RequestId", true))
     } else if let Some(entry) = plugins
@@ -987,3 +995,21 @@ fn hostname_intersection<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
 #[cfg(test)]
 #[path = "../../../../../tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/route_utils_test.rs"]
 mod tests;
+
+/// Route-kind validation uses the same raw source generation as dependencies.
+pub(super) fn contains_grpc_transcoder(
+    runtime: &ControllerRuntime,
+    namespace: &str,
+    reference: &LocalObjectReference,
+) -> bool {
+    if !is_supported_edgion_plugins_ref(reference) {
+        return false;
+    }
+    let namespace = reference.resolved_namespace.as_deref().unwrap_or(namespace);
+    runtime
+        .processor_registry
+        .get("EdgionPlugins")
+        .and_then(|p| p.get_raw_any(&format!("{namespace}/{}", reference.name)))
+        .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())
+        .is_some_and(|plugins| plugins.has_active_grpc_transcoder())
+}

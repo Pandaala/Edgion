@@ -2149,6 +2149,8 @@ pub struct EdgionHttpContext {
     ///   - single-point decision idempotency (retries don't re-decide)
     ///   - mirror / fan-out consumers see consistent `req_header.uri`
     pub uri_finalized: bool,
+    /// Independent upstream RPC owner; the downstream request remains REST.
+    pub(crate) grpc_transcoding: Option<Arc<crate::plugins::http::grpc_json_transcoder::GrpcTranscodingPlan>>,
 
     // --- Optional route state ---
     /// Lazily allocated state for routes that enable session persistence.
@@ -2622,10 +2624,15 @@ impl EdgionHttpContext {
     pub(crate) fn push_request_body_stream_handler(
         &mut self,
         handler: Box<dyn crate::plugins::runtime::traits::RequestBodyStreamHandler>,
-    ) {
+    ) -> bool {
+        if let Some(plan) = &self.grpc_transcoding {
+            plan.reject_mutation();
+            return false;
+        }
         let state = self.ensure_request_body_plugins();
         state.handlers.push(sync_wrapper::SyncWrapper::new(handler));
         state.active_sources |= REQUEST_BODY_SOURCE_HANDLER;
+        true
     }
 
     #[inline]
@@ -3087,6 +3094,7 @@ impl EdgionHttpContext {
             parsed_request_caches: ParsedRequestCaches::default(),
             jump: None,
             uri_finalized: false,
+            grpc_transcoding: None,
             session_persistence: None,
             allow_loopback_upstream: false,
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),

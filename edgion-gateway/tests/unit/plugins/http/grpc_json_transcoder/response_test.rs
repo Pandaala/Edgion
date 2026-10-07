@@ -1,0 +1,191 @@
+use super::super::budget::Reservation;
+use super::*;
+use base64::{engine::general_purpose::STANDARD, Engine};
+use edgion_resources::grpc_transcoding::GrpcJsonTranscoderConfig;
+use pingora_proxy::{ResponseHeadBoundary, ResponseHeadBoundaryAction, ResponseHeadSource};
+use tokio::sync::Semaphore;
+fn processor(streaming: bool, format: GrpcJsonStreamFormat) -> GrpcResponseProcessor {
+    let descriptor = include_bytes!("../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb");
+    let mut config: GrpcJsonTranscoderConfig = serde_json::from_value(serde_json::json!({ "descriptor":{"type":"inline","base64":STANDARD.encode(descriptor)},"services":["test.TestService"] })).unwrap();
+    config.stream_format = format;
+    let compiled = Arc::new(config.compile().unwrap());
+    let binding = compiled
+        .bind("GET", if streaming { "/v1/numbers" } else { "/v1/hello/name" }, None)
+        .unwrap()
+        .binding;
+    let reservation = Reservation::acquire_from(&Arc::new(Semaphore::new(1))).unwrap();
+    let plan = Arc::new(GrpcTranscodingPlan::new(compiled, binding, reservation, 5));
+    let mut processor = GrpcResponseProcessor::new(plan);
+    let mut header = ResponseHeader::build(200, None).unwrap();
+    header.insert_header("content-type", "application/grpc+proto").unwrap();
+    header.insert_header("access-control-allow-origin", "*").unwrap();
+    header.set_version(http::Version::HTTP_2);
+    processor.on_response_header(&mut header);
+    processor.plan.head_plan(ResponseHeadSource::Origin, &header).unwrap();
+    processor
+}
+fn frame(payload: &[u8]) -> Bytes {
+    let mut bytes = vec![0];
+    bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(payload);
+    Bytes::from(bytes)
+}
+fn trailers(code: &str) -> HeaderMap {
+    let mut trailers = HeaderMap::new();
+    trailers.insert("grpc-status", code.parse().unwrap());
+    trailers
+}
+#[tokio::test]
+async fn streaming_fragmented_frames_and_real_status_emit_one_terminal() {
+    let mut p = processor(true, GrpcJsonStreamFormat::Ndjson);
+    let input = frame(&[8, 3]);
+    assert!(p.feed(input.slice(..2)).unwrap().is_empty());
+    assert!(p.feed(input.slice(2..6)).unwrap().is_empty());
+    assert_eq!(
+        p.feed(input.slice(6..)).unwrap(),
+        b"{\"type\":\"message\",\"data\":{\"number\":3}}\n"
+    );
+    assert!(p.plan.terminal.lock().is_none());
+    p.on_actual_upstream_trailers(Some(&trailers("0")), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        p.plan.terminal.lock().take().unwrap(),
+        b"{\"type\":\"end\"}\n".as_slice()
+    );
+    p.on_actual_upstream_trailers(Some(&trailers("0")), false)
+        .await
+        .unwrap();
+    assert!(p.plan.terminal.lock().is_none());
+}
+#[tokio::test]
+async fn streaming_coalesced_sse_and_missing_status_are_distinct() {
+    let mut p = processor(true, GrpcJsonStreamFormat::Sse);
+    let mut input = frame(&[8, 1]).to_vec();
+    input.extend_from_slice(&frame(&[8, 2]));
+    assert_eq!(
+        p.feed(Bytes::from(input)).unwrap(),
+        b"event: rpc_message\ndata: {\"number\":1}\n\nevent: rpc_message\ndata: {\"number\":2}\n\n"
+    );
+    p.on_actual_upstream_trailers(None, false).await.unwrap();
+    let terminal = p.plan.terminal.lock().take().unwrap();
+    assert!(terminal.starts_with(b"event: rpc_error\n"));
+    assert!(!terminal.windows(7).any(|v| v == b"rpc_end"));
+}
+#[tokio::test]
+async fn unary_waits_for_real_status_and_preserves_post_onion_metadata() {
+    let mut p = processor(false, GrpcJsonStreamFormat::Ndjson);
+    assert!(p.feed(frame(&[10, 2, b'o', b'k'])).unwrap().is_empty());
+    assert!(p.plan.ready.lock().is_none());
+    p.on_actual_upstream_trailers(Some(&trailers("0")), false)
+        .await
+        .unwrap();
+    let ResponseHeadBoundaryAction::Replace(replacement) =
+        p.plan.boundary(ResponseHeadBoundary::CleanTerminalWithoutDecision)
+    else {
+        panic!("missing unary replacement");
+    };
+    assert_eq!(replacement.header().status.as_u16(), 200);
+    assert_eq!(replacement.header().version, http::Version::HTTP_11);
+    assert_eq!(replacement.header().headers["access-control-allow-origin"], "*");
+    assert_eq!(replacement.body()[0], br#"{"message":"ok"}"#.as_slice());
+    assert!(p.plan.ready.lock().is_none());
+}
+#[tokio::test]
+async fn unary_missing_status_extra_frames_truncation_and_expiration_fail_closed() {
+    let mut p = processor(false, GrpcJsonStreamFormat::Ndjson);
+    p.feed(frame(&[])).unwrap();
+    assert!(p.on_actual_upstream_trailers(None, false).await.is_err());
+    let mut p = processor(false, GrpcJsonStreamFormat::Ndjson);
+    p.feed(frame(&[])).unwrap();
+    assert!(p.feed(frame(&[])).is_err());
+    let mut p = processor(false, GrpcJsonStreamFormat::Ndjson);
+    p.feed(Bytes::from_static(&[0, 0, 0])).unwrap();
+    assert!(p
+        .on_actual_upstream_trailers(Some(&trailers("0")), false)
+        .await
+        .is_err());
+    let mut p = processor(false, GrpcJsonStreamFormat::Ndjson);
+    p.feed(frame(&[])).unwrap();
+    p.on_actual_upstream_trailers(Some(&trailers("0")), false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        p.plan.boundary(ResponseHeadBoundary::Timeout),
+        ResponseHeadBoundaryAction::Fail(_)
+    ));
+    assert!(p.plan.ready.lock().is_none());
+}
+#[tokio::test]
+async fn header_only_error_maps_to_rest_and_malformed_status_never_succeeds() {
+    let mut p = processor(false, GrpcJsonStreamFormat::Ndjson);
+    p.header_status = Ok(Some(7));
+    p.on_actual_upstream_trailers(None, true).await.unwrap();
+    let ResponseHeadBoundaryAction::Replace(reply) =
+        p.plan.boundary(ResponseHeadBoundary::CleanTerminalWithoutDecision)
+    else {
+        panic!();
+    };
+    assert_eq!(reply.header().status.as_u16(), 403);
+    assert_eq!(reply.body()[0], ERROR_JSON);
+    for code in ["-1", "17", "", "0a"] {
+        assert!(status(&trailers(code)).is_err());
+    }
+    let mut duplicate = trailers("0");
+    duplicate.append("grpc-status", "0".parse().unwrap());
+    assert!(status(&duplicate).is_err());
+    let mut p = processor(true, GrpcJsonStreamFormat::Ndjson);
+    assert!(p.feed(Bytes::from_static(&[1, 0, 0, 0, 0])).is_err());
+    assert!(p.feed(Bytes::from_static(&[0, 0, 16, 0, 0])).is_err());
+}
+
+#[tokio::test]
+async fn immediate_stream_credit_exhaustion_cancels_the_transport() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    for malformed in [false, true] {
+        let mut p = processor(true, GrpcJsonStreamFormat::Ndjson);
+        let queued = p.plan.output(vec![0; 1024 * 1024]).unwrap();
+        let mut chunk = Some(if malformed {
+            Bytes::from_static(&[1, 0, 0, 0, 0])
+        } else {
+            frame(&[8, 1])
+        });
+        let mut sink = ResponseBodySink::new();
+        p.on_event(
+            &mut chunk,
+            StreamingResponseEvent::Data { end_of_stream: false },
+            ResponseStreamKind::None,
+            &mut sink,
+            &mut MockPluginSession::new(),
+        )
+        .await;
+        assert!(sink.is_terminated());
+        assert!(chunk.is_none());
+        assert!(p.finished);
+        assert!(p.plan.terminal.lock().is_none());
+        drop(queued);
+    }
+}
+
+#[tokio::test]
+async fn mutable_companions_cannot_manufacture_transport_success() {
+    for original in [Some("7"), None, Some("invalid")] {
+        let mut actual = original.map(trailers).unwrap_or_default();
+        let evidence = status_evidence(&actual);
+        actual.insert("grpc-status", "0".parse().unwrap());
+        let mut p = processor(false, GrpcJsonStreamFormat::Ndjson);
+        p.feed(frame(&[10, 2, b'o', b'k'])).unwrap();
+        let result = p.on_actual_upstream_trailers(Some(&evidence), false).await;
+        if original == Some("7") {
+            result.unwrap();
+            let ResponseHeadBoundaryAction::Replace(reply) =
+                p.plan.boundary(ResponseHeadBoundary::CleanTerminalWithoutDecision)
+            else {
+                panic!();
+            };
+            assert_eq!(reply.header().status.as_u16(), 403);
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}

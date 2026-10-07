@@ -26,6 +26,15 @@ pub async fn logging(
     // releases the active-context gauge charge.
     let _active_context_release = global_metrics().active_context_release_guard();
 
+    if ctx.grpc_transcoding.is_some() {
+        if let Some(driver) = ctx.response_processor_driver() {
+            driver.finalize_ordinary_incomplete().await;
+        }
+        if let Some(plan) = &ctx.grpc_transcoding {
+            plan.clear_output();
+        }
+    }
+
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         upstream.set_response_body_size(session.upstream_body_bytes_received());
         let wpt = session.upstream_write_pending_time();

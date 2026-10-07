@@ -1925,6 +1925,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_DslBody" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslBody" || test_failed=true
                     run_test "EdgionPlugins_BodyPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i BodyPlugins" || test_failed=true
                     run_test "EdgionPlugins_JsonSchemaValidation" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i JsonSchemaValidation" || test_failed=true
+                    run_test "EdgionPlugins_GrpcJsonTranscoder" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GrpcJsonTranscoder" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
                         run_test "EdgionPlugins_AllEndpointStatus" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
                     else
@@ -2222,6 +2223,7 @@ run_all_tests() {
         run_test "EdgionPlugins_DslBody" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslBody" || test_failed=true
         run_test "EdgionPlugins_BodyPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i BodyPlugins" || test_failed=true
         run_test "EdgionPlugins_JsonSchemaValidation" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i JsonSchemaValidation" || test_failed=true
+        run_test "EdgionPlugins_GrpcJsonTranscoder" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GrpcJsonTranscoder" || test_failed=true
         if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
             run_test "EdgionPlugins_AllEndpointStatus" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
         else
@@ -2451,7 +2453,7 @@ main() {
                 # must be present or the suite either cannot connect or falls
                 # through to an unrelated GRPCRoute.
                 base_suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis"
-                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/CredentialInjector,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimitLocal,EdgionPlugins/RateLimitRedis,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/GuardrailEncoding,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/RequestId,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
+                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/CredentialInjector,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimitLocal,EdgionPlugins/RateLimitRedis,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/GuardrailEncoding,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/GrpcJsonTranscoder,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/RequestId,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth,EdgionPlugins/LdapAuthTls"
                 fi
@@ -2795,7 +2797,7 @@ main() {
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
         || { [ "$G_RESOURCE" = "HTTPRoute" ] && [ "$G_ITEM" = "Backend/InformationalRetry" ]; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
-        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ]; }; }; then
+        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ]; }; }; then
         log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"
         report_test "Preflight_LoopbackAliases" "SKIP" "0" "not required by selected suites"
     elif ! ensure_loopback_aliases; then

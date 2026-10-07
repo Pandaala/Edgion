@@ -1,0 +1,22 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-transcoder-small
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-transcoder-small.example.com
+  rules:
+  - backendRefs:
+    - name: grpc-transcoder
+      namespace: edgion-default
+      port: 30021
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-small

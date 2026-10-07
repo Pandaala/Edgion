@@ -32,6 +32,11 @@ pub(crate) async fn dispatch_upstream_response_trailers(
     if !claimed {
         return Ok(());
     }
+    let grpc_evidence = ctx.grpc_transcoding.as_ref().and_then(|_| {
+        trailers
+            .as_deref()
+            .map(crate::plugins::http::grpc_json_transcoder::status_evidence)
+    });
 
     let Some(driver) = ctx.response_processor_driver() else {
         return Ok(());
@@ -41,6 +46,14 @@ pub(crate) async fn dispatch_upstream_response_trailers(
     };
     if lease.companions().is_empty() {
         lease.complete();
+        if ctx.grpc_transcoding.is_some() {
+            driver
+                .finalize_grpc_transcoding(
+                    grpc_evidence.as_ref(),
+                    ctx.upstream_response_headers_end_stream == Some(true),
+                )
+                .await?;
+        }
         return Ok(());
     }
 
@@ -72,6 +85,14 @@ pub(crate) async fn dispatch_upstream_response_trailers(
 
     ctx.finish_plugin_stage("upstream_response_trailers", logs);
     lease.complete();
+    if ctx.grpc_transcoding.is_some() {
+        driver
+            .finalize_grpc_transcoding(
+                grpc_evidence.as_ref(),
+                ctx.upstream_response_headers_end_stream == Some(true),
+            )
+            .await?;
+    }
     Ok(())
 }
 

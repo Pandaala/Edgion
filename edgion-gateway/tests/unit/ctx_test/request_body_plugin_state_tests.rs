@@ -80,7 +80,7 @@ fn retiring_mirror_only_state_restores_outer_fast_path() {
 #[test]
 fn retiring_mirror_preserves_handler_and_waf_replay_latches() {
     let mut handler_ctx = EdgionHttpContext::new();
-    handler_ctx.push_request_body_stream_handler(Box::new(NoopStreamHandler));
+    assert!(handler_ctx.push_request_body_stream_handler(Box::new(NoopStreamHandler)));
     handler_ctx.activate_request_body_source(REQUEST_BODY_SOURCE_MIRROR);
     handler_ctx.ensure_plugin_aux().mirror_state = Some(MirrorState::Abandoned);
 

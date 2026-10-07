@@ -1,0 +1,131 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-transcoder-inline
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-transcoder-inline.example.com
+  rules:
+  - backendRefs:
+    - name: grpc-transcoder
+      namespace: edgion-default
+      port: 30021
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-transcoder-configmap
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-transcoder-configmap.example.com
+  rules:
+  - backendRefs:
+    - name: grpc-transcoder
+      namespace: edgion-default
+      port: 30021
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-configmap
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-transcoder-sse
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-transcoder-sse.example.com
+  rules:
+  - backendRefs:
+    - name: grpc-transcoder
+      namespace: edgion-default
+      port: 30021
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-sse
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-transcoder-raw
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-transcoder-raw.example.com
+  rules:
+  - backendRefs:
+    - name: grpc-transcoder-raw
+      namespace: edgion-default
+      port: 30031
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-transcoder-tls-h1
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-transcoder-tls-h1.example.com
+  rules:
+  - backendRefs:
+    - name: grpc-transcoder-tls-h1
+      namespace: edgion-test
+      port: 30026
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-transcoder-h1-control
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-transcoder-h1-control.example.com
+  rules:
+  - backendRefs:
+    - name: grpc-transcoder-tls-h1
+      namespace: edgion-test
+      port: 30026

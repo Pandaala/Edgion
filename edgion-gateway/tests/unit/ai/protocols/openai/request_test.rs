@@ -121,3 +121,39 @@ fn responses_rejects_unsupported_and_ambiguous_managed_metadata() {
             .continuation
     );
 }
+
+#[test]
+fn responses_nullable_controls_preserve_native_bytes_and_defaults() {
+    for controls in [
+        r#""background":null"#,
+        r#""stream":null"#,
+        r#""max_output_tokens":null"#,
+        r#""background":null,"stream":null,"max_output_tokens":null"#,
+    ] {
+        let body = Bytes::from(format!(
+            r#" {{ "model" : "m", {controls}, "input" : [{{"content":"native"}}] }} "#
+        ));
+        let metadata = responses_metadata(&body).unwrap();
+        assert!(!metadata.streaming);
+        assert_eq!(metadata.output_bound, None);
+        assert!(!metadata.continuation);
+        assert!(rewrite_model(&body, "m").unwrap().is_none());
+        let rewritten = rewrite_model(&body, "other").unwrap().unwrap();
+        assert_eq!(
+            rewritten,
+            Bytes::from(
+                String::from_utf8(body.to_vec())
+                    .unwrap()
+                    .replace(r#""m""#, r#""other""#)
+            )
+        );
+    }
+    for body in [
+        br#"{"model":"m","background":"false"}"#.as_slice(),
+        br#"{"model":"m","background":1}"#,
+        br#"{"model":"m","max_output_tokens":"12"}"#,
+        br#"{"model":"m","max_output_tokens":1.5}"#,
+    ] {
+        assert!(responses_metadata(body).is_err());
+    }
+}

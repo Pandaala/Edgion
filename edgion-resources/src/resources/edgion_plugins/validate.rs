@@ -125,13 +125,32 @@ pub const AI_GUARD_AFTER_AI_PROXY_ERROR: &str =
     "requestPlugins: AiGuard must be ordered before AiProxy; a mask published after AiProxy has captured the \
      canonical body never reaches the provider";
 
+/// One protocol conversion owner per resource, with Controller/Gateway parity.
+pub fn collect_grpc_transcoding_errors(entries: &[RequestFilterEntry]) -> Vec<String> {
+    let count = entries
+        .iter()
+        .filter(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::GrpcJsonTranscoder(_)))
+        .count();
+    let mut errors = Vec::new();
+    if count > 1 {
+        errors.push("requestPlugins: at most one GrpcJsonTranscoder plugin is allowed".into());
+    }
+    if count != 0
+        && entries.iter().any(|entry| {
+            entry.is_enabled()
+                && matches!(
+                    entry.plugin,
+                    EdgionPlugin::AiProxy(_) | EdgionPlugin::AiGuard(_) | EdgionPlugin::Guardrail(_)
+                )
+        })
+    {
+        errors.push("requestPlugins: GrpcJsonTranscoder conflicts with AI conversion owners".into());
+    }
+    errors
+}
+
 /// Report an `AiGuard` entry ordered after `AiProxy` in the same resource.
-///
-/// This is deliberately narrow and best-effort. It catches the unambiguous
-/// same-resource mistake with no false positives; it cannot see across
-/// resources (global/Gateway scope, or two `ExtensionRef` targets), and it does
-/// not attempt to detect a body-mutating plugin between the two. The exact,
-/// scope-independent guarantee is the runtime body-generation check, not this.
+/// Cross-resource ordering still requires the runtime body-generation guard.
 pub fn collect_ai_guard_ordering_errors(entries: &[RequestFilterEntry], errors: &mut Vec<String>) {
     let responses = entries.iter().any(|entry| {
         entry.is_enabled()
@@ -274,6 +293,15 @@ fn collect_body_condition_errors(conds: &PluginConditions, label: &str, index: u
 }
 
 impl EdgionPlugins {
+    /// This conversion owner is valid only at HTTPRoute rule scope.
+    pub fn has_active_grpc_transcoder(&self) -> bool {
+        self.spec
+            .request_plugins
+            .iter()
+            .flatten()
+            .any(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::GrpcJsonTranscoder(_)))
+    }
+
     /// Whether this resource contributes RequestId rules at an active attachment.
     pub fn has_active_request_id(&self) -> bool {
         self.spec
@@ -285,6 +313,9 @@ impl EdgionPlugins {
 
     /// Early attachments may only depend on parsed headers, method and W3C ID.
     pub fn validate_request_id_early_attachment(&self) -> Vec<String> {
+        if self.has_active_grpc_transcoder() {
+            return vec!["GrpcJsonTranscoder requires HTTPRoute rule scope".into()];
+        }
         use super::conditions::Condition;
         use crate::common::KeyGet;
         let mut errors = Vec::new();
@@ -470,6 +501,7 @@ impl EdgionPlugins {
                             && matches!(
                                 entry.plugin,
                                 EdgionPlugin::FormJsonTransform(_)
+                                    | EdgionPlugin::GrpcJsonTranscoder(_)
                                     | EdgionPlugin::JsonSchemaValidation(_)
                                     | EdgionPlugin::ProxyRewrite(super::plugin_configs::ProxyRewriteConfig {
                                         json_body: Some(_),
@@ -673,6 +705,7 @@ impl EdgionPlugins {
                         } else if matches!(
                             entry.plugin,
                             EdgionPlugin::FormJsonTransform(_)
+                                | EdgionPlugin::GrpcJsonTranscoder(_)
                                 | EdgionPlugin::JsonSchemaValidation(_)
                                 | EdgionPlugin::ProxyRewrite(_)
                         ) {
@@ -705,6 +738,7 @@ impl EdgionPlugins {
                 ));
             }
 
+            errors.extend(collect_grpc_transcoding_errors(entries));
             collect_ai_guard_ordering_errors(entries, &mut errors);
             collect_rate_limit_dependency_errors(entries, &mut errors);
         }

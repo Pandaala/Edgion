@@ -1,6 +1,6 @@
 ---
 name: request-body-documentation-runtime-contract
-description: Use when reviewing request-body documentation; distinguishes shared request capture from streaming upstream responses and the narrowly reviewed AI conversion exception.
+description: Use when reviewing request-body documentation; distinguishes shared request capture from streaming upstream responses and narrowly reviewed AI and unary RPC conversion exceptions.
 status: fixed
 finding_id: BODY-011
 closed: 2026-07-27
@@ -24,6 +24,14 @@ remediation remains Task 03 (historical path:
 the task file is absent from the current tree).
 This amendment does not validate the current converter, change the request-body
 model, or authorize full-body aggregation for observation, DSL, Wasm or ExtProc.
+
+On 2026-10-07 the user additionally authorized unary GrpcJsonTranscoder conversion,
+with independent plan and corrected-code review. The same authoritative HTTP body
+rules now require one bounded message, structural admission, an explicit memory
+ledger, process admission, outstanding output ownership and absolute Hold timeout.
+Streaming RPC responses use canonical per-message RawWindow windows. This exception
+adds no general response-body cache or whole-response plugin API. Implementation and
+verification are recorded in the [transcoder acceptance record](../../../../tasks/pending/grpc-json-transcoding/04-verification.md).
 
 ## Core Rationale
 

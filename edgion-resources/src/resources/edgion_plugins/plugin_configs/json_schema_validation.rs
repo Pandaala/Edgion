@@ -183,11 +183,24 @@ pub enum StrictJsonError {
 /// Parse one UTF-8 JSON value, rejecting duplicate object keys and collecting
 /// node/text accounting in the same pass.
 pub fn parse_json_instance(bytes: &[u8]) -> Result<ParsedJsonInstance, StrictJsonError> {
+    parse_json_instance_with_limits(bytes, MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES)
+}
+
+/// Parse with tighter caller-selected structural limits, retaining strict key checks.
+pub fn parse_json_instance_with_limits(
+    bytes: &[u8],
+    depth: usize,
+    nodes: u64,
+) -> Result<ParsedJsonInstance, StrictJsonError> {
     if bytes.len() as u64 > ABSOLUTE_INSTANCE_MAX_BYTES {
         return Err(StrictJsonError::TooLarge);
     }
 
-    let mut state = ParseState::default();
+    let mut state = ParseState {
+        max_depth: depth.min(MAX_JSON_INSTANCE_DEPTH),
+        max_nodes: nodes.min(MAX_JSON_INSTANCE_NODES),
+        ..ParseState::default()
+    };
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let value = ValueSeed {
         state: &mut state,
@@ -249,6 +262,8 @@ pub fn profile_json_value(value: &Value) -> Result<JsonValueProfile, StrictJsonE
 
 #[derive(Default)]
 struct ParseState {
+    max_depth: usize,
+    max_nodes: u64,
     node_count: u64,
     text_bytes: u64,
     failure: Option<StrictJsonError>,
@@ -266,12 +281,12 @@ impl<'de> DeserializeSeed<'de> for ValueSeed<'_> {
     where
         D: Deserializer<'de>,
     {
-        if self.depth > MAX_JSON_INSTANCE_DEPTH {
+        if self.depth > self.state.max_depth {
             self.state.failure = Some(StrictJsonError::DepthLimit);
             return Err(D::Error::custom("JSON nesting limit exceeded"));
         }
         self.state.node_count = self.state.node_count.saturating_add(1);
-        if self.state.node_count > MAX_JSON_INSTANCE_NODES {
+        if self.state.node_count > self.state.max_nodes {
             self.state.failure = Some(StrictJsonError::NodeLimit);
             return Err(D::Error::custom("JSON node limit exceeded"));
         }
@@ -337,7 +352,7 @@ impl<'de> Visitor<'de> for ValueVisitor<'_> {
     where
         A: SeqAccess<'de>,
     {
-        let mut values = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(MAX_JSON_INSTANCE_NODES as usize));
+        let mut values = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(self.state.max_nodes as usize));
         while let Some(value) = seq.next_element_seed(ValueSeed {
             state: self.state,
             depth: self.depth + 1,
@@ -351,7 +366,7 @@ impl<'de> Visitor<'de> for ValueVisitor<'_> {
     where
         A: MapAccess<'de>,
     {
-        let capacity = map.size_hint().unwrap_or(0).min(MAX_JSON_INSTANCE_NODES as usize);
+        let capacity = map.size_hint().unwrap_or(0).min(self.state.max_nodes as usize);
         let mut values = Map::with_capacity(capacity);
         let mut keys = HashSet::with_capacity(capacity);
         while let Some(key) = map.next_key::<String>()? {

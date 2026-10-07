@@ -46,6 +46,7 @@ rule without echoing the realm. Disabled entries remain inert.
 | [ext-proc.md](ext-proc.md) | External processing over gRPC (Envoy ext_proc compatible) |
 | [request-access-policy.md](request-access-policy.md) | L7 host/path/IP access policies with Secret/HMAC conditions and profile hot-swap |
 | [guardrail.md](guardrail.md) | Bounded unary Pass/Replace/Reject decisions for canonical semantic AI SSE windows |
+| [grpc-json-transcoder.md](grpc-json-transcoder.md) | Descriptor-backed REST JSON to native gRPC over mandatory upstream HTTP/2 |
 | [header-cert-auth.md](header-cert-auth.md) | Header/certificate authentication |
 | [hmac-auth.md](hmac-auth.md) | HMAC signature verification |
 | [ip-restriction.md](ip-restriction.md) | IP allowlist/denylist |

@@ -118,6 +118,17 @@ pub struct WindowRecord {
 }
 
 impl WindowRecord {
+    /// Binary framing has no SSE lines or semantic ranges.
+    pub(crate) fn binary(bytes: Bytes) -> Self {
+        Self {
+            slices: vec![bytes],
+            line_count: 0,
+            complete_event: false,
+            semantic_available: true,
+            fragments: Vec::new(),
+        }
+    }
+
     pub fn raw(slices: Vec<Bytes>) -> Self {
         let line_count = count_lines(&slices);
         Self {
@@ -360,6 +371,18 @@ impl RawWindow {
             state: State::Collecting,
             policy,
         }
+    }
+
+    /// Materialize one admitted binary message, never an entire response.
+    pub(crate) fn binary_bytes(&self) -> Result<Vec<u8>, WindowError> {
+        self.require_collecting()?;
+        self.admit(self.raw.len())?;
+        let mut output = Vec::with_capacity(self.raw.len());
+        self.raw
+            .for_each_range(super::chain::ByteRange::new(0, self.raw.len()), |part| {
+                output.extend_from_slice(part)
+            });
+        Ok(output)
     }
 
     pub fn stats(&mut self) -> Result<WindowStats, WindowError> {

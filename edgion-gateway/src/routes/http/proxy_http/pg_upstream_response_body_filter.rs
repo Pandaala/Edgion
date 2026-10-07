@@ -297,6 +297,7 @@ pub async fn upstream_response_body_filter_event(
             if end_of_stream {
                 super::pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, None)
                     .await?;
+                emit_grpc_terminal(ctx, sink)?;
             }
             Ok(delay)
         }
@@ -312,6 +313,7 @@ pub async fn upstream_response_body_filter_event(
             .await;
             let delay = run_read_only_body_plugins(session, ctx, body, true);
             super::pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, None).await?;
+            emit_grpc_terminal(ctx, sink)?;
             Ok(delay)
         }
         UpstreamResponseBodyEvent::TerminalBeforeTrailers => {
@@ -422,3 +424,14 @@ fn record_first_body_time(ctx: &mut EdgionHttpContext, body: Option<&bytes::Byte
 #[cfg(test)]
 #[path = "../../../../tests/unit/routes/http/proxy_http/pg_upstream_response_body_filter_test.rs"]
 mod tests;
+
+/// A no-trailers terminal has no downstream trailer callback; emit its fixed
+/// failure record through the canonical bounded body sink exactly once.
+fn emit_grpc_terminal(ctx: &EdgionHttpContext, sink: &mut ResponseBodySink) -> pingora_core::Result<()> {
+    if let Some(plan) = &ctx.grpc_transcoding {
+        if let Some(terminal) = plan.terminal.lock().take() {
+            sink.push(terminal)?;
+        }
+    }
+    Ok(())
+}

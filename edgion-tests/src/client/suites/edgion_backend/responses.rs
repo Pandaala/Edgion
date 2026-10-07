@@ -98,6 +98,44 @@ async fn ledger(ctx: &TestContext, marker: &str, source: &str, failure: Option<&
     Ok(())
 }
 
+fn nullable_controls(ctx: TestContext) -> TestFuture {
+    Box::pin(async move {
+        let start = Instant::now();
+        let request =
+            json!({"model":"fixture-model","input":"native", "background":null,"stream":null,"max_output_tokens":null});
+        let result = async {
+            let response = post(
+                &ctx,
+                "responses-off.example.com",
+                request,
+                "split",
+                false,
+                "responses-null-controls",
+                "/v1/responses",
+            )
+            .await?;
+            if !response.status().is_success() {
+                return Err(format!("null controls returned {}", response.status()));
+            }
+            let value: Value = response.json().await.map_err(|e| e.to_string())?;
+            let echoed = value
+                .pointer("/native_extension/request")
+                .ok_or("missing request echo")?;
+            for key in ["background", "stream", "max_output_tokens"] {
+                if echoed.get(key) != Some(&Value::Null) {
+                    return Err(format!("native null {key} changed"));
+                }
+            }
+            Ok::<(), String>(())
+        }
+        .await;
+        match result {
+            Ok(()) => TestResult::passed(start.elapsed()),
+            Err(e) => TestResult::failed(start.elapsed(), e),
+        }
+    })
+}
+
 async fn native(ctx: &TestContext, h2: bool) -> Result<(), String> {
     for (host, source) in [
         ("responses-off.example.com", "notObserved"),
@@ -496,6 +534,11 @@ impl TestSuite for ResponsesTestSuite {
                 "quota",
                 "Reported terminal settlement and typed active framing cut",
                 quota,
+            ),
+            TestCase::new(
+                "nullable_controls",
+                "Nullable native controls retain their exact meaning",
+                nullable_controls,
             ),
             TestCase::new("h1_native", "H1 native JSON/SSE and provider isolation", h1),
             TestCase::new("h2_native", "H2 native JSON/SSE", h2),

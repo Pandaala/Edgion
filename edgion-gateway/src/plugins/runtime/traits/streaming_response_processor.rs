@@ -75,6 +75,16 @@ pub trait StreamingResponseProcessor: Send + Sync {
     /// and headers and retain a bounded body-processing mode.
     fn on_response_header(&mut self, _response: &mut ResponseHeader) {}
 
+    /// Core-owned terminal finalization after successful trailer companions.
+    /// This is protocol evidence, not a general whole-response/body API.
+    async fn on_actual_upstream_trailers(
+        &mut self,
+        _trailers: Option<&http::HeaderMap>,
+        _header_end_stream: bool,
+    ) -> pingora_core::Result<()> {
+        Ok(())
+    }
+
     /// Whether this processor may change the response body length.
     ///
     /// The proxy uses this declaration to remove stale Content-Length metadata

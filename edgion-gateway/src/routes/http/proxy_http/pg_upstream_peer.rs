@@ -322,6 +322,15 @@ pub async fn upstream_peer(
     }
 
     apply_upstream_authority(session, ctx, &mut peer)?;
+    crate::plugins::http::grpc_json_transcoder::validate_request(session.req_header(), ctx)?;
+    if ctx.grpc_transcoding.is_some() || ctx.is_grpc_route_matched {
+        crate::plugins::http::grpc_json_transcoder::require_h2(&mut peer);
+    }
+    if ctx.grpc_transcoding.is_some() {
+        let cap = std::time::Duration::from_secs(30);
+        peer.options.read_timeout = Some(peer.options.read_timeout.unwrap_or(cap).min(cap));
+        peer.options.write_timeout = Some(peer.options.write_timeout.unwrap_or(cap).min(cap));
+    }
 
     Ok(peer)
 }
@@ -510,7 +519,6 @@ pub async fn upstream_peer_grpc(
     };
 
     // 6. Force HTTP/2 for gRPC
-    peer.options.set_http_version(2, 2);
 
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     backfill_upstream_addr(&peer, ctx);

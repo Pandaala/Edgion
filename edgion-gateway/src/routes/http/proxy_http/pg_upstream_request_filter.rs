@@ -38,6 +38,11 @@ pub async fn upstream_request_filter(
         let _ = upstream_request.insert_header("grpc-timeout", &value);
     }
 
+    crate::plugins::http::grpc_json_transcoder::prepare_attempt(upstream_request, ctx)?;
+    let rpc_timeout = ctx
+        .grpc_transcoding
+        .as_ref()
+        .and_then(|_| upstream_request.headers.get("grpc-timeout").cloned());
     apply_upstream_authority(upstream_request, ctx);
 
     sync_body_framing_headers(upstream_request, ctx).map_err(|_| local_pre_dispatch_failure())?;
@@ -60,6 +65,11 @@ pub async fn upstream_request_filter(
     // authoritative even when its name overlaps a managed RequestId header.
     ctx.request_info.trace_id.reconcile_request(upstream_request);
     finalize_forwarded_headers(&ctx.remote_ip_header, upstream_request, ctx);
+
+    crate::plugins::http::grpc_json_transcoder::transport::validate_attempt(upstream_request, ctx)?;
+    if ctx.grpc_transcoding.is_some() && upstream_request.headers.get("grpc-timeout") != rpc_timeout.as_ref() {
+        return Err(crate::plugins::http::grpc_json_transcoder::failure());
+    }
 
     // All fallible local header/framing preparation has succeeded. Crossing
     // the boundary here keeps a local preparation failure pre-dispatch.

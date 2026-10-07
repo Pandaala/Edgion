@@ -99,6 +99,8 @@ tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
 tonic-reflection = "0.12"
 tonic-build = "0.12"
 prost = "0.13"
+prost-types = "0.13"
+prost-reflect = { version = "=0.14.7", features = ["serde"] }
 
 # TLS / certificates
 rustls = { version = "0.23", features = ["aws_lc_rs", "ring"] }

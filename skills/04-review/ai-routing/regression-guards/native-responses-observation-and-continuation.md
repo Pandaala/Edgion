@@ -4,6 +4,14 @@ Task 06 enables POST /v1/responses for api=openaiResponses and provider OpenAI. 
 background creation, management operations or native guards. Protocol selection comes from config
 and effective path, never authentication headers or body guessing.
 
+Native request controls follow the provider's nullable schema: explicit null for background and
+stream selects their false defaults; null max_output_tokens leaves the bound unspecified. Preserve
+these values in the forwarded native document and during selective model rewriting. Non-null
+invalid types remain rejected, as does background=true. The official OpenAI Python
+[Responses request schema](https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_create_params.py)
+declares these controls optional and nullable. The request mirror's nullable-control regression and
+the EdgionBackend/Responses nullable_controls live case cover parsing and byte preservation.
+
 The canonical selective JSON tokenizer optionally captures short selected strings under a decoded
 byte cap; default consumers still discard string values. Native Responses output is not aggregated.
 JSON/SSE usage shares the existing observation and quota owners, with reported-only actual billing.

@@ -586,6 +586,18 @@ pub trait PluginSession: Send + Sync {
         false
     }
 
+    /// Only a rule-scoped HTTPRoute REST request may claim this conversion.
+    fn grpc_transcoding_allowed(&self) -> bool {
+        false
+    }
+    /// Install the sealed RPC plan and its response processor atomically.
+    fn install_grpc_transcoding(
+        &mut self,
+        _plan: crate::plugins::http::grpc_json_transcoder::GrpcTranscodingPlan,
+    ) -> bool {
+        false
+    }
+
     /// Install a bounded response-stream observer. Alternate adapters that do
     /// not run the proxy response-body pipeline drop it by default.
     fn install_stream_processor(

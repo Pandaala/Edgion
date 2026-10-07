@@ -15,8 +15,10 @@ fn active_claim(ctx: &EdgionHttpContext) -> Option<pingora_proxy::ResponseHeadHo
 }
 
 pub(crate) fn response_head_may_hold(ctx: &EdgionHttpContext) -> bool {
-    ctx.ai_state()
-        .is_some_and(|state| state.unary_possible || state.response_head_hold_claim.is_some())
+    ctx.grpc_transcoding.is_some()
+        || ctx
+            .ai_state()
+            .is_some_and(|state| state.unary_possible || state.response_head_hold_claim.is_some())
 }
 
 pub(crate) fn response_head_commit_plan(
@@ -25,6 +27,9 @@ pub(crate) fn response_head_commit_plan(
     response: &ResponseHeader,
     ctx: &EdgionHttpContext,
 ) -> Result<ResponseHeadCommitPlan> {
+    if let Some(plan) = &ctx.grpc_transcoding {
+        return plan.head_plan(source, response);
+    }
     if let Some(owner) = ctx.ai_state().and_then(|state| state.unary_owner.as_ref()) {
         return owner.plan(source, response, ctx);
     }
@@ -64,6 +69,9 @@ pub(crate) fn response_head_hold_boundary(
     boundary: ResponseHeadBoundary,
     ctx: &EdgionHttpContext,
 ) -> ResponseHeadBoundaryAction {
+    if let Some(plan) = &ctx.grpc_transcoding {
+        return plan.boundary(boundary);
+    }
     if let Some(owner) = ctx
         .ai_state()
         .and_then(|state| state.unary_owner.as_ref())

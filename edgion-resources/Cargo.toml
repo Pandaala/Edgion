@@ -58,6 +58,8 @@ hex.workspace = true
 clap.workspace = true
 chrono.workspace = true
 prost.workspace = true
+prost-types.workspace = true
+prost-reflect.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

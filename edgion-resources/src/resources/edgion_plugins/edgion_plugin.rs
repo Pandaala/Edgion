@@ -105,6 +105,8 @@ pub enum EdgionPlugin {
     RequestBodyBuffer(RequestBodyBufferConfig),
     /// Validate a bounded JSON request body against an inline JSON Schema.
     JsonSchemaValidation(JsonSchemaValidationConfig),
+    /// Convert REST JSON to native upstream gRPC using compiled descriptors.
+    GrpcJsonTranscoder(super::plugin_configs::GrpcJsonTranscoderConfig),
     /// Transform a bounded request body between form URL encoding and flat JSON.
     FormJsonTransform(FormJsonTransformConfig),
     /// Response Rewrite filter (rewrite status code and headers before returning to client)
@@ -212,6 +214,10 @@ impl EdgionPlugin {
                 conditions: Some(Default::default()),
                 ..BodyRequirement::fail_close()
             }),
+            GrpcJsonTranscoder(_) if stage == BodyStage::Request => Some(BodyRequirement {
+                max_body_size: Some("1m".into()),
+                ..BodyRequirement::fail_close()
+            }),
             JsonSchemaValidation(_) if stage == BodyStage::Request => Some(BodyRequirement {
                 max_body_size: Some(DEFAULT_INSTANCE_MAX_BYTES.to_string()),
                 ..BodyRequirement::fail_close()
@@ -273,6 +279,7 @@ impl EdgionPlugin {
             | DebugAccessLogToHeader(_)
             | ProxyRewrite(_)
             | RequestBodyBuffer(_)
+            | GrpcJsonTranscoder(_)
             | JsonSchemaValidation(_)
             | FormJsonTransform(_)
             | RequestRestriction(_)
@@ -342,6 +349,7 @@ impl EdgionPlugin {
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestBodyBuffer(_) => "RequestBodyBuffer",
             EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
+            EdgionPlugin::GrpcJsonTranscoder(_) => "GrpcJsonTranscoder",
             EdgionPlugin::FormJsonTransform(_) => "FormJsonTransform",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
@@ -485,6 +493,7 @@ impl EdgionPlugin {
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
@@ -544,6 +553,7 @@ impl EdgionPlugin {
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
@@ -630,6 +640,7 @@ impl EdgionPlugin {
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
@@ -674,6 +685,7 @@ impl EdgionPlugin {
             EdgionPlugin::ProxyRewrite(c) => c.validation_error(),
             EdgionPlugin::RequestBodyBuffer(c) => c.validation_error(),
             EdgionPlugin::JsonSchemaValidation(c) => c.validation_error(),
+            EdgionPlugin::GrpcJsonTranscoder(c) => c.validation_error(),
             EdgionPlugin::FormJsonTransform(c) => c.validation_error(),
             EdgionPlugin::RequestRestriction(c) => c.validation_error(),
             EdgionPlugin::RateLimitLocal(c) => c.validation_error(),

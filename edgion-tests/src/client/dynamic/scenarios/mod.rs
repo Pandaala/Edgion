@@ -61,3 +61,4 @@ pub mod plugin_policy;
 pub mod preflight_policy_hot_reload;
 
 pub mod ai_responses_continuation;
+pub mod grpc_json_transcoder;

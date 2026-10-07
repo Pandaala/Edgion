@@ -253,7 +253,17 @@ async fn send_html_error(
     ctx.request_info.trace_id.reconcile_response(&mut resp);
     resp.remove_header(&http::header::CONTENT_LENGTH);
     resp.remove_header(&http::header::TRANSFER_ENCODING);
-    resp.insert_header("Content-Type", "text/html")
+    let body = if ctx.grpc_transcoding.is_some() {
+        b"{\"error\":\"gRPC upstream exchange failed\"}".as_slice()
+    } else {
+        body
+    };
+    let media = if ctx.grpc_transcoding.is_some() {
+        "application/json"
+    } else {
+        "text/html"
+    };
+    resp.insert_header("Content-Type", media)
         .expect("static ASCII header literal, cannot fail");
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;

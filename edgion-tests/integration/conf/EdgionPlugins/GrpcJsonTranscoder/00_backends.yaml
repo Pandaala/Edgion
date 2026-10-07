@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpc-transcoder
+  namespace: edgion-default
+spec:
+  ports:
+  - name: upstream
+    port: 30021
+    targetPort: 30021
+    protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: grpc-transcoder
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: grpc-transcoder
+addressType: IPv4
+ports:
+- name: upstream
+  port: 30021
+  protocol: TCP
+endpoints:
+- addresses:
+  - 127.0.0.1
+  conditions:
+    ready: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpc-transcoder-raw
+  namespace: edgion-default
+spec:
+  ports:
+  - name: upstream
+    port: 30031
+    targetPort: 30031
+    protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: grpc-transcoder-raw
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: grpc-transcoder-raw
+addressType: IPv4
+ports:
+- name: upstream
+  port: 30031
+  protocol: TCP
+endpoints:
+- addresses:
+  - 127.0.0.1
+  conditions:
+    ready: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpc-transcoder-tls-h1
+  namespace: edgion-test
+spec:
+  ports:
+  - name: upstream
+    port: 30026
+    targetPort: 30026
+    protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: grpc-transcoder-tls-h1
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: grpc-transcoder-tls-h1
+addressType: IPv4
+ports:
+- name: upstream
+  port: 30026
+  protocol: TCP
+endpoints:
+- addresses:
+  - 127.0.0.1
+  conditions:
+    ready: true
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: grpc-transcoder-tls-h1
+  namespace: edgion-test
+spec:
+  targetRefs:
+  - group: ''
+    kind: Service
+    name: grpc-transcoder-tls-h1
+  validation:
+    caCertificateRefs:
+    - name: backend-ca
+      kind: Secret
+      group: ''
+    hostname: hostname-a.example.com

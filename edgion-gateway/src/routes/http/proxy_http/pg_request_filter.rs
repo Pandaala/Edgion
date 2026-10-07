@@ -228,6 +228,31 @@ pub async fn request_filter(
     let global = ctx.resolved_global_plugins();
     let gateway = ctx.resolved_gateway_plugins();
     let route = ctx.resolved_route_ext_refs();
+    if global
+        .iter()
+        .chain(gateway.iter())
+        .flat_map(|plugins| plugins.iter())
+        .any(|runtime| runtime.has_grpc_transcoder())
+    {
+        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
+    }
+    let conversion_owners = route
+        .iter()
+        .flat_map(|plugins| plugins.iter().flatten())
+        .filter(|runtime| runtime.has_grpc_transcoder())
+        .count();
+    let has_ai_owner = global
+        .iter()
+        .chain(gateway.iter())
+        .flat_map(|plugins| plugins.iter())
+        .chain(route.iter().flat_map(|plugins| plugins.iter().flatten()))
+        .any(|runtime| runtime.has_ai_conversion_owner());
+    if conversion_owners > 1 || conversion_owners != 0 && (has_ai_owner || ctx.grpc_route_unit.is_some()) {
+        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
+    }
+
     for runtime in global
         .iter()
         .flat_map(|plugins| plugins.iter())
@@ -377,6 +402,7 @@ pub async fn request_filter(
     // first-attempt dispatcher also permits a read-only mirror tee before the
     // body pump starts; it changes neither framing nor replay policy. Capture,
     // mutation and other body capability installation remain closed here.
+    crate::plugins::http::grpc_json_transcoder::validate_request(session.req_header(), ctx)?;
     ctx.request_info.in_request_body_stage = false;
 
     Ok(false)

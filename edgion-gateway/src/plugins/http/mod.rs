@@ -98,3 +98,5 @@ pub use edgion_resources::resources::edgion_plugins::{
     MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitLocalConfig, RateLimitRedisConfig, RealIpConfig,
     RegionRouteConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };
+
+pub mod grpc_json_transcoder;

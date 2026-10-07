@@ -125,7 +125,21 @@ async fn write_proxy_error_reply(
     code: u16,
     error: &Error,
 ) -> bool {
-    if ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched {
+    if ctx.grpc_transcoding.is_some() {
+        let body = bytes::Bytes::from_static(b"{\"error\":\"gRPC upstream exchange failed\"}");
+        let Ok(mut header) = pingora_http::ResponseHeader::build(code, None) else {
+            return true;
+        };
+        let _ = header.insert_header("content-type", "application/json");
+        let _ = header.insert_header("content-length", body.len().to_string());
+        server_header_opts.apply_to_response(&mut header);
+        ctx.request_info.trace_id.reconcile_response(&mut header);
+        if ctx.claim_final_response(code) {
+            session.write_error_response(header, body).await.is_err()
+        } else {
+            false
+        }
+    } else if ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched {
         send_grpc_trailers_only(session, ctx, server_header_opts, code)
             .await
             .is_err()

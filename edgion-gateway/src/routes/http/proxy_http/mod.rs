@@ -324,6 +324,19 @@ impl ProxyHttp for EdgionHttpProxy {
         crate::ai::conversion::chat_to_anthropic::head::compact_trailers(trailers, ctx)
     }
 
+    async fn response_trailer_filter(
+        &self,
+        _session: &mut Session,
+        trailers: &mut http::HeaderMap,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<Option<bytes::Bytes>> {
+        let Some(plan) = &ctx.grpc_transcoding else {
+            return Ok(None);
+        };
+        trailers.clear();
+        Ok(plan.terminal.lock().take())
+    }
+
     async fn logging(&self, session: &mut Session, e: Option<&Error>, ctx: &mut Self::CTX)
     where
         Self::CTX: Send + Sync,

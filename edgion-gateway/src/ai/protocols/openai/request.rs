@@ -195,7 +195,7 @@ pub(crate) struct ResponsesMetadata {
 }
 
 fn optional_bool(raw: Option<&RawValue>) -> Result<bool, AiProxyError> {
-    raw.map_or(Ok(false), |raw| {
+    raw.filter(|raw| raw.get() != "null").map_or(Ok(false), |raw| {
         serde_json::from_str(raw.get()).map_err(|_| AiProxyError::MalformedBody)
     })
 }
@@ -221,6 +221,7 @@ pub(crate) fn responses_metadata(body: &[u8]) -> Result<ResponsesMetadata, AiPro
     }
     let output_bound = fields
         .max_output_tokens
+        .filter(|raw| raw.get() != "null")
         .map(|raw| serde_json::from_str::<u64>(raw.get()).map_err(|_| AiProxyError::MalformedBody))
         .transpose()?;
     Ok(ResponsesMetadata {

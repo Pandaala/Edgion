@@ -164,3 +164,6 @@ pub use waf::{
 };
 pub use wasm::WasmPluginTestSuite;
 pub use webhook_key_get::WebhookKeyGetTestSuite;
+
+mod grpc_json_transcoder;
+pub use grpc_json_transcoder::{GrpcJsonTranscoderDynamicSuite, GrpcJsonTranscoderTestSuite};

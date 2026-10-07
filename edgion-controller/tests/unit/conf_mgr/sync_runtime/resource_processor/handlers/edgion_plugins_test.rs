@@ -3260,6 +3260,7 @@ fn ep_ref_bearing_variants_are_classified() {
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::ResponseRewrite(_)
@@ -6334,4 +6335,89 @@ fn unsupported_plugin_reports_invalid_status_even_when_disabled() {
         .unwrap();
     assert_eq!(accepted["status"], "False");
     assert_eq!(accepted["reason"], "Invalid");
+}
+
+#[tokio::test]
+async fn grpc_descriptor_replacement_and_deletion_clear_prior_generation() {
+    use crate::conf_mgr::sync_runtime::resource_processor::format_configmap_ref_key;
+    use edgion_resources::grpc_transcoding::GrpcJsonTranscoderConfig;
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let config: GrpcJsonTranscoderConfig = serde_json::from_value(serde_json::json!({
+        "descriptor":{"type":"configMapRef","name":"grpc-schema","key":"test.pb"},
+        "services":["test.TestService"]
+    }))
+    .unwrap();
+    let mut ep = EdgionPlugins::new("grpc-schema-owner", EdgionPluginsSpec::default());
+    ep.metadata.namespace = Some("tenant".into());
+    ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::GrpcJsonTranscoder(config))]);
+    let owner = ResourceRef::new(
+        edgion_resources::ResourceKind::EdgionPlugins,
+        Some("tenant".into()),
+        "grpc-schema-owner".into(),
+    );
+    for bytes in [
+        Some(include_bytes!("../../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb").to_vec()),
+        Some(vec![0]),
+        None,
+    ] {
+        runtime.configmap_store.replace_all(
+            bytes
+                .as_ref()
+                .map(|bytes| {
+                    HashMap::from([(
+                        "tenant/grpc-schema".into(),
+                        ConfigMap {
+                            metadata: ObjectMeta {
+                                name: Some("grpc-schema".into()),
+                                namespace: Some("tenant".into()),
+                                ..Default::default()
+                            },
+                            binary_data: Some(BTreeMap::from([("test.pb".into(), ByteString(bytes.clone()))])),
+                            ..Default::default()
+                        },
+                    )])
+                })
+                .unwrap_or_default(),
+        );
+        ep = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(ep) => ep,
+            ProcessResult::Skip { reason } => panic!("{reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut ep, &ctx, &[]);
+        let EdgionPlugin::GrpcJsonTranscoder(config) = &ep.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!();
+        };
+        assert_eq!(config.resolved_descriptor.as_ref(), bytes.as_ref());
+        let valid = bytes.as_ref().is_some_and(|bytes| bytes.len() > 1);
+        assert_eq!(config.compile().is_ok(), valid);
+        assert!(runtime
+            .secret_ref_manager
+            .get_refs(&format_configmap_ref_key(Some("tenant".into()).as_ref(), "grpc-schema"))
+            .contains(&owner));
+        let accepted = ep
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Accepted")
+            .unwrap();
+        assert_eq!(accepted.status == "True", valid);
+    }
+    ep.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+    ep = match EdgionPluginsHandler.parse(ep, &ctx).await {
+        ProcessResult::Continue(ep) => ep,
+        ProcessResult::Skip { reason } => panic!("{reason}"),
+    };
+    let EdgionPlugin::GrpcJsonTranscoder(config) = &ep.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+        panic!();
+    };
+    assert!(config.resolved_descriptor.is_none());
+    assert!(config.descriptor_error.is_none());
+    assert!(runtime
+        .secret_ref_manager
+        .get_refs(&format_configmap_ref_key(Some("tenant".into()).as_ref(), "grpc-schema"))
+        .is_empty());
 }

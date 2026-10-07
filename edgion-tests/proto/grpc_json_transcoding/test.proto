@@ -1,0 +1,28 @@
+syntax = "proto3";
+package test;
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+service TestService {
+  rpc SayHello(HelloRequest) returns (HelloResponse) {
+    option (google.api.http) = { get: "/v1/hello/{name}" additional_bindings { post: "/v1/hello" body: "*" } };
+  }
+  rpc StreamNumbers(NumberRequest) returns (stream NumberResponse) {
+    option (google.api.http) = { get: "/v1/numbers" additional_bindings { post: "/v1/numbers" body: "*" } };
+  }
+}
+message HelloRequest { string name = 1; }
+message HelloResponse { string message = 1; string server_addr = 2; }
+message NumberRequest { int32 count = 1; }
+message NumberResponse { int32 number = 1; }
+service CodecTest {
+  rpc Echo(Complex) returns (Complex);
+  rpc Time(google.protobuf.Timestamp) returns (google.protobuf.Timestamp);
+}
+message Complex {
+  int64 id = 1;
+  bytes data = 2;
+  repeated int32 numbers = 3;
+  map<string, int32> labels = 4;
+  Complex nested = 5;
+  string display_name = 6;
+}

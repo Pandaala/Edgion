@@ -53,6 +53,7 @@ use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::form_json_transform::FormJsonTransform;
 use crate::plugins::http::forward_auth::ForwardAuth;
 use crate::plugins::http::geoip_location::GeoIpLocation;
+use crate::plugins::http::grpc_json_transcoder::GrpcJsonTranscoder;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
 use crate::plugins::http::hmac_auth::HmacAuth;
 use crate::plugins::http::ip_restriction::IpRestriction;
@@ -113,6 +114,7 @@ impl WafCandidate {
 pub struct PluginRuntime {
     rate_limit_local_outcome_slots: usize,
     has_upstream_jump_plugin: bool,
+    has_grpc_transcoder: bool,
     /// Plugins for request stage (async)
     request_plugins: Vec<Arc<dyn RequestFilter>>,
     /// The same native HTTP backend modifier held by `request_plugins`.
@@ -266,6 +268,7 @@ impl PluginRuntime {
     pub fn new() -> Self {
         Self {
             has_upstream_jump_plugin: false,
+            has_grpc_transcoder: false,
             request_plugins: vec![],
             backend_request_header_modifier: None,
             upstream_response_plugins: vec![],
@@ -304,6 +307,10 @@ impl PluginRuntime {
     }
 
     fn append_entry_bundle(&mut self, bundle: &EntryBundle) {
+        self.has_grpc_transcoder |= bundle
+            .request
+            .iter()
+            .any(|filter| filter.name() == "GrpcJsonTranscoder");
         self.has_upstream_jump_plugin |= bundle.request.iter().any(|filter| {
             edgion_resources::resources::edgion_plugins::edgion_plugin::is_upstream_jump_plugin_type(filter.name())
         });
@@ -406,6 +413,16 @@ impl PluginRuntime {
 
     pub(crate) fn has_waf(&self) -> bool {
         self.waf_candidate.is_some()
+    }
+
+    pub(crate) fn has_grpc_transcoder(&self) -> bool {
+        self.has_grpc_transcoder
+    }
+
+    pub(crate) fn has_ai_conversion_owner(&self) -> bool {
+        self.request_plugins
+            .iter()
+            .any(|plugin| matches!(plugin.name(), "AiProxy" | "AiGuard" | "Guardrail"))
     }
 
     pub(crate) fn has_upstream_jump_plugin(&self) -> bool {
@@ -808,6 +825,15 @@ impl PluginRuntime {
                 }
             }
         }
+        let transcoding_errors =
+            edgion_resources::resources::edgion_plugins::validate::collect_grpc_transcoding_errors(entries);
+        if !transcoding_errors.is_empty() {
+            self.invalid_plugins.record_non_retainable("GrpcJsonTranscoder");
+            errors.extend(transcoding_errors);
+        }
+        self.has_grpc_transcoder |= entries
+            .iter()
+            .any(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::GrpcJsonTranscoder(_)));
         let mut invalid_bounded_structured_entries = vec![false; entries.len()];
         // Freeze config validation before the bounded-body prepass. A config
         // error owns the entry and suppresses later body-policy errors, matching
@@ -846,6 +872,7 @@ impl PluginRuntime {
                 || !matches!(
                     entry.plugin,
                     EdgionPlugin::FormJsonTransform(_)
+                        | EdgionPlugin::GrpcJsonTranscoder(_)
                         | EdgionPlugin::JsonSchemaValidation(_)
                         | EdgionPlugin::ProxyRewrite(edgion_resources::resources::edgion_plugins::ProxyRewriteConfig {
                             json_body: Some(_),
@@ -1787,6 +1814,7 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(Box::new(JweDecrypt::new(config, namespace.to_string()))))
             }
             EdgionPlugin::JsonSchemaValidation(config) => CreateResult::Ok(JsonSchemaValidation::create(config)),
+            EdgionPlugin::GrpcJsonTranscoder(config) => CreateResult::Ok(GrpcJsonTranscoder::create(config)),
             EdgionPlugin::FormJsonTransform(config) => {
                 CreateResult::Ok(FormJsonTransform::create(config, body_requirement))
             }
@@ -1871,6 +1899,7 @@ impl PluginRuntime {
             | EdgionPlugin::IpRestriction(_)
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::HmacAuth(_)
@@ -1943,6 +1972,7 @@ impl PluginRuntime {
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
@@ -1992,6 +2022,7 @@ impl PluginRuntime {
             | EdgionPlugin::IpRestriction(_)
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::HmacAuth(_)
@@ -2047,6 +2078,7 @@ impl PluginRuntime {
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
             EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
+            EdgionPlugin::GrpcJsonTranscoder(_) => "GrpcJsonTranscoder",
             EdgionPlugin::FormJsonTransform(_) => "FormJsonTransform",
             EdgionPlugin::HmacAuth(_) => "HmacAuth",
             EdgionPlugin::HeaderCertAuth(_) => "HeaderCertAuth",

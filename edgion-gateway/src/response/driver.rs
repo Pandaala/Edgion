@@ -138,6 +138,28 @@ impl ResponseProcessorDriver {
         })
     }
 
+    /// Finalize protocol evidence under the same cancellation lease as body work.
+    pub(crate) async fn finalize_grpc_transcoding(
+        &self,
+        trailers: Option<&http::HeaderMap>,
+        header_eos: bool,
+    ) -> pingora_core::Result<()> {
+        let Some(mut lease) = self.body_lease().await else {
+            return Err(crate::plugins::http::grpc_json_transcoder::failure());
+        };
+        for processor in &mut lease.processors().ordinary {
+            processor.on_actual_upstream_trailers(trailers, header_eos).await?;
+        }
+        lease.complete();
+        Ok(())
+    }
+    pub(crate) async fn finalize_ordinary_incomplete(&self) {
+        let mut state = self.state.lock().await;
+        for processor in &mut state.body.ordinary {
+            processor.finalize_incomplete("terminal", "logging-fallback");
+        }
+    }
+
     pub(crate) async fn finalize_ai_incomplete(&self) {
         let mut state = self.state.lock().await;
         if let Some(processor) = state.body.ai.as_mut() {

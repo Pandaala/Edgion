@@ -72,6 +72,8 @@ impl CompiledPlugins {
             && !previous.has_cross_namespace_mirror()
             && !self.has_enabled_jwe()
             && !previous.has_enabled_jwe()
+            && !self.spec.has_active_grpc_transcoder()
+            && !previous.spec.has_active_grpc_transcoder()
     }
 
     fn has_cross_namespace_mirror(&self) -> bool {

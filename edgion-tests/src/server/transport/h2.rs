@@ -24,6 +24,7 @@ use tracing::{debug, error, info};
 use super::recorder::{self, TransportEvent, LISTENER_H2};
 use super::script::{AfterResponse, Behavior, RetryFailure, UpScript};
 
+mod grpc_transcoding;
 mod lifecycle;
 mod retry_wire;
 
@@ -391,8 +392,34 @@ async fn handle_stream(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
 
+    let grpc_fixture = req
+        .headers()
+        .get("x-transcoding-fixture")
+        .and_then(|v| v.to_str().ok())
+        .filter(|mode| {
+            matches!(
+                *mode,
+                "missing-status"
+                    | "truncated"
+                    | "compressed"
+                    | "bad-status"
+                    | "error-status"
+                    | "success"
+                    | "header-only-error"
+                    | "header-only-missing"
+                    | "header-only-invalid"
+            )
+        })
+        .map(str::to_owned);
+    let grpc_streaming = req.uri().path().ends_with("/StreamNumbers");
     let mut body = req.into_body();
     let mut state = BodyState::default();
+    if let Some(mode) = grpc_fixture {
+        if pump_body(&mut body, &ctx, &mut state, None).await != PumpStop::PeerReset {
+            grpc_transcoding::respond(&mut respond, &mode, grpc_streaming);
+        }
+        return;
+    }
 
     if let Some(mode) = lifecycle {
         lifecycle::run(

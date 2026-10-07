@@ -257,3 +257,30 @@ Client TCP connection
                   → response_filter: async response plugins
                     → logging: metric recording + AccessLog
 ```
+
+## HTTPRoute gRPC JSON transcoding
+
+`GrpcJsonTranscoder` is an HTTPRoute rule request plugin. It keeps the selected
+backend/TLS/egress owners while sealing an upstream RPC plan before dial, requiring
+H2 with a separate stable pool domain, and checking the actual attempt version and
+reserved headers. Downstream H1.1/H2 protocol selection remains independent.
+Descriptors compile in the runtime-independent resources crate; Controller resolves
+same-namespace ConfigMap binaryData through the existing dependency/requeue mechanism.
+
+The additional unary full-document exception is explicitly authorized in the
+[HTTP body rules](../../../AGENTS.md#http-body-handling-invariants). It admits one
+bounded message and uses the canonical Hold/Replace transport with per-exchange and
+process-wide memory limits; no response BodyStorage or general whole-body API exists.
+Server streaming uses canonical RawWindow binary message windows and bounded output
+capacity. Finalization consumes immutable original grpc-status evidence after ordinary
+trailer companions. The [operator guide](../../../docs/en/user-guide/http-route/filters/edgion-plugins/grpc-json-transcoder.md)
+records scope, limits and lifetime/reuse limitations.
+
+RPC ownership excludes streamed request-body mutators in either plugin order. A late
+registration refusal records a persistent conflict, including when the companion uses
+fail-open behavior. Cold descriptor admission walks a trusted protobuf/HTTP-options
+schema before reflection; only standard options and resolved google.api.http values
+are admitted. Encoded custom/uninterpreted options, unknown descriptor fields and
+relative extension extendees are rejected; supplied reserved field shapes are checked
+against the trusted schema. HTTP annotation descendants consume the cold depth/node
+budget. The operator guide describes these descriptor restrictions.

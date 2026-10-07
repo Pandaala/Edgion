@@ -1905,6 +1905,8 @@ dependencies = [
  "kube",
  "parking_lot",
  "prost 0.13.5",
+ "prost-reflect",
+ "prost-types 0.13.5",
  "regex",
  "schemars",
  "serde",
@@ -5051,6 +5053,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "prost-reflect"
+version = "0.14.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5edd582b62f5cde844716e66d92565d7faf7ab1445c8cebce6e00fba83ddb2"
+dependencies = [
+ "base64",
+ "once_cell",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
+ "serde",
+ "serde-value",
 ]
 
 [[package]]
