@@ -66,9 +66,9 @@ injection without uninstalling the response observer.
 OpenAI JSON usage observation is incremental and bounded. Valid complete JSON without usage
 can fall back to a coarse raw-JSON character estimate; invalid/incomplete JSON or observation
 budget failure produces unknown usage. Selected unary Chat-to-Anthropic conversion instead
-retains one bounded document and defers final commitment under the completed
-[Task 03](../../../tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md)
-resource/transport contract. SSE conversion remains event-based.
+retains one bounded document and defers final commitment under the
+[bounded unary resource/transport contract](../../01-architecture/02-gateway/00-overview.md#ai-implementation-boundary).
+SSE conversion remains event-based.
 
 `defaults.maxOutputTokens` does not clamp an explicit request value or inject an OpenAI default.
 Business token quota is cumulative and entry-scoped; credential TPM uses a separate reservation.

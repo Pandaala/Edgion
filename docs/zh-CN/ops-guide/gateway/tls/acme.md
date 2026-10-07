@@ -120,7 +120,7 @@ Controller 将 token 发布到 `status.activeChallenges`；仅当校验、所选
 |------|------|--------|------|
 | `renewal.renewBefore` | Duration | `720h` | 在证书到期前多久开始续期（720h = 30 天） |
 | `renewal.checkInterval` | Duration | `24h` | 续期检查间隔 |
-| `renewal.failBackoff` | Duration | `5m` | 失败后重试延迟的基数；每次连续失败乘以 4（`failBackoff * 4^attempt`，如 5m、20m、80m、约 5.3h、约 21.3h）。5 次连续失败后资源保持 `Failed` 状态，停止重试，直到编辑 CRD 或[手动触发](#手动触发)（重置计数器）；成功也会重置计数器 |
+| `renewal.failBackoff` | Duration | `5m` | 失败后重试延迟的基数；每次预留的尝试将延迟乘以 4（`failBackoff * 4^attempt`，如 5m、20m、80m、约 5.3h、约 21.3h）。同一 spec generation 用完 5 次尝试后资源保持 `Failed`；修改 spec 开启新 generation，显式 [Admin 触发](#手动触发)重置当前 generation 的重试预算，成功后清除预算 |
 
 ### 外部账号绑定
 
@@ -233,20 +233,15 @@ spec:
 
 ## 手动触发
 
-如需立即重新发起签发或续期（例如修复 DNS 或网络问题后），可触发重新处理——同时重置失败重试计数器。
+修复 DNS 或网络问题后，可通过 Admin API 请求立即重新检查签发或续期条件。下一次尝试前，Admin 触发会重置当前 spec generation 的持久化重试预算，并跳过已有失败的退避等待。仅修改 metadata 注解（包括 `edgion.io/trigger`）不构成签发命令，也不会重置预算；修改 spec 会开启新 generation。
 
-### 方式一：注解资源
+Admin 触发仍需通过资源有效性和 HTTP-01 监听器授权检查；若证书处于 `Ready` 且未进入 `renewal.renewBefore` 续期窗口，不会强制重新签发。成功响应只表示请求已入队，请查看 `status.phase` 和 `status.lastFailureReason` 确认后续结果。
 
-任意修改 metadata 都会使 Controller 重新处理该资源：
+### Admin API
 
-```bash
-kubectl annotate edgionacme example-acme -n production \
-  edgion.io/trigger="$(date +%s)" --overwrite
-```
+> **需要认证**：将 `EDGION_TOKEN` 设置为 Controller 接受的 Bearer Token。若使用 `edgion-cli gen-token`，还需将其输出的 SHA-256 配置到 Controller 的 `cli_tokens`，并授予对 `Service` 的 `acme-trigger` 权限；仅生成 token 不会自动注册。详见[联邦 RBAC — CLI Token RBAC](../../federation-rbac.md#cli-token-rbac)。
 
-### 方式二：Admin API
-
-> **需要认证**：所有 Controller Admin API 调用都需要 Bearer Token。将 `EDGION_TOKEN` 设置为 `edgion-cli gen-token` 生成的 token，或直接使用 `edgion-cli acme trigger`。详见[联邦 RBAC — CLI Token RBAC](../../federation-rbac.md#cli-token-rbac)。
+将下面的地址替换为运行 ACME 服务的 leader Controller Admin 地址。当前 `edgion-cli` 没有 `acme trigger` 子命令，请使用以下 HTTP 请求：
 
 ```bash
 curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<name>/trigger" \
@@ -262,7 +257,7 @@ curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<
 }
 ```
 
-如果 ACME 服务未在被访问的副本上运行（例如未持有 leadership 的副本），请求不会入队，响应会如实报告失败：
+如果 ACME 服务未在被访问的副本上运行（例如未持有 leadership 的副本），请求不会入队，API 返回 HTTP 503 和以下响应。请改用 leader Controller 的 Admin 地址；若 leader 的服务尚未就绪，待就绪后重试：
 
 ```json
 {
@@ -281,7 +276,7 @@ curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<
 | `Issuing` | ACME 订单进行中（校验或签发中） |
 | `Ready` | 证书已签发且有效 |
 | `Renewing` | 续期进行中 |
-| `Failed` | 最近一次操作失败；使用指数退避重试（`failBackoff * 4^attempt`），最多 5 次，之后保持 `Failed` 状态，直到编辑 CRD 或[手动触发](#手动触发)重置重试计数器 |
+| `Failed` | 最近一次操作失败；同一 spec generation 最多预留 5 次尝试，期间使用指数退避重试，之后保持 `Failed`，直到修改 spec 或通过 [Admin 触发](#手动触发)重置重试预算 |
 
 ### 常用状态字段
 
@@ -289,6 +284,7 @@ curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<
 - `status.lastFailureReason`、`status.lastFailureTime`——最近一次失败的详情
 - `status.secretName`、`status.edgionTlsName`——当前使用的 Secret 和 EdgionTls
 - `status.accountUri`——已注册的 ACME 账号 URI
+- `status.scheduler`——只读恢复检查点，包含观察到的 spec generation、预留尝试的 ID 和已消耗次数、尝试开始时间及下次重试时间
 
 ### 常见问题
 

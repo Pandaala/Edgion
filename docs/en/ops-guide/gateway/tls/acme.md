@@ -235,11 +235,15 @@ spec:
 
 ## Manual trigger
 
-To immediately re-run issuance or renewal (for example after fixing DNS or network problems), use the Admin trigger. It has explicit reset semantics: the current spec generation's persisted retry budget is replaced before the next attempt. A metadata-only annotation is not an issuance command and does not reset the budget.
+After fixing DNS or network problems, use the Admin API to request an immediate check of issuance or renewal eligibility. Before the next attempt, an Admin trigger resets the current spec generation's persisted retry budget and bypasses an existing failure backoff. A metadata-only annotation (including `edgion.io/trigger`) is not an issuance command and does not reset the budget; changing the spec starts a new generation.
+
+Admin triggers still require valid resource configuration and authorized HTTP-01 listener attachments. A certificate in `Ready` outside the `renewal.renewBefore` window is not forcibly reissued. A successful response means only that the request was queued; inspect `status.phase` and `status.lastFailureReason` for the outcome.
 
 ### Admin API
 
-> **Authentication required**: all Controller Admin API calls need a Bearer token. Set `EDGION_TOKEN` to a token from `edgion-cli gen-token`, or use `edgion-cli acme trigger` directly. See [Federation RBAC — CLI Token RBAC](../../federation-rbac.md#cli-token-rbac).
+> **Authentication required**: set `EDGION_TOKEN` to a Bearer token accepted by the Controller. If using `edgion-cli gen-token`, configure its SHA-256 output in the Controller's `cli_tokens` and grant `acme-trigger` on `Service`; generating a token alone does not register it. See [Federation RBAC — CLI Token RBAC](../../federation-rbac.md#cli-token-rbac).
+
+Replace the address below with the Admin address of the leader Controller running the ACME service. The current `edgion-cli` has no `acme trigger` subcommand; use this HTTP request:
 
 ```bash
 curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<name>/trigger" \
@@ -255,7 +259,7 @@ A successful response:
 }
 ```
 
-If the ACME service is not running on the contacted replica (for example one that does not hold leadership), the request is not queued and the failure is reported rather than a misleading success:
+If the ACME service is not running on the contacted replica (for example one that does not hold leadership), the request is not queued and the API returns HTTP 503 with the response below. Use the leader Controller's Admin address; if its service is not ready yet, retry after it becomes ready:
 
 ```json
 {

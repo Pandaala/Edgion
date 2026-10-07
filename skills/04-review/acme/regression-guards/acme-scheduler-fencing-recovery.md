@@ -30,6 +30,48 @@ may change its epoch/digest because the issued Secret itself reloads the Gateway
 Admin commands take pending priority and alone reset the
 budget without requiring a new spec generation.
 
+## Manual trigger documentation boundary
+
+`acme-manual-trigger-documentation` corrected the Chinese operator guide's
+unsupported `edgion.io/trigger` annotation example and the nonexistent
+`edgion-cli acme trigger` recommendation in both languages. Document the
+authenticated `POST /api/v1/services/acme/{namespace}/{name}/trigger` instead.
+The route classifier requires `acme-trigger` on `Service`; a newly generated
+CLI token must first have its hash and permissions configured on the Controller.
+
+`api::trigger_acme` calls `trigger_resource`, which enqueues `AdminTrigger`.
+A successful response establishes enqueueing only, not resource existence,
+eligibility, or certificate issuance. A missing or closed service sender returns
+HTTP 503; contact the leader with a running ACME service. In `check_resource`,
+Admin resets the persisted attempt count and bypasses a same-generation future
+retry deadline, but still passes the normal eligibility gate. The Ready check
+also remains in force: a certificate outside its renewal window is not reissued.
+An active job coalesces the command as pending work rather than starting a
+concurrent attempt.
+
+`EdgionAcmeHandler::parse` compares source UID/generation, ResolvedRefs
+status/reason, and listener attachments; it does not consume an arbitrary
+metadata annotation as a command. Ordinary notifications and startup preserve
+the same-generation attempt budget. `persisted_attempts` resets it for Admin
+or a new source generation. The existing
+`persisted_retry_budget_resets_only_for_admin_or_new_generation` unit test
+asserts these distinctions; this documentation correction does not change
+runtime behavior or add tests. Its source and test review is current, while
+the existing scheduler regression evidence below concerns the earlier fixes,
+not a claim of a fresh live CA/API-server run.
+
+The operator procedure is maintained in the
+[English](../../../../docs/en/ops-guide/gateway/tls/acme.md#manual-trigger) and
+[Chinese](../../../../docs/zh-CN/ops-guide/gateway/tls/acme.md) guides.
+Re-evaluate these instructions if the CLI gains an ACME command, the handler
+gains a supported trigger input, or Admin admission, retry-reset, renewal-window,
+or authentication behavior changes.
+
+Fresh closure verification for this documentation correction: all nine
+`AGENTS.md` pre-commit checks passed, including workspace check/clippy and
+global agent-doc validation. No live CA/API-server test or full workspace
+test run was performed for this documentation-only correction.
+
 ## Side-effect boundary
 
 The attempt guard runs before account registration/persistence, order creation,
