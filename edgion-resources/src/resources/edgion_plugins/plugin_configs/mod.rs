@@ -68,10 +68,11 @@ pub use ai_guard::{
     AI_GUARD_REGEX_SIZE_LIMIT,
 };
 pub use ai_proxy::{
-    AiBackendSelection, AiBackendSelectionConfig, AiBackendSlotSelector, AiModelHeaderMatch, AiModelPattern,
-    AiModelRoute, AiModelRouteAction, AiModelRouteCandidate, AiModelRouteMatch, AiProxyConfig, AiTokenQuotaConfig,
-    AiTokenQuotaLimit, AiTokenQuotaOnExceeded, AiTokenQuotaScope, OnUnknownModel, AI_MODEL_ROUTE_MAX_CANDIDATES,
-    AI_MODEL_ROUTE_MAX_COUNT, AI_MODEL_ROUTE_MAX_HEADERS, AI_QUOTA_MAX_SAFE_INTEGER,
+    AiApi, AiBackendSelection, AiBackendSelectionConfig, AiBackendSlotSelector, AiConversion, AiModelHeaderMatch,
+    AiModelPattern, AiModelRoute, AiModelRouteAction, AiModelRouteCandidate, AiModelRouteMatch, AiProxyConfig,
+    AiTokenQuotaConfig, AiTokenQuotaLimit, AiTokenQuotaOnExceeded, AiTokenQuotaScope, AiUsageObservation,
+    OnUnknownModel, AI_MODEL_ROUTE_MAX_CANDIDATES, AI_MODEL_ROUTE_MAX_COUNT, AI_MODEL_ROUTE_MAX_HEADERS,
+    AI_QUOTA_MAX_SAFE_INTEGER,
 };
 pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use auth_header_projection::{

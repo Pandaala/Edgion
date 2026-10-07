@@ -1967,10 +1967,14 @@ async fn ai_provider_handler(
     }
 
     if path.starts_with("resilience-429/") {
-        return Response::builder()
+        let mut response = Response::builder()
             .status(StatusCode::TOO_MANY_REQUESTS)
             .header("content-type", "application/json")
-            .header("x-ratelimit-reset-requests", "1500ms")
+            .header("x-ratelimit-reset-requests", "1500ms");
+        if path.ends_with("/v1/messages") {
+            response = response.header("retry-after", "2");
+        }
+        return response
             .body(Body::from(
                 r#"{"error":{"message":"private resilience fixture detail"}}"#,
             ))

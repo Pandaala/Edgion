@@ -8,6 +8,9 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted
 ---
@@ -21,6 +24,9 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted
         onUnknownModel: passthrough
@@ -35,6 +41,8 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
         backendSelection:
           type: Weighted
         injectUsageTracking: false
@@ -49,6 +57,9 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted
 ---
@@ -62,6 +73,9 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted
         tokenQuota:
@@ -89,6 +103,9 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Priority
 ---
@@ -102,6 +119,9 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted
         tokenQuota:
@@ -130,6 +150,9 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted
         tokenQuota:

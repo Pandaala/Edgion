@@ -29,7 +29,7 @@ flowchart LR
 
 ## Request path (high level)
 
-1. The route matches POST `/v1/chat/completions` (or a path with the same suffix) and runs rule-level AiProxy.
+1. The route matches POST `/v1/chat/completions` after any configured URLRewrite and runs rule-level AiProxy.
 2. AiProxy parses the client model/alias, applies explicit `modelRoutes` rewrites, then admits optional token quota using the effective logical model.
 3. `backendSelection` picks an eligible positive-weight EdgionBackend that supports that model.
 4. The selected backend maps the logical name to its provider model, then Edgion picks an eligible

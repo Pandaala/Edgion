@@ -88,13 +88,13 @@ fn hot_backend_yaml(name: &str, endpoint_path: &str) -> String {
 
 fn plugin_yaml() -> String {
     format!(
-        "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {PLUGIN}\n  namespace: {ROUTE_NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: AiProxy\n      config:\n        backendSelection:\n          type: Weighted\n"
+        "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {PLUGIN}\n  namespace: {ROUTE_NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: AiProxy\n      config:\n        api: openaiChat\n        usageObservation: provider\n        backendSelection:\n          type: Weighted\n"
     )
 }
 
 fn routed_plugin_yaml() -> String {
     format!(
-        "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {PLUGIN}\n  namespace: {ROUTE_NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: AiProxy\n      config:\n        backendSelection:\n          type: Weighted\n        modelRoutes:\n          - match:\n              model: virtual-*\n            action:\n              rewrite: economy-model\n              candidates:\n                - backend:\n                    group: edgion.io\n                    kind: EdgionBackend\n                    namespace: {BACKEND_NS}\n                    name: {BACKEND_A}\n                    occurrence: 0\n                  weight: 1\n          - match:\n              model: header-only\n              headers:\n                - name: x-model-tier\n                  value: paid\n            action:\n              rewrite: economy-model\n          - match:\n              model: blocked-model\n            action:\n              rewrite: economy-model\n              candidates:\n                - backend:\n                    group: edgion.io\n                    kind: EdgionBackend\n                    namespace: {BACKEND_NS}\n                    name: {BACKEND_A}\n                    occurrence: 0\n                  weight: 0\n"
+        "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {PLUGIN}\n  namespace: {ROUTE_NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: AiProxy\n      config:\n        api: openaiChat\n        usageObservation: provider\n        backendSelection:\n          type: Weighted\n        modelRoutes:\n          - match:\n              model: virtual-*\n            action:\n              rewrite: economy-model\n              candidates:\n                - backend:\n                    group: edgion.io\n                    kind: EdgionBackend\n                    namespace: {BACKEND_NS}\n                    name: {BACKEND_A}\n                    occurrence: 0\n                  weight: 1\n          - match:\n              model: header-only\n              headers:\n                - name: x-model-tier\n                  value: paid\n            action:\n              rewrite: economy-model\n          - match:\n              model: blocked-model\n            action:\n              rewrite: economy-model\n              candidates:\n                - backend:\n                    group: edgion.io\n                    kind: EdgionBackend\n                    namespace: {BACKEND_NS}\n                    name: {BACKEND_A}\n                    occurrence: 0\n                  weight: 0\n"
     )
 }
 
@@ -335,6 +335,15 @@ async fn ai_request_model(ctx: &ScenarioCtx, model: &str) -> Result<reqwest::Res
 }
 
 async fn ai_request_model_with_header(ctx: &ScenarioCtx, model: &str, tier: Option<&str>) -> Result<reqwest::Response> {
+    ai_request_model_with_headers(ctx, model, tier, None).await
+}
+
+async fn ai_request_model_with_headers(
+    ctx: &ScenarioCtx,
+    model: &str,
+    tier: Option<&str>,
+    trace: Option<&str>,
+) -> Result<reqwest::Response> {
     let target = ctx.target_socket_addr(AI_GATEWAY_PORT).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -347,6 +356,11 @@ async fn ai_request_model_with_header(ctx: &ScenarioCtx, model: &str, tier: Opti
         .json(&json!({"model": model, "messages": [{"role": "user", "content": "hello"}]}));
     if let Some(tier) = tier {
         request = request.header("x-model-tier", tier);
+    }
+    if let Some(trace) = trace {
+        request = request
+            .header("traceparent", crate::access_log_client::traceparent_for_marker(trace))
+            .header("access_log", "test_store");
     }
     request.send().await.context("AI lifecycle request failed")
 }
@@ -501,6 +515,76 @@ async fn reference_lifecycle(ctx: &ScenarioCtx) -> Result<()> {
     apply(ctx, route_grant_yaml()).await?;
     wait_condition(ctx, "HTTPRoute", ROUTE_NS, ROUTE, "ResolvedRefs", "True", None).await?;
     wait_traffic(ctx, true).await?;
+
+    // Observation is a route policy, independent of credential/body forwarding.
+    // Raw config arrival precedes publication of the immutable route runtime.
+    // Wait for the full request outcome before checking the next phase.
+    for observation in ["off", "provider", "off", "provider"] {
+        apply(
+            ctx,
+            plugin_yaml().replace(
+                "usageObservation: provider",
+                &format!("usageObservation: {observation}"),
+            ),
+        )
+        .await?;
+        wait_for("AI observation policy publication", Duration::from_secs(15), || async {
+            let items = gateway_list(ctx, "/configclient/edgionplugins/list").await?;
+            Ok(items
+                .iter()
+                .find(|item| resource_named(item, ROUTE_NS, PLUGIN))
+                .is_some_and(|item| {
+                    item.pointer("/spec/requestPlugins/0/config/usageObservation")
+                        .and_then(Value::as_str)
+                        == Some(observation)
+                }))
+        })
+        .await?;
+        wait_traffic(ctx, true).await?;
+        wait_for(
+            "AI observation runtime convergence",
+            Duration::from_secs(15),
+            || async {
+                let trace = format!("ai-observation-{observation}-{}", uuid::Uuid::new_v4());
+                let response = ai_request_model_with_headers(ctx, "fixture-model", None, Some(&trace)).await?;
+                anyhow::ensure!(
+                    response.status().is_success(),
+                    "observation reload blocked native traffic"
+                );
+                let _ = response.bytes().await?;
+                let entry = ctx
+                    .test_ctx
+                    .access_log_client()
+                    .get_access_log_with_retry(&trace, 20, 200)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                let usage = &entry.data["genai"];
+                let attempt = &usage["attempts"][0];
+                if observation == "off" {
+                    anyhow::ensure!(
+                        usage["usage_source"] == "notObserved" && attempt["usage_source"] == "notObserved",
+                        "off reload retained observation: {usage}"
+                    );
+                    anyhow::ensure!(
+                        usage.get("input_tokens").is_none()
+                            && usage.get("output_tokens").is_none()
+                            && attempt.get("input_tokens").is_none()
+                            && attempt.get("output_tokens").is_none(),
+                        "off reload published numeric usage: {usage}"
+                    );
+                } else {
+                    anyhow::ensure!(
+                        usage["usage_source"] == "reported"
+                            && attempt["usage_source"] == "reported"
+                            && usage.get("input_tokens").is_some(),
+                        "provider reload did not enable observation: {usage}"
+                    );
+                }
+                Ok(true)
+            },
+        )
+        .await?;
+    }
 
     // Updating an existing grant must requeue the same dependency edge; this
     // is distinct from the delete/recreate lifecycle below.

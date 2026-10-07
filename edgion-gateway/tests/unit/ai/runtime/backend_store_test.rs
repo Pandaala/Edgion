@@ -566,3 +566,37 @@ fn debug_never_exposes_credential() {
     assert!(!debug.contains("credential:"));
     assert!(debug.contains("ai.example.com"));
 }
+
+#[test]
+fn unresolved_tpm_is_retained_in_the_same_backend_generation() {
+    let store = AiBackendStore::new();
+    let original = resource("provider", "https://ai.example.com", Some(b"usable-key"));
+    store.full_set(&HashMap::from([(
+        "default/provider".to_string(),
+        Arc::clone(&original),
+    )]));
+    let before = store.snapshot();
+    assert!(!before.get_by_key("default/provider").unwrap().has_credential_tpm);
+    let mut updated = (*original).clone();
+    let mut unresolved = updated.spec.ai.credential_pool.credentials[0].clone();
+    unresolved.name = "unresolved-tpm".to_string();
+    unresolved.weight = 1;
+    unresolved.credential.secret = None;
+    unresolved.limits = Some(AiCredentialLimits {
+        requests_per_minute: None,
+        tokens_per_minute: Some(1000),
+    });
+    updated.spec.ai.credential_pool.redis_ref = Some("default/accounting".to_string());
+    updated.spec.ai.credential_pool.credentials.push(unresolved);
+    store.partial_update(
+        HashMap::new(),
+        HashMap::from([("default/provider".to_string(), Arc::new(updated))]),
+        HashSet::new(),
+    );
+    let after = store.snapshot();
+    let compiled = after.get_by_key("default/provider").unwrap();
+    assert!(compiled.has_credential_tpm);
+    assert_eq!(compiled.credential_pool.credentials.len(), 1);
+    assert!(after.generation() > before.generation());
+    assert!(!before.get_by_key("default/provider").unwrap().has_credential_tpm);
+}

@@ -35,6 +35,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
         backendSelection:
           type: Priority
         injectUsageTracking: true
@@ -46,8 +48,11 @@ Secret、EdgionBackend 与 HTTPRoute 见
 
 ## 用量观测
 
-当前 OpenAI/OpenAICompatible Chat JSON 用量使用有界状态增量提取，原始分片立即转发。编码不支持或 JSON 非法/不完整时，
-用量为 unknown，计数和成本省略。执行与结算规则见[配额与成本](../../../../ai-gateway/quotas-and-cost.md)。
-`injectUsageTracking` 默认 true，控制请求修改，不控制响应观测器是否安装；当前没有公开的观测关闭配置。
-Anthropic JSON 转换复用转换器用量并在提交前完成有界转换，不能概括为立即转发原始分片。
-原生 Responses/Messages 及 `api`、`conversion`、`usageObservation` 配置尚不支持，见[提供商](../../../../ai-gateway/providers.md)。
+`usageObservation` 默认 `off`：原生响应字节与编码直接转发，不安装 JSON/SSE 用量观测器；
+access log 记录 notObserved，不输出计数和成本。`provider` 显式启用已有的有界增量观测。
+tokenQuota、凭据 TPM 和 LowestUsage 要求 provider 观测；RPM 与 LowestLatency 可关闭观测。
+`injectUsageTracking` 默认 false，独立控制请求修改；true 要求 provider 观测或显式转换。
+
+Anthropic 转换需声明 `conversion: chatToAnthropic`，且候选全为 Anthropic。关闭观测时，转换器
+仍解析客户端协议需要的 usage，但不发布数值核算；有界 JSON 转换在提交前完成。
+原生 Responses/Messages 尚未实现，见[提供商](../../../../ai-gateway/providers.md)。

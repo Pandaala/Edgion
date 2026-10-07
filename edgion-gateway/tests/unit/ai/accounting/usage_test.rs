@@ -1079,3 +1079,18 @@ async fn encoded_passthrough_does_not_parse_or_count_transformed_bytes() {
     );
     assert!(processor.json.is_none());
 }
+
+#[test]
+fn public_off_initialization_suppresses_converter_numeric_publication() {
+    use edgion_resources::resources::edgion_plugins::AiUsageObservation;
+    let usage = AiUsageShared::with_observation(AiUsageObservation::Off);
+    usage.set_input_chars(100);
+    usage.add_output_chars(200);
+    usage.observe_reported_usage(7, 11, 0, 0);
+    assert_eq!(usage.input_chars(), 0);
+    assert_eq!(usage.output_chars(), 0);
+    assert_eq!(usage.reported_usage(), None);
+    let snapshot = usage.accounting_snapshot(99, true);
+    assert_eq!(snapshot.source, GenAiAttemptUsageSource::NotObserved);
+    assert_eq!(snapshot.usage, None);
+}

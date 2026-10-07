@@ -28,7 +28,7 @@ fn ai_guard_entry() -> RequestFilterEntry {
 
 fn ai_proxy_entry() -> RequestFilterEntry {
     let config: crate::resources::edgion_plugins::AiProxyConfig =
-        serde_yaml::from_str("{}").expect("configuration parses");
+        serde_yaml::from_str("api: openaiChat").expect("configuration parses");
     RequestFilterEntry::new(EdgionPlugin::AiProxy(config))
 }
 

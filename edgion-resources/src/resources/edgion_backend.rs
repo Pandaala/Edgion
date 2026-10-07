@@ -403,6 +403,16 @@ pub fn normalize_external_http_endpoint(
 }
 
 impl AiBackendSpec {
+    /// Declarative accounting dependency, including unresolved and zero-weight credentials.
+    pub fn has_credential_tpm(&self) -> bool {
+        self.credential_pool.credentials.iter().any(|credential| {
+            credential
+                .limits
+                .as_ref()
+                .is_some_and(|limits| limits.tokens_per_minute.is_some())
+        })
+    }
+
     /// Resolves and validates the provider endpoint without performing I/O.
     pub fn effective_endpoint(&self) -> Result<Url, String> {
         let endpoint = match (&self.provider, self.endpoint.as_deref()) {

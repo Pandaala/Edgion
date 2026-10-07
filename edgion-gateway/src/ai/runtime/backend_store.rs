@@ -115,6 +115,7 @@ pub struct RuntimeAiBackend {
     /// resources use metadata.uid; UID-less config centers use the typed key.
     pub uid: String,
     pub provider: AiProvider,
+    pub has_credential_tpm: bool,
     pub endpoint: RuntimeAiEndpoint,
     pub streaming: bool,
     pub max_output_tokens: Option<u32>,
@@ -610,6 +611,7 @@ fn try_compile_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeAiB
     Ok(RuntimeAiBackend {
         uid,
         provider: ai.provider,
+        has_credential_tpm: ai.has_credential_tpm(),
         endpoint,
         streaming: ai.defaults.streaming,
         max_output_tokens: ai.defaults.max_output_tokens,

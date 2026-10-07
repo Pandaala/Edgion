@@ -7,6 +7,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: off
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -33,6 +35,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: off
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -59,6 +63,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: off
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -86,6 +92,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: off
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -112,6 +120,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: off
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -138,6 +148,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: off
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -174,6 +186,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: off
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -242,6 +256,10 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        conversion: chatToAnthropic
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -268,6 +286,10 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        conversion: chatToAnthropic
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -294,6 +316,10 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        conversion: chatToAnthropic
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted
     - type: Guardrail

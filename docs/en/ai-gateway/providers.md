@@ -14,13 +14,11 @@ quota downgrade policy can change that choice.
 | `POST /v1/responses`, native `POST /v1/messages` | Any managed backend | Not yet supported |
 | Gemini native, Bedrock | Any managed backend | Not yet supported; deferred scope |
 
-Ingress identifies operations by method and the `/chat/completions` or `/models` path suffix.
-Different prefixes work; arbitrarily renamed paths need an earlier rewrite to a supported suffix.
-Other managed operations return fixed `404 unsupported_endpoint`.
-`api`, `conversion`, and `usageObservation` are not AiProxy configuration fields yet and cannot
-be used in current configuration. An ordinary HTTPRoute to a Service can separately proxy opaque
-HTTP traffic. It does not provide AI credential, model, or quota semantics and does not bypass
-the requirement to pair EdgionBackend with AiProxy.
+The configured `api: openaiChat` is authoritative. Ingress accepts exact effective POST
+`/v1/chat/completions` and local GET `/v1/models`; custom paths need an earlier URLRewrite.
+Other managed operations return fixed `404 unsupported_endpoint`. Responses/Messages API values
+are recognized but fail configuration validation until their native handlers are implemented.
+An ordinary HTTPRoute to a Service can separately proxy opaque HTTP traffic without managed AI semantics.
 
 ## Supported providers
 
@@ -46,8 +44,9 @@ canonical catalog name. Anthropic conversion always requires a catalog match.
 
 ## Anthropic translation
 
-Selecting `provider: Anthropic` automatically selects the current Chat-to-Messages converter;
-no AiProxy `conversion` field is required or supported. The subset covers text messages, declared
+Use `api: openaiChat` with `conversion: chatToAnthropic` and exclusively Anthropic candidates
+to select the existing Chat-to-Messages converter. Native entries omit conversion and use only
+OpenAI/OpenAICompatible candidates. The subset covers text messages, declared
 function tools, tool calls/results, `tool_choice`, `parallel_tool_calls`, and `stop`. `n`,
 `temperature`, and `top_p` accept only omission, null, or the neutral value 1, not arbitrary
 sampling controls. System messages must precede the conversation, which must end with a user

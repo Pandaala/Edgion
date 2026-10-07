@@ -8,5 +8,25 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
+        injectUsageTracking: true
+        backendSelection:
+          type: Priority
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-resilience-conversion-proxy
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: AiProxy
+      config:
+        api: openaiChat
+        conversion: chatToAnthropic
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Priority

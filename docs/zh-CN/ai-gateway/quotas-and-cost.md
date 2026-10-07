@@ -1,5 +1,8 @@
 # 配额与成本
 
+tokenQuota 要求 `usageObservation: provider`。观测默认 off；关闭时记录 notObserved，不发布
+token 计数和成本。下文的观测与结算说明适用于显式启用 provider 观测的入口。
+
 ## Token 配额
 
 可选的 AiProxy `tokenQuota` 基于 Redis，并按请求身份分桶。省略时不执行配额 Redis 操作。

@@ -86,7 +86,7 @@ impl EdgionHttpContext {
     }
 
     pub(crate) fn try_set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
-        let unary_possible = matches!(&plan, AiAttemptPlan::Ready(ready) if !ready.requested_streaming && ready.candidates.iter().any(|candidate| candidate.weight > 0 && candidate.model.is_some() && candidate.backend.as_ref().is_some_and(|backend| backend.provider == edgion_resources::resources::edgion_backend::AiProvider::Anthropic)));
+        let unary_possible = matches!(&plan, AiAttemptPlan::Ready(ready) if ready.conversion == Some(edgion_resources::resources::edgion_plugins::AiConversion::ChatToAnthropic) && !ready.requested_streaming && ready.candidates.iter().any(|candidate| candidate.weight > 0 && candidate.model.is_some() && candidate.backend.as_ref().is_some_and(|backend| backend.provider == edgion_resources::resources::edgion_backend::AiProvider::Anthropic)));
         let state = self.ensure_ai_state();
         if state.attempt_plan.is_some() {
             false

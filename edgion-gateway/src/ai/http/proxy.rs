@@ -2,16 +2,17 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::ai::protocols::openai::request;
+use crate::ai::runtime::attempt_plan::AiOperation;
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_backend::{AiProvider, AI_MODEL_NAME_MAX_BYTES};
+use edgion_resources::resources::edgion_backend::AiProvider;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::{
-    AiBackendSelection, AiProxyConfig, OnUnknownModel, PluginValidation,
+    AiBackendSelection, AiProxyConfig, AiUsageObservation, OnUnknownModel, PluginValidation,
 };
 use pingora_http::ResponseHeader;
-use serde_json::{Map, Value};
 
 use crate::ai::quota::{CompiledAiQuotaPlan, QuotaAdmission, QuotaExceededAction};
 use crate::ai::routing::candidate::{invalid_weight_gate, CandidateEligibility, ConformanceGate, RouteCandidate};
@@ -139,6 +140,38 @@ fn has_positive_weight_service_backend(backends: &[crate::routes::http::match_un
     })
 }
 
+/// Backend publication can precede route facts; check the declaration union
+/// against the request-captured generation before endpoint/model filtering.
+fn captured_backend_contract_valid(
+    config: &AiProxyConfig,
+    backends: &[crate::routes::http::match_unit::CompiledBackend],
+    snapshot: &crate::ai::AiBackendSnapshot,
+) -> bool {
+    for backend in backends.iter() {
+        let promoted = config
+            .model_routes
+            .iter()
+            .flat_map(|route| route.action.candidates.iter().flatten())
+            .any(|candidate| {
+                backend.identity.matches_ai_selector(&candidate.backend)
+                    && candidate.weight.unwrap_or(backend.schema.weight.unwrap_or(1)) > 0
+            });
+        if backend.schema.weight.unwrap_or(1) <= 0 && !promoted {
+            continue;
+        }
+        if let Some((_, _, key)) = ai_candidate_spec(backend) {
+            if let Some(runtime) = snapshot.get_by_key(&key) {
+                if !config.accepts_provider(runtime.provider)
+                    || (runtime.has_credential_tpm && config.usage_observation == AiUsageObservation::Off)
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Request-stage AI semantics. Provider-specific mutation happens per attempt.
 pub struct AiProxy {
     config: AiProxyConfig,
@@ -255,16 +288,21 @@ impl AiProxy {
         // Capture one runtime generation for the complete request decision.
         let snapshot = store.snapshot();
 
-        if session.get_method() == "GET" && session.get_path().ends_with("/models") {
+        if !captured_backend_contract_valid(&self.config, &backends, &snapshot) {
+            return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
+        }
+
+        if session.get_method() == "GET" && session.get_path() == "/v1/models" {
             return self.write_model_list(&snapshot, &backends, session, log).await;
         }
 
-        if session.get_method() != "POST" || !session.get_path().ends_with("/chat/completions") {
+        if session.get_method() != "POST" || session.get_path() != "/v1/chat/completions" {
             return Self::reject(session, log, "endpoint-unsupported", AiProxyError::UnsupportedEndpoint);
         }
         if session.declares_body() == Some(false) {
             return Self::reject(session, log, "body-required", AiProxyError::MalformedBody);
         }
+        let before_body_generation = session.ctx().request_body.generation();
         let body = match session.read_request_body(None).await {
             Ok(body) => body,
             Err(crate::plugins::runtime::traits::session::BodyReadError::BufferLimitExceeded { .. }) => {
@@ -272,6 +310,16 @@ impl AiProxy {
             }
             Err(_) => return Self::reject(session, log, "body-unavailable", AiProxyError::BackendUnavailable),
         };
+        let body_generation = session.ctx().request_body.generation();
+        if before_body_generation.is_some() && before_body_generation != body_generation {
+            session.record_error(edgion_resources::EdgionErrorCode::BodyMutationConflict);
+            return Self::reject(
+                session,
+                log,
+                "body generation changed",
+                AiProxyError::BackendUnavailable,
+            );
+        }
         // If an AiGuard settled a decision for this request, the body it
         // settled on must still be the body being canonicalized here. Anything
         // that mutated it in between — a rewrite plugin ordered between the
@@ -290,6 +338,15 @@ impl AiProxy {
             Ok(canonical) => canonical,
             Err(error) => return Self::reject(session, log, "request-invalid", error),
         };
+
+        if self.config.usage_observation == AiUsageObservation::Provider
+            || self.config.backend_selection.selection_type == AiBackendSelection::CostWeighted
+        {
+            canonical.input_chars = match checked_utf8_chars(&canonical.body) {
+                Ok(chars) => chars,
+                Err(error) => return Self::reject(session, log, "request-invalid", error),
+            };
+        }
 
         let Ok(decision) =
             self.model_routes
@@ -584,8 +641,25 @@ impl AiProxy {
             None
         };
 
+        // Quota admission can await. Never label captured bytes with a later generation.
+        if session.ctx().request_body.generation() != body_generation {
+            session.record_error(edgion_resources::EdgionErrorCode::BodyMutationConflict);
+            return Self::reject(
+                session,
+                log,
+                "body generation changed",
+                AiProxyError::BackendUnavailable,
+            );
+        }
         let plan = AiAttemptPlan::Ready(ReadyAiAttemptPlan {
-            canonical_openai_body: canonical.body,
+            request_body: canonical.body,
+            api: self.config.api,
+            operation: AiOperation::ChatCompletions,
+            conversion: self.config.conversion,
+            usage_observation: self.config.usage_observation,
+            body_generation,
+            body_is_current: !canonical.mutated,
+            request_max_output_tokens: canonical.output_bound,
             canonical_path: session.ctx().path().to_string(),
             canonical_query: session.get_query(),
             logical_model: canonical.logical_model,
@@ -634,18 +708,20 @@ struct CanonicalOpenAiRequest {
     logical_model: String,
     requested_streaming: bool,
     input_chars: u64,
+    output_bound: Option<u64>,
+    mutated: bool,
 }
 
 impl CanonicalOpenAiRequest {
     fn replace_logical_model(&mut self, logical_model: &str) -> Result<(), AiProxyError> {
-        let mut value: Value = serde_json::from_slice(&self.body).map_err(|_| AiProxyError::BackendUnavailable)?;
-        let object = value.as_object_mut().ok_or(AiProxyError::BackendUnavailable)?;
-        object.insert("model".to_string(), Value::String(logical_model.to_string()));
-        let body = Bytes::from(serde_json::to_vec(&value).map_err(|_| AiProxyError::BackendUnavailable)?);
-        let input_chars = checked_utf8_chars(&body)?;
-        self.body = body;
+        if let Some(body) = request::rewrite_model(&self.body, logical_model)? {
+            self.body = body;
+            self.mutated = true;
+        }
+        if self.input_chars != 0 {
+            self.input_chars = checked_utf8_chars(&self.body)?;
+        }
         self.logical_model = logical_model.to_string();
-        self.input_chars = input_chars;
         Ok(())
     }
 }
@@ -750,35 +826,21 @@ fn reject_quota_exhausted(
 }
 
 fn canonical_openai_request(body: Bytes, inject_usage_tracking: bool) -> Result<CanonicalOpenAiRequest, AiProxyError> {
-    let mut value: Value = serde_json::from_slice(&body).map_err(|_| AiProxyError::MalformedBody)?;
-    let object = value.as_object_mut().ok_or(AiProxyError::MalformedBody)?;
-    let logical_model = match object.get("model") {
-        None => return Err(AiProxyError::ModelNotFound),
-        Some(Value::String(model)) if model.is_empty() => return Err(AiProxyError::ModelNotFound),
-        Some(Value::String(model)) if model.len() <= AI_MODEL_NAME_MAX_BYTES => model.clone(),
-        Some(Value::String(_)) => return Err(AiProxyError::ModelNotFound),
-        Some(_) => return Err(AiProxyError::MalformedBody),
-    };
-    let requested_streaming = object.get("stream").and_then(Value::as_bool) == Some(true);
-    let body = if requested_streaming && inject_usage_tracking {
-        let stream_options = object
-            .entry("stream_options".to_string())
-            .or_insert_with(|| Value::Object(Map::new()));
-        let Some(stream_options) = stream_options.as_object_mut() else {
-            return Err(AiProxyError::MalformedBody);
-        };
-        stream_options.insert("include_usage".to_string(), Value::Bool(true));
-        Bytes::from(serde_json::to_vec(&value).map_err(|_| AiProxyError::BackendUnavailable)?)
+    let metadata = request::metadata(&body)?;
+    let changed = if inject_usage_tracking {
+        request::inject_usage(&body)?
     } else {
-        body
+        None
     };
-    let input_chars = checked_utf8_chars(&body)?;
+    let mutated = changed.is_some();
     Ok(CanonicalOpenAiRequest {
-        body,
-        requested_model: logical_model.clone(),
-        logical_model,
-        requested_streaming,
-        input_chars,
+        body: changed.unwrap_or(body),
+        requested_model: metadata.model.clone(),
+        logical_model: metadata.model,
+        requested_streaming: metadata.streaming,
+        input_chars: 0,
+        output_bound: metadata.output_bound,
+        mutated,
     })
 }
 

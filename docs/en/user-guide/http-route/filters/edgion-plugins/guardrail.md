@@ -27,6 +27,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
         backendSelection:
           type: Weighted
     - type: Guardrail

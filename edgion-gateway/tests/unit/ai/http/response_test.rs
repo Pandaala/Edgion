@@ -84,7 +84,14 @@ async fn encoded_reject_stages_json_reply_before_conversion_and_header_plugins()
     scheduler.select_backend(0).unwrap();
     scheduler.select_credential(1, 0).unwrap();
     ctx.ensure_ai_state().attempt_plan = Some(AiAttemptPlan::Ready(ReadyAiAttemptPlan {
-        canonical_openai_body: bytes::Bytes::new(),
+        api: edgion_resources::resources::edgion_plugins::AiApi::OpenaiChat,
+        operation: crate::ai::runtime::attempt_plan::AiOperation::ChatCompletions,
+        conversion: None,
+        usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
+        body_generation: None,
+        body_is_current: false,
+        request_max_output_tokens: None,
+        request_body: bytes::Bytes::new(),
         canonical_path: "/v1/chat/completions".to_string(),
         canonical_query: None,
         logical_model: "fixture-model".to_string(),
@@ -139,4 +146,44 @@ async fn encoded_reject_stages_json_reply_before_conversion_and_header_plugins()
         &mut response
     ));
     assert!(shared.observation_unavailable());
+}
+
+#[tokio::test]
+async fn native_off_keeps_encoded_response_without_usage_diagnostics() {
+    use crate::ai::{AiRequestContext, AiUsageShared};
+    use edgion_resources::resources::edgion_plugins::AiUsageObservation;
+    use std::sync::Arc;
+    use tokio::io::AsyncWriteExt;
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: fixture\r\nContent-Length: 0\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = pingora_proxy::Session::new_h1(Box::new(server));
+    assert!(session.read_request().await.unwrap());
+    let mut ctx = crate::EdgionHttpContext::new();
+    let usage = Arc::new(AiUsageShared::with_observation(AiUsageObservation::Off));
+    ctx.ensure_ai_state().request = Some(AiRequestContext {
+        provider: AiProviderLabel::OpenAiCompatible,
+        model: "fixture-model".into(),
+        pricing: None,
+        requested_streaming: true,
+        usage: Arc::clone(&usage),
+        quota_status: None,
+        quota: None,
+    });
+    let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+    response.insert_header("content-encoding", "gzip").unwrap();
+    assert!(!super::enforce_observation_encoding(
+        &mut session,
+        &mut ctx,
+        &mut response
+    ));
+    assert_eq!(response.status.as_u16(), 200);
+    assert_eq!(response.headers["content-encoding"], "gzip");
+    assert!(!usage.observation_unavailable());
+    assert_eq!(
+        usage.accounting_snapshot(0, true).source,
+        crate::ai::accounting::usage::GenAiAttemptUsageSource::NotObserved
+    );
 }

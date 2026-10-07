@@ -65,7 +65,14 @@ fn ctx_with_selected_ai_target() -> EdgionHttpContext {
     scheduler.select_credential(u16::MAX, 0).unwrap();
 
     let plan = ReadyAiAttemptPlan {
-        canonical_openai_body: Bytes::from_static(br#"{"model":"logical"}"#),
+        api: edgion_resources::resources::edgion_plugins::AiApi::OpenaiChat,
+        operation: crate::ai::runtime::attempt_plan::AiOperation::ChatCompletions,
+        conversion: None,
+        usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
+        body_generation: None,
+        body_is_current: false,
+        request_max_output_tokens: None,
+        request_body: Bytes::from_static(br#"{"model":"logical"}"#),
         canonical_path: "/v1/chat/completions".to_string(),
         canonical_query: None,
         logical_model: "logical".to_string(),

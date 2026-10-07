@@ -15,8 +15,9 @@ AI 请求会在结构化 access log 中增加顶层 `genai` 对象；非 AI 请�
 计数和成本，不表示零。`usage_estimated` 仅在 `estimated` 时为 true，因此 false 本身
 不能证明用量由提供商上报。任一次尝试未知，或已观测与未观测尝试混合时，请求汇总为 unknown；
 全部未观测时为 notObserved。即使请求汇总未知，已知尝试仍保留各自的账本数据。
-内部 notObserved 状态不提供公开的观测关闭选项；`injectUsageTracking: false` 仅关闭
-请求侧 usage 注入。
+`usageObservation: off` 是默认值，原生与转换尝试均记录 notObserved，不输出 token 计数或成本。
+`provider` 显式启用有界观测；`injectUsageTracking` 仅控制请求注入。关闭观测时，转换器仍保留
+客户端协议需要的 usage；RPM 和成功 TTFT 仍由现有尝试生命周期处理。
 
 `model` 是实际用于上游派发的有效逻辑模型。它通常与客户端请求的已声明模型名称或别名一致；明确的 `modelRoutes` 改写或 quota
 `Downgrade` 动作会将其替换为配置的回退模型。启用未知模型透传后，它也可能是最长 512 UTF-8 字节

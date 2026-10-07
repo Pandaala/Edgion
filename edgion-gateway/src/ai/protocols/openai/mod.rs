@@ -5,3 +5,5 @@ pub mod error;
 pub(crate) mod terminal;
 
 pub(crate) mod json_usage;
+
+pub(crate) mod request;

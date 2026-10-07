@@ -1183,6 +1183,8 @@ fn resolve_ai_admission(
                         Some(raw) => match raw.downcast::<EdgionBackend>() {
                             Ok(resource) => ResolvedForwardingTarget::EdgionBackend {
                                 spec_valid: resource.spec.validate().is_ok(),
+                                provider: resource.spec.ai.provider,
+                                has_credential_tpm: resource.spec.ai.has_credential_tpm(),
                                 canonical_models: resource
                                     .spec
                                     .ai

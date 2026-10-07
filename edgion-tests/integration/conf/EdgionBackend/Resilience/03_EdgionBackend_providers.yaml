@@ -5,16 +5,20 @@ metadata:
   namespace: edgion-test
 spec:
   ai:
-    provider: OpenAICompatible
+    provider: Anthropic
     endpoint: http://127.0.0.1:30001/ai/resilience-429
     allowInsecureHttp: true
     credentialPool:
       credentials:
         - name: rate-primary
           secretRef:
-            name: ai-resilience-openai-credential
+            name: ai-resilience-anthropic-credential
     models:
-      - name: fixture-model
+      - name: claude-fixture
+        aliases:
+          - fixture-model
+    defaults:
+      maxOutputTokens: 64
 ---
 apiVersion: edgion.io/v1
 kind: EdgionBackend
@@ -105,6 +109,24 @@ spec:
     credentialPool:
       credentials:
         - name: half-open-fallback
+          secretRef:
+            name: ai-resilience-openai-credential
+    models:
+      - name: fixture-model
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: resilience-native-rate-limited
+  namespace: edgion-test
+spec:
+  ai:
+    provider: OpenAICompatible
+    endpoint: http://127.0.0.1:30001/ai/resilience-429
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: native-rate-primary
           secretRef:
             name: ai-resilience-openai-credential
     models:

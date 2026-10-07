@@ -34,9 +34,9 @@ Clients never hold provider API keys.
 
 Current support covers Chat JSON/SSE and limited JSON/SSE conversion to Anthropic. Native
 Responses, native Messages, Gemini, and Bedrock are not implemented; see
-[Providers](./providers.md#current-support) for the capability boundary. `api`, `conversion`, and
-`usageObservation` are not AiProxy configuration fields yet. Current `injectUsageTracking`
-defaults to true; setting it false disables request-side usage injection, not usage observation.
+[Providers](./providers.md#current-support) for the capability boundary. `api: openaiChat` is required. Native forwarding is the default; Anthropic conversion requires
+`conversion: chatToAnthropic`. `usageObservation` defaults to `off`, and `injectUsageTracking`
+defaults to false. Provider observation is explicit and independent of request injection.
 
 ## Related docs
 

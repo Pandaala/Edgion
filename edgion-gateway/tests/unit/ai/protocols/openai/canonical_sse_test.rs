@@ -84,3 +84,49 @@ fn batch_raw_cap_is_inclusive_and_plus_one_returns_the_record() {
     assert_eq!(rejected.raw_len(), 1);
     assert_eq!(batch.raw_len(), MAX_CANONICAL_BATCH_RAW_BYTES);
 }
+
+#[tokio::test]
+async fn semantic_only_source_preserves_split_raw_records_without_usage_counting() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::StreamingResponseProcessor;
+    use parking_lot::Mutex;
+    use pingora_proxy::ResponseBodySink;
+    use std::sync::Arc;
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&records);
+    let mut session = MockPluginSession::new();
+    session.expect_semantic_guard_active().return_const(true);
+    session.expect_publish_canonical_records().returning(move |batch| {
+        captured.lock().push(batch);
+        Ok(())
+    });
+    let mut source = SemanticSseSource::new();
+    let mut sink = ResponseBodySink::new();
+    let raw = b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":11}}\n\n";
+    for (index, part) in raw.chunks(13).enumerate() {
+        let mut chunk = Some(Bytes::copy_from_slice(part));
+        source
+            .on_chunk(
+                &mut chunk,
+                (index + 1) * 13 >= raw.len(),
+                crate::ctx::ResponseStreamKind::Sse,
+                &mut sink,
+                &mut session,
+            )
+            .await;
+        assert!(chunk.is_none());
+    }
+    assert_eq!(source.decoder.take_data_chars(), 0);
+    let mut decoder = SseDecoder::with_default_limit();
+    decoder.feed_each_bytes(Bytes::from_static(raw), |event| {
+        let observation = observe_event(&event, false);
+        assert_eq!(observation.usage.prompt_tokens, None);
+        assert_eq!(observation.fragments.len(), 1);
+    });
+    let raw_bytes: Vec<u8> = records
+        .lock()
+        .drain(..)
+        .flat_map(|batch| batch.into_raw_bytes().unwrap().to_vec())
+        .collect();
+    assert_eq!(raw_bytes, raw);
+}

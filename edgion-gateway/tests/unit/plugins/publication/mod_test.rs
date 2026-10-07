@@ -826,18 +826,18 @@ fn another_class_cache_cannot_resurrect_a_revoked_candidate_slot() {
 async fn ai_admission_uses_effective_policy_and_current_route_facts() {
     let publisher = publisher();
     let mut source = (*plugin("dsl", true)).clone();
-    source
-        .spec
-        .request_plugins
-        .as_mut()
-        .unwrap()
-        .push(serde_json::from_value(json!({"type": "AiProxy", "config": {}})).unwrap());
+    source.spec.request_plugins.as_mut().unwrap().push(
+        serde_json::from_value(
+            json!({"type": "AiProxy", "config": {"api":"openaiChat","usageObservation":"provider",}}),
+        )
+        .unwrap(),
+    );
     update_source(&publisher, Arc::new(source), false);
     let mut ai_route = (*route()).clone();
     ai_route.spec.rules = Some(vec![serde_json::from_value(json!({
         "filters": [{"type": "ExtensionRef", "extensionRef": {"group": "edgion.io", "kind": "EdgionPlugins", "name": "plugins"}}],
         "backendRefs": [{"group": "edgion.io", "kind": "EdgionBackend", "name": "ai"}],
-        "resolvedAiAdmission": {"backends": [{"kind": "edgionBackend", "specValid": true, "canonicalModels": []}]},
+        "resolvedAiAdmission": {"backends": [{"kind": "edgionBackend", "provider":"OpenAICompatible", "hasCredentialTpm":false, "specValid": true, "canonicalModels": []}]},
     })).unwrap()]);
     let ai_route = Arc::new(ai_route);
     publisher.replace_routes(

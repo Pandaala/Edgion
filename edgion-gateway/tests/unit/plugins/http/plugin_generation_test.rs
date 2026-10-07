@@ -358,7 +358,7 @@ fn metadata_and_cross_entry_validation_are_rebuilt_for_each_scope() {
     let mut generation = PluginGeneration::new(resource(json!({"requestPlugins": [
         {"type": "Cors", "config": {"allowOrigins": "https://example.com"}},
         {"type": "RequestId", "config": {}},
-        {"type": "AiProxy", "config": {}},
+        {"type": "AiProxy", "config": {"api":"openaiChat","usageObservation":"provider",}},
         {"type": "AiGuard", "config": {"rules": [{
             "name": "guard-rule",
             "match": {"type": "regex", "pattern": "private-prompt"},

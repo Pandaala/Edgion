@@ -29,7 +29,7 @@ flowchart LR
 
 ## 请求路径（高层）
 
-1. Route 匹配 POST `/v1/chat/completions`（或具有相同后缀的路径）并运行 Rule 级 AiProxy。
+1. Route 匹配 POST `/v1/chat/completions`（自定义入口需先经 URLRewrite 改写）并运行 Rule 级 AiProxy。
 2. AiProxy 解析客户端模型名/别名，先应用明确的 `modelRoutes` 改写，再按有效逻辑模型做可选的 token 配额准入。
 3. `backendSelection` 在支持该模型、权重为正的 EdgionBackend 中选择一个。
 4. 选中的 Service 把逻辑名映射为 provider model，再按权重选择可用凭据（跳过 RPM/TPM/冷却）。

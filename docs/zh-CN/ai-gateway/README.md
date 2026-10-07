@@ -33,8 +33,8 @@
 
 当前支持 Chat JSON/SSE，以及到 Anthropic 的有限 JSON/SSE 转换。原生 Responses、原生
 Messages、Gemini 与 Bedrock 尚未实现；能力边界见[提供商](./providers.md#当前支持范围)。
-`api`、`conversion`、`usageObservation` 尚不是 AiProxy 配置字段。当前 `injectUsageTracking`
-默认 true；关闭它只关闭请求侧 usage 注入，不关闭用量观测。
+`api: openaiChat` 必填。默认原生转发；Anthropic 转换需显式声明 `conversion: chatToAnthropic`。
+`usageObservation` 默认 `off`，`injectUsageTracking` 默认 false。提供商用量观测与请求注入分别配置。
 
 ## 相关文档
 

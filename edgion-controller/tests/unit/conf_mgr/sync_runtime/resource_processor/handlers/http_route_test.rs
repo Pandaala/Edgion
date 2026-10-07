@@ -446,8 +446,8 @@ async fn ai_rule_preserves_a_missing_service_as_an_invalid_share() {
         EdgionPluginsSpec {
             current_status: None,
             request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::AiProxy(
-                serde_json::from_value::<AiProxyConfig>(serde_json::json!({}))
-                    .expect("empty AiProxy config must use stable defaults"),
+                serde_json::from_value::<AiProxyConfig>(serde_json::json!({"api":"openaiChat"}))
+                    .expect("explicit API config must use stable policy defaults"),
             ))]),
             ..Default::default()
         },
@@ -729,6 +729,7 @@ fn model_route_positive_override_promotes_zero_weight_slot_for_admission() {
     );
     let config: AiProxyConfig = serde_yaml::from_str(
         r#"
+api: openaiChat
 modelRoutes:
   - match: {model: virtual}
     action:
@@ -829,6 +830,7 @@ async fn model_route_checks_zero_weight_slot_identity_before_ignoring_target() {
 
     let candidate_config = |group: &str, kind: &str, name: &str, occurrence: u32| {
         serde_json::from_value::<AiProxyConfig>(serde_json::json!({
+            "api": "openaiChat",
             "modelRoutes": [{
                 "match": {"model": "virtual"},
                 "action": {"candidates": [{"backend": {
@@ -920,7 +922,7 @@ async fn ai_source_diagnostics_use_enabled_processed_entries_without_policy() {
         Arc::new(EdgionPluginsHandler),
         runtime.clone(),
     ));
-    let config: AiProxyConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+    let config: AiProxyConfig = serde_json::from_value(serde_json::json!({"api":"openaiChat"})).unwrap();
     let mut plugins = EdgionPlugins::new(
         "ai",
         EdgionPluginsSpec {

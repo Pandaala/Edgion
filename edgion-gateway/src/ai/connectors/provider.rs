@@ -14,6 +14,7 @@ pub(crate) fn prepare_provider_request(
     credential: &str,
     canonical_path: &str,
     canonical_query: Option<&str>,
+    require_identity: bool,
 ) -> Result<(), AiDispatchError> {
     let uri = provider_uri(provider, &endpoint.path_prefix, canonical_path, canonical_query);
     for header in [
@@ -22,15 +23,19 @@ pub(crate) fn prepare_provider_request(
         "api-key",
         "anthropic-version",
         "anthropic-beta",
-        "accept-encoding",
     ] {
         adapter
             .remove_request_header(header)
             .map_err(|_| AiDispatchError::InvalidConfiguration)?;
     }
-    adapter
-        .set_request_header("accept-encoding", "identity")
-        .map_err(|_| AiDispatchError::InvalidConfiguration)?;
+    if require_identity {
+        adapter
+            .remove_request_header("accept-encoding")
+            .map_err(|_| AiDispatchError::InvalidConfiguration)?;
+        adapter
+            .set_request_header("accept-encoding", "identity")
+            .map_err(|_| AiDispatchError::InvalidConfiguration)?;
+    }
     adapter
         .set_upstream_uri(&uri)
         .map_err(|_| AiDispatchError::InvalidConfiguration)?;

@@ -80,6 +80,8 @@ spec:
             roles: [user]
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
         backendSelection:
           type: Weighted
 ```

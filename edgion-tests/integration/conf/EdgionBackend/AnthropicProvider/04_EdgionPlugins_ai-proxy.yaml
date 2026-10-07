@@ -8,5 +8,9 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        conversion: chatToAnthropic
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted

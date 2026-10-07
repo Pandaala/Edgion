@@ -10,7 +10,10 @@ AiProxy must appear exactly once in a rule-level EdgionPlugins ExtensionRef.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `backendSelection.type` | Enum | `Weighted` | `Weighted`, `Priority`, `LowestLatency`, `LowestUsage`, or `CostWeighted` |
-| `injectUsageTracking` | Boolean | `true` | Requests provider usage for streaming passthrough while retaining independent access-log accounting |
+| `api` | Enum | required | Currently `openaiChat`; Responses/Messages values fail validation until implemented |
+| `conversion` | Enum | none | `chatToAnthropic` explicitly selects the existing bounded converter; all positive/promoted candidates must be Anthropic |
+| `usageObservation` | Enum | `off` | `provider` installs bounded observation; off creates no response usage observer |
+| `injectUsageTracking` | Boolean | `false` | Explicit Chat SSE usage mutation; requires provider observation or declared conversion |
 | `onUnknownModel` | Enum | `reject` | `reject` fails unknown models; `passthrough` requires `Weighted` or `Priority` and all valid positive-weight candidates to be `OpenAI` or `OpenAICompatible` |
 | `modelRoutes` | Array | `[]` | Structured model/header matching, canonical rewrite, and typed candidate filter/weight overrides |
 | `tokenQuota` | Object | none | Optional Redis-backed logical-model token quota; omission performs no quota Redis work |
@@ -18,10 +21,12 @@ AiProxy must appear exactly once in a rule-level EdgionPlugins ExtensionRef.
 AiProxy uses only the candidates and retry permission declared by HTTPRoute. A model-route action
 may identify existing typed route slots and explicitly override their effective weights.
 
-`injectUsageTracking` defaults to true: streaming OpenAI requests set `stream_options.include_usage: true`,
-and Anthropic conversion can emit Chat usage chunks. False stops automatic injection, without
-suppressing a client's explicit usage request or removing the response observer. `api`, `conversion`,
-and `usageObservation` are not configurable yet.
+`injectUsageTracking: true` sets Chat `stream_options.include_usage` without rewriting unrelated
+provider extensions and may add a client-visible usage event. False preserves a client's explicit
+usage request. Observation is independently selected with `usageObservation: provider`; quota,
+credential TPM and LowestUsage require it. RPM, LowestLatency and explicit CostWeighted can use
+off; CostWeighted collects request estimates only. Native candidates must all be OpenAI or
+OpenAICompatible, including zero-weight slots promoted by modelRoutes.
 
 ## Model routes
 
@@ -89,6 +94,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
         backendSelection:
           type: Priority
         injectUsageTracking: true

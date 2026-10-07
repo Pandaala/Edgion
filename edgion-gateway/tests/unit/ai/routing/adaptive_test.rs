@@ -19,6 +19,9 @@ fn key(route_uid: &str, model: &str) -> AdaptiveTelemetryKey {
 fn adaptive_entry(selection_type: AiBackendSelection, enable: bool) -> RequestFilterEntry {
     RequestFilterEntry::with_enable(
         EdgionPlugin::AiProxy(AiProxyConfig {
+            api: edgion_resources::resources::edgion_plugins::AiApi::OpenaiChat,
+            conversion: None,
+            usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
             backend_selection: AiBackendSelectionConfig { selection_type },
             inject_usage_tracking: true,
             on_unknown_model: OnUnknownModel::Reject,

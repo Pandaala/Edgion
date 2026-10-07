@@ -49,6 +49,8 @@ fn ai_ordering_resource(types: &[&str]) -> EdgionPlugins {
             let config = if *kind == "AiGuard" {
                 serde_json::json!({"rules": [{"name": "guard-rule",
                         "match": {"type": "regex", "pattern": "private-prompt"}, "action": "reject"}]})
+            } else if *kind == "AiProxy" {
+                serde_json::json!({"api":"openaiChat"})
             } else {
                 serde_json::json!({})
             };
@@ -1985,7 +1987,7 @@ fn validate_plugins_matches_compile_plugins_error_set() {
     };
     let ai_proxy = || {
         let config: edgion_resources::resources::edgion_plugins::AiProxyConfig =
-            serde_yaml::from_str("{}").expect("configuration parses");
+            serde_yaml::from_str("api: openaiChat").expect("configuration parses");
         RequestFilterEntry::new(EdgionPlugin::AiProxy(config))
     };
 

@@ -37,7 +37,7 @@ struct GuardrailObservation {
 }
 
 fn provider_observation() -> &'static str {
-    r#"{"fixture_id":"openai-compatible-v1","auth_is_provider_key":true,"credential_generation":"a","auth_is_client_key":false,"host_is_expected":true,"path_has_prefix":true,"query_is_preserved":false,"model_is_canonical":true,"model_is_economy":false,"model_is_unknown":false,"stream_requested":true,"include_usage":true}"#
+    r#"{"fixture_id":"openai-compatible-v1","auth_is_provider_key":true,"credential_generation":"a","auth_is_client_key":false,"host_is_expected":true,"path_has_prefix":true,"query_is_preserved":false,"model_is_canonical":true,"model_is_economy":false,"model_is_unknown":false,"stream_requested":true,"include_usage":false}"#
 }
 
 fn expected_pass_body() -> Vec<u8> {

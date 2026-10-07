@@ -3,7 +3,8 @@
 //! Resolved facts describe declarations, not executable backend availability. All
 //! checks run on configuration publication; requests consume the resulting gate.
 
-use super::edgion_plugins::AiProxyConfig;
+use super::edgion_backend::AiProvider;
+use super::edgion_plugins::{AiProxyConfig, AiUsageObservation, PluginValidation};
 use super::http_route::{
     logical_backend_slot_identities, HTTPBackendRef, HTTPBackendRefKind, HTTPRouteFilterType, HTTPRouteRule,
 };
@@ -27,6 +28,9 @@ pub enum ResolvedForwardingTarget {
     EdgionBackend {
         #[serde(rename = "specValid")]
         spec_valid: bool,
+        provider: AiProvider,
+        #[serde(rename = "hasCredentialTpm")]
+        has_credential_tpm: bool,
         #[serde(rename = "canonicalModels")]
         canonical_models: Vec<String>,
     },
@@ -203,6 +207,31 @@ pub fn runtime_ai_rule_invalid_reason(
         return Some(format!(
             "AI routing requires exactly one enabled AiProxy, but EdgionPlugins '{key}' was not found"
         ));
+    }
+    for config in proxies.configs {
+        if let Some(error) = config.validation_error() {
+            return Some(error);
+        }
+        for (slot, _, class) in &classes {
+            if *class != ForwardingBackendClass::Ai {
+                continue;
+            }
+            if let ResolvedForwardingTarget::EdgionBackend {
+                provider,
+                has_credential_tpm,
+                ..
+            } = &resolved.backends[*slot]
+            {
+                if !config.accepts_provider(*provider) {
+                    return Some(
+                        "AiProxy api and conversion must match every positive or promoted backend provider".to_string(),
+                    );
+                }
+                if *has_credential_tpm && config.usage_observation == AiUsageObservation::Off {
+                    return Some("credential tokensPerMinute requires usageObservation provider".to_string());
+                }
+            }
+        }
     }
     (proxies.active_count != 1).then(|| {
         format!(

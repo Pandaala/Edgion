@@ -26,10 +26,14 @@ This supersedes the historical estimation-only observer described by gw-18:
 that observer was needed while it was the sole character-counter owner, but
 ownership has since moved into the translator.
 
-The dispatch contract is provider-specific:
+The dispatch contract is explicitly selected by AiProxy API/conversion/observation:
 
-- OpenAI and OpenAI-compatible providers install full usage extraction.
-- Anthropic installs its translator, which owns exact usage and SSE-only estimation.
+- Native OpenAI Chat installs usage extraction only with `usageObservation: provider`.
+- Explicit `chatToAnthropic` installs its translator, never a second usage observer.
+- Observation defaults off for both paths. Converter-intrinsic client usage still works,
+  while `AiUsageShared` suppresses numeric publication and accounting stays `notObserved`.
+- Native off with explicit semantic Guardrail installs the canonical semantic-only source,
+  without character counting, JSON usage observation or numeric accounting.
 
 Do not install a second SSE decoder or retain the translated body for accounting.
 The bounded unary remediation
@@ -38,8 +42,7 @@ shared admission/output ownership; fresh workspace/shared-topology verification
 and final independent Astra code/evidence review passed. The historical task
 attribution includes the unrelated global WAF documentation exception. Its path
 was `tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md`;
-the task file is absent from the current tree, so that historical evidence is
-not available here for independent inspection. The converter-only exception in
+the task file and its implementation artifacts remain available in the queue. The converter-only exception in
 [AGENTS.md](../../../../AGENTS.md#http-body-handling-invariants) authorizes no second
 usage-only response copy. Document validation, actual source EOS and client
 outcome remain distinct: Released does not synthesize source EOS or delivery success.

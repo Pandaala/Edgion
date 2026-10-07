@@ -20,6 +20,9 @@ fn base_quota() -> AiTokenQuotaConfig {
 
 fn config(token_quota: Option<AiTokenQuotaConfig>) -> AiProxyConfig {
     AiProxyConfig {
+        api: crate::resources::edgion_plugins::AiApi::OpenaiChat,
+        conversion: None,
+        usage_observation: crate::resources::edgion_plugins::AiUsageObservation::Provider,
         backend_selection: AiBackendSelectionConfig::default(),
         inject_usage_tracking: true,
         on_unknown_model: OnUnknownModel::Reject,
@@ -30,15 +33,16 @@ fn config(token_quota: Option<AiTokenQuotaConfig>) -> AiProxyConfig {
 
 #[test]
 fn ai_proxy_defaults_are_stable() {
-    let config: AiProxyConfig = serde_json::from_str("{}").unwrap();
+    let config: AiProxyConfig = serde_json::from_str(r#"{"api":"openaiChat"}"#).unwrap();
     assert_eq!(config.backend_selection.selection_type, AiBackendSelection::Weighted);
-    assert!(config.inject_usage_tracking);
+    assert!(!config.inject_usage_tracking);
+    assert_eq!(config.usage_observation, AiUsageObservation::Off);
     assert_eq!(config.on_unknown_model, OnUnknownModel::Reject);
     assert!(config.model_routes.is_empty());
     assert!(config.token_quota.is_none());
 
     let passthrough: AiProxyConfig = serde_json::from_str(
-        r#"{"backendSelection":{"type":"Priority"},"injectUsageTracking":false,"onUnknownModel":"passthrough"}"#,
+        r#"{"api":"openaiChat","backendSelection":{"type":"Priority"},"injectUsageTracking":false,"onUnknownModel":"passthrough"}"#,
     )
     .unwrap();
     assert!(!passthrough.inject_usage_tracking);
@@ -54,6 +58,7 @@ fn ai_proxy_defaults_are_stable() {
 fn model_routes_validate_wildcards_headers_selectors_and_ambiguity() {
     let valid: AiProxyConfig = serde_yaml::from_str(
         r#"
+api: openaiChat
 modelRoutes:
   - match:
       model: gpt-4*
@@ -82,12 +87,13 @@ modelRoutes:
         r#"modelRoutes: [{match: {model: a}, action: {candidates: []}}]"#,
         r#"modelRoutes: [{match: {model: a}, action: {rewrite: "alias*"}}]"#,
     ] {
-        let value: AiProxyConfig = serde_yaml::from_str(yaml).unwrap();
+        let value: AiProxyConfig = serde_yaml::from_str(&format!("api: openaiChat\n{yaml}")).unwrap();
         assert!(value.validation_error().is_some(), "accepted {yaml}");
     }
 
     let ambiguous: AiProxyConfig = serde_yaml::from_str(
         r#"
+api: openaiChat
 modelRoutes:
   - match: {model: gpt*}
     action: {rewrite: a}
@@ -111,7 +117,7 @@ fn model_route_headers_require_bounded_visible_ascii() {
         "modelRoutes: [{match: {model: a, headers: [{name: x-tier, value: \"bad\\nvalue\"}]}, action: {}}]".to_string(),
         "modelRoutes: [{match: {model: a, headers: [{name: x-tier, value: \"é\"}]}, action: {}}]".to_string(),
     ] {
-        let value: AiProxyConfig = serde_yaml::from_str(&yaml).unwrap();
+        let value: AiProxyConfig = serde_yaml::from_str(&format!("api: openaiChat\n{yaml}")).unwrap();
         assert!(value.validation_error().is_some(), "accepted {yaml}");
     }
 
@@ -119,16 +125,19 @@ fn model_route_headers_require_bounded_visible_ascii() {
         "modelRoutes: [{{match: {{model: a, headers: [{{name: {}, value: '~'}}]}}, action: {{}}}}]",
         "x".repeat(crate::gwapi_types::HEADER_NAME_MAX_LEN as usize)
     );
-    assert!(serde_yaml::from_str::<AiProxyConfig>(&boundary)
-        .unwrap()
-        .validation_error()
-        .is_none());
+    assert!(
+        serde_yaml::from_str::<AiProxyConfig>(&format!("api: openaiChat\n{boundary}"))
+            .unwrap()
+            .validation_error()
+            .is_none()
+    );
 }
 
 #[test]
 fn backend_selection_has_no_inline_candidates_and_gates_passthrough() {
     let error = serde_yaml::from_str::<AiProxyConfig>(
         r#"
+api: openaiChat
 backendSelection:
   type: Weighted
   candidates:
@@ -144,6 +153,9 @@ backendSelection:
         AiBackendSelection::CostWeighted,
     ] {
         let invalid = AiProxyConfig {
+            api: crate::resources::edgion_plugins::AiApi::OpenaiChat,
+            conversion: None,
+            usage_observation: crate::resources::edgion_plugins::AiUsageObservation::Provider,
             backend_selection: AiBackendSelectionConfig { selection_type },
             inject_usage_tracking: true,
             on_unknown_model: OnUnknownModel::Passthrough,
@@ -166,6 +178,8 @@ backendSelection:
 fn token_quota_defaults_fail_closed_and_are_bounded() {
     let config: AiProxyConfig = serde_yaml::from_str(
         r#"
+api: openaiChat
+usageObservation: provider
 tokenQuota:
   redisRef: default/ai-quota
   key:
@@ -265,4 +279,46 @@ fn token_quota_exceeded_actions_are_tagged_and_validated() {
     };
     assert!(http::HeaderValue::try_from("économy").is_ok());
     assert!(config(Some(downgrade)).validation_error().is_none());
+}
+
+#[test]
+fn api_is_required_and_observation_is_an_independent_explicit_contract() {
+    assert!(serde_json::from_str::<AiProxyConfig>("{}").is_err());
+    let schema = serde_json::to_value(schemars::schema_for!(AiProxyConfig)).unwrap();
+    assert!(schema["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| field == "api"));
+    for api in ["openaiResponses", "anthropicMessages"] {
+        let config: AiProxyConfig = serde_json::from_value(serde_json::json!({"api":api})).unwrap();
+        assert!(config.validation_error().unwrap().contains("not implemented"));
+    }
+    let mut native: AiProxyConfig = serde_json::from_str(r#"{"api":"openaiChat"}"#).unwrap();
+    assert!(native.validation_error().is_none());
+    native.inject_usage_tracking = true;
+    assert!(native.validation_error().is_some());
+    native.conversion = Some(AiConversion::ChatToAnthropic);
+    assert!(native.validation_error().is_none());
+    native.conversion = None;
+    native.usage_observation = AiUsageObservation::Provider;
+    assert!(native.validation_error().is_none());
+    native.usage_observation = AiUsageObservation::Off;
+    native.inject_usage_tracking = false;
+    for selection in [
+        AiBackendSelection::Weighted,
+        AiBackendSelection::Priority,
+        AiBackendSelection::LowestLatency,
+        AiBackendSelection::CostWeighted,
+    ] {
+        native.backend_selection.selection_type = selection;
+        assert!(native.validation_error().is_none());
+    }
+    native.backend_selection.selection_type = AiBackendSelection::LowestUsage;
+    assert!(native.validation_error().is_some());
+    native.backend_selection.selection_type = AiBackendSelection::Weighted;
+    native.token_quota = Some(base_quota());
+    assert!(native.validation_error().is_some());
+    native.usage_observation = AiUsageObservation::Provider;
+    assert!(native.validation_error().is_none());
 }

@@ -57,11 +57,13 @@ rule must attach `AiProxy`; candidate order and weights come exclusively from
 
 ## Current protocol and accounting boundary
 
-Managed ingress currently accepts GET paths ending in `/models` and POST paths ending in
-`/chat/completions`. Anthropic uses Chat-to-Messages conversion for the implemented text/tool
-subset; native Messages and Responses are pending. AiProxy has no `api`, `conversion` or
-`usageObservation` field. `injectUsageTracking` defaults to true; false stops automatic request
-injection without uninstalling the response observer.
+Managed AiProxy requires `api: openaiChat`, with exact effective POST `/v1/chat/completions`
+and local GET `/v1/models`. Native entries omit conversion and accept OpenAI/OpenAICompatible
+candidates. Anthropic requires explicit `conversion: chatToAnthropic`; native Messages and
+Responses remain pending and their recognized API values fail validation. `usageObservation`
+defaults off, with no provider usage observer or token/cost publication. `provider` enables
+existing bounded observation; tokenQuota, credential TPM and LowestUsage require it.
+`injectUsageTracking` defaults false and controls declared request mutation independently.
 
 OpenAI JSON usage observation is incremental and bounded. Valid complete JSON without usage
 can fall back to a coarse raw-JSON character estimate; invalid/incomplete JSON or observation

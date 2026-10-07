@@ -1,5 +1,9 @@
 # Quotas and Cost
 
+Token quota requires `usageObservation: provider`. Observation defaults off; off produces
+`notObserved` without token/cost publication. The observation and settlement details below apply
+when provider observation is explicitly enabled.
+
 ## Token quota
 
 Optional AiProxy `tokenQuota` is Redis-backed and keyed by request identity. Omission performs no

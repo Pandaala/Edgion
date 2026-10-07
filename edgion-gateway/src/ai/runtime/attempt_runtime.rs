@@ -582,16 +582,19 @@ impl AiAttemptRuntimeState {
                 } else {
                     self.accounting_overflow = true;
                 }
-                if let Some(adaptive) = adaptive {
+                if let Some(adaptive) = &adaptive {
                     let second = current_unix_second();
                     adaptive.record_charged_tokens(second, charged);
-                    if let Some(ttft_micros) = successful_ttft_ms.and_then(|millis| millis.checked_mul(1_000)) {
-                        adaptive.record_success_ttft(second, ttft_micros);
-                    }
                 }
             } else {
                 self.accounting_overflow = true;
             }
+        }
+        if let (Some(adaptive), Some(ttft_micros)) = (
+            adaptive,
+            successful_ttft_ms.and_then(|millis| millis.checked_mul(1_000)),
+        ) {
+            adaptive.record_success_ttft(current_unix_second(), ttft_micros);
         }
         if self.attempts.len() >= MAX_PENDING_SETTLEMENTS {
             self.attempts_truncated = true;

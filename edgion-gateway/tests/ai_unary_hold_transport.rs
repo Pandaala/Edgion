@@ -351,10 +351,14 @@ fn publish(port: u16, origin: u16) {
     let gateway:Gateway=serde_json::from_value(json!({"metadata":{"name":"unary-wire","namespace":"default"},"spec":{"gatewayClassName":"unary-wire","listeners":[{"name":"http","port":port,"protocol":"HTTP"}],"currentStatus":{"listeners":[{"name":"http","supportedKinds":[],"attachedRoutes":0,"conditions":[accepted()]}]}}})).unwrap();
     edgion_gateway::runtime::create_gateway_handler()
         .full_set(&HashMap::from([("default/unary-wire".into(), Arc::new(gateway))]));
-    let plugin:EdgionPlugins=serde_json::from_value(json!({"metadata":{"name":"wire-ai","namespace":"default"},"spec":{"requestPlugins":[{"type":"AiProxy","config":{"backendSelection":{"type":"Weighted"}}}]}})).unwrap();
+    let plugin:EdgionPlugins=serde_json::from_value(json!({"metadata":{"name":"wire-ai","namespace":"default"},"spec":{"requestPlugins":[{"type":"AiProxy","config":{"api":"openaiChat","usageObservation":"provider","conversion":"chatToAnthropic","backendSelection":{"type":"Weighted"}}}]}})).unwrap();
+    let native_plugin: EdgionPlugins = serde_json::from_value(json!({"metadata":{"name":"wire-native","namespace":"default"},"spec":{"requestPlugins":[{"type":"AiProxy","config":{"api":"openaiChat"}}]}})).unwrap();
+    let off_conversion: EdgionPlugins = serde_json::from_value(json!({"metadata":{"name":"wire-conversion-off","namespace":"default"},"spec":{"requestPlugins":[{"type":"AiProxy","config":{"api":"openaiChat","conversion":"chatToAnthropic"}}]}})).unwrap();
     let bandwidth: EdgionPlugins = serde_json::from_value(json!({"metadata":{"name":"wire-bandwidth","namespace":"default"},"spec":{"upstreamResponseBodyFilterPlugins":[{"type":"BandwidthLimit","config":{"rate":"1024"}}]}})).unwrap();
     edgion_gateway::plugins::http::create_plugin_handler().full_set(&HashMap::from([
         ("default/wire-ai".into(), Arc::new(plugin)),
+        ("default/wire-native".into(), Arc::new(native_plugin)),
+        ("default/wire-conversion-off".into(), Arc::new(off_conversion)),
         ("default/wire-bandwidth".into(), Arc::new(bandwidth)),
     ]));
     let mut backends = HashMap::new();
@@ -373,13 +377,34 @@ fn publish(port: u16, origin: u16) {
     let mut routes = HashMap::new();
     for (name, backend_name) in [
         ("anthropic", "anthropic"),
+        ("anthropic-off", "anthropic"),
         ("native", "native"),
         ("anthropic-timeout", "anthropic"),
         ("anthropic-bandwidth", "anthropic"),
     ] {
         let parent = json!({"name":"unary-wire"});
-        let mut route:HTTPRoute=serde_json::from_value(json!({"metadata":{"name":name,"namespace":"default"},"spec":{"parentRefs":[parent.clone()],"hostnames":[format!("{name}.example.com")],"resolvedListeners":[format!("0.0.0.0:{port}/HTTP")],"resolvedStatusController":"edgion.io/gateway-controller","currentStatus":{"parents":[{"parentRef":parent,"controllerName":"edgion.io/gateway-controller","conditions":[accepted()]}]},"rules":[{"resolvedTerminalRouteUid":format!("HTTPRoute/default/{name}"),"resolvedTerminalRuleIdentity":"index:0","resolvedAiAdmission":{"backends":[{"kind":"edgionBackend","specValid":true,"canonicalModels":["claude-fixture"]}]},"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"wire-ai"}}],"backendRefs":[{"group":"edgion.io","kind":"EdgionBackend","name":backend_name}]}]}})).unwrap();
+        let mut route:HTTPRoute=serde_json::from_value(json!({"metadata":{"name":name,"namespace":"default"},"spec":{"parentRefs":[parent.clone()],"hostnames":[format!("{name}.example.com")],"resolvedListeners":[format!("0.0.0.0:{port}/HTTP")],"resolvedStatusController":"edgion.io/gateway-controller","currentStatus":{"parents":[{"parentRef":parent,"controllerName":"edgion.io/gateway-controller","conditions":[accepted()]}]},"rules":[{"resolvedTerminalRouteUid":format!("HTTPRoute/default/{name}"),"resolvedTerminalRuleIdentity":"index:0","resolvedAiAdmission":{"backends":[{"kind":"edgionBackend","provider":"OpenAICompatible","hasCredentialTpm":false,"specValid":true,"canonicalModels":["claude-fixture"]}]},"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"wire-ai"}}],"backendRefs":[{"group":"edgion.io","kind":"EdgionBackend","name":backend_name}]}]}})).unwrap();
         let rule = &mut route.spec.rules.as_mut().unwrap()[0];
+        if let Some(edgion_resources::resources::http_route_ai_admission::ResolvedForwardingTarget::EdgionBackend {
+            provider,
+            ..
+        }) = rule
+            .resolved_ai_admission
+            .as_mut()
+            .and_then(|facts| facts.backends.first_mut())
+        {
+            *provider = if backend_name == "native" {
+                edgion_resources::resources::edgion_backend::AiProvider::OpenAICompatible
+            } else {
+                edgion_resources::resources::edgion_backend::AiProvider::Anthropic
+            };
+        }
+        if backend_name == "native" {
+            rule.filters.as_mut().unwrap()[0].extension_ref.as_mut().unwrap().name = "wire-native".to_string();
+        }
+        if name == "anthropic-off" {
+            rule.filters.as_mut().unwrap()[0].extension_ref.as_mut().unwrap().name = "wire-conversion-off".to_string();
+        }
         if name == "anthropic-timeout" {
             rule.timeouts = Some(serde_json::from_value(json!({"request":"500ms"})).unwrap());
         }
@@ -421,6 +446,7 @@ fn fixture_document(mode: &str) -> Bytes {
 }
 fn fixture_body(mode: &str) -> Bytes {
     match mode {
+        "native-sse" => Bytes::from_static(b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"native early\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":11}}\n\ndata: [DONE]\n\n"),
         "malformed" => Bytes::from_static(b"{\"provider_secret\":\"must-not-leak\"} broken"),
         "truncated" | "trickle" => Bytes::from_static(b"{\"content\":["),
         "native" | "ordinary" => Bytes::from_static(br#"{"id":"chat_wire","choices":[{"message":{"content":"native early"}}],"usage":{"prompt_tokens":7,"completion_tokens":11}}"#),
@@ -506,12 +532,12 @@ async fn origin_h1(mut socket: TcpStream, conn: u64, started: mpsc::UnboundedSen
         let body = fixture_body(&mode);
         let media = if mode == "wrong-media" {
             "text/plain"
-        } else if mode == "sse" {
+        } else if matches!(mode.as_str(), "sse" | "native-sse") {
             "text/event-stream"
         } else {
             "application/json"
         };
-        let encoding = if mode == "gzip" {
+        let encoding = if matches!(mode.as_str(), "gzip" | "off-gzip") {
             "Content-Encoding: gzip\r\n"
         } else {
             ""
@@ -658,9 +684,9 @@ async fn origin_h2(socket: TcpStream, conn: u64, started: mpsc::UnboundedSender<
                         response.send_reset(h2::Reason::CANCEL);
                         return;
                     }
-                    let media=if mode=="wrong-media" {"text/plain"} else if mode=="sse" {"text/event-stream"} else {"application/json"};
+                    let media=if mode=="wrong-media" {"text/plain"} else if matches!(mode.as_str(),"sse"|"native-sse") {"text/event-stream"} else {"application/json"};
                     let mut head=http::Response::builder().status(200).header("content-type",media);
-                    if mode=="gzip" { head=head.header("content-encoding","gzip"); }
+                    if matches!(mode.as_str(),"gzip"|"off-gzip") { head=head.header("content-encoding","gzip"); }
                     let Ok(mut output)=response.send_response(head.body(()).unwrap(),false) else { return; };
                     if output.send_data(fixture_body(&mode),false).is_err() {return;}
                     if !flush_origin(&flush).await {return;}
@@ -801,7 +827,9 @@ enum Client {
 }
 impl Client {
     async fn start(port: u16, h2: bool, id: &str, mode: &str, native: bool) -> Self {
-        let host = if mode == "preheader-timeout" {
+        let host = if mode.starts_with("off") {
+            "anthropic-off.example.com"
+        } else if mode == "preheader-timeout" {
             "anthropic-timeout.example.com"
         } else if mode == "trailers-bandwidth" {
             "anthropic-bandwidth.example.com"
@@ -812,7 +840,7 @@ impl Client {
         } else {
             "anthropic.example.com"
         };
-        let body = if mode == "sse" {
+        let body = if matches!(mode, "sse" | "native-sse") {
             br#"{"model":"claude-fixture","messages":[{"role":"user","content":"hello"}],"stream":true}"#.as_slice()
         } else {
             br#"{"model":"claude-fixture","messages":[{"role":"user","content":"hello"}]}"#.as_slice()
@@ -1067,6 +1095,8 @@ async fn real_edgion_unary_hold_h1_h2_matrix() {
             let mut reset_connection = None;
             for mode in [
                 "success",
+                "off",
+                "off-gzip",
                 "fragment",
                 "interleaved-fragment",
                 "input-overflow",
@@ -1097,7 +1127,7 @@ async fn real_edgion_unary_hold_h1_h2_matrix() {
                 if mode == "reset" {
                     reset_connection = Some(event.conn);
                 }
-                if !matches!(mode, "wrong-media" | "gzip") {
+                if !matches!(mode, "wrong-media" | "gzip" | "off-gzip") {
                     client.no_head().await;
                 }
                 let stalled = if mode != "timeout" {
@@ -1125,7 +1155,10 @@ async fn real_edgion_unary_hold_h1_h2_matrix() {
                 }
                 let expected = if matches!(mode, "timeout" | "trickle") {
                     504
-                } else if matches!(mode, "success" | "fragment" | "interleaved-fragment" | "trailers") {
+                } else if matches!(
+                    mode,
+                    "success" | "off" | "fragment" | "interleaved-fragment" | "trailers"
+                ) {
                     200
                 } else {
                     502
@@ -1158,6 +1191,17 @@ async fn real_edgion_unary_hold_h1_h2_matrix() {
                     assert!(!body.windows(13).any(|w| w == b"must-not-leak"));
                 }
                 let log = harness.log(expected).await;
+                if mode.starts_with("off") {
+                    if mode == "off" {
+                        assert_eq!(parsed["usage"]["prompt_tokens"], 7);
+                        assert_eq!(parsed["usage"]["completion_tokens"], 11);
+                    }
+                    assert_eq!(log["genai"]["usage_source"], "notObserved");
+                    assert_eq!(log["genai"]["attempts"][0]["usage_source"], "notObserved");
+                    assert!(log["genai"]["input_tokens"].is_null());
+                    assert!(log["genai"]["output_tokens"].is_null());
+                }
+
                 if matches!(
                     mode,
                     "success"
@@ -1310,7 +1354,12 @@ async fn real_edgion_unary_hold_h1_h2_matrix() {
     for upstream_h2 in [false, true] {
         harness.h2.store(upstream_h2, Ordering::Release);
         for downstream_h2 in [false, true] {
-            for (mode, native) in [("native", true), ("ordinary", false), ("sse", false)] {
+            for (mode, native) in [
+                ("native", true),
+                ("native-sse", true),
+                ("ordinary", false),
+                ("sse", false),
+            ] {
                 let id = format!("early-{upstream_h2}-{downstream_h2}-{mode}");
                 let mut client = Client::start(harness.port, downstream_h2, &id, mode, native).await;
                 let event = harness.event(&id).await;
@@ -1323,7 +1372,7 @@ async fn real_edgion_unary_hold_h1_h2_matrix() {
                 event.release.send(()).unwrap();
                 let (status, body) = client.finish().await;
                 assert_eq!(status, 200);
-                if mode != "sse" {
+                if !matches!(mode, "sse" | "native-sse") {
                     assert_eq!(
                         serde_json::from_slice::<Value>(&body).unwrap()["choices"][0]["message"]["content"],
                         "native early"
@@ -1335,7 +1384,15 @@ async fn real_edgion_unary_hold_h1_h2_matrix() {
                         String::from_utf8_lossy(&body)
                     );
                 }
-                harness.log(200).await;
+                if mode == "native-sse" {
+                    assert_eq!(body, fixture_body(mode));
+                }
+                let log = harness.log(200).await;
+                if native {
+                    assert_eq!(log["genai"]["usage_source"], "notObserved");
+                    assert_eq!(log["genai"]["attempts"][0]["usage_source"], "notObserved");
+                    assert!(log["genai"]["input_tokens"].is_null());
+                }
             }
             let id = format!("held-{upstream_h2}-{downstream_h2}");
             let mut held = Client::start(harness.port, downstream_h2, &id, "success", false).await;

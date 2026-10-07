@@ -1,5 +1,8 @@
 # 凭据与限额
 
+凭据 `tokensPerMinute` 要求 AiProxy 声明 `usageObservation: provider`。只有 RPM 的凭据可使用
+默认的 off 观测策略；依赖校验涵盖所有声明的凭据，包括未解析成功的项。
+
 每个 `EdgionBackend` 为同一提供商 Endpoint 拥有一个凭据池。凭据由 Secret 承载；状态与
 access log 只出现配置别名。
 

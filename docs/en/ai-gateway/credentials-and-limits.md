@@ -1,5 +1,9 @@
 # Credentials and Limits
 
+Credential `tokensPerMinute` requires `usageObservation: provider` on the AiProxy entry.
+RPM-only credentials may use the default off observation policy. This dependency is checked
+from every declared credential, including unresolved entries.
+
 Each `EdgionBackend` owns a credential pool for one provider endpoint. Credentials are
 Secret-backed; only configured aliases appear in status and access logs.
 

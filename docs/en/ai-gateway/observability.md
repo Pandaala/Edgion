@@ -19,8 +19,10 @@ true only for `estimated`, so false alone does not prove provider-reported usage
 Any unknown attempt, or a mixture of observed and unobserved attempts, makes the
 request summary unknown. All-unobserved attempts yield `notObserved`. Known
 attempt entries remain available even when the request summary is unknown.
-The internal `notObserved` state does not provide a public observation-off option;
-`injectUsageTracking: false` only disables request-side usage injection.
+`usageObservation: off` is the default and produces `notObserved`, omitting token counts and cost
+for native and converted attempts. `provider` enables bounded observation. `injectUsageTracking`
+only controls explicit request-side injection. Converter-intrinsic client usage remains available
+when observation is off; RPM and successful TTFT still use the attempt lifecycle.
 
 `model` is the effective logical model used for upstream dispatch. It normally matches the client's
 declared model name or alias; an explicit `modelRoutes` rewrite or quota `Downgrade` replaces it with the configured target.

@@ -1546,6 +1546,9 @@ fn ai_proxy_is_constructed_only_for_request_stage() {
     };
 
     let plugin = EdgionPlugin::AiProxy(AiProxyConfig {
+        api: edgion_resources::resources::edgion_plugins::AiApi::OpenaiChat,
+        conversion: None,
+        usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
         backend_selection: AiBackendSelectionConfig {
             selection_type: AiBackendSelection::Weighted,
         },

@@ -7,6 +7,7 @@ use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_backend::ParsedAiModelPricing;
+use edgion_resources::resources::edgion_plugins::AiUsageObservation;
 use edgion_resources::EdgionErrorCode;
 use pingora_proxy::ResponseBodySink;
 #[cfg(test)]
@@ -379,6 +380,17 @@ pub struct AiUsageShared {
 }
 
 impl AiUsageShared {
+    pub(crate) fn with_observation(observation: AiUsageObservation) -> Self {
+        Self {
+            observation_off: AtomicBool::new(observation == AiUsageObservation::Off),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn observation_is_off(&self) -> bool {
+        self.observation_off.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn mark_json_started(&self) {
         self.json_started.store(true, Ordering::Release);
     }
@@ -391,6 +403,9 @@ impl AiUsageShared {
         }
     }
     pub fn set_input_chars(&self, chars: u64) {
+        if self.observation_is_off() {
+            return;
+        }
         self.input_chars.store(chars, Ordering::Relaxed);
     }
 
@@ -498,6 +513,9 @@ impl AiUsageShared {
     }
 
     pub(crate) fn add_output_chars(&self, delta: u64) {
+        if self.observation_is_off() {
+            return;
+        }
         let _ = self
             .output_chars
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
@@ -517,6 +535,9 @@ impl AiUsageShared {
         cache_read_input: u64,
         cache_write_input: u64,
     ) {
+        if self.observation_is_off() {
+            return;
+        }
         // One processor owns updates. Provider usage frames are cumulative,
         // so every component keeps a high-water mark and never refunds an
         // earlier observation. ArcSwap publishes the immutable multi-field
@@ -723,26 +744,18 @@ impl UsageExtractionProcessor {
                             );
                         }
                         if let Some(batch) = &mut batch {
-                            let mut owned = WindowRecord::from_sse_record(SseRecordRef::Block { status, event });
-                            if observation.semantic_available {
-                                owned = owned.with_fragments(observation.fragments);
-                            } else {
-                                owned = owned.semantic_unavailable();
-                                batch.mark_unavailable();
-                            }
-                            if batch.push(owned).is_err() {
+                            if batch
+                                .push_observed(SseRecordRef::Block { status, event }, Some(observation))
+                                .is_err()
+                            {
                                 batch_overflowed = true;
                             }
                         }
                     }
                     other => {
                         if let Some(batch) = &mut batch {
-                            let unavailable = matches!(other, SseRecordRef::Opaque(_));
-                            if batch.push(WindowRecord::from_sse_record(other)).is_err() {
+                            if batch.push_observed(other, None).is_err() {
                                 batch_overflowed = true;
-                            }
-                            if unavailable {
-                                batch.mark_unavailable();
                             }
                         }
                     }

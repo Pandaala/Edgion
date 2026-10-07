@@ -148,6 +148,8 @@ pub(super) fn ai_rule_invalid_reason(
             .map(|backend| match backend.backend_kind() {
                 HTTPBackendRefKind::Service => ResolvedForwardingTarget::Service,
                 HTTPBackendRefKind::EdgionBackend => ResolvedForwardingTarget::EdgionBackend {
+                    provider: edgion_resources::resources::edgion_backend::AiProvider::OpenAICompatible,
+                    has_credential_tpm: false,
                     spec_valid: true,
                     canonical_models: vec![],
                 },

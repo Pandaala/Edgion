@@ -36,6 +36,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
         backendSelection:
           type: Priority
         injectUsageTracking: true
@@ -47,11 +49,14 @@ for Secret, EdgionBackend, and HTTPRoute resources.
 
 ## Usage observation
 
-Current OpenAI/OpenAICompatible Chat JSON usage extraction uses bounded incremental state and forwards
-original chunks immediately. Unsupported encoding or invalid/incomplete JSON
-makes usage unknown; counts and cost are omitted. See [Quotas and Cost](../../../../ai-gateway/quotas-and-cost.md)
-for enforcement and settlement. `injectUsageTracking` defaults to true and controls request mutation,
-not whether response observation is installed. There is no public observation-off option yet.
-Anthropic JSON conversion reuses translator-owned usage and finishes bounded conversion before
-commitment; it does not immediately forward original chunks. Native Responses/Messages and the
-`api`, `conversion`, and `usageObservation` fields are not supported yet; see [Providers](../../../../ai-gateway/providers.md).
+`usageObservation` defaults to `off`: native response bytes and encoding pass through without
+a JSON/SSE usage observer, and the access log records `notObserved` without counts or cost.
+`provider` enables existing bounded incremental observation. Quota, credential TPM and
+LowestUsage require provider observation; RPM and LowestLatency remain available with off.
+`injectUsageTracking` defaults false and controls explicit request mutation independently;
+true requires provider observation or declared conversion.
+
+Anthropic conversion requires `conversion: chatToAnthropic` and exclusively Anthropic candidates.
+The converter still parses client-visible usage when observation is off, but does not publish
+numeric accounting. Its bounded JSON path finishes before commitment. Native Responses/Messages
+remain pending; see [Providers](../../../../ai-gateway/providers.md).

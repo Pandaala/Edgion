@@ -62,6 +62,7 @@ fn every_provider_requests_identity_encoding_after_removing_client_values() {
             "fixture-test-credential",
             "/v1/chat/completions",
             None,
+            true,
         )
         .unwrap();
     }

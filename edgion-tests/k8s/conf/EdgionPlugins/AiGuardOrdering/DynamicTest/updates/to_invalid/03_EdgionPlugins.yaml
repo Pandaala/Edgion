@@ -7,6 +7,9 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Weighted
     - type: AiGuard

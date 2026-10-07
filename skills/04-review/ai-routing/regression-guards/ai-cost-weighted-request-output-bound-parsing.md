@@ -12,8 +12,8 @@ knowledge_type: regression-guards
 ## Conclusion
 
 The OpenAI scheduler and credential-accounting consumers of the *client-declared*
-output-token bound resolve it through `request_output_bound`
-(`edgion-gateway/src/ai/runtime/dispatch.rs`), which prefers `max_completion_tokens` and
+output-token bound resolve it through `openai::request::metadata`
+(`edgion-gateway/src/ai/protocols/openai/request.rs`), which prefers `max_completion_tokens` and
 falls back to the deprecated `max_tokens`. `request_max_tokens` previously read
 only `max_tokens`, so a body from a current OpenAI SDK looked bound-less to
 `CostWeighted` selection while the sibling TPM helper saw the real value.
@@ -26,8 +26,8 @@ are **not accepted**.
 
 The original failure and HTML mapping below describe the 2026-08-04 review,
 not a fresh result. The resolved [conflicting-bound client-error guard](conflicting-openai-token-bounds-are-client-errors.md)
-owns the later error-mapping correction. Current `effective_max_output_tokens` rejects unequal
-numeric request fields with `Client(AiProxyError::MalformedBody)`; the old
+owns the later error-mapping correction. Current ingress metadata rejects unequal
+numeric request fields with `AiProxyError::MalformedBody`, rendered as a fixed Chat 400; the old
 conflict-mapping finding is not current evidence. `CostWeighted` selection,
 TPM reservation and conversion use request-first resolution with a backend
 fallback, not a backend ceiling. `defaults.maxOutputTokens` does not clamp
@@ -77,7 +77,7 @@ bound comes from the request first, the service model entry second.
 - Make `defaults.maxOutputTokens` mandatory whenever `CostWeighted` is selected — the field is a *fallback*; forcing it hides the parser bug and breaks configurations that legitimately let the client set the bound.
 - Have `pick_cost_weighted` substitute a default bound when none is declared — `MissingCostInput` fail-close is deliberate (a silent default would make cost ranking fiction); the bug was that a declared bound was not being seen.
 - Duplicate the `max_completion_tokens.or(max_tokens)` expression at the third call site instead of extracting a shared helper — a fourth reader would drift the same way.
-- Move the `max_tokens` / `max_completion_tokens` conflict rejection into the value-only helper without reviewing its callers — the check remains `effective_max_output_tokens`-local. Historically its HTML mapping was tracked as `gw-02`; current code returns a client malformed-body error.
+- Duplicate the conflict check across consumers. Task 05 moved it to the reviewed selective ingress parser and stores the validated bound once in the attempt plan; selection and reservation share that value. Historically the HTML error mapping was tracked as `gw-02`.
 
 ## Re-evaluation Triggers
 
@@ -89,10 +89,18 @@ Re-open this decision only if:
 ## Reference Cases
 
 - `tasks/review-ai-work/gw-01-costweighted-ignores-max-completion-tokens.md` (AI dispatch review, 2026-08-04)
-- `edgion-gateway/src/ai/runtime/dispatch.rs` — `request_output_bound`, `request_max_tokens`, `effective_max_output_tokens`; regression tests `request_max_tokens_prefers_max_completion_tokens` and `cost_weighted_accepts_max_completion_tokens_only_body_without_service_max`
+- `edgion-gateway/src/ai/protocols/openai/request.rs` — production `metadata` parser; `edgion-gateway/src/ai/runtime/dispatch.rs` delegates private test helpers to the same parser. Regression tests `request_max_tokens_prefers_max_completion_tokens` and `cost_weighted_accepts_max_completion_tokens_only_body_without_service_max`
 - `edgion-gateway/src/ai/routing/candidate.rs` — `pick_cost_weighted` output-bound resolution
 - `docs/en/ai-gateway/routing.md` / `docs/zh-CN/ai-gateway/routing.md` — operator-facing statement of where the bound comes from
 
 ## Resolution references
 
 - `gw-01` — 2026-08-04.
+
+## Task 05 owner update
+
+The production output-bound owner is now `ai/protocols/openai/request.rs`. Selective ingress
+metadata validates conflicting numeric spellings as a fixed client 400 and captures one bound
+for both selection and reservation. Native forwarding retains unknown extension bytes;
+no whole-document Value deserialization is required for this metadata. Private test helpers
+in dispatch only delegate to this parser. Fresh Task 05 verification is recorded in its task.

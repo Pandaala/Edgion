@@ -6,6 +6,9 @@ use crate::resources::edgion_plugins::{
 
 fn config(name: &str) -> AiProxyConfig {
     AiProxyConfig {
+        api: crate::resources::edgion_plugins::AiApi::OpenaiChat,
+        conversion: None,
+        usage_observation: crate::resources::edgion_plugins::AiUsageObservation::Provider,
         backend_selection: AiBackendSelectionConfig {
             selection_type: if name.is_empty() {
                 AiBackendSelection::LowestLatency

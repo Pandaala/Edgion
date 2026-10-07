@@ -83,7 +83,7 @@ fn backend_yaml_with_max_output(name: &str, secret: &str, endpoint: &str, max_ou
 
 fn plugin_yaml(selection: &str) -> String {
     format!(
-        "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {PLUGIN}\n  namespace: {NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: AiProxy\n      config:\n        backendSelection:\n          type: {selection}\n"
+        "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {PLUGIN}\n  namespace: {NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: AiProxy\n      config:\n        api: openaiChat\n        usageObservation: provider\n        backendSelection:\n          type: {selection}\n"
     )
 }
 

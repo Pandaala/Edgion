@@ -13,11 +13,10 @@
 | `POST /v1/responses`、原生 `POST /v1/messages` | 任意受管后端 | 尚不支持 |
 | Gemini native、Bedrock | 任意受管后端 | 尚不支持；后续范围 |
 
-入口按方法和路径后缀 `/chat/completions` 或 `/models` 识别操作；可使用不同前缀，任意重命名
-的路径需先改写为支持的后缀。其他受管操作返回固定的 `404 unsupported_endpoint`。
-`api`、`conversion`、`usageObservation` 尚不是 AiProxy 配置字段，不能写入当前配置。
-普通 HTTPRoute 到 Service 可作为独立的不透明 HTTP 代理；这不提供 AI 凭据、模型或配额语义，
-也不能绕过 EdgionBackend 必须配合 AiProxy 的规则。
+`api: openaiChat` 是操作识别的依据。入口接受有效路径 POST `/v1/chat/completions` 和本地
+GET `/v1/models`；自定义路径需先经 URLRewrite 改写。其他受管操作返回固定的
+`404 unsupported_endpoint`。Responses/Messages 枚举可识别，但在原生处理器实现前配置校验失败。
+普通 HTTPRoute 到 Service 可独立代理不透明 HTTP 流量，不提供受管 AI 语义。
 
 ## 支持的提供商
 
@@ -42,8 +41,8 @@ Anthropic 转换始终要求目录命中。
 
 ## Anthropic 转换
 
-选择 `provider: Anthropic` 自动启用当前 Chat-to-Messages 转换，不需要或支持 AiProxy
-`conversion` 字段。转换支持文本消息、已声明的 function tools、tool calls/results、
+使用 `api: openaiChat` 与 `conversion: chatToAnthropic`，且候选全为 Anthropic，显式启用
+现有 Chat-to-Messages 转换。原生入口省略 conversion，仅使用 OpenAI/OpenAICompatible 候选。转换支持文本消息、已声明的 function tools、tool calls/results、
 `tool_choice`、`parallel_tool_calls` 和 `stop`。`n`、`temperature`、`top_p` 只接受省略、null 或中性值 1，
 不支持任意采样参数。system 消息必须位于会话开头，最后一条必须是 user 或 tool result；不支持 developer role。
 多模态内容、结构化输出、未知字段及其他不支持的组合会在本地拒绝，不会静默删除。

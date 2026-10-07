@@ -1,4 +1,7 @@
 use super::*;
+use edgion_common::conf_sync::traits::ConfHandler;
+use edgion_resources::resources::edgion_backend::AI_MODEL_NAME_MAX_BYTES;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -16,6 +19,9 @@ use edgion_resources::HTTPBackendRef;
 
 fn config() -> AiProxyConfig {
     AiProxyConfig {
+        api: edgion_resources::resources::edgion_plugins::AiApi::OpenaiChat,
+        conversion: None,
+        usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
         backend_selection: AiBackendSelectionConfig {
             selection_type: AiBackendSelection::Weighted,
         },
@@ -125,6 +131,7 @@ fn model_list_is_deterministic_public_and_requires_symbolic_wildcard_owner() {
         public: false,
     };
     let runtime = Arc::new(RuntimeAiBackend {
+        has_credential_tpm: false,
         uid: "backend-uid".to_string(),
         provider: AiProvider::OpenAI,
         endpoint: RuntimeAiEndpoint {
@@ -204,7 +211,9 @@ fn canonical_request_preserves_logical_model_and_injects_usage_once() {
     let input =
         Bytes::from_static(br#"{"model":"fast","stream":true,"stream_options":{"custom":7,"include_usage":false}}"#);
     let witness = input.clone();
-    let request = canonical_openai_request(input, true).unwrap();
+    let mut request = canonical_openai_request(input, true).unwrap();
+    assert_eq!(request.input_chars, 0, "metadata capture alone must not count usage");
+    request.input_chars = checked_utf8_chars(&request.body).unwrap();
     assert_eq!(request.logical_model, "fast");
     assert!(request.requested_streaming);
     let body: Value = serde_json::from_slice(&request.body).unwrap();
@@ -262,6 +271,8 @@ fn canonical_request_replaces_only_the_logical_model_for_downgrade() {
     )
     .unwrap();
 
+    assert_eq!(request.input_chars, 0);
+    request.input_chars = checked_utf8_chars(&request.body).unwrap();
     let premium_chars = request.input_chars;
     request.replace_logical_model("e").unwrap();
     let short_chars = request.input_chars;
@@ -284,8 +295,12 @@ fn canonical_request_replaces_only_the_logical_model_for_downgrade() {
 #[test]
 fn canonical_input_chars_tracks_usage_injection_and_unicode_characters() {
     let original = Bytes::copy_from_slice(r#"{"model":"fast","stream":true,"messages":[{"content":"é€"}]}"#.as_bytes());
-    let without_injection = canonical_openai_request(original.clone(), false).unwrap();
-    let with_injection = canonical_openai_request(original, true).unwrap();
+    let mut without_injection = canonical_openai_request(original.clone(), false).unwrap();
+    let mut with_injection = canonical_openai_request(original, true).unwrap();
+    assert_eq!(without_injection.input_chars, 0);
+    assert_eq!(with_injection.input_chars, 0);
+    without_injection.input_chars = checked_utf8_chars(&without_injection.body).unwrap();
+    with_injection.input_chars = checked_utf8_chars(&with_injection.body).unwrap();
 
     assert_eq!(
         without_injection.input_chars,
@@ -315,6 +330,7 @@ fn initial_candidate_errors_preserve_model_streaming_and_availability_semantics(
 #[test]
 fn downgrade_re_resolves_models_from_captured_candidates_without_passthrough() {
     let backend = Arc::new(RuntimeAiBackend {
+        has_credential_tpm: false,
         uid: "backend-uid".to_string(),
         provider: AiProvider::OpenAI,
         endpoint: RuntimeAiEndpoint {
@@ -454,7 +470,14 @@ fn downgrade_re_resolves_models_from_captured_candidates_without_passthrough() {
 #[test]
 fn plan_debug_never_renders_canonical_body() {
     let plan = ReadyAiAttemptPlan {
-        canonical_openai_body: Bytes::from_static(br#"{"prompt":"must-not-render"}"#),
+        api: edgion_resources::resources::edgion_plugins::AiApi::OpenaiChat,
+        operation: crate::ai::runtime::attempt_plan::AiOperation::ChatCompletions,
+        conversion: None,
+        usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
+        body_generation: None,
+        body_is_current: false,
+        request_max_output_tokens: None,
+        request_body: Bytes::from_static(br#"{"prompt":"must-not-render"}"#),
         canonical_path: "/v1/chat/completions".to_string(),
         canonical_query: None,
         logical_model: "model-a".to_string(),
@@ -473,5 +496,82 @@ fn plan_debug_never_renders_canonical_body() {
     };
     let rendered = format!("{plan:?}");
     assert!(!rendered.contains("must-not-render"));
-    assert!(rendered.contains("canonical_openai_body_bytes"));
+    assert!(rendered.contains("request_body_bytes"));
+}
+
+#[test]
+fn captured_backend_skew_cannot_hide_unresolved_tpm_or_provider_changes() {
+    use edgion_resources::resources::edgion_backend::EdgionBackend;
+    use k8s_openapi::ByteString;
+    let store = AiBackendStore::new();
+    let mut declared: EdgionBackend = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"provider","namespace":"tenant-b"},
+        "spec":{"ai":{"provider":"OpenAICompatible","endpoint":"https://provider.example.com","credentialPool":{"credentials":[{"name":"usable","secretRef":{"name":"key"}}]},"models":[{"name":"model"}],"defaults":{"maxOutputTokens":64}}}
+    })).unwrap();
+    declared.spec.ai.credential_pool.credentials[0].credential.secret = Some(k8s_openapi::api::core::v1::Secret {
+        data: Some(std::collections::BTreeMap::from([(
+            "api-key".to_string(),
+            ByteString(b"usable-key".to_vec()),
+        )])),
+        ..Default::default()
+    });
+    store.full_set(&HashMap::from([(
+        "tenant-b/provider".to_string(),
+        Arc::new(declared.clone()),
+    )]));
+    let before = store.snapshot();
+    let mut config = config();
+    config.usage_observation = AiUsageObservation::Off;
+    config.inject_usage_tracking = false;
+    let backend = compiled_ai_backend(None);
+    assert!(captured_backend_contract_valid(
+        &config,
+        std::slice::from_ref(&backend),
+        &before
+    ));
+    let mut missing = declared.spec.ai.credential_pool.credentials[0].clone();
+    missing.name = "missing-tpm".into();
+    missing.weight = 1;
+    missing.credential.secret = None;
+    missing.limits = Some(edgion_resources::resources::edgion_backend::AiCredentialLimits {
+        requests_per_minute: None,
+        tokens_per_minute: Some(1000),
+    });
+    declared.spec.ai.credential_pool.redis_ref = Some("default/accounting".into());
+    declared.spec.ai.credential_pool.credentials.push(missing);
+    store.full_set(&HashMap::from([(
+        "tenant-b/provider".to_string(),
+        Arc::new(declared.clone()),
+    )]));
+    let current = store.snapshot();
+    assert!(captured_backend_contract_valid(
+        &config,
+        std::slice::from_ref(&backend),
+        &before
+    ));
+    assert!(!captured_backend_contract_valid(
+        &config,
+        std::slice::from_ref(&backend),
+        &current
+    ));
+    config.usage_observation = AiUsageObservation::Provider;
+    assert!(captured_backend_contract_valid(
+        &config,
+        std::slice::from_ref(&backend),
+        &current
+    ));
+    declared.spec.ai.provider = AiProvider::Anthropic;
+    declared.spec.ai.endpoint = None;
+    store.full_set(&HashMap::from([("tenant-b/provider".to_string(), Arc::new(declared))]));
+    let current = store.snapshot();
+    assert!(!captured_backend_contract_valid(
+        &config,
+        std::slice::from_ref(&backend),
+        &current
+    ));
+    let mut zero = backend;
+    zero.schema.weight = Some(0);
+    assert!(captured_backend_contract_valid(&config, &[zero.clone()], &current));
+    config.model_routes = serde_json::from_value(serde_json::json!([{"match":{"model":"virtual"},"action":{"candidates":[{"backend":{"group":"edgion.io","kind":"EdgionBackend","namespace":"tenant-b","name":"provider","occurrence":0},"weight":1}]}}])).unwrap();
+    assert!(!captured_backend_contract_valid(&config, &[zero], &current));
 }

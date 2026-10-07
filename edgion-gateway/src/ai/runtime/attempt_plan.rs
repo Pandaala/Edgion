@@ -8,7 +8,7 @@ use crate::backends::policy::BackendTlsPolicyLookup;
 use crate::backends::LogicalBackendHandle;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_backend::ParsedAiModelPricing;
-use edgion_resources::resources::edgion_plugins::AiBackendSelection;
+use edgion_resources::resources::edgion_plugins::{AiApi, AiBackendSelection, AiConversion, AiUsageObservation};
 
 use super::attempt::AttemptScheduler;
 use crate::ai::quota::AiQuotaRequest;
@@ -74,9 +74,23 @@ impl fmt::Debug for AiPlanCandidate {
     }
 }
 
-/// Request data that is immutable across provider and credential retries.
+/// Selected operation metadata; further native APIs extend this finite enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiOperation {
+    ChatCompletions,
+}
+
+/// Request data captured once across provider and credential retries.
 pub struct ReadyAiAttemptPlan {
-    pub canonical_openai_body: Bytes,
+    pub request_body: Bytes,
+    pub api: AiApi,
+    pub operation: AiOperation,
+    pub conversion: Option<AiConversion>,
+    pub usage_observation: AiUsageObservation,
+    /// Only dispatcher-owned body mutations may advance this proof.
+    pub body_generation: Option<u64>,
+    pub body_is_current: bool,
+    pub request_max_output_tokens: Option<u64>,
     pub canonical_path: String,
     pub canonical_query: Option<String>,
     pub logical_model: String,
@@ -104,7 +118,7 @@ pub struct ReadyAiAttemptPlan {
 impl fmt::Debug for ReadyAiAttemptPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReadyAiAttemptPlan")
-            .field("canonical_openai_body_bytes", &self.canonical_openai_body.len())
+            .field("request_body_bytes", &self.request_body.len())
             .field("canonical_path", &self.canonical_path)
             .field("logical_model", &self.logical_model)
             .field("requested_streaming", &self.requested_streaming)

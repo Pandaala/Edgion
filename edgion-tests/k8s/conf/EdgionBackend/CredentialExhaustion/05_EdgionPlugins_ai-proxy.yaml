@@ -8,5 +8,8 @@ spec:
     - enable: true
       type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
+        injectUsageTracking: true
         backendSelection:
           type: Priority

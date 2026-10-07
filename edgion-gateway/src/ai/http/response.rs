@@ -18,7 +18,9 @@ pub(crate) fn enforce_observation_encoding(
     let Some(ai) = state.request.as_ref() else {
         return false;
     };
-    if crate::routes::http::proxy_http::content_type::response_is_identity_encoded(&response.headers) {
+    if ai.usage.observation_is_off()
+        || crate::routes::http::proxy_http::content_type::response_is_identity_encoded(&response.headers)
+    {
         return false;
     }
     ai.usage.mark_encoding_unavailable();

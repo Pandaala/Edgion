@@ -1,6 +1,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::*;
+use serde_json::Value;
+
 use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials};
 use crate::ai::{
     AiBackendStore, AiCandidateModel, AiPlanCandidate, ReadyAiAttemptPlan, RuntimeAiBackend, RuntimeAiCredential,
@@ -18,6 +20,18 @@ use edgion_resources::{HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule, ParsedRout
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 
+fn request_max_tokens(body: &[u8]) -> Option<u64> {
+    request::metadata(body).ok()?.output_bound
+}
+
+fn effective_max_output_tokens(body: &[u8], service_max: Option<u32>) -> Result<u64, AiDispatchError> {
+    Ok(request::metadata(body)
+        .map_err(AiDispatchError::Client)?
+        .output_bound
+        .or(service_max.map(u64::from))
+        .unwrap_or(0))
+}
+
 fn candidate_scheduler() -> AttemptScheduler {
     let mut scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &[1] }], 0).unwrap();
     scheduler.select_backend(0).unwrap();
@@ -27,7 +41,14 @@ fn candidate_scheduler() -> AttemptScheduler {
 
 fn candidate_plan() -> ReadyAiAttemptPlan {
     ReadyAiAttemptPlan {
-        canonical_openai_body: Bytes::from_static(br#"{"model":"logical"}"#),
+        api: edgion_resources::resources::edgion_plugins::AiApi::OpenaiChat,
+        operation: crate::ai::runtime::attempt_plan::AiOperation::ChatCompletions,
+        conversion: None,
+        usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
+        body_generation: None,
+        body_is_current: false,
+        request_max_output_tokens: None,
+        request_body: Bytes::from_static(br#"{"model":"logical"}"#),
         canonical_path: "/v1/chat/completions".to_string(),
         canonical_query: Some("trace=1".to_string()),
         logical_model: "logical".to_string(),
@@ -94,6 +115,7 @@ fn selectable_plan(credentials: Vec<RuntimeAiCredential>) -> ReadyAiAttemptPlan 
     let outlier_service = outlier_store.current_handle(&target).unwrap();
     let credential_outliers = aliases.iter().map(|alias| outlier_service.capture(alias)).collect();
     let backend = Arc::new(RuntimeAiBackend {
+        has_credential_tpm: false,
         uid: "backend-uid".to_string(),
         provider: AiProvider::OpenAICompatible,
         endpoint: RuntimeAiEndpoint {
@@ -395,6 +417,7 @@ async fn dispatch_rejects_denied_backend_before_request_mutation() {
         target_name: "provider".to_string(),
         reason: Some("NoMatchingReferenceGrant".to_string()),
     }));
+    plan.body_generation = ctx.request_body.generation();
     ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
     let mut session = test_session().await;
 
@@ -424,7 +447,10 @@ async fn dispatch_uses_candidate_handle_after_route_snapshot_changes() {
     // This route generation contains a denied slot. The captured plan owns
     // an earlier permitted logical handle and must not re-read this route.
     ctx.route_unit = Some(denied_route_unit());
-    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+    let mut plan = selectable_plan(vec![credential]);
+    plan.body_generation = ctx.request_body.generation();
+    plan.body_generation = ctx.request_body.generation();
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
     let mut session = test_session().await;
 
     let prepared = prepare_first_attempt(&mut session, &mut ctx, 0, None, 0).unwrap();
@@ -448,7 +474,10 @@ async fn prepare_first_attempt_rechecks_request_deadline_before_plan_mutation() 
     let mut ctx = EdgionHttpContext::new();
     ctx.route_unit = Some(request_deadline_route_unit(Duration::from_millis(1)));
     ctx.start_time = Instant::now() - Duration::from_secs(1);
-    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+    let mut plan = selectable_plan(vec![credential]);
+    plan.body_generation = ctx.request_body.generation();
+    plan.body_generation = ctx.request_body.generation();
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
     let mut session = test_session().await;
 
     assert!(matches!(
@@ -473,7 +502,10 @@ async fn prepare_first_attempt_rechecks_grpc_deadline_before_plan_mutation() {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info
         .set_grpc_client_deadline(Instant::now() - Duration::from_secs(1));
-    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+    let mut plan = selectable_plan(vec![credential]);
+    plan.body_generation = ctx.request_body.generation();
+    plan.body_generation = ctx.request_body.generation();
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
     let mut session = test_session().await;
 
     assert!(matches!(
@@ -489,7 +521,12 @@ async fn prepare_first_attempt_rechecks_grpc_deadline_before_plan_mutation() {
 
 #[test]
 fn openai_attempt_rewrites_only_provider_model() {
-    let body = openai_provider_body(br#"{"model":"logical","messages":[]}"#, "provider-a").unwrap();
+    let body = request::rewrite_model(
+        &Bytes::from_static(br#"{"model":"logical","messages":[]}"#),
+        "provider-a",
+    )
+    .unwrap()
+    .unwrap();
     let value: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value["model"], "provider-a");
     assert_eq!(value["messages"], serde_json::json!([]));
@@ -509,12 +546,15 @@ fn anthropic_attempt_translation_is_bounded_and_native() {
 
 #[test]
 fn request_max_tokens_prefers_max_completion_tokens() {
-    assert_eq!(request_max_tokens(br#"{"max_completion_tokens":128}"#), Some(128));
-    assert_eq!(request_max_tokens(br#"{"max_tokens":64}"#), Some(64));
-    // The deprecated spelling never wins over the current one.
     assert_eq!(
-        request_max_tokens(br#"{"max_tokens":64,"max_completion_tokens":128}"#),
+        request_max_tokens(br#"{"model":"logical","max_completion_tokens":128}"#),
         Some(128)
+    );
+    assert_eq!(request_max_tokens(br#"{"model":"logical","max_tokens":64}"#), Some(64));
+    // Conflicting numeric spellings are rejected by the shared metadata owner.
+    assert_eq!(
+        request_max_tokens(br#"{"model":"logical","max_tokens":64,"max_completion_tokens":128}"#),
+        None
     );
     assert_eq!(request_max_tokens(br#"{"model":"logical"}"#), None);
     assert_eq!(request_max_tokens(b"not json"), None);
@@ -523,11 +563,17 @@ fn request_max_tokens_prefers_max_completion_tokens() {
 #[test]
 fn conflicting_request_output_bounds_are_client_errors() {
     assert_eq!(
-        effective_max_output_tokens(br#"{"max_tokens":64,"max_completion_tokens":128}"#, None),
+        effective_max_output_tokens(
+            br#"{"model":"logical","max_tokens":64,"max_completion_tokens":128}"#,
+            None
+        ),
         Err(AiDispatchError::Client(AiProxyError::MalformedBody))
     );
     assert_eq!(
-        effective_max_output_tokens(br#"{"max_tokens":64,"max_completion_tokens":64}"#, None),
+        effective_max_output_tokens(
+            br#"{"model":"logical","max_tokens":64,"max_completion_tokens":64}"#,
+            None
+        ),
         Ok(64)
     );
 }
@@ -764,6 +810,7 @@ fn endpoint_predispatch_failure_releases_and_skips_the_whole_service() {
     plan.scheduler.select_backend(0).unwrap();
     plan.scheduler.select_credential(u16::MAX, 0).unwrap();
     let mut ctx = EdgionHttpContext::new();
+    plan.body_generation = ctx.request_body.generation();
     ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
 
     assert!(AiPeerPredispatchFailure::Endpoint.finish(&mut ctx));
@@ -937,7 +984,8 @@ async fn unary_admission_arbitrates_only_active_owners_before_dispatch() {
             Arc::get_mut(plan.candidates[0].backend.as_mut().unwrap())
                 .unwrap()
                 .provider = AiProvider::Anthropic;
-            plan.canonical_openai_body =
+            plan.conversion = Some(AiConversion::ChatToAnthropic);
+            plan.request_body =
                 Bytes::from_static(br#"{"model":"logical","messages":[{"role":"user","content":"hello"}]}"#);
             let mut ctx = EdgionHttpContext::new();
             let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
@@ -951,6 +999,7 @@ async fn unary_admission_arbitrates_only_active_owners_before_dispatch() {
             if guard_first {
                 ctx.ensure_ai_state().response_head_hold_claim = Some(claim);
             }
+            plan.body_generation = ctx.request_body.generation();
             assert!(ctx.try_set_ai_attempt_plan(AiAttemptPlan::Ready(plan)));
             if !guard_first {
                 ctx.ensure_ai_state().response_head_hold_claim = Some(claim);
@@ -988,6 +1037,7 @@ async fn unary_admission_arbitrates_only_active_owners_before_dispatch() {
     Arc::get_mut(plan.candidates[0].backend.as_mut().unwrap())
         .unwrap()
         .provider = AiProvider::Anthropic;
+    plan.conversion = Some(AiConversion::ChatToAnthropic);
     let mut ctx = EdgionHttpContext::new();
     ctx.try_set_ai_attempt_plan(AiAttemptPlan::Ready(plan));
     let mut session = test_session().await;
@@ -1001,16 +1051,130 @@ async fn unary_admission_arbitrates_only_active_owners_before_dispatch() {
     let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
     storage.finish().await.unwrap();
     ctx.request_body.install(view);
-    ctx.try_set_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![RuntimeAiCredential {
+    let mut plan = selectable_plan(vec![RuntimeAiCredential {
         name: "primary".into(),
         weight: 1,
         credential: "fixture".into(),
         limits: None,
-    }])));
+    }]);
+    plan.body_generation = ctx.request_body.generation();
+    ctx.try_set_ai_attempt_plan(AiAttemptPlan::Ready(plan));
     ctx.ensure_ai_state().unary_possible = true;
     let prepared = prepare_first_attempt(&mut session, &mut ctx, 0, None, 0).unwrap();
     assert!(
         prepared.unary_owner.is_none(),
         "native selection in a mixed pending plan does not admit unary"
     );
+}
+
+#[tokio::test]
+async fn native_off_preserves_bytes_generation_encoding_and_rejects_later_mutation() {
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let body = Bytes::from_static(br#" { "model" : "logical", "extensions" : 123456789012345678901234567890 } "#);
+    let mut ctx = EdgionHttpContext::new();
+    let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
+    storage.write(&body).await.unwrap();
+    storage.finish().await.unwrap();
+    ctx.request_body.install(view);
+    let generation = ctx.request_body.generation();
+    let mut plan = selectable_plan(vec![RuntimeAiCredential {
+        name: "primary".into(),
+        weight: 1,
+        credential: "fixture".into(),
+        limits: None,
+    }]);
+    plan.request_body = body.clone();
+    plan.body_generation = generation;
+    plan.body_is_current = true;
+    plan.inject_usage_tracking = false;
+    plan.usage_observation = AiUsageObservation::Off;
+    plan.candidates[0].model.as_mut().unwrap().provider_model = "logical".to_string();
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
+    let mut session = test_session().await;
+    session
+        .req_header_mut()
+        .insert_header("accept-encoding", "gzip, br")
+        .unwrap();
+    let mut prepared = prepare_first_attempt(&mut session, &mut ctx, 0, None, 0).unwrap();
+    assert_eq!(ctx.request_body.generation(), generation);
+    assert_eq!(ctx.request_body.read_all().await.unwrap().unwrap(), body);
+    assert_eq!(session.req_header().headers["accept-encoding"], "gzip, br");
+    assert_eq!(
+        session.req_header().uri.path_and_query().unwrap().as_str(),
+        "/v1/chat/completions?trace=1"
+    );
+    assert!(prepared.unary_owner.is_none());
+    assert_eq!(
+        prepared.usage.accounting_snapshot(10, true).source,
+        crate::ai::GenAiAttemptUsageSource::NotObserved
+    );
+    let mut response = ResponseHeader::build(200, None).unwrap();
+    response.insert_header("content-encoding", "gzip").unwrap();
+    let processor = prepared.response_processor.as_mut().unwrap();
+    processor.on_response_header(&mut response);
+    let raw = Bytes::from_static(b"opaque compressed response");
+    let mut response_chunk = Some(raw.clone());
+    let mut sink = ResponseBodySink::new();
+    let mut mock = crate::plugins::runtime::traits::session::MockPluginSession::new();
+    processor
+        .on_chunk(
+            &mut response_chunk,
+            true,
+            crate::ctx::ResponseStreamKind::None,
+            &mut sink,
+            &mut mock,
+        )
+        .await;
+    assert_eq!(response_chunk, Some(raw));
+    assert!(prepared.eos.load(std::sync::atomic::Ordering::Acquire));
+    assert!(!prepared.usage.observation_unavailable());
+    ctx.overwrite_request_body(Bytes::from_static(br#"{"model":"unauthorized"}"#))
+        .unwrap();
+    assert!(matches!(
+        prepare_first_attempt(&mut session, &mut ctx, 0, None, 0),
+        Err(AiDispatchError::Client(AiProxyError::BackendUnavailable))
+    ));
+}
+
+#[tokio::test]
+async fn dispatcher_owned_retry_rewrite_restores_the_original_extension_bytes() {
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let body = Bytes::from_static(br#" { "model" : "logical", "extensions" : 123456789012345678901234567890 } "#);
+    let mut ctx = EdgionHttpContext::new();
+    let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
+    storage.write(&body).await.unwrap();
+    storage.finish().await.unwrap();
+    ctx.request_body.install(view);
+    let mut plan = selectable_plan(vec![RuntimeAiCredential {
+        name: "primary".into(),
+        weight: 1,
+        credential: "fixture".into(),
+        limits: None,
+    }]);
+    plan.request_body = body.clone();
+    plan.body_generation = ctx.request_body.generation();
+    plan.body_is_current = true;
+    plan.usage_observation = AiUsageObservation::Off;
+    plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &[1] }], 1).unwrap();
+    let mut session = test_session().await;
+    let first = prepare_ready_attempt(&mut session, &mut ctx, &mut plan, 0).unwrap();
+    drop(first);
+    assert_eq!(
+        ctx.request_body.read_all().await.unwrap().unwrap(),
+        Bytes::from(
+            String::from_utf8(body.to_vec())
+                .unwrap()
+                .replace("logical", "provider-model")
+        )
+    );
+    plan.scheduler.start_dispatch().unwrap();
+    plan.scheduler
+        .finish_dispatch(crate::ai::runtime::attempt::DispatchOutcome::RetryableFailure)
+        .unwrap();
+    plan.candidates[0].model.as_mut().unwrap().provider_model = "logical".into();
+    let second = prepare_ready_attempt(&mut session, &mut ctx, &mut plan, 0).unwrap();
+    assert!(second.unary_owner.is_none());
+    assert_eq!(ctx.request_body.read_all().await.unwrap().unwrap(), body);
+    assert!(plan.body_is_current);
+    assert_eq!(plan.body_generation, ctx.request_body.generation());
 }

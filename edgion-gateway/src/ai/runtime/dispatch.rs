@@ -4,12 +4,15 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::ai::protocols::openai::canonical_sse::SemanticSseSource;
+use crate::ai::protocols::openai::request;
+use crate::ai::runtime::attempt_plan::AiOperation;
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_backend::AiProvider;
+use edgion_resources::resources::edgion_plugins::{AiApi, AiConversion, AiUsageObservation};
 use edgion_resources::resources::http_route::HTTPRouteFilterType;
 use pingora_proxy::ResponseBodySink;
-use serde_json::Value;
 
 use crate::ai::conversion::chat_to_anthropic::{
     prepare_anthropic_request, AnthropicRequestError, AnthropicResponseProcessor,
@@ -342,6 +345,13 @@ fn prepare_ready_attempt(
     plan: &mut ReadyAiAttemptPlan,
     entropy: u128,
 ) -> Result<PreparedAiAttempt, AiDispatchError> {
+    if plan.api != AiApi::OpenaiChat
+        || plan.operation != AiOperation::ChatCompletions
+        || plan.body_generation != ctx.request_body.generation()
+    {
+        ctx.record_error(edgion_resources::EdgionErrorCode::BodyMutationConflict);
+        return Err(AiDispatchError::Client(AiProxyError::BackendUnavailable));
+    }
     if let Some(baseline) = ctx.ai_state().and_then(|state| state.request_baseline.clone()) {
         *session.req_header_mut() = baseline;
         let config = edgion_resources::path_normalization::get_path_normalization_config();
@@ -384,7 +394,7 @@ fn prepare_ready_attempt(
         }
         state.unary_owner = None;
     }
-    let unary_owner = if ai_backend.provider == AiProvider::Anthropic && !plan.requested_streaming {
+    let unary_owner = if plan.conversion == Some(AiConversion::ChatToAnthropic) && !plan.requested_streaming {
         if ctx
             .ai_state()
             .and_then(|state| state.response_head_hold_claim)
@@ -409,19 +419,21 @@ fn prepare_ready_attempt(
     } else {
         None
     };
-    let (body, requested_streaming, anthropic_usage_chunk) = match ai_backend.provider {
-        AiProvider::OpenAI | AiProvider::OpenAICompatible => {
-            let body = openai_provider_body(&plan.canonical_openai_body, &model.provider_model)?;
+    let (body, requested_streaming, anthropic_usage_chunk) = match plan.conversion {
+        None if matches!(ai_backend.provider, AiProvider::OpenAI | AiProvider::OpenAICompatible) => {
+            let body = if model.provider_model == plan.logical_model {
+                plan.request_body.clone()
+            } else {
+                request::rewrite_model(&plan.request_body, &model.provider_model)
+                    .map_err(AiDispatchError::Client)?
+                    .unwrap_or_else(|| plan.request_body.clone())
+            };
             (body, plan.requested_streaming, false)
         }
-        AiProvider::Anthropic => {
-            let value = serde_json::from_slice(&plan.canonical_openai_body)
-                .map_err(|_| AiDispatchError::InvalidConfiguration)?;
-            let max_output_bytes = plan
-                .canonical_openai_body
-                .len()
-                .saturating_mul(2)
-                .saturating_add(64 * 1024);
+        Some(AiConversion::ChatToAnthropic) if ai_backend.provider == AiProvider::Anthropic => {
+            let value =
+                serde_json::from_slice(&plan.request_body).map_err(|_| AiDispatchError::InvalidConfiguration)?;
+            let max_output_bytes = plan.request_body.len().saturating_mul(2).saturating_add(64 * 1024);
             let translated = prepare_anthropic_request(
                 value,
                 &model.provider_model,
@@ -436,9 +448,15 @@ fn prepare_ready_attempt(
                 translated.effective_usage_chunk,
             )
         }
+        _ => return Err(AiDispatchError::InvalidConfiguration),
     };
-    ctx.overwrite_request_body(body)
-        .map_err(|_| AiDispatchError::InvalidConfiguration)?;
+    if !plan.body_is_current || body.as_ptr() != plan.request_body.as_ptr() || body.len() != plan.request_body.len() {
+        let is_plan = body.as_ptr() == plan.request_body.as_ptr() && body.len() == plan.request_body.len();
+        ctx.overwrite_request_body(body)
+            .map_err(|_| AiDispatchError::InvalidConfiguration)?;
+        plan.body_generation = ctx.request_body.generation();
+        plan.body_is_current = is_plan;
+    }
 
     if ctx.ai_state().is_none_or(|state| state.request_baseline.is_none()) {
         ctx.ensure_ai_state().request_baseline = Some(session.req_header().clone());
@@ -453,10 +471,11 @@ fn prepare_ready_attempt(
             &credential.credential,
             &plan.canonical_path,
             plan.canonical_query.as_deref(),
+            plan.usage_observation == AiUsageObservation::Provider || plan.conversion.is_some(),
         )?;
     }
 
-    let usage = Arc::new(AiUsageShared::default());
+    let usage = Arc::new(AiUsageShared::with_observation(plan.usage_observation));
     usage.set_input_chars(plan.input_chars);
     let eos = crate::ai::runtime::attempt_runtime::new_eos_latch();
     let quota_accumulator = plan.quota.as_ref().map(|quota| quota.accumulator()).or_else(|| {
@@ -475,8 +494,15 @@ fn prepare_ready_attempt(
         quota: None,
         quota_status: plan.quota_status,
     };
-    let mut response_processors: Vec<Box<dyn StreamingResponseProcessor>> = Vec::with_capacity(1);
-    if ai_backend.provider == AiProvider::Anthropic {
+    let needs_processor = plan.conversion.is_some()
+        || plan.usage_observation == AiUsageObservation::Provider
+        || ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed);
+    let mut response_processors: Vec<Box<dyn StreamingResponseProcessor>> = if needs_processor {
+        Vec::with_capacity(1)
+    } else {
+        Vec::new()
+    };
+    if plan.conversion == Some(AiConversion::ChatToAnthropic) {
         let created = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -492,13 +518,19 @@ fn prepare_ready_attempt(
             unary_owner.clone(),
         )));
     }
-    if ai_backend.provider != AiProvider::Anthropic {
+    if plan.conversion.is_none() && plan.usage_observation == AiUsageObservation::Provider {
         response_processors.push(Box::new(UsageExtractionProcessor::new_with_quota(
             Arc::clone(&usage),
             quota_accumulator,
             requested_streaming,
             plan.terminate_on_over_limit,
         )));
+    }
+    if plan.conversion.is_none()
+        && plan.usage_observation == AiUsageObservation::Off
+        && ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
+    {
+        response_processors.push(Box::new(SemanticSseSource::new()));
     }
     let response_processor: Box<dyn StreamingResponseProcessor> = Box::new(AiAttemptResponseProcessor {
         processors: response_processors,
@@ -515,7 +547,10 @@ fn prepare_ready_attempt(
         on_redis_failure: ai_backend.credential_pool.on_redis_failure.clone(),
         credential_limits: credential.limits.clone(),
         estimated_input_tokens: plan.input_chars.saturating_add(3) / 4,
-        max_output_tokens: effective_max_output_tokens(&plan.canonical_openai_body, ai_backend.max_output_tokens)?,
+        max_output_tokens: plan
+            .request_max_output_tokens
+            .or(ai_backend.max_output_tokens.map(u64::from))
+            .unwrap_or(0),
         usage,
         eos,
         limiter_core: Arc::clone(&ai_backend.credential_pool.limiter_core),
@@ -552,17 +587,6 @@ fn initialize_retry_cap(plan: &mut ReadyAiAttemptPlan, retry_cap: u8) -> Result<
     plan.scheduler = AttemptScheduler::new(&backends, retry_cap).map_err(|_| AiDispatchError::InvalidConfiguration)?;
     plan.retry_cap_initialized = true;
     Ok(())
-}
-
-fn openai_provider_body(canonical: &[u8], provider_model: &str) -> Result<Bytes, AiDispatchError> {
-    let mut value: Value = serde_json::from_slice(canonical).map_err(|_| AiDispatchError::InvalidConfiguration)?;
-    value
-        .as_object_mut()
-        .ok_or(AiDispatchError::InvalidConfiguration)?
-        .insert("model".to_string(), Value::String(provider_model.to_string()));
-    serde_json::to_vec(&value)
-        .map(Bytes::from)
-        .map_err(|_| AiDispatchError::InvalidConfiguration)
 }
 
 fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<SelectedTarget, AiDispatchError> {
@@ -633,7 +657,7 @@ fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<Selecte
                 entropy,
                 selection_sequence: u64::from(plan.selection_sequence),
                 input_tokens: plan.input_chars.saturating_add(3) / 4,
-                request_max_output_tokens: request_max_tokens(&plan.canonical_openai_body),
+                request_max_output_tokens: plan.request_max_output_tokens,
             },
             plan.selection,
         ) {
@@ -758,7 +782,9 @@ impl StreamingResponseProcessor for AiAttemptResponseProcessor {
     fn on_response_header(&mut self, response: &mut ResponseHeader) {
         // Converters may replace every header. Preserve raw eligibility before
         // any child sees it so translated error text cannot become usage evidence.
-        if !crate::routes::http::proxy_http::content_type::response_is_identity_encoded(&response.headers) {
+        if !self.usage.observation_is_off()
+            && !crate::routes::http::proxy_http::content_type::response_is_identity_encoded(&response.headers)
+        {
             self.usage.mark_encoding_unavailable();
         }
         for processor in &mut self.processors {
@@ -824,36 +850,6 @@ impl StreamingResponseProcessor for AiAttemptResponseProcessor {
         )
         .await;
     }
-}
-
-/// Reads the client-declared output-token bound from a canonical OpenAI body.
-/// Current OpenAI clients send `max_completion_tokens`; `max_tokens` is the
-/// deprecated spelling and only serves as a fallback. Every consumer of the
-/// request-declared bound must resolve it through this helper so cost ranking
-/// and quota accounting never disagree about what the client asked for.
-fn request_output_bound(value: &Value) -> Option<u64> {
-    value
-        .get("max_completion_tokens")
-        .and_then(Value::as_u64)
-        .or_else(|| value.get("max_tokens").and_then(Value::as_u64))
-}
-
-fn request_max_tokens(body: &[u8]) -> Option<u64> {
-    request_output_bound(&serde_json::from_slice::<Value>(body).ok()?)
-}
-
-fn effective_max_output_tokens(body: &[u8], service_max: Option<u32>) -> Result<u64, AiDispatchError> {
-    let value: Value = serde_json::from_slice(body).map_err(|_| AiDispatchError::InvalidConfiguration)?;
-    let max_tokens = value.get("max_tokens").and_then(Value::as_u64);
-    let max_completion_tokens = value.get("max_completion_tokens").and_then(Value::as_u64);
-    if max_tokens.is_some() && max_completion_tokens.is_some() && max_tokens != max_completion_tokens {
-        return Err(AiDispatchError::Client(AiProxyError::MalformedBody));
-    }
-    Ok(match (request_output_bound(&value), service_max.map(u64::from)) {
-        (Some(request), _) => request,
-        (None, Some(backend)) => backend,
-        (None, None) => 0,
-    })
 }
 
 fn provider_label(provider: AiProvider) -> AiProviderLabel {

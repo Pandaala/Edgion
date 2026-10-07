@@ -91,14 +91,14 @@ metadata:
   namespace: production
 spec:
   ai:
-    provider: Anthropic
+    provider: OpenAI
     credentialPool:
       credentials:
         - name: fallback-account
           secretRef:
             name: fallback-key
     models:
-      - name: claude-example
+      - name: gpt-fallback-example
         aliases: [chat]
     defaults:
       streaming: true
@@ -113,6 +113,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
         backendSelection:
           type: Priority
         injectUsageTracking: true
@@ -163,3 +165,16 @@ spec:
 - [Concepts](./concepts.md) — who owns candidates, credentials, selection, and resilience
 - [Routing and Selection](./routing.md) — choose a `backendSelection` algorithm
 - [Resilience and Failover](./resilience.md) — retries, SSE commitment, outlier detection
+
+## Explicit Anthropic conversion
+
+Bind a separate AiProxy entry to exclusively Anthropic backendRefs:
+
+```yaml
+api: openaiChat
+conversion: chatToAnthropic
+usageObservation: off
+```
+
+This fragment selects the existing bounded JSON/event SSE converter. It keeps client-visible
+usage fields while omitting numerical accounting. Use provider observation for token quotas or TPM.

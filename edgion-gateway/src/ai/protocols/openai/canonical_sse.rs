@@ -1,11 +1,18 @@
 //! Single-pass observation and owned handoff for canonical OpenAI SSE records.
 
+use crate::ctx::ResponseStreamKind;
+use crate::plugins::runtime::traits::StreamingResponseProcessor;
+use crate::plugins::runtime::PluginSession;
+use crate::response::terminal::{ResponseTerminalCause, TerminalEmission};
+use async_trait::async_trait;
 use bytes::Bytes;
+use pingora_http::ResponseHeader;
+use pingora_proxy::ResponseBodySink;
 
 use crate::ai::protocols::json_span::{field, last_field, Field, Node, Parser, StringToken};
 use crate::sse::chain::SliceChain;
 use crate::sse::window::{LogicalBucketKey, LogicalField, SemanticFragment, SemanticSource, WindowRecord};
-use crate::sse::{ByteRange, SseEventRef};
+use crate::sse::{ByteRange, SseDecoder, SseEventRef, SseRecordRef};
 use serde_json::Value;
 
 pub(crate) const MAX_CANONICAL_BATCH_RECORDS: usize = 1_024;
@@ -55,6 +62,27 @@ impl CanonicalRecordBatch {
             metadata_bytes: 0,
             status: CanonicalSourceStatus::Available,
         }
+    }
+
+    pub(crate) fn push_observed(
+        &mut self,
+        record: SseRecordRef<'_>,
+        observation: Option<CanonicalEventObservation>,
+    ) -> Result<(), WindowRecord> {
+        let unavailable = matches!(&record, SseRecordRef::Opaque(_));
+        let mut owned = WindowRecord::from_sse_record(record);
+        if let Some(observation) = observation {
+            if observation.semantic_available {
+                owned = owned.with_fragments(observation.fragments);
+            } else {
+                owned = owned.semantic_unavailable();
+                self.mark_unavailable();
+            }
+        }
+        if unavailable {
+            self.mark_unavailable();
+        }
+        self.push(owned)
     }
 
     pub(crate) fn push(&mut self, record: WindowRecord) -> Result<(), WindowRecord> {
@@ -262,6 +290,10 @@ impl ValueWriter {
 }
 
 pub(crate) fn observe_canonical_event(event: &SseEventRef<'_>) -> CanonicalEventObservation {
+    observe_event(event, true)
+}
+
+fn observe_event(event: &SseEventRef<'_>, account_usage: bool) -> CanonicalEventObservation {
     if event.data_is_literal(b"[DONE]") {
         return CanonicalEventObservation {
             semantic_available: true,
@@ -278,7 +310,9 @@ pub(crate) fn observe_canonical_event(event: &SseEventRef<'_>) -> CanonicalEvent
         semantic_available: true,
         ..Default::default()
     };
-    observation.usage = observe_usage(&root);
+    if account_usage {
+        observation.usage = observe_usage(&root);
+    }
     let choices = match field(&root, "choices") {
         Field::Missing => return observation,
         Field::Unique(value) => match value.array() {
@@ -460,3 +494,75 @@ fn observe_usage(root: &Node) -> CanonicalUsageObservation {
 #[cfg(test)]
 #[path = "../../../../tests/unit/ai/protocols/openai/canonical_sse_test.rs"]
 mod tests;
+
+/// Canonical semantic source installed only for explicit Guardrail with usage off.
+pub(crate) struct SemanticSseSource {
+    decoder: SseDecoder,
+    identity_encoded: bool,
+}
+
+impl SemanticSseSource {
+    pub(crate) fn new() -> Self {
+        Self {
+            decoder: SseDecoder::with_default_limit(),
+            identity_encoded: true,
+        }
+    }
+}
+
+#[async_trait]
+impl StreamingResponseProcessor for SemanticSseSource {
+    fn on_response_header(&mut self, response: &mut ResponseHeader) {
+        self.identity_encoded =
+            crate::routes::http::proxy_http::content_type::response_is_identity_encoded(&response.headers);
+    }
+
+    async fn on_chunk(
+        &mut self,
+        chunk: &mut Option<Bytes>,
+        end_of_stream: bool,
+        stream_kind: ResponseStreamKind,
+        sink: &mut ResponseBodySink,
+        session: &mut dyn PluginSession,
+    ) {
+        if stream_kind != ResponseStreamKind::Sse || !session.semantic_guard_active() {
+            return;
+        }
+        let mut batch = CanonicalRecordBatch::new();
+        let mut overflowed = false;
+        if let Some(bytes) = chunk.take() {
+            if self.identity_encoded {
+                self.decoder.feed_records(bytes, |record| {
+                    let observation = match &record {
+                        SseRecordRef::Block { event, .. } => Some(observe_event(event, false)),
+                        _ => None,
+                    };
+                    if batch.push_observed(record, observation).is_err() {
+                        overflowed = true;
+                    }
+                });
+            } else {
+                batch.mark_unavailable();
+                if batch.push(WindowRecord::raw(vec![bytes])).is_err() {
+                    overflowed = true;
+                }
+            }
+        }
+        if end_of_stream && self.identity_encoded {
+            self.decoder.finish_records(|record| {
+                if batch.push_observed(record, None).is_err() {
+                    overflowed = true;
+                }
+            });
+        }
+        if self.decoder.degraded() {
+            batch.mark_unavailable();
+        }
+        if (overflowed || session.publish_canonical_records(batch).is_err())
+            && session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure)
+        {
+            session.mark_response_terminal_emission(TerminalEmission::NoEvent);
+            sink.terminate();
+        }
+    }
+}

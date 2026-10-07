@@ -7,6 +7,8 @@ fn rule(backends: serde_json::Value) -> HTTPRouteRule {
 
 fn ai_fact(valid: bool) -> ResolvedForwardingTarget {
     ResolvedForwardingTarget::EdgionBackend {
+        provider: crate::resources::edgion_backend::AiProvider::OpenAICompatible,
+        has_credential_tpm: false,
         spec_valid: valid,
         canonical_models: vec!["canonical".to_string()],
     }
@@ -73,7 +75,7 @@ fn bypassed_ai_proxy_rejects_the_matched_ai_rule() {
 #[test]
 fn promoted_zero_weight_slots_use_current_effective_config() {
     let rule = rule(json!([{"group": "edgion.io", "kind": "EdgionBackend", "name": "models", "weight": 0}]));
-    let config: AiProxyConfig = serde_json::from_value(json!({
+    let config: AiProxyConfig = serde_json::from_value(json!({"api":"openaiChat",
             "modelRoutes": [{"match": {"model": "virtual"}, "action": {
                 "candidates": [{"backend": {"group": "edgion.io", "kind": "EdgionBackend", "namespace": "apps", "name": "models", "occurrence": 0}, "weight": 1}]
             }}]
@@ -98,7 +100,7 @@ fn ordered_shape_variant_and_model_failures_preserve_diagnostics() {
     let facts = ResolvedAiAdmission {
         backends: vec![ai_fact(true)],
     };
-    let config: AiProxyConfig = serde_json::from_value(json!({
+    let config: AiProxyConfig = serde_json::from_value(json!({"api":"openaiChat",
         "modelRoutes": [{"match": {"model": "virtual"}, "action": {"rewrite": "missing"}}]
     }))
     .unwrap();
@@ -166,4 +168,44 @@ fn facts_survive_clone_and_transport_without_entering_operator_schema() {
         .as_object()
         .unwrap()
         .contains_key("resolvedAiAdmission"));
+}
+
+#[test]
+fn declared_provider_and_tpm_dependencies_apply_to_promoted_union() {
+    let rule = rule(json!([
+        {"group":"edgion.io","kind":"EdgionBackend","name":"primary"},
+        {"group":"edgion.io","kind":"EdgionBackend","name":"spare","weight":0}
+    ]));
+    let mut config: AiProxyConfig = serde_json::from_value(json!({"api":"openaiChat"})).unwrap();
+    let mut facts = ResolvedAiAdmission {
+        backends: vec![ai_fact(true), ai_fact(true)],
+    };
+    assert!(check(&rule, Some(&facts), 1, Some(&config)).is_none());
+    if let ResolvedForwardingTarget::EdgionBackend {
+        provider,
+        has_credential_tpm,
+        ..
+    } = &mut facts.backends[1]
+    {
+        *provider = AiProvider::Anthropic;
+        *has_credential_tpm = true;
+    }
+    // Inert zero slots impose no dependency until an explicit route can promote them.
+    assert!(check(&rule, Some(&facts), 1, Some(&config)).is_none());
+    config.model_routes = serde_json::from_value(json!([{"match":{"model":"virtual"},"action":{"candidates":[{"backend":{"group":"edgion.io","kind":"EdgionBackend","namespace":"apps","name":"spare","occurrence":0},"weight":1}]}}])).unwrap();
+    assert!(check(&rule, Some(&facts), 1, Some(&config))
+        .unwrap()
+        .contains("provider"));
+    if let ResolvedForwardingTarget::EdgionBackend { provider, .. } = &mut facts.backends[1] {
+        *provider = AiProvider::OpenAICompatible;
+    }
+    assert!(check(&rule, Some(&facts), 1, Some(&config))
+        .unwrap()
+        .contains("tokensPerMinute"));
+    config.usage_observation = AiUsageObservation::Provider;
+    assert!(check(&rule, Some(&facts), 1, Some(&config)).is_none());
+    config.conversion = Some(super::super::edgion_plugins::AiConversion::ChatToAnthropic);
+    assert!(check(&rule, Some(&facts), 1, Some(&config))
+        .unwrap()
+        .contains("provider"));
 }

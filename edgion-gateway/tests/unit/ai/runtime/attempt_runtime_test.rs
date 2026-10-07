@@ -609,3 +609,39 @@ async fn all_off_and_mixed_observation_reduce_distinctly() {
     assert_eq!(state.attempts().len(), 2);
     assert_eq!(state.charged_request_tokens(), Err(()));
 }
+
+#[tokio::test]
+async fn successful_ttft_is_recorded_without_numeric_usage() {
+    use crate::ai::{AdaptiveTelemetryKey, AdaptiveTelemetryStore};
+    use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+    use edgion_resources::resources::edgion_plugins::AiUsageObservation;
+    let key = AdaptiveTelemetryKey::new(
+        "off-route".into(),
+        "rule".into(),
+        PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "default".into(),
+            name: "provider".into(),
+        },
+        "logical".into(),
+    )
+    .unwrap();
+    let store = AdaptiveTelemetryStore::new();
+    store.reconcile_keys(&std::collections::HashSet::from([key.clone()]));
+    let adaptive = store.get(&key).unwrap();
+    adaptive.tick(current_unix_second());
+    let mut active = attempt(5, 8, true);
+    active.usage = Arc::new(AiUsageShared::with_observation(AiUsageObservation::Off));
+    active.adaptive = Some(Arc::clone(&adaptive));
+    active.status = Some(200);
+    let mut state = AiAttemptRuntimeState::default();
+    state.install(active);
+    state.finalize(Some(12)).await;
+    adaptive.tick(current_unix_second() + 1);
+    assert_eq!(adaptive.snapshot().latency_samples, 1);
+    assert_eq!(adaptive.snapshot().latency_p50_micros, Some(15_000));
+    assert_eq!(adaptive.snapshot().charged_tokens_60s, 0);
+    assert_eq!(state.attempts()[0].usage_source, GenAiAttemptUsageSource::NotObserved);
+    assert!(state.attempts()[0].input_tokens.is_none());
+    assert!(state.metric_totals().unwrap().is_empty());
+}

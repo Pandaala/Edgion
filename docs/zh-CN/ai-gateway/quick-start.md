@@ -87,14 +87,14 @@ metadata:
   namespace: production
 spec:
   ai:
-    provider: Anthropic
+    provider: OpenAI
     credentialPool:
       credentials:
         - name: fallback-account
           secretRef:
             name: fallback-key
     models:
-      - name: claude-example
+      - name: gpt-fallback-example
         aliases: [chat]
     defaults:
       streaming: true
@@ -109,6 +109,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
         backendSelection:
           type: Priority
         injectUsageTracking: true
@@ -159,3 +161,16 @@ spec:
 - [概念](./concepts.md) — 谁拥有候选、凭据、选择与弹性
 - [路由与选择](./routing.md) — 选择 `backendSelection` 算法
 - [弹性与故障切换](./resilience.md) — 重试、SSE 承诺、outlier 检测
+
+## 显式 Anthropic 转换
+
+为全为 Anthropic 的 backendRefs 单独绑定 AiProxy 入口：
+
+```yaml
+api: openaiChat
+conversion: chatToAnthropic
+usageObservation: off
+```
+
+该片段选择现有的有界 JSON／事件 SSE 转换器，保留客户端 usage 字段但不发布数值核算。
+tokenQuota 或 TPM 场景需改为 provider 观测。

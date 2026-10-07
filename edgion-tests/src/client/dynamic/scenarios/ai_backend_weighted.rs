@@ -73,7 +73,7 @@ fn backend_yaml(name: &str, secret: &str, endpoint_path: &str) -> String {
 
 fn plugin_yaml() -> String {
     format!(
-        "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {PLUGIN}\n  namespace: {ROUTE_NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: AiProxy\n      config:\n        backendSelection:\n          type: Weighted\n"
+        "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {PLUGIN}\n  namespace: {ROUTE_NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: AiProxy\n      config:\n        api: openaiChat\n        usageObservation: provider\n        backendSelection:\n          type: Weighted\n"
     )
 }
 

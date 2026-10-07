@@ -225,6 +225,65 @@ async fn logged_attempts(ctx: &TestContext, trace: &str) -> Result<Vec<Value>, S
     safe_attempts(&entry.data["genai"]).cloned()
 }
 
+fn native_429_reset_header_is_normalized(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        let trace = format!("ai-native-reset-{}", uuid::Uuid::new_v4());
+        let response = match post(&ctx, "ai-resilience-native-429.example.com", &trace, false).await {
+            Ok(response) => response,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS
+            || response.headers().get("retry-after").and_then(|v| v.to_str().ok()) != Some("2")
+        {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "native reset hint was not normalized: {} {:?}",
+                    response.status(),
+                    response.headers()
+                ),
+            );
+        }
+        if let Err(error) = response.bytes().await {
+            return TestResult::failed(start.elapsed(), format!("native 429 body failed: {error}"));
+        }
+        let observed = match counts(&ctx, &trace).await {
+            Ok(value) => value,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        if observed["rate_limited"] != 1 || observed["healthy"] != 0 {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("unexpected native reset hit counts: {observed}"),
+            );
+        }
+        let entry = match ctx.access_log_client().get_access_log_with_retry(&trace, 20, 200).await {
+            Ok(value) => value,
+            Err(error) => return TestResult::failed(start.elapsed(), format!("native reset ledger missing: {error}")),
+        };
+        let attempts = match safe_attempts(&entry.data["genai"]) {
+            Ok(value) => value,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        if attempts.len() != 1
+            || attempts[0]["backend"] != "edgion-test/resilience-native-rate-limited"
+            || attempts[0]["credential"] != "native-rate-primary"
+            || attempts[0]["provider"] != "openai_compatible"
+            || attempts[0]["status"] != 429
+            || attempts[0]["retry_after_seconds"] != 2
+        {
+            return TestResult::failed(start.elapsed(), format!("unexpected native reset ledger: {attempts:?}"));
+        }
+        TestResult::passed_with_message(
+            start.elapsed(),
+            "native OpenAI reset header retained its 2s cooldown without conversion".into(),
+        )
+    })
+}
+
 fn provider_429_priority_fallback(
     ctx: TestContext,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
@@ -276,7 +335,7 @@ fn provider_429_priority_fallback(
             if observation[key] != true {
                 return TestResult::failed(
                     start.elapsed(),
-                    format!("cross-provider request translation failed {key}: {observation}"),
+                    format!("explicit converter request translation failed {key}: {observation}"),
                 );
             }
         }
@@ -313,7 +372,7 @@ fn provider_429_priority_fallback(
         }
         TestResult::passed_with_message(
             start.elapsed(),
-            "provider reset cooldown normalized to 2s and Priority fallback completed on the second AI backend"
+            "provider cooldown normalized to 2s and explicit-converter Priority fallback completed on the second AI backend"
                 .to_string(),
         )
     })
@@ -582,6 +641,11 @@ impl TestSuite for ResilienceTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
+            TestCase::new(
+                "native_429_reset_header_is_normalized",
+                "A native OpenAI reset header becomes the same bounded cooldown and response hint",
+                native_429_reset_header_is_normalized,
+            ),
             TestCase::new(
                 "provider_429_priority_fallback",
                 "A provider 429 cooldown rotates to the next Priority AI backend",

@@ -10,16 +10,21 @@ AiProxy 必须通过 Rule 级 EdgionPlugins ExtensionRef 恰好出现一次。
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `backendSelection.type` | Enum | `Weighted` | `Weighted`、`Priority`、`LowestLatency`、`LowestUsage` 或 `CostWeighted` |
-| `injectUsageTracking` | Boolean | `true` | 为流式透传请求提供商 usage，同时保留独立的 access log 核算 |
+| `api` | Enum | 必填 | 当前仅实现 `openaiChat`；Responses/Messages 值在实现前校验失败 |
+| `conversion` | Enum | 无 | `chatToAnthropic` 显式选择现有有界转换器；所有正权重或提升的候选均须为 Anthropic |
+| `usageObservation` | Enum | `off` | `provider` 启用有界观测；off 不安装响应用量观测器 |
+| `injectUsageTracking` | Boolean | `false` | 显式修改 Chat SSE usage 参数；要求 provider 观测或声明转换 |
 | `onUnknownModel` | Enum | `reject` | `reject` 拒绝未知模型；`passthrough` 要求 `Weighted` 或 `Priority`，且所有有效正权重候选均为 `OpenAI` 或 `OpenAICompatible` |
 | `modelRoutes` | Array | `[]` | 结构化模型/header 匹配、canonical 改写、类型化候选过滤与权重覆盖 |
 | `tokenQuota` | Object | 无 | 可选的 Redis 逻辑模型 token 配额；省略时不执行配额 Redis 操作 |
 
 AiProxy 只使用 HTTPRoute 声明的候选和重试许可。模型路由可引用已有的类型化候选槽位并明确覆盖权重。
 
-`injectUsageTracking` 默认为 true：流式 OpenAI 请求会设置 `stream_options.include_usage: true`，
-Anthropic 转换也可输出 Chat usage 分片。false 只停止自动注入，不阻止客户端显式请求 usage，
-也不卸载响应观测器。`api`、`conversion`、`usageObservation` 当前均不可配置。
+`injectUsageTracking: true` 设置 Chat `stream_options.include_usage`，保留无关的提供商扩展字段，
+并可能让客户端收到额外 usage 事件。false 保留客户端自己的 usage 请求。
+`usageObservation: provider` 独立启用观测；tokenQuota、凭据 TPM 和 LowestUsage 要求启用它。
+RPM、LowestLatency 和显式 CostWeighted 可关闭观测；CostWeighted 仅采集请求估算。
+原生候选必须全为 OpenAI 或 OpenAICompatible，包含 modelRoutes 提升的零权重槽位。
 
 ## 模型路由
 
@@ -80,6 +85,8 @@ spec:
   requestPlugins:
     - type: AiProxy
       config:
+        api: openaiChat
+        usageObservation: provider
         backendSelection:
           type: Priority
         injectUsageTracking: true

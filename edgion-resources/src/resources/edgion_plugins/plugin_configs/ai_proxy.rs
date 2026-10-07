@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::KeyGet;
 use crate::duration::parse_duration;
-use crate::resources::edgion_backend::AI_MODEL_NAME_MAX_BYTES;
+use crate::resources::edgion_backend::{AiProvider, AI_MODEL_NAME_MAX_BYTES};
 use crate::resources::edgion_plugins::PluginValidation;
 
 use super::rate_limit_local::OnKeyMiss;
@@ -45,9 +45,37 @@ pub struct AiBackendSelectionConfig {
     pub selection_type: AiBackendSelection,
 }
 
+/// Client API selected by the route. Unsupported operations fail validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum AiApi {
+    OpenaiChat,
+    OpenaiResponses,
+    AnthropicMessages,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum AiConversion {
+    ChatToAnthropic,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum AiUsageObservation {
+    #[default]
+    Off,
+    Provider,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AiProxyConfig {
+    pub api: AiApi,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversion: Option<AiConversion>,
+    #[serde(default)]
+    pub usage_observation: AiUsageObservation,
     /// Policy used to select among the backends attached by the route.
     #[serde(default)]
     pub backend_selection: AiBackendSelectionConfig,
@@ -272,11 +300,40 @@ fn default_request_timeout() -> String {
 }
 
 const fn default_inject_usage_tracking() -> bool {
-    true
+    false
+}
+
+impl AiProxyConfig {
+    /// Shared family check for declaration admission and captured runtime candidates.
+    pub fn accepts_provider(&self, provider: AiProvider) -> bool {
+        match (self.api, self.conversion) {
+            (AiApi::OpenaiChat, None) => matches!(provider, AiProvider::OpenAI | AiProvider::OpenAICompatible),
+            (AiApi::OpenaiChat, Some(AiConversion::ChatToAnthropic)) => provider == AiProvider::Anthropic,
+            _ => false,
+        }
+    }
 }
 
 impl PluginValidation for AiProxyConfig {
     fn validation_error(&self) -> Option<String> {
+        if self.api != AiApi::OpenaiChat {
+            return Some(
+                "AiProxy currently supports only api openaiChat; native Responses and Messages are not implemented"
+                    .to_string(),
+            );
+        }
+        if self.inject_usage_tracking && self.usage_observation == AiUsageObservation::Off && self.conversion.is_none()
+        {
+            return Some(
+                "injectUsageTracking requires usageObservation provider or explicit chatToAnthropic conversion"
+                    .to_string(),
+            );
+        }
+        if self.usage_observation == AiUsageObservation::Off
+            && (self.token_quota.is_some() || self.backend_selection.selection_type == AiBackendSelection::LowestUsage)
+        {
+            return Some("tokenQuota and LowestUsage require usageObservation provider".to_string());
+        }
         if self.on_unknown_model == OnUnknownModel::Passthrough
             && !matches!(
                 self.backend_selection.selection_type,
