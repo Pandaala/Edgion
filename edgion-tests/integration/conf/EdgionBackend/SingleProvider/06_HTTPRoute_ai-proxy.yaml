@@ -187,3 +187,124 @@ spec:
         - group: edgion.io
           kind: EdgionBackend
           name: fixture-provider
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-chat-compatible-off
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-chat-compatible-off.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-observation-off
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-chat-compatible-provider
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-chat-compatible-provider.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-optout
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-chat-openai-off
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-chat-openai-off.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-observation-off
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider-openai
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-chat-openai-provider
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-chat-openai-provider.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-optout
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider-openai
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-proxy-priority-retry-quota
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-retry-quota.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-priority-retry-quota
+      retry:
+        attempts: 1
+        codes:
+          - 503
+      timeouts:
+        request: 5s
+        backendRequest: 2s
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider-retryable
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider

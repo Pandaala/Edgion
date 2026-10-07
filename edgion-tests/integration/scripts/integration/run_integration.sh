@@ -26,6 +26,7 @@ DO_CLEANUP=true
 
 # Whether to run full tests including slow tests (default: false for faster iteration)
 FULL_TEST=false
+AI_CONFORMANCE=false
 
 # Required open files limit for integration run.
 REQUIRED_NOFILE=65535
@@ -1655,6 +1656,7 @@ show_help() {
     echo "  --no-prepare           Skip build step"
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
+    echo "  --ai-conformance       Local native AI matrix (requires Messages target and both SDK interpreters)"
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
     echo "  --jobs <N>             Max parallel isolated scenarios (default: 4)"
     echo "  --isolated-timeout-secs <N>       Per-isolated-scenario deadline (default: 900)"
@@ -2304,6 +2306,20 @@ run_all_tests() {
         fi
     fi
 
+    run_openai_sdk() {
+        "$EDGION_OPENAI_SDK_PYTHON" "$SCRIPT_DIR/test_openai_sdk.py" \
+            --ports "$PROJECT_ROOT/edgion-tests/integration/conf/ports.json"
+    }
+    if $AI_CONFORMANCE; then
+        for control in Resilience CredentialExhaustion; do
+            run_test "AI_Conformance_${control}" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i ${control}" || test_failed=true
+        done
+        for scenario in AiBackendLifecycle AiBackendSecretRotation AiBackendWeighted AiBackendPolicyIntegration AiGuardOrderingDynamic AiResponsesContinuation; do
+            run_test "Dyn_${scenario}" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario ${scenario}" || test_failed=true
+        done
+        run_test "OpenAI_SDK" "run_openai_sdk" || test_failed=true
+    fi
+
     # A resource-wide Gateway sweep loads the dynamic fixtures. An exact
     # Gateway item only loads that item's fixtures and must remain isolated.
     if [ "$G_RESOURCE" = "Gateway" ] && [ -z "$G_ITEM" ]; then
@@ -2358,6 +2374,10 @@ main() {
                 DO_CLEANUP=false
                 shift
                 ;;
+            --ai-conformance)
+                AI_CONFORMANCE=true
+                shift
+                ;;
             --full-test)
                 FULL_TEST=true
                 shift
@@ -2403,6 +2423,17 @@ main() {
                 ;;
         esac
     done
+
+    if $AI_CONFORMANCE; then
+        if [ "$G_RESOURCE" != "EdgionBackend" ] || [ "$G_ITEM" != "Messages" ] || [ -n "$suites" ] || ! $do_start || ! $DO_CLEANUP || $SKIP_RESIDUE_CHECK || [ "${RESIDUE_MODE:-fail}" != "fail" ]; then
+            log_error "--ai-conformance requires the owned Messages topology, default cleanup and strict residue validation"
+            exit 2
+        fi
+        if [ -z "${EDGION_OPENAI_SDK_PYTHON:-}" ] || [ -z "${EDGION_MESSAGES_SDK_PYTHON:-}" ]; then
+            log_error "--ai-conformance requires EDGION_OPENAI_SDK_PYTHON and EDGION_MESSAGES_SDK_PYTHON"
+            exit 2
+        fi
+    fi
 
     case "$INTEGRATION_JOBS" in
         ''|*[!0-9]*)
@@ -2540,6 +2571,9 @@ main() {
         elif [ -n "$G_ITEM" ]; then
             if [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Messages" ]; then
                 suites="${base_suites},LinkSys/Redis,EdgionBackend/Messages,EdgionBackend/Responses,EdgionBackend/SingleProvider,EdgionBackend/AnthropicProvider,HTTPRoute/Basic,HTTPRoute/SseStreaming"
+                if $AI_CONFORMANCE; then
+                    suites="${suites},EdgionBackend/Resilience,EdgionBackend/CredentialExhaustion,EdgionBackend/Lifecycle/DynamicTest,EdgionBackend/Weighted,EdgionBackend/PolicyIntegration,EdgionPlugins/AiGuardOrdering/DynamicTest"
+                fi
             elif [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Responses" ]; then
                 suites="${base_suites},LinkSys/Redis,EdgionBackend/Responses"
             elif [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; then

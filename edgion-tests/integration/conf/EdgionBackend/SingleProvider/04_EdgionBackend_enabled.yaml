@@ -96,3 +96,31 @@ spec:
       - name: fixture-model
     defaults:
       streaming: true
+
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: fixture-provider-openai
+  namespace: edgion-test
+spec:
+  ai:
+    provider: OpenAI
+    endpoint: http://127.0.0.1:30001/ai/prefix
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: primary
+          secretRef:
+            name: ai-provider-credential
+    models:
+      - name: fixture-model
+        aliases:
+          - fixture-alias
+        pricing:
+          inputPerMillionUsd: "10"
+          outputPerMillionUsd: "20"
+      - name: premium-model
+      - name: economy-model
+    defaults:
+      streaming: true

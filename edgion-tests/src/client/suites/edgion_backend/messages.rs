@@ -88,7 +88,15 @@ async fn ledger(ctx: &TestContext, marker: &str, source: &str, failure: Option<&
         .get_access_log_with_retry(marker, 15, 200)
         .await
         .map_err(|e| e.to_string())?;
+    ctx.access_log_client()
+        .require_single_write(marker)
+        .await
+        .map_err(|e| e.to_string())?;
     let genai = &entry.data["genai"];
+    let attempts = genai["attempts"].as_array().ok_or("missing attempts")?;
+    if attempts.len() != 1 || attempts[0]["usage_source"] != source {
+        return Err(format!("wrong attempt ledger: {genai}"));
+    }
     if genai["usage_source"] != source {
         return Err(format!("{marker}: unexpected usage {genai}"));
     }
@@ -101,6 +109,17 @@ async fn ledger(ctx: &TestContext, marker: &str, source: &str, failure: Option<&
         || genai.get("estimated_cost_usd").is_some()
     {
         return Err(format!("unknown/off acquired numeric consumption: {genai}"));
+    }
+    if genai["attempts_truncated"] == true || attempts[0]["status"] != 200 {
+        return Err(format!("invalid completed attempt: {genai}"));
+    }
+    for key in ["input_tokens", "output_tokens", "estimated_cost_usd"] {
+        if attempts[0].get(key) != genai.get(key) {
+            return Err(format!("attempt/summary mismatch for {key}: {genai}"));
+        }
+    }
+    if failure.is_none() && !attempts[0]["failure"].is_null() {
+        return Err(format!("unexpected provider failure: {genai}"));
     }
     if let Some(failure) = failure {
         if genai["attempts"][0]["failure"] != failure {
@@ -141,7 +160,7 @@ async fn native(ctx: &TestContext, h2: bool) -> Result<(), String> {
         ("messages-provider.example.com", "reported"),
     ] {
         for stream in [false, true] {
-            let marker = format!("messages-native-{h2}-{stream}-{source}");
+            let marker = format!("messages-native-{h2}-{stream}-{source}-{}", uuid::Uuid::new_v4());
             let request = body(stream);
             let observed = observation(
                 post(
@@ -203,9 +222,10 @@ fn outcomes(ctx: TestContext) -> TestFuture {
                     ("pause", "reported"),
                     ("iterations", "reported"),
                     ("composite", "unknown"),
+                    ("missing_usage", "unknown"),
                     ("malformed", "unknown"),
                 ] {
-                    let marker = format!("messages-outcome-{mode}-{stream}");
+                    let marker = format!("messages-outcome-{mode}-{stream}-{}", uuid::Uuid::new_v4());
                     let response = post(
                         &ctx,
                         "messages-provider.example.com",
@@ -225,14 +245,14 @@ fn outcomes(ctx: TestContext) -> TestFuture {
                     ledger(&ctx, &marker, source, None).await?;
                 }
             }
-            let marker = "messages-sse-provider-error";
+            let marker = format!("messages-sse-provider-error-{}", uuid::Uuid::new_v4());
             let text = post(
                 &ctx,
                 "messages-provider.example.com",
                 &body(true),
                 "error",
                 false,
-                marker,
+                &marker,
                 "/v1/messages",
                 "2023-06-01",
                 false,
@@ -244,12 +264,12 @@ fn outcomes(ctx: TestContext) -> TestFuture {
             if !text.contains("overloaded_error") {
                 return Err("provider native error changed".into());
             }
-            ledger(&ctx, marker, "unknown", Some("provider_failed")).await?;
+            ledger(&ctx, &marker, "unknown", Some("provider_failed")).await?;
             for (host, source) in [
                 ("messages-off.example.com", "notObserved"),
                 ("messages-provider.example.com", "unknown"),
             ] {
-                let marker = format!("messages-unsupported-version-{source}");
+                let marker = format!("messages-unsupported-version-{source}-{}", uuid::Uuid::new_v4());
                 let observed = observation(
                     post(
                         &ctx,
@@ -270,6 +290,26 @@ fn outcomes(ctx: TestContext) -> TestFuture {
                     return Err("native version rewritten".into());
                 }
                 ledger(&ctx, &marker, source, None).await?;
+            }
+            for stream in [false, true] {
+                let marker = format!("messages-missing-off-{stream}-{}", uuid::Uuid::new_v4());
+                let response = post(
+                    &ctx,
+                    "messages-off.example.com",
+                    &body(stream),
+                    "missing_usage",
+                    false,
+                    &marker,
+                    "/v1/messages",
+                    "2023-06-01",
+                    false,
+                )
+                .await?;
+                if response.status() != 200 {
+                    return Err("missing usage changed native admission".into());
+                }
+                response.bytes().await.map_err(|e| e.to_string())?;
+                ledger(&ctx, &marker, "notObserved", None).await?;
             }
             Ok::<(), String>(())
         }
@@ -367,7 +407,7 @@ fn rejects(ctx: TestContext) -> TestFuture {
                     &body,
                     "normal",
                     false,
-                    &format!("messages-reject-{i}"),
+                    &format!("messages-reject-{i}-{}", uuid::Uuid::new_v4()),
                     path,
                     version,
                     profile,
@@ -400,7 +440,7 @@ async fn binding(ctx: &TestContext, allowed: bool, label: &str) -> Result<(), St
         &request,
         "normal",
         false,
-        &format!("messages-binding-{allowed}-{label}"),
+        &format!("messages-binding-{allowed}-{label}-{}", uuid::Uuid::new_v4()),
         "/v1/messages",
         "2023-06-01",
         false,
@@ -422,7 +462,7 @@ async fn binding(ctx: &TestContext, allowed: bool, label: &str) -> Result<(), St
                 &body(false),
                 "normal",
                 false,
-                "messages-stateless-after-update",
+                &format!("messages-stateless-after-update-{}", uuid::Uuid::new_v4()),
                 "/v1/messages",
                 "2023-06-01",
                 false,
@@ -468,66 +508,109 @@ fn termination(ctx: TestContext) -> TestFuture {
     Box::pin(async move {
         let start = Instant::now();
         let result = async {
-            for h2 in [false, true] {
-                let marker = format!("messages-abort-{h2}");
-                let response = post(
-                    &ctx,
-                    "messages-provider.example.com",
-                    &body(true),
-                    "abort",
-                    h2,
-                    &marker,
-                    "/v1/messages",
-                    "2023-06-01",
-                    false,
-                )
-                .await?;
-                let mut stream = response.bytes_stream();
-                while let Some(Ok(_)) = stream.next().await {}
-                ledger(&ctx, &marker, "unknown", Some("incomplete_response")).await?;
-                let marker = format!("messages-cancel-{h2}");
-                let response = post(
-                    &ctx,
-                    "messages-provider.example.com",
-                    &body(true),
-                    "long",
-                    h2,
-                    &marker,
-                    "/v1/messages",
-                    "2023-06-01",
-                    false,
-                )
-                .await?;
-                let mut stream = response.bytes_stream();
-                let _ = stream.next().await;
-                drop(stream);
-                let trace = crate::access_log_client::trace_id_for_marker(&marker);
-                let mut cancelled = false;
-                for _ in 0..30 {
-                    for host in crate::framework::test_backend_hosts(&ctx) {
-                        let value: Value = ctx
-                            .http_client
-                            .get(format!("http://{host}:30001/ai-long-stream/observation/{trace}"))
-                            .send()
+            for observation in ["off", "provider"] {
+                let host = format!("messages-{observation}.example.com");
+                let source = if observation == "off" { "notObserved" } else { "unknown" };
+                for h2 in [false, true] {
+                    let marker = format!("messages-cancel-{observation}-{h2}-{}", uuid::Uuid::new_v4());
+                    let response = post(
+                        &ctx,
+                        &host,
+                        &body(true),
+                        "long",
+                        h2,
+                        &marker,
+                        "/v1/messages",
+                        "2023-06-01",
+                        false,
+                    )
+                    .await?;
+                    if response.status() != 200 {
+                        return Err("long stream not committed as 200".into());
+                    }
+                    let mut stream = response.bytes_stream();
+                    let mut prefix = Vec::new();
+                    loop {
+                        let chunk = stream
+                            .next()
                             .await
-                            .map_err(|e| e.to_string())?
-                            .json()
-                            .await
+                            .ok_or("no nonterminal content delta")?
                             .map_err(|e| e.to_string())?;
-                        if value.pointer("/observation/upstream_cancelled") == Some(&json!(true)) {
-                            cancelled = true;
+                        if prefix.len() + chunk.len() > 16 * 1024 {
+                            return Err("cancel prefix cap exceeded".into());
+                        }
+                        prefix.extend_from_slice(&chunk);
+                        let text = String::from_utf8_lossy(&prefix);
+                        if text.contains("event: message_stop") {
+                            return Err("terminal preceded cancellation".into());
+                        }
+                        if text.contains("\"type\":\"text_delta\"") && text.ends_with("\n\n") {
                             break;
                         }
                     }
-                    if cancelled {
-                        break;
+                    drop(stream);
+                    let trace = crate::access_log_client::trace_id_for_marker(&marker);
+                    let mut cancelled = false;
+                    for _ in 0..30 {
+                        for backend in crate::framework::test_backend_hosts(&ctx) {
+                            let authority = backend
+                                .parse::<IpAddr>()
+                                .map(|ip| SocketAddr::new(ip, 30001).to_string())
+                                .unwrap_or_else(|_| format!("{backend}:30001"));
+                            let value: Value = ctx
+                                .http_client
+                                .get(format!("http://{authority}/ai-long-stream/observation/{trace}"))
+                                .send()
+                                .await
+                                .map_err(|e| e.to_string())?
+                                .json()
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            let state = &value["observation"];
+                            if state["upstream_cancelled"] == true {
+                                let count = state["chunks_queued"].as_u64().ok_or("missing producer count")?;
+                                if value["found"] != true
+                                    || state["provider_completed"] != false
+                                    || !(4..1000).contains(&count)
+                                {
+                                    return Err(format!("invalid cancelled producer: {value}"));
+                                }
+                                cancelled = true;
+                                break;
+                            }
+                        }
+                        if cancelled {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if !cancelled {
+                        return Err("downstream cancellation did not stop upstream producer".into());
+                    }
+                    ledger(&ctx, &marker, source, Some("incomplete_response")).await?;
+                    let marker = format!("messages-abort-{observation}-{h2}-{}", uuid::Uuid::new_v4());
+                    let response = post(
+                        &ctx,
+                        &host,
+                        &body(true),
+                        "abort",
+                        h2,
+                        &marker,
+                        "/v1/messages",
+                        "2023-06-01",
+                        false,
+                    )
+                    .await?;
+                    if response.status() != 200 {
+                        return Err("abort stream not committed as 200".into());
+                    }
+                    if let Ok(bytes) = response.bytes().await {
+                        if bytes.is_empty() || String::from_utf8_lossy(&bytes).contains("event: message_stop") {
+                            return Err("aborted body did not expose an incomplete stream".into());
+                        }
+                    }
+                    ledger(&ctx, &marker, source, Some("incomplete_response")).await?;
                 }
-                if !cancelled {
-                    return Err("native downstream cancellation did not stop upstream producer".into());
-                }
-                ledger(&ctx, &marker, "unknown", Some("incomplete_response")).await?;
             }
             Ok::<(), String>(())
         }
@@ -544,7 +627,7 @@ fn active_quota(ctx: TestContext) -> TestFuture {
         let start = Instant::now();
         let result = async {
             for h2 in [false, true] {
-                let marker = format!("messages-quota-wire-{h2}");
+                let marker = format!("messages-quota-wire-{h2}-{}", uuid::Uuid::new_v4());
                 let mut request = body(true);
                 request["max_tokens"] = json!(64);
                 let response = post(

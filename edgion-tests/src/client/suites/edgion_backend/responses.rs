@@ -72,6 +72,10 @@ async fn ledger(ctx: &TestContext, marker: &str, source: &str, failure: Option<&
         .get_access_log_with_retry(marker, 15, 200)
         .await
         .map_err(|e| e.to_string())?;
+    ctx.access_log_client()
+        .require_single_write(marker)
+        .await
+        .map_err(|e| e.to_string())?;
     let genai = &entry.data["genai"];
     if genai["usage_source"] != source {
         return Err(format!("{marker} unexpected usage: {genai}"));
@@ -90,6 +94,17 @@ async fn ledger(ctx: &TestContext, marker: &str, source: &str, failure: Option<&
     {
         return Err(format!("unobserved Responses acquired numeric billing: {genai}"));
     }
+    if genai["attempts_truncated"] == true || attempts[0]["status"] != 200 {
+        return Err(format!("invalid completed attempt: {genai}"));
+    }
+    for key in ["input_tokens", "output_tokens", "estimated_cost_usd"] {
+        if attempts[0].get(key) != genai.get(key) {
+            return Err(format!("attempt/summary mismatch for {key}: {genai}"));
+        }
+    }
+    if failure.is_none() && !attempts[0]["failure"].is_null() {
+        return Err(format!("unexpected provider failure: {genai}"));
+    }
     if let Some(failure) = failure {
         if attempts[0]["failure"] != failure {
             return Err(format!("wrong provider outcome: {genai}"));
@@ -105,7 +120,7 @@ fn malformed_utf8(ctx: TestContext) -> TestFuture {
             for observation in ["off", "provider"] {
                 for model in ["fixture-model", "fixture-alias"] {
                     for nested in [false, true] {
-                        let marker = format!("responses-utf8-{observation}-{model}-{nested}");
+                        let marker = format!("responses-utf8-{observation}-{model}-{nested}-{}", uuid::Uuid::new_v4());
                         let mut body = format!("{{\"model\":\"{model}\",").into_bytes();
                         body.extend_from_slice(if nested {
                             b"\"extension\":{\"items\":[\"\xff\"]}}"
@@ -161,7 +176,7 @@ fn nullable_controls(ctx: TestContext) -> TestFuture {
                 request,
                 "split",
                 false,
-                "responses-null-controls",
+                &format!("responses-null-controls-{}", uuid::Uuid::new_v4()),
                 "/v1/responses",
             )
             .await?;
@@ -193,7 +208,7 @@ async fn native(ctx: &TestContext, h2: bool) -> Result<(), String> {
         ("responses-provider.example.com", "reported"),
     ] {
         for stream in [false, true] {
-            let marker = format!("responses-native-{h2}-{stream}-{source}");
+            let marker = format!("responses-native-{h2}-{stream}-{source}-{}", uuid::Uuid::new_v4());
             let r = post(ctx, host, body(stream), "split", h2, &marker, "/v1/responses").await?;
             if !r.status().is_success() {
                 return Err(format!("native request returned {}", r.status()));
@@ -275,29 +290,52 @@ fn outcomes(ctx: TestContext) -> TestFuture {
                 ("large", "reported", None),
                 ("oversized", "unknown", None),
             ] {
-                let stream = mode == "oversized";
-                let marker = format!("responses-outcome-{mode}");
-                let r = post(
+                for stream in if mode == "missing_usage" {
+                    vec![false, true]
+                } else {
+                    vec![mode == "oversized"]
+                } {
+                    let marker = format!("responses-outcome-{mode}-{}", uuid::Uuid::new_v4());
+                    let r = post(
+                        &ctx,
+                        "responses-provider.example.com",
+                        body(stream),
+                        mode,
+                        false,
+                        &marker,
+                        "/v1/responses",
+                    )
+                    .await?;
+                    if !r.status().is_success() {
+                        return Err(format!("passive {mode} returned {}", r.status()));
+                    }
+                    let text = r.text().await.map_err(|e| e.to_string())?;
+                    if mode == "large" && text.len() < 256 * 1024 {
+                        return Err("large native output was truncated".into());
+                    }
+                    if mode == "oversized" && text.len() < 1024 * 1024 {
+                        return Err("passive oversized native event was truncated".into());
+                    }
+                    ledger(&ctx, &marker, source, failure).await?;
+                }
+            }
+            for stream in [false, true] {
+                let marker = format!("responses-missing-off-{stream}-{}", uuid::Uuid::new_v4());
+                let response = post(
                     &ctx,
-                    "responses-provider.example.com",
+                    "responses-off.example.com",
                     body(stream),
-                    mode,
+                    "missing_usage",
                     false,
                     &marker,
                     "/v1/responses",
                 )
                 .await?;
-                if !r.status().is_success() {
-                    return Err(format!("passive {mode} returned {}", r.status()));
+                if response.status() != 200 {
+                    return Err("missing usage changed native admission".into());
                 }
-                let text = r.text().await.map_err(|e| e.to_string())?;
-                if mode == "large" && text.len() < 256 * 1024 {
-                    return Err("large native output was truncated".into());
-                }
-                if mode == "oversized" && text.len() < 1024 * 1024 {
-                    return Err("passive oversized native event was truncated".into());
-                }
-                ledger(&ctx, &marker, source, failure).await?;
+                response.bytes().await.map_err(|e| e.to_string())?;
+                ledger(&ctx, &marker, "notObserved", None).await?;
             }
             Ok::<(), String>(())
         }
@@ -319,7 +357,7 @@ async fn continuation(ctx: &TestContext, allowed: bool) -> Result<(), String> {
             request,
             "completed",
             false,
-            &format!("responses-continuation-{field}-{allowed}"),
+            &format!("responses-continuation-{field}-{allowed}-{}", uuid::Uuid::new_v4()),
             "/v1/responses",
         )
         .await?;
@@ -343,7 +381,7 @@ async fn continuation(ctx: &TestContext, allowed: bool) -> Result<(), String> {
         body(false),
         "completed",
         false,
-        "responses-stateless-after-update",
+        &format!("responses-stateless-after-update-{}", uuid::Uuid::new_v4()),
         "/v1/responses",
     )
     .await?;
@@ -402,7 +440,7 @@ fn rejects(ctx: TestContext) -> TestFuture {
                     request,
                     "completed",
                     false,
-                    &format!("responses-reject-{index}"),
+                    &format!("responses-reject-{index}-{}", uuid::Uuid::new_v4()),
                     path,
                 )
                 .await?;
@@ -428,65 +466,87 @@ fn termination(ctx: TestContext) -> TestFuture {
     Box::pin(async move {
         let start = Instant::now();
         let result = async {
-            for h2 in [false, true] {
-                let marker = format!("responses-cancel-{h2}");
-                let response = post(
-                    &ctx,
-                    "responses-provider.example.com",
-                    body(true),
-                    "long",
-                    h2,
-                    &marker,
-                    "/v1/responses",
-                )
-                .await?;
-                let mut stream = response.bytes_stream();
-                stream
-                    .next()
-                    .await
-                    .ok_or("no first stream chunk")?
-                    .map_err(|e| e.to_string())?;
-                drop(stream);
-                let trace = crate::access_log_client::trace_id_for_marker(&marker);
-                let mut cancelled = false;
-                for _ in 0..30 {
-                    for host in test_backend_hosts(&ctx) {
-                        let value: Value = ctx
-                            .http_client
-                            .get(format!("http://{host}:30001/ai-long-stream/observation/{trace}"))
-                            .send()
+            for observation in ["off", "provider"] {
+                let host = format!("responses-{observation}.example.com");
+                let source = if observation == "off" { "notObserved" } else { "unknown" };
+                for h2 in [false, true] {
+                    let marker = format!("responses-cancel-{observation}-{h2}-{}", uuid::Uuid::new_v4());
+                    let response = post(&ctx, &host, body(true), "long", h2, &marker, "/v1/responses").await?;
+                    if response.status() != 200 {
+                        return Err("long stream not committed as 200".into());
+                    }
+                    let mut stream = response.bytes_stream();
+                    let mut prefix = Vec::new();
+                    loop {
+                        let chunk = stream
+                            .next()
                             .await
-                            .map_err(|e| e.to_string())?
-                            .json()
-                            .await
+                            .ok_or("no nonterminal content delta")?
                             .map_err(|e| e.to_string())?;
-                        if value.pointer("/observation/upstream_cancelled") == Some(&json!(true)) {
-                            cancelled = true;
+                        if prefix.len() + chunk.len() > 16 * 1024 {
+                            return Err("cancel prefix cap exceeded".into());
+                        }
+                        prefix.extend_from_slice(&chunk);
+                        let text = String::from_utf8_lossy(&prefix);
+                        if text.contains("event: response.completed") {
+                            return Err("terminal preceded cancellation".into());
+                        }
+                        if text.contains("event: response.output_text.delta") && text.ends_with("\n\n") {
                             break;
                         }
                     }
-                    if cancelled {
-                        break;
+                    drop(stream);
+                    let trace = crate::access_log_client::trace_id_for_marker(&marker);
+                    let mut cancelled = false;
+                    for _ in 0..30 {
+                        for backend in crate::framework::test_backend_hosts(&ctx) {
+                            let authority = backend
+                                .parse::<IpAddr>()
+                                .map(|ip| SocketAddr::new(ip, 30001).to_string())
+                                .unwrap_or_else(|_| format!("{backend}:30001"));
+                            let value: Value = ctx
+                                .http_client
+                                .get(format!("http://{authority}/ai-long-stream/observation/{trace}"))
+                                .send()
+                                .await
+                                .map_err(|e| e.to_string())?
+                                .json()
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            let state = &value["observation"];
+                            if state["upstream_cancelled"] == true {
+                                let count = state["chunks_queued"].as_u64().ok_or("missing producer count")?;
+                                if value["found"] != true
+                                    || state["provider_completed"] != false
+                                    || !(2..1000).contains(&count)
+                                {
+                                    return Err(format!("invalid cancelled producer: {value}"));
+                                }
+                                cancelled = true;
+                                break;
+                            }
+                        }
+                        if cancelled {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if !cancelled {
+                        return Err("downstream cancellation did not stop upstream producer".into());
+                    }
+                    ledger(&ctx, &marker, source, Some("incomplete_response")).await?;
+                    let marker = format!("responses-abort-{observation}-{h2}-{}", uuid::Uuid::new_v4());
+                    let response = post(&ctx, &host, body(true), "abort", h2, &marker, "/v1/responses").await?;
+                    if response.status() != 200 {
+                        return Err("abort stream not committed as 200".into());
+                    }
+                    if let Ok(bytes) = response.bytes().await {
+                        if bytes.is_empty() || String::from_utf8_lossy(&bytes).contains("event: response.completed") {
+                            return Err("aborted body did not expose an incomplete stream".into());
+                        }
+                    }
+                    ledger(&ctx, &marker, source, Some("incomplete_response")).await?;
                 }
-                if !cancelled {
-                    return Err("downstream cancellation did not stop upstream producer".into());
-                }
-                ledger(&ctx, &marker, "unknown", Some("incomplete_response")).await?;
-                let marker = format!("responses-abort-{h2}");
-                let r = post(
-                    &ctx,
-                    "responses-provider.example.com",
-                    body(true),
-                    "abort",
-                    h2,
-                    &marker,
-                    "/v1/responses",
-                )
-                .await?;
-                let _ = r.bytes().await;
-                ledger(&ctx, &marker, "unknown", Some("incomplete_response")).await?;
             }
             Ok::<(), String>(())
         }
@@ -502,7 +562,7 @@ fn quota(ctx: TestContext) -> TestFuture {
     Box::pin(async move {
         let start = Instant::now();
         let result = async {
-            let identity = format!("responses-quota-{}", std::process::id());
+            let identity = format!("responses-quota-{}", uuid::Uuid::new_v4());
             let r = post(
                 &ctx,
                 "responses-quota.example.com",
@@ -518,21 +578,31 @@ fn quota(ctx: TestContext) -> TestFuture {
             }
             r.bytes().await.map_err(|e| e.to_string())?;
             ledger(&ctx, &identity, "reported", None).await?;
-            let r = post(
-                &ctx,
-                "responses-quota.example.com",
-                body(false),
-                "completed",
-                false,
-                &identity,
-                "/v1/responses",
-            )
-            .await?;
+            let followup = uuid::Uuid::new_v4().to_string();
+            let authority = ctx
+                .target_host
+                .parse::<IpAddr>()
+                .map(|ip| SocketAddr::new(ip, ctx.http_port).to_string())
+                .unwrap_or_else(|_| format!("{}:{}", ctx.target_host, ctx.http_port));
+            let r = ctx
+                .http_client
+                .post(format!("http://{authority}/v1/responses"))
+                .header("host", "responses-quota.example.com")
+                .header("x-quota-user", &identity)
+                .header(
+                    "traceparent",
+                    crate::access_log_client::traceparent_for_marker(&followup),
+                )
+                .header("access_log", "test_store")
+                .json(&body(false))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
             if r.status() != 429 {
                 return Err(format!("terminal usage did not settle Redis quota: {}", r.status()));
             }
             r.bytes().await.map_err(|e| e.to_string())?;
-            let marker = format!("responses-quota-cut-{}", std::process::id());
+            let marker = format!("responses-quota-cut-{}", uuid::Uuid::new_v4());
             let r = post(
                 &ctx,
                 "responses-quota.example.com",
