@@ -54,7 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Keep this source override FIPS-only and verify the exact upstream patch bytes.
 # TODO(boring-fips-arm64): Remove this override and update Boring once boring-sys
 # vendors BORINGSSL_FIPS_ARM64_FIX_REV or a descendant containing that fix. See
-# tasks/pending/boring-upstream-arm64-fips-source-override-removal.md.
+# tasks/block/boring-upstream-arm64-fips-source-override-removal.md.
 RUN if [ "${INCLUDE_BORINGSSL_FIPS_SOURCE}" = "true" ]; then \
         boringssl_fips_source_path="/opt/boringssl-fips-${BORINGSSL_FIPS_BASE_REV}-${BORINGSSL_FIPS_ARM64_FIX_REV}-${BORINGSSL_FIPS_ARM64_FIX_SHA256}" && \
         mkdir -p "${boringssl_fips_source_path}" /tmp/boringssl-fips-fix && \

@@ -89,7 +89,7 @@ runtime utilities used by the isolated scenario.
 
 - `cicd/build-image.sh`
 - `cicd/docker/Dockerfile.builder`
-- `tasks/pending/boring-upstream-arm64-fips-source-override-removal.md`
+- `tasks/block/boring-upstream-arm64-fips-source-override-removal.md`
 - `edgion-tests/integration/scripts/integration/test_fips_policy.sh`
 - `docs/en/ops-guide/gateway/tls/fips.md`
 
