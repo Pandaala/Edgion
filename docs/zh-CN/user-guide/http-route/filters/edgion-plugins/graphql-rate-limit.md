@@ -43,8 +43,10 @@ spec:
 时使用 SDL 默认值 10，也花费 12。
 
 成本是运营者选择的估算值。仅凭 SDL 无法推断 resolver 的实际展开量、数据库
-工作量或 CPU 消耗。返回列表的 resolver 应配置分页倍率，并与后端的真实默认
-分页值保持一致。规则使用 `Type.field`，不受别名影响。重复字段和 fragment
+工作量或 CPU 消耗。返回对象、接口或 union（包括这些类型的列表）的 resolver
+可配置分页倍率，并与后端的真实默认分页值保持一致。Scalar/Enum 返回字段
+（包括标量和枚举列表）没有子字段成本，配置非空 `multipliers` 会被拒绝；
+这些字段应使用保守的固定 `weight`。规则使用 `Type.field`，不受别名影响。重复字段和 fragment
 引用逐次计费，`@skip` / `@include` 分支始终计费。接口和 union 对所有可能的
 具体类型计算后取最大值；每个字段取完整接口规则与具体类型规则中的最大成本。
 这些保守规则可能比实际执行收费更多。
@@ -55,7 +57,7 @@ spec:
 | `costRules` | 空，最多 256 条 |
 | `field` | 必填，存在的对象或接口字段 `Type.field` |
 | `weight` | 1，范围 1..1,000,000 |
-| `multipliers` | 空，最多 8 个不同的 Int 参数名 |
+| `multipliers` | 空，最多 8 个不同的 Int 参数名；非空时返回类型须为对象、接口或 union |
 | `defaultMultiplier` | 100，没有实参、变量或 SDL 默认值时使用 |
 | `maxCost` | 10,000，范围 1..1,000,000 |
 | `maxDepth` | 20，范围 1..32 |

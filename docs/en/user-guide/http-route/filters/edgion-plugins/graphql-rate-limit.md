@@ -46,7 +46,10 @@ example schema; omitting `first` also costs12 because the SDL default is10.
 
 Weights and pagination defaults are estimates chosen by the operator. SDL alone
 cannot reveal resolver fanout, database work or actual CPU use. Configure
-multipliers for list-producing resolvers and match their real pagination defaults.
+multipliers for resolvers returning objects, interfaces or unions, including lists
+of those types, and match their real pagination defaults. Scalar/enum returns,
+including scalar/enum lists, have no child costs: nonempty `multipliers` are
+rejected for these fields. Use a conservative fixed `weight` instead.
 Fields are identified by `Type.field`, regardless of aliases. Repeated fields and
 fragment spreads count per occurrence. `@skip`/`@include` branches are always
 counted. Interfaces/unions use the maximum over possible concrete objects, and
@@ -59,7 +62,7 @@ These conservative choices may overcharge compared with actual execution.
 | `costRules` | Empty; at most256 rules |
 | `costRules[].field` | Required existing object/interface `Type.field` |
 | `costRules[].weight` | 1; range1..1,000,000 |
-| `costRules[].multipliers` | Empty; up to8 distinct scalar Int argument names |
+| `costRules[].multipliers` | Empty; up to8 distinct scalar Int argument names; nonempty only for object/interface/union returns |
 | `costRules[].defaultMultiplier` | 100; used when no argument/variable/SDL default exists |
 | `maxCost` | 10,000; range1..1,000,000 |
 | `maxDepth` | 20; range1..32 |

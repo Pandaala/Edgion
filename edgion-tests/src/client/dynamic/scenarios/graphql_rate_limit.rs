@@ -41,6 +41,14 @@ static PHASES: &[PhaseSuite] = &[
         name: "valid-v2",
         factory: valid_v2,
     },
+    PhaseSuite {
+        name: "invalid-leaf-reload",
+        factory: invalid,
+    },
+    PhaseSuite {
+        name: "recovered-v2",
+        factory: valid_v2,
+    },
 ];
 fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
     Box::pin(async move {
@@ -52,6 +60,12 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
             .await?;
         ctx.apply_dir("updates/to_valid_v2").await?;
         ctx.wait_phase(SCENARIO, "valid-v2", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_invalid_leaf").await?;
+        ctx.wait_phase(SCENARIO, "invalid-leaf-reload", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_valid_v2").await?;
+        ctx.wait_phase(SCENARIO, "recovered-v2", Duration::from_secs(15))
+            .await?;
         Ok(())
     })
 }

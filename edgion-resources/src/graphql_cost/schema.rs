@@ -472,6 +472,9 @@ impl CompiledGraphqlCost {
                 .filter(|t| matches!(t.kind, Kind::Object | Kind::Interface))
                 .ok_or(GraphqlCostError::Invalid)?;
             let field = ty.fields.get(field).ok_or(GraphqlCostError::Invalid)?;
+            if !rule.multipliers.is_empty() && !schema.types[&field.ty.name].composite() {
+                return Err(GraphqlCostError::Invalid);
+            }
             let mut names = HashSet::new();
             for n in &rule.multipliers {
                 work.step()?;

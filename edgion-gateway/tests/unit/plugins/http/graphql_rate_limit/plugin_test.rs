@@ -71,6 +71,16 @@ fn constructor_checks_schema_and_absolute_body_policy() {
     assert!(!filter(None).requires_materialized_request_body());
 }
 
+#[test]
+fn constructor_independently_rejects_leaf_multiplier_rules() {
+    let mut invalid = config();
+    invalid.schema = "type Query { ids(first:Int=100):[Int] }".into();
+    invalid.cost_rules[0].field = "Query.ids".into();
+    assert!(GraphqlRateLimit::create(&invalid, "unit", None).is_none());
+    invalid.cost_rules[0].multipliers.clear();
+    assert!(GraphqlRateLimit::create(&invalid, "unit", None).is_some());
+}
+
 // Keep permit exhaustion and its successful successor in one test so this
 // deliberately held process-wide budget cannot race another evaluation test.
 #[tokio::test]

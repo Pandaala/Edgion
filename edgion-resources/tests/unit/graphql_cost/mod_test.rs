@@ -42,6 +42,49 @@ fn aliases_defaults_and_nested_multipliers() {
 }
 
 #[test]
+fn leaf_multipliers_are_rejected_but_fixed_weights_remain_chargeable() {
+    for return_type in ["Int", "String!", "Money", "E!", "[Int]", "[Money!]!", "[[E!]!]!"] {
+        for interface_rule in [false, true] {
+            let schema = if interface_rule {
+                format!("type Query {{ item: I }} interface I {{ value(first:Int=100):{return_type} }} type C implements I {{ value(first:Int=100):{return_type} }} scalar Money enum E {{ ONE }}")
+            } else {
+                format!("type Query {{ value(first:Int=100):{return_type} }} scalar Money enum E {{ ONE }}")
+            };
+            let mut rule = GraphqlCostRule {
+                field: if interface_rule { "I.value" } else { "Query.value" }.into(),
+                weight: 7,
+                multipliers: vec!["first".into()],
+                default_multiplier: 100,
+            };
+            assert!(
+                CompiledGraphqlCost::compile(&schema, &[rule.clone()], 1000, 20).is_err(),
+                "{return_type}, interface_rule={interface_rule}"
+            );
+            rule.multipliers.clear();
+            let m = CompiledGraphqlCost::compile(&schema, &[rule], 1000, 20).unwrap();
+            for arguments in ["", "(first:1)", "(first:1000000)"] {
+                let query = if interface_rule {
+                    format!("{{item{{value{arguments}}}}}")
+                } else {
+                    format!("{{value{arguments}}}")
+                };
+                assert_eq!(estimate(&m, &query), Ok(if interface_rule { 9 } else { 8 }));
+            }
+        }
+    }
+}
+
+#[test]
+fn composite_return_multipliers_preserve_child_charges() {
+    for return_type in ["Leaf", "[I!]!", "[[U!]!]!"] {
+        let schema = format!("type Query {{ items(first:Int=2):{return_type} }} interface I {{ name:String }} type Leaf implements I {{ name:String }} union U = Leaf");
+        let m = model(&schema, &[("Query.items", 3, &["first"], 100)]);
+        assert_eq!(estimate(&m, "{items(first:4){... on Leaf{name}}}"), Ok(8));
+        assert_eq!(estimate(&m, "{items{... on Leaf{name}}}"), Ok(6));
+    }
+}
+
+#[test]
 fn abstract_maximum_and_concrete_default_cannot_be_bypassed() {
     let m = model("type Query { item: I } interface I { children(first: Int = 2): [Leaf] } type A implements I { children(first: Int = 7): [Leaf] } type B implements I { children(first: Int = 3): [Leaf] } type Leaf { name: String }", &[("I.children",10,&["first"],100), ("A.children",1,&["first"],100)]);
     assert_eq!(estimate(&m, "{ item { children { name } } }"), Ok(19));
@@ -248,7 +291,13 @@ fn sdl_consistency_and_cost_rule_validation() {
         multipliers: vec!["n".into()],
         default_multiplier: 100,
     };
-    assert!(CompiledGraphqlCost::compile("type Query{x(n:Int=null):String}", &[rule], 10000, 20).is_err());
+    assert!(CompiledGraphqlCost::compile(
+        "type Query{x(n:Int=null):Leaf} type Leaf{name:String}",
+        &[rule],
+        10000,
+        20
+    )
+    .is_err());
 }
 
 #[test]

@@ -47,14 +47,14 @@ branches are conservatively counted; cost units do not measure actual resolver C
 
 ## Limits and re-evaluation
 
-Additional independent SDL and Astra reviews on 2026-10-07 confirmed one open
-P2: nonempty multipliers are accepted on scalar/enum return fields, including
-list wrappers, but their zero child cost makes the charge independent of the
-multiplier. Do not infer pagination protection from successful validation of
-these rules. A conservative fixed weight works under the current formula;
-the pending correction must reject ineffective multipliers and clarify usage
-guidance without silently changing cost semantics. See the
-[open finding](../../../../tasks/pending/graphql-cost-rate-limit/05-issues.md).
+The additional SDL and Astra reviews identified P2 ineffective leaf multipliers:
+scalar/enum return fields, including list wrappers, have zero child cost, so
+the approved formula cannot charge their pagination amount. The shared compiler
+now rejects nonempty multipliers unless the return named type is composite
+(object/interface/union), using the same predicate as evaluation. Scalar/enum
+resolvers require conservative fixed weights; no per-item leaf charge is implied.
+Review changes to this check, wrappers, interface rule applicability or the formula
+against both leaf rejection and retained composite/fixed-weight charging tests.
 
 The pinned Apollo0.8.6/Rowan0.16.1 parser allocation ledger uses lexical preflight,
 4096 native tokens,256-byte nontrivia tokens,64 native recursion, bounded JSON and
@@ -72,6 +72,16 @@ composition and4096-byte key truncation retain canonical limiter semantics.
 
 ## Verification
 
+The P2 leaf-multiplier correction passed fresh independent plan and final reviews
+on 2026-10-07. The rejection/configuration tests failed before the guard and passed
+after it. Current focused results: Resources14, Gateway4 and harness23 tests;
+workspace check, warning-free final Clippy, format and project guards passed.
+Canonical real-Redis integration passed35 static cases and all6 dynamic phases,
+including leaf-invalid replacement (Accepted=False and fixed500) and recovery
+at cost16. Final metrics/unknown-field/requeue/residue gates passed. Evidence is
+in the linked review/implementation artifacts. No full Cargo tests ran, and this
+correction does not establish a new parser heap proof.
+
 Fresh implementation verification passed on 2026-10-07: 11 Resources GraphQL
 tests, 3 Gateway GraphQL tests, 19 ordinary Redis limiter regressions, 23 harness
 registration checks and 40 CRD/stage guards. Full workspace check and Clippy,
@@ -85,7 +95,7 @@ both pass, while duplicate GET parameters remain rejected.
 Fresh independent implementation review passed with LGTM on 2026-10-07;
 the reviewer verified original rules, current code, knowledge and fresh logs.
 This is historical evidence. The subsequent user-requested SDL and Astra
-reviews both returned IssuesFound for the leaf-multiplier configuration above;
+reviews both returned IssuesFound for the subsequently corrected leaf configuration;
 both freshly passed 11 Resources GraphQL tests, but neither independently
 proved the complete parser allocation ledger or measured peak heap.
 The four-request concurrent case isolates Redis atomic charging within the
@@ -106,3 +116,7 @@ query ambiguity. This design evidence does not claim implementation test success
   budgets on 2026-10-07. Operation routing remains an explicit
   [pending requirement](../../../../tasks/pending/graphql-operation-routing.md);
   it is not claimed implemented or dismissed.
+- P2 ineffective leaf multipliers: diagnosed by two independent additional
+  reviews; corrected in the existing shared compiler without changing the cost
+  formula. Current correction verification belongs in the linked review evidence;
+  historical feature checks do not establish that this boundary was covered.
