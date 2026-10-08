@@ -62,22 +62,9 @@ fn same_namespace_skips_authority_reads_and_receipts_preserve_duplicate_ports() 
     assert_eq!(receipts[1].slot.backend(), 1);
     assert_eq!(receipts[0].source_kind, ResourceKind::HTTPRoute);
     assert_eq!(receipts[0].source_name, "owner");
-    let dropped = super::super::route_utils::register_service_backend_refs(
-        ResourceKind::HTTPRoute,
-        "default",
-        "owner",
-        &receipts,
-        &runtime,
-    );
+    let dropped = super::super::route_utils::register_service_backend_refs(&owner, &receipts, &runtime);
     assert!(dropped.is_empty());
-    assert_eq!(
-        runtime.service_ref_mgr.get_refs("default/service"),
-        vec![ResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some("default".into()),
-            "owner".into()
-        )]
-    );
+    assert_eq!(runtime.service_ref_mgr.get_refs("default/service"), vec![owner.clone()]);
     assert!(runtime.cross_ns_ref_mgr.get_refs("default").is_empty());
 }
 
@@ -178,7 +165,7 @@ async fn all_five_invalid_owners_fail_closed_in_direct_status_and_recover_after_
                 assert!(repaired.spec.resolved_listeners.is_some(),"{} repaired attachment",$kind.as_str());
                 assert!(repaired.status.as_ref().unwrap().parents.iter().any(|parent|parent.conditions.iter().any(|condition|condition.type_=="Accepted" && condition.status=="True")));
                 assert_eq!($facade::from_route(&repaired).unwrap().effective().count(),1);
-                assert!(runtime.service_ref_mgr.get_refs("default/service").contains(&ResourceRef::new($kind,if $kind == ResourceKind::HTTPRoute { None } else { Some("default".into()) },"owner".into())));
+                assert!(runtime.service_ref_mgr.get_refs("default/service").contains(&ResourceRef::new($kind,None,"owner".into())));
             }
         }};
     }
@@ -238,7 +225,7 @@ async fn all_five_apply_replace_dependencies_and_clear_stale_denial_for_invalid_
             let ProcessResult::Continue(mut route)=handler.parse(route,&ctx).await else {panic!("first parse")};
             assert_eq!(runtime.cross_ns_ref_mgr.get_refs("old"),vec![owner.clone()]);
             assert_eq!(runtime.cross_ns_ref_mgr.get_refs("second"),vec![owner.clone()]);
-            assert_eq!(runtime.service_ref_mgr.get_refs("old/service"),vec![ResourceRef::new($kind,if $kind == ResourceKind::HTTPRoute { None } else { Some("default".into()) },"owner".into())]);
+            assert_eq!(runtime.service_ref_mgr.get_refs("old/service"),vec![ResourceRef::new($kind,None,"owner".into())]);
             for backend in route.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap() {
                 backend.port=Some(0);
                 backend.ref_denied=Some(RefDenied{target_namespace:"old".into(),target_name:"service".into(),reason:Some("stale".into())});
@@ -312,4 +299,136 @@ fn l4_complete_dependency_sets_are_available_before_first_authority_read() {
     check!(TCPRoute, TcpRouteBackendRefs, ResourceKind::TCPRoute);
     check!(TLSRoute, TlsRouteBackendRefs, ResourceKind::TLSRoute);
     check!(UDPRoute, UdpRouteBackendRefs, ResourceKind::UDPRoute);
+}
+
+#[tokio::test]
+async fn remaining_route_workers_preserve_raw_owner_through_service_lifecycle() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{
+        handlers::{
+            EndpointSliceHandler, GrpcRouteHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
+        },
+        LocalRawStore, ProcessorHandler, RawStore, ResourceProcessor,
+    };
+    use edgion_resources::{BackendTLSPolicy, EdgionBackendTrafficPolicy};
+    use k8s_openapi::api::{core::v1::Service, discovery::v1::EndpointSlice};
+    use std::sync::Arc;
+    struct PolicyObserver;
+    #[async_trait::async_trait]
+    impl ProcessorHandler<BackendTLSPolicy> for PolicyObserver {}
+    #[async_trait::async_trait]
+    impl ProcessorHandler<EdgionBackendTrafficPolicy> for PolicyObserver {}
+    macro_rules! step {
+        ($processor:expr,$raw:expr,$key:expr) => {{
+            let queue = $processor.workqueue();
+            let item = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(item.key, $key);
+            let source = $raw.get(&item.key).map(|value| (*value).clone());
+            $processor
+                .process_work_item(&item.key, source, None, item.trigger_chain)
+                .await;
+            queue.done(&item.key);
+        }};
+    }
+    macro_rules! check {
+        ($route:ty,$handler:expr,$kind:expr,$listener:expr) => {{
+            for namespace in [None, Some("default")] {
+                let runtime = Arc::new(ControllerRuntime::default());
+                let gateways=Arc::new(ResourceProcessor::<edgion_resources::Gateway>::new("Gateway",32,Arc::new(crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler::new(None,None)),runtime.clone()));
+                let gateway_raw=Arc::new(LocalRawStore::new());
+                gateway_raw.upsert("default/gateway".into(),Arc::new(serde_json::from_value(json!({"metadata":{"name":"gateway","namespace":"default"},"spec":{"gatewayClassName":"test","listeners":[{"name":"http","port":80,"protocol":"HTTP"},{"name":"tcp","port":9000,"protocol":"TCP"},{"name":"tls","port":443,"protocol":"TLS","tls":{"mode":"Passthrough"}},{"name":"udp","port":9001,"protocol":"UDP"}]}})).unwrap()));
+                gateways.set_raw_store(gateway_raw); runtime.processor_registry.register(gateways);
+                let routes = Arc::new(ResourceProcessor::<$route>::new($kind.as_str(),32,Arc::new($handler),runtime.clone()));
+                let raw = Arc::new(LocalRawStore::new()); routes.set_raw_store(raw.clone());
+                runtime.processor_registry.register(routes.clone());
+                let services = Arc::new(ResourceProcessor::<Service>::new("Service",32,Arc::new(ServiceHandler::new()),runtime.clone()));
+                let service_raw=Arc::new(LocalRawStore::new()); services.set_raw_store(service_raw.clone()); runtime.processor_registry.register(services.clone());
+                let slices=Arc::new(ResourceProcessor::<EndpointSlice>::new("EndpointSlice",32,Arc::new(EndpointSliceHandler::new()),runtime.clone()));
+                let slice_raw=Arc::new(LocalRawStore::new()); slices.set_raw_store(slice_raw.clone()); runtime.processor_registry.register(slices.clone());
+                let btp=Arc::new(ResourceProcessor::<BackendTLSPolicy>::new("BackendTLSPolicy",32,Arc::new(PolicyObserver),runtime.clone()));
+                let ebtp=Arc::new(ResourceProcessor::<EdgionBackendTrafficPolicy>::new("EdgionBackendTrafficPolicy",32,Arc::new(PolicyObserver),runtime.clone()));
+                runtime.processor_registry.register(btp.clone()); runtime.processor_registry.register(ebtp.clone());
+                let owner=ResourceRef::new($kind,namespace.map(str::to_string),"route".into());
+                let key=owner.resource_key();
+                let mut route:$route=serde_json::from_value(json!({"metadata":{"name":"route","namespace":namespace,"uid":"initial","generation":1},"spec":{"hostnames":["api.example.com"],"parentRefs":[{"name":"gateway","sectionName":$listener}],"rules":[{"backendRefs":[{"name":"old","port":80}]}]}})).unwrap();
+                raw.upsert(key.clone(),Arc::new(route.clone())); routes.on_event_key(key.clone()).await; step!(routes,raw,key);
+                assert_eq!(runtime.service_ref_mgr.get_refs("default/old"),vec![owner.clone()]);
+                assert_eq!(runtime.service_ref_mgr.get_dependencies(&owner.key()),vec!["default/old"]);
+                for (generation,present) in [(2,true),(3,false),(4,true)] {
+                    route.metadata.uid=Some(format!("replacement-{generation}")); route.metadata.generation=Some(generation);
+                    raw.remove(&key); raw.upsert(key.clone(),Arc::new(route.clone()));
+                    if present { service_raw.upsert("default/old".into(),Arc::new(serde_json::from_value(json!({"metadata":{"name":"old","namespace":"default","uid":format!("service-{generation}"),"resourceVersion":"1"},"spec":{"ports":[{"port":80}]}})).unwrap())); }
+                    else { service_raw.remove("default/old"); }
+                    services.on_event_key("default/old".into()).await; step!(services,service_raw,"default/old"); step!(routes,raw,key);
+                    let current=routes.get(&key).unwrap(); assert_eq!(current.metadata.uid,route.metadata.uid); assert_eq!(current.metadata.generation,Some(generation));
+                    let conditions=&current.status.as_ref().unwrap().parents[0].conditions;
+                    assert!(conditions.iter().any(|condition|condition.type_=="Accepted" && condition.status=="True"));
+                    assert!(conditions.iter().any(|condition|condition.type_=="ResolvedRefs" && condition.status==if present {"True"} else {"False"}));
+                    assert_eq!(runtime.service_ref_mgr.get_refs("default/old"),vec![owner.clone()]);
+                    assert_eq!(services.get("default/old").is_some(),present);
+                }
+                // Ordinary Service update preserves UID while changing its published port mapping.
+                let mut updated_service=(*service_raw.get("default/old").unwrap()).clone();
+                let service_uid=updated_service.metadata.uid.clone();
+                assert_eq!(updated_service.metadata.resource_version.as_deref(),Some("1"));
+                updated_service.metadata.resource_version=Some("2".into());
+                updated_service.spec.as_mut().unwrap().ports.as_mut().unwrap()[0].target_port=Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(8081));
+                service_raw.upsert("default/old".into(),Arc::new(updated_service));
+                route.metadata.resource_version=Some("service-update".into());
+                raw.upsert(key.clone(),Arc::new(route.clone()));
+                services.on_event_key("default/old".into()).await;
+                step!(services,service_raw,"default/old"); step!(routes,raw,key);
+                let published_service=services.get("default/old").unwrap();
+                assert_eq!(published_service.metadata.uid,service_uid);
+                assert_eq!(published_service.metadata.resource_version.as_deref(),Some("2"));
+                assert_eq!(published_service.spec.as_ref().unwrap().ports.as_ref().unwrap()[0].target_port,Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(8081)));
+                let current=routes.get(&key).unwrap();
+                assert_eq!(current.metadata.uid,route.metadata.uid);
+                assert_eq!(current.metadata.generation,route.metadata.generation);
+                assert_eq!(current.metadata.resource_version.as_deref(),Some("service-update"));
+                assert_eq!(runtime.service_ref_mgr.get_refs("default/old"),vec![owner.clone()]);
+                assert_eq!(runtime.service_ref_mgr.get_dependencies(&owner.key()),vec!["default/old"]);
+                for present in [true,false] {
+                    if present { slice_raw.upsert("default/slice".into(),Arc::new(serde_json::from_value(json!({"metadata":{"name":"slice","namespace":"default","labels":{"kubernetes.io/service-name":"old"}},"addressType":"IPv4","endpoints":[]})).unwrap())); }
+                    else { slice_raw.remove("default/slice"); }
+                    slices.on_event_key("default/slice".into()).await; step!(slices,slice_raw,"default/slice"); step!(routes,raw,key);
+                    assert_eq!(routes.get(&key).unwrap().metadata.uid,route.metadata.uid);
+                }
+                for target in ["old","new","mirror-only"] {
+                    runtime.service_ref_mgr.add_ref(format!("default/{target}"),ResourceRef::new(ResourceKind::BackendTLSPolicy,Some("default".into()),format!("btp-{target}")));
+                    runtime.service_ref_mgr.add_ref(format!("default/{target}"),ResourceRef::new(ResourceKind::EdgionBackendTrafficPolicy,Some("default".into()),format!("ebtp-{target}")));
+                }
+                runtime.service_ref_mgr.add_ref(super::super::super::service_ref::mirror_service_key("default","mirror-only"),owner.clone());
+                // Two source events coalesce; only the latest recreated UID is loaded.
+                raw.remove(&key); routes.on_event_key(key.clone()).await;
+                route.metadata.uid=Some("coalesced".into()); route.metadata.generation=Some(5);
+                route.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].name="new".into();
+                raw.upsert(key.clone(),Arc::new(route.clone())); routes.on_event_key(key.clone()).await;
+                assert_eq!(routes.workqueue().len(),1); step!(routes,raw,key);
+                assert_eq!(routes.get(&key).unwrap().metadata.uid.as_deref(),Some("coalesced"));
+                assert_eq!(runtime.service_ref_mgr.get_dependencies(&owner.key()),vec!["default/new"]);
+                assert!(!runtime.service_ref_mgr.get_refs("default/old").contains(&owner));
+                for (processor,prefix) in [(btp.workqueue(),"btp"),(ebtp.workqueue(),"ebtp")] {
+                    let mut seen=std::collections::BTreeSet::new();
+                    for _ in 0..2 { let item=tokio::time::timeout(std::time::Duration::from_secs(3),processor.dequeue()).await.unwrap().unwrap(); seen.insert(item.key.clone()); processor.done(&item.key); }
+                    assert_eq!(seen,std::collections::BTreeSet::from([format!("default/{prefix}-old"),format!("default/{prefix}-new")]));
+                    assert!(tokio::time::timeout(processor.config().default_requeue_delay+std::time::Duration::from_millis(20),processor.dequeue()).await.is_err());
+                }
+                raw.remove(&key); routes.on_event_key(key.clone()).await; step!(routes,raw,key);
+                assert!(routes.get(&key).is_none()); assert!(runtime.service_ref_mgr.get_dependencies(&owner.key()).is_empty());
+                assert!(!runtime.service_ref_mgr.get_refs("default/new").contains(&owner));
+                for queue in [btp.workqueue(),ebtp.workqueue()] { let item=tokio::time::timeout(std::time::Duration::from_secs(3),queue.dequeue()).await.unwrap().unwrap(); assert!(item.key.ends_with("-new")); queue.done(&item.key); }
+                route.metadata.uid=Some("after-delete".into()); route.metadata.generation=Some(6);
+                raw.upsert(key.clone(),Arc::new(route)); routes.on_event_key(key.clone()).await; step!(routes,raw,key);
+                assert_eq!(routes.get(&key).unwrap().metadata.uid.as_deref(),Some("after-delete"));
+                assert_eq!(runtime.service_ref_mgr.get_dependencies(&owner.key()),vec!["default/new"]);
+            }
+        }};
+    }
+    check!(GRPCRoute, GrpcRouteHandler::default(), ResourceKind::GRPCRoute, "http");
+    check!(TCPRoute, TcpRouteHandler::default(), ResourceKind::TCPRoute, "tcp");
+    check!(TLSRoute, TlsRouteHandler::default(), ResourceKind::TLSRoute, "tls");
+    check!(UDPRoute, UdpRouteHandler::default(), ResourceKind::UDPRoute, "udp");
 }

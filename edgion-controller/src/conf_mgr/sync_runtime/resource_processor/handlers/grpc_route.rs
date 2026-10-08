@@ -10,7 +10,7 @@ use super::super::ref_grant::validate_grpc_route_if_enabled;
 use super::grpc_route_delegation::{flatten_route, DelegationLookup};
 use super::route_backend_refs::{self, BackendDependencyReceipt};
 use super::{
-    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_route,
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_owner,
     requeue_backend_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
@@ -118,18 +118,13 @@ impl GrpcRouteHandler {
         extra_dependencies: &[BackendDependencyReceipt],
         ctx: &HandlerContext,
     ) -> Vec<String> {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let route_name = route.metadata.name.as_deref().unwrap_or("");
-
         let mut backend_refs_list = GrpcRouteBackendRefs::from_route(route)
             .map(|references| route_backend_refs::collect_dependencies(references.authored()))
             .unwrap_or_default();
         backend_refs_list.extend_from_slice(extra_dependencies);
 
         super::route_utils::register_service_backend_refs(
-            ResourceKind::GRPCRoute,
-            route_ns,
-            route_name,
+            &Self::create_resource_ref(route),
             &backend_refs_list,
             ctx.runtime(),
         )
@@ -408,7 +403,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         }
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
-        requeue_backend_policies_for_route(ResourceKind::GRPCRoute, route_ns, route_name, ctx).await;
+        requeue_backend_policies_for_owner(&Self::create_resource_ref(route), ctx).await;
 
         // This route may be someone's delegation child: requeue the parents so
         // they re-flatten with the new child spec.
@@ -429,8 +424,8 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
-        requeue_backend_policies_for_route(ResourceKind::GRPCRoute, route_ns, route_name, ctx).await;
-        super::route_utils::clear_service_backend_refs(ResourceKind::GRPCRoute, route_ns, route_name, ctx.runtime());
+        requeue_backend_policies_for_owner(&Self::create_resource_ref(route), ctx).await;
+        super::route_utils::clear_service_backend_refs(&resource_ref, ctx.runtime());
 
         remove_from_gateway_route_index(ResourceKind::GRPCRoute, route_ns, route_name, ctx.runtime());
 

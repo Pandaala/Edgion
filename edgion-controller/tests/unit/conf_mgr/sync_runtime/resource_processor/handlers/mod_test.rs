@@ -190,3 +190,41 @@ fn ebtp_refs_for_service_filters_out_route_refs() {
     assert_eq!(refs, vec![policy]);
     assert!(ebtp_refs_for_service(&mgr, "ns/other").is_empty());
 }
+
+#[test]
+fn remaining_raw_route_owners_use_semantic_gateway_ancestry_without_mirror_aliases() {
+    use crate::conf_mgr::sync_runtime::resource_processor::service_ref::mirror_service_key;
+    use crate::conf_mgr::ControllerRuntime;
+    use edgion_resources::resources::common::ParentReference;
+    use std::sync::Arc;
+    for kind in [
+        ResourceKind::GRPCRoute,
+        ResourceKind::TCPRoute,
+        ResourceKind::TLSRoute,
+        ResourceKind::UDPRoute,
+    ] {
+        for namespace in [None, Some("default".to_string())] {
+            let runtime = Arc::new(ControllerRuntime::default());
+            let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
+            let owner = ResourceRef::new(kind, namespace, "route".into());
+            let parent: ParentReference = serde_json::from_value(serde_json::json!({"name":"gateway"})).unwrap();
+            runtime
+                .gateway_route_index
+                .update_route(kind, "default/route", &[parent], "default");
+            runtime.service_ref_mgr.add_ref("default/service".into(), owner.clone());
+            runtime
+                .service_ref_mgr
+                .add_ref(mirror_service_key("default", "mirror"), owner.clone());
+            let map = resolve_policy_ancestor_gateways("default", &["service", "mirror"], "default/policy", &ctx);
+            assert_eq!(map.len(), 1);
+            assert_eq!(map["default/gateway"], BTreeSet::from(["default/service".to_string()]));
+            assert_eq!(
+                crate::conf_mgr::sync_runtime::resource_processor::service_ref::forwarding_service_dependencies(
+                    &runtime.service_ref_mgr,
+                    &owner.key()
+                ),
+                vec!["default/service"]
+            );
+        }
+    }
+}

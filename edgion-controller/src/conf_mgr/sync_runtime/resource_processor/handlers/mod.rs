@@ -240,16 +240,6 @@ pub(crate) fn resolve_policy_ancestor_gateways_for_targets(
 /// parentRefs).
 ///
 /// Chain: Route → ServiceRefManager(reverse: route→services) → {BackendTLSPolicyTargetManager, service_ref_mgr}(forward: service→policies)
-pub(crate) async fn requeue_backend_policies_for_route(
-    route_kind: ResourceKind,
-    route_ns: &str,
-    route_name: &str,
-    ctx: &HandlerContext,
-) {
-    let route_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
-    requeue_backend_policies_for_owner(&route_ref, ctx).await;
-}
-
 pub(crate) async fn requeue_backend_policies_for_owner(route_ref: &ResourceRef, ctx: &HandlerContext) {
     let service_keys = crate::conf_mgr::sync_runtime::resource_processor::service_ref::forwarding_service_dependencies(
         &ctx.runtime().service_ref_mgr,
@@ -313,7 +303,7 @@ pub(crate) async fn requeue_backend_policies_for_backend_targets(backend_target_
 /// Requeue backend policies (BackendTLSPolicy + EdgionBackendTrafficPolicy)
 /// bound to Services this route no longer references.
 ///
-/// Companion to `requeue_backend_policies_for_route`: that helper reads the
+/// Companion to `requeue_backend_policies_for_owner`: that helper reads the
 /// route's *current* backend Services (the apply path re-registers them in
 /// `parse` before `on_change` runs), so a Service dropped from backendRefs would
 /// never have its policies requeued to re-resolve ancestor Gateways. Feed it the

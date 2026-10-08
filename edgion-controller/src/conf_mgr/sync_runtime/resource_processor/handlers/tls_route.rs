@@ -5,7 +5,7 @@
 use super::super::ref_grant::validate_tls_route_if_enabled;
 use super::route_backend_refs;
 use super::{
-    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_route,
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_owner,
     requeue_backend_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
@@ -38,17 +38,12 @@ impl TlsRouteHandler {
     /// Register Service backend references for cross-resource requeue.
     /// Returns the Service keys dropped from backendRefs by this update.
     fn register_service_refs(route: &TLSRoute, ctx: &HandlerContext) -> Vec<String> {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let route_name = route.metadata.name.as_deref().unwrap_or("");
-
         let backend_refs_list = TlsRouteBackendRefs::from_route(route)
             .map(|references| route_backend_refs::collect_dependencies(references.authored()))
             .unwrap_or_default();
 
         super::route_utils::register_service_backend_refs(
-            ResourceKind::TLSRoute,
-            route_ns,
-            route_name,
+            &Self::create_resource_ref(route),
             &backend_refs_list,
             ctx.runtime(),
         )
@@ -179,7 +174,7 @@ impl TlsRouteHandler {
         }
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
-        requeue_backend_policies_for_route(ResourceKind::TLSRoute, route_ns, route_name, ctx).await;
+        requeue_backend_policies_for_owner(&Self::create_resource_ref(route), ctx).await;
     }
 
     async fn on_delete_route(&self, route: &TLSRoute, ctx: &HandlerContext) {
@@ -188,8 +183,8 @@ impl TlsRouteHandler {
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
-        requeue_backend_policies_for_route(ResourceKind::TLSRoute, route_ns, route_name, ctx).await;
-        super::route_utils::clear_service_backend_refs(ResourceKind::TLSRoute, route_ns, route_name, ctx.runtime());
+        requeue_backend_policies_for_owner(&Self::create_resource_ref(route), ctx).await;
+        super::route_utils::clear_service_backend_refs(&resource_ref, ctx.runtime());
 
         remove_from_gateway_route_index(ResourceKind::TLSRoute, route_ns, route_name, ctx.runtime());
 

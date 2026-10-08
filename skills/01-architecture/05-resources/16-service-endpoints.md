@@ -19,6 +19,17 @@ BackendTLSPolicy, and EdgionBackendTrafficPolicy register target Service keys th
 runtime-owned reference manager. A Service create/update/delete requeues those owners so
 `ResolvedRefs`, resolved ports, and policy target status are recomputed.
 
+Route dependency owners retain their actual metadata namespace, including `None`
+for namespace-less local inputs. Service and EndpointSlice events enqueue that
+exact raw worker key. Backend target defaults and GatewayRouteIndex identities
+still use the effective namespace (`default` when omitted). Registration,
+replacement, policy notification and deletion must use the same raw owner;
+normalizing it would enqueue `default/name` for a source stored under `name`.
+The R4a worker matrix covers GRPC/TCP/TLS/UDP with both namespace forms, extending
+the HTTP R3b precedent, including ordinary same-UID Service updates with changed
+resource version and port mapping. It proves in-process queue/raw-store reconciliation, not
+live configuration delivery or every other event source's identity handling.
+
 The Gateway discovery coordinator combines Service port/protocol metadata with EndpointSlice
 sources and publishes one immutable generation of canonical Service sections.
 Native HTTP/gRPC selects ExternalName behavior from the actual Service type, using

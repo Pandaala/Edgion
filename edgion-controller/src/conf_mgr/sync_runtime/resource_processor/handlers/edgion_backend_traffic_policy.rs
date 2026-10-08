@@ -36,7 +36,7 @@
 //! requeues routes, gateways, or Services; it only requeues its own siblings):
 //! - Service or EdgionBackend appear/disappear requeues every policy ref
 //!   registered under the corresponding typed dependency key.
-//! - Route change -> `requeue_backend_policies_for_route` /
+//! - Route change -> `requeue_backend_policies_for_owner` /
 //!   `requeue_backend_policies_for_services` (in `handlers/mod.rs`) requeue
 //!   policies bound to the route's backend Services, so ancestor Gateways
 //!   re-resolve.

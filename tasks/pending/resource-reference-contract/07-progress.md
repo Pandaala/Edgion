@@ -76,9 +76,10 @@ or historical conformance. Record commit hashes only after successful commits.
   R3b mirror migration passed both independent Astra result rounds and all
   warning-free root gates, then committed locally as
   16e7be6dce9d9d7ffc9dd70fa6889a557043aace. No push occurred. R3c descriptor
-  migration has completed corrected implementation, two independent actual
-  Astra review passes and clean renewed root gates; local commit is next.
-  R4-R8 and F1/F2 remain pending.
+  migration completed corrected implementation, two independent actual Astra
+  review passes and clean renewed root gates, then committed locally as
+  ca7bdaf79bed40287505287345e5ddb5f443ae84. No push occurred. R4a is in plan
+  preparation; the rest of R4-R8 and F1/F2 remain pending.
 - The first checkpoint audit and workspace commit gates passed. The user
   committed the accumulated code snapshot
   as 0f40e2708496e9aacafb0dc2fbd2cdd786ffa9e8 (`tmp commit`) while verification
@@ -87,7 +88,7 @@ or historical conformance. Record commit hashes only after successful commits.
   documentation and execution records. No push occurred. The user's commit
   remains unchanged.
 - The earlier external baseline was 4dbcc5495; current HEAD is the completed
-  R3b commit 16e7be6dc. Revalidate each batch against its current HEAD.
+  R3c commit ca7bdaf79. Revalidate each batch against its current HEAD.
   The independently owned, untracked `review-results/` artifacts remain outside
   this task's mutation and staging scope.
 
@@ -1209,3 +1210,53 @@ metrics/locks/snapshots, body/transport mechanism or sensitive logging. English
 content and mirrored unit layout pass. Stage only the19 reviewed technical paths
 plus this coordinator ledger; unrelated review-results is excluded. Original issue,
 R4-R8 and F1/F2 remain open. Commit is authorized locally; never push.
+
+R3c committed locally as ca7bdaf79bed40287505287345e5ddb5f443ae84
+(Bind descriptor construction to owning plugin references), parent16e7be6dc.
+Exact20 staged paths contained19 frozen technical files plus this ledger; root
+verified every committed technical hash, clean tracked tree and empty index.
+Only unrelated review-results remained untracked. No push performed. Stage and
+commit proofs remain under r3c-verification-20261008-r1.
+
+Root starts R4a PLAN ONLY at this new HEAD: revalidate omitted-namespace Service
+wake/cleanup/policy notification keys for GRPC/TCP/TLS/UDP Routes. Preserve exact
+raw owner keys while semantic target/index namespace remains effective default;
+HTTP's reviewed R3b correction is precedent, not a reason for blind replacement.
+Require real event/worker/source-generation tests and independent plan review before
+edits. Admin namespace admission, EP semantic collisions and generic readonly status
+remain separate R4 work; candidate evidence is under r4-candidate-20261008.
+
+R4a exact14 plan passed independent Astra review. Root froze14 originals,13 original
+IDs/0 ignores and fresh Controller compiled1751 listing (no test execution). The
+three specified owner-expectation amendments are approved; every other assertion
+remains. Root authorizes EXECUTE with actual raw ResourceRef reused throughout
+Service registration/replacement/delete and current/dropped policy notification,
+while semantic target/index defaults remain unchanged. Baseline/plan artifacts are
+r4a-baseline-20261008 and r4a-plan-20261008. No broader R4 work or push authorized.
+
+R4a candidate passed931 Controller tests (source13 ->15; compiled1751 ->1753,
+no removals/ignore changes) and all14 clean root gates. First actual independent
+review found R4a-F1, a bounded verification gap: new Service lifecycle matrix omitted
+ordinary same-UID update. Production semantics and evidence otherwise passed.
+Root authorizes adding the already planned update case within the existing new test,
+with changed RV/data and real raw-key worker/publication assertions. No production
+or scope expansion. Earlier new-fixture delay-queue and TLS hostname failures remain
+recorded. Corrected focused verification and both actual reviews remain required.
+
+R4a-F1 corrected: same-UID Service update changes RV1 ->2 and targetPort8081,
+then real Service and raw Route workers prove publication/current Route identity
+and both dependency directions for all8 cases. Corrected Controller931 tests pass;
+source13 ->15 and compiled1751 ->1753 retain all originals/ignores. All14 renewed
+root r2 gates pass, check10.884s/Clippy14.034s, zero warnings/errors. Root reproduced
+raw logs and unchanged before/after/current/frozen14 hashes.
+
+Both independent actual Astra reviewers return SCOPED PASS on corrected r2,
+manifest0ea2c205ae0c0dd58f080479dc5637ba1f4a4cadf9a260d76cf61e09cc0997bd,
+patchf90ae43feb213c8b2f319e493fc4c96233de473747b7b5b9ed882bc3c0db596f.
+First reviewer independently resolved F1; second reviewed the full actual diff,
+callers, lifecycle and evidence. No scoped blocker remains. Root graded MUST scan
+confirms canonical raw-owner reuse, semantic target/index defaults and Grant
+unchanged, no added queue/handler IO/schema/logging/metrics/hotpath work, preserved
+assertions except3 reviewed owner expectations. Stage exactly14 reviewed technical
+files plus this ledger; unrelated review-results remains excluded. Local commit
+next; no push. Broader R4-R8/F1/F2 and original issue remain open.

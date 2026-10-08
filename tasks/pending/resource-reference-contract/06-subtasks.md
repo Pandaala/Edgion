@@ -729,8 +729,8 @@ recorded. See [04-implementation.md](04-implementation.md) for evidence detail a
 [07-progress.md](07-progress.md) for workspace checks, independent result reviews
 and commit authority, which remain separate gates.
 
-Other native omitted-namespace Service worker keys remain an explicit R4 follow-up,
-not part of R3b acceptance. Mirror in-process tests do not establish live
+Other native omitted-namespace Service worker keys were an explicit R4 follow-up,
+not part of R3b acceptance; the bounded correction is recorded in R4a below. Mirror in-process tests do not establish live
 conformance; descriptor R3c and remaining finite-contract work remain open.
 
 The first actual R3b review returned SCOPED BLOCK for R3b-F1: a test-only
@@ -786,3 +786,23 @@ no removals; all original assertions and previous R3c tests remain. Evidence is 
 `tmp/resource-reference-contract/r3c-f1-verification-20261008-r1`. Renewed workspace
 gates and two actual-result reviews are required before coordinator acceptance;
 the earlier first PASS does not accept the correction.
+
+
+### R4a execution evidence
+
+The 14-path batch makes GRPC/TCP/TLS/UDP Service dependency owners preserve their
+actual raw namespace for register/replace/delete and policy notifications. Target
+and Gateway index defaults remain semantic `default`. The shared helpers retain
+forwarding-only policy selection and dropped-target notifications.
+
+Stable focused Controller verification passed 931 tests; source IDs 13 to 15 and
+compiled IDs 1751 to 1753 preserve all originals and ignores. Actual worker tests
+cover both namespace forms, Service/Slice events, latest UID/generation,
+ordinary same-UID Service updates with changed resource version and port mapping,
+coalescing, replacement, deletion/recreation and old/current policy wakes. Two
+NEW-fixture failures and their corrections are retained in
+`tmp/resource-reference-contract/r4a-verification-20261008-r1`.
+See [04-implementation.md](04-implementation.md) for scope and evidence, and
+[07-progress.md](07-progress.md) for final gates, independent reviews and commit.
+Other event-source identities, Admin/source collision, raw-None EP lookup,
+generic EP status scans and live conformance remain separate work.

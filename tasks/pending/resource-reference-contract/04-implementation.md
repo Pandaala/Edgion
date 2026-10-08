@@ -2153,7 +2153,7 @@ passed; they establish in-process recovery, not live delivery or conformance.
 Workspace gates and both independent actual-result reviews remain pending under
 root ownership. These results do not close the whole finite reference contract.
 
-Static follow-up: GRPCRoute/TCPRoute/TLSRoute/UDPRoute continue to use the unchanged
+Historical R3b follow-up: GRPCRoute/TCPRoute/TLSRoute/UDPRoute still used the
 namespace-normalizing Service registration wrapper. The source-key distinction for
 omitted namespaces is not fixed or worker-verified for those kinds by R3b. Track
 that finite remaining lifecycle boundary with R4; do not infer coverage from the
@@ -2262,3 +2262,30 @@ Raw commands/exits, binary/source/log hashes and comparisons are under
 and superseded results remain in their original evidence directories. Scoped format,
 diff and owning-document checks accompany handoff. Renewed workspace gates and two
 actual-result reviews are required; progress07 owns their final state.
+
+
+### R4a: remaining Route Service wake owners
+
+At base `ca7bdaf79bed40287505287345e5ddb5f443ae84`, the approved 14-path batch
+passes actual GRPC/TCP/TLS/UDP ResourceRef owners into Service registration,
+replacement, deletion and the existing owner policy notifier. Effective target,
+GatewayRouteIndex and attachment namespaces remain unchanged. No aliases, global
+metadata normalization, queues, handler IO, schema or Grant behavior were added.
+Three approved old expected-owner adaptations retain all other assertions.
+
+Stable r4 verification passed 931 Controller resource_processor tests. Scoped
+source identities are 13 to 15, full compiled identities 1751 to 1753, with no
+removals or changed ignores. The new eight-case worker matrix uses real event
+queues, exact RawStore lookups and process_work_item for Service/Slice events,
+current UID/generation, ordinary same-UID Service updates with changed resource
+version and port mapping, coalesced retargeting, policy wakes and delete/recreate.
+Ancestry tests retain semantic default keys and mirror-only exclusion. The two
+initial NEW-fixture failures (ready-queue timing and missing TLS hostname) remain
+recorded; neither required production or old-assertion changes.
+
+Commands, exits, frozen Rust hashes, binary hash and identity comparison are in
+`tmp/resource-reference-contract/r4a-verification-20261008-r1`. These tests do not
+establish live delivery, all other event-source wake identities, Admin/source
+collision handling, raw-None EP lookup or generic EP status-scan correctness.
+Final gates, both independent result reviews and commit status are maintained in
+[07-progress.md](07-progress.md).

@@ -63,6 +63,18 @@ The previous registry-only replacement/deletion test established consistent
 normalization, but did not prove that the resulting key could load the actual
 namespace-less source from RawStore; R3b corrects that limitation.
 
+R4a extends this raw-owner correction to forwarding Service dependencies of
+GRPCRoute, TCPRoute, TLSRoute and UDPRoute. It reuses the existing owner policy
+notifier and clear-before-add helpers; semantic Gateway ancestry still defaults
+the namespace. The shared worker matrix checks both namespace forms, current
+UID/generation, Service and EndpointSlice events, ordinary same-UID Service
+updates with changed resource version and port mapping, coalesced retargeting, deletion,
+recreation and old/current policy notifications. Mirror-only policy exclusion
+remains intact; no mirror behavior is added to these Route kinds. Focused
+Controller verification passed 931 tests. This is in-process evidence; coordinator
+[progress](../../../../tasks/pending/resource-reference-contract/07-progress.md)
+records independent reviews, workspace gates and commit status.
+
 ## Alternatives and limits
 
 Relying on Kubernetes admission leaves other configuration centers inconsistent.

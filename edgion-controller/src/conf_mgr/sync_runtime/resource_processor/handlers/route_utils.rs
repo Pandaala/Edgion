@@ -676,18 +676,12 @@ pub fn update_tracker_accepted_only(
 /// update that drops a backend Service would otherwise never notify that
 /// Service's policies to re-resolve their ancestor Gateways.
 pub(super) fn register_service_backend_refs(
-    route_kind: edgion_resources::ResourceKind,
-    route_ns: &str,
-    route_name: &str,
+    resource_ref: &crate::conf_mgr::sync_runtime::resource_processor::ResourceRef,
     backend_refs: &[super::route_backend_refs::BackendDependencyReceipt],
     runtime: &ControllerRuntime,
 ) -> Vec<String> {
-    use crate::conf_mgr::sync_runtime::resource_processor::ResourceRef;
-
-    let resource_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
-
-    let old = begin_service_refs(&resource_ref, runtime);
-    finish_service_refs(&resource_ref, backend_refs, old, runtime)
+    let old = begin_service_refs(resource_ref, runtime);
+    finish_service_refs(resource_ref, backend_refs, old, runtime)
 }
 
 pub(super) fn begin_service_refs(
@@ -723,15 +717,10 @@ pub(super) fn finish_service_refs(
 
 /// Clear Service backend references for a deleted route.
 pub fn clear_service_backend_refs(
-    route_kind: edgion_resources::ResourceKind,
-    route_ns: &str,
-    route_name: &str,
+    resource_ref: &crate::conf_mgr::sync_runtime::resource_processor::ResourceRef,
     runtime: &ControllerRuntime,
 ) {
-    use crate::conf_mgr::sync_runtime::resource_processor::ResourceRef;
-
-    let resource_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
-    runtime.service_ref_mgr.clear_value_refs(&resource_ref);
+    runtime.service_ref_mgr.clear_value_refs(resource_ref);
 }
 
 /// Look up a Gateway resource from the processor registry.

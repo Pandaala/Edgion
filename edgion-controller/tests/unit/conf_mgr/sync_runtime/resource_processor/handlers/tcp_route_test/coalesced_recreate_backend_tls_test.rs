@@ -2,7 +2,7 @@
 //! delete->recreate that drops a backend Service must requeue the
 //! BackendTLSPolicies bound to that dropped Service, even though
 //! handler.on_delete never runs (the workqueue coalesces by key). The apply
-//! path's `requeue_backend_policies_for_route` only sees the route's
+//! path's `requeue_backend_policies_for_owner` only sees the route's
 //! CURRENT backends, so the dropped Service's BTPs rely on the return-delta
 //! requeue added to `register_service_backend_refs`.
 
