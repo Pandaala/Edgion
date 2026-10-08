@@ -259,3 +259,46 @@ async fn standalone_generation_default_target_live_updates_and_disabled_owner_po
         assert!(disabled.tls_route_plugin_runtime.is_empty());
     }
 }
+
+#[tokio::test]
+async fn gcir_selector_fresh_retarget_generation_and_pinned_view_keep_live_snapshot() {
+    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+    let store = get_global_edgion_config_data_store();
+    let seed = |name: &str, active: &str| {
+        let data=serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"default"},"spec":{"data":{"type":"Selector","config":{"active":active}}}})).unwrap();
+        store.insert_raw_for_test(format!("default/{name}"), Arc::new(data));
+    };
+    let source = |name: &str| -> Arc<EdgionStreamPlugins> {
+        Arc::new(serde_json::from_value(serde_json::json!({"metadata":{"name":"r5e-gcir"},"spec":{"plugins":[{
+        "type":"GlobalConnectionIpRestriction","config":{"enable":true,"activeProfile":"base","activeProfileRef":{"name":name},"profiles":{"base":{"defaultAction":"allow","deny":[{"name":"other-net","cidrs":["203.0.113.0/24"]}]},"blocked":{"defaultAction":"deny","deny":[{"name":"all","cidrs":["0.0.0.0/0"]}]}}}
+    }]}})).unwrap())
+    };
+    let mut first = StreamPluginGeneration::new(source("r5e-selector-first"));
+    let pinned = first.compile(&CompiledPluginPolicy::default(), CONNECTION);
+    let context = StreamContext::new("198.51.100.9".parse().unwrap(), 18502, StreamLayer::Stage1);
+    assert!(matches!(
+        pinned.stream_plugin_runtime.run(&context).await,
+        StreamPluginResult::Allow
+    ));
+    seed("r5e-selector-first", "blocked");
+    assert!(matches!(
+        pinned.stream_plugin_runtime.run(&context).await,
+        StreamPluginResult::Deny(_)
+    ));
+    seed("r5e-selector-second", "base");
+    let mut next = StreamPluginGeneration::new(source("r5e-selector-second"));
+    let repaired = next.compile(&CompiledPluginPolicy::default(), CONNECTION);
+    assert!(matches!(
+        repaired.stream_plugin_runtime.run(&context).await,
+        StreamPluginResult::Allow
+    ));
+    assert!(matches!(
+        pinned.stream_plugin_runtime.run(&context).await,
+        StreamPluginResult::Deny(_)
+    ));
+    seed("r5e-selector-first", "base");
+    assert!(matches!(
+        pinned.stream_plugin_runtime.run(&context).await,
+        StreamPluginResult::Allow
+    ));
+}

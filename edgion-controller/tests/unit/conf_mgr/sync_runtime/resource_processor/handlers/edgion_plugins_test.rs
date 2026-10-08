@@ -8254,3 +8254,239 @@ async fn waf_policy_and_selector_grants_require_ep_source_through_revocation() {
         }
     }
 }
+
+#[tokio::test]
+async fn remaining_config_data_roles_validate_identity_and_recompute_current_grants() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::config_data_ref_mark::{
+        denial_marker, resolve_field,
+    };
+    use edgion_resources::refs::config_data_fields::HttpConfigDataEntry;
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    for (kind, field, target_type, config) in [
+        (
+            "RequestAccessPolicy",
+            "activeProfileRef",
+            "Selector",
+            serde_json::json!({"active":"base"}),
+        ),
+        (
+            "Canary",
+            "activeProfileRef",
+            "Selector",
+            serde_json::json!({"active":"base"}),
+        ),
+        (
+            "RegionRoute",
+            "overrideRef",
+            "RegionRouteOverride",
+            serde_json::json!({}),
+        ),
+    ] {
+        let mut owner: EdgionPlugins = serde_json::from_value(
+            serde_json::json!({"metadata":{"name":"bare"},"spec":{"requestPlugins":[{
+                "type":kind,"config":remaining_role_config(kind,field,serde_json::json!({"name":"target","namespace":"shared"}))
+            }]}}),
+        )
+        .unwrap();
+        let target: edgion_resources::EdgionConfigData = serde_json::from_value(serde_json::json!({"metadata":{"name":"target","namespace":"shared"},"spec":{"data":{"type":target_type,"config":config}}})).unwrap();
+        runtime
+            .edgion_config_data_store
+            .replace_all(HashMap::from([("shared/target".into(), target.clone())]));
+        for source in [Some("EdgionStreamPlugins"), Some("EdgionPlugins"), None] {
+            runtime.ref_grant_store.remove("shared/grant");
+            if let Some(source) = source {
+                let grant = serde_json::from_value(serde_json::json!({"metadata":{"name":"grant","namespace":"shared"},"spec":{
+                    "from":[{"group":"edgion.io","kind":source,"namespace":"default"}],"to":[{"group":"edgion.io","kind":"EdgionConfigData","name":"target"}]
+                }})).unwrap();
+                runtime.ref_grant_store.upsert("shared/grant".into(), Arc::new(grant));
+            }
+            let loan = HttpConfigDataEntry::from_plugins(&owner, 0).unwrap().field().unwrap();
+            let result = resolve_field(&loan, &ctx);
+            assert_eq!(result.target.is_some(), source == Some("EdgionPlugins"));
+            assert_eq!(result.denied.is_none(), source == Some("EdgionPlugins"));
+            assert_eq!(result.error.is_none(), source == Some("EdgionPlugins"));
+            let ProcessResult::Continue(mut parsed) = EdgionPluginsHandler.parse(owner.clone(), &ctx).await else {
+                panic!("parse")
+            };
+            let current_errors = match kind {
+                "RequestAccessPolicy" => super::resolve_active_profile_refs(&parsed, &ctx),
+                "Canary" => super::resolve_canary_active_profile_refs(&parsed, &ctx),
+                _ => super::resolve_override_refs(&parsed, &ctx),
+            };
+            assert_eq!(current_errors.is_empty(), source == Some("EdgionPlugins"));
+            assert!(runtime
+                .edgion_config_data_refs
+                .get_refs("shared/target")
+                .contains(&"EdgionPlugins:bare".into()));
+            // Readonly diagnostics use current permission even with the opposite transported marker.
+            let entry = &mut parsed.spec.request_plugins.as_mut().unwrap()[0].plugin;
+            let reference = match entry {
+                EdgionPlugin::RequestAccessPolicy(c) => c.active_profile_ref.as_mut().unwrap(),
+                EdgionPlugin::Canary(c) => c.active_profile_ref.as_mut().unwrap(),
+                EdgionPlugin::RegionRoute(c) => c.override_ref.as_mut().unwrap(),
+                _ => unreachable!(),
+            };
+            reference.ref_denied = if source == Some("EdgionPlugins") {
+                Some(edgion_resources::resources::common::RefDenied {
+                    target_namespace: "shared".into(),
+                    target_name: "target".into(),
+                    reason: None,
+                })
+            } else {
+                None
+            };
+            let errors = match kind {
+                "RequestAccessPolicy" => super::resolve_active_profile_refs(&parsed, &ctx),
+                "Canary" => super::resolve_canary_active_profile_refs(&parsed, &ctx),
+                _ => super::resolve_override_refs(&parsed, &ctx),
+            };
+            assert_eq!(errors.is_empty(), source == Some("EdgionPlugins"));
+            EdgionPluginsHandler.on_delete(&parsed, &ctx).await;
+            assert!(runtime.edgion_config_data_refs.get_refs("shared/target").is_empty());
+        }
+        for reference in [
+            serde_json::json!({"name":"bad/name"}),
+            serde_json::json!({"name":"target","namespace":""}),
+        ] {
+            owner = serde_json::from_value(serde_json::json!({"metadata":{"name":"bare"},"spec":{"requestPlugins":[{"type":kind,"config":remaining_role_config(kind,field,reference)}]}})).unwrap();
+            runtime.edgion_config_data_store.replace_all(HashMap::from([
+                ("default/bad/name".into(), target.clone()),
+                ("/target".into(), target.clone()),
+            ]));
+            let loan = HttpConfigDataEntry::from_plugins(&owner, 0).unwrap().field().unwrap();
+            assert!(denial_marker(&loan, &ctx).is_none());
+            assert!(matches!(
+                resolve_field(&loan, &ctx).error,
+                Some(ResolvedRefsError::InvalidReference { .. })
+            ));
+            assert!(EdgionPluginsHandler::get_region_route_override_keys(&owner).is_empty());
+            assert!(EdgionPluginsHandler::get_active_profile_ref_keys(&owner).is_empty());
+            assert!(EdgionPluginsHandler::get_canary_active_profile_ref_keys(&owner).is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn url_actual_slots_keep_good_units_through_grant_revocation_and_invalid_decoys() {
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let good = request_access_url_data("default", "good", vec![request_access_url_candidate("good", vec![])]);
+    let external = request_access_url_data(
+        "shared",
+        "external",
+        vec![request_access_url_candidate("external", vec![])],
+    );
+    runtime.edgion_config_data_store.replace_all(HashMap::from([
+        ("default/good".into(), good.clone()),
+        ("default/bad/name".into(), good.clone()),
+        ("/good".into(), good),
+        ("shared/external".into(), external),
+    ]));
+    let refs = "                - name: good\n                - name: bad/name\n                - name: good\n                  namespace: ''\n                - name: external\n                  namespace: shared\n";
+    for source in [Some("EdgionConfigData"), Some("EdgionPlugins"), None] {
+        runtime.ref_grant_store.remove("shared/url-grant");
+        if let Some(source) = source {
+            let grant = serde_json::from_value(serde_json::json!({"metadata":{"name":"url-grant","namespace":"shared"},"spec":{
+                "from":[{"group":"edgion.io","kind":source,"namespace":"default"}],"to":[{"group":"edgion.io","kind":"EdgionConfigData","name":"external"}]
+            }})).unwrap();
+            runtime
+                .ref_grant_store
+                .upsert("shared/url-grant".into(), Arc::new(grant));
+        }
+        let mut owner = request_access_url_policy(refs);
+        owner.metadata.namespace = None;
+        let ProcessResult::Continue(mut parsed) = EdgionPluginsHandler.parse(owner, &ctx).await else {
+            panic!("parse")
+        };
+        assert_eq!(
+            first_resolved_url_candidates(&parsed).len(),
+            if source == Some("EdgionPlugins") { 2 } else { 1 }
+        );
+        for key in ["default/good", "shared/external"] {
+            assert_eq!(runtime.edgion_config_data_refs.get_refs(key).len(), 1);
+        }
+        for key in ["default/bad/name", "/good"] {
+            assert!(runtime.edgion_config_data_refs.get_refs(key).is_empty());
+        }
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            unreachable!()
+        };
+        let warnings = config.resolution_warnings.clone();
+        assert!(!warnings.is_empty());
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            unreachable!()
+        };
+        assert_eq!(
+            config.resolution_warnings, warnings,
+            "readonly status keeps parse-time warnings"
+        );
+    }
+}
+
+fn remaining_role_config(kind: &str, field: &str, reference: serde_json::Value) -> serde_json::Value {
+    let mut config = match kind {
+        "RequestAccessPolicy" => {
+            serde_json::json!({"defaultProfile":"base","profiles":{"base":{"requiredRuleGroups":[]}}})
+        }
+        "Canary" => serde_json::json!({"enable":true,"activeProfile":"base","profiles":{"base":{"name":"backend"}}}),
+        _ => serde_json::json!({}),
+    };
+    config[field] = reference;
+    config
+}
+
+#[tokio::test]
+async fn config_data_permission_exemptions_never_exempt_invalid_identity() {
+    const CHILD: &str = "EDGION_R5E_VALIDATION_OFF_CHILD";
+    let validation_off = std::env::var_os(CHILD).is_some();
+    if validation_off {
+        let mut config = crate::config::EdgionControllerConfig::default();
+        config.validation.enable_reference_grant_validation = false;
+        crate::config::init_controller_config(config);
+        assert!(!crate::config::is_reference_grant_validation_enabled());
+    } else {
+        let output=std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","conf_mgr::sync_runtime::resource_processor::handlers::edgion_plugins::tests::config_data_permission_exemptions_never_exempt_invalid_identity","--nocapture"])
+            .env(CHILD,"1").output().unwrap();
+        assert!(
+            output.status.success(),
+            "child failed: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed; 0 failed"),
+            "child must execute the exact test: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    for visibility in ["Namespace", "Cluster"] {
+        let target:edgion_resources::EdgionConfigData=serde_json::from_value(serde_json::json!({"metadata":{"name":"selector","namespace":"shared"},"spec":{"visibility":visibility,"data":{"type":"Selector","config":{"active":"base"}}}})).unwrap();
+        runtime.edgion_config_data_store.replace_all(HashMap::from([
+            ("shared/selector".into(), target.clone()),
+            ("shared/bad/name".into(), target.clone()),
+            ("/selector".into(), target),
+        ]));
+        for (name, namespace, valid) in [
+            ("selector", "shared", true),
+            ("bad/name", "shared", false),
+            ("selector", "", false),
+        ] {
+            let owner:EdgionPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"exemption-owner"},"spec":{"requestPlugins":[{
+                "type":"Canary","config":remaining_role_config("Canary","activeProfileRef",serde_json::json!({"name":name,"namespace":namespace}))
+            }]}})).unwrap();
+            let ProcessResult::Continue(parsed) = EdgionPluginsHandler.parse(owner, &ctx).await else {
+                panic!("parse")
+            };
+            let errors = super::resolve_canary_active_profile_refs(&parsed, &ctx);
+            assert_eq!(errors.is_empty(), valid && (validation_off || visibility == "Cluster"));
+            assert!(runtime.edgion_config_data_refs.get_refs("shared/bad/name").is_empty());
+            assert!(runtime.edgion_config_data_refs.get_refs("/selector").is_empty());
+            assert_eq!(
+                runtime.edgion_config_data_refs.get_refs("shared/selector").len(),
+                usize::from(valid)
+            );
+        }
+    }
+}

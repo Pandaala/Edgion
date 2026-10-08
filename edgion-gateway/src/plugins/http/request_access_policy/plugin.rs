@@ -1,5 +1,7 @@
 //! RequestAccessPolicy L7 request filter.
 
+use edgion_resources::refs::config_data_fields::{request_access_has_external_data, HttpConfigDataEntry};
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 
@@ -347,17 +349,42 @@ pub struct RequestAccessPolicy {
 }
 
 impl RequestAccessPolicy {
-    pub fn create(
+    pub(crate) fn create_bound(
+        entry: HttpConfigDataEntry<'_>,
+        body_requirement: Option<BodyRequirement>,
+    ) -> Option<Box<dyn RequestFilter>> {
+        let EdgionPlugin::RequestAccessPolicy(config) = entry.plugin() else {
+            return None;
+        };
+        if entry.has_references() {
+            entry.validate_owner().ok()?;
+        }
+        let (key, invalid_selector) = match entry.field().map(|field| field.runtime_key()) {
+            None => (None, false),
+            Some(Ok(Some(key))) => (Some(key), false),
+            Some(Ok(None) | Err(_)) => (None, true),
+        };
+        Some(Self::build(config, key, invalid_selector, body_requirement))
+    }
+
+    pub(crate) fn create_inline(
         config: &RequestAccessPolicyConfig,
-        namespace: &str,
+        body_requirement: Option<BodyRequirement>,
+    ) -> Option<Box<dyn RequestFilter>> {
+        if request_access_has_external_data(config) {
+            return None;
+        }
+        Some(Self::build(config, None, false, body_requirement))
+    }
+
+    fn build(
+        config: &RequestAccessPolicyConfig,
+        active_profile_ref_key: Option<String>,
+        invalid_selector: bool,
         body_requirement: Option<BodyRequirement>,
     ) -> Box<dyn RequestFilter> {
         let mut config = config.clone();
-        let mut init_failed = config.validate_and_init().is_err()
-            || config
-                .active_profile_ref
-                .as_ref()
-                .is_some_and(|reference| reference.ref_denied.is_some());
+        let mut init_failed = config.validate_and_init().is_err() || invalid_selector;
         let mut profiles = HashMap::new();
         if !init_failed {
             let prepared_profiles = config
@@ -381,17 +408,6 @@ impl RequestAccessPolicy {
         if init_failed {
             tracing::error!("Invalid RequestAccessPolicy configuration; requests will be denied");
         }
-        let active_profile_ref_key = config
-            .active_profile_ref
-            .as_ref()
-            .filter(|reference| reference.ref_denied.is_none())
-            .map(|reference| {
-                format!(
-                    "{}/{}",
-                    reference.namespace.as_deref().unwrap_or(namespace),
-                    reference.name
-                )
-            });
         Box::new(Self {
             default_profile: config.default_profile,
             profiles,

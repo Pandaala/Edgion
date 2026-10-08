@@ -1,12 +1,8 @@
 //! Canary runtime plugin (L7 request stage).
 //!
-//! Resolves the active profile via the Selector EdgionConfigData store
-//! (fail-to-base, mirrors RequestAccessPolicy::resolve_active_profile_name
-//! exactly, including the ref_denied filter), then jumps 100% of the
-//! request's traffic to that profile's backendRef. Unlike
-//! RequestAccessPolicy (which fails OPEN on an unresolvable profile), an
-//! invalid *resolved backend* (not present in the route's backendRefs)
-//! follows the configured `on_invalid` behavior (Reject default / Fallback).
+//! A live Selector switches among authored profiles; unavailable selectors use the
+//! base profile. RAP deliberately differs: its Selector failures deny requests.
+//! Invalid selected backends follow Canary's configured on_invalid policy.
 
 use async_trait::async_trait;
 
@@ -16,24 +12,10 @@ use crate::routes::http::routes_mgr::RouteRules;
 use crate::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
+use edgion_resources::refs::config_data_fields::HttpConfigDataEntry;
+use edgion_resources::resources::edgion_config_data::ConfigEntry;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget, UpstreamFallback};
-
-/// Resolve the "namespace/name" Selector store key for a (possibly denied)
-/// `activeProfileRef`. Returns `None` when no ref is configured OR the ref
-/// was denied by the controller (cross-namespace, no ReferenceGrant) — both
-/// cases must fall back to the base `active_profile`, so they collapse to
-/// the same `None` (mirrors `RequestAccessPolicy::create` exactly). Extracted
-/// as a free function so this security-relevant gate (a denied ref must
-/// never resolve to a live store key — cross-namespace authorization bypass
-/// otherwise) is directly unit-testable without downcasting the
-/// `Box<dyn RequestFilter>` that `Canary::create()` returns.
-fn resolve_active_profile_ref_key(active_profile_ref: &Option<EdgionConfigDataRef>, namespace: &str) -> Option<String> {
-    active_profile_ref.as_ref().filter(|r| r.ref_denied.is_none()).map(|r| {
-        let ns = r.namespace.as_deref().unwrap_or(namespace);
-        format!("{}/{}", ns, r.name)
-    })
-}
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
 /// Canary L7 traffic-switch plugin.
 pub struct Canary {
@@ -44,16 +26,31 @@ pub struct Canary {
     /// reload). `None` when no selector is configured OR the ref was
     /// denied by the controller (cross-namespace, no ReferenceGrant) —
     /// both cases must use the base `active_profile`, so they collapse to
-    /// the same `None` (mirrors `RequestAccessPolicy::create` exactly).
+    /// the same `None`; RAP instead denies on Selector failure.
     active_profile_ref_key: Option<String>,
 }
 
 impl Canary {
-    pub fn create(config: &CanaryConfig, namespace: &str) -> Box<dyn RequestFilter> {
+    pub(crate) fn create_bound(entry: HttpConfigDataEntry<'_>) -> Option<Box<dyn RequestFilter>> {
+        let EdgionPlugin::Canary(config) = entry.plugin() else {
+            return None;
+        };
+        if entry.has_references() {
+            entry.validate_owner().ok()?;
+        }
+        let key = entry.field().and_then(|field| field.runtime_key().ok().flatten());
+        Some(Self::build(config, key))
+    }
+
+    pub(crate) fn create_inline(config: &CanaryConfig) -> Option<Box<dyn RequestFilter>> {
+        if config.active_profile_ref.is_some() {
+            return None;
+        }
+        Some(Self::build(config, None))
+    }
+
+    fn build(config: &CanaryConfig, active_profile_ref_key: Option<String>) -> Box<dyn RequestFilter> {
         let config = config.clone();
-
-        let active_profile_ref_key = resolve_active_profile_ref_key(&config.active_profile_ref, namespace);
-
         Box::new(Canary {
             name: "Canary".to_string(),
             config,

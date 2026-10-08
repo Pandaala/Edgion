@@ -417,3 +417,28 @@ async fn blank_reference_name_preserves_structural_constructor_failure() {
         assert!(result.is_err());
     }
 }
+
+#[tokio::test]
+async fn owning_gcir_selector_invalid_slot_uses_base_and_invalid_owner_rejects() {
+    for reference in [
+        serde_json::json!({"name":"bad/name"}),
+        serde_json::json!({"name":"selector","namespace":""}),
+    ] {
+        let owner: edgion_resources::EdgionStreamPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"gcir"},"spec":{"plugins":[{
+            "type":"GlobalConnectionIpRestriction","config":{"enable":true,"activeProfile":"base","activeProfileRef":reference,"profiles":{"base":{"defaultAction":"allow","deny":[{"name":"other-net","cidrs":["203.0.113.0/24"]}]},"other":{"defaultAction":"deny","deny":[{"name":"all","cidrs":["0.0.0.0/0"]}]}}}
+        }]}})).unwrap();
+        let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
+        let binding = prepared.bind_stream_plugins(&owner).unwrap();
+        let plugin = GlobalConnectionIpRestrictionPlugin::from_bound(binding.global_entry(0).unwrap()).unwrap();
+        let context = StreamContext::new("198.51.100.9".parse().unwrap(), 18501, StreamLayer::Stage1);
+        assert!(matches!(
+            plugin.on_connection(&context).await,
+            StreamPluginResult::Allow
+        ));
+        let mut owner = owner;
+        owner.metadata.namespace = Some(String::new());
+        let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
+        let binding = prepared.bind_stream_plugins(&owner).unwrap();
+        assert!(GlobalConnectionIpRestrictionPlugin::from_bound(binding.global_entry(0).unwrap()).is_err());
+    }
+}

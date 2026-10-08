@@ -554,3 +554,36 @@ async fn route_to_rejected_jump_records_no_outcome() {
     let result = plugin.route_to(&mut session, &region, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
 }
+
+// Detached fixture convenience is confined to this mirrored test module.
+impl RegionRoute {
+    pub(crate) fn create(config: &RegionRouteConfig, namespace: &str) -> Box<dyn RequestFilter> {
+        let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "fixture", "namespace": namespace},
+            "spec": {"requestPlugins": [{"type": "RegionRoute", "config": config}]}
+        }))
+        .unwrap();
+        Self::create_bound(HttpConfigDataEntry::from_plugins(&owner, 0).unwrap()).unwrap()
+    }
+}
+
+#[test]
+fn owning_region_invalid_target_keeps_base_but_owner_failure_has_no_constructor() {
+    for reference in [
+        serde_json::json!({"name":"bad/name"}),
+        serde_json::json!({"name":"overlay","namespace":""}),
+    ] {
+        let config = RegionRouteConfig {
+            override_ref: Some(serde_json::from_value(reference).unwrap()),
+            ..Default::default()
+        };
+        let owner: EdgionPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"region"},"spec":{"requestPlugins":[{"type":"RegionRoute","config":config}]}})).unwrap();
+        let entry = HttpConfigDataEntry::from_plugins(&owner, 0).unwrap();
+        assert!(entry.field().unwrap().runtime_key().is_err());
+        assert!(RegionRoute::create_bound(entry).is_some());
+        assert!(RegionRoute::create_inline(&config).is_none());
+        let mut owner = owner;
+        owner.metadata.namespace = Some(String::new());
+        assert!(RegionRoute::create_bound(HttpConfigDataEntry::from_plugins(&owner, 0).unwrap()).is_none());
+    }
+}

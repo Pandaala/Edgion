@@ -384,4 +384,16 @@ R5c2 closes standalone HTTP IpRestriction, connection IpRestriction, TLS-route
 IpRestriction and every GCIR profile's allowRefs/denyRefs using actual owner loans.
 Invalid slots contribute no lookup, dependency or Grant query; valid missing and
 denied slots retain recovery edges under raw owner keys. GCIR activeProfileRef,
-RegionRoute, WAF and other non-IpList roles remain separate follow-up work.
+At the R5c2 boundary, non-IpList roles remained follow-up work. WAF and the finite remaining Selector/URL/Region slots are covered by the later R5d/R5e rows below.
+
+### R5e remaining plugin ConfigData slots
+
+| Actual owning field | Target role / namespace | Permission source | Failure and status |
+| --- | --- | --- | --- |
+| EP.requestPlugins[*].RequestAccessPolicy.profiles[*].requiredRuleGroups[*].anyOfRules[*].Url.configRefs[*] | RequestAccessUrlAllowList; omitted namespace uses effective EP namespace | Actual EP, including imported conditions | Partial-good inline/sibling preservation; parse-time bounded PartiallyInvalid warnings |
+| EP.requestPlugins[*].RequestAccessPolicy.activeProfileRef | Selector; effective EP namespace | Actual EP | Configured failure denies via RAP filter; current readonly ResolvedRefs |
+| EP.requestPlugins[*].Canary.activeProfileRef | Selector; effective EP namespace | Actual EP | Validated base fallback; current readonly ResolvedRefs |
+| EP.requestPlugins[*].RegionRoute.overrideRef | RegionRouteOverride; effective EP namespace | Actual EP | Validated base fallback; enabled-entry readonly ResolvedRefs |
+| ESP.plugins[*].GlobalConnectionIpRestriction.activeProfileRef | Selector; effective ESP namespace | Actual ESP | Validated base fallback; current readonly ResolvedRefs; disabled entries retain existing diagnostics/dependencies |
+
+All five fields reject invalid owner/target identity before lookup, Grant query or edge creation. Only target namespace omission defaults; raw target store keys are not aliased. Raw source queue/delete identity remains independent.

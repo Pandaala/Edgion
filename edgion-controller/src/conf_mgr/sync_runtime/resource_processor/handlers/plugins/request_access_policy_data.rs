@@ -6,71 +6,82 @@
 //! not walk those leaves itself.
 
 use edgion_resources::prelude_resources::EdgionPlugins;
-use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
+use edgion_resources::refs::config_data_fields::{ConfigDataField, HttpConfigDataEntry};
+use edgion_resources::refs::ReferenceError;
+use edgion_resources::resources::edgion_config_data::ConfigEntry;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
-    RequestAccessPolicyConfig, RequestAccessRuleType, UrlAccessCandidate, UrlAccessRuleConfig,
+    RequestAccessRuleType, UrlAccessCandidate, UrlAccessRuleConfig,
 };
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::ResourceKind;
 
-use crate::conf_mgr::sync_runtime::resource_processor::handlers::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::config_data_ref_mark::resolve_field;
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
 
 const MAX_RESOLUTION_WARNINGS: usize = 64;
 
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn expand(
     ep: &mut EdgionPlugins,
-    resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    let owner_namespace = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
+    let resource_ref = ResourceRef::new(
+        ResourceKind::EdgionPlugins,
+        ep.metadata.namespace.clone(),
+        ep.metadata.name.clone().unwrap_or_default(),
+    );
     let owner_key = format!("{}:{}", resource_ref.kind_str(), resource_ref.resource_key());
-    let Some(entries) = ep.spec.request_plugins.as_mut() else {
-        return;
-    };
-    for entry in entries {
-        if !entry.is_enabled() {
+    let count = ep.spec.request_plugins.as_ref().map_or(0, Vec::len);
+    for index in 0..count {
+        if !ep.spec.request_plugins.as_ref().expect("current entry")[index].is_enabled() {
             continue;
         }
-        let EdgionPlugin::RequestAccessPolicy(config) = &mut entry.plugin else {
+        let Some(entry) = HttpConfigDataEntry::from_plugins(ep, index) else {
             continue;
         };
-        expand_config(config, &owner_namespace, &owner_key, resource_ref, ctx);
-    }
-}
-
-fn expand_config(
-    config: &mut RequestAccessPolicyConfig,
-    owner_namespace: &str,
-    owner_key: &str,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    config.resolution_warnings.clear();
-    let mut profiles = config.profiles.clone();
-    for profile in profiles.values_mut() {
-        for group in &mut profile.required_rule_groups {
-            for rule in &mut group.any_of_rules {
-                if let RequestAccessRuleType::Url(url) = &mut rule.rule {
-                    expand_url_rule(
-                        &rule.name,
-                        url,
-                        owner_namespace,
-                        owner_key,
-                        resource_ref,
-                        ctx,
-                        &mut config.resolution_warnings,
-                    );
+        let EdgionPlugin::RequestAccessPolicy(config) = entry.plugin() else {
+            continue;
+        };
+        // This is the existing one authored-profile copy. Imported candidates
+        // are copied only after the actual URL field passes resolution.
+        let owner_validation = entry.validate_owner();
+        let mut profiles = config.profiles.clone();
+        let mut warnings = Vec::new();
+        for (name, profile) in &mut profiles {
+            for (group_index, group) in profile.required_rule_groups.iter_mut().enumerate() {
+                for (rule_index, rule) in group.any_of_rules.iter_mut().enumerate() {
+                    if let RequestAccessRuleType::Url(url) = &mut rule.rule {
+                        expand_url_rule(
+                            &rule.name,
+                            url,
+                            |reference| {
+                                owner_validation?;
+                                entry
+                                    .url_field(name, group_index, rule_index, reference)
+                                    .ok_or(ReferenceError::StaleBinding)
+                            },
+                            &owner_key,
+                            &resource_ref,
+                            ctx,
+                            &mut warnings,
+                        );
+                    }
                 }
             }
         }
+        let EdgionPlugin::RequestAccessPolicy(config) =
+            &mut ep.spec.request_plugins.as_mut().expect("current entry")[index].plugin
+        else {
+            unreachable!("actual entry")
+        };
+        config.resolved_profiles = Some(profiles);
+        config.resolution_warnings = warnings;
     }
-    config.resolved_profiles = Some(profiles);
 }
 
-fn expand_url_rule(
+fn expand_url_rule<'a>(
     rule_name: &str,
     config: &mut UrlAccessRuleConfig,
-    owner_namespace: &str,
+    field_at: impl Fn(usize) -> Result<ConfigDataField<'a>, ReferenceError>,
     owner_key: &str,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
@@ -86,61 +97,46 @@ fn expand_url_rule(
         });
     }
 
-    for reference in &mut config.config_refs {
+    for (index, reference) in config.config_refs.iter_mut().enumerate() {
         let data_ref = &mut reference.reference;
-        register_ref(data_ref, owner_namespace, owner_key, resource_ref, ctx);
-        mark_one_ref(
-            data_ref,
-            owner_namespace,
-            "EdgionPlugins",
-            ExpectedEntry::RequestAccessUrlAllowList,
-            ctx,
-        );
-        if data_ref.ref_denied.is_some() {
-            let target_namespace = data_ref.namespace.as_deref().unwrap_or(owner_namespace);
+        data_ref.ref_denied = None;
+        let field = match field_at(index) {
+            Ok(field) => field,
+            Err(error) => {
+                push_warning(
+                    warnings,
+                    format!("RequestAccessPolicy URL data ref is invalid: {error}"),
+                );
+                continue;
+            }
+        };
+        let query = match field.query() {
+            Ok(query) => query,
+            Err(error) => {
+                push_warning(
+                    warnings,
+                    format!("RequestAccessPolicy URL data ref is invalid: {error}"),
+                );
+                continue;
+            }
+        };
+        register_ref(&field, owner_key, resource_ref, ctx);
+        let target_namespace = query.target().scope().namespace().expect("namespaced target");
+        let resolution = resolve_field(&field, ctx);
+        data_ref.ref_denied = resolution.denied;
+        let Some(target) = resolution.target else {
             push_warning(
                 warnings,
                 format!(
-                    "RequestAccessPolicy URL data ref {target_namespace}/{} is not permitted",
-                    data_ref.name
-                ),
-            );
-            continue;
-        }
-        let target_namespace = data_ref.namespace.as_deref().unwrap_or(owner_namespace);
-        let Some(target) = ctx
-            .runtime()
-            .edgion_config_data_store
-            .get(Some(target_namespace), &data_ref.name)
-        else {
-            push_warning(
-                warnings,
-                format!(
-                    "RequestAccessPolicy URL data ref {target_namespace}/{} is unavailable",
-                    data_ref.name
+                    "RequestAccessPolicy URL data ref {target_namespace}/{} {}",
+                    query.target().name(),
+                    resolution.failure
                 ),
             );
             continue;
         };
-        if !target.spec.enable {
-            push_warning(
-                warnings,
-                format!(
-                    "RequestAccessPolicy URL data ref {target_namespace}/{} is disabled",
-                    data_ref.name
-                ),
-            );
-            continue;
-        }
         let ConfigEntry::RequestAccessUrlAllowList(data) = &target.spec.data else {
-            push_warning(
-                warnings,
-                format!(
-                    "RequestAccessPolicy URL data ref {target_namespace}/{} has the wrong type",
-                    data_ref.name
-                ),
-            );
-            continue;
+            unreachable!("fixed URL role")
         };
         let ip_rule_count = data.items.iter().map(UrlAccessCandidate::ip_rule_count).sum::<usize>();
         let invalid = data.items.len() > reference.validate.max_url_rules
@@ -174,19 +170,15 @@ fn expand_url_rule(
     config.resolved_candidates = Some(candidates);
 }
 
-fn register_ref(
-    reference: &EdgionConfigDataRef,
-    owner_namespace: &str,
-    owner_key: &str,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    let target_namespace = reference.namespace.as_deref().unwrap_or(owner_namespace);
-    let target_key = format!("{target_namespace}/{}", reference.name);
+fn register_ref(field: &ConfigDataField<'_>, owner_key: &str, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+    let Ok(query) = field.query() else {
+        return;
+    };
+    let target_namespace = query.target().scope().namespace().expect("namespaced target");
     ctx.runtime()
         .edgion_config_data_refs
-        .add_ref(target_key, owner_key.to_string());
-    if target_namespace != owner_namespace {
+        .add_ref(field.key().expect("validated field"), owner_key.to_string());
+    if query.source().scope() != query.target().scope() {
         ctx.runtime()
             .cross_ns_ref_mgr
             .add_ref(target_namespace.to_string(), resource_ref.clone());

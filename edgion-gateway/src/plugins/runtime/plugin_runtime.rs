@@ -1,5 +1,6 @@
 //! Plugin runtime - manages plugin execution across different stages
 
+use edgion_resources::refs::config_data_fields::{request_access_has_external_data, HttpConfigDataEntry};
 use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
 use edgion_resources::refs::waf_fields::WafPluginReferences;
 use edgion_resources::resource::meta::ResourceMeta;
@@ -1063,10 +1064,32 @@ impl PluginRuntime {
                     errors.push(format!("requestPlugins[{index}] (GrpcJsonTranscoder): {error}"));
                     continue;
                 }
-                if let Some(outcome) = cache.get(slot) {
-                    self.append_entry_bundle(outcome.bundle());
-                    errors.extend(outcome.bundle().errors.iter().cloned());
+                let data_entry = owner.and_then(|owner| HttpConfigDataEntry::from_plugins(owner, index));
+                let data_ref_bearing = match &entry.plugin {
+                    EdgionPlugin::RequestAccessPolicy(config) => request_access_has_external_data(config),
+                    EdgionPlugin::Canary(config) => config.active_profile_ref.is_some(),
+                    EdgionPlugin::RegionRoute(config) => config.override_ref.is_some(),
+                    _ => false,
+                };
+                if data_ref_bearing && data_entry.is_none_or(|entry| entry.validate_owner().is_err()) {
+                    let name = Self::get_plugin_name(&entry.plugin);
+                    self.invalid_plugins.record_non_retainable(name);
+                    errors.push(format!(
+                        "requestPlugins[{index}] ({name}): invalid owning ConfigData reference"
+                    ));
                     continue;
+                }
+                // An invalid/denied target must rebuild its consumer-specific
+                // deny/base result rather than reuse a cached external key.
+                let data_cache_reusable = data_entry
+                    .and_then(|entry| entry.field())
+                    .is_none_or(|field| matches!(field.runtime_key(), Ok(Some(_))));
+                if data_cache_reusable {
+                    if let Some(outcome) = cache.get(slot) {
+                        self.append_entry_bundle(outcome.bundle());
+                        errors.extend(outcome.bundle().errors.iter().cloned());
+                        continue;
+                    }
                 }
                 let mut entry_runtime = Self::new();
                 let errors_before = errors.len();
@@ -1286,6 +1309,18 @@ impl PluginRuntime {
                             CreateResult::Ok(bound.and_then(IpRestriction::create_bound))
                         }
 
+                        EdgionPlugin::RequestAccessPolicy(config) => CreateResult::Ok(match data_entry {
+                            Some(entry) => RequestAccessPolicy::create_bound(entry, body_req.clone()),
+                            None => RequestAccessPolicy::create_inline(config, body_req.clone()),
+                        }),
+                        EdgionPlugin::Canary(config) => CreateResult::Ok(match data_entry {
+                            Some(entry) => Canary::create_bound(entry),
+                            None => Canary::create_inline(config),
+                        }),
+                        EdgionPlugin::RegionRoute(config) => CreateResult::Ok(match data_entry {
+                            Some(entry) => RegionRoute::create_bound(entry),
+                            None => RegionRoute::create_inline(config),
+                        }),
                         EdgionPlugin::GrpcJsonTranscoder(config) => CreateResult::Ok(
                             descriptor_entries
                                 .get(index)
@@ -1974,10 +2009,10 @@ impl PluginRuntime {
             EdgionPlugin::CredentialInjector(config) => CreateResult::Ok(CredentialInjector::create(config)),
             EdgionPlugin::IpRestriction(_) => CreateResult::WrongStage,
             EdgionPlugin::RequestAccessPolicy(config) => {
-                CreateResult::Ok(Some(RequestAccessPolicy::create(config, namespace, body_requirement)))
+                CreateResult::Ok(RequestAccessPolicy::create_inline(config, body_requirement))
             }
             EdgionPlugin::GeoIpLocation(config) => CreateResult::Ok(Some(GeoIpLocation::create(config))),
-            EdgionPlugin::Canary(config) => CreateResult::Ok(Some(Canary::create(config, namespace))),
+            EdgionPlugin::Canary(config) => CreateResult::Ok(Canary::create_inline(config)),
             EdgionPlugin::JwtAuth(config) => {
                 CreateResult::Ok(Some(Box::new(JwtAuth::new(config, namespace.to_string()))))
             }
@@ -2029,7 +2064,7 @@ impl PluginRuntime {
                 Err(_) => CreateResult::Ok(None),
             },
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
-            EdgionPlugin::RegionRoute(config) => CreateResult::Ok(Some(RegionRoute::create(config, namespace))),
+            EdgionPlugin::RegionRoute(config) => CreateResult::Ok(RegionRoute::create_inline(config)),
             EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_request(config)),
             // Response-stage only — not applicable to request filters
             EdgionPlugin::ResponseHeaderModifier(_)

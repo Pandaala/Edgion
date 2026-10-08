@@ -1178,3 +1178,9 @@ default invalidates the candidate. Selector identity failure retains existing de
 Gateway checks actual EP policy identity at its cold cache boundary and selected transport bundle
 identity in the compiler; transported policy/namespace values never become resource capabilities.
 Existing current policy, LKG, scoped source-copy and in-flight pinning rules remain unchanged.
+
+## R5e finite plugin ConfigData fields
+
+RAP URL document, RAP/Canary/GCIR Selector and RegionRoute override references use actual owning-entry loans with fixed edgion.io/EdgionConfigData roles. Owner failure is distinct from target unavailability. Invalid identities produce no external lookup, Grant query or dependency edge; valid missing/denied references retain recovery edges. Target namespace omission uses the owner's effective default namespace independently of raw owner keys.
+
+RAP configured Selector failure remains a denying RAP filter under existing condition/policy placement. Canary/GCIR Selector failures and Region override failures retain validated base fallback. URL imports skip invalid/denied/unavailable units, preserve inline and permitted siblings, retain the 64-warning bound and authorize copied conditions as the EP. Readonly URL status consumes parse-time warnings; Selector/Region status recomputes current reference permission. Actual owning guards precede cold cache hits. Runtime immutable snapshot and pin contracts remain unchanged. R6-R8 and live traffic verification remain open.

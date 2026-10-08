@@ -90,6 +90,16 @@ impl StreamPluginRuntime {
                 None => {}
             }
 
+            if let Some(field) = binding.global_entry(index).and_then(|entry| entry.selector()) {
+                if field.validate_owner().is_err() {
+                    invalid_config_reason.get_or_insert_with(|| "invalid owning ConfigData reference".to_string());
+                    continue;
+                }
+                if !matches!(field.runtime_key(), Ok(Some(_))) {
+                    // Rebuild the base-only outcome; never carry an old Selector key.
+                    cache[index] = None;
+                }
+            }
             let outcome = cache[index].get_or_insert_with(|| {
                 let outcome = Self::build_entry(entry, binding, resource_key, index);
                 if outcome.is_err() {

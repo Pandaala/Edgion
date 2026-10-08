@@ -165,3 +165,7 @@ The Gateway retains only canonical target keys in the compiled plugin. It contin
 to capture one immutable ConfigData snapshot per decision, preserving atomic IpList
 updates and live content refresh for pinned plugin generations. Selector and other
 ConfigData target roles are not migrated by this change.
+
+### Bound remaining plugin fields
+
+RAP/Canary/GCIR Selector and RegionRoute keys are built from actual EP/ESP field loans before cache reuse. Invalid target slots rebuild each consumer's established denial/base outcome; invalid owners cannot reuse a prior external executable. Fresh valid retarget generations retain the existing fresh-cache contract. GCIR still captures Selector and IpLists together, and Region raw value/proof publication remains paired. RAP URL documents are expanded in Controller and introduce no live Gateway document lookup. Unit coverage proves bounded constructor/cache/generation behavior, not live cross-process requeue traffic.

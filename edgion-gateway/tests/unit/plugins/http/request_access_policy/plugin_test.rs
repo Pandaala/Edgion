@@ -705,3 +705,50 @@ async fn partial_good_ip_payload_keeps_valid_sibling_matching() {
         PluginRunningResult::GoodNext
     );
 }
+
+// Detached fixture convenience is confined to this mirrored test module.
+impl RequestAccessPolicy {
+    pub(crate) fn create(
+        config: &RequestAccessPolicyConfig,
+        namespace: &str,
+        body_requirement: Option<BodyRequirement>,
+    ) -> Box<dyn RequestFilter> {
+        let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "fixture", "namespace": namespace},
+            "spec": {"requestPlugins": [{"type": "RequestAccessPolicy", "config": config}]}
+        }))
+        .unwrap();
+        Self::create_bound(HttpConfigDataEntry::from_plugins(&owner, 0).unwrap(), body_requirement).unwrap()
+    }
+}
+
+#[tokio::test]
+async fn owning_selector_invalid_and_denied_slots_keep_rap_filter_denial() {
+    for reference in [
+        serde_json::json!({"name":"bad/name"}),
+        serde_json::json!({"name":"selector","namespace":""}),
+        serde_json::json!({"name":"selector","refDenied":{"targetNamespace":"default","targetName":"selector"}}),
+    ] {
+        let owner: edgion_resources::EdgionPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"rap"},"spec":{"requestPlugins":[{
+            "type":"RequestAccessPolicy","config":{"defaultProfile":"base","activeProfileRef":reference,"profiles":{"base":{"requiredRuleGroups":[{"name":"all","anyOfRules":[{"name":"ip","type":"remoteIp","config":{"ips":["0.0.0.0/0"]}}]}]}}}
+        }]}})).unwrap();
+        let entry = HttpConfigDataEntry::from_plugins(&owner, 0).unwrap();
+        let filter = RequestAccessPolicy::create_bound(entry, None).unwrap();
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestAccessPolicy");
+        assert!(matches!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse { .. }
+        ));
+        let EdgionPlugin::RequestAccessPolicy(config) = entry.plugin() else {
+            unreachable!()
+        };
+        assert!(RequestAccessPolicy::create_inline(config, None).is_none());
+        let mut invalid_owner = owner;
+        invalid_owner.metadata.namespace = Some(String::new());
+        assert!(
+            RequestAccessPolicy::create_bound(HttpConfigDataEntry::from_plugins(&invalid_owner, 0).unwrap(), None)
+                .is_none()
+        );
+    }
+}

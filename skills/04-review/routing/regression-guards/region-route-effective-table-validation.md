@@ -155,3 +155,7 @@ per-consumer bounds when changing store reuse projections.
   `region-route-validation-integration` follow-up verified fixture migration,
   hot reload, per-consumer effective tables, and management HTTP behavior.
 - `B0099` — earlier, separate modulo-zero guard; not evidence of complete table validation.
+
+### Override identity boundary
+
+RegionRoute override lookup keys now come from an actual EP entry loan. Invalid owner identity prevents reference-bearing construction; an invalid, denied or unavailable target leaves the validated base table in force. Cold cache eligibility checks this distinction before reuse. Readonly Controller diagnostics validate current identity and permission for enabled RegionRoute entries. This does not change base-table validation, effective-table proof publication, or the Gateway paired raw/proof snapshot lookup.

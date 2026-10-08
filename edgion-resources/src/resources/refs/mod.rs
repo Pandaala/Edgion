@@ -5,6 +5,7 @@
 //! their consuming runtimes.
 
 pub mod condition_fields;
+pub mod config_data_fields;
 pub mod egc_tls_fields;
 pub mod extension_ref;
 pub mod gateway_class_fields;

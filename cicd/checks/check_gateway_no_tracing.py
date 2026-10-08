@@ -143,7 +143,7 @@ COLD_FUNCTION_REGISTRATIONS = [
     ("plugins/http/openid_connect/plugin.rs", "OpenidConnect", "try_new", "fallible plugin construction"),
     ("plugins/http/openid_connect/plugin.rs", "<free>", "spawn_discovery_prewarm", "bounded background prewarm setup"),
     ("plugins/http/real_ip/plugin.rs", "RealIp", "create", "plugin construction"),
-    ("plugins/http/request_access_policy/plugin.rs", "RequestAccessPolicy", "create", "plugin construction"),
+    ("plugins/http/request_access_policy/plugin.rs", "RequestAccessPolicy", "build", "plugin construction"),
     ("plugins/http/request_mirror/plugin.rs", "RequestMirrorPlugin", "new", "plugin construction"),
     ("plugins/http/wasm/plugin.rs", "WasmPlugin", "build", "plugin construction"),
     ("plugins/runtime/plugin_runtime.rs", "PluginRuntime", "add_request_entries", "configuration publication assembles cached plugin entries"),

@@ -12,8 +12,12 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::ResourceKind;
 
-use super::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
-use edgion_resources::prelude_resources::{EdgionConfigData, EdgionStreamPlugins};
+use super::config_data_ref_mark::{denial_marker, resolve_field};
+#[cfg(test)]
+use edgion_resources::prelude_resources::EdgionConfigData;
+use edgion_resources::prelude_resources::EdgionStreamPlugins;
+use edgion_resources::refs::config_data_fields::StreamConfigDataEntry;
+#[cfg(test)]
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::{
@@ -53,24 +57,14 @@ impl EdgionStreamPluginsHandler {
     /// Iterate each GlobalConnectionIpRestriction plugin that has an `activeProfileRef`
     /// and yield `(selector_namespace, selector_name)`.
     fn iter_gcir_refs<'a>(esp: &'a EdgionStreamPlugins) -> impl Iterator<Item = (String, String)> + 'a {
-        let esp_ns = esp.metadata.namespace.as_deref().unwrap_or("").to_string();
-        esp.spec
-            .plugins
-            .as_ref()
-            .into_iter()
-            .flat_map(|v| v.iter())
-            .filter_map(move |entry| match &entry.plugin {
-                EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
-                    // Only register a ref when activeProfileRef is set; the config is inline.
-                    gcir.active_profile_ref.as_ref().map(|r| {
-                        let ns = r.namespace.clone().unwrap_or_else(|| esp_ns.clone());
-                        (ns, r.name.clone())
-                    })
-                }
-                EdgionStreamPlugin::IpRestriction(_) | EdgionStreamPlugin::Unsupported => None,
-                EdgionStreamPlugin::ConnectionRateLimit(_) => None,
-                EdgionStreamPlugin::GeoIpLocation(_) => None,
-            })
+        esp.spec.plugins.iter().flatten().enumerate().filter_map(|(index, _)| {
+            let field = StreamConfigDataEntry::from_stream_plugins(esp, index)?.field()?;
+            let query = field.query().ok()?;
+            Some((
+                query.target().scope().namespace()?.to_string(),
+                query.target().name().to_string(),
+            ))
+        })
     }
 
     /// Set or clear `ref_denied` on every EdgionConfigDataRef in this EdgionStreamPlugins.
@@ -81,13 +75,19 @@ impl EdgionStreamPluginsHandler {
     /// expected ConfigEntry type. Missing / wrong-type targets are not marked here —
     /// those surface as `EdgionConfigDataNotFound` in `update_status`.
     fn mark_config_data_ref_denials(esp: &mut EdgionStreamPlugins, ctx: &HandlerContext) {
-        let from_ns = esp.metadata.namespace.as_deref().unwrap_or("default").to_string();
-        for entry in esp.spec.plugins.iter_mut().flatten() {
-            if let EdgionStreamPlugin::GlobalConnectionIpRestriction(config) = &mut entry.plugin {
-                if let Some(reference) = &mut config.active_profile_ref {
-                    mark_one_ref(reference, &from_ns, "EdgionStreamPlugins", ExpectedEntry::Selector, ctx);
-                }
-            }
+        let count = esp.spec.plugins.as_ref().map_or(0, Vec::len);
+        for index in 0..count {
+            let Some(field) = StreamConfigDataEntry::from_stream_plugins(esp, index).and_then(|entry| entry.field())
+            else {
+                continue;
+            };
+            let denied = denial_marker(&field, ctx);
+            let EdgionStreamPlugin::GlobalConnectionIpRestriction(config) =
+                &mut esp.spec.plugins.as_mut().expect("current entry")[index].plugin
+            else {
+                unreachable!("actual field variant")
+            };
+            config.active_profile_ref.as_mut().expect("current field").ref_denied = denied;
         }
         super::ip_list_refs::mark_stream(esp, ctx);
     }
@@ -421,40 +421,18 @@ fn collect_inline_ip_entry_errors(
 /// Returns one `RefNotPermitted` error when `ref_denied` is set (cross-namespace denial),
 /// or one `EdgionConfigDataNotFound { expected_type: "Selector" }` per unresolved or wrong-type
 /// reference. Mutually exclusive per ref via else-branch to avoid a TOCTOU double-message.
-/// Iterates the real `&EdgionConfigDataRef` objects (not `(ns,name)` pairs) to preserve the
-/// `ref_denied` marker set by `parse()`.
+/// Recomputes identity, availability and current permission from the actual ESP field.
 fn resolve_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    let from_ns = esp.metadata.namespace.as_deref().unwrap_or("default");
-    let mut errors = Vec::new();
-    for entry in esp.spec.plugins.iter().flatten() {
-        if let EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) = &entry.plugin {
-            if let Some(r) = &gcir.active_profile_ref {
-                let rns = r.namespace.as_deref().unwrap_or(from_ns);
-                if r.ref_denied.is_some() {
-                    errors.push(ResolvedRefsError::RefNotPermitted {
-                        from_namespace: from_ns.to_string(),
-                        from_kind: "EdgionStreamPlugins",
-                        target_namespace: rns.to_string(),
-                        target_name: r.name.clone(),
-                    });
-                } else {
-                    let target: Option<EdgionConfigData> =
-                        ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
-                    let resolved = target
-                        .as_ref()
-                        .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::Selector(_)));
-                    if !resolved {
-                        errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                            namespace: rns.to_string(),
-                            name: r.name.clone(),
-                            expected_type: "Selector".to_string(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-    errors
+    esp.spec
+        .plugins
+        .iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, _)| {
+            let field = StreamConfigDataEntry::from_stream_plugins(esp, index)?.field()?;
+            resolve_field(&field, ctx).error
+        })
+        .collect()
 }
 
 #[cfg(test)]

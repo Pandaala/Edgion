@@ -3,10 +3,13 @@
 //! Used by both EdgionPlugins and EdgionStreamPlugins handlers to set or clear
 //! `ref_denied` on every ref-bearing arm before the resource is pushed to the store.
 
+use crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError;
+use edgion_resources::refs::config_data_fields::{ConfigDataField, ConfigDataRole};
 use edgion_resources::resources::common::RefDenied;
-use edgion_resources::resources::edgion_config_data::{ConfigDataVisibility, ConfigEntry, EdgionConfigDataRef};
+use edgion_resources::resources::edgion_config_data::ConfigEntry;
+use edgion_resources::EdgionConfigData;
 
-use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::is_edgion_config_data_ref_allowed;
+use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::decide_edgion_config_data_ref;
 use crate::conf_mgr::sync_runtime::resource_processor::HandlerContext;
 
 /// Expected ConfigEntry variant for a given ref kind. Marking only applies to a
@@ -15,64 +18,124 @@ use crate::conf_mgr::sync_runtime::resource_processor::HandlerContext;
 #[derive(Clone, Copy)]
 pub(crate) enum ExpectedEntry {
     IpList,
-    RequestAccessUrlAllowList,
-    RegionRouteOverride,
-    Selector,
 }
-
 impl ExpectedEntry {
     pub(crate) fn matches(self, data: &ConfigEntry) -> bool {
-        matches!(
-            (self, data),
-            (ExpectedEntry::IpList, ConfigEntry::IpList(_))
-                | (
-                    ExpectedEntry::RequestAccessUrlAllowList,
-                    ConfigEntry::RequestAccessUrlAllowList(_),
-                )
-                | (ExpectedEntry::RegionRouteOverride, ConfigEntry::RegionRouteOverride(_))
-                | (ExpectedEntry::Selector, ConfigEntry::Selector(_))
-        )
+        matches!(data, ConfigEntry::IpList(_))
     }
 }
 
-/// Set or clear `ref_denied` on a single ref per the permission predicate.
-///
-/// - Same-namespace refs are always cleared (no denial possible).
-/// - Cross-namespace refs whose target is missing or has the wrong ConfigEntry type
-///   are also cleared — those are reported as NotFound in update_status, not a denial.
-/// - Cross-namespace refs with a present, right-type target are allowed or denied
-///   based on ReferenceGrant validation.
-pub(crate) fn mark_one_ref(
-    r: &mut EdgionConfigDataRef,
-    from_ns: &str,
-    from_kind: &str,
-    expected: ExpectedEntry,
-    ctx: &HandlerContext,
-) {
-    let to_ns = r.namespace.as_deref().unwrap_or(from_ns).to_string();
-    if to_ns == from_ns {
-        r.ref_denied = None;
-        return;
-    }
-    let target = ctx.runtime().edgion_config_data_store.get(Some(&to_ns), &r.name);
-    let right_type = target.as_ref().is_some_and(|t| expected.matches(&t.spec.data));
-    if !right_type {
-        // Missing / wrong-type -> reported as EdgionConfigDataNotFound in update_status, not denial.
-        r.ref_denied = None;
-        return;
-    }
-    let visibility = target
-        .as_ref()
-        .map(|t| t.spec.visibility)
-        .unwrap_or(ConfigDataVisibility::Namespace);
-    let allowed = is_edgion_config_data_ref_allowed(ctx.runtime(), from_ns, from_kind, &to_ns, &r.name, visibility);
-    r.ref_denied = if allowed {
-        None
-    } else {
-        Some(RefDenied {
-            target_namespace: to_ns,
-            target_name: r.name.clone(),
-            reason: Some("NoMatchingReferenceGrant".to_string()),
-        })
+/// One current target decision shared by marking, readonly status and URL expansion.
+/// Invalid identities return before store access or permission queries.
+pub(crate) struct ConfigDataResolution {
+    pub target: Option<EdgionConfigData>,
+    pub denied: Option<RefDenied>,
+    pub error: Option<ResolvedRefsError>,
+    pub failure: &'static str,
+}
+
+pub(crate) fn resolve_field(field: &ConfigDataField<'_>, ctx: &HandlerContext) -> ConfigDataResolution {
+    let query = match field.query() {
+        Ok(query) => query,
+        Err(error) => {
+            return ConfigDataResolution {
+                target: None,
+                denied: None,
+                error: Some(ResolvedRefsError::InvalidReference { error }),
+                failure: "has an invalid reference",
+            }
+        }
     };
+    let target_namespace = query.target().scope().namespace().expect("namespaced target");
+    let target_name = query.target().name();
+    let unavailable = || ResolvedRefsError::EdgionConfigDataNotFound {
+        namespace: target_namespace.to_string(),
+        name: target_name.to_string(),
+        expected_type: field.role().expected_type().to_string(),
+    };
+    let Some(target) = ctx
+        .runtime()
+        .edgion_config_data_store
+        .get(Some(target_namespace), target_name)
+    else {
+        return ConfigDataResolution {
+            target: None,
+            denied: None,
+            error: Some(unavailable()),
+            failure: "is unavailable",
+        };
+    };
+    if !field.role().matches(&target.spec.data) {
+        return ConfigDataResolution {
+            target: None,
+            denied: None,
+            error: Some(unavailable()),
+            failure: "has the wrong type",
+        };
+    }
+    let allowed = decide_edgion_config_data_ref(
+        crate::config::is_reference_grant_validation_enabled(),
+        query.source().scope() == query.target().scope(),
+        target.spec.visibility,
+        ctx.runtime().ref_grant_store.check_query(query),
+    );
+    if !allowed {
+        let from_kind = match query.source().group_kind().kind() {
+            "EdgionPlugins" => "EdgionPlugins",
+            "EdgionStreamPlugins" => "EdgionStreamPlugins",
+            _ => unreachable!("fixed source role"),
+        };
+        return ConfigDataResolution {
+            target: None,
+            failure: "is not permitted",
+            denied: Some(RefDenied {
+                target_namespace: target_namespace.to_string(),
+                target_name: target_name.to_string(),
+                reason: Some("NoMatchingReferenceGrant".into()),
+            }),
+            error: Some(ResolvedRefsError::RefNotPermitted {
+                from_namespace: query
+                    .source()
+                    .scope()
+                    .namespace()
+                    .expect("namespaced source")
+                    .to_string(),
+                from_kind,
+                target_namespace: target_namespace.to_string(),
+                target_name: target_name.to_string(),
+            }),
+        };
+    }
+    if !target.spec.enable {
+        let error = if field.role() == ConfigDataRole::RegionOverride {
+            ResolvedRefsError::EdgionConfigDataInvalid {
+                namespace: target_namespace.to_string(),
+                name: target_name.to_string(),
+                detail: "RegionRouteOverride is disabled; using base regions".into(),
+            }
+        } else {
+            unavailable()
+        };
+        return ConfigDataResolution {
+            target: None,
+            denied: None,
+            error: Some(error),
+            failure: "is disabled",
+        };
+    }
+    ConfigDataResolution {
+        target: Some(target),
+        denied: None,
+        error: None,
+        failure: "",
+    }
+}
+
+/// Pure marking needs no material read for a valid same-namespace field.
+pub(crate) fn denial_marker(field: &ConfigDataField<'_>, ctx: &HandlerContext) -> Option<RefDenied> {
+    let query = field.query().ok()?;
+    if query.source().scope() == query.target().scope() {
+        return None;
+    }
+    resolve_field(field, ctx).denied
 }

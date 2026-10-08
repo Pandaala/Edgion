@@ -1050,3 +1050,105 @@ async fn standalone_stream_grant_source_isolation_add_and_revoke_preserve_edges(
     assert!(ctx.runtime().edgion_config_data_refs.get_refs("ops/nets").is_empty());
     assert!(!ctx.runtime().cross_ns_ref_mgr.get_refs("ops").contains(&raw));
 }
+
+#[tokio::test]
+async fn gcir_selector_actual_source_grants_and_default_namespace_are_current() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::config_data_ref_mark::resolve_field;
+    use edgion_resources::refs::config_data_fields::StreamConfigDataEntry;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = make_ctx_with_runtime(runtime.clone());
+    let mut owner: EdgionStreamPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"bare-gcir"},"spec":{"plugins":[{
+        "type":"GlobalConnectionIpRestriction","enable":false,"config":{"enable":true,"activeProfile":"base","activeProfileRef":{"name":"selector"},"profiles":{"base":{}}}
+    }]}})).unwrap();
+    assert_eq!(
+        EdgionStreamPluginsHandler::iter_gcir_refs(&owner).collect::<Vec<_>>(),
+        vec![("default".into(), "selector".into())]
+    );
+    let EdgionStreamPlugin::GlobalConnectionIpRestriction(config) = &mut owner.spec.plugins.as_mut().unwrap()[0].plugin
+    else {
+        unreachable!()
+    };
+    config.active_profile_ref.as_mut().unwrap().namespace = Some("shared".into());
+    let target=serde_json::from_value(serde_json::json!({"metadata":{"name":"selector","namespace":"shared"},"spec":{"data":{"type":"Selector","config":{"active":"base"}}}})).unwrap();
+    runtime
+        .edgion_config_data_store
+        .replace_all(std::collections::HashMap::from([("shared/selector".into(), target)]));
+    for source in [Some("EdgionPlugins"), Some("EdgionStreamPlugins"), None] {
+        runtime.ref_grant_store.remove("shared/selector");
+        if let Some(source) = source {
+            let grant=serde_json::from_value(serde_json::json!({"metadata":{"name":"selector","namespace":"shared"},"spec":{
+                "from":[{"group":"edgion.io","kind":source,"namespace":"default"}],"to":[{"group":"edgion.io","kind":"EdgionConfigData","name":"selector"}]
+            }})).unwrap();
+            runtime
+                .ref_grant_store
+                .upsert("shared/selector".into(), Arc::new(grant));
+        }
+        let loan = StreamConfigDataEntry::from_stream_plugins(&owner, 0)
+            .unwrap()
+            .field()
+            .unwrap();
+        assert_eq!(
+            resolve_field(&loan, &ctx).error.is_none(),
+            source == Some("EdgionStreamPlugins")
+        );
+        assert_eq!(
+            EdgionStreamPluginsHandler::iter_gcir_refs(&owner).collect::<Vec<_>>(),
+            vec![("shared".into(), "selector".into())]
+        );
+        let allowed = source == Some("EdgionStreamPlugins");
+        let handler = EdgionStreamPluginsHandler::new();
+        let ProcessResult::Continue(mut parsed) = handler.parse(owner.clone(), &ctx).await else {
+            panic!("parse")
+        };
+        let EdgionStreamPlugin::GlobalConnectionIpRestriction(config) =
+            &parsed.spec.plugins.as_ref().unwrap()[0].plugin
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            config.active_profile_ref.as_ref().unwrap().ref_denied.is_none(),
+            allowed
+        );
+        assert_eq!(resolve_refs(&parsed, &ctx).is_empty(), allowed);
+        handler.update_status(&mut parsed, &ctx, &[]);
+        let resolved = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(resolved.status, if allowed { "True" } else { "False" });
+        assert_eq!(
+            resolved.reason,
+            if allowed { "ResolvedRefs" } else { "RefNotPermitted" }
+        );
+        assert_eq!(
+            runtime.edgion_config_data_refs.get_refs("shared/selector"),
+            ["EdgionStreamPlugins:bare-gcir"]
+        );
+        let raw = ResourceRef::new(ResourceKind::EdgionStreamPlugins, None, "bare-gcir".into());
+        assert!(runtime.cross_ns_ref_mgr.get_refs("shared").contains(&raw));
+        let EdgionStreamPlugin::GlobalConnectionIpRestriction(config) =
+            &mut parsed.spec.plugins.as_mut().unwrap()[0].plugin
+        else {
+            unreachable!()
+        };
+        config.active_profile_ref.as_mut().unwrap().ref_denied = None;
+        assert_eq!(
+            resolve_refs(&parsed, &ctx).is_empty(),
+            allowed,
+            "readonly permission ignores stale marker"
+        );
+        handler.on_delete(&parsed, &ctx).await;
+        assert!(runtime.edgion_config_data_refs.get_refs("shared/selector").is_empty());
+        assert!(!runtime.cross_ns_ref_mgr.get_refs("shared").contains(&raw));
+    }
+    owner.metadata.namespace = Some(String::new());
+    assert!(EdgionStreamPluginsHandler::iter_gcir_refs(&owner)
+        .collect::<Vec<_>>()
+        .is_empty());
+}

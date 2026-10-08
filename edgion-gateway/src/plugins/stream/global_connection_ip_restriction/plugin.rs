@@ -61,7 +61,11 @@ impl GlobalConnectionIpRestrictionPlugin {
     /// practice if the controller validated before syncing).
     pub(crate) fn from_bound(entry: GlobalIpListEntry<'_>) -> Result<Self, String> {
         let config = entry.config();
-        let parent_namespace = entry.namespace();
+        let selector = entry.selector();
+        if let Some(field) = &selector {
+            field.validate_owner().map_err(|error| error.to_string())?;
+        }
+        let active_profile_ref_key = selector.and_then(|field| field.runtime_key().ok().flatten());
         let profile_ref_keys = entry
             .profiles()
             .map(|(name, refs)| resolve_bound_ip_list_keys(refs).map(|(allow, deny)| (name.to_string(), (deny, allow))))
@@ -70,15 +74,6 @@ impl GlobalConnectionIpRestrictionPlugin {
         let mut base = config.clone();
         base.validate_and_init()
             .map_err(|e| format!("GlobalConnectionIpRestriction config validation failed: {e}"))?;
-
-        let active_profile_ref_key = config
-            .active_profile_ref
-            .as_ref()
-            .filter(|r| r.ref_denied.is_none())
-            .map(|r| {
-                let ns = r.namespace.as_deref().unwrap_or(parent_namespace);
-                format!("{}/{}", ns, r.name)
-            });
 
         Ok(Self {
             base: Arc::new(base),

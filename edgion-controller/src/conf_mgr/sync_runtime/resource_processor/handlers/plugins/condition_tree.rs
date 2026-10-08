@@ -46,7 +46,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn expand_co
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    request_access_policy_data::expand(ep, resource_ref, ctx);
+    request_access_policy_data::expand(ep, ctx);
     let prepared = PreparedConditionReferences::from_plugins(ep);
     // The owner was just prepared; callbacks mutate only Controller-owned payloads.
     let _ = prepared.visit_ip_mut(

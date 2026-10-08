@@ -506,3 +506,56 @@ async fn canary_rejects_missing_service_port_before_setting_jump() {
         }
     );
 }
+
+use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
+fn resolve_active_profile_ref_key(reference: &Option<EdgionConfigDataRef>, namespace: &str) -> Option<String> {
+    let mut config = base_config();
+    config.active_profile_ref = reference.clone();
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "fixture", "namespace": namespace},
+        "spec": {"requestPlugins": [{"type": "Canary", "config": config}]}
+    }))
+    .unwrap();
+    HttpConfigDataEntry::from_plugins(&owner, 0)
+        .unwrap()
+        .field()?
+        .runtime_key()
+        .ok()
+        .flatten()
+}
+
+#[tokio::test]
+async fn owning_selector_invalid_slots_keep_canary_base_and_reject_invalid_owner() {
+    for reference in [
+        serde_json::json!({"name":"bad/name"}),
+        serde_json::json!({"name":"selector","namespace":""}),
+    ] {
+        let mut config = base_config();
+        config.active_profile_ref = Some(serde_json::from_value(reference).unwrap());
+        let owner: edgion_resources::EdgionPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"canary"},"spec":{"requestPlugins":[{"type":"Canary","config":config}]}})).unwrap();
+        let filter = Canary::create_bound(HttpConfigDataEntry::from_plugins(&owner, 0).unwrap()).unwrap();
+        let mut session = MockPluginSession::new();
+        session
+            .expect_ctx()
+            .return_const(ctx_with_backend_refs(vec![test_backend_ref("app-v1")]));
+        session.expect_set_upstream_jump().return_const(SetJumpOutcome::Set);
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| *outcome == DyeOutcome::Success && value == "stable")
+            .times(1)
+            .return_const(());
+        let mut log = PluginLog::new("Canary");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert!(
+            !log.contains("selector miss"),
+            "invalid identity never becomes a live key"
+        );
+        assert!(Canary::create_inline(&config).is_none());
+        let mut owner = owner;
+        owner.metadata.name = None;
+        assert!(Canary::create_bound(HttpConfigDataEntry::from_plugins(&owner, 0).unwrap()).is_none());
+    }
+}

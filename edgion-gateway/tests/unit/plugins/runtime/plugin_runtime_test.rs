@@ -1837,3 +1837,90 @@ fn detached_mixed_ip_descriptor_and_mirror_entries_have_no_executable_fallback()
     }
     assert_eq!(runtime.request_plugins_iter().count(), 0);
 }
+
+#[test]
+fn config_data_owner_and_target_guards_precede_populated_cache() {
+    use edgion_resources::EdgionPlugins;
+    for (kind, config) in [
+        (
+            "RequestAccessPolicy",
+            serde_json::json!({"defaultProfile":"base","profiles":{"base":{"requiredRuleGroups":[{"name":"all","anyOfRules":[{"name":"ip","type":"remoteIp","config":{"ips":["0.0.0.0/0"]}}]}]}},"activeProfileRef":{"name":"selector"}}),
+        ),
+        (
+            "Canary",
+            serde_json::json!({"enable":true,"activeProfile":"base","profiles":{"base":{"name":"backend"}},"activeProfileRef":{"name":"selector"}}),
+        ),
+        ("RegionRoute", serde_json::json!({"overrideRef":{"name":"overlay"}})),
+    ] {
+        let owner:EdgionPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"cache-owner","namespace":"default"},"spec":{"requestPlugins":[{"type":kind,"config":config}]}})).unwrap();
+        let mut cache = EntryCache::default();
+        let mut first = PluginRuntime::new();
+        first.add_from_request_filters_with_cache(&owner, &mut cache);
+        let pinned = first.request_plugins_iter().next().unwrap().clone();
+        let mut invalid = owner.clone();
+        let reference = match &mut invalid.spec.request_plugins.as_mut().unwrap()[0].plugin {
+            EdgionPlugin::RequestAccessPolicy(c) => c.active_profile_ref.as_mut().unwrap(),
+            EdgionPlugin::Canary(c) => c.active_profile_ref.as_mut().unwrap(),
+            EdgionPlugin::RegionRoute(c) => c.override_ref.as_mut().unwrap(),
+            _ => unreachable!(),
+        };
+        reference.namespace = Some(String::new());
+        let mut rebuilt = PluginRuntime::new();
+        rebuilt.add_from_request_filters_with_cache(&invalid, &mut cache);
+        let replacement = rebuilt.request_plugins_iter().next().unwrap();
+        assert!(
+            !Arc::ptr_eq(&pinned, replacement),
+            "{kind}: invalid target cannot reuse executable key"
+        );
+        invalid.metadata.name = Some("bad/name".into());
+        let mut rejected = PluginRuntime::new();
+        assert!(!rejected
+            .add_from_request_filters_with_cache(&invalid, &mut cache)
+            .is_empty());
+        assert_eq!(rejected.request_plugins_iter().count(), 0);
+        assert_eq!(
+            first.request_plugins_iter().count(),
+            1,
+            "pinned generation remains intact"
+        );
+        let mut detached = PluginRuntime::new();
+        assert!(!detached
+            .add_from_request_filters(owner.spec.request_plugins.as_ref().unwrap(), "default", "detached")
+            .is_empty());
+        assert_eq!(detached.request_plugins_iter().count(), 0);
+    }
+}
+
+#[tokio::test]
+async fn invalid_rap_selector_keeps_entry_condition_and_policy_failure_scope() {
+    for mode in ["invoked", "condition", "bypass"] {
+        let mut entry:RequestFilterEntry=serde_json::from_value(serde_json::json!({"type":"RequestAccessPolicy","config":{
+            "defaultProfile":"base","activeProfileRef":{"name":"bad/name"},"profiles":{"base":{"requiredRuleGroups":[{"name":"all","anyOfRules":[{"name":"ip","type":"remoteIp","config":{"ips":["0.0.0.0/0"]}}]}]}}
+        }})).unwrap();
+        if mode == "condition" {
+            entry.conditions=Some(serde_json::from_value(serde_json::json!({"run":{"allOf":[{"type":"keyExist","key":{"type":"header","name":"x-run-rap"}}]}})).unwrap());
+        }
+        let deny = if mode == "bypass" {
+            serde_json::json!([{"name":"http/RequestAccessPolicy","action":"bypass"}])
+        } else {
+            serde_json::json!([])
+        };
+        let compiled = compile_scoped_request_entries(vec![entry], deny);
+        assert!(compiled.is_activatable, "target failure is local to RAP filter");
+        assert!(compiled
+            .plugin_runtime
+            .request_plugins_iter()
+            .all(|filter| filter.name() != "RejectInvalidConfig"));
+        let (mut session, _client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        compiled
+            .plugin_runtime
+            .run_request_plugins(&mut session, &mut ctx)
+            .await;
+        assert_eq!(
+            ctx.final_downstream_status(),
+            if mode == "invoked" { Some(403) } else { None },
+            "{mode}"
+        );
+    }
+}

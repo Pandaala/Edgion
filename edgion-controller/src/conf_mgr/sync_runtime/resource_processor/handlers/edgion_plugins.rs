@@ -31,9 +31,10 @@ use edgion_resources::resources::refs::route_fields::MirrorSlot;
 use edgion_resources::resources::refs::waf_fields::{WafPluginReferences, WafPolicyReferences, WafReference};
 use edgion_resources::ResourceKind;
 
-use super::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
+use super::config_data_ref_mark::{denial_marker, resolve_field};
 use super::plugins::resolve_credential as cred;
 use super::san_guard;
+use edgion_resources::refs::config_data_fields::HttpConfigDataEntry;
 
 pub struct EdgionPluginsHandler;
 
@@ -86,21 +87,16 @@ impl EdgionPluginsHandler {
     /// Collect all `overrideRef` EdgionConfigData keys from RegionRoute plugins.
     /// Returns "namespace/name" keys (namespace defaults to EP's namespace when absent).
     fn get_region_route_override_keys(ep: &EdgionPlugins) -> Vec<String> {
-        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-        let Some(plugins) = &ep.spec.request_plugins else {
-            return vec![];
-        };
-        plugins
+        ep.spec
+            .request_plugins
             .iter()
-            .filter_map(|e| {
-                if let EdgionPlugin::RegionRoute(ref config) = e.plugin {
-                    config.override_ref.as_ref().map(|r| {
-                        let override_ns = r.namespace.as_deref().unwrap_or(ns);
-                        format!("{}/{}", override_ns, r.name)
-                    })
-                } else {
-                    None
+            .flatten()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                if !matches!(entry.plugin, EdgionPlugin::RegionRoute(_)) {
+                    return None;
                 }
+                HttpConfigDataEntry::from_plugins(ep, index)?.field()?.key().ok()
             })
             .collect()
     }
@@ -119,21 +115,16 @@ impl EdgionPluginsHandler {
     /// `active_profile_ref` in `request_plugins`. Namespace defaults to the EP namespace.
     /// Mirrors `get_region_route_override_keys` for the policy ref site.
     fn get_active_profile_ref_keys(ep: &EdgionPlugins) -> Vec<String> {
-        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-        let Some(plugins) = &ep.spec.request_plugins else {
-            return vec![];
-        };
-        plugins
+        ep.spec
+            .request_plugins
             .iter()
-            .filter_map(|e| {
-                if let EdgionPlugin::RequestAccessPolicy(ref config) = e.plugin {
-                    config.active_profile_ref.as_ref().map(|r| {
-                        let ref_ns = r.namespace.as_deref().unwrap_or(ns);
-                        format!("{}/{}", ref_ns, r.name)
-                    })
-                } else {
-                    None
+            .flatten()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                if !matches!(entry.plugin, EdgionPlugin::RequestAccessPolicy(_)) {
+                    return None;
                 }
+                HttpConfigDataEntry::from_plugins(ep, index)?.field()?.key().ok()
             })
             .collect()
     }
@@ -142,21 +133,16 @@ impl EdgionPluginsHandler {
     /// `active_profile_ref` in `request_plugins`. Namespace defaults to the
     /// EP namespace. Mirrors `get_active_profile_ref_keys` for the Canary ref site.
     fn get_canary_active_profile_ref_keys(ep: &EdgionPlugins) -> Vec<String> {
-        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-        let Some(plugins) = &ep.spec.request_plugins else {
-            return vec![];
-        };
-        plugins
+        ep.spec
+            .request_plugins
             .iter()
-            .filter_map(|e| {
-                if let EdgionPlugin::Canary(ref config) = e.plugin {
-                    config.active_profile_ref.as_ref().map(|r| {
-                        let ref_ns = r.namespace.as_deref().unwrap_or(ns);
-                        format!("{}/{}", ref_ns, r.name)
-                    })
-                } else {
-                    None
+            .flatten()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                if !matches!(entry.plugin, EdgionPlugin::Canary(_)) {
+                    return None;
                 }
+                HttpConfigDataEntry::from_plugins(ep, index)?.field()?.key().ok()
             })
             .collect()
     }
@@ -169,77 +155,20 @@ impl EdgionPluginsHandler {
     /// expected ConfigEntry type. Missing / wrong-type targets are not marked here —
     /// those surface as `EdgionConfigDataNotFound` in `update_status`.
     fn mark_config_data_ref_denials(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
-        let from_ns = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
-        let Some(plugins) = ep.spec.request_plugins.as_mut() else {
-            return;
-        };
-        for entry in plugins.iter_mut() {
-            match &mut entry.plugin {
-                EdgionPlugin::Unsupported => {}
-                EdgionPlugin::RegionRoute(config) => {
-                    if let Some(r) = config.override_ref.as_mut() {
-                        mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::RegionRouteOverride, ctx);
-                    }
-                }
-                EdgionPlugin::IpRestriction(_) => {}
-                EdgionPlugin::RequestAccessPolicy(config) => {
-                    if let Some(r) = config.active_profile_ref.as_mut() {
-                        mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::Selector, ctx);
-                    }
-                }
-                EdgionPlugin::Canary(config) => {
-                    if let Some(r) = config.active_profile_ref.as_mut() {
-                        mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::Selector, ctx);
-                    }
-                }
-                // Non-ref-bearing variants: explicit arms so a future ref-bearing
-                // variant forces a compile error here (fail-safe completeness guard).
-                EdgionPlugin::RequestHeaderModifier(_)
-                | EdgionPlugin::AiProxy(_)
-                | EdgionPlugin::ResponseHeaderModifier(_)
-                | EdgionPlugin::RequestRedirect(_)
-                | EdgionPlugin::UrlRewrite(_)
-                | EdgionPlugin::RequestMirror(_)
-                | EdgionPlugin::BasicAuth(_)
-                | EdgionPlugin::CredentialInjector(_)
-                | EdgionPlugin::Cors(_)
-                | EdgionPlugin::Csrf(_)
-                | EdgionPlugin::JwtAuth(_)
-                | EdgionPlugin::JweDecrypt(_)
-                | EdgionPlugin::HmacAuth(_)
-                | EdgionPlugin::HeaderCertAuth(_)
-                | EdgionPlugin::KeyAuth(_)
-                | EdgionPlugin::LdapAuth(_)
-                | EdgionPlugin::Mock(_)
-                | EdgionPlugin::FaultInjection(_)
-                | EdgionPlugin::DebugAccessLogToHeader(_)
-                | EdgionPlugin::ProxyRewrite(_)
-                | EdgionPlugin::RequestBodyBuffer(_)
-                | EdgionPlugin::GrpcJsonTranscoder(_)
-                | EdgionPlugin::JsonSchemaValidation(_)
-                | EdgionPlugin::FormJsonTransform(_)
-                | EdgionPlugin::RequestRestriction(_)
-                | EdgionPlugin::ResponseRewrite(_)
-                | EdgionPlugin::RateLimitLocal(_)
-                | EdgionPlugin::RateLimitRedis(_)
-                | EdgionPlugin::CtxSet(_)
-                | EdgionPlugin::WebhookKeyGet(_)
-                | EdgionPlugin::RealIp(_)
-                | EdgionPlugin::ForwardAuth(_)
-                | EdgionPlugin::OpenidConnect(_)
-                | EdgionPlugin::BandwidthLimit(_)
-                | EdgionPlugin::DirectEndpoint(_)
-                | EdgionPlugin::AllEndpointStatus(_)
-                | EdgionPlugin::DynamicInternalUpstream(_)
-                | EdgionPlugin::DynamicExternalUpstream(_)
-                | EdgionPlugin::Dsl(_)
-                | EdgionPlugin::RequestId(_)
-                | EdgionPlugin::ExtProc(_)
-                | EdgionPlugin::Guardrail(_)
-                | EdgionPlugin::AiGuard(_)
-                | EdgionPlugin::GeoIpLocation(_)
-                | EdgionPlugin::Wasm(_) => {}
-            }
+        let count = ep.spec.request_plugins.as_ref().map_or(0, Vec::len);
+        for index in 0..count {
+            let Some(field) = HttpConfigDataEntry::from_plugins(ep, index).and_then(|entry| entry.field()) else {
+                continue;
+            };
+            let denied = denial_marker(&field, ctx);
+            let entry = &mut ep.spec.request_plugins.as_mut().expect("current entry")[index];
+            let reference = match &mut entry.plugin {
+                EdgionPlugin::RegionRoute(config) => config.override_ref.as_mut(),
+                EdgionPlugin::RequestAccessPolicy(config) => config.active_profile_ref.as_mut(),
+                EdgionPlugin::Canary(config) => config.active_profile_ref.as_mut(),
+                _ => unreachable!("actual field variant"),
+            };
+            reference.expect("current field").ref_denied = denied;
         }
     }
 }
@@ -1074,63 +1003,47 @@ fn resolve_waf_policy_ref(ep: &EdgionPlugins) -> Vec<ResolvedRefsError> {
 }
 
 /// Check each RegionRoute plugin's `overrideRef` against the EdgionConfigData store.
-/// Returns one `RefNotPermitted` error when `ref_denied` is set (cross-namespace denial),
+/// Recomputes current identity and permission without trusting stored denial markers. Returns
 /// or one missing/type/content error per unusable reference. Content validation
 /// includes this consumer's modulo and does not invalidate its accepted base.
 /// Mutually exclusive per ref via else-branch to avoid a TOCTOU double-message.
 pub fn resolve_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-    let Some(plugins) = &ep.spec.request_plugins else {
-        return vec![];
-    };
     let mut errors = Vec::new();
-    for entry in plugins {
+    for (index, entry) in ep.spec.request_plugins.iter().flatten().enumerate() {
         if !entry.is_enabled() {
             continue;
         }
-        if let EdgionPlugin::RegionRoute(ref config) = entry.plugin {
-            if let Some(ref override_ref) = config.override_ref {
-                let override_ns = override_ref.namespace.as_deref().unwrap_or(ns);
-                if override_ref.ref_denied.is_some() {
-                    errors.push(ResolvedRefsError::RefNotPermitted {
-                        from_namespace: ns.to_string(),
-                        from_kind: "EdgionPlugins",
-                        target_namespace: override_ns.to_string(),
-                        target_name: override_ref.name.clone(),
-                    });
-                } else {
-                    let target = ctx
-                        .runtime()
-                        .edgion_config_data_store
-                        .get(Some(override_ns), &override_ref.name);
-                    let overlay = target.as_ref().and_then(|target| match &target.spec.data {
-                        ConfigEntry::RegionRouteOverride(overlay) => Some((target.spec.enable, overlay)),
-                        _ => None,
-                    });
-                    if let Some((enabled, overlay)) = overlay {
-                        let error = if !enabled {
-                            Some("RegionRouteOverride is disabled; using base regions".to_string())
-                        } else {
-                            overlay
-                                .regions
-                                .as_deref()
-                                .and_then(|regions| config.validate_effective_regions(regions).err())
-                        };
-                        if let Some(detail) = error {
-                            errors.push(ResolvedRefsError::EdgionConfigDataInvalid {
-                                namespace: override_ns.to_string(),
-                                name: override_ref.name.clone(),
-                                detail,
-                            });
-                        }
-                    } else {
-                        errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                            namespace: override_ns.to_string(),
-                            name: override_ref.name.clone(),
-                            expected_type: "RegionRouteOverride".to_string(),
-                        });
-                    }
-                }
+        let EdgionPlugin::RegionRoute(config) = &entry.plugin else {
+            continue;
+        };
+        let Some(field) = HttpConfigDataEntry::from_plugins(ep, index).and_then(|entry| entry.field()) else {
+            continue;
+        };
+        let resolution = resolve_field(&field, ctx);
+        if let Some(error) = resolution.error {
+            errors.push(error);
+            continue;
+        }
+        if let Some(target) = resolution.target {
+            let ConfigEntry::RegionRouteOverride(overlay) = &target.spec.data else {
+                unreachable!("fixed target role")
+            };
+            if let Some(detail) = overlay
+                .regions
+                .as_deref()
+                .and_then(|regions| config.validate_effective_regions(regions).err())
+            {
+                let query = field.query().expect("validated field");
+                errors.push(ResolvedRefsError::EdgionConfigDataInvalid {
+                    namespace: query
+                        .target()
+                        .scope()
+                        .namespace()
+                        .expect("namespaced target")
+                        .to_string(),
+                    name: query.target().name().to_string(),
+                    detail,
+                });
             }
         }
     }
@@ -1147,86 +1060,45 @@ pub fn resolve_ip_list_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Res
 }
 
 /// Check each `RequestAccessPolicy` plugin's `active_profile_ref` against the EdgionConfigData
-/// store. Returns one `RefNotPermitted` error when `ref_denied` is set (cross-namespace denial),
+/// store using current owning identity and permission; stored markers are not authority. Returns
 /// or one `EdgionConfigDataNotFound { expected_type: "Selector" }` per missing or wrong-type
 /// reference. Mutually exclusive per ref via else-branch to avoid a TOCTOU double-message.
 ///
 /// This is a net-new resolver — `RequestAccessPolicy.active_profile_ref` (the 7th ref site)
 /// had no status reporting before Task 5.
 pub fn resolve_active_profile_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-    let Some(plugins) = &ep.spec.request_plugins else {
-        return vec![];
-    };
-    let mut errors = Vec::new();
-    for entry in plugins {
-        if let EdgionPlugin::RequestAccessPolicy(ref config) = entry.plugin {
-            if let Some(ref r) = config.active_profile_ref {
-                let rns = r.namespace.as_deref().unwrap_or(ns);
-                if r.ref_denied.is_some() {
-                    errors.push(ResolvedRefsError::RefNotPermitted {
-                        from_namespace: ns.to_string(),
-                        from_kind: "EdgionPlugins",
-                        target_namespace: rns.to_string(),
-                        target_name: r.name.clone(),
-                    });
-                } else {
-                    let target = ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
-                    let resolved = target
-                        .as_ref()
-                        .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::Selector(_)));
-                    if !resolved {
-                        errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                            namespace: rns.to_string(),
-                            name: r.name.clone(),
-                            expected_type: "Selector".to_string(),
-                        });
-                    }
-                }
+    ep.spec
+        .request_plugins
+        .iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            if !matches!(entry.plugin, EdgionPlugin::RequestAccessPolicy(_)) {
+                return None;
             }
-        }
-    }
-    errors
+            let field = HttpConfigDataEntry::from_plugins(ep, index)?.field()?;
+            resolve_field(&field, ctx).error
+        })
+        .collect()
 }
 
 /// Check each `Canary` plugin's `active_profile_ref` against the EdgionConfigData
-/// store. Returns one `RefNotPermitted` error when `ref_denied` is set (cross-namespace
-/// denial), or one `EdgionConfigDataNotFound { expected_type: "Selector" }` per missing
+/// store using current owning identity and permission. Returns one `EdgionConfigDataNotFound { expected_type: "Selector" }` per missing
 /// or wrong-type reference. Mirrors `resolve_active_profile_refs` (RequestAccessPolicy).
 pub fn resolve_canary_active_profile_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-    let Some(plugins) = &ep.spec.request_plugins else {
-        return vec![];
-    };
-    let mut errors = Vec::new();
-    for entry in plugins {
-        if let EdgionPlugin::Canary(ref config) = entry.plugin {
-            if let Some(ref r) = config.active_profile_ref {
-                let rns = r.namespace.as_deref().unwrap_or(ns);
-                if r.ref_denied.is_some() {
-                    errors.push(ResolvedRefsError::RefNotPermitted {
-                        from_namespace: ns.to_string(),
-                        from_kind: "EdgionPlugins",
-                        target_namespace: rns.to_string(),
-                        target_name: r.name.clone(),
-                    });
-                } else {
-                    let target = ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
-                    let resolved = target
-                        .as_ref()
-                        .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::Selector(_)));
-                    if !resolved {
-                        errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                            namespace: rns.to_string(),
-                            name: r.name.clone(),
-                            expected_type: "Selector".to_string(),
-                        });
-                    }
-                }
+    ep.spec
+        .request_plugins
+        .iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            if !matches!(entry.plugin, EdgionPlugin::Canary(_)) {
+                return None;
             }
-        }
-    }
-    errors
+            let field = HttpConfigDataEntry::from_plugins(ep, index)?.field()?;
+            resolve_field(&field, ctx).error
+        })
+        .collect()
 }
 
 /// Requeue all Gateways, HTTPRoutes, and GRPCRoutes that reference this EdgionPlugins.

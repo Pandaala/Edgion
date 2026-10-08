@@ -1,4 +1,5 @@
 //! Synchronous owning loans for standalone HTTP and Stream IpList fields.
+use super::config_data_fields::{ConfigDataField, StreamConfigDataEntry};
 use super::owned::{FieldContract, FieldSlot, FieldWire, OwnerSnapshot, PreparedSlot, TopologyLoan};
 use super::{ReferenceError, ReferenceToken};
 use crate::resources::common::RefDenied;
@@ -351,6 +352,7 @@ impl<'a> StreamIpListBindings<'a> {
             return None;
         };
         Some(GlobalIpListEntry {
+            owner: self.owner,
             config,
             index,
             prepared: self.prepared,
@@ -395,11 +397,15 @@ impl<'a> ConnectionIpListEntry<'a> {
     }
 }
 pub struct GlobalIpListEntry<'a> {
+    owner: &'a EdgionStreamPlugins,
     config: &'a GlobalConnectionIpRestrictionConfig,
     index: usize,
     prepared: &'a PreparedIpListReferences,
 }
 impl<'a> GlobalIpListEntry<'a> {
+    pub fn selector(&self) -> Option<ConfigDataField<'a>> {
+        StreamConfigDataEntry::from_stream_plugins(self.owner, self.index)?.field()
+    }
     pub fn config(&self) -> &'a GlobalConnectionIpRestrictionConfig {
         self.config
     }

@@ -1704,3 +1704,58 @@ R5e, R6-R8 and F1/F2 remain open; the selected original issue stays open.
 Both independent reviewers confirmed final R5d SCOPED PASS against the final
 manifest and all14 root gate logs. Stage the19 technical paths plus this ledger;
 commit locally without push. Unrelated untracked artifacts remain excluded.
+
+R5d committed558433cf9e9695938f77693c88d39d7b60d35917 locally, parent745850e98.
+All20 staged hashes match HEAD; tracked/index state was clean after commit.
+No push; concurrent untracked artifacts remain unchanged. R5e starts PLAN ONLY
+for RAP URL configRefs, non-WAF Selectors and RegionRoute overrideRef. Revalidate
+residual evidence on this HEAD; preserve each family's existing failure policy,
+actual consumer ownership, disabled-slot behavior and immutable snapshots.
+
+R5e source and feature authority correct the old residual inventory's blanket
+Selector fallback claim: RAP denies denied/missing/disabled/wrong-type/unknown
+profile selection, while Canary/GCIR fall back to base. The RAP user guide states
+this explicitly; the generic ConfigData table and Canary parity comment are
+stale. The plan must preserve consumer policies and correct their scoped docs,
+not relax RAP under identity unification. Fresh test/caller evidence is in
+ignored r5e-test-inventory-20261008.md; no implementation has started.
+
+R5e Astra grounding identifies pre-plan gates: RAP invalid Selector must retain
+an explicit failure state rather than lose its key and use default; GCIR Selector
+loans must retain actual ESP ownership rather than prepared metadata alone; URL
+slots validate before effective profile copying and preserve bounded warnings,
+inline siblings and nested-condition second pass. Existing GCIR single-snapshot
+and Region raw-overlay/proof contracts remain required. Formal plan approval is
+pending; no R5e production edits or Cargo have started.
+
+R5e independent Astra PLAN SCOPED PASS authorizes EXECUTE for31 technical paths
+(14 Rust production,1 existing tracing registry,11 mirrored tests,5 docs), after
+fresh original/list baseline capture at558433cf9. The existing authored-profiles
+clone is permitted under actual-owner loans; invalid fields must never read,
+authorize, subscribe to or copy external document candidates. No extra clone may
+fabricate ownership. Original tests remain frozen; deviations require review.
+Final role-specific authorization, activity, fallback, cache and warning evidence
+plus two actual reviews/root gates remain pending. No next batch is activated.
+
+R5e final candidate changes29 technical paths within the31-path allowlist.
+Actual EP/ESP loans now unify RAP URL configRefs, RAP/Canary/GCIR Selectors and
+RegionRoute overrideRef across identity, permission, dependencies and runtime
+construction. Invalid identities stop before external access; valid missing or
+denied dependencies remain recoverable. RAP Selector denial retains its existing
+conditional/policy scope; Canary/GCIR/Region preserve their distinct base fallback.
+No schema, queue, request-path parsing or extra owner clone is introduced.
+Focused verification passes433 distinct unit tests,2 actual-owner E0505 doctests
+and18 tracing-guard self-tests. All8926 old compiled test identities survive;
+13 are added, and10 existing test-file prefixes remain byte-identical. The
+validation-disabled child test proves that exactly one isolated test executed.
+All14 root r1 gates pass with zero warnings/errors and unchanged source,
+including workspace check and Clippy. Final manifest:
+7882b09816d41393e885025a6c112f6feb2c6f5f0c77a0786b8f6b7abe53d4c8.
+Initial test import/fixture failures and an unused test-helper warning were
+corrected; original evidence remains in ignored verification directories.
+These results cover direct handlers, permission transitions and runtime/snapshot
+behavior, not live traffic or Gateway API conformance. R6-R8 and F1/F2 remain
+open, including annotation/LinkSys/DNS/log consumers and final documentation.
+Both independent reviewers confirmed final SCOPED PASS after independently
+checking all14 root logs and frozen source hashes. Commit29 technical paths plus
+this ledger locally without push; unrelated untracked artifacts remain excluded.

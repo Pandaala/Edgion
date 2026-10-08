@@ -351,7 +351,7 @@ withholds that ref at runtime:
 | `allowRefs` (IpList) | **Deny-all fail-closed**: `allow_mode` stays true but the referenced allow set is withheld — no IP is permitted through that ref. Whitelist intent is preserved; this is the safe fail direction. |
 | `denyRefs` (IpList) | **Under-block**: the denied deny set is not applied. The plugin continues with remaining inline/permitted deny entries, but the denied external deny set is missing (possible security gap). |
 | `overrideRef` (RegionRouteOverride) | **No override**: RegionRoute falls back to the base inline region table. Traffic continues (fail-to-base, not fail-closed). |
-| `activeProfileRef` (Selector) | **Fail-to-base** (NOT fail-closed): the plugin uses its base/inline `activeProfile`. Unlike `allowRefs`, a denied selector does NOT block traffic — the Selector only switches among existing git-owned profiles, and the base profile is the safe default. |
+| `activeProfileRef` (Selector) | Consumer-specific: Canary and GlobalConnectionIpRestriction use their validated base profile on invalid, denied or unavailable targets; WAF uses its validated default profile. RequestAccessPolicy fails closed: invalid or denied configured selectors produce an initialization-failed filter, and missing, disabled, wrong-type or unknown selections deny. An absent RAP selector, or an enabled Selector with no active value, uses its default profile. |
 
 ### Status Conditions on the Referrer
 
@@ -536,3 +536,28 @@ with policy bounds checked before child copies. Existing shape failures stay str
 optional targets are unavailable units, while required targets invalidate their profile. Selector target
 identity failure keeps the validated default fallback. Gateway selected-bundle transport checks establish
 lexical consistency only, never WafPolicy ownership or Grant authority.
+
+### Remaining plugin ConfigData field identity
+
+RAP URL documents and RAP/Canary/GCIR Selectors, plus RegionRoute overrides, borrow
+actual authored EP/ESP entries through `refs::config_data_fields`. Identity is
+validated before target access, Grant queries or dependency registration. Omitted
+owner namespace defaults to `default` for targets; raw owner queue and deletion
+keys remain unchanged. Explicit empty namespaces and invalid names have no target
+key, even when a malformed raw-store decoy exists. Missing valid targets retain
+recovery dependencies. Current readonly Selector/Region diagnostics recompute
+permission instead of trusting transported denial markers.
+
+URL documents preserve partial-good expansion and the existing 64-warning bound;
+imported conditions retain the consuming EP's authority. URL warnings are captured
+during parse and reused by readonly status; status does not re-expand document
+material. Same-namespace pure denial marking performs no material read after
+identity validation. Availability resolution and cross-namespace marking still
+use the existing owned store result; this is not a global zero-copy guarantee.
+
+Gateway cold construction and cache eligibility validate actual owning slots.
+Reference-free inline factory construction remains available, while reference-bearing
+entries require their actual owner. Consumer fallback and denial retain their
+existing policy/condition placement. GCIR still reads its Selector and selected
+profile IpLists from one immutable snapshot; RegionRoute retains its paired raw
+value and validation-proof lookup. No request-path identity parsing is added.

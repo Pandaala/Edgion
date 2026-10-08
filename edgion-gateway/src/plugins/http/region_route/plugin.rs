@@ -17,6 +17,8 @@
 //! `compute_effective_regions` is called per request: one ArcSwap load + one hashmap lookup.
 //! The plugin struct itself caches only the base config (Arc) and the optional overlay store key.
 
+use edgion_resources::refs::config_data_fields::HttpConfigDataEntry;
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use std::{num::NonZeroU16, sync::Arc};
 
 use async_trait::async_trait;
@@ -96,20 +98,25 @@ pub struct RegionRoute {
 }
 
 impl RegionRoute {
-    /// Create the plugin from a full `RegionRouteConfig` (from EdgionPlugins).
-    ///
-    /// `ep_namespace` is the EdgionPlugins namespace, used as the default namespace
-    /// for `override_ref` entries that do not specify their own namespace.
-    pub fn create(ep_config: &RegionRouteConfig, ep_namespace: &str) -> Box<dyn RequestFilter> {
-        let override_key = ep_config
-            .override_ref
-            .as_ref()
-            .filter(|r| r.ref_denied.is_none())
-            .map(|r| {
-                let ns = r.namespace.as_deref().unwrap_or(ep_namespace);
-                format!("{}/{}", ns, r.name)
-            });
+    pub(crate) fn create_bound(entry: HttpConfigDataEntry<'_>) -> Option<Box<dyn RequestFilter>> {
+        let EdgionPlugin::RegionRoute(config) = entry.plugin() else {
+            return None;
+        };
+        if entry.has_references() {
+            entry.validate_owner().ok()?;
+        }
+        let key = entry.field().and_then(|field| field.runtime_key().ok().flatten());
+        Some(Self::build(config, key))
+    }
 
+    pub(crate) fn create_inline(config: &RegionRouteConfig) -> Option<Box<dyn RequestFilter>> {
+        if config.override_ref.is_some() {
+            return None;
+        }
+        Some(Self::build(config, None))
+    }
+
+    fn build(ep_config: &RegionRouteConfig, override_key: Option<String>) -> Box<dyn RequestFilter> {
         Box::new(Self {
             name: "RegionRoute".to_string(),
             init_error: ep_config.validation_error().map(|_| {
