@@ -112,9 +112,8 @@ Source/test owners are the mirrored XML parser/runtime tests, public XML API tes
 Gateway capture tests, resource strict-admission tests and shared WafDynamic XML
 wire/generation/mode scenarios. Legacy XML helpers live only in the body unit-test
 oracle; their historical test cases are not proof of native parser correctness.
-Review and verification were tracked in the historical
-`tasks/pending/waf-xml-checker/waf-xml-checker.md` task, which is no longer present
-in the working tree.
+The completed implementation plans and process artifacts were removed during
+task cleanup. This guard and the canonical code/tests own the current contract.
 Historical results do not establish correctness after a relevant source change.
 
 Heap-capacity measurements exclude allocator overhead, BodyStorage, inline storage

@@ -109,7 +109,7 @@ ordered findings, TX/captures and later phases; its enlarged reference work cap
 is never a production override. Exact compiler/constructor budget boundaries,
 mask lifecycle and typed-control counterexamples are regression gates. Re-evaluate
 the proof when adding TX-writing actions, capture aliases, target controls,
-scheduler edges or consumers. The reviewed implementation record was `tasks/pending/waf-demand-driven/04-verification.md`; that historical task file is absent from the current tree.
+scheduler edges or consumers.
 
 ## Alternatives and limits
 
@@ -136,34 +136,22 @@ independent component peaks are not a simultaneous aggregate peak.
 
 ## Verification and re-evaluation
 
-JSON classification reports must distinguish historical analyst conclusions from
-the replacement implementation. CAND-local-001 corrected retired narrow-lane,
-always-copy, production-serde-number and fixed-depth descriptions in
-`tasks/pending/waf-json-rule-classification/`. Its current contract and inventories
-are bound to a separately hashed source manifest; each member assessment leaves
-original-unit compiler admission and runtime acceptance explicitly untested.
-Original reports and corpus bodies remain unchanged. Verification defaults to
-read-only current scoped hashes or historical `git show` evidence and publishes
-only explicitly requested separate result files. Isolated regeneration must
-preserve the current overlay and original attribution. Re-evaluate the assessment
-and source manifest after any relevant compiler, parser or Gateway entry change;
-never infer current support from a historical category or old pass record.
+Historical rule classification is not compiler admission or runtime acceptance.
+Retired narrow-lane, always-copy, production-serde-number and fixed-depth
+reports were superseded by the current bounded implementation. The old analyst
+reports, source snapshots and execution queues were removed during task cleanup;
+this page retains the reusable contract rather than a task transcript.
+Use `config/waf/crs-4.25.1-supported-v1/` and the canonical test fixtures for
+source inventory and executable acceptance. Re-evaluate support against current
+compiler/parser/Gateway code after relevant changes.
 
-The classification reconciliation remains a frozen `5554f0c` baseline after
-native XML extends shared compiler/collector/transaction and Gateway files.
-Current-worktree hashes can therefore differ intentionally; do not refresh the
-manifest to imply new original-rule validation. XML shares the selected-result
-and replay engine under an explicit domain; see
-[the XML regression guard](native-xml-inspection.md) for its separate projection
-and physical-error contract. JSON-only summary optimizations remain JSON-only.
+XML shares selected results and replay under an explicit domain; see
+[the XML regression guard](native-xml-inspection.md). JSON-only summary
+optimizations remain JSON-only. Structural JSONPath and unsupported broad
+dynamic dependencies do not gain a DOM fallback through historical categories.
 
-The historical `tasks/pending/waf-json-checker/` records are retained in the
-working tree. Capture wiring and closure were tracked in the historical
-`tasks/waf-todo/16-json-capture-wiring-and-closure.md` task, which is no longer
-present in the working tree.
-Prior test and measurement results below are historical evidence, not proof of
-the new entry. Remaining WAF work is tracked in the
-[current execution queue](../../../../tasks/waf-todo/README.md).
+Prior test and measurement results below are historical evidence, not fresh
+verification or a whole-Gateway performance claim.
 
 C1 independent review approved the replacement and legacy assertion mapping;
 508 WAF library tests passed with two existing ignored cases, and API 4/4 passed.
@@ -437,7 +425,6 @@ coverage is deliberately narrow; synthetic speedups do not establish CRS/Gateway
 latency. Exact/one-less optional build, tight global admission, VM parity,
 fanout and original supported package witnesses are regression gates.
 
-
 ## Exact simple boolean regex execution
 
 The final optional pass proves a singleton validated NFA path with at most16
@@ -456,7 +443,6 @@ and replay remain canonical. Re-evaluate on NFA look semantics, supported proof
 shapes, hint layout, compiler pass order, or scratch-owner changes. Directed
 byte/Unicode/empty/anchor/fanout/budget tests and paired release witnesses are
 regression evidence; synthetic timing does not establish Gateway throughput.
-
 
 ## Stage-cache membership storage
 
@@ -477,3 +463,37 @@ owners. Do not claim matcher-scratch or body retention savings from this change.
 Re-evaluate on namespace, domain capacity, alias, engine-write or reset changes.
 Canonical cache tests cover58/64/65 namespaces, sparse high IDs, both modes,
 exact/one-less physical admission, failure non-mutation and capacity reuse.
+
+## Completed multi-pattern optimization evidence
+
+The completed A-H series interns selector programs (37 logical occurrences to
+12 programs), shares duplicate boolean patterns (66 to 60), adds 22 optional
+capture-hit engines with 72 patterns, reuses current-input/current-name results,
+and lowers proven simple patterns. Current 36 ordinary plus 22 shadow engines
+fit inline stage membership. Rule ordering, exact captures, Reference fallback,
+work charging and optional aggregate policy remain unchanged.
+
+The historical final comparison used CountingSystem over System in debug builds,
+three warmups and 31 samples per row: 28 rows cover seven fixtures, both profiles
+and both expensive-check settings. With expensive checks off, structured standard
+fixtures reduced cumulative requested bytes by 2.2-2.9% and extra live-heap peaks
+by 3.1-3.8%; strict fixtures reduced them by 9.4-11.7% and 11.7-13.2% respectively.
+Ordered outcomes, selected TX values and multipart counters matched the baseline;
+post-Drop live deltas were unchanged, not proven zero. Source bindings were
+checked against the unchanged WAF implementation at cleanup. Raw process artifacts
+were removed with completed tasks. These results do not measure Gateway latency,
+throughput or RSS; see the
+[remaining performance measurement task](../../../../tasks/todo/waf-production-performance-baseline.md).
+
+Capture-hit acceleration adds generation memory and conservative admission cost:
+its measured engine-plus-metadata delta was 668,878 bytes and incremental scratch
+envelope 2,567,160 bytes, including empty slots; engine caches stay lazy. Final
+reported generation retention was 9,221,804 bytes and conservative compile peak
+1,048,458,311 bytes under the unchanged 1 GiB cap. Compiler forecasts exclude
+allocator fragmentation and are not observed process memory.
+
+Historical combined verification passed 776 library and 19 integration tests
+(with existing ignored cases), workspace all-target check/clippy, both original
+fixture targets, and live WafDynamic/WafExpensiveChecks scenarios. Re-run relevant
+gates after implementation changes; these counts are historical, not certification
+of arbitrary CRS configurations or full response-body support.

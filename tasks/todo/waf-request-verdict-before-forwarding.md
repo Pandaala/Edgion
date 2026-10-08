@@ -5,11 +5,11 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-09-23 |
-| Status | pending |
+| Status | completed; historical record superseded by the canonical regression guard |
 | Type | feature |
 | Priority | P0 |
 | Issue | N/A |
-| Design status | shared-storage prefix implemented; local wire/hot-reload verified; remote publication pending |
+| Design status | implemented and integrated into the supported fork; old publication notes below are historical |
 
 ## AI guide summary
 
@@ -45,7 +45,7 @@ path for other configurations; later work can expand or reorganize modes.
 
 ## Current design specification
 
-The consolidated [WAF request-body spec](../pending/waf-request-body-spec.md)
+The current [WAF request-body contract](../../skills/04-review/http-body/regression-guards/waf-prefix-before-dispatch.md)
 is authoritative for configuration, default early prefix caching, in-memory
 window limits, full inspection, and exact forwarding. It supersedes the earlier
 incremental spec in this task. The default captures only the inspection prefix

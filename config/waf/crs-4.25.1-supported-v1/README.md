@@ -48,4 +48,6 @@ The same generator emits local/Kubernetes WafDynamic fixtures with the exact
 product core/tuning pins and one separately declared test-owned guard. That
 568-unit test generation must not be described as 568 original CRS rules.
 `generated/acceptance.json` records pins, output hashes and exact exclusions;
-live and performance evidence is tracked in the request-profile task.
+current runtime contracts are recorded in the
+[WAF review knowledge](../../../skills/04-review/waf/SKILL.md). Remaining
+performance and Kubernetes verification have standalone tasks linked there.
