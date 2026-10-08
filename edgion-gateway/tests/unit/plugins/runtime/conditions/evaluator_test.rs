@@ -1219,3 +1219,15 @@ fn resolved_empty_ip_union_is_not_unresolved() {
     assert!(!condition.has_unresolved_refs());
     assert!(condition.evaluate(&session, None));
 }
+
+#[test]
+fn invalid_ip_reference_payload_is_unresolved_even_with_inline_ips_and_negation() {
+    for kind in ["directPeerIpMatch", "remoteIpMatch"] {
+        let condition: Condition = serde_json::from_value(
+            serde_json::json!({"type":kind,"ips":["0.0.0.0/0"],"ipRefs":[{"name":"bad/name"}],"negate":true}),
+        )
+        .unwrap();
+        assert!(condition.has_unresolved_refs());
+        assert!(!condition.evaluate(&MockPluginSession::new(), None));
+    }
+}

@@ -205,6 +205,7 @@ pub(super) enum FieldContract {
     CustomCredential,
     TemplateSecret,
     FixedConfigMap,
+    FixedConfigData,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -213,6 +214,7 @@ pub(super) enum FieldWire {
     Ca(CustomCACertificateRef),
     Template(super::template_fields::TemplateWire),
     Descriptor { name: String, key: String },
+    ConfigData { name: String, namespace: Option<String> },
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -263,6 +265,9 @@ impl OwnedTarget {
             });
         }
         let (group, kind, namespace, name) = match wire {
+            FieldWire::ConfigData { name, namespace } => {
+                ("edgion.io", "EdgionConfigData", namespace.as_deref(), name.as_str())
+            }
             FieldWire::Secret(reference) => (
                 reference.group.as_deref().unwrap_or(""),
                 reference.kind.as_deref().unwrap_or("Secret"),
@@ -289,6 +294,7 @@ impl OwnedTarget {
         };
         ObjectIdentity::checked(group, kind, ResourceScope::Namespaced(namespace), name)?;
         let supported = match contract {
+            FieldContract::FixedConfigData => group == "edgion.io" && kind == "EdgionConfigData",
             FieldContract::CustomSecret => group.is_empty() && kind == "Secret",
             FieldContract::CustomCa => group.is_empty() && matches!(kind, "Secret" | "ConfigMap"),
             FieldContract::CustomCredential => {
@@ -337,6 +343,11 @@ pub(super) enum FieldSlot {
         position: crate::resources::common::outbound_request::RequestTemplatePosition,
         segment: usize,
     },
+    ConditionIp {
+        root: usize,
+        leaf: Option<super::condition_fields::LeafPosition>,
+        reference: usize,
+    },
     Condition {
         root: usize,
         leaf: super::condition_fields::LeafPosition,
@@ -381,6 +392,7 @@ impl FieldSlot {
                     && *current_reference == reference
             }
             Self::LinkSys { .. }
+            | Self::ConditionIp { .. }
             | Self::Condition { .. }
             | Self::PluginTemplate { .. }
             | Self::LinkSysTemplate { .. }
@@ -492,7 +504,7 @@ impl ReferenceToken<'_> {
             FieldWire::Secret(reference) => &reference.name,
             FieldWire::Ca(reference) => &reference.name,
             FieldWire::Template(reference) => reference.target().map_or("", |(_, name)| name),
-            FieldWire::Descriptor { name, .. } => name,
+            FieldWire::Descriptor { name, .. } | FieldWire::ConfigData { name, .. } => name,
         }
     }
 }

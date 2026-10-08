@@ -53,3 +53,18 @@ Re-open this decision only if:
 ## Resolution references
 
 - `cl-01` — 2026-08-24.
+
+## RAP IP resolution distinction
+
+The Controller's existing RAP IP policy is partial-good: direct IP rule fields,
+optional IP-rule conditions and expanded URL-candidate IP conditions retain inline
+and usable referenced siblings, write a resolved union (including an empty union),
+and record bounded resolution warnings. This is distinct from a condition that
+reaches the Gateway with an absent resolved payload. The unavailable-candidate
+rule above applies to genuinely unresolved conditions, including unresolved RAP
+credentials; it does not turn the existing RAP IP union into all-or-nothing lookup.
+Ordinary entry/body/dye/RequestRestriction IP reference failures leave the payload
+absent, including after a formerly resolved generation. Invalid identities obey
+the same consumer policies while causing no target lookup, Grant query or dependency.
+R5c1 binds these references and warning ownership through the existing effective
+condition catalogue; standalone IpRestriction remains a separate contract.

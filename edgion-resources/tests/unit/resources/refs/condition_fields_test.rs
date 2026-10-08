@@ -308,3 +308,163 @@ fn effective_rap_expansion_does_not_invalidate_raw_frozen_credentials() {
     config.resolved_profiles = None;
     assert!(frozen.matches_plugins(&owner));
 }
+
+fn ip_owner() -> EdgionPlugins {
+    fn replace(value: &mut serde_json::Value) {
+        if value.get("type").and_then(|v| v.as_str()) == Some("secretMatch") {
+            *value = serde_json::json!({"type":"remoteIpMatch", "ipRefs":[{"name":"nets"}]});
+            return;
+        }
+        match value {
+            serde_json::Value::Object(fields) => {
+                for child in fields.values_mut() {
+                    replace(child);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    replace(child);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut wire = serde_json::to_value(root_fixture()).unwrap();
+    replace(&mut wire);
+    let mut owner: EdgionPlugins = serde_json::from_value(wire).unwrap();
+    if let EdgionPlugin::RequestAccessPolicy(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[2].plugin {
+        for profile in config.resolved_profiles.as_mut().unwrap().values_mut() {
+            for rule in &mut profile.required_rule_groups[0].any_of_rules {
+                if let RequestAccessRuleType::DirectPeerIp(ip) | RequestAccessRuleType::RemoteIp(ip) = &mut rule.rule {
+                    ip.ip.ip_refs = vec![serde_json::from_value(serde_json::json!({"name":"direct-nets"})).unwrap()];
+                }
+            }
+        }
+    }
+    owner
+}
+
+#[test]
+fn ip_catalogue_covers_actual_roots_and_retains_enabled_only_activity() {
+    let mut owner = ip_owner();
+    owner.metadata.namespace = None;
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    let mut ordinary = 0;
+    let mut rap = 0;
+    prepared
+        .visit_ip(&owner, |leaf| {
+            match leaf.consumer() {
+                IpReferenceConsumer::Ordinary => ordinary += 1,
+                IpReferenceConsumer::RequestAccessPolicy => rap += 1,
+            }
+            for token in leaf.references().unwrap() {
+                let bound = token.validated().unwrap();
+                assert_eq!(bound.target().scope().namespace(), Some("default"));
+                assert_eq!(bound.source().group_kind().kind(), "EdgionPlugins");
+                assert_eq!(bound.target().group_kind().kind(), "EdgionConfigData");
+                assert!(matches!(token.freeze(), Err(ReferenceError::UnsupportedTarget)));
+            }
+        })
+        .unwrap();
+    assert_eq!((ordinary, rap), (29, 10));
+    // Wasm is unsupported in this stage, but existing IP resolution is enabled-only.
+    owner.spec.upstream_response_body_filter_plugins.as_mut().unwrap()[0].enable = false;
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    let mut count = 0;
+    prepared.visit_ip(&owner, |_| count += 1).unwrap();
+    assert_eq!(count, 33);
+}
+
+#[test]
+fn ip_descriptors_validate_before_access_and_resolved_payload_does_not_change_binding() {
+    for (name, namespace, valid) in [
+        ("nets", None, true),
+        ("nets", Some("ops"), true),
+        ("", None, false),
+        ("bad/name", None, false),
+        ("nets", Some(""), false),
+    ] {
+        let mut owner = ip_owner();
+        let prepared = PreparedConditionReferences::from_plugins(&owner);
+        prepared
+            .visit_ip_mut(
+                &mut owner,
+                |mut leaf, _emit| {
+                    leaf.config_mut().resolved_ips = Some(vec![]);
+                    for wire in &mut leaf.config_mut().ip_refs {
+                        wire.ref_denied = None;
+                    }
+                    assert!(leaf.references().is_ok());
+                },
+                |_, _| {},
+            )
+            .unwrap();
+        let prepared = PreparedConditionReferences::from_plugins(&owner);
+        let mut first = true;
+        let result = prepared.visit_ip_mut(
+            &mut owner,
+            |mut leaf, _emit| {
+                if first {
+                    first = false;
+                    leaf.config_mut().ip_refs[0].name = name.into();
+                    leaf.config_mut().ip_refs[0].namespace = namespace.map(str::to_string);
+                }
+            },
+            |_, _| {},
+        );
+        if name != "nets" || namespace.is_some() {
+            assert!(matches!(result, Err(ReferenceError::StaleBinding)));
+        }
+        let prepared = PreparedConditionReferences::from_plugins(&owner);
+        let mut first = true;
+        prepared
+            .visit_ip(&owner, |leaf| {
+                if first {
+                    first = false;
+                    assert_eq!(leaf.references().unwrap().next().unwrap().validated().is_ok(), valid);
+                }
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn rap_warning_application_rechecks_owner_and_preserves_root_order() {
+    let mut owner = ip_owner();
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    let mut order = Vec::new();
+    prepared
+        .visit_ip_mut(
+            &mut owner,
+            |leaf, emit| {
+                if leaf.consumer() == IpReferenceConsumer::RequestAccessPolicy {
+                    let name = leaf.references().unwrap().next().unwrap().authored_name().to_string();
+                    order.push(name.clone());
+                    emit(name);
+                }
+            },
+            |warnings, warning| warnings.push(warning),
+        )
+        .unwrap();
+    assert_eq!(order, ["direct-nets", "nets", "direct-nets", "nets", "nets"].repeat(2));
+    let EdgionPlugin::RequestAccessPolicy(config) = &owner.spec.request_plugins.as_ref().unwrap()[2].plugin else {
+        unreachable!()
+    };
+    assert_eq!(config.resolution_warnings, order);
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    let result = prepared.visit_ip_mut(
+        &mut owner,
+        |mut leaf, emit| {
+            if leaf.consumer() == IpReferenceConsumer::RequestAccessPolicy {
+                leaf.config_mut().ip_refs.clear();
+            }
+            emit("must not append".into());
+        },
+        |warnings, warning| warnings.push(warning),
+    );
+    assert!(matches!(result, Err(ReferenceError::StaleBinding)));
+    let EdgionPlugin::RequestAccessPolicy(config) = &owner.spec.request_plugins.as_ref().unwrap()[2].plugin else {
+        unreachable!()
+    };
+    assert_eq!(config.resolution_warnings, order);
+}

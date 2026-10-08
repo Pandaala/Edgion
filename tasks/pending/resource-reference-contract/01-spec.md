@@ -1131,3 +1131,20 @@ the existing 16-target and uniqueness limits. BTP still requires one eligible
 target and preserves invalid exact/whole occupancy for canonical target slots.
 Gateway target indexes share these loans without changing atomic publication,
 precedence, captured snapshots, or TLS/material ownership.
+
+### Condition IpList owning references (R5c1)
+
+`PreparedConditionReferences` owns both ConditionSet IP leaves and RAP direct
+IpAccessMatch fields after sidecar expansion. Fixed ConfigData identity validation
+precedes lookup, Grant queries and dependency registration. Omitted target namespace
+uses the actual EP's effective namespace (default when omitted); reverse dependencies
+retain `Kind:raw-resource-key`. Invalid identities have no recovery edges; valid
+missing/denied targets retain them. Missing/wrong-type targets remain unavailable;
+present right-type targets are permission-checked before the enable flag.
+
+IP activity preserves enabled-only entry/body/dye roots and request-stage RR/RAP,
+independently of credential supported-stage gating. Ordinary IP consumers remain
+unresolved on reference failure; RAP IP consumers retain partial-good unions and
+bounded warnings. The owning visitor binds warning application to the effective
+RAP entry, preserves URL-before-IP order, and traverses profile keys deterministically.
+Standalone HTTP/Stream IpRestriction reference migration remains R5c2.

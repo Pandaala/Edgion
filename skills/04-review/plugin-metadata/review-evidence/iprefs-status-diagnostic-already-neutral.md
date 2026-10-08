@@ -46,3 +46,12 @@ the RequestRestriction polarity and the presence of `ResolvedRefs=False`.
 ## Resolution references
 
 - `cl-06` — 2026-08-24 (❌ false positive).
+
+## Owning-reference update (R5c1)
+
+The canonical prepared IP visitor now replaces the manual condition walkers.
+`ip_status_errors` supplies typed neutral ordinary-condition errors (including
+InvalidReference before lookup); RAP warning sinks remain bound to their actual
+RAP entry. `resolve_ip_reference` preserves permission and availability precedence,
+while content expansion runs only during parse. The historical diagnostic-channel
+conclusion above remains valid; the former `lookup_ip_list` symbol is historical.

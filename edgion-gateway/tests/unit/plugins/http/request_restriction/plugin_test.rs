@@ -668,3 +668,39 @@ async fn negated_hmac_body_no_match_logs_descriptor() {
     );
     assert!(log.contains("Deny"), "{log:?}");
 }
+
+#[tokio::test]
+async fn invalid_ip_identity_preserves_deny_failure_and_allow_fallback() {
+    for mode in [RestrictionMode::Deny, RestrictionMode::Allow] {
+        let condition: Condition = serde_json::from_value(
+            serde_json::json!({"type":"remoteIpMatch","ipRefs":[{"name":"bad/name"}],"negate":true}),
+        )
+        .unwrap();
+        let config = cfg(
+            mode,
+            vec![
+                named_group("incomplete", vec![condition]),
+                named_group("backup", vec![key_match(KeyGet::Method, &["GET"])]),
+            ],
+        );
+        let plugin = RequestRestriction::create(&config);
+        let mut session = MockPluginSession::new();
+        if mode == RestrictionMode::Deny {
+            session.expect_write_response_header().returning(|_, _| Ok(()));
+            session.expect_write_response_body().returning(|_, _| Ok(()));
+            session.expect_shutdown().returning(|| {});
+        } else {
+            expect_key(&mut session, KeyGet::Method, Some("GET".into()));
+        }
+        let mut log = PluginLog::new("RequestRestriction");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            if mode == RestrictionMode::Deny {
+                PluginRunningResult::ErrTerminateRequest
+            } else {
+                PluginRunningResult::GoodNext
+            }
+        );
+    }
+}

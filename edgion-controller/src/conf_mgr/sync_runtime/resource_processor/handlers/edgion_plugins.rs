@@ -87,9 +87,12 @@ impl Default for EdgionPluginsHandler {
 impl EdgionPluginsHandler {
     /// Clear all EdgionConfigData reverse refs registered by this EdgionPlugins.
     fn clear_config_data_refs(ep: &EdgionPlugins, ctx: &HandlerContext) {
-        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-        let ep_name = ep.metadata.name.as_deref().unwrap_or("");
-        let ep_key = format!("{}:{}/{}", ResourceKind::EdgionPlugins.as_str(), ns, ep_name);
+        let owner = ResourceRef::new(
+            ResourceKind::EdgionPlugins,
+            ep.metadata.namespace.clone(),
+            ep.metadata.name.clone().unwrap_or_default(),
+        );
+        let ep_key = format!("{}:{}", owner.kind_str(), owner.resource_key());
         ctx.runtime().edgion_config_data_refs.clear_refs_from(&ep_key);
     }
 
@@ -116,8 +119,8 @@ impl EdgionPluginsHandler {
     }
 
     /// Collect "namespace/name" keys for every IpList referenced by an `IpRestriction`
-    /// plugin's `allow_refs`/`deny_refs` and by operator-authored Condition `ipRefs`
-    /// (entry-level / RR / body / dye). Namespace defaults to the EP namespace.
+    /// plugin's `allow_refs`/`deny_refs`. Condition dependencies use owning loans.
+    /// Namespace defaults to the EP namespace.
     fn get_ip_list_ref_keys(ep: &EdgionPlugins) -> Vec<String> {
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
         let mut keys = Vec::new();
@@ -136,10 +139,7 @@ impl EdgionPluginsHandler {
                 }
             }
         }
-        super::plugins::condition_tree::for_each_fail_closed_ip_ref(ep, |r| {
-            let rns = r.namespace.as_deref().unwrap_or(ns);
-            keys.push(format!("{}/{}", rns, r.name));
-        });
+
         keys
     }
 
@@ -380,8 +380,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         Self::clear_config_data_refs(&ep, ctx);
 
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
-        let ep_name = ep.metadata.name.as_deref().unwrap_or("").to_string();
-        let ep_key = format!("{}:{}/{}", ResourceKind::EdgionPlugins.as_str(), ns, ep_name);
+        let ep_key = format!("{}:{}", resource_ref.kind_str(), resource_ref.resource_key());
 
         // Register requeue watcher: EP → EdgionConfigData(overrideRef).
         // When the referenced EdgionConfigData changes, the EdgionConfigDataHandler requeues this EP.
@@ -1194,9 +1193,7 @@ pub fn resolve_ip_list_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Res
     }
     // Operator-authored entry-level / RR / body / dye ipRefs fail closed.
     // RAP sidecar ipRefs stay on PartiallyInvalid (existing partial-good).
-    super::plugins::condition_tree::for_each_fail_closed_ip_ref(ep, |reference| {
-        check_ref(reference);
-    });
+    errors.extend(super::plugins::condition_tree::ip_status_errors(ep, ctx));
     errors
 }
 

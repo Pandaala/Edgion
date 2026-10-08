@@ -7729,3 +7729,170 @@ async fn readonly_field_status_recovers_through_secret_and_configmap_event_worke
         "ConfigMap/apps/shared"
     );
 }
+
+#[tokio::test]
+async fn condition_ip_identity_uses_default_targets_and_raw_owner_cleanup() {
+    use edgion_resources::resources::edgion_plugins::plugin_configs::Condition;
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    runtime.edgion_config_data_store.replace_all(HashMap::from([(
+        "default/nets".into(),
+        ip_list_config_data("default", "nets", "192.0.2.0/24"),
+    )]));
+    let mut condition = condition_ip_refs(&["nets", "bad/name"]);
+    let Condition::DirectPeerIpMatch(ip) = &mut condition else {
+        unreachable!()
+    };
+    ip.resolved_ips = Some(vec!["0.0.0.0/0".into()]);
+    let mut owner = plugins_with_request_entries(
+        "bare-owner",
+        vec![RequestFilterEntry::new(EdgionPlugin::RequestRestriction(
+            rr_deny_groups(vec![vec![condition]]),
+        ))],
+    );
+    owner.metadata.namespace = None;
+    let ProcessResult::Continue(mut parsed) = EdgionPluginsHandler.parse(owner, &ctx).await else {
+        panic!("parse")
+    };
+    let Condition::DirectPeerIpMatch(ip) = first_rr_condition(&parsed) else {
+        unreachable!()
+    };
+    assert!(ip.resolved_ips.is_none());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/nets"),
+        vec!["EdgionPlugins:bare-owner".to_string()]
+    );
+    assert!(runtime.edgion_config_data_refs.get_refs("default/bad/name").is_empty());
+    assert!(super::resolve_ip_list_refs(&parsed, &ctx)
+        .iter()
+        .any(|error| matches!(error, super::ResolvedRefsError::InvalidReference { .. })));
+    let EdgionPlugin::RequestRestriction(config) = &mut parsed.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        unreachable!()
+    };
+    config.conditions = edgion_resources::resources::edgion_plugins::conditions::ConditionSet::all_of(vec![
+        condition_ip_refs(&["next"]),
+    ]);
+    let ProcessResult::Continue(parsed) = EdgionPluginsHandler.parse(parsed, &ctx).await else {
+        panic!("reparse")
+    };
+    assert!(runtime.edgion_config_data_refs.get_refs("default/nets").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/next"),
+        vec!["EdgionPlugins:bare-owner".to_string()]
+    );
+    runtime.edgion_config_data_store.replace_all(HashMap::from([(
+        "default/next".into(),
+        ip_list_config_data("default", "next", "198.51.100.0/24"),
+    )]));
+    let ProcessResult::Continue(parsed) = EdgionPluginsHandler.parse(parsed, &ctx).await else {
+        panic!("recovery")
+    };
+    let Condition::DirectPeerIpMatch(ip) = first_rr_condition(&parsed) else {
+        unreachable!()
+    };
+    assert_eq!(ip.resolved_ips.as_ref().unwrap(), &["198.51.100.0/24"]);
+    assert!(super::resolve_ip_list_refs(&parsed, &ctx).is_empty());
+    EdgionPluginsHandler.on_delete(&parsed, &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("default/next").is_empty());
+}
+
+#[tokio::test]
+async fn rap_bound_ip_keeps_partial_good_and_warning_bound() {
+    use edgion_resources::resources::refs::condition_fields::{IpReferenceConsumer, PreparedConditionReferences};
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    runtime.edgion_config_data_store.replace_all(HashMap::from([(
+        "default/nets".into(),
+        ip_list_config_data("default", "nets", "192.0.2.0/24"),
+    )]));
+    let refs: Vec<_> = [
+        serde_json::json!({"name":"nets"}),
+        serde_json::json!({"name":"bad/name"}),
+    ]
+    .into_iter()
+    .chain((0..80).map(|i| serde_json::json!({"name":format!("missing-{i}")})))
+    .collect();
+    let set = serde_json::json!({"allOf":[{"type":"remoteIpMatch","ipRefs":refs,"ips":["198.51.100.0/24"]}]});
+    let owner: EdgionPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"rap-bare"},"spec":{"requestPlugins":[{"type":"RequestAccessPolicy","config":{"defaultProfile":"main","profiles":{"main":{"requiredRuleGroups":[{"name":"g","anyOfRules":[
+        {"name":"direct","type":"directPeerIp","config":{"ips":["198.51.100.0/24"],"ipRefs":refs,"conditions":set}},
+        {"name":"url","type":"url","config":{"configRefs":[{"name":"missing-url"}],"hosts":["example.com"],"paths":[{"type":"Exact","value":"/"}],"conditions":set}}
+    ]}]}}}}]}})).unwrap();
+    let ProcessResult::Continue(parsed) = EdgionPluginsHandler.parse(owner, &ctx).await else {
+        panic!("parse")
+    };
+    let mut count = 0;
+    PreparedConditionReferences::from_plugins(&parsed)
+        .visit_ip(&parsed, |leaf| {
+            assert_eq!(leaf.consumer(), IpReferenceConsumer::RequestAccessPolicy);
+            assert_eq!(
+                leaf.config().resolved_ips.as_ref().unwrap(),
+                &["198.51.100.0/24", "192.0.2.0/24"]
+            );
+            count += 1;
+        })
+        .unwrap();
+    assert_eq!(count, 3);
+    let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+        unreachable!()
+    };
+    assert_eq!(config.resolution_warnings.len(), 64);
+    assert!(config.resolution_warnings[0].contains("URL data ref default/missing-url is unavailable"));
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/missing-url"),
+        vec!["EdgionPlugins:rap-bare".to_string()]
+    );
+    assert!(super::resolve_ip_list_refs(&parsed, &ctx).is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/nets"),
+        vec!["EdgionPlugins:rap-bare".to_string()]
+    );
+    assert!(runtime.edgion_config_data_refs.get_refs("default/bad/name").is_empty());
+    EdgionPluginsHandler.on_delete(&parsed, &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("default/nets").is_empty());
+    assert!(runtime
+        .edgion_config_data_refs
+        .get_refs("default/missing-url")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn condition_ip_grant_recovery_keeps_only_valid_namespace_edges() {
+    use edgion_resources::resources::edgion_plugins::plugin_configs::Condition;
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    runtime.edgion_config_data_store.replace_all(HashMap::from([(
+        "ops/nets".into(),
+        ip_list_config_data("ops", "nets", "192.0.2.0/24"),
+    )]));
+    let owner: EdgionPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"grant-owner"},"spec":{"requestPlugins":[{"type":"RequestRestriction","config":{"mode":"Deny","conditions":{"allOf":[{"type":"remoteIpMatch","ipRefs":[{"name":"nets","namespace":"ops"}]}]}}}]}})).unwrap();
+    let raw_owner = ResourceRef::new(
+        edgion_resources::ResourceKind::EdgionPlugins,
+        None,
+        "grant-owner".into(),
+    );
+    for allowed in [false, true, false] {
+        runtime.ref_grant_store.remove("ops/allow");
+        if allowed {
+            let grant = serde_json::from_value(serde_json::json!({"metadata":{"name":"allow","namespace":"ops"},"spec":{"from":[{"group":"edgion.io","kind":"EdgionPlugins","namespace":"default"}],"to":[{"group":"edgion.io","kind":"EdgionConfigData","name":"nets"}]}})).unwrap();
+            runtime.ref_grant_store.upsert("ops/allow".into(), Arc::new(grant));
+        }
+        let ProcessResult::Continue(parsed) = EdgionPluginsHandler.parse(owner.clone(), &ctx).await else {
+            panic!("parse")
+        };
+        let Condition::RemoteIpMatch(ip) = first_rr_condition(&parsed) else {
+            unreachable!()
+        };
+        assert_eq!(ip.resolved_ips.is_some(), allowed);
+        assert_eq!(ip.ip_refs[0].ref_denied.is_some(), !allowed);
+        assert_eq!(super::resolve_ip_list_refs(&parsed, &ctx).is_empty(), allowed);
+        assert!(runtime.cross_ns_ref_mgr.get_refs("ops").contains(&raw_owner));
+    }
+    let mut wire = serde_json::to_value(owner).unwrap();
+    wire["spec"]["requestPlugins"][0]["config"]["conditions"]["allOf"][0]["ipRefs"] =
+        serde_json::json!([{"name":"bad/name","namespace":"phantom"},{"name":"nets","namespace":""}]);
+    let owner = serde_json::from_value(wire).unwrap();
+    let ProcessResult::Continue(parsed) = EdgionPluginsHandler.parse(owner, &ctx).await else {
+        panic!("invalid parse")
+    };
+    assert!(runtime.cross_ns_ref_mgr.get_dependencies(&raw_owner.key()).is_empty());
+    assert!(runtime.edgion_config_data_refs.get_refs("ops/nets").is_empty());
+    assert!(runtime.edgion_config_data_refs.get_refs("phantom/bad/name").is_empty());
+    assert_eq!(super::resolve_ip_list_refs(&parsed, &ctx).len(), 2);
+}

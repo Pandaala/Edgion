@@ -11,7 +11,6 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::{
     RequestAccessPolicyConfig, RequestAccessRuleType, UrlAccessCandidate, UrlAccessRuleConfig,
 };
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
-use edgion_resources::ResourceKind;
 
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
@@ -24,12 +23,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn expand(
     ctx: &HandlerContext,
 ) {
     let owner_namespace = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
-    let owner_key = format!(
-        "{}:{}/{}",
-        ResourceKind::EdgionPlugins.as_str(),
-        owner_namespace,
-        ep.metadata.name.as_deref().unwrap_or("")
-    );
+    let owner_key = format!("{}:{}", resource_ref.kind_str(), resource_ref.resource_key());
     let Some(entries) = ep.spec.request_plugins.as_mut() else {
         return;
     };

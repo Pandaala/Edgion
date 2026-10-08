@@ -691,3 +691,17 @@ profiles:
     assert!(log.contains("conditions.allOf[0]:keyExist:hdr:X-One"));
     assert!(log.contains("conditions.allOf[1]:keyExist:hdr:X-Two"));
 }
+
+#[tokio::test]
+async fn partial_good_ip_payload_keeps_valid_sibling_matching() {
+    let config: RequestAccessPolicyConfig = serde_json::from_value(serde_json::json!({"defaultProfile":"main","profiles":{"main":{"requiredRuleGroups":[{"name":"g","anyOfRules":[{"name":"peer","type":"directPeerIp","config":{"ipRefs":[{"name":"bad/name"},{"name":"nets"}],"resolvedIps":["192.0.2.0/24"]}}]}]}}})).unwrap();
+    let plugin = RequestAccessPolicy::create(&config, "default", None);
+    let mut session = MockPluginSession::new();
+    session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
+    session.expect_remote_ip().return_const("198.51.100.10".to_string());
+    let mut log = PluginLog::new("RequestAccessPolicy");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+}

@@ -1479,3 +1479,72 @@ Zero target/hostname reads for invalid identities is control-flow proof; recover
 tests use direct handler calls, not actual queued events. No live or conformance
 claim. Evidence: r5b-verification, r5b-root-verification and r5b-final ignored
 artifacts. Stage exact17 technical paths plus this ledger, local commit only.
+
+R5b committed 7e6c675ebad2feb4ede29cc89bc243743740e725 locally, parent4917ce767.
+All17 technical hashes verified in HEAD; index/tracked tree clean before this
+ledger continuation, unrelated review-results untouched. No push.
+
+R5c begins PLAN ONLY: revalidate actual HTTP/stream/Condition/RAP IpList fields,
+invalid lexical identities and stream missing-owner namespace dependency mismatch.
+Use existing canonical identity and condition ownership machinery; preserve Grant
+allow/deny polarity, raw source keys, disabled-slot contracts and pinned runtimes.
+WAF/Selector/Region/ProxyProtocol stay separate. Independently review exact scope
+and regression requirements before implementation.
+
+R5c investigation splits implementation into serial complete field families.
+R5c1 covers ConditionSet and RAP direct-IP actual-owner loans, Controller
+resolution/status/dependencies and existing resolved-payload Gateway enforcement.
+R5c2 covers standalone HTTP/stream IpRestriction (including TLS and GCIR) across
+Controller and Gateway constructor/cache ownership seams. The latter cannot be
+claimed complete from a Controller-only migration. R5c1 remains PLAN ONLY pending
+exact independent Astra review; neither split changes existing failure policies.
+
+R5c1 plan frozen for independent Astra review:15 paths, existing condition
+catalogue extended to IP and direct RAP fields. Explicit review items include
+IP enabled-only versus credential supported-stage activity, sorted RAP profile
+warning order, PartialGood versus FailClosed, and Kind:raw-resource-key dependency
+encoding. No implementation before review.
+Residual ConfigData inventory confirms RAP URL document configRefs, non-WAF
+Selectors (RAP/Canary/GCIR), and RegionRoute overrideRef remain outside R5c1/R5c2
+and R5d. Track them as prospective R5e, requiring its own bounded plan/reviews.
+ProxyProtocol already validates lexical identity before reads; its remaining
+owning-adapter unification is not a new lexical-lookup defect. Evidence remains
+in ignored r5-configdata-residual-inventory-20261008.md.
+
+R5c1 independent Astra PLAN PASS; EXECUTE authorized for the exact15 paths.
+Preserve IP enabled-only activity and unchanged credential stage filtering;
+identity invalidity precedes reads, Grant queries and dependencies. Missing or
+wrong-type targets stay unavailable, while present right-type cross-namespace
+targets retain denied-before-disabled precedence. RAP warnings stay bound to the
+actual entry with rule order, URL-before-IP and cap64 intact; sorted profile keys
+replace unspecified HashMap traversal order. Ordinary unresolved behavior and RAP
+PartialGood remain distinct. Fresh baseline/original capture precedes mutation.
+
+R5c1 scoped amendment independently approved by Astra: add ref_grant/mod.rs
+as path16 solely for a pub(crate) re-export of the existing pure ConfigData
+permission decision. The module was private; the helper was already crate-visible.
+This enables the approved token check_query plus canonical decision without
+duplicating policy or widening external visibility. Capture its HEAD original
+before editing; all other plan constraints remain unchanged.
+
+R5c1 implementation and both independent final reviews pass. The existing
+condition catalogue now owns ordinary and RAP direct/condition IP slots; token
+validation precedes registration, target and Grant reads. Raw Kind:resource-key
+dependencies align clearing, IP resolution and URL expansion. IP enabled-only
+activity, credential stage filtering, ordinary FailClosed and RAP PartialGood
+remain distinct. Warnings retain entry ownership, URL-first order and cap64.
+Review removed unbounded pending warnings and extra CIDR copy/content validation
+from status; the existing store clone remains. First compilation caught an
+exhaustive slot arm and borrow-scope error, corrected with raw failure logs retained.
+Focused Resources10, Controller2+115, Gateway45+18+17, sealing3/body2 and loan docs2
+pass, zero ignored. Compiled identities1936->1939 /1774->1779 /5168->5171 retain all
+originals; five old test bodies remain unchanged. Root fmt changed only three new
+Gateway test blocks; preformat evidence is retained, affected45/18/17 tests and
+Gateway list reran, and the final16-path freeze was refreshed and independently
+verified. All14 root r2 gates pass with stable source and zero warnings/errors.
+Graded MUST scan confirms no material/Grant authority expansion, schema/redaction
+change, new handler IO/queue or request-path work. Tests demonstrate counted invalid
+resolver access and direct handler recovery, not live queue/network conformance.
+Stage exact16 technical paths plus this ledger, local commit only. Evidence under
+r5c-verification, r5c1-root-verification and r5c1-final ignored directories. R5c2,
+R5d/R5e, R6-R8 and F1/F2 remain open.

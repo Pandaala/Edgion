@@ -372,3 +372,10 @@ the existing 16-target and uniqueness limits. BTP still requires one eligible
 target and preserves invalid exact/whole occupancy for canonical target slots.
 Gateway target indexes share these loans without changing atomic publication,
 precedence, captured snapshots, or TLS/material ownership.
+
+R5c1 closes FixedConfigData `IpAccessMatch.ip_refs[]` in the effective condition
+roots above and RAP direct IP rule fields through `PreparedConditionReferences`.
+Tokens bind actual owner, placement and authored name/namespace; Controller-owned
+resolved payloads and denial markers do not change descriptor identity. These
+synchronous loans grant no Secret material role or asynchronous frozen authority.
+Standalone HTTP/Stream/connection/TLS allowRefs and denyRefs remain pending R5c2.

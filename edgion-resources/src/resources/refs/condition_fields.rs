@@ -5,9 +5,10 @@
 use super::owned::{FieldContract, FieldSlot, FieldWire, OwnerSnapshot, PreparedSlot, TopologyLoan};
 use super::plugin_fields::{supports_stage, PluginStage};
 use super::{ReferenceError, ReferenceToken};
+use crate::resources::edgion_config_data::EdgionConfigDataRef;
 use crate::resources::edgion_plugins::conditions::{AnyOfClause, Condition, ConditionSet, PluginConditions};
 use crate::resources::edgion_plugins::dye::DyeSuite;
-use crate::resources::edgion_plugins::plugin_configs::RequestAccessRuleType;
+use crate::resources::edgion_plugins::plugin_configs::{IpAccessMatch, RequestAccessRuleType};
 use crate::resources::edgion_plugins::{EdgionPlugin, EdgionPlugins};
 use serde::Serialize;
 use std::mem::{discriminant, Discriminant};
@@ -96,6 +97,7 @@ struct PreparedLeaf {
     key: Option<String>,
     secret: Option<PreparedSlot>,
     groups: Option<Vec<PreparedGroup>>,
+    ip: Option<PreparedIp>,
 }
 struct PreparedSet {
     shape: Shape,
@@ -107,6 +109,7 @@ struct PreparedRoot {
     supported: bool,
     variant: &'static str,
     set: Option<PreparedSet>,
+    ip: Option<PreparedIp>,
 }
 pub(super) struct ConditionSnapshot {
     pub(super) owner: OwnerSnapshot,
@@ -157,11 +160,12 @@ impl PreparedConditionReferences {
             .map(|(ordinal, root)| {
                 let set = root.conditions.map(|set| PreparedSet::new(&source, ordinal, set));
                 PreparedRoot {
-                    position: root.position,
+                    position: root.position.clone(),
                     enabled: root.enabled,
                     supported: root.supported,
                     variant: root.variant,
                     set,
+                    ip: direct_ip(owner, &root.position).map(|ip| PreparedIp::new(&source, ordinal, None, ip)),
                 }
             })
             .collect();
@@ -229,6 +233,11 @@ impl PreparedConditionReferences {
                     && root.enabled == prepared.enabled
                     && root.supported == prepared.supported
                     && root.variant == prepared.variant
+                    && match (direct_ip(owner, &root.position), &prepared.ip) {
+                        (None, None) => true,
+                        (Some(ip), Some(prepared)) => prepared.matches(ip),
+                        _ => false,
+                    }
                     && match (root.conditions, &prepared.set) {
                         (None, None) => true,
                         (Some(set), Some(prepared)) => prepared.matches(set),
@@ -239,6 +248,322 @@ impl PreparedConditionReferences {
             return Err(ReferenceError::StaleBinding);
         }
         Ok(())
+    }
+}
+
+/// IP consumers retain their established resolution policy independently of credentials.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IpReferenceConsumer {
+    Ordinary,
+    RequestAccessPolicy,
+}
+struct PreparedIp {
+    slots: Vec<PreparedSlot>,
+}
+impl PreparedIp {
+    fn new(owner: &OwnerSnapshot, root: usize, leaf: Option<LeafPosition>, ip: &IpAccessMatch) -> Self {
+        Self {
+            slots: ip
+                .ip_refs
+                .iter()
+                .enumerate()
+                .map(|(reference, wire)| {
+                    PreparedSlot::new(
+                        owner,
+                        ip_wire(wire),
+                        FieldContract::FixedConfigData,
+                        FieldSlot::ConditionIp { root, leaf, reference },
+                    )
+                })
+                .collect(),
+        }
+    }
+    fn matches(&self, ip: &IpAccessMatch) -> bool {
+        self.slots.len() == ip.ip_refs.len()
+            && self
+                .slots
+                .iter()
+                .zip(&ip.ip_refs)
+                .all(|(slot, wire)| slot.wire == ip_wire(wire))
+    }
+}
+fn ip_wire(wire: &EdgionConfigDataRef) -> FieldWire {
+    FieldWire::ConfigData {
+        name: wire.name.clone(),
+        namespace: wire.namespace.clone(),
+    }
+}
+pub struct BoundIpAccess<'a> {
+    config: &'a IpAccessMatch,
+    prepared: &'a PreparedIp,
+    snapshot: &'a ConditionSnapshot,
+    consumer: IpReferenceConsumer,
+}
+pub struct BoundIpAccessMut<'a> {
+    config: &'a mut IpAccessMatch,
+    prepared: &'a PreparedIp,
+    snapshot: &'a ConditionSnapshot,
+    consumer: IpReferenceConsumer,
+}
+macro_rules! ip_access {
+    () => {
+        pub fn config(&self) -> &IpAccessMatch {
+            self.config
+        }
+        pub fn consumer(&self) -> IpReferenceConsumer {
+            self.consumer
+        }
+        pub fn references(&self) -> Result<impl Iterator<Item = ReferenceToken<'_>>, ReferenceError> {
+            if !self.prepared.matches(self.config) {
+                return Err(ReferenceError::StaleBinding);
+            }
+            Ok(self
+                .prepared
+                .slots
+                .iter()
+                .map(|slot| slot.token(TopologyLoan::Conditions(self.snapshot))))
+        }
+    };
+}
+impl BoundIpAccess<'_> {
+    ip_access!();
+}
+impl BoundIpAccessMut<'_> {
+    ip_access!();
+    pub fn config_mut(&mut self) -> &mut IpAccessMatch {
+        self.config
+    }
+}
+impl PreparedRoot {
+    fn ip_consumer(&self) -> Option<IpReferenceConsumer> {
+        if !self.enabled {
+            return None;
+        }
+        match self.position.location {
+            Location::RapIp { .. } | Location::RapUrl { .. } if self.position.stage == PluginStage::Request => {
+                Some(IpReferenceConsumer::RequestAccessPolicy)
+            }
+            Location::RapIp { .. } | Location::RapUrl { .. } | Location::Boundary { .. } => None,
+            Location::Restriction if self.position.stage != PluginStage::Request => None,
+            _ => Some(IpReferenceConsumer::Ordinary),
+        }
+    }
+}
+impl PreparedConditionReferences {
+    pub fn visit_ip(
+        &self,
+        owner: &EdgionPlugins,
+        mut visit: impl for<'leaf> FnMut(BoundIpAccess<'leaf>),
+    ) -> Result<(), ReferenceError> {
+        self.check(owner)?;
+        for (root, prepared) in roots(owner).into_iter().zip(&self.snapshot.roots) {
+            let Some(consumer) = prepared.ip_consumer() else {
+                continue;
+            };
+            if let (Some(config), Some(ip)) = (direct_ip(owner, &root.position), &prepared.ip) {
+                visit(BoundIpAccess {
+                    config,
+                    prepared: ip,
+                    snapshot: &self.snapshot,
+                    consumer,
+                });
+            }
+            if let (Some(set), Some(prepared)) = (root.conditions, &prepared.set) {
+                for leaf in &prepared.leaves {
+                    if let Some(ip) = &leaf.ip {
+                        let config = condition_ip(leaf_at(set, leaf.position).ok_or(ReferenceError::StaleBinding)?)
+                            .ok_or(ReferenceError::StaleBinding)?;
+                        visit(BoundIpAccess {
+                            config,
+                            prepared: ip,
+                            snapshot: &self.snapshot,
+                            consumer,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Warning application rechecks the same owning topology before borrowing the RAP entry.
+    pub fn visit_ip_mut(
+        &self,
+        owner: &mut EdgionPlugins,
+        mut visit: impl for<'leaf> FnMut(BoundIpAccessMut<'leaf>, &mut dyn FnMut(String)),
+        mut append_warning: impl FnMut(&mut Vec<String>, String),
+    ) -> Result<(), ReferenceError> {
+        self.check(owner)?;
+        let mut pending = std::collections::BTreeMap::new();
+        for root in &self.snapshot.roots {
+            let Some(consumer) = root.ip_consumer() else {
+                continue;
+            };
+            if consumer == IpReferenceConsumer::RequestAccessPolicy && !pending.contains_key(&root.position.entry) {
+                pending.insert(
+                    root.position.entry,
+                    rap_warnings_mut(owner, root.position.entry)?.clone(),
+                );
+            }
+            let mut emit = |warning| {
+                if consumer == IpReferenceConsumer::RequestAccessPolicy {
+                    if let Some(warnings) = pending.get_mut(&root.position.entry) {
+                        append_warning(warnings, warning);
+                    }
+                }
+            };
+            if let Some(prepared) = &root.ip {
+                let config = direct_ip_mut(owner, &root.position).ok_or(ReferenceError::StaleBinding)?;
+                visit(
+                    BoundIpAccessMut {
+                        config,
+                        prepared,
+                        snapshot: &self.snapshot,
+                        consumer,
+                    },
+                    &mut emit,
+                );
+            }
+            if let Some(set) = &root.set {
+                let config = root_mut(owner, &root.position).ok_or(ReferenceError::StaleBinding)?;
+                for leaf in &set.leaves {
+                    if let Some(prepared) = &leaf.ip {
+                        let config =
+                            condition_ip_mut(leaf_at_mut(config, leaf.position).ok_or(ReferenceError::StaleBinding)?)
+                                .ok_or(ReferenceError::StaleBinding)?;
+                        visit(
+                            BoundIpAccessMut {
+                                config,
+                                prepared,
+                                snapshot: &self.snapshot,
+                                consumer,
+                            },
+                            &mut emit,
+                        );
+                    }
+                }
+            }
+        }
+        self.check(owner)?;
+        for (entry, warnings) in pending {
+            *rap_warnings_mut(owner, entry)? = warnings;
+        }
+        Ok(())
+    }
+}
+fn rap_warnings_mut(owner: &mut EdgionPlugins, entry: usize) -> Result<&mut Vec<String>, ReferenceError> {
+    let plugin = &mut owner
+        .spec
+        .request_plugins
+        .as_mut()
+        .ok_or(ReferenceError::StaleBinding)?
+        .get_mut(entry)
+        .ok_or(ReferenceError::StaleBinding)?
+        .plugin;
+    let EdgionPlugin::RequestAccessPolicy(config) = plugin else {
+        return Err(ReferenceError::StaleBinding);
+    };
+    Ok(&mut config.resolution_warnings)
+}
+
+fn condition_ip(condition: &Condition) -> Option<&IpAccessMatch> {
+    match condition {
+        Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => Some(ip),
+        _ => None,
+    }
+}
+fn condition_ip_mut(condition: &mut Condition) -> Option<&mut IpAccessMatch> {
+    match condition {
+        Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => Some(ip),
+        _ => None,
+    }
+}
+fn direct_ip<'a>(owner: &'a EdgionPlugins, position: &RootPosition) -> Option<&'a IpAccessMatch> {
+    let Location::RapIp {
+        profile,
+        group,
+        rule,
+        direct,
+    } = &position.location
+    else {
+        return None;
+    };
+    let plugin = match position.stage {
+        PluginStage::Request => &owner.spec.request_plugins.as_ref()?.get(position.entry)?.plugin,
+        PluginStage::Response => {
+            &owner
+                .spec
+                .upstream_response_plugins
+                .as_ref()?
+                .get(position.entry)?
+                .plugin
+        }
+        PluginStage::ResponseFilter => {
+            &owner
+                .spec
+                .upstream_response_filter_plugins
+                .as_ref()?
+                .get(position.entry)?
+                .plugin
+        }
+        PluginStage::ResponseBodyFilter => {
+            &owner
+                .spec
+                .upstream_response_body_filter_plugins
+                .as_ref()?
+                .get(position.entry)?
+                .plugin
+        }
+    };
+    let EdgionPlugin::RequestAccessPolicy(config) = plugin else {
+        return None;
+    };
+    let rule = &config
+        .resolved_profiles
+        .as_ref()?
+        .get(profile)?
+        .required_rule_groups
+        .get(*group)?
+        .any_of_rules
+        .get(*rule)?
+        .rule;
+    match rule {
+        RequestAccessRuleType::DirectPeerIp(ip) if *direct => Some(&ip.ip),
+        RequestAccessRuleType::RemoteIp(ip) if !*direct => Some(&ip.ip),
+        _ => None,
+    }
+}
+fn direct_ip_mut<'a>(owner: &'a mut EdgionPlugins, position: &RootPosition) -> Option<&'a mut IpAccessMatch> {
+    let Location::RapIp {
+        profile,
+        group,
+        rule,
+        direct,
+    } = &position.location
+    else {
+        return None;
+    };
+    // IP RAP consumers exist only at the request stage.
+    if position.stage != PluginStage::Request {
+        return None;
+    }
+    let EdgionPlugin::RequestAccessPolicy(config) =
+        &mut owner.spec.request_plugins.as_mut()?.get_mut(position.entry)?.plugin
+    else {
+        return None;
+    };
+    let rule = &mut config
+        .resolved_profiles
+        .as_mut()?
+        .get_mut(profile)?
+        .required_rule_groups
+        .get_mut(*group)?
+        .any_of_rules
+        .get_mut(*rule)?
+        .rule;
+    match rule {
+        RequestAccessRuleType::DirectPeerIp(ip) if *direct => Some(&mut ip.ip),
+        RequestAccessRuleType::RemoteIp(ip) if !*direct => Some(&mut ip.ip),
+        _ => None,
     }
 }
 
@@ -376,6 +701,7 @@ impl PreparedSet {
                         key,
                         secret,
                         groups,
+                        ip: condition_ip(condition).map(|ip| PreparedIp::new(owner, root, Some(position), ip)),
                     }
                 })
                 .collect(),
@@ -399,6 +725,9 @@ impl PreparedLeaf {
             return false;
         }
         match condition {
+            Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => {
+                self.ip.as_ref().is_some_and(|prepared| prepared.matches(ip))
+            }
             Condition::SecretMatch(config) => {
                 self.key.as_deref() == Some(&config.secret_key)
                     && self

@@ -13,42 +13,20 @@
 //! `resolved_profiles` sidecar; in-place `resolved*` lands on conditions inside
 //! that sidecar.
 
-use edgion_resources::prelude_resources::EdgionPlugins;
-use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
-use edgion_resources::resources::edgion_plugins::conditions::{ConditionSet, PluginConditions};
-use edgion_resources::resources::edgion_plugins::dye::DyeSuite;
-use edgion_resources::resources::edgion_plugins::plugin_configs::{
-    Condition, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessRuleType,
-};
-use edgion_resources::resources::edgion_plugins::{
-    EdgionPlugin, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
-    UpstreamResponseFilterEntry,
-};
-use edgion_resources::ResourceKind;
-
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_bound_secret, BoundFetchOutcome};
-use crate::conf_mgr::sync_runtime::resource_processor::handlers::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::plugins::request_access_policy_data;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::plugins::resolve_credential as cred;
-use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
-
-use edgion_resources::resources::refs::condition_fields::{BoundConditionMut, PreparedConditionReferences};
-
-/// How a missing `ipRefs` target is reported.
-#[derive(Clone, Copy)]
-enum IpRefFailure {
-    /// RAP ConfigData content: keep siblings, record `PartiallyInvalid`.
-    PartialGood,
-    /// Operator-authored entry-level / RR / body / dye: fail-closed status.
-    FailClosed,
-}
-
-struct ResolveCtx<'a> {
-    owner_namespace: &'a str,
-    owner_key: &'a str,
-    resource_ref: &'a ResourceRef,
-    ctx: &'a HandlerContext,
-}
+use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::decide_edgion_config_data_ref;
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResolvedRefsError, ResourceRef};
+use crate::config::is_reference_grant_validation_enabled;
+use edgion_resources::prelude_resources::{EdgionConfigData, EdgionPlugins};
+use edgion_resources::resources::common::RefDenied;
+use edgion_resources::resources::edgion_config_data::{ConfigDataVisibility, ConfigEntry};
+use edgion_resources::resources::edgion_plugins::plugin_configs::Condition;
+use edgion_resources::resources::refs::condition_fields::{
+    BoundConditionMut, BoundIpAccessMut, IpReferenceConsumer, PreparedConditionReferences,
+};
+use edgion_resources::resources::refs::{GrantQuery, ReferenceToken};
 
 /// Resolve every Condition tree on `ep`. Expansion always runs before credentials.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
@@ -67,20 +45,13 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn expand_co
     ctx: &HandlerContext,
 ) {
     request_access_policy_data::expand(ep, resource_ref, ctx);
-    let owner_namespace = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
-    let owner_key = format!(
-        "{}:{}/{}",
-        ResourceKind::EdgionPlugins.as_str(),
-        owner_namespace,
-        ep.metadata.name.as_deref().unwrap_or("")
+    let prepared = PreparedConditionReferences::from_plugins(ep);
+    // The owner was just prepared; callbacks mutate only Controller-owned payloads.
+    let _ = prepared.visit_ip_mut(
+        ep,
+        |leaf, warning| resolve_ip_match(leaf, resource_ref, ctx, warning),
+        request_access_policy_data::push_warning,
     );
-    let resolve_ctx = ResolveCtx {
-        owner_namespace: &owner_namespace,
-        owner_key: &owner_key,
-        resource_ref,
-        ctx,
-    };
-    walk_all_ip_refs(ep, &resolve_ctx);
 }
 
 /// Pass 2: `secretRef` / HMAC credentials. Must run after [`expand_config_data`].
@@ -99,307 +70,165 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve_c
     }
 }
 
-fn walk_all_ip_refs(ep: &mut EdgionPlugins, resolve_ctx: &ResolveCtx<'_>) {
-    if let Some(entries) = ep.spec.request_plugins.as_mut() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
+struct IpResolution {
+    denied: Option<RefDenied>,
+    error: Option<ResolvedRefsError>,
+    data: Option<EdgionConfigData>,
+    warning: Option<String>,
+}
+
+// The actual owning token is validated before either injected read boundary.
+fn resolve_ip_reference(
+    token: ReferenceToken<'_>,
+    validation_enabled: bool,
+    mut read: impl FnMut(&str, &str) -> Option<EdgionConfigData>,
+    mut grant: impl FnMut(GrantQuery<'_>) -> bool,
+) -> IpResolution {
+    let bound = match token.validated() {
+        Ok(bound) => bound,
+        Err(error) => {
+            return IpResolution {
+                denied: None,
+                data: None,
+                warning: Some(format!("RequestAccessPolicy IP data reference is invalid: {error}")),
+                error: Some(ResolvedRefsError::InvalidReference { error }),
             }
-            walk_request_entry_ip_refs(entry, resolve_ctx);
         }
-    }
-    if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_mut() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            walk_upstream_filter_entry_ip_refs(entry, resolve_ctx);
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_mut() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            walk_upstream_body_entry_ip_refs(entry, resolve_ctx);
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_plugins.as_mut() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            walk_upstream_response_entry_ip_refs(entry, resolve_ctx);
-        }
-    }
-}
-
-fn walk_request_entry_ip_refs(entry: &mut RequestFilterEntry, resolve_ctx: &ResolveCtx<'_>) {
-    walk_plugin_conditions_ip(entry.conditions.as_mut(), resolve_ctx, None);
-    walk_plugin_conditions_ip(
-        entry.body.as_mut().and_then(|body| body.conditions.as_mut()),
-        resolve_ctx,
-        None,
-    );
-    walk_dye_ip(entry.dye.as_mut(), resolve_ctx);
-    match &mut entry.plugin {
-        EdgionPlugin::RequestAccessPolicy(config) => walk_rap_resolved_ip(config, resolve_ctx),
-        EdgionPlugin::RequestRestriction(config) => {
-            walk_conditions_ip(&mut config.conditions, resolve_ctx, None, IpRefFailure::FailClosed);
-        }
-        _ => {}
-    }
-}
-
-fn walk_upstream_filter_entry_ip_refs(entry: &mut UpstreamResponseFilterEntry, resolve_ctx: &ResolveCtx<'_>) {
-    walk_plugin_conditions_ip(entry.conditions.as_mut(), resolve_ctx, None);
-    walk_dye_ip(entry.dye.as_mut(), resolve_ctx);
-}
-
-fn walk_upstream_body_entry_ip_refs(entry: &mut UpstreamResponseBodyFilterEntry, resolve_ctx: &ResolveCtx<'_>) {
-    walk_plugin_conditions_ip(entry.conditions.as_mut(), resolve_ctx, None);
-    walk_dye_ip(entry.dye.as_mut(), resolve_ctx);
-}
-
-fn walk_upstream_response_entry_ip_refs(entry: &mut UpstreamResponseEntry, resolve_ctx: &ResolveCtx<'_>) {
-    walk_plugin_conditions_ip(entry.conditions.as_mut(), resolve_ctx, None);
-    walk_plugin_conditions_ip(
-        entry.body.as_mut().and_then(|body| body.conditions.as_mut()),
-        resolve_ctx,
-        None,
-    );
-    walk_dye_ip(entry.dye.as_mut(), resolve_ctx);
-}
-
-fn walk_dye_ip(dye: Option<&mut DyeSuite>, resolve_ctx: &ResolveCtx<'_>) {
-    let Some(dye) = dye else {
-        return;
     };
-    for rule in dye.request.iter_mut().chain(dye.response.iter_mut()) {
-        walk_plugin_conditions_ip(rule.conditions.as_mut(), resolve_ctx, None);
+    let target = bound.target();
+    let namespace = target.scope().namespace().unwrap_or_default();
+    let name = target.name();
+    let unavailable = |suffix: &str| IpResolution {
+        denied: None,
+        data: None,
+        error: Some(ResolvedRefsError::EdgionConfigDataNotFound {
+            namespace: namespace.into(),
+            name: name.into(),
+            expected_type: "IpList".into(),
+        }),
+        warning: Some(format!("RequestAccessPolicy IP data ref {namespace}/{name} {suffix}")),
+    };
+    let Some(data) = read(namespace, name) else {
+        return unavailable("is unavailable");
+    };
+    let ConfigEntry::IpList(_) = &data.spec.data else {
+        return unavailable("has the wrong type");
+    };
+    let same_namespace = bound.is_same_namespace();
+    let grant_allows = !same_namespace
+        && validation_enabled
+        && data.spec.visibility != ConfigDataVisibility::Cluster
+        && grant(bound.grant_query());
+    if !decide_edgion_config_data_ref(validation_enabled, same_namespace, data.spec.visibility, grant_allows) {
+        return IpResolution {
+            denied: Some(RefDenied {
+                target_namespace: namespace.into(),
+                target_name: name.into(),
+                reason: Some("NoMatchingReferenceGrant".into()),
+            }),
+            error: Some(ResolvedRefsError::RefNotPermitted {
+                from_namespace: bound.source().scope().namespace().unwrap_or_default().into(),
+                from_kind: "EdgionPlugins",
+                target_namespace: namespace.into(),
+                target_name: name.into(),
+            }),
+            data: None,
+            warning: Some(format!(
+                "RequestAccessPolicy IP data ref {namespace}/{name} is not permitted"
+            )),
+        };
+    }
+    if !data.spec.enable {
+        return unavailable("is disabled");
+    }
+    IpResolution {
+        denied: None,
+        error: None,
+        data: Some(data),
+        warning: None,
     }
 }
-
-fn walk_plugin_conditions_ip(
-    conditions: Option<&mut PluginConditions>,
-    resolve_ctx: &ResolveCtx<'_>,
-    warnings: Option<&mut Vec<String>>,
+fn resolve_ip_match(
+    mut leaf: BoundIpAccessMut<'_>,
+    owner: &ResourceRef,
+    ctx: &HandlerContext,
+    warning: &mut dyn FnMut(String),
 ) {
-    let Some(conditions) = conditions else {
-        return;
-    };
-    if let Some(warnings) = warnings {
-        if let Some(skip) = conditions.skip.as_mut() {
-            walk_conditions_ip(skip, resolve_ctx, Some(warnings), IpRefFailure::FailClosed);
-        }
-        if let Some(run) = conditions.run.as_mut() {
-            walk_conditions_ip(run, resolve_ctx, Some(warnings), IpRefFailure::FailClosed);
-        }
+    if leaf.config().ip_refs.is_empty() {
+        leaf.config_mut().resolved_ips = None;
         return;
     }
-    if let Some(skip) = conditions.skip.as_mut() {
-        walk_conditions_ip(skip, resolve_ctx, None, IpRefFailure::FailClosed);
-    }
-    if let Some(run) = conditions.run.as_mut() {
-        walk_conditions_ip(run, resolve_ctx, None, IpRefFailure::FailClosed);
-    }
-}
-
-fn walk_rap_resolved_ip(config: &mut RequestAccessPolicyConfig, resolve_ctx: &ResolveCtx<'_>) {
-    let Some(profiles) = config.resolved_profiles.as_mut() else {
-        return;
-    };
-    for profile in profiles.values_mut() {
-        for group in &mut profile.required_rule_groups {
-            for rule in &mut group.any_of_rules {
-                match &mut rule.rule {
-                    RequestAccessRuleType::DirectPeerIp(ip) | RequestAccessRuleType::RemoteIp(ip) => {
-                        resolve_ip_match(
-                            &mut ip.ip,
-                            resolve_ctx,
-                            Some(&mut config.resolution_warnings),
-                            IpRefFailure::PartialGood,
-                        );
-                        walk_optional_conditions_ip(
-                            ip.conditions.as_mut(),
-                            resolve_ctx,
-                            Some(&mut config.resolution_warnings),
-                            IpRefFailure::PartialGood,
-                        );
-                    }
-                    RequestAccessRuleType::Url(url) => {
-                        if let Some(candidates) = url.resolved_candidates.as_mut() {
-                            for candidate in candidates {
-                                walk_optional_conditions_ip(
-                                    candidate.conditions.as_mut(),
-                                    resolve_ctx,
-                                    Some(&mut config.resolution_warnings),
-                                    IpRefFailure::PartialGood,
-                                );
-                            }
+    let partial = leaf.consumer() == IpReferenceConsumer::RequestAccessPolicy;
+    let mut resolved = leaf.config().ips.clone();
+    let mut failed = false;
+    let markers: Option<Vec<_>> = match leaf.references() {
+        Ok(tokens) => Some(tokens.map(|token| {
+            if let Ok(bound) = token.validated() {
+                let target = bound.target();
+                let namespace = target.scope().namespace().unwrap_or_default();
+                ctx.runtime().edgion_config_data_refs.add_ref(format!("{namespace}/{}", target.name()), format!("{}:{}", owner.kind_str(), owner.resource_key()));
+                if !bound.is_same_namespace() { ctx.runtime().cross_ns_ref_mgr.add_ref(namespace.into(), owner.clone()); }
+            }
+            let outcome = resolve_ip_reference(token, is_reference_grant_validation_enabled(), |ns, name| ctx.runtime().edgion_config_data_store.get(Some(ns), name), |query| ctx.runtime().ref_grant_store.check_query(query));
+            failed |= outcome.error.is_some();
+            if let Some(data) = outcome.data {
+                if let ConfigEntry::IpList(ip) = data.spec.data {
+                    if partial && !edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors(&ip.items).is_empty() {
+                        if let Ok(bound) = token.validated() {
+                            warning(format!("RequestAccessPolicy IP data ref {}/{} contains invalid entries; valid entries were retained", bound.target().scope().namespace().unwrap_or_default(), bound.target().name()));
                         }
                     }
+                    resolved.extend(ip.items.into_iter().flat_map(|group| group.cidrs));
                 }
             }
-        }
-    }
-}
-
-fn walk_optional_conditions_ip(
-    conditions: Option<&mut ConditionSet>,
-    resolve_ctx: &ResolveCtx<'_>,
-    warnings: Option<&mut Vec<String>>,
-    failure: IpRefFailure,
-) {
-    let Some(conditions) = conditions else {
+            if partial { if let Some(message) = outcome.warning { warning(message); } }
+            outcome.denied
+        }).collect()),
+        Err(_) => None,
+    };
+    let Some(markers) = markers else {
+        leaf.config_mut().resolved_ips = None;
         return;
     };
-    walk_conditions_ip(conditions, resolve_ctx, warnings, failure);
+    let config = leaf.config_mut();
+    config.resolved_ips = None;
+    for (reference, marker) in config.ip_refs.iter_mut().zip(markers) {
+        reference.ref_denied = marker;
+    }
+    if !config.ip_refs.is_empty() && (partial || !failed) {
+        config.resolved_ips = Some(resolved);
+    }
 }
 
-fn walk_conditions_ip(
-    conditions: &mut ConditionSet,
-    resolve_ctx: &ResolveCtx<'_>,
-    mut warnings: Option<&mut Vec<String>>,
-    failure: IpRefFailure,
-) {
-    for condition in conditions.iter_conditions_mut() {
-        match condition {
-            Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => {
-                resolve_ip_match(ip, resolve_ctx, warnings.as_deref_mut(), failure);
-            }
-            Condition::KeyExist(_)
-            | Condition::KeyMatch(_)
-            | Condition::TimeRange(_)
-            | Condition::Probability(_)
-            | Condition::SecretMatch(_)
-            | Condition::HmacAuth(_)
-            | Condition::JwtClaimMatch(_)
-            | Condition::MtlsMatch(_)
-            | Condition::RateLimitExceeded(_) => {}
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn ip_status_errors(
+    ep: &EdgionPlugins,
+    ctx: &HandlerContext,
+) -> Vec<ResolvedRefsError> {
+    let prepared = PreparedConditionReferences::from_plugins(ep);
+    let mut errors = Vec::new();
+    let result = prepared.visit_ip(ep, |leaf| {
+        if leaf.consumer() != IpReferenceConsumer::Ordinary {
+            return;
         }
-    }
-}
-
-fn resolve_ip_match(
-    config: &mut IpAccessMatch,
-    resolve_ctx: &ResolveCtx<'_>,
-    mut warnings: Option<&mut Vec<String>>,
-    failure: IpRefFailure,
-) {
-    if config.ip_refs.is_empty() {
-        return;
-    }
-    let mut resolved = config.ips.clone();
-    let mut missing_reference = false;
-    for reference in &mut config.ip_refs {
-        register_ref(reference, resolve_ctx);
-        mark_one_ref(
-            reference,
-            resolve_ctx.owner_namespace,
-            "EdgionPlugins",
-            ExpectedEntry::IpList,
-            resolve_ctx.ctx,
-        );
-        match lookup_ip_list(reference, resolve_ctx) {
-            Ok((cidrs, content_warning)) => {
-                resolved.extend(cidrs);
-                if let (Some(warning), Some(warnings)) = (content_warning, warnings.as_deref_mut()) {
-                    request_access_policy_data::push_warning(warnings, warning);
+        match leaf.references() {
+            Ok(tokens) => {
+                for token in tokens {
+                    let result = resolve_ip_reference(
+                        token,
+                        is_reference_grant_validation_enabled(),
+                        |ns, name| ctx.runtime().edgion_config_data_store.get(Some(ns), name),
+                        |query| ctx.runtime().ref_grant_store.check_query(query),
+                    );
+                    errors.extend(result.error);
                 }
             }
-            Err(warning) => {
-                missing_reference = true;
-                if let Some(warnings) = warnings.as_deref_mut() {
-                    request_access_policy_data::push_warning(warnings, warning);
-                }
-            }
+            Err(error) => errors.push(ResolvedRefsError::InvalidReference { error }),
         }
+    });
+    if let Err(error) = result {
+        errors.push(ResolvedRefsError::InvalidReference { error });
     }
-    match failure {
-        IpRefFailure::PartialGood => {
-            config.resolved_ips = Some(resolved);
-        }
-        IpRefFailure::FailClosed => {
-            // A missing *reference* is a status condition. Do not compile an
-            // empty matcher from `resolvedIps: []` when operator-authored
-            // ipRefs did not resolve. RAP partial-good `resolvedIps` is
-            // ConfigData IpList *content*, not a missing reference.
-            if !missing_reference {
-                config.resolved_ips = Some(resolved);
-            }
-        }
-    }
-}
-
-fn lookup_ip_list(
-    reference: &EdgionConfigDataRef,
-    resolve_ctx: &ResolveCtx<'_>,
-) -> Result<(Vec<String>, Option<String>), String> {
-    let target_namespace = reference.namespace.as_deref().unwrap_or(resolve_ctx.owner_namespace);
-    if reference.ref_denied.is_some() {
-        return Err(format!(
-            "RequestAccessPolicy IP data ref {target_namespace}/{} is not permitted",
-            reference.name
-        ));
-    }
-    let Some(target) = resolve_ctx
-        .ctx
-        .runtime()
-        .edgion_config_data_store
-        .get(Some(target_namespace), &reference.name)
-    else {
-        return Err(format!(
-            "RequestAccessPolicy IP data ref {target_namespace}/{} is unavailable",
-            reference.name
-        ));
-    };
-    if !target.spec.enable {
-        return Err(format!(
-            "RequestAccessPolicy IP data ref {target_namespace}/{} is disabled",
-            reference.name
-        ));
-    }
-    let ConfigEntry::IpList(data) = &target.spec.data else {
-        return Err(format!(
-            "RequestAccessPolicy IP data ref {target_namespace}/{} has the wrong type",
-            reference.name
-        ));
-    };
-    // Invalid CIDRs inside a present IpList are partial-good content, not a
-    // missing reference. Callers keep the valid siblings.
-    let content_warning = if !edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors(&data.items).is_empty() {
-        Some(format!(
-            "RequestAccessPolicy IP data ref {target_namespace}/{} contains invalid entries; valid entries were retained",
-            reference.name
-        ))
-    } else {
-        None
-    };
-    Ok((
-        data.items
-            .iter()
-            .flat_map(|group| group.cidrs.iter().cloned())
-            .collect(),
-        content_warning,
-    ))
-}
-
-fn register_ref(reference: &EdgionConfigDataRef, resolve_ctx: &ResolveCtx<'_>) {
-    let target_namespace = reference.namespace.as_deref().unwrap_or(resolve_ctx.owner_namespace);
-    let target_key = format!("{target_namespace}/{}", reference.name);
-    resolve_ctx
-        .ctx
-        .runtime()
-        .edgion_config_data_refs
-        .add_ref(target_key, resolve_ctx.owner_key.to_string());
-    if target_namespace != resolve_ctx.owner_namespace {
-        resolve_ctx
-            .ctx
-            .runtime()
-            .cross_ns_ref_mgr
-            .add_ref(target_namespace.to_string(), resolve_ctx.resource_ref.clone());
-    }
+    errors
 }
 
 fn resolve_secret_match(mut leaf: BoundConditionMut<'_>, owner: &ResourceRef, ctx: &HandlerContext) {
@@ -513,95 +342,6 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn credentia
     errors
 }
 
-/// Collect operator-authored (non-RAP-sidecar) `ipRefs` for `ResolvedRefs`.
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_fail_closed_ip_ref(
-    ep: &EdgionPlugins,
-    mut visit: impl FnMut(&EdgionConfigDataRef),
-) {
-    if let Some(entries) = ep.spec.request_plugins.as_ref() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
-            visit_plugin_conditions_ip_refs(
-                entry.body.as_ref().and_then(|body| body.conditions.as_ref()),
-                &mut visit,
-            );
-            visit_dye_ip_refs(entry.dye.as_ref(), &mut visit);
-            if let EdgionPlugin::RequestRestriction(config) = &entry.plugin {
-                for condition in config.conditions.iter_conditions() {
-                    visit_condition_ip_refs(condition, &mut visit);
-                }
-            }
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_ref() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
-            visit_dye_ip_refs(entry.dye.as_ref(), &mut visit);
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_ref() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
-            visit_dye_ip_refs(entry.dye.as_ref(), &mut visit);
-        }
-    }
-    if let Some(entries) = ep.spec.upstream_response_plugins.as_ref() {
-        for entry in entries {
-            if !entry.is_enabled() {
-                continue;
-            }
-            visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
-            visit_plugin_conditions_ip_refs(
-                entry.body.as_ref().and_then(|body| body.conditions.as_ref()),
-                &mut visit,
-            );
-            visit_dye_ip_refs(entry.dye.as_ref(), &mut visit);
-        }
-    }
-}
-
-fn visit_plugin_conditions_ip_refs(
-    conditions: Option<&PluginConditions>,
-    visit: &mut impl FnMut(&EdgionConfigDataRef),
-) {
-    let Some(conditions) = conditions else {
-        return;
-    };
-    for set in [conditions.skip.as_ref(), conditions.run.as_ref()]
-        .into_iter()
-        .flatten()
-    {
-        for condition in set.iter_conditions() {
-            visit_condition_ip_refs(condition, visit);
-        }
-    }
-}
-
-fn visit_dye_ip_refs(dye: Option<&DyeSuite>, visit: &mut impl FnMut(&EdgionConfigDataRef)) {
-    let Some(dye) = dye else {
-        return;
-    };
-    for rule in dye.request.iter().chain(dye.response.iter()) {
-        visit_plugin_conditions_ip_refs(rule.conditions.as_ref(), visit);
-    }
-}
-
-fn visit_condition_ip_refs(condition: &Condition, visit: &mut impl FnMut(&EdgionConfigDataRef)) {
-    match condition {
-        Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => {
-            for reference in &ip.ip_refs {
-                visit(reference);
-            }
-        }
-        _ => {}
-    }
-}
+#[cfg(test)]
+#[path = "../../../../../../tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/plugins/condition_tree_test.rs"]
+mod tests;
