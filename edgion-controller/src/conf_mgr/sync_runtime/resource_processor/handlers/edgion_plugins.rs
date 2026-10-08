@@ -1288,7 +1288,13 @@ async fn requeue_referencing_resources(ep: &EdgionPlugins, ctx: &HandlerContext)
     let Some(ep_name) = ep.metadata.name.as_deref().filter(|n| !n.is_empty()) else {
         return;
     };
-    let ep_key = format!("{}/{}", ep.metadata.namespace.as_deref().unwrap_or("default"), ep_name);
+    let raw_key = match ep.metadata.namespace.as_deref() {
+        Some(namespace) => format!("{namespace}/{ep_name}"),
+        None => ep_name.to_owned(),
+    };
+    let Ok(ep_key) = edgion_resources::resources::refs::plugin_target::semantic_key(&raw_key) else {
+        return;
+    };
     let refs = ctx.runtime().plugin_ref_mgr.get_refs(&ep_key);
     if !refs.is_empty() {
         tracing::info!(

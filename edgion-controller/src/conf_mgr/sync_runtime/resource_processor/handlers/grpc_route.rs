@@ -509,6 +509,12 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             GrpcRouteBackendRefs::from_route(route).map(|references| references.effective()),
             _ctx.runtime(),
         );
+        if let Ok(refs) = GrpcRouteExtensionRefs::from_route(route) {
+            resolved_refs_errors.extend(
+                refs.effective()
+                    .filter_map(|field| super::route_utils::ambiguous_plugin_ref(field, _ctx.runtime())),
+            );
+        }
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
             route_ns,

@@ -151,3 +151,10 @@ defines the production contract; do not relax admission to repair test setup.
   candidate, and the focused current-HEAD regression passed on 2026-09-12.
 - `http-plugin-store-request-generation-snapshot` / B0175 — earlier declined
   request-wide proposal, preserved separately as superseded history.
+
+Semantic default/name EdgionPlugins targets may select one bare or qualified
+raw source. A collision publishes an empty-spec sealed denial, independent of
+Bypass, without borrowing either candidate's declarations. Selections retain
+the raw owner; collision clears retention and recovery uses only the current
+survivor. See the [LKG contract](../intentional-design/edgionplugins-key-scoped-last-known-good.md).
+Adaptive delta notifications use semantic target keys; inventories remain raw.

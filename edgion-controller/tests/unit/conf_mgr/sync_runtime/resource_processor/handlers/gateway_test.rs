@@ -2232,3 +2232,32 @@ fn proxy_protocol_unsupported_extension_invalidates_previous_trust_and_recovers(
         }
     }
 }
+
+#[tokio::test]
+async fn gateway_plugin_reference_resolves_bare_source_but_reports_collision() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use edgion_resources::EdgionPlugins;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        16,
+        Arc::new(EdgionPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor);
+    let mut source = EdgionPlugins::new("plugins", Default::default());
+    raw.upsert("plugins".into(), Arc::new(source.clone()));
+    let gateway = make_gateway_with_plugin_annotation("default", "plugins");
+    assert!(validate_gateway_plugin_ref(&gateway, &runtime).is_none());
+    source.metadata.namespace = Some("default".into());
+    raw.upsert("default/plugins".into(), Arc::new(source));
+    assert_eq!(
+        validate_gateway_plugin_ref(&gateway, &runtime).as_deref(),
+        Some("EdgionPlugins reference default/plugins is ambiguous")
+    );
+    raw.remove("plugins");
+    assert!(validate_gateway_plugin_ref(&gateway, &runtime).is_none());
+}

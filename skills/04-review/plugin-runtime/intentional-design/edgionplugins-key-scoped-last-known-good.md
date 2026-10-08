@@ -135,3 +135,27 @@ Re-evaluate this choice if:
 - `D0031` / `tasks/todo/add-edgionplugins-lkg-identity-integration-coverage.md` —
   closed on 2026-09-05 because identity-specific coverage was not independently
   actionable.
+
+## EdgionPlugins reference-target ambiguity
+
+EdgionPlugins reference lookup distinguishes semantic target identity from exact
+raw source ownership. A default/name target may resolve raw default/name or raw
+name (omitted namespace), but never an explicit empty namespace /name. Other
+namespaces require the exact qualified key. Zero sources is missing; one is
+unique; both are ambiguous even if content or UID agrees. This is specific to
+EdgionPlugins and grants no authorization or aliases for other resource kinds.
+
+Ambiguity means no uniquely resolvable source. New scopes publish a sealed
+non-retainable denial without candidate policy, AI or log declarations; Bypass
+cannot suppress it. Route ambiguity diagnostics use ResolvedRefs=False without dropping
+rules or backend slots. Ordinary missing-reference and unique-source scope
+policies remain unchanged.
+
+A collision clears the semantic selection and its retained candidate. After
+collision removal, only the survivor's current generation may activate: an
+invalid survivor fails closed rather than reviving a pre-collision executable.
+Normal same-raw-key DSL/WAF retention, including UID changes and full relists,
+keeps its existing policy/material exclusions. No equal-UID retention gate is
+introduced. Exact raw inventory, deletion, credential ownership and entry/rate
+scopes remain unchanged; retained execution never crosses raw owners. Existing
+in-flight captured scopes and independent-kind publication boundaries remain.

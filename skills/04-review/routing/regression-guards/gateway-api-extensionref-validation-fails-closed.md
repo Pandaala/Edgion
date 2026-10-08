@@ -176,3 +176,13 @@ are not live admission/conformance verification.
 ## Resolution references
 
 - `fail-closed-missing-gateway-api-extensionref-configuration` — fixed 2026-09-12.
+
+EdgionPlugins raw-source collisions are distinct from malformed ExtensionRef
+syntax and unique-source execution-scope errors. Ambiguous effective targets
+produce ResolvedRefs=False (InvalidPluginsRef), without changing Accepted,
+PartiallyInvalid, effective rules or backend positions. The captured Gateway
+scope contains a present sealed denial, including for global/Gateway consumers
+that intentionally drop ordinary missing references. No candidate policy, AI
+configuration or access-log declarations are selected; a fallback rule cannot
+replace the ambiguous matched rule. Semantic dependency keys retain recovery
+on either candidate's update or removal.

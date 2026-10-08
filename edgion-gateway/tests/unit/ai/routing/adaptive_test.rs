@@ -630,3 +630,41 @@ fn invalid_owning_extension_never_queries_adaptive_plugin_or_catalog() {
     )
     .is_empty());
 }
+
+#[test]
+fn bare_plugin_events_find_semantic_adaptive_dependents_on_collision_and_recovery() {
+    use edgion_resources::resources::refs::plugin_target::{classify, semantic_key, PluginTarget};
+    let mut route = adaptive_route();
+    route.metadata.namespace = None;
+    let facts = RouteAdaptiveFacts::from_route(&route);
+    let target = facts.targets.iter().next().unwrap().clone();
+    let mut index = AdaptiveContributionIndex::default();
+    index.attach_route("route-a".into(), facts);
+    let models = HashMap::from([(target, vec!["model-a".to_string()])]);
+    let mut sources = HashMap::new();
+    for (raw_key, present) in [
+        ("adaptive", true),
+        ("default/adaptive", true),
+        ("adaptive", false),
+        ("default/adaptive", false),
+    ] {
+        if present {
+            sources.insert(raw_key, ());
+        } else {
+            sources.remove(raw_key);
+        }
+        let semantic = semantic_key(raw_key).unwrap();
+        let routes = index.plugin_routes[&semantic].clone();
+        let unique = matches!(
+            classify(&semantic, |key| sources.get(key).copied()).unwrap(),
+            PluginTarget::Unique { .. }
+        );
+        let plugins = if unique {
+            HashSet::from([semantic])
+        } else {
+            HashSet::new()
+        };
+        recompute_test_routes(&mut index, routes, &plugins, &models);
+        assert_eq!(index.retained_keys().len(), usize::from(unique));
+    }
+}

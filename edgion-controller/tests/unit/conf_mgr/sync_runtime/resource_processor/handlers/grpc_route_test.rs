@@ -1043,3 +1043,64 @@ async fn grpc_rule_transcoder_priority_precedes_backend_waf_and_request_id() {
         );
     }
 }
+
+#[tokio::test]
+async fn plugin_collision_status_preserves_effective_rule_and_backend_positions() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use edgion_resources::EdgionPlugins;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        16,
+        Arc::new(EdgionPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor);
+    let mut source = EdgionPlugins::new("plugins", Default::default());
+    raw.upsert("plugins".into(), Arc::new(source.clone()));
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime);
+    let mut route: GRPCRoute = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"route","namespace":"default"},
+        "spec":{"parentRefs":[{"name":"gateway"}],"rules":[
+            {"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins"}}],
+             "backendRefs":[{"name":"service","port":80,"weight":7,"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins"}}]}]},
+            {"backendRefs":[{"name":"fallback","port":80}]}
+        ]}
+    })).unwrap();
+    let handler = GrpcRouteHandler::default();
+    handler.update_status(&mut route, &ctx, &[]);
+    let before_rules = serde_json::to_value(route.effective_rules()).unwrap();
+    let before_indices = route.spec.invalid_rule_indices.clone();
+    let admission = |route: &GRPCRoute| {
+        route
+            .status
+            .as_ref()
+            .unwrap()
+            .parents
+            .iter()
+            .flat_map(|p| &p.conditions)
+            .filter(|c| matches!(c.type_.as_str(), "Accepted" | "PartiallyInvalid"))
+            .map(|c| (c.type_.clone(), c.status.clone(), c.reason.clone(), c.message.clone()))
+            .collect::<Vec<_>>()
+    };
+    let before_admission = admission(&route);
+    source.metadata.namespace = Some("default".into());
+    raw.upsert("default/plugins".into(), Arc::new(source));
+    handler.update_status(&mut route, &ctx, &[]);
+    assert_eq!(serde_json::to_value(route.effective_rules()).unwrap(), before_rules);
+    assert_eq!(route.spec.invalid_rule_indices, before_indices);
+    assert_eq!(admission(&route), before_admission);
+    let parents = &route.status.as_ref().unwrap().parents;
+    assert!(parents
+        .iter()
+        .flat_map(|parent| parent.conditions.iter())
+        .any(|condition| {
+            condition.type_ == "ResolvedRefs" && condition.status == "False" && condition.message.contains("ambiguous")
+        }));
+    raw.remove("plugins");
+    handler.update_status(&mut route, &ctx, &[]);
+    assert!(!serde_json::to_string(&route.status).unwrap().contains("ambiguous"));
+}

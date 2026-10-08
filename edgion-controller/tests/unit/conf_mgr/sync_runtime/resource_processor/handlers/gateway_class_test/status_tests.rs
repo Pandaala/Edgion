@@ -264,3 +264,39 @@ async fn global_request_id_validation_observes_replaced_raw_generation() {
         assert!(!deployment.drain_class().await, "EGC echo must not cause a class write");
     }
 }
+
+#[tokio::test]
+async fn bare_plugin_event_requeues_global_owner_and_class_reports_collision() {
+    let deployment = Deployment::new("edgion", None).await;
+    let mut shared = config();
+    shared.spec.global_plugins_ref.as_mut().unwrap()[0].namespace = None;
+    let (shared, _) = deployment.process_egc(shared).await;
+    deployment.drain_class().await;
+    for (raw_key, namespace) in [("ids", None), ("default/ids", Some("default"))] {
+        let mut plugin = EdgionPlugins::new("ids", Default::default());
+        plugin.metadata.namespace = namespace.map(str::to_owned);
+        deployment.plugins_raw.upsert(raw_key.into(), Arc::new(plugin.clone()));
+        deployment.plugins.on_event_key(raw_key.into()).await;
+        let item = deployment.plugins.workqueue().dequeue().await.unwrap();
+        assert_eq!(item.key, raw_key, "queue retains exact raw source identity");
+        deployment
+            .plugins
+            .process_work_item(&item.key, Some(plugin), None, item.trigger_chain)
+            .await;
+        deployment.plugins.workqueue().done(&item.key);
+        let item = tokio::time::timeout(Duration::from_secs(5), deployment.egc.workqueue().dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.key, "shared");
+        deployment
+            .egc
+            .process_work_item(&item.key, Some(shared.clone()), None, item.trigger_chain)
+            .await;
+        deployment.egc.workqueue().done(&item.key);
+        deployment.drain_class().await;
+        let class = deployment.gc_raw.get("edgion").unwrap();
+        let status = serde_json::to_string(&class.status).unwrap();
+        assert_eq!(status.contains("ambiguous"), namespace.is_some());
+    }
+}

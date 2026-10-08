@@ -713,3 +713,58 @@ async fn raw_http_owner_clear_finalize_preserves_child_mirror_and_policy_ancestr
     };
     assert!(super::super::resolve_policy_ancestor_gateways_for_targets(&[mirror], "default/policy", &ctx).is_empty());
 }
+
+#[tokio::test]
+async fn semantic_plugin_lookup_never_borrows_one_collision_candidate() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        16,
+        Arc::new(EdgionPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor);
+    let mut source: EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"ids"}, "spec":{"requestPlugins":[{"type":"RequestId","config":{}}]}
+    }))
+    .unwrap();
+    raw.upsert("ids".into(), Arc::new(source.clone()));
+    let reference: LocalObjectReference =
+        serde_json::from_value(serde_json::json!({"group":"edgion.io","kind":"EdgionPlugins","name":"ids"})).unwrap();
+    let mut route = backend_extension_owner(&reference, 2);
+    route.metadata.namespace = None;
+    let refs = HttpRouteExtensionRefs::from_route(&route).unwrap();
+    let field = refs.authored_at(0, Some(2), 0).unwrap();
+    let root = ResourceRef::new(ResourceKind::HTTPRoute, None, "route".into());
+    assert!(backend_request_scope_extension_ref_error(&runtime, &root, field)
+        .unwrap()
+        .contains("RequestId"));
+    source.metadata.namespace = Some("default".into());
+    raw.upsert("default/ids".into(), Arc::new(source));
+    assert!(matches!(
+        plugin_target(&runtime, "default/ids"),
+        PluginTarget::Ambiguous
+    ));
+    assert!(
+        backend_request_scope_extension_ref_error(&runtime, &root, field).is_none(),
+        "collision must not drop a rule using candidate scope restrictions"
+    );
+    assert_eq!(
+        ambiguous_plugin_ref(field, &runtime).unwrap().reason(),
+        "InvalidPluginsRef"
+    );
+    assert_eq!(
+        runtime.plugin_ref_mgr.get_dependencies(&root.key()),
+        vec!["default/ids"]
+    );
+    raw.remove("ids");
+    assert!(ambiguous_plugin_ref(field, &runtime).is_none());
+    assert!(backend_request_scope_extension_ref_error(&runtime, &root, field)
+        .unwrap()
+        .contains("RequestId"));
+}

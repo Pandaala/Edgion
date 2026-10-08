@@ -287,3 +287,12 @@ fn non_dsl_invalid_update_replaces_last_known_good_with_fail_closed_runtime() {
         Some(false)
     );
 }
+
+#[test]
+fn raw_delta_keys_notify_semantic_targets_without_aliasing_empty_namespace() {
+    let keys = ["plugins", "default/plugins", "other/plugins", "/plugins"].map(str::to_owned);
+    assert_eq!(
+        super::changed_plugin_targets(keys.iter()),
+        HashSet::from(["default/plugins".to_owned(), "other/plugins".to_owned()])
+    );
+}

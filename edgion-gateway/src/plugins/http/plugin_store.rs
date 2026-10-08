@@ -63,6 +63,17 @@ pub struct CompiledPlugins {
 }
 
 impl CompiledPlugins {
+    /// Present denial for a target with two raw owners. Never expose either spec.
+    pub(crate) fn ambiguous_reference() -> Self {
+        Self {
+            spec: Arc::new(EdgionPlugins::new("", Default::default())),
+            plugin_runtime: Arc::new(PluginRuntime::ambiguous_reference()),
+            preparse_errors: vec!["ambiguous EdgionPlugins reference".to_string()],
+            is_activatable: false,
+            retain_previous_on_invalid_update: false,
+        }
+    }
+
     /// Reusing a whole runtime also reuses its mirror authorization snapshot.
     /// Cross-namespace mirrors in either generation therefore require publishing
     /// the incoming sealed runtime, even when a DSL/WAF update is invalid.

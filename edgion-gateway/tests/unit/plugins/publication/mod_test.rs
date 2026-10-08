@@ -1041,3 +1041,199 @@ fn descriptor_publication_rejects_constructor_material_but_retains_opaque_source
     assert!(!Arc::ptr_eq(&old, &filter(&recovered, "GrpcJsonTranscoder")));
     assert_eq!(old.name(), "GrpcJsonTranscoder");
 }
+
+fn default_target_publisher(policy: Value) -> PluginPublisher {
+    let publisher = publisher();
+    let mut cfg = (*config("policy-a", policy)).clone();
+    cfg.spec.global_plugins_ref.as_mut().unwrap()[0].namespace = None;
+    publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(cfg))]));
+    publisher
+}
+
+fn default_source(bare: bool, valid: bool, uid: &str) -> Arc<EdgionPlugins> {
+    let mut source = (*plugin("dsl", valid)).clone();
+    source.metadata.namespace = (!bare).then(|| "default".into());
+    source.metadata.uid = Some(uid.into());
+    Arc::new(source)
+}
+
+#[test]
+fn semantic_plugin_collision_clears_lkg_and_recovers_only_current_survivor() {
+    for full in [false, true] {
+        for bare_first in [false, true] {
+            let publisher = default_target_publisher(json!({}));
+            let first = if bare_first { "plugins" } else { "default/plugins" };
+            let second = if bare_first { "default/plugins" } else { "plugins" };
+            let good = default_source(bare_first, true, "old");
+            publisher.replace_http_plugins(HashMap::from([(first.into(), good)]));
+            let pinned = scope(&publisher, "apps/a");
+            let old = pinned.http("default/plugins").unwrap();
+            assert!(old.is_activatable);
+            assert_eq!(old.spec.metadata.namespace.is_none(), bare_first);
+            let invalid = default_source(bare_first, false, "new-uid");
+            let sources = HashMap::from([(first.into(), invalid.clone())]);
+            if full {
+                publisher.replace_http_plugins(sources);
+            } else {
+                publisher.update_http_plugins(HashMap::new(), sources, &HashSet::new());
+            }
+            let retained = scope(&publisher, "apps/a").http("default/plugins").unwrap();
+            assert!(
+                retained.is_activatable,
+                "same raw owner UID replacement retains eligible LKG"
+            );
+            assert_eq!(retained.spec.metadata.uid.as_deref(), Some("old"));
+            let sibling = default_source(!bare_first, true, "new-uid");
+            if full {
+                publisher.replace_http_plugins(HashMap::from([
+                    (first.into(), invalid.clone()),
+                    (second.into(), sibling),
+                ]));
+            } else {
+                publisher.update_http_plugins(
+                    HashMap::from([(second.into(), sibling)]),
+                    HashMap::new(),
+                    &HashSet::new(),
+                );
+            }
+            let denied = scope(&publisher, "apps/a").http("default/plugins").unwrap();
+            assert!(!denied.is_activatable);
+            assert!(!denied.retain_previous_on_invalid_update);
+            assert!(denied.plugin_runtime.rejects_invalid_config());
+            assert!(denied.spec.spec.request_plugins.is_none());
+            assert!(denied.spec.spec.access_log_extern.is_none());
+            assert_eq!(publisher.snapshot().http_sources().len(), 2);
+            assert!(pinned.http("default/plugins").unwrap().is_activatable);
+            if full {
+                publisher.replace_http_plugins(HashMap::from([(first.into(), invalid)]));
+            } else {
+                publisher.update_http_plugins(HashMap::new(), HashMap::new(), &HashSet::from([second.into()]));
+            }
+            assert!(
+                !scope(&publisher, "apps/a")
+                    .http("default/plugins")
+                    .unwrap()
+                    .is_activatable,
+                "invalid survivor cannot revive pre-collision LKG"
+            );
+            publisher.update_http_plugins(
+                HashMap::new(),
+                HashMap::from([(first.into(), default_source(bare_first, true, "fixed"))]),
+                &HashSet::new(),
+            );
+            assert!(
+                scope(&publisher, "apps/a")
+                    .http("default/plugins")
+                    .unwrap()
+                    .is_activatable
+            );
+            publisher.replace_http_plugins(HashMap::new());
+            assert!(scope(&publisher, "apps/a").http("default/plugins").is_none());
+        }
+    }
+}
+
+#[test]
+fn collision_denial_survives_policy_bypass_and_raw_owner_replacement() {
+    for action in ["bypass", "block"] {
+        let publisher = default_target_publisher(json!({"deny":[{"name":"http/Dsl","action":action}]}));
+        // Two identical specs still have distinct raw owners.
+        let mut raw = (*default_source(true, true, "same")).clone();
+        raw.spec.request_plugins = None;
+        let bare = Arc::new(raw.clone());
+        raw.metadata.namespace = Some("default".into());
+        publisher.replace_http_plugins(HashMap::from([
+            ("plugins".into(), bare),
+            ("default/plugins".into(), Arc::new(raw)),
+        ]));
+        let denied = scope(&publisher, "apps/a").http("default/plugins").unwrap();
+        assert!(denied.plugin_runtime.rejects_invalid_config());
+        assert_eq!(
+            denied.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+            "RejectInvalidConfig"
+        );
+    }
+    let publisher = default_target_publisher(json!({}));
+    publisher.replace_http_plugins(HashMap::from([("plugins".into(), default_source(true, true, "a"))]));
+    publisher.update_http_plugins(
+        HashMap::from([("default/plugins".into(), default_source(false, false, "b"))]),
+        HashMap::new(),
+        &HashSet::from(["plugins".into()]),
+    );
+    assert!(
+        !scope(&publisher, "apps/a")
+            .http("default/plugins")
+            .unwrap()
+            .is_activatable
+    );
+    assert_eq!(publisher.snapshot().http_sources().len(), 1);
+    assert!(!publisher.snapshot().http_sources().contains_key("plugins"));
+}
+
+#[test]
+fn delegated_rule_and_backend_collision_use_effective_owner_and_pinned_scope() {
+    let publisher = publisher();
+    let mut cfg = (*config("policy-a", json!({}))).clone();
+    cfg.spec.global_plugins_ref = None;
+    publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(cfg))]));
+    let mut source = (*route()).clone();
+    source.spec.resolved_rules = Some(serde_json::from_value(json!([{
+        "filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins","resolvedNamespace":"default"}}],
+        "backendRefs":[{"name":"service","port":80,"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins","resolvedNamespace":"default"}}]}]
+    }])).unwrap());
+    let input = RouteInput::from_http(Arc::new(source));
+    assert!(input.http_keys.contains("default/plugins"));
+    assert!(!input.http_keys.contains("apps/plugins"));
+    publisher.replace_routes(RouteKind::Http, HashMap::from([("apps/route".into(), input)]));
+    publisher.replace_http_plugins(HashMap::from([("plugins".into(), default_source(true, true, "old"))]));
+    let mut old_request = crate::EdgionHttpContext::new();
+    assert!(old_request.capture_plugin_scope(publisher.snapshot().gateway("apps/a").unwrap()));
+    let old_scope = old_request.plugin_scope().unwrap().scope.clone();
+    let old = old_request
+        .pinned_backend_ext_ref("default/plugins", || {
+            old_scope
+                .http("default/plugins")
+                .map(|view| view.plugin_runtime.clone())
+        })
+        .unwrap();
+    assert!(!old.rejects_invalid_config());
+    publisher.update_http_plugins(
+        HashMap::from([("default/plugins".into(), default_source(false, true, "new"))]),
+        HashMap::new(),
+        &HashSet::new(),
+    );
+    let mut new_request = crate::EdgionHttpContext::new();
+    assert!(new_request.capture_plugin_scope(publisher.snapshot().gateway("apps/a").unwrap()));
+    let new_scope = new_request.plugin_scope().unwrap().scope.clone();
+    let denied = new_request
+        .pinned_backend_ext_ref("default/plugins", || {
+            new_scope
+                .http("default/plugins")
+                .map(|view| view.plugin_runtime.clone())
+        })
+        .unwrap();
+    assert!(denied.rejects_invalid_config());
+    assert!(Arc::ptr_eq(
+        &old,
+        &old_request
+            .pinned_backend_ext_ref("default/plugins", || panic!("old backend stays pinned"))
+            .unwrap()
+    ));
+    publisher.update_http_plugins(
+        HashMap::new(),
+        HashMap::new(),
+        &HashSet::from(["default/plugins".into()]),
+    );
+    assert!(
+        scope(&publisher, "apps/a")
+            .http("default/plugins")
+            .unwrap()
+            .is_activatable
+    );
+    assert!(Arc::ptr_eq(
+        &denied,
+        &new_request
+            .pinned_backend_ext_ref("default/plugins", || panic!("denied backend stays pinned"))
+            .unwrap()
+    ));
+}

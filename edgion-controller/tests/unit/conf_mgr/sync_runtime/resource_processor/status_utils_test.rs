@@ -454,3 +454,45 @@ fn test_set_parent_conditions_full_validation_and_resolved_refs_errors() {
     assert_eq!(resolved.status, "False");
     assert_eq!(resolved.reason, "BackendNotFound");
 }
+
+#[test]
+fn ambiguous_plugin_reference_has_bounded_resolved_refs_diagnostic() {
+    let error = ResolvedRefsError::AmbiguousEdgionPlugins {
+        namespace: "default".into(),
+        name: "plugins".into(),
+    };
+    assert_eq!(error.reason(), "InvalidPluginsRef");
+    assert_eq!(error.message(), "EdgionPlugins reference default/plugins is ambiguous");
+}
+
+#[test]
+fn ambiguity_reason_priority_is_independent_of_input_order() {
+    let ambiguity = ResolvedRefsError::AmbiguousEdgionPlugins {
+        namespace: "default".into(),
+        name: "plugins".into(),
+    };
+    for existing in [
+        ResolvedRefsError::InvalidKind {
+            kind: "Unsupported".into(),
+            name: "target".into(),
+        },
+        ResolvedRefsError::InvalidReference {
+            error: edgion_resources::resources::refs::ReferenceError::MissingNamespace,
+        },
+        ResolvedRefsError::RefNotPermitted {
+            from_namespace: "apps".into(),
+            from_kind: "HTTPRoute",
+            target_namespace: "default".into(),
+            target_name: "plugins".into(),
+        },
+    ] {
+        assert_eq!(
+            pick_resolved_refs_reason(&[ambiguity.clone(), existing.clone()]),
+            existing.reason()
+        );
+        assert_eq!(
+            pick_resolved_refs_reason(&[existing.clone(), ambiguity.clone()]),
+            existing.reason()
+        );
+    }
+}

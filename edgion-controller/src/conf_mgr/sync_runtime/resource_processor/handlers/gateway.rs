@@ -31,6 +31,7 @@ use edgion_resources::resources::proxy_protocol::{
     BoundedProxyProtocolReferenceIdentity, InboundProxyProtocolAnnotation, ProxyProtocolConfigErrorCode,
     ProxyProtocolPolicySourceKind, ResolvedInboundProxyProtocol,
 };
+use edgion_resources::resources::refs::plugin_target::PluginTarget;
 use edgion_resources::{ResourceKind, ResourceMeta};
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::ByteString;
@@ -2813,21 +2814,15 @@ fn validate_gateway_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -
     let errors: Vec<String> = annotations::edgion::parse_plugin_ref_list(value, gateway_ns)
         .into_iter()
         .flat_map(|key| {
-            let plugins = runtime
-                .processor_registry
-                .get("EdgionPlugins")
-                .and_then(|p| p.get_raw_any(&key))
-                .and_then(|raw| {
-                    raw.downcast::<edgion_resources::prelude_resources::EdgionPlugins>()
-                        .ok()
-                });
+            let plugins = super::route_utils::plugin_target(runtime, &key);
             match plugins {
-                Some(plugins) => plugins
+                PluginTarget::Unique { source: plugins, .. } => plugins
                     .validate_request_id_early_attachment()
                     .into_iter()
                     .map(|error| format!("EdgionPlugins {key}: {error}"))
                     .collect::<Vec<_>>(),
-                None => vec![format!("EdgionPlugins not found: {key}")],
+                PluginTarget::Missing => vec![format!("EdgionPlugins not found: {key}")],
+                PluginTarget::Ambiguous => vec![format!("EdgionPlugins reference {key} is ambiguous")],
             }
         })
         .collect();

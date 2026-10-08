@@ -218,6 +218,8 @@ impl AcceptedError {
 /// string-based inference and providing compile-time safety.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedRefsError {
+    /// Two raw plugin sources identify one semantic reference target.
+    AmbiguousEdgionPlugins { namespace: String, name: String },
     /// An owning reference failed identity or supported-target validation.
     /// The typed error contains no authored values or credential material.
     InvalidReference {
@@ -311,6 +313,7 @@ pub enum ResolvedRefsError {
 impl ResolvedRefsError {
     pub fn reason(&self) -> &'static str {
         match self {
+            Self::AmbiguousEdgionPlugins { .. } => condition_reasons::INVALID_PLUGINS_REF,
             Self::InvalidReference { .. } => condition_reasons::INVALID_KIND,
             Self::InvalidKind { .. } => condition_reasons::INVALID_KIND,
             Self::BackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
@@ -332,6 +335,9 @@ impl ResolvedRefsError {
 
     pub fn message(&self) -> String {
         match self {
+            Self::AmbiguousEdgionPlugins { namespace, name } => {
+                format!("EdgionPlugins reference {namespace}/{name} is ambiguous")
+            }
             Self::InvalidReference { error } => format!("Invalid resource reference: {error}"),
             Self::InvalidKind { kind, name } => {
                 format!("Invalid backend ref kind '{}' for backend '{}'", kind, name)
@@ -572,6 +578,8 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
     fn variant_priority(err: &ResolvedRefsError) -> u8 {
         match err {
             ResolvedRefsError::InvalidKind { .. } | ResolvedRefsError::InvalidReference { .. } => 0,
+            // Implementation-specific ambiguity follows all existing reference diagnostics.
+            ResolvedRefsError::AmbiguousEdgionPlugins { .. } => 9,
             ResolvedRefsError::RefNotPermitted { .. } => 1,
             ResolvedRefsError::CertContentInvalid { .. } => 2,
             ResolvedRefsError::InvalidSecretType { .. } => 3,

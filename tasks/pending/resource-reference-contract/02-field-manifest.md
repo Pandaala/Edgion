@@ -338,3 +338,8 @@ cert-provider=EdgionTls is a provider selector and expose-client-cert is a boole
 not a named object reference. Namespace label selectors retain their own policy
 and watch path. Direct reads/writes outside the frozen reference-field scope do
 not make this task a bootstrap PKI, leader-election or general metadata redesign.
+
+EdgionPlugins ExtensionLocal, globalPluginsRef and Gateway plugin annotation
+targets use the EdgionPlugins-specific missing/unique/ambiguous source contract
+in 01-spec. Raw namespace omission remains authored; explicit empty namespace
+is not an alias. This does not extend default aliases to other target kinds.

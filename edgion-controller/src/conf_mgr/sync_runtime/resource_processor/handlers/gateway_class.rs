@@ -11,8 +11,11 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     ProcessResult, ProcessorHandler,
 };
 use crate::conf_mgr::ControllerRuntime;
-use edgion_resources::prelude_resources::{EdgionGatewayConfig, EdgionPlugins, Gateway, GatewayClass};
+use edgion_resources::prelude_resources::{EdgionGatewayConfig, Gateway, GatewayClass};
 use edgion_resources::resources::gateway_class::{GatewayClassStatus, SupportedFeature, SUPPORTED_FEATURES};
+use edgion_resources::resources::refs::plugin_target::PluginTarget;
+#[cfg(test)]
+use edgion_resources::EdgionPlugins;
 
 /// Outcome of resolving `GatewayClass.spec.parametersRef`.
 enum ParamsRefState {
@@ -57,20 +60,23 @@ fn resolve_params_ref(gc: &GatewayClass, ctx: &HandlerContext) -> ParamsRefState
             // Unlike the shared cluster-scoped EGC, this class is owned by one
             // deployment and may report that deployment's local plugin validation.
             let mut errors = Vec::new();
-            if let Some(plugins_processor) = ctx.runtime().processor_registry.get("EdgionPlugins") {
+            if ctx.runtime().processor_registry.get("EdgionPlugins").is_some() {
                 for reference in egc.spec.global_plugins_ref.as_deref().unwrap_or_default() {
                     let namespace = reference.namespace.as_deref().unwrap_or("default");
                     let key = format!("{namespace}/{}", reference.name);
-                    if let Some(plugins) = plugins_processor
-                        .get_raw_any(&key)
-                        .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())
-                    {
-                        errors.extend(
-                            plugins
-                                .validate_request_id_early_attachment()
-                                .into_iter()
-                                .map(|error| format!("globalPluginsRef {key}: {error}")),
-                        );
+                    match super::route_utils::plugin_target(ctx.runtime(), &key) {
+                        PluginTarget::Unique { source: plugins, .. } => {
+                            errors.extend(
+                                plugins
+                                    .validate_request_id_early_attachment()
+                                    .into_iter()
+                                    .map(|error| format!("globalPluginsRef {key}: {error}")),
+                            );
+                        }
+                        PluginTarget::Ambiguous => {
+                            errors.push(format!("globalPluginsRef {key} is ambiguous"));
+                        }
+                        PluginTarget::Missing => {}
                     }
                 }
             }

@@ -3,6 +3,7 @@
 //! Deduplicates common logic used across gateway.rs, http_route.rs,
 //! grpc_route.rs, and other route handlers.
 
+use edgion_resources::resources::refs::plugin_target::{classify, PluginTarget};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -189,13 +190,41 @@ impl ExtensionDependencyReceipt {
     }
 }
 
+/// Inspect semantic targets without changing raw source ownership or authorization.
+pub(super) fn plugin_target(runtime: &ControllerRuntime, key: &str) -> PluginTarget<Arc<EdgionPlugins>> {
+    classify(key, |raw_key| {
+        runtime
+            .processor_registry
+            .get("EdgionPlugins")?
+            .get_raw_any(raw_key)?
+            .downcast::<EdgionPlugins>()
+            .ok()
+    })
+    .unwrap_or(PluginTarget::Missing)
+}
+
+/// Collision is diagnostic only: retain the matched rule and selected backend.
+pub(super) fn ambiguous_plugin_ref(
+    field: RouteExtensionField<'_>,
+    runtime: &ControllerRuntime,
+) -> Option<ResolvedRefsError> {
+    let reference = field.validated().ok()??;
+    let target = reference.target();
+    let namespace = target.scope().namespace()?;
+    let key = format!("{namespace}/{}", target.name());
+    matches!(plugin_target(runtime, &key), PluginTarget::Ambiguous).then(|| ResolvedRefsError::AmbiguousEdgionPlugins {
+        namespace: namespace.to_owned(),
+        name: target.name().to_owned(),
+    })
+}
+
 /// Register before consulting the desired plugin generation. The root owns the
 /// wakeup; only the actual field controls the target's namespace and identity.
 fn extension_scope_violation_with(
     field: RouteExtensionField<'_>,
     inspect: bool,
     register: impl FnOnce(&ExtensionDependencyReceipt),
-    read: impl FnOnce(&str) -> Option<Arc<EdgionPlugins>>,
+    read: impl FnMut(&str) -> Option<Arc<EdgionPlugins>>,
 ) -> Option<(&'static str, bool)> {
     let reference = field.validated().ok()??;
     let receipt = ExtensionDependencyReceipt::from_lookup(reference);
@@ -204,7 +233,9 @@ fn extension_scope_violation_with(
     if !inspect || (!backend && reference.source_kind() != ResourceKind::GRPCRoute) {
         return None;
     }
-    let plugins = read(&receipt.key)?;
+    let PluginTarget::Unique { source: plugins, .. } = classify(&receipt.key, read).ok()? else {
+        return None;
+    };
     if !backend {
         return plugins
             .has_active_grpc_transcoder()

@@ -5,7 +5,12 @@ use std::sync::Arc;
 
 use super::{get_global_plugin_store, PluginStore};
 use edgion_common::conf_sync::traits::ConfHandler;
+use edgion_resources::resources::refs::plugin_target::semantic_key;
 use edgion_resources::resources::EdgionPlugins;
+
+fn changed_plugin_targets<'a>(keys: impl Iterator<Item = &'a String>) -> HashSet<String> {
+    keys.filter_map(|key| semantic_key(key).ok()).collect()
+}
 
 /// Create a PluginStore handler for registration with ConfigClient
 pub fn create_plugin_handler() -> Box<dyn ConfHandler<EdgionPlugins> + Send + Sync> {
@@ -28,7 +33,7 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
         update: HashMap<String, Arc<EdgionPlugins>>,
         remove: HashSet<String>,
     ) {
-        let changed_keys: HashSet<_> = add.keys().chain(update.keys()).chain(remove.iter()).cloned().collect();
+        let changed_keys = changed_plugin_targets(add.keys().chain(update.keys()).chain(remove.iter()));
         #[cfg(test)]
         {
             let mut keys: HashSet<_> = self.publisher().snapshot().http_sources().keys().cloned().collect();

@@ -632,6 +632,12 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         if let Ok(refs) = HttpRouteMirrorRefs::from_route(route) {
             resolved_refs_errors.extend(super::request_mirror::errors(refs.effective(), _ctx.runtime()));
         }
+        if let Ok(refs) = HttpRouteExtensionRefs::from_route(route) {
+            resolved_refs_errors.extend(
+                refs.effective()
+                    .filter_map(|field| super::route_utils::ambiguous_plugin_ref(field, _ctx.runtime())),
+            );
+        }
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
             route_ns,

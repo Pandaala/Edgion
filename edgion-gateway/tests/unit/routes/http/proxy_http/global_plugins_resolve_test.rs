@@ -190,3 +190,42 @@ fn invalid_slots_make_zero_queries_and_preserve_valid_missing_and_duplicate_posi
     assert!(Arc::ptr_eq(resolved[2].as_ref().unwrap(), &target));
     assert!(Arc::ptr_eq(resolved[4].as_ref().unwrap(), &target));
 }
+
+#[tokio::test]
+async fn ambiguous_view_is_present_at_global_gateway_and_rule_resolution() {
+    use edgion_common::conf_sync::traits::ConfHandler;
+    let store = PluginStore::new();
+    let (_, mut bare) = make_plugin("default", "ambiguous");
+    bare.metadata.namespace = None;
+    let (_, qualified) = make_plugin("default", "ambiguous");
+    store.full_set(&HashMap::from([
+        ("ambiguous".into(), Arc::new(bare)),
+        ("default/ambiguous".into(), Arc::new(qualified)),
+    ]));
+    let scope = store.scope();
+    assert!(resolve_global_plugins(&scope)
+        .iter()
+        .any(|runtime| runtime.rejects_invalid_config()));
+    let gateway = resolve_gateway_plugins(&scope, &["default/missing".into(), "default/ambiguous".into()]);
+    assert_eq!(gateway.len(), 1, "ordinary missing drops but collision does not");
+    let rule = resolve_route_ext_refs(&scope, &[Some("default/ambiguous".into())]);
+    assert!(rule[0].as_ref().unwrap().rejects_invalid_config());
+    assert!(gateway[0].rejects_invalid_config());
+    // Exercise the same preflight gate used before native or plugin CORS.
+    use tokio::io::AsyncWriteExt;
+    for runtime in [gateway[0].clone(), rule[0].as_ref().unwrap().clone()] {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let mut session = pingora_proxy::Session::new_h1(Box::new(server));
+        client.write_all(b"OPTIONS / HTTP/1.1\r\nHost: test\r\nOrigin: https://app.example\r\nAccess-Control-Request-Method: GET\r\n\r\n").await.unwrap();
+        assert!(session.read_request().await.unwrap());
+        let mut ctx = crate::EdgionHttpContext::new();
+        runtime.run_preflight_gate(&mut session, &mut ctx).await;
+        assert!(ctx.plugin_terminated());
+        assert_eq!(session.response_written().unwrap().status.as_u16(), 500);
+        assert!(!session
+            .response_written()
+            .unwrap()
+            .headers
+            .contains_key("access-control-allow-origin"));
+    }
+}

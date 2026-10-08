@@ -7,10 +7,12 @@ use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use crate::plugins::http::CompiledPlugins;
 use crate::plugins::runtime::gateway_api_filters::extension_ref::extension_ref_key;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use edgion_resources::resources::http_route_ai_admission::{ai_rule_invalid_reason, AiProxyAdmission};
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily, PluginPolicyAction};
+use edgion_resources::resources::refs::plugin_target::{classify, PluginTarget};
 use edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs;
 
 use edgion_resources::{EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, GatewayClass, HTTPRoute, ListenerKey};
@@ -36,6 +38,7 @@ pub(crate) struct PluginPublisher {
 
 #[derive(Clone)]
 struct Selection {
+    raw_key: String,
     latest: u64,
     executable: u64,
     permitted: EntryDemand,
@@ -66,7 +69,7 @@ struct ScopeSignature {
     config: usize,
     policy: CompiledPluginPolicy,
     globals: Vec<String>,
-    http: HashMap<String, Option<u64>>,
+    http: HashMap<String, PluginTarget<u64>>,
     stream: HashMap<String, (Option<u64>, StreamStages)>,
     routes: Vec<usize>,
 }
@@ -258,7 +261,7 @@ impl Inputs {
         self.http_sources.retain(|key, _| !removed.contains(key));
         self.http_latest.retain(|key, _| !removed.contains(key));
         for selected in self.selected.values_mut() {
-            selected.retain(|key, _| !removed.contains(key));
+            selected.retain(|_, selection| !removed.contains(&selection.raw_key));
         }
     }
 
@@ -268,7 +271,7 @@ impl Inputs {
         }
         if fresh {
             for selected in self.selected.values_mut() {
-                selected.remove(&key);
+                selected.retain(|_, selection| selection.raw_key != key);
             }
         }
         let id = self.id();
@@ -395,7 +398,8 @@ impl Inputs {
                 http: http
                     .into_iter()
                     .map(|key| {
-                        let id = self.http_latest.get(&key).copied();
+                        let id = classify(&key, |raw_key| self.http_latest.get(raw_key).copied())
+                            .unwrap_or(PluginTarget::Missing);
                         (key, id)
                     })
                     .collect(),
@@ -454,8 +458,19 @@ impl Inputs {
                 };
                 if scope.available {
                     for (key, latest) in &plan.signature.http {
-                        let Some(latest) = *latest else { continue };
-                        let prior = old_selected.and_then(|selection| selection.get(key));
+                        let (raw_key, latest) = match latest {
+                            PluginTarget::Missing => continue,
+                            PluginTarget::Ambiguous => {
+                                scope
+                                    .http
+                                    .insert(key.clone(), Arc::new(CompiledPlugins::ambiguous_reference()));
+                                continue;
+                            }
+                            PluginTarget::Unique { raw_key, source } => (raw_key, *source),
+                        };
+                        let prior = old_selected
+                            .and_then(|selection| selection.get(key))
+                            .filter(|selection| selection.raw_key == *raw_key);
                         let same_policy =
                             old_signature.is_some_and(|old| old.available && old.policy == plan.signature.policy);
                         if let Some(prior) = prior.filter(|prior| same_policy && prior.latest == latest) {
@@ -496,6 +511,7 @@ impl Inputs {
                         selection.insert(
                             key.clone(),
                             Selection {
+                                raw_key: raw_key.clone(),
                                 latest,
                                 executable,
                                 permitted,

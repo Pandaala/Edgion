@@ -1356,3 +1356,49 @@ Stage only the three reviewed technical files plus this ledger; no push. This
 acceptance covers in-process admission/persistence, not live conformance or the
 remaining reference-contract scope. Evidence: r4c-verification-20261008,
 r4c-root-verification-20261008 and r4c-final-20261008 under the ignored task area.
+
+R4c committed fc4abfee03923241176bcd851bcff85b19125c45 locally, parent5225c3e15.
+Root verified all committed technical hashes and clean tracked/index state;
+unrelated review-results remains untouched. No push.
+
+R4d starts PLAN ONLY at this HEAD. Read-only inventory confirms EP raw name versus
+semantic default/name mismatch in Controller target lookups and Gateway publication.
+Global/Gateway ordinary missing views are dropped, so ambiguity cannot be encoded
+as absence without bypassing security plugins. The proposed design must distinguish
+Missing/Unique/Ambiguous in cold target resolution, preserve exact raw identity and
+rate-limit scopes, prevent cross-source LKG reuse, and recover through existing
+semantic dependency wakes and adaptive notifications. Collision semantics and the
+exact allowlist require independent plan review before any implementation.
+
+R4d independent Astra plan review returns SCOPED PASS for one coherent30-path
+integration (13 production,12 tests,5 documentation). The approved EP-only
+collision rule distinguishes Missing/Unique/Ambiguous before reads; explicit
+empty namespace is not an alias. Ambiguity selects no candidate material or
+metadata, publishes a non-retainable denial surviving Bypass, and reports only
+ResolvedRefs=False without dropping Route slots. Collision clears semantic LKG;
+recovery uses the survivor current generation. Same-raw-key UID-insensitive LKG
+outside collisions remains accepted under D0030. Tests must include prior LKG,
+collision and invalid-survivor recovery. Root authorizes implementation after
+baseline capture; raw stores/rate scopes/exact deletion and other-kind source
+contracts remain unchanged. Plan: r4d-plan-20261008 in ignored task artifacts.
+
+R4d scoped implementation and both actual-result reviews pass. Shared EP target
+classification, Controller Route-only collision diagnostics, Gateway sealed denial,
+raw-owner retention/removal and adaptive semantic notifications satisfy the approved
+contract. Review corrected a cfg(test) import and a new reason-priority tie;
+ambiguity now ranks9 without changing old ranks, with reversed-order regressions.
+Compiler/fixture failures remain recorded; all final focused suites pass:
+Controller942; Gateway plugins2268 with17 existing ignored; resolver8; adaptive22;
+classifier2. Compiled identities1931->1933 /1762->1769 /5158->5164 retain originals;
+all11 existing allowed test files remain verbatim prefixes. OPTIONS coverage is
+real-Session preflight invocation, backend coverage is Context cache pinning and
+delegation coverage is effective owner demand, combined with inspected unchanged
+production wiring; no full live pipeline or conformance claim.
+All14 root gates pass, check51.25s/Clippy60.499s warning-free. Root reproduced
+rawlog/binary/list hashes and the30-path frozen manifest. Graded MUST scan confirms
+no raw-store identity, Grant authority, queue/handler IO, schema/secret transport,
+request-path allocation/locking/logging or rate-scope changes. Ambiguous denial
+contains no candidate material; unchanged raw source/prepared snapshots are not a
+process-wide zero-copy claim. Stage only reviewed technical changes plus this
+ledger, excluding review-results; local commit only. Evidence: r4d-verification,
+r4d-root-verification and r4d-final directories under ignored task artifacts.

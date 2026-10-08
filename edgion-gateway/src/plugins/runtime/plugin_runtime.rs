@@ -484,6 +484,14 @@ impl PluginRuntime {
         self.invalid_plugins.update_policy()
     }
 
+    /// A collision owns no executable candidate and cannot be policy-bypassed.
+    pub(crate) fn ambiguous_reference() -> Self {
+        let mut runtime = Self::default();
+        runtime.invalid_plugins.record_non_retainable("AmbiguousEdgionPlugins");
+        runtime.seal_fail_closed();
+        runtime
+    }
+
     /// Prepend a fail-closed `RejectFilter` to the request stage when any plugin
     /// in this runtime had an invalid config (recorded in `invalid_plugins`).
     ///
