@@ -12,8 +12,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use super::common::{
-    expected_resource_version, map_writer_error, parse_kind, parse_resource_and_update_version, unknown_field_warnings,
-    validate_gateway_api_raw, validate_http_route_transforms, validate_resource,
+    expected_resource_version, map_writer_error, parse_kind, parse_resource, parse_resource_and_update_version,
+    unknown_field_warnings, validate_gateway_api_raw, validate_http_route_transforms, validate_resource,
 };
 use super::types::*;
 
@@ -76,6 +76,29 @@ pub async fn get_namespaced(
     resource.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
+/// Establish the URL namespace before any backend persists the admitted body.
+/// Stored FS/etcd content must already match its key; ingest never backfills it.
+fn admit_namespace(content: String, namespace: &str) -> Result<String, StatusCode> {
+    let mut document: serde_json::Value = parse_resource(&content)?;
+    let metadata = document
+        .get_mut("metadata")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    match metadata.get("namespace") {
+        Some(serde_json::Value::String(value)) if value == namespace && !value.is_empty() => Ok(content),
+        None | Some(serde_json::Value::Null) => {
+            metadata.insert(
+                "namespace".to_string(),
+                serde_json::Value::String(namespace.to_string()),
+            );
+            // Preserve the whole source document, including fields unknown to
+            // local types that Kubernetes HTTPRoute writes forward verbatim.
+            serde_json::to_string(&document).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        }
+        _ => Err(StatusCode::BAD_REQUEST),
+    }
+}
+
 /// Create a namespace-scoped resource.
 pub async fn create_namespaced(
     State(state): State<Arc<AdminState>>,
@@ -111,17 +134,7 @@ pub async fn create_namespaced(
         StatusCode::BAD_REQUEST
     })?;
 
-    // The URL namespace is the authoritative storage key, but the body content is
-    // what gets persisted. Reject a body whose metadata.namespace contradicts the
-    // URL, otherwise the resource would be stored under the URL namespace while its
-    // content claims a different one (create_one keys the path on the URL namespace
-    // in non-K8s mode), desynchronizing storage and the running cache. Absent body
-    // namespace defers to the URL value. Mirrors the guard in update_namespaced.
-    // (K8s API server rejects the same mismatch.) The collection POST takes the name
-    // from the body by design, so only the namespace dimension is validated here.
-    if metadata.namespace.as_ref().is_some_and(|meta_ns| meta_ns != &ns) {
-        return Err(StatusCode::BAD_REQUEST);
-    }
+    let content = admit_namespace(content, &ns)?;
 
     let name = metadata.name.ok_or_else(|| {
         tracing::warn!("Resource name is missing in metadata");
@@ -425,21 +438,14 @@ pub async fn update_namespaced(
     // the new resourceVersion that will be persisted by this update.
     let expected_resource_version = expected_resource_version(&headers, &content)?;
 
-    // The URL name/namespace are the authoritative storage keys, but the body
-    // content is what gets persisted. Reject a body whose metadata identity
-    // contradicts the URL, otherwise the resource would be stored under the URL
-    // name while its content claims a different name (the writer keys the path on
-    // the URL name in non-K8s mode), desynchronizing storage and the running
-    // cache. Absent body name/namespace defers to the URL value. (K8s API server
-    // rejects the same mismatch.)
+    // A present body name must agree with the URL. The writer preserves the
+    // current identity when an update omits its name.
     if let Some(metadata) = edgion_resources::resource::meta::extract_resource_metadata(&content) {
         if metadata.name.is_some_and(|meta_name| meta_name != name) {
             return Err(StatusCode::BAD_REQUEST);
         }
-        if metadata.namespace.is_some_and(|meta_ns| meta_ns != ns) {
-            return Err(StatusCode::BAD_REQUEST);
-        }
     }
+    let content = admit_namespace(content, &ns)?;
 
     // Parse, validate, and persist using update_one (fails if not exists)
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
@@ -896,3 +902,7 @@ mod update_identity_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/api/namespaced_handlers_test/unknown_field_warning_tests.rs"]
 mod unknown_field_warning_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/api/namespaced_handlers_test/namespace_admission_tests.rs"]
+mod namespace_admission_tests;

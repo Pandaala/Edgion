@@ -1,16 +1,59 @@
 ---
 name: update-namespaced-reject-body-name-mismatch
-description: Use when reviewing controller Admin API update_namespaced / update_cluster body metadata.name-vs-URL-path mismatch findings — both handlers now reject present-and-mismatched names with 400; absent name defers to URL.
+description: Review Admin URL/body identity admission, namespace omission, and immutable identity on updates.
 knowledge_type: regression-guards
 ---
 
-# Controller Admin API update_namespaced / update_cluster Trusts Body metadata.name
+# Admin writes preserve URL and stored resource identity
 
-**Status / verdict**: fixed (controller-02, 2026-05-24)
+## Contract and implementation
 
-When reviewing controller Admin API findings of the form "`update_namespaced` / `update_cluster` persist the body's `metadata.name` without checking the URL path name / a PUT whose body claims a different name desyncs storage path vs. content / non-K8s (FileSystem/Etcd) resource stored at URL name but content says another name / processor restart emits duplicates": **fixed (controller-02, 2026-05-24)**. Both handlers (`edgion-controller/src/api/namespaced_handlers.rs`, `cluster_handlers.rs`) now reject with `400 BAD_REQUEST` when the body `metadata.name` (and, for namespaced, `metadata.namespace`) is **present and != the URL value**, via a single `extract_resource_metadata` guard before the per-kind `match` (the helper `create_namespaced` already uses). Absent body name/namespace defers to the authoritative URL value — so this is **present-and-mismatched only**, not "require body name", to avoid breaking clients that omit it. Aligns with K8s API server semantics. Note: Admin REST API RFC/REST-convention findings remain out of scope (see the admin-endpoint entry above) — this was closed as a storage/cache **correctness** fix, not a REST-status-code conformance change. Re-reports of the trust-body-name form are not accepted; verify the current guard before re-reporting. Unit regressions live in `update_identity_tests` in both handler files.
+Namespaced Admin create/update reject an explicit body namespace that differs
+from the URL. Both namespaced and cluster updates reject an explicit body name
+that differs from the URL; collection creates still require a body name.
+
+Omitted body name on update defers to the URL-addressed current resource. The
+shared `merge_operator_update_values` writer merge preserves current metadata,
+including name, namespace and UID; FS/etcd additionally retain the newly assigned
+resourceVersion through `merge_operator_update_yaml`. Thus absence of a name in
+the parser output alone does not demonstrate an identity defect.
+
+Namespaced create/update use `admit_namespace` before per-kind parsing and
+persistence: absent/null namespace becomes the URL namespace, matching explicit
+namespace is retained, and empty/nonstring/conflicting namespace or absent/non-object
+metadata is rejected. Only namespace changes in the complete raw document;
+source API version and unknown source fields remain available to downstream
+validation and Kubernetes HTTPRoute raw forwarding. Original raw validation and
+update precondition capture run before this admission step.
+
+Before this correction, a namespace-less create succeeded but wrote namespace-less
+content to a namespaced storage location. Strict FS/etcd ingest then rejected its
+identity. Binding namespace at Admin admission fixes newly created records and
+their subsequent update lifecycle. It does not repair already malformed stored
+records: update merges intentionally preserve current metadata identity.
+
+This is an admission boundary, not permission to normalize stored objects.
+Direct FS/etcd ingest continues to reject key/content mismatches; see
+[etcd identity guard](../../controller/regression-guards/etcd-key-content-identity.md).
+No cluster-resource namespace or reference default is introduced.
+
+## Evidence and limits
+
+- `edgion-controller/src/api/namespaced_handlers.rs`: create/update admission.
+- `edgion-controller/src/api/cluster_handlers.rs`: cluster name guard, unchanged.
+- `edgion-controller/src/conf_mgr/conf_center/common.rs`: immutable identity merge.
+- Existing `update_identity_tests` retain explicit identity and stale-version cases.
+- `namespace_admission_tests` covers JSON/YAML create/read/update persistence,
+  omitted/null/matching namespaces, mismatch rejection without writes, preserved
+  UID/name/preconditions, raw-field preservation, and FS init/runtime worker publication.
+- Unit coverage does not exercise a live Kubernetes API server or etcd service.
+
+Re-evaluate when admission, raw forwarding, writer merging, or storage identity
+rules change. Historical matching/mismatch tests did not establish omitted-create
+namespace binding; the earlier blanket fixed verdict had that coverage limit.
 
 ## Resolution references
 
-- `controller-02` — 2026-05-24.
+- `controller-02` — 2026-05-24: explicit update identity mismatch rejection.
 - `v1-01` — 2026-05-29.
+- Resource-reference contract R4c: Admin namespace admission.

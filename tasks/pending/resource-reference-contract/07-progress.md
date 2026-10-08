@@ -80,8 +80,10 @@ or historical conformance. Record commit hashes only after successful commits.
   review passes and clean renewed root gates, then committed locally as
   ca7bdaf79bed40287505287345e5ddb5f443ae84. R4a subsequently passed both
   independent Astra reviews and clean gates, then committed locally as
-  f8bfbf6a52aa509db50366fe3f6521e931d56835. No push occurred. R4b is in
-  plan preparation; remaining R4-R8 and F1/F2 remain pending.
+  f8bfbf6a52aa509db50366fe3f6521e931d56835. R4b then passed both independent
+  actual reviews and clean gates, committing5225c3e15d9e2eec5c6448935d7a226326b9b9e6
+  locally. No push occurred. R4c is in plan preparation; remaining R4-R8 and
+  F1/F2 remain pending.
 - The first checkpoint audit and workspace commit gates passed. The user
   committed the accumulated code snapshot
   as 0f40e2708496e9aacafb0dc2fbd2cdd786ffa9e8 (`tmp commit`) while verification
@@ -90,7 +92,7 @@ or historical conformance. Record commit hashes only after successful commits.
   documentation and execution records. No push occurred. The user's commit
   remains unchanged.
 - The earlier external baseline was 4dbcc5495; current HEAD is the completed
-  R4a commit f8bfbf6a5. Revalidate each batch against its current HEAD.
+  R4b commit5225c3e15. Revalidate each batch against its current HEAD.
   The independently owned, untracked `review-results/` artifacts remain outside
   this task's mutation and staging scope.
 
@@ -1318,3 +1320,39 @@ credential memory/expiry/binding semantics, no new runtime observer or logs/metr
 queue/handler IO/schema/transport changes, and compliant mirrored test ownership.
 Stage exactly10 frozen technical paths plus this ledger; review-results is excluded.
 Original issue and remaining R4-R8/F1/F2 remain open. Local commit, no push.
+
+R4b committed5225c3e15d9e2eec5c6448935d7a226326b9b9e6 locally, parentf8bfbf6a5.
+Exact11 paths contain10 frozen technical files plus this ledger. Root reproduced
+all committed hashes, clean tracked tree and empty index. Only unrelated
+review-results remained; no push. Stage/commit proofs are in r4b-verification-20261008-r1.
+
+R4c PLAN ONLY starts at this HEAD: verify Admin namespaced-write admission adopts
+its authoritative URL namespace when body namespace is omitted, preserves explicit
+mismatch rejection and strict FS/etcd storage-content ingest identity. This does not
+authorize ingest backfill, global key normalization or bare EP semantic collisions;
+those remain separate. A fresh implementer reads original rules/knowledge and must
+return an exact independently reviewed plan before edits. Root07 remains exclusive.
+
+R4c independent Astra plan review passes for three technical paths: namespaced
+Admin admission, its new mirrored tests, and the owning Admin identity guard.
+Bind omitted/null namespace from URL before typed dispatch while preserving raw
+source fields and validation/precondition ordering. Reject malformed metadata and
+explicit namespace contradictions. Existing writer merge retains current identity;
+no claim of repairing malformed stored records or an omitted-name defect follows.
+Compiled Controller baseline is 1757 tests. Implementation proceeds in one lane;
+R4d semantic source-identity investigation is read-only and not an approved plan.
+
+R4c completes scoped verification: API167, FS21 and etcd13 tests pass without
+warnings; compiled identities1757 ->1762 retain every original. All frozen
+pre-existing test files remain byte-identical. First run passed with four new
+unused-return warnings; warning cleanup briefly broke three assertion expressions.
+Both raw rounds remain recorded, and the corrected final run is clean.
+Fresh independent actual review and second Astra deep actual review both return
+SCOPED PASS. Root independently verified all14 gates, raw logs, test binary and
+stable three-file hashes; workspace check49.404s and Clippy37s are warning-free.
+Graded MUST scan: one admission helper, no reference/Grant authority change, no
+handler IO/queue/logging/schema/secret-transport or Gateway hot-path change.
+Stage only the three reviewed technical files plus this ledger; no push. This
+acceptance covers in-process admission/persistence, not live conformance or the
+remaining reference-contract scope. Evidence: r4c-verification-20261008,
+r4c-root-verification-20261008 and r4c-final-20261008 under the ignored task area.
