@@ -12,15 +12,20 @@ the accelerated and scalar-reference paths to agree across all five phases.
 Install `cargo-fuzz`, then run from the repository root:
 
 ```text
-cargo +nightly fuzz run --fuzz-dir edgion-waf/fuzz aho_corasick_equivalence -- -max_len=640 -timeout=10
-cargo +nightly fuzz run --fuzz-dir edgion-waf/fuzz transaction_body -- -max_len=4096 -timeout=10
-cargo +nightly fuzz run --fuzz-dir edgion-waf/fuzz seclang_pipeline edgion-waf/fuzz/seeds/seclang_pipeline -- -max_len=8194 -timeout=10
+cargo +nightly fuzz run --target-dir target/waf-fuzz --fuzz-dir edgion-waf/tests/fuzz aho_corasick_equivalence -- -max_len=640 -timeout=10
+cargo +nightly fuzz run --target-dir target/waf-fuzz --fuzz-dir edgion-waf/tests/fuzz transaction_body -- -max_len=4096 -timeout=10
+cargo +nightly fuzz run --target-dir target/waf-fuzz --fuzz-dir edgion-waf/tests/fuzz seclang_pipeline edgion-waf/tests/fuzz/seeds/seclang_pipeline -- -max_len=8194 -timeout=10
 ```
 
 Preserve crashing or minimized regression inputs in
-`fuzz/corpus/aho_corasick_equivalence/`. Record the command, toolchain, seed,
-duration, executions, and result in the Stage 8 acceptance ledger. The fuzz
+`edgion-waf/tests/fuzz/corpus/aho_corasick_equivalence/`. Record the command, toolchain, seed,
+duration, executions, and result with the change being validated. The fuzz
 dependency must never move into `edgion-waf/Cargo.toml`.
+
+The commands above keep build artifacts under the repository-root
+`target/waf-fuzz/`. This nested Cargo workspace otherwise has its own target
+directory; use the explicit `--target-dir` when running cargo-fuzz. Corpus,
+crash artifacts, and checked-in seeds remain separate from build artifacts.
 
 ## Recorded run
 

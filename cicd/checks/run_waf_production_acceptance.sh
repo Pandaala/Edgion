@@ -10,7 +10,7 @@ report_dir="$(cd "$report_dir" && pwd)"
 rm -f "$report_dir/acceptance.json" "$report_dir/integration-report.log" "$report_dir/coverage.json"
 
 cargo run --locked -q -p edgion-resources --example waf_production_acceptance -- \
-    edgion-waf/acceptance/production-v1.json "$report_dir/coverage.json"
+    edgion-waf/tests/acceptance/production-v1.json "$report_dir/coverage.json"
 
 cargo test --locked -p edgion-gateway --lib waf_store_publishes_atomically_and_pins_in_flight_generations
 

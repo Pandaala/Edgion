@@ -1,9 +1,0 @@
-# Local differential-oracle implementations and generated benchmark evidence.
-# The pinned upstream Rust oracle already tracked under oracles/ remains reviewable;
-# these additional same-host comparison tools never enter the production tree.
-/benchmarks/
-/oracles/ac-comparison/
-/oracles/coraza-ftw/
-/oracles/go-ac-comparison/
-/examples/coraza_pm_fixtures.rs
-/examples/crs_aho_corasick_corpus.rs

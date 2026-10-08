@@ -31,6 +31,11 @@ serde.workspace = true
 serde_yaml.workspace = true
 
 [[bench]]
+name = "aho_corasick_backends"
+path = "tests/benches/aho_corasick_backends.rs"
+harness = false
+
+[[bench]]
 name = "matcher_regression"
 path = "tests/benches/matcher_regression.rs"
 harness = false

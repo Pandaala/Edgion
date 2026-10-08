@@ -55,7 +55,7 @@ cargo bench -p edgion-waf --bench injection_regression
 ```
 
 The first measurement is recorded in
-`acceptance/injection-baseline-2026-09-24.csv` (Apple M4, arm64, macOS 15.5,
+`tests/acceptance/injection-baseline-2026-09-24.csv` (Apple M4, arm64, macOS 15.5,
 optimized build, 1,001 samples per case). It is a regression baseline for this
 machine, not a cross-platform performance guarantee. The 32 KiB and 64 KiB
 dotted-word cases guard the SQL tokenizer's linear prefix scan: their measured

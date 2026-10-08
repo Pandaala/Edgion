@@ -5,5 +5,7 @@ This isolated Cargo project compares normalized ordered block, range, anchored, 
 It is deliberately outside the Edgion workspace and production dependency graph. Run it explicitly:
 
 ```text
-cargo run --manifest-path edgion-waf/oracles/aho-corasick-1.1.5/Cargo.toml --locked
+cargo run --manifest-path edgion-waf/tests/oracles/aho-corasick-1.1.5/Cargo.toml --target-dir target/waf-oracles --locked
 ```
+
+Run from the repository root so build artifacts stay under `target/waf-oracles/`.
