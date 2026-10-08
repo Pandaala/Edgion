@@ -392,12 +392,12 @@ async fn graphql_limiter_json_rejection_overrides_earlier_queued_type_without_ch
     use crate::plugins::http::common::graphql_request;
     use crate::plugins::http::rate_limit_redis::RateLimitRedis;
     use edgion_resources::plugin_configs::RateLimitRedisConfig;
-    let config: RateLimitRedisConfig = serde_json::from_value(serde_json::json!({
-        "redisRef":"default/unused-graphql-header-test",
+    let config: RateLimitRedisConfig = serde_json::from_value(serde_json::json!({"quotas":[{"name":"default",
         "key":[{"type":"header","name":"x-missing-identity"}],
         "policies":[{"rate":100,"interval":"1s"}],
         "onKeyMiss":"Deny"
-    }))
+    ,}],
+        "redisRef":"default/unused-graphql-header-test",}))
     .unwrap();
     for graphql in [false, true] {
         let (mut session, mut client) = plugin_test_session().await;

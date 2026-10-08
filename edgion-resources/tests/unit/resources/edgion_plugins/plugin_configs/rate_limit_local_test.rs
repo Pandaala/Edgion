@@ -195,13 +195,16 @@ fn both_rate_limit_configs_apply_shared_header_name_validation() {
         ..Default::default()
     };
     let redis = super::super::rate_limit_redis::RateLimitRedisConfig {
-        redis_ref: "default/shared-redis".to_string(),
-        policies: vec![super::super::rate_limit_redis::RateLimitPolicy {
-            rate: 100,
-            interval: "1s".to_string(),
-            algorithm: super::super::rate_limit_redis::RateLimitAlgorithm::default(),
-            interval_duration: None,
+        quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![super::super::rate_limit_redis::RateLimitPolicy {
+                rate: 100,
+                interval: "1s".to_string(),
+                algorithm: super::super::rate_limit_redis::RateLimitAlgorithm::default(),
+                interval_duration: None,
+            }],
+            ..Default::default()
         }],
+        redis_ref: "default/shared-redis".to_string(),
         header_names,
         ..Default::default()
     };

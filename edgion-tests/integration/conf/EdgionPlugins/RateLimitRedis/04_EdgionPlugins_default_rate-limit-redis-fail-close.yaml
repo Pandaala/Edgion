@@ -9,16 +9,18 @@ spec:
       type: RateLimitRedis
       config:
         redisRef: "default/redis-not-found"
-        policies:
-          - rate: 3
-            interval: "10s"
-            algorithm: SlidingWindow
-        key:
-          - type: header
-            name: "X-Rate-Key"
-        onKeyMiss: Deny
         onRedisFailure: Deny
         rejectStatus: 429
         rejectMessage: "Redis unavailable (deny)"
         showLimitHeaders: true
         keyPrefix: "edgion:it:rlr:fail-close:"
+        quotas:
+          - name: default
+            policies:
+              - rate: 3
+                interval: "10s"
+                algorithm: SlidingWindow
+            key:
+              - type: header
+                name: "X-Rate-Key"
+            onKeyMiss: Deny

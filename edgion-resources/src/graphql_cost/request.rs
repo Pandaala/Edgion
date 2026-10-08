@@ -1,5 +1,5 @@
 use super::schema::{DefaultValue, TypeRef};
-use super::{CompiledGraphqlCost, GraphqlError, MAX_RECURSION};
+use super::{CompiledGraphqlCost, GraphqlError, GraphqlQuotaCosts, MAX_RECURSION, MAX_ROOT_QUOTAS};
 use crate::graphql_request::{directives, name, GraphqlOperationType, ParsedGraphqlRequest, Work, MAX_TOKENS};
 use apollo_parser::cst;
 use serde_json::{Map, Value};
@@ -13,6 +13,9 @@ impl CompiledGraphqlCost {
         self.estimate(ParsedGraphqlRequest::parse_get(query, limit)?)
     }
     pub fn estimate(&self, parsed: ParsedGraphqlRequest) -> Result<u32, GraphqlError> {
+        self.estimate_quotas(parsed).map(|costs| costs.total)
+    }
+    pub fn estimate_quotas(&self, parsed: ParsedGraphqlRequest) -> Result<GraphqlQuotaCosts, GraphqlError> {
         let root = match parsed.operation_type() {
             GraphqlOperationType::Query => &self.schema.query,
             GraphqlOperationType::Mutation => self.schema.mutation.as_ref().ok_or(GraphqlError::Invalid)?,
@@ -27,6 +30,7 @@ impl CompiledGraphqlCost {
             vars: &vars,
             values: parsed.value.get("variables").and_then(Value::as_object),
             work,
+            root_costs: [0; MAX_ROOT_QUOTAS],
         };
         evaluation.validate_set(&operation.selection_set().ok_or(GraphqlError::Invalid)?, root, 0)?;
         for f in fragments.values() {
@@ -40,7 +44,10 @@ impl CompiledGraphqlCost {
             1,
             0,
         )?;
-        evaluation.add(1, cost)
+        Ok(GraphqlQuotaCosts {
+            total: evaluation.add(1, cost)?,
+            roots: evaluation.root_costs,
+        })
     }
 }
 struct Evaluation<'a> {
@@ -49,6 +56,7 @@ struct Evaluation<'a> {
     vars: &'a HashMap<String, cst::VariableDefinition>,
     values: Option<&'a Map<String, Value>>,
     work: Work,
+    root_costs: [u32; MAX_ROOT_QUOTAS],
 }
 impl Evaluation<'_> {
     // Validate static selection shapes without following or expanding spreads.
@@ -301,7 +309,16 @@ impl Evaluation<'_> {
                 cost = Some(cost.unwrap_or(0u32).max(candidate));
             }
         }
-        cost.map(Ok).unwrap_or_else(|| self.add(1, children))
+        let charge = cost.map(Ok).unwrap_or_else(|| self.add(1, children))?;
+        if depth == 1 {
+            for (index, (root_type, field_name)) in self.model.root_fields.iter().enumerate() {
+                self.work.step()?;
+                if root_type == object && field_name == &n {
+                    self.root_costs[index] = self.add(self.root_costs[index], charge)?;
+                }
+            }
+        }
+        Ok(charge)
     }
     fn multiplier(&mut self, value: &cst::Value) -> Result<Option<u32>, GraphqlError> {
         match value {

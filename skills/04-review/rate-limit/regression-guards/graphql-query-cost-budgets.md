@@ -11,7 +11,7 @@ knowledge_type: regression-guards
 GraphqlRateLimitConfig owns a static SDL cost model and explicit Redis budgets.
 The Resources pure compiler serves Controller validation and Gateway compilation;
 the Gateway does not trust Controller acceptance. Costs flow through
-RateLimitRedis::run_request_with_cost and its canonical RedisRateLimiter/key
+RateLimitRedis::run_request_with_costs and its canonical RedisRateLimiter/key
 composition, entry scope, timeout, headers and failure policy. GraphQL defaults
 Redis failure to Deny without changing ordinary RateLimitRedis's accepted Allow.
 
@@ -134,7 +134,8 @@ query ambiguity. This design evidence does not claim implementation test success
 
 GraphqlRateLimit logs completed cost through its existing PluginLog and optionally
 queues X-Graphql-Query-Cost with showQueryCost. That is the same scalar passed into
-the shared weighted limiter; capacity/dependency rejection may occur without a debit.
+the shared weighted limiter's total quota; root quotas receive bounded computed
+charges. Capacity/dependency rejection may occur without a debit.
 Never treat this header/log as a receipt or emit a partial/saturated estimate after
 failed evaluation. Guard-only measurement does not relax Redis quota enforcement.
 
@@ -148,3 +149,20 @@ Metadata has no retained model/runtime state, cost effect or outbound URL fetch.
 Other directive locations, unknown directives, definitions and extensions remain
 rejected. Review additions against the metadata location/type/repetition tests
 and unchanged cost comparisons, preserving the parser/token/model budgets.
+
+## Independent root-budget boundary
+
+Optional rootQuotas bind actual SDL query/mutation root coordinates at cold
+construction and use canonical named Redis quotas. The existing traversal returns
+one Copy total plus15 fixed scalar slots. Record only complete depth1 field charges
+once child maxima finish; fragments preserve depth and deeper occurrences of the
+same type are excluded. Same-coordinate slots may charge different identities.
+Repeated aliases/spreads accumulate conservatively; base operation cost belongs
+only to total. Shared query/mutation root objects intentionally share coordinate
+budgets. Preserve one monotonic Work budget, existing hard caps and permit release
+before Redis. No nested/abstract quota generalization or new parsing cache follows.
+
+Total and active root capacity checks precede all Redis work. Absent roots skip
+identity resolution and debit. Total is checked first, followed by roots in order;
+later denial retains earlier total debit. Numeric cost visibility is not a debit
+receipt. See [named quota ownership](redis-named-quotas.md).

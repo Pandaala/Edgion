@@ -108,7 +108,9 @@ pub use form_json_transform::{FormJsonDirection, FormJsonTransformConfig};
 pub use forward_auth::{ForwardAuthConfig, ForwardAuthDecision};
 pub use geo_rule::{GeoDimFacts, GeoRule, GeoRuleContext, GeoRuleGroup, GeoRuleKey, GeoRuleSource};
 pub use geoip_location::{GeoDecision, GeoIpLocationConfig};
-pub use graphql_rate_limit::{graphql_body_validation_errors, GraphqlCostRule, GraphqlRateLimitConfig};
+pub use graphql_rate_limit::{
+    graphql_body_validation_errors, GraphqlCostRule, GraphqlRateLimitConfig, GraphqlRootQuota,
+};
 pub use guardrail::{
     GuardrailConfig, GUARDRAIL_MAX_CONCURRENT, GUARDRAIL_MAX_OVERLAP_BYTES, GUARDRAIL_MAX_REPLACEMENT_BYTES,
     GUARDRAIL_MAX_REQUEST_BYTES, GUARDRAIL_MAX_WINDOW_BYTES,
@@ -138,7 +140,7 @@ pub use proxy_rewrite::{
     MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
 };
 pub use rate_limit_local::{LimitHeaderNames, OnKeyMiss, OnLimitExceeded, RateLimitLocalConfig, RateLimitLocalScope};
-pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitRedisConfig};
+pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitQuota, RateLimitRedisConfig};
 pub use real_ip::RealIpConfig;
 pub use region_route::{
     HashAlgorithm, HashCalcConfig, RegionDef, RegionRouteConfig, RouteByKeyConfMatchMeta, RouteRule,

@@ -24,6 +24,12 @@ fn valid_v2() -> Box<dyn TestSuite> {
         expected_remaining: 984,
     })
 }
+fn valid_roots() -> Box<dyn TestSuite> {
+    Box::new(GraphqlRateLimitDynamicSuite {
+        valid: true,
+        expected_remaining: 15,
+    })
+}
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "invalid-initial",
@@ -57,6 +63,18 @@ static PHASES: &[PhaseSuite] = &[
         name: "metadata-recovered",
         factory: valid_v2,
     },
+    PhaseSuite {
+        name: "root-quota-valid",
+        factory: valid_roots,
+    },
+    PhaseSuite {
+        name: "root-quota-invalid",
+        factory: invalid,
+    },
+    PhaseSuite {
+        name: "root-quota-recovered",
+        factory: valid_roots,
+    },
 ];
 fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
     Box::pin(async move {
@@ -79,6 +97,15 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
             .await?;
         ctx.apply_dir("updates/to_valid_v2").await?;
         ctx.wait_phase(SCENARIO, "metadata-recovered", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_valid_roots").await?;
+        ctx.wait_phase(SCENARIO, "root-quota-valid", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_invalid_roots").await?;
+        ctx.wait_phase(SCENARIO, "root-quota-invalid", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_valid_roots").await?;
+        ctx.wait_phase(SCENARIO, "root-quota-recovered", Duration::from_secs(15))
             .await?;
         Ok(())
     })

@@ -102,9 +102,9 @@ async fn rate_limit_local_outcomes_are_stable_across_policy_construction_order()
         }},
         {"type": "RateLimitRedis", "conditions": {"run": {"allOf": [
             {"type": "rateLimitExceeded", "pluginAlias": "local"}
-        ]}}, "config": {
-            "redisRef": "apps/intentionally-absent", "key": [],
-            "policies": [{"rate": 1, "interval": "1h", "algorithm": "TokenBucket"}],
+        ]}}, "config": {"quotas":[{"name":"default", "key": [],
+            "policies": [{"rate": 1, "interval": "1h", "algorithm": "TokenBucket"}],}],
+            "redisRef": "apps/intentionally-absent",
             "onRedisFailure": "Deny", "showLimitHeaders": false
         }}
     ]}));
@@ -163,9 +163,9 @@ async fn rate_limit_local_dependency_checks_original_aliases_after_policy_maskin
         );
         entries.push(json!({"type": "RateLimitRedis", "conditions": {"run": {"allOf": [
             {"type": "rateLimitExceeded", "pluginAlias": "local"}
-        ]}}, "config": {
-            "redisRef": "apps/intentionally-absent", "key": [],
-            "policies": [{"rate": 1, "interval": "1h", "algorithm": "TokenBucket"}],
+        ]}}, "config": {"quotas":[{"name":"default", "key": [],
+            "policies": [{"rate": 1, "interval": "1h", "algorithm": "TokenBucket"}],}],
+            "redisRef": "apps/intentionally-absent",
             "onRedisFailure": "Deny", "showLimitHeaders": false
         }}));
         let mut generation = PluginGeneration::new(resource(json!({"requestPlugins": entries})));

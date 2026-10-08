@@ -545,6 +545,7 @@ impl CompiledGraphqlCost {
             rules: compiled,
             max_cost,
             max_depth,
+            root_fields: Vec::new(),
         })
     }
 }

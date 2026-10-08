@@ -18,6 +18,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Named Redis quotas and bounded single-response orchestration](regression-guards/redis-named-quotas.md)
+
 - [GraphQL query-cost budgets and bounded parsing](regression-guards/graphql-query-cost-budgets.md)
 - [Independent GraphQL selected-operation shape guard](regression-guards/graphql-guard-selected-shape.md)
 - [Static GraphQL whole-document safelist](regression-guards/graphql-static-safelist.md)

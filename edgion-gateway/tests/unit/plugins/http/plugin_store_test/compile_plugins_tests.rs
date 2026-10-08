@@ -1810,13 +1810,16 @@ fn validate_plugins_matches_compile_plugins_error_set() {
         use edgion_resources::resources::edgion_plugins::{RateLimitAlgorithm, RateLimitPolicy};
 
         EdgionPlugin::RateLimitRedis(RateLimitRedisConfig {
-            redis_ref: "default/shared-redis".to_string(),
-            policies: vec![RateLimitPolicy {
-                rate: 100,
-                interval: "1s".to_string(),
-                algorithm: RateLimitAlgorithm::default(),
-                interval_duration: None,
+            quotas: vec![edgion_resources::resources::edgion_plugins::RateLimitQuota {
+                policies: vec![RateLimitPolicy {
+                    rate: 100,
+                    interval: "1s".to_string(),
+                    algorithm: RateLimitAlgorithm::default(),
+                    interval_duration: None,
+                }],
+                ..Default::default()
             }],
+            redis_ref: "default/shared-redis".to_string(),
             header_names: Some(LimitHeaderNames {
                 remaining: Some("transfer-encoding".to_string()),
                 ..Default::default()
@@ -2275,9 +2278,9 @@ fn request_local_reply_status_validation_matches_controller_and_gateway() {
             ("RateLimitLocal", serde_json::json!({"rate": 1, "rejectStatus": status})),
             (
                 "RateLimitRedis",
-                serde_json::json!({
+                serde_json::json!({"quotas":[{"name":"default",
+                    "policies": [{"rate": 1, "interval": "1s"}],}],
                     "redisRef": "default/redis",
-                    "policies": [{"rate": 1, "interval": "1s"}],
                     "rejectStatus": status
                 }),
             ),
@@ -2346,7 +2349,7 @@ fn responses_guard_capability_rejection_has_shared_validation_and_policy_parity(
         assert!(compiled
             .preparse_errors
             .iter()
-            .any(|error| error.contains("native Responses does not support")));
+            .any(|error| error.contains("native Responses/Messages does not support")));
         assert!(!compiled.is_activatable);
         let bypassed = compile_with_policy(&resource, "AiGuard", Some(PluginPolicyAction::Bypass));
         assert!(bypassed.preparse_errors.is_empty());

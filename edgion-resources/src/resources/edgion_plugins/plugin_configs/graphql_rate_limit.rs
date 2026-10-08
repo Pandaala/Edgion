@@ -10,7 +10,7 @@ use crate::resources::edgion_plugins::{BodyRequirement, PluginValidation};
 
 use super::json_schema_validation::bounded_structured_body_validation_errors;
 use super::rate_limit_local::OnKeyMiss;
-use super::rate_limit_redis::{OnRedisFailure, RateLimitPolicy, RateLimitRedisConfig};
+use super::rate_limit_redis::{OnRedisFailure, RateLimitPolicy, RateLimitQuota, RateLimitRedisConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -22,6 +22,18 @@ pub struct GraphqlCostRule {
     pub multipliers: Vec<String>,
     #[serde(default = "default_multiplier")]
     pub default_multiplier: u32,
+}
+
+/// An independent budget for a complete query/mutation root-field subtree.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GraphqlRootQuota {
+    pub name: String,
+    pub field: String,
+    /// None inherits total identity; an explicit empty list is a global bucket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<Vec<KeyGet>>,
+    pub policies: Vec<RateLimitPolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -40,6 +52,11 @@ pub struct GraphqlRateLimitConfig {
     #[serde(default = "default_keys")]
     pub key: Vec<KeyGet>,
     pub policies: Vec<RateLimitPolicy>,
+    #[serde(default)]
+    #[schemars(length(max = 15))]
+    pub root_quotas: Vec<GraphqlRootQuota>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_quota: Option<String>,
     #[serde(default = "default_redis_failure")]
     pub on_redis_failure: OnRedisFailure,
     #[serde(default = "default_request_timeout")]
@@ -70,24 +87,43 @@ fn default_request_timeout() -> String {
 
 impl GraphqlRateLimitConfig {
     pub fn compile(&self) -> Result<CompiledGraphqlCost, String> {
+        if self.root_quotas.len() > 15 {
+            return Err("Too many GraphQL root quotas: max 15".into());
+        }
+        if self.root_quotas.iter().any(|quota| quota.name == "total") {
+            return Err("Root quota name total is reserved".into());
+        }
         self.rate_limit_config().validate()?;
-        CompiledGraphqlCost::compile(&self.schema, &self.cost_rules, self.max_cost, self.max_depth)
+        CompiledGraphqlCost::compile(&self.schema, &self.cost_rules, self.max_cost, self.max_depth)?
+            .with_root_fields(self.root_quotas.iter().map(|quota| quota.field.as_str()))
     }
 
     pub fn rate_limit_config(&self) -> RateLimitRedisConfig {
+        let mut quotas = Vec::with_capacity(1 + self.root_quotas.len());
+        quotas.push(RateLimitQuota {
+            name: "total".into(),
+            key: self.key.clone(),
+            policies: self.policies.clone(),
+            on_key_miss: OnKeyMiss::Deny,
+            ..Default::default()
+        });
+        quotas.extend(self.root_quotas.iter().map(|quota| RateLimitQuota {
+            name: quota.name.clone(),
+            key: quota.key.as_ref().unwrap_or(&self.key).clone(),
+            policies: quota.policies.clone(),
+            on_key_miss: OnKeyMiss::Deny,
+            ..Default::default()
+        }));
         RateLimitRedisConfig {
             redis_ref: self.redis_ref.clone(),
-            policies: self.policies.clone(),
-            key: self.key.clone(),
-            on_key_miss: OnKeyMiss::Deny,
-            default_key: None,
+            quotas,
+            response_quota: Some(self.response_quota.clone().unwrap_or_else(|| "total".into())),
             reject_status: 429,
             reject_message: None,
             show_limit_headers: true,
             header_names: None,
             key_prefix: "edgion:graphql:".to_string(),
             on_redis_failure: self.on_redis_failure.clone(),
-            cost: 1,
             max_key_len: 4096,
             request_timeout: Some(self.request_timeout.clone()),
             request_timeout_duration: None,

@@ -167,3 +167,35 @@ async fn completed_estimate_is_visible_before_capacity_or_dependency_outcome() {
         }
     }
 }
+
+#[tokio::test]
+async fn root_capacity_is_prechecked_before_total_debit_and_absent_root_is_skipped() {
+    let _guard = EVALUATION_TEST_LOCK.lock().await;
+    let mut config = config();
+    config.root_quotas = serde_json::from_value(json!([{
+        "name":"users","field":"Query.users","policies":[{"rate":5,"interval":"1h"}]
+    }]))
+    .unwrap();
+    let filter = GraphqlRateLimit::create(&config, "unit/root-capacity", None).unwrap();
+    let bytes = Bytes::from_static(br#"{"query":"{users(first:10){name}}"}"#);
+    let mut mock = session("POST", bytes.len() as u64, true, None);
+    mock.expect_read_request_body().returning(move |_| Ok(bytes.clone()));
+    let mut log = PluginLog::new("GraphqlRateLimit");
+    assert_eq!(status(filter.run_request(&mut mock, &mut log).await), 429);
+    assert!(log.render_for_test().contains("deny policy capacity"));
+    assert!(!log.render_for_test().contains("redis"));
+    config
+        .schema
+        .push_str(" type Mutation { users(first:Int=10):[User!]! }");
+    config.root_quotas[0].field = "Mutation.users".into();
+    let filter = GraphqlRateLimit::create(&config, "unit/root-absent", None).unwrap();
+    let bytes = Bytes::from_static(br#"{"query":"{users(first:10){name}}"}"#);
+    let mut mock = session("POST", bytes.len() as u64, true, None);
+    mock.expect_read_request_body().returning(move |_| Ok(bytes.clone()));
+    let mut log = PluginLog::new("GraphqlRateLimit");
+    assert_eq!(
+        filter.run_request(&mut mock, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    assert!(!log.render_for_test().contains("deny policy capacity"));
+}

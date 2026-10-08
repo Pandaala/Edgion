@@ -140,6 +140,60 @@ async fn accepted(ctx: &TestContext, resource: &str, expected: &str) -> Result<(
     Ok(())
 }
 
+async fn root_post(ctx: &TestContext, body: &str, identity: &str, root: &str) -> Result<Reply, String> {
+    let marker = format!("graphql-root-{}", uuid::Uuid::new_v4());
+    let response = ctx
+        .http_client
+        .post(format!("{}/echo", ctx.http_url()))
+        .header("host", "graphql-root-quotas.example.com")
+        .header("content-type", "application/json")
+        .header("X-Graphql-Key", identity)
+        .header("X-Root-Key", root)
+        .header("access_log", "test_store")
+        .header("traceparent", crate::access_log_client::traceparent_for_marker(&marker))
+        .body(body.to_owned())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = response.status().as_u16();
+    let remaining = response
+        .headers()
+        .get("x-ratelimit-remaining")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok());
+    let cost = response
+        .headers()
+        .get(log_tokens::COST_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok());
+    let retry_after = response
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    if status == 429 {
+        let log = ctx
+            .access_log_client()
+            .get_access_log_with_retry(&marker, 15, 200)
+            .await
+            .map_err(|e| e.to_string())?;
+        if log.upstream_count() != 0 {
+            return Err("Root quota rejection attempted upstream".into());
+        }
+        if body != r#"{"errors":[{"message":"GraphQL request rejected","extensions":{"code":"RATE_LIMITED"}}]}"# {
+            return Err("Unexpected GraphQL quota body".into());
+        }
+    }
+    Ok(Reply {
+        status,
+        remaining,
+        retry_after,
+        body,
+        cost,
+    })
+}
+
 pub struct GraphqlRateLimitTestSuite;
 
 impl TestSuite for GraphqlRateLimitTestSuite {
@@ -690,6 +744,66 @@ impl TestSuite for GraphqlRateLimitTestSuite {
                     )
                     .await;
                     result(start, reply.and_then(|reply| require(&reply, 429, None)))
+                })
+            },
+        ));
+        cases.push(TestCase::new(
+            "graphql_independent_root_quotas",
+            "Root subtrees, aliases, custom roots, separate keys and retained total debit",
+            |ctx| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let outcome: Result<(), String> = async {
+                        let identity = uuid::Uuid::new_v4().to_string();
+                        let root = uuid::Uuid::new_v4().to_string();
+                        for (body, status, remaining, cost) in [
+                            (SIMPLE, 200, 88, 12),
+                            (r#"{"query":"{alias:users(first:10){name}}"}"#, 200, 76, 12),
+                            (
+                                r#"{"query":"{...F} fragment F on Read {users(first:10){name}}"}"#,
+                                429,
+                                0,
+                                12,
+                            ),
+                            (r#"{"query":"{ok}"}"#, 200, 62, 2),
+                            (r#"{"query":"mutation {users(first:10){name}}"}"#, 200, 50, 12),
+                        ] {
+                            let reply = root_post(&ctx, body, &identity, &root).await?;
+                            require(&reply, status, Some(remaining))?;
+                            if reply.cost != Some(cost) {
+                                return Err("Incorrect root/total cost".into());
+                            }
+                        }
+                        let other = uuid::Uuid::new_v4().to_string();
+                        require(&root_post(&ctx, SIMPLE, &other, &root).await?, 429, Some(0))?;
+                        require(
+                            &root_post(&ctx, r#"{"query":"{ok}"}"#, &other, &root).await?,
+                            200,
+                            Some(86),
+                        )?;
+                        let fresh = uuid::Uuid::new_v4().to_string();
+                        let root = uuid::Uuid::new_v4().to_string();
+                        let duplicate = r#"{"query":"{a:users(first:1){name} b:users(first:1){name}}"}"#;
+                        let reply = root_post(&ctx, duplicate, &fresh, &root).await?;
+                        require(&reply, 200, Some(95))?;
+                        if reply.cost != Some(5) {
+                            return Err("Aliases were not charged twice".into());
+                        }
+                        let fresh = uuid::Uuid::new_v4().to_string();
+                        let reply = root_post(&ctx, r#"{"query":"{users(first:30){name}}"}"#, &fresh, &root).await?;
+                        require(&reply, 429, None)?;
+                        if reply.remaining.is_some() || reply.cost != Some(32) {
+                            return Err("Capacity precheck fabricated quota headers".into());
+                        }
+                        require(
+                            &root_post(&ctx, r#"{"query":"{ok}"}"#, &fresh, &root).await?,
+                            200,
+                            Some(98),
+                        )?;
+                        Ok(())
+                    }
+                    .await;
+                    result(start, outcome)
                 })
             },
         ));

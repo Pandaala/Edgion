@@ -19,7 +19,7 @@ pub struct GraphqlRateLimit {
     compiled: CompiledGraphqlCost,
     limiter: RateLimitRedis,
     envelope_limit: usize,
-    policy_capacity: u64,
+    policy_capacities: Vec<u64>,
     show_query_cost: bool,
 }
 
@@ -32,13 +32,17 @@ impl GraphqlRateLimit {
         let envelope_limit = graphql_request::envelope_limit(body)?;
         let compiled = catch_redacted_panic(|| config.compile()).ok()?.ok()?;
         let rate_config = config.rate_limit_config();
-        let policy_capacity = rate_config.policies.iter().map(|policy| policy.rate).min()?;
+        let policy_capacities = rate_config
+            .quotas
+            .iter()
+            .map(|quota| quota.policies.iter().map(|policy| policy.rate).min())
+            .collect::<Option<Vec<_>>>()?;
         Some(Box::new(Self {
             compiled,
             limiter: RateLimitRedis::new(&rate_config, entry_scope)
                 .with_json_rejection_body(graphql_request::error_body(429)),
             envelope_limit,
-            policy_capacity,
+            policy_capacities,
             show_query_cost: config.show_query_cost,
         }))
     }
@@ -55,20 +59,28 @@ impl RequestFilter for GraphqlRateLimit {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        let cost = match graphql_request::evaluate(session, log, self.envelope_limit, |parsed| {
-            self.compiled.estimate(parsed)
+        let report = match graphql_request::evaluate(session, log, self.envelope_limit, |parsed| {
+            self.compiled.estimate_quotas(parsed)
         })
         .await
         {
-            Ok(cost) => cost,
+            Ok(report) => report,
             Err(reply) => return reply,
         };
-        graphql_request::record_cost(session, log, cost, self.show_query_cost);
-        if u64::from(cost) > self.policy_capacity {
+        graphql_request::record_cost(session, log, report.total, self.show_query_cost);
+        let mut costs = [0u32; 16];
+        costs[0] = report.total;
+        costs[1..].copy_from_slice(&report.roots);
+        let costs = &costs[..self.policy_capacities.len()];
+        if costs
+            .iter()
+            .zip(&self.policy_capacities)
+            .any(|(&cost, &capacity)| u64::from(cost) > capacity)
+        {
             log.push("deny policy capacity");
             return graphql_request::reject(session, 429);
         }
-        self.limiter.run_request_with_cost(session, log, cost).await
+        self.limiter.run_request_with_costs(session, log, costs).await
     }
 }
 

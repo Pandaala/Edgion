@@ -137,3 +137,30 @@ route/backend filter、DSL、ExtProc 不得再修改 query、body、方法或表
 元数据不改变权重、权限或估算成本，弃用字段仍正常计费。自定义指令、指令定义、
 SDL 扩展、联邦注解、`@cost`、`@listSize`、`@oneOf` 仍不支持；元数据字符串
 仍受现有 token、源文本和模型预算约束。
+
+## 独立根字段预算
+
+在必需的总预算之外，可增加最多 15 个命名根字段预算；总计最多 16 个配额、
+64 个策略。在插件 config 内添加：
+
+```yaml
+rootQuotas:
+  - name: users
+    field: Query.users
+    key: [{type: header, name: X-Tenant}]
+    policies: [{rate: 2000, interval: 1m}]
+responseQuota: total
+```
+
+field 使用 SDL 实际的 query/mutation 根类型名。未设置 key 时继承总预算身份，
+显式 `key: []` 使用全局桶。没有出现的根字段不扣减。根预算计算完整选中子树，
+包含字段权重和子字段乘数；别名及重复片段按现有保守语义累加。操作自身的
+一个基础成本单位只计入总预算。同一根字段可以使用不同名称和身份建立多个
+预算；query 与 mutation 共用一个根对象时，相同坐标的预算也跨操作类型共享。
+
+先检查总预算，再按配置顺序检查有效根预算，共用已有 requestTimeout
+（默认 200ms）。容量和身份错误在任何扣减前检查；后续根预算拒绝保留已经
+完成的总预算扣减，不提供跨配额事务或退款。成功响应头默认来自 total，
+responseQuota 可选择根预算；选中根字段缺席时不生成配额头。拒绝头来自实际
+拒绝配额。查询成本仍是估算值，不代表扣减收据。已有 Redis 故障默认值和
+固定 GraphQL 错误格式保持原合约。

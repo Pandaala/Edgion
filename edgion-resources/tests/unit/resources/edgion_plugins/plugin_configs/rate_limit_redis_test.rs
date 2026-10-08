@@ -3,13 +3,16 @@ use crate::redis_rate_limit::{MAX_RATE_LIMIT_UNITS, MAX_RATE_LIMIT_WINDOW_MS};
 
 fn create_valid_config() -> RateLimitRedisConfig {
     RateLimitRedisConfig {
-        redis_ref: "default/shared-redis".to_string(),
-        policies: vec![RateLimitPolicy {
-            rate: 100,
-            interval: "1s".to_string(),
-            algorithm: RateLimitAlgorithm::default(),
-            interval_duration: None,
+        quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![RateLimitPolicy {
+                rate: 100,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::default(),
+                interval_duration: None,
+            }],
+            ..Default::default()
         }],
+        redis_ref: "default/shared-redis".to_string(),
         ..Default::default()
     }
 }
@@ -20,7 +23,7 @@ fn test_default_config() {
     assert_eq!(config.reject_status, 429);
     assert!(config.show_limit_headers);
     assert_eq!(config.key_prefix, "edgion:rl:");
-    assert_eq!(config.cost, 1);
+    assert_eq!(config.quotas[0].cost, 1);
     assert_eq!(config.max_key_len, 4096);
     assert_eq!(config.on_redis_failure, OnRedisFailure::Allow);
 }
@@ -60,8 +63,11 @@ fn test_invalid_redis_ref_special_chars() {
 #[test]
 fn test_empty_policies() {
     let mut config = RateLimitRedisConfig {
+        quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![],
+            ..Default::default()
+        }],
         redis_ref: "default/redis".to_string(),
-        policies: vec![],
         ..Default::default()
     };
     let err = config.validate().unwrap_err();
@@ -71,15 +77,18 @@ fn test_empty_policies() {
 #[test]
 fn test_too_many_policies() {
     let mut config = RateLimitRedisConfig {
+        quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+            policies: (0..11)
+                .map(|_| RateLimitPolicy {
+                    rate: 100,
+                    interval: "1s".to_string(),
+                    algorithm: RateLimitAlgorithm::default(),
+                    interval_duration: None,
+                })
+                .collect(),
+            ..Default::default()
+        }],
         redis_ref: "default/redis".to_string(),
-        policies: (0..11)
-            .map(|_| RateLimitPolicy {
-                rate: 100,
-                interval: "1s".to_string(),
-                algorithm: RateLimitAlgorithm::default(),
-                interval_duration: None,
-            })
-            .collect(),
         ..Default::default()
     };
     let err = config.validate().unwrap_err();
@@ -89,13 +98,16 @@ fn test_too_many_policies() {
 #[test]
 fn test_zero_rate_policy() {
     let mut config = RateLimitRedisConfig {
-        redis_ref: "default/redis".to_string(),
-        policies: vec![RateLimitPolicy {
-            rate: 0,
-            interval: "1s".to_string(),
-            algorithm: RateLimitAlgorithm::default(),
-            interval_duration: None,
+        quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![RateLimitPolicy {
+                rate: 0,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::default(),
+                interval_duration: None,
+            }],
+            ..Default::default()
         }],
+        redis_ref: "default/redis".to_string(),
         ..Default::default()
     };
     let err = config.validate().unwrap_err();
@@ -105,13 +117,16 @@ fn test_zero_rate_policy() {
 #[test]
 fn test_interval_too_small() {
     let mut config = RateLimitRedisConfig {
-        redis_ref: "default/redis".to_string(),
-        policies: vec![RateLimitPolicy {
-            rate: 100,
-            interval: "50ms".to_string(),
-            algorithm: RateLimitAlgorithm::default(),
-            interval_duration: None,
+        quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![RateLimitPolicy {
+                rate: 100,
+                interval: "50ms".to_string(),
+                algorithm: RateLimitAlgorithm::default(),
+                interval_duration: None,
+            }],
+            ..Default::default()
         }],
+        redis_ref: "default/redis".to_string(),
         ..Default::default()
     };
     let err = config.validate().unwrap_err();
@@ -136,7 +151,7 @@ fn test_invalid_key_prefix_empty() {
 #[test]
 fn test_zero_cost() {
     let mut config = create_valid_config();
-    config.cost = 0;
+    config.quotas[0].cost = 0;
     let err = config.validate().unwrap_err();
     assert!(err.contains("cost"));
 }
@@ -144,32 +159,32 @@ fn test_zero_cost() {
 #[test]
 fn numeric_domain_accepts_maxima_and_rejects_first_invalid_values() {
     let mut config = create_valid_config();
-    config.policies[0].rate = u64::from(MAX_RATE_LIMIT_UNITS);
+    config.quotas[0].policies[0].rate = u64::from(MAX_RATE_LIMIT_UNITS);
     assert_eq!(MAX_RATE_LIMIT_WINDOW_MS, 2_147_483_647);
-    config.policies[0].interval = "596h31m23s647ms".to_string();
-    config.cost = MAX_RATE_LIMIT_UNITS;
+    config.quotas[0].policies[0].interval = "596h31m23s647ms".to_string();
+    config.quotas[0].cost = MAX_RATE_LIMIT_UNITS;
     assert!(config.validate().is_ok());
 
-    config.policies[0].rate += 1;
+    config.quotas[0].policies[0].rate += 1;
     assert_eq!(
         config.validate().unwrap_err(),
         "policies[0].rate must be between 1 and 1000000"
     );
-    config.policies[0].rate = 1;
-    config.policies[0].interval = "596h31m23s648ms".to_string();
+    config.quotas[0].policies[0].rate = 1;
+    config.quotas[0].policies[0].interval = "596h31m23s648ms".to_string();
     assert_eq!(
         config.validate().unwrap_err(),
         "policies[0].interval must be between 100ms and 2147483647ms"
     );
-    config.policies[0].interval = "1s".to_string();
-    config.cost = MAX_RATE_LIMIT_UNITS + 1;
+    config.quotas[0].policies[0].interval = "1s".to_string();
+    config.quotas[0].cost = MAX_RATE_LIMIT_UNITS + 1;
     assert_eq!(config.validate().unwrap_err(), "cost must be between 1 and 1000000");
 }
 
 #[test]
 fn numeric_schema_maxima_match_the_canonical_constant() {
     let policy_schema = serde_json::to_value(schemars::schema_for!(RateLimitPolicy)).unwrap();
-    let config_schema = serde_json::to_value(schemars::schema_for!(RateLimitRedisConfig)).unwrap();
+    let config_schema = serde_json::to_value(schemars::schema_for!(RateLimitQuota)).unwrap();
     assert_eq!(
         policy_schema
             .pointer("/properties/rate/maximum")
@@ -202,26 +217,35 @@ fn test_max_key_len_too_large() {
 #[test]
 fn test_multi_policy_config() {
     let mut config = RateLimitRedisConfig {
+        quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![
+                RateLimitPolicy {
+                    rate: 50,
+                    interval: "1s".to_string(),
+                    algorithm: RateLimitAlgorithm::SlidingWindow,
+                    interval_duration: None,
+                },
+                RateLimitPolicy {
+                    rate: 5000,
+                    interval: "1h".to_string(),
+                    algorithm: RateLimitAlgorithm::FixedWindow,
+                    interval_duration: None,
+                },
+            ],
+            ..Default::default()
+        }],
         redis_ref: "prod/redis-cluster".to_string(),
-        policies: vec![
-            RateLimitPolicy {
-                rate: 50,
-                interval: "1s".to_string(),
-                algorithm: RateLimitAlgorithm::SlidingWindow,
-                interval_duration: None,
-            },
-            RateLimitPolicy {
-                rate: 5000,
-                interval: "1h".to_string(),
-                algorithm: RateLimitAlgorithm::FixedWindow,
-                interval_duration: None,
-            },
-        ],
         ..Default::default()
     };
     assert!(config.validate().is_ok());
-    assert_eq!(config.policies[0].interval_duration, Some(Duration::from_secs(1)));
-    assert_eq!(config.policies[1].interval_duration, Some(Duration::from_secs(3600)));
+    assert_eq!(
+        config.quotas[0].policies[0].interval_duration,
+        Some(Duration::from_secs(1))
+    );
+    assert_eq!(
+        config.quotas[0].policies[1].interval_duration,
+        Some(Duration::from_secs(3600))
+    );
 }
 
 #[test]
@@ -234,48 +258,58 @@ fn test_algorithm_key_prefix() {
 #[test]
 fn test_yaml_deserialization_basic() {
     let yaml = r#"
-redisRef: "default/shared-redis"
-key:
+redisRef: default/shared-redis
+quotas:
+- name: default
+  key:
   - type: remoteIp
-policies:
+  policies:
   - rate: 100
-    interval: "1s"
+    interval: 1s
 "#;
     let config: RateLimitRedisConfig = serde_yaml::from_str(yaml).unwrap();
     assert_eq!(config.redis_ref, "default/shared-redis");
-    assert_eq!(config.policies.len(), 1);
-    assert_eq!(config.policies[0].rate, 100);
-    assert_eq!(config.policies[0].algorithm, RateLimitAlgorithm::SlidingWindow);
+    assert_eq!(config.quotas[0].policies.len(), 1);
+    assert_eq!(config.quotas[0].policies[0].rate, 100);
+    assert_eq!(
+        config.quotas[0].policies[0].algorithm,
+        RateLimitAlgorithm::SlidingWindow
+    );
 }
 
 #[test]
 fn test_yaml_deserialization_multi_policy() {
     let yaml = r#"
-redisRef: "prod/redis"
-policies:
+redisRef: prod/redis
+onRedisFailure: Deny
+maxKeyLen: 16384
+keyPrefix: 'myapp:rl:'
+quotas:
+- name: default
+  policies:
   - rate: 50
-    interval: "1s"
+    interval: 1s
     algorithm: SlidingWindow
   - rate: 5000
-    interval: "1h"
+    interval: 1h
     algorithm: FixedWindow
   - rate: 100
-    interval: "1m"
+    interval: 1m
     algorithm: TokenBucket
-onRedisFailure: Deny
-onKeyMiss: Deny
-cost: 5
-maxKeyLen: 16384
-keyPrefix: "myapp:rl:"
+  onKeyMiss: Deny
+  cost: 5
 "#;
     let config: RateLimitRedisConfig = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(config.policies.len(), 3);
-    assert_eq!(config.policies[0].algorithm, RateLimitAlgorithm::SlidingWindow);
-    assert_eq!(config.policies[1].algorithm, RateLimitAlgorithm::FixedWindow);
-    assert_eq!(config.policies[2].algorithm, RateLimitAlgorithm::TokenBucket);
+    assert_eq!(config.quotas[0].policies.len(), 3);
+    assert_eq!(
+        config.quotas[0].policies[0].algorithm,
+        RateLimitAlgorithm::SlidingWindow
+    );
+    assert_eq!(config.quotas[0].policies[1].algorithm, RateLimitAlgorithm::FixedWindow);
+    assert_eq!(config.quotas[0].policies[2].algorithm, RateLimitAlgorithm::TokenBucket);
     assert_eq!(config.on_redis_failure, OnRedisFailure::Deny);
-    assert_eq!(config.on_key_miss, OnKeyMiss::Deny);
-    assert_eq!(config.cost, 5);
+    assert_eq!(config.quotas[0].on_key_miss, OnKeyMiss::Deny);
+    assert_eq!(config.quotas[0].cost, 5);
     assert_eq!(config.max_key_len, 16384);
     assert_eq!(config.key_prefix, "myapp:rl:");
 }
@@ -301,7 +335,7 @@ fn reject_status_schema_matches_final_response_range() {
 #[test]
 fn test_empty_key_name() {
     let mut config = create_valid_config();
-    config.key = vec![KeyGet::Header { name: "".to_string() }];
+    config.quotas[0].key = vec![KeyGet::Header { name: "".to_string() }];
     let err = config.validate().unwrap_err();
     assert!(err.contains("key[0].name"));
 }
@@ -321,13 +355,17 @@ mod validation_trait_tests {
     fn validation_error_returns_field_error_without_validate_call() {
         // invalid redis_ref should be caught without calling validate()
         let config = RateLimitRedisConfig {
-            redis_ref: "invalid".to_string(), // missing slash
-            policies: vec![RateLimitPolicy {
-                rate: 100,
-                interval: "1s".to_string(),
-                algorithm: RateLimitAlgorithm::default(),
-                interval_duration: None,
+            quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+                // missing slash
+                policies: vec![RateLimitPolicy {
+                    rate: 100,
+                    interval: "1s".to_string(),
+                    algorithm: RateLimitAlgorithm::default(),
+                    interval_duration: None,
+                }],
+                ..Default::default()
             }],
+            redis_ref: "invalid".to_string(),
             ..Default::default()
         };
         assert!(config.validation_error().is_some());
@@ -338,13 +376,16 @@ mod validation_trait_tests {
         // policy.interval_duration = Some(dur) is a side effect, not an error.
         // A valid config should return None even though interval_duration is None before validate().
         let config = RateLimitRedisConfig {
-            redis_ref: "default/shared-redis".to_string(),
-            policies: vec![RateLimitPolicy {
-                rate: 100,
-                interval: "1s".to_string(),
-                algorithm: RateLimitAlgorithm::default(),
-                interval_duration: None,
+            quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+                policies: vec![RateLimitPolicy {
+                    rate: 100,
+                    interval: "1s".to_string(),
+                    algorithm: RateLimitAlgorithm::default(),
+                    interval_duration: None,
+                }],
+                ..Default::default()
             }],
+            redis_ref: "default/shared-redis".to_string(),
             ..Default::default()
         };
         assert_eq!(
@@ -358,13 +399,16 @@ mod validation_trait_tests {
 #[test]
 fn request_timeout_parsed_into_duration() {
     let mut cfg = RateLimitRedisConfig {
-        redis_ref: "default/redis".to_string(),
-        policies: vec![RateLimitPolicy {
-            rate: 10,
-            interval: "1s".to_string(),
-            algorithm: RateLimitAlgorithm::SlidingWindow,
-            interval_duration: None,
+        quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![RateLimitPolicy {
+                rate: 10,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::SlidingWindow,
+                interval_duration: None,
+            }],
+            ..Default::default()
         }],
+        redis_ref: "default/redis".to_string(),
         request_timeout: Some("500ms".to_string()),
         ..Default::default()
     };
@@ -375,13 +419,16 @@ fn request_timeout_parsed_into_duration() {
 #[test]
 fn rejects_unparseable_request_timeout() {
     let mut cfg = RateLimitRedisConfig {
-        redis_ref: "default/redis".to_string(),
-        policies: vec![RateLimitPolicy {
-            rate: 10,
-            interval: "1s".to_string(),
-            algorithm: RateLimitAlgorithm::SlidingWindow,
-            interval_duration: None,
+        quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![RateLimitPolicy {
+                rate: 10,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::SlidingWindow,
+                interval_duration: None,
+            }],
+            ..Default::default()
         }],
+        redis_ref: "default/redis".to_string(),
         request_timeout: Some("nope".to_string()),
         ..Default::default()
     };
@@ -391,15 +438,74 @@ fn rejects_unparseable_request_timeout() {
 #[test]
 fn rejects_zero_request_timeout() {
     let mut cfg = RateLimitRedisConfig {
-        redis_ref: "default/redis".to_string(),
-        policies: vec![RateLimitPolicy {
-            rate: 10,
-            interval: "1s".to_string(),
-            algorithm: RateLimitAlgorithm::SlidingWindow,
-            interval_duration: None,
+        quotas: vec![crate::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![RateLimitPolicy {
+                rate: 10,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::SlidingWindow,
+                interval_duration: None,
+            }],
+            ..Default::default()
         }],
+        redis_ref: "default/redis".to_string(),
         request_timeout: Some("0ms".to_string()),
         ..Default::default()
     };
     assert!(cfg.validate().unwrap_err().contains("request_timeout must be > 0"));
+}
+
+#[test]
+fn multi_quota_validation_bounds_identity_and_latency() {
+    let mut config = create_valid_config();
+    let mut second = config.quotas[0].clone();
+    second.name = "user".into();
+    config.quotas.push(second);
+    assert!(config.validation_error().unwrap().contains("requestTimeout"));
+    config.request_timeout = Some("200ms".into());
+    config.response_quota = Some("user".into());
+    assert!(config.validate().is_ok());
+    assert!(config.quotas.iter().all(|q| q.policies[0].interval_duration.is_some()));
+    config.quotas[1].name = "default".into();
+    assert!(config.validation_error().is_some());
+    config.quotas[1].name = "invalid:name".into();
+    assert!(config.validation_error().is_some());
+    config.quotas[1].name = "user".into();
+    config.response_quota = Some("absent".into());
+    assert!(config.validation_error().is_some());
+    config.response_quota = None;
+    config.quotas = (0..7)
+        .map(|i| {
+            let mut quota = config.quotas[0].clone();
+            quota.name = format!("q{i}");
+            quota.policies = vec![quota.policies[0].clone(); 10];
+            quota
+        })
+        .collect();
+    assert!(config.validation_error().unwrap().contains("64"));
+    config.quotas = (0..17)
+        .map(|i| {
+            let mut quota = config.quotas[0].clone();
+            quota.name = format!("q{i}");
+            quota
+        })
+        .collect();
+    assert!(config.validation_error().unwrap().contains("16"));
+}
+
+#[test]
+fn named_quota_schema_rejects_stale_flat_fields_and_preserves_key_defaults() {
+    let value = serde_json::json!({"redisRef":"default/redis","quotas":[{"name":"main","policies":[{"rate":1,"interval":"1s"}]}]});
+    let config: RateLimitRedisConfig = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(config.quotas[0].key, vec![KeyGet::RemoteIp]);
+    for field in ["key", "policies", "cost", "onKeyMiss"] {
+        let mut stale = value.clone();
+        stale[field] = serde_json::json!(null);
+        assert!(serde_json::from_value::<RateLimitRedisConfig>(stale).is_err());
+    }
+    let mut value = value;
+    value["quotas"][0]["key"] = serde_json::json!([]);
+    let config: RateLimitRedisConfig = serde_json::from_value(value.clone()).unwrap();
+    assert!(config.quotas[0].key.is_empty());
+    value["quotas"][0]["typo"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<RateLimitRedisConfig>(value).is_err());
 }

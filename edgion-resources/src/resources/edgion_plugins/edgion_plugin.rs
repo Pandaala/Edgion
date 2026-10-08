@@ -663,7 +663,15 @@ impl EdgionPlugin {
                 }
                 names
             }
-            EdgionPlugin::GraphqlRateLimit(c) => headers_of(c.key.iter()),
+            EdgionPlugin::GraphqlRateLimit(c) => {
+                let mut names = headers_of(c.key.iter());
+                for quota in &c.root_quotas {
+                    if let Some(keys) = &quota.key {
+                        names.extend(headers_of(keys.iter()));
+                    }
+                }
+                names
+            }
             EdgionPlugin::GraphqlGuard(_)
             | EdgionPlugin::GraphqlSafelist(_)
             | EdgionPlugin::GraphqlOperationRouter(_) => Vec::new(),

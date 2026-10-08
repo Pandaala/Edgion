@@ -161,3 +161,33 @@ field access or estimated cost; deprecated fields are still chargeable. Unknown
 directives, directive definitions, SDL extensions, federation annotations,
 `@cost`, `@listSize` and `@oneOf` remain unsupported. Existing token/source/model
 bounds apply to metadata strings too. See the [GraphQL directive definitions](https://spec.graphql.org/September2025/#sec--deprecated).
+
+## Independent root-field budgets
+
+The mandatory total budget can be combined with up to 15 named root budgets
+(total plus roots: at most 16 quotas and 64 policies). Add to the plugin config:
+
+```yaml
+rootQuotas:
+  - name: users
+    field: Query.users
+    key: [{type: header, name: X-Tenant}]
+    policies: [{rate: 2000, interval: 1m}]
+responseQuota: total
+```
+
+Use the actual SDL query/mutation root type name. Root key omission inherits the
+total key; explicit `key: []` selects a global bucket. A missing root is skipped.
+Each budget charges the complete selected subtree, including its own weight and
+child multipliers; aliases and repeated spreads accumulate conservatively. The
+operation overhead unit is charged only to total. Different names may limit the
+same root field under different identities. When query and mutation share one
+root object, its coordinate quota shares across both kinds.
+
+Total is checked before active roots, under the existing aggregate requestTimeout
+(default 200ms). Capacity and identity errors are prechecked before any debit.
+A later root denial retains the earlier total debit. No cross-quota transaction
+or refunds are provided. Success headers default to total; responseQuota may name
+a root quota, and an absent selected root emits no quota headers. Rejection headers
+come only from the denying quota. Completed query cost remains an estimate, not a
+debit receipt. Existing dependency defaults and fixed GraphQL errors are unchanged.

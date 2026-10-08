@@ -422,3 +422,91 @@ fn sdl_metadata_retains_token_source_and_model_bounds() {
     let values = (0..257).map(|n| format!("V{n} @deprecated ")).collect::<String>();
     assert!(CompiledGraphqlCost::compile(&format!("type Query {{ f:E }} enum E {{{values}}}"), &[], 100, 20).is_err());
 }
+
+fn quota_report(model: &CompiledGraphqlCost, query: &str) -> Result<GraphqlQuotaCosts, GraphqlError> {
+    let bytes = serde_json::json!({"query":query}).to_string();
+    model.estimate_quotas(crate::graphql_request::ParsedGraphqlRequest::parse_post(
+        bytes.as_bytes(),
+        MAX_ENVELOPE_BYTES,
+    )?)
+}
+
+#[test]
+fn root_quotas_use_complete_weighted_maxima_and_conservative_occurrences() {
+    let schema = "type Query { users(first:Int=2):[I] scalar:String nested:Query } interface I { value:String } type C implements I { value:String } type D implements I { value:String }";
+    let rules = [
+        ("Query.users", 3, &["first"][..], 100),
+        ("C.value", 2, &[][..], 100),
+        ("D.value", 5, &[][..], 100),
+        ("Query.scalar", 7, &[][..], 100),
+    ];
+    let original = model(schema, &rules);
+    let bound = model(schema, &rules)
+        .with_root_fields(["Query.users", "Query.scalar", "Query.users", "Query.nested"])
+        .unwrap();
+    let query =
+        "{ a:users{value} ...F scalar nested{users{value}} } fragment F on Query { b:users @skip(if:true){value} }";
+    let report = quota_report(&bound, query).unwrap();
+    assert_eq!(report.total, 48);
+    assert_eq!(&report.roots[..4], &[26, 7, 26, 14]);
+    assert_eq!(report.roots[4..], [0; 11]);
+    assert_eq!(estimate(&original, query), Ok(report.total));
+    assert_eq!(report.total - 1, report.roots[0] + report.roots[1] + report.roots[3]);
+    let absent = quota_report(&bound, "{ scalar }").unwrap();
+    assert_eq!(absent.total, 8);
+    assert_eq!(&absent.roots[..4], &[0, 7, 0, 0]);
+}
+
+#[test]
+fn root_coordinates_support_custom_shared_query_mutation_objects() {
+    let schema = "schema { query:Root mutation:Root } type Root { count:Int self:Root }";
+    let bound = model(schema, &[])
+        .with_root_fields(["Root.count", "Root.self"])
+        .unwrap();
+    let query = quota_report(&bound, "{count self{count}}").unwrap();
+    assert_eq!(query.total, 4);
+    assert_eq!(&query.roots[..2], &[1, 2]);
+    let mutation = quota_report(&bound, "mutation {count}").unwrap();
+    assert_eq!(mutation.total, 2);
+    assert_eq!(&mutation.roots[..2], &[1, 0]);
+    for invalid in ["Query.count", "Root.absent", "Root.__typename", "Root.count.extra"] {
+        assert!(model(schema, &[]).with_root_fields([invalid]).is_err());
+    }
+    assert!(model(schema, &[]).with_root_fields(["Root.count"; 16]).is_err());
+}
+
+#[test]
+fn root_reports_retain_existing_variable_and_hard_cost_validation() {
+    let schema = "type Query { users(first:Int):[User] } type User { name:String }";
+    let m = CompiledGraphqlCost::compile(
+        schema,
+        &[GraphqlCostRule {
+            field: "Query.users".into(),
+            weight: 1,
+            multipliers: vec!["first".into()],
+            default_multiplier: 3,
+        }],
+        5,
+        4,
+    )
+    .unwrap()
+    .with_root_fields(["Query.users"])
+    .unwrap();
+    assert_eq!(quota_report(&m, "{users(first:3){name}}").unwrap().roots[0], 4);
+    assert_eq!(quota_report(&m, "{users(first:4){name}}"), Err(GraphqlError::Invalid));
+    assert_eq!(
+        quota_report(&m, "query($n:Int!){users(first:$n){name}}"),
+        Err(GraphqlError::Invalid)
+    );
+}
+
+#[test]
+fn root_evaluation_does_not_reset_frontend_work() {
+    let m = model("type Query {ok:Int}", &[])
+        .with_root_fields(["Query.ok"])
+        .unwrap();
+    let mut parsed =
+        crate::graphql_request::ParsedGraphqlRequest::parse_post(br#"{"query":"{ok}"}"#, MAX_ENVELOPE_BYTES).unwrap();
+    while parsed.work.step().is_ok() {}
+    assert_eq!(m.estimate_quotas(parsed), Err(GraphqlError::Invalid));
+}

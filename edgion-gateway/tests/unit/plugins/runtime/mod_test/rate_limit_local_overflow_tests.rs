@@ -24,8 +24,8 @@ fn overflow_resource(name: &str, failure: &str) -> Value {
              "conditions": {"run": {"allOf": [
                  {"type": "rateLimitExceeded", "pluginAlias": "local-budget"}
              ]}},
-             "config": {"redisRef": "overflow-tests/intentionally-absent", "key": [],
-                 "policies": [{"rate": 1, "interval": "1h", "algorithm": "TokenBucket"}],
+             "config": {"quotas":[{"name":"default", "key": [],
+                 "policies": [{"rate": 1, "interval": "1h", "algorithm": "TokenBucket"}],}],"redisRef": "overflow-tests/intentionally-absent",
                  "onRedisFailure": failure, "showLimitHeaders": true
              }}
         ]}

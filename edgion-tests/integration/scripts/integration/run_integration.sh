@@ -2904,7 +2904,7 @@ main() {
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
         || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ]; }; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
-        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "GraphqlSafelist" ]; }; }; then
+        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "GraphqlSafelist" ]; }; }; then
         log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"
         report_test "Preflight_LoopbackAliases" "SKIP" "0" "not required by selected suites"
     elif ! ensure_loopback_aliases; then

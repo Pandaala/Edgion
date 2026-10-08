@@ -281,19 +281,21 @@ spec:
             "on": [fail-close]
       config:
         redisRef: "default/redis-not-found"
-        policies:
-          - rate: 3
-            interval: "10s"
-            algorithm: SlidingWindow
-        key:
-          - type: header
-            name: "X-Rate-Key"
-        onKeyMiss: Allow
         onRedisFailure: Deny
         rejectStatus: 429
         rejectMessage: "Redis unavailable (dye fail-close)"
         showLimitHeaders: true
         keyPrefix: "edgion:it:rlr:dye-fail-close:"
+        quotas:
+          - name: default
+            policies:
+              - rate: 3
+                interval: "10s"
+                algorithm: SlidingWindow
+            key:
+              - type: header
+                name: "X-Rate-Key"
+            onKeyMiss: Allow
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -337,19 +339,21 @@ spec:
             "on": [fail-open]
       config:
         redisRef: "default/redis-not-found"
-        policies:
-          - rate: 3
-            interval: "10s"
-            algorithm: SlidingWindow
-        key:
-          - type: header
-            name: "X-Rate-Key"
-        onKeyMiss: Allow
         onRedisFailure: Allow
         rejectStatus: 429
         rejectMessage: "Redis unavailable (dye fail-open)"
         showLimitHeaders: true
         keyPrefix: "edgion:it:rlr:dye-fail-open:"
+        quotas:
+          - name: default
+            policies:
+              - rate: 3
+                interval: "10s"
+                algorithm: SlidingWindow
+            key:
+              - type: header
+                name: "X-Rate-Key"
+            onKeyMiss: Allow
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -411,19 +415,21 @@ spec:
             "on": [fail-open]
       config:
         redisRef: "default/redis-not-found"
-        policies:
-          - rate: 3
-            interval: "10s"
-            algorithm: SlidingWindow
-        key:
-          - type: header
-            name: "X-Rate-Key"
-        onKeyMiss: Allow
         onRedisFailure: Allow
         rejectStatus: 429
         rejectMessage: "unused (fail-open)"
         showLimitHeaders: false
         keyPrefix: "edgion:it:rlr:shared-dye:"
+        quotas:
+          - name: default
+            policies:
+              - rate: 3
+                interval: "10s"
+                algorithm: SlidingWindow
+            key:
+              - type: header
+                name: "X-Rate-Key"
+            onKeyMiss: Allow
 ---
 # backendRefs deliberately omits canary-app-v2, so canary-shared-dye-name's
 # activeProfile ("canary" -> canary-app-v2) is a misconfigured profile and
