@@ -25,7 +25,7 @@ can skip the entire plugin; this is an explicit deployment boundary.
 
 ## Rationale and evidence
 
-- [Specification and resource ledger](../../../../tasks/pending/graphql-cost-rate-limit/01-design.md)
+- [Supported configuration and cost semantics](../../../../docs/en/user-guide/http-route/filters/edgion-plugins/graphql-rate-limit.md)
 - [Pure model](../../../../edgion-resources/src/graphql_cost/mod.rs)
 - [Typed configuration](../../../../edgion-resources/src/resources/edgion_plugins/plugin_configs/graphql_rate_limit.rs)
 - [Gateway admission](../../../../edgion-gateway/src/plugins/http/graphql_rate_limit/plugin.rs)
@@ -72,15 +72,22 @@ composition and4096-byte key truncation retain canonical limiter semantics.
 
 ## Verification
 
+The original task design, review and implementation artifacts are no longer
+present in the current tree. The results below are retained historical summaries,
+not fresh verification; their original commands and report locations are unavailable
+from those artifacts. Maintained regression coverage lives in the
+[cost-model tests](../../../../edgion-resources/tests/unit/graphql_cost/mod_test.rs),
+[Gateway admission tests](../../../../edgion-gateway/tests/unit/plugins/http/graphql_rate_limit/plugin_test.rs)
+and [dynamic integration scenario](../../../../edgion-tests/integration/conf/EdgionPlugins/GraphqlRateLimit/DynamicTest/README.md).
+
 The P2 leaf-multiplier correction passed fresh independent plan and final reviews
 on 2026-10-07. The rejection/configuration tests failed before the guard and passed
 after it. Current focused results: Resources14, Gateway4 and harness23 tests;
 workspace check, warning-free final Clippy, format and project guards passed.
 Canonical real-Redis integration passed35 static cases and all6 dynamic phases,
 including leaf-invalid replacement (Accepted=False and fixed500) and recovery
-at cost16. Final metrics/unknown-field/requeue/residue gates passed. Evidence is
-in the linked review/implementation artifacts. No full Cargo tests ran, and this
-correction does not establish a new parser heap proof.
+at cost16. Final metrics/unknown-field/requeue/residue gates passed. No full Cargo
+tests ran, and this correction does not establish a new parser heap proof.
 
 Fresh implementation verification passed on 2026-10-07: 11 Resources GraphQL
 tests, 3 Gateway GraphQL tests, 19 ordinary Redis limiter regressions, 23 harness
@@ -100,11 +107,9 @@ both freshly passed 11 Resources GraphQL tests, but neither independently
 proved the complete parser allocation ledger or measured peak heap.
 The four-request concurrent case isolates Redis atomic charging within the
 independent four-permit parsing admission; parser exhaustion is covered by the
-separate unit test. Final review evidence is recorded in
-[review evidence](../../../../tasks/pending/graphql-cost-rate-limit/02-review.md).
-Full cargo test --all was not run. Exact commands and fresh integration report
-location are in
-[implementation verification](../../../../tasks/pending/graphql-cost-rate-limit/02-implementation.md).
+separate unit test. Final review evidence, exact commands and integration report
+locations were recorded in the original task artifacts noted above.
+Full cargo test --all was not run.
 
 Two independent specification reviews passed on 2026-10-07 after concrete fixes to
 GET allocation order, abstract rule maxima, partial key-miss semantics and POST
@@ -113,10 +118,10 @@ query ambiguity. This design evidence does not claim implementation test success
 ## Resolution references
 
 - 11-graphql-support: feature scope narrowed by user to Kong-like query-cost
-  budgets on 2026-10-07. Operation routing remains an explicit
-  [pending requirement](../../../../tasks/pending/graphql-operation-routing.md);
-  it is not claimed implemented or dismissed.
+  budgets on 2026-10-07. Operation routing remains outside the implemented
+  feature scope. Its former pending task record is no longer present in the
+  current tree; this does not establish implementation or dismissal.
 - P2 ineffective leaf multipliers: diagnosed by two independent additional
   reviews; corrected in the existing shared compiler without changing the cost
-  formula. Current correction verification belongs in the linked review evidence;
+  formula. Correction verification is summarized in the historical results above;
   historical feature checks do not establish that this boundary was covered.
