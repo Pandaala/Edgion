@@ -10,6 +10,7 @@ pub mod filters;
 pub mod gateway_api_support;
 pub mod geoip_codes;
 pub mod graphql_cost;
+pub mod graphql_request;
 pub mod grpc_transcoding;
 pub mod gwapi_types;
 pub mod hostname;

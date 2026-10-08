@@ -942,14 +942,14 @@ fn backend_plugin_scope_invalid_reason(
     runtime: &ControllerRuntime,
     route_wide_only: bool,
 ) -> Option<String> {
-    if rule
+    if let Some(plugin) = rule
         .filters
         .iter()
         .flatten()
         .filter_map(|filter| filter.extension_ref.as_ref())
-        .any(|reference| super::route_utils::contains_grpc_transcoder(runtime, route_namespace, reference))
+        .find_map(|reference| super::route_utils::http_route_only_plugin(runtime, route_namespace, reference))
     {
-        return Some("GrpcJsonTranscoder requires HTTPRoute rule scope".into());
+        return Some(format!("{plugin} requires HTTPRoute rule scope"));
     }
     rule.backend_refs
         .iter()

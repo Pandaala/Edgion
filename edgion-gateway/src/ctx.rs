@@ -2137,6 +2137,8 @@ pub struct EdgionHttpContext {
     /// explicit jump plugins activate it; ordinary routing retains one nullable
     /// pointer. First-write-wins and the target survives upstream retries.
     pub jump: Option<Box<UpstreamJumpTarget>>,
+    strict_jump: bool,
+    jump_conflict: bool,
 
     /// True when `req_header.uri` is already in its upstream-forwarded final form;
     /// further writes are forbidden.
@@ -3186,6 +3188,8 @@ impl EdgionHttpContext {
             upstream_authority: None,
             parsed_request_caches: ParsedRequestCaches::default(),
             jump: None,
+            strict_jump: false,
+            jump_conflict: false,
             uri_finalized: false,
             grpc_transcoding: None,
             session_persistence: None,
@@ -3789,8 +3793,24 @@ impl EdgionHttpContext {
     /// First-write-wins setter for the unified upstream-jump slot. Returns
     /// `Set` on the first successful write, `Rejected` on every subsequent
     /// call. The target is stored without modifying backend selection state.
+    /// Opt into fatal second publications using the same canonical jump slot.
+    pub(crate) fn try_set_strict_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
+        let outcome = self.try_set_jump(target);
+        if outcome == SetJumpOutcome::Set {
+            self.strict_jump = true;
+        }
+        outcome
+    }
+    pub(crate) fn has_strict_jump(&self) -> bool {
+        self.strict_jump
+    }
+    pub(crate) fn has_strict_jump_conflict(&self) -> bool {
+        self.jump_conflict
+    }
+
     pub fn try_set_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
         if self.jump.is_some() {
+            self.jump_conflict |= self.strict_jump;
             return SetJumpOutcome::Rejected;
         }
         self.jump = Some(Box::new(target));

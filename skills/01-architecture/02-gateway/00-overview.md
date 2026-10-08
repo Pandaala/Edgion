@@ -288,3 +288,31 @@ are admitted. Encoded custom/uninterpreted options, unknown descriptor fields an
 relative extension extendees are rejected; supplied reserved field shapes are checked
 against the trusted schema. HTTP annotation descendants consume the cold depth/node
 budget. The operator guide describes these descriptor restrictions.
+
+## HTTPRoute GraphQL operation routing
+
+GraphqlOperationRouter selects a declared Service backend inside an already
+matched, undelegated HTTPRoute rule. Shared graphql_request frontends own bounded
+GET/POST envelopes, syntax and verified operation selection; cost evaluation stays
+in graphql_cost. Gateway common/graphql_request owns transport checks and four
+nonwaiting evaluation permits shared with GraphqlRateLimit, released before any
+upstream or Redis await. No second body cache or response aggregation is added.
+
+Resources separates raw source-enabled structural binding from effective chain
+composition. Controller only invalidates structurally illegal attachments through
+existing rule status/requeue paths. PluginPublisher::rule_admission validates
+current raw sources and effective scoped views together and publishes its decision
+with the existing Weak route Arc/index token. Conditions and Bypass cannot repair
+undeclared mappings/defaults; effective masks can remove conflicting publishers.
+
+The request gate checks the captured token after policy Block preflight. The
+plugin reuses the compiled named target matcher and ReferenceGrant check, then
+publishes a strict jump through the canonical context owner. Later conflicting
+publication seals the exchange before upstream I/O. The canonical selected-backend
+compatibility guard checks AI/transcoding owners in the selected runtime and pinned
+backend ExtensionRefs before their execution; unselected candidates remain inert.
+Router generations cannot
+retain stale whole-resource DSL/WAF last-known-good routing policy.
+
+See [operator configuration](../../../docs/en/user-guide/http-route/filters/edgion-plugins/graphql-operation-router.md)
+and [review guard](../../04-review/routing/regression-guards/graphql-operation-router-declared-backends.md).

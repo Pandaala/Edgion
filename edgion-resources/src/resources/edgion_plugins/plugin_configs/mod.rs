@@ -21,6 +21,7 @@ mod form_json_transform;
 mod forward_auth;
 pub mod geo_rule;
 mod geoip_location;
+mod graphql_operation_router;
 mod graphql_rate_limit;
 mod guardrail;
 mod header_cert_auth;
@@ -191,3 +192,8 @@ pub(super) fn validate_restricted_template(template: &str, field: &str) -> Optio
 }
 
 pub use crate::grpc_transcoding::{GrpcDescriptorSource, GrpcJsonStreamFormat, GrpcJsonTranscoderConfig};
+
+pub use graphql_operation_router::{
+    graphql_router_attachment_error, graphql_router_binding_error, graphql_router_rule_binding_error,
+    graphql_router_rule_error, GraphqlOperationRouteRule, GraphqlOperationRouterConfig,
+};

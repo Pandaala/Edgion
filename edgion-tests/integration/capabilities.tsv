@@ -22,3 +22,5 @@ suite	EdgionPlugins/GrpcJsonTranscoder	body-buffering
 dynamic	GrpcJsonTranscoderDynamic	body-buffering
 suite	EdgionBackend/Messages	body-buffering
 dynamic	AiMessagesBinding	body-buffering
+suite	EdgionPlugins/GraphqlOperationRouter	body-buffering
+dynamic	GraphqlOperationRouterDynamic	body-buffering

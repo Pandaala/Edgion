@@ -827,6 +827,11 @@ pub trait PluginSession: Send + Sync {
     ///   `Set` -> existing per-plugin status string
     ///   `Rejected` -> `log.push("jump locked, rejected")`
     fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome;
+    /// Publish through the canonical slot with fatal conflict handling.
+    /// Unsupported adapters fail closed rather than weaken the ownership contract.
+    fn set_strict_upstream_jump(&mut self, _target: UpstreamJumpTarget) -> SetJumpOutcome {
+        SetJumpOutcome::Rejected
+    }
 
     /// Install request mirror state used by the request-body-filter tee.
     /// Returns `false` after the request-scoped body policy has frozen.

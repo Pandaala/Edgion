@@ -119,6 +119,31 @@ impl TestSuite for GraphqlRateLimitTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         let mut cases = vec![
             TestCase::new(
+                "graphql_cost_before_operation_routing",
+                "Routing failure keeps the weighted debit and successful routing preserves bytes",
+                |ctx| {
+                    Box::pin(async move {
+                        let start = Instant::now();
+                        let outcome = async {
+                            let key = uuid::Uuid::new_v4().to_string();
+                            let host = "graphql-rate-limit-routing.example.com";
+                            let unknown = r#"{"query":"query Unmapped { users(first:10) { name } }"}"#;
+                            require(&post(&ctx, host, unknown, &key).await?, 400, Some(12))?;
+                            let body = r#"{"query":"query GetUser { users(first:10) { name } }"}"#;
+                            let reply = post(&ctx, host, body, &key).await?;
+                            require(&reply, 200, Some(0))?;
+                            if reply.body.split_once("Echo: ").map(|(_, body)| body) != Some(body) {
+                                return Err("Combined routing changed POST bytes".into());
+                            }
+                            require(&post(&ctx, host, body, &key).await?, 429, Some(0))?;
+                            Ok(())
+                        }
+                        .await;
+                        result(start, outcome)
+                    })
+                },
+            ),
+            TestCase::new(
                 "graphql_weighted_debit_and_replay",
                 "Redis charges the actual cost and preserves POST bytes",
                 |ctx| {

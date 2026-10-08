@@ -894,3 +894,150 @@ async fn unsupported_plugin_update_replaces_previous_runtime_and_correction_reco
         assert!(view(&publisher).is_activatable);
     }
 }
+
+fn graphql_router_source(second: &str, program: Option<&str>) -> Arc<EdgionPlugins> {
+    let mut entries = json!([{"type":"GraphqlOperationRouter","config":{"rules":[
+        {"operationType":"query","operationName":"GetUser","backendRef":{"name":"users"}},
+        {"operationType":"mutation","operationName":"CreateOrder","backendRef":{"name":second}}
+    ]}}]);
+    if let Some(source) = program {
+        entries
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"Dsl","config":{"name":"program","source":source}}));
+    }
+    Arc::new(
+        serde_json::from_value(json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins",
+        "metadata":{"namespace":"apps","name":"plugins"},"spec":{"requestPlugins":entries}}))
+        .unwrap(),
+    )
+}
+fn graphql_router_route() -> Arc<HTTPRoute> {
+    let mut source = (*route()).clone();
+    source.spec.rules = Some(
+        serde_json::from_value(json!([{"filters":[{"type":"ExtensionRef",
+        "extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins"}}],
+        "backendRefs":[{"name":"users","port":80},{"name":"orders","port":81}]}]))
+        .unwrap(),
+    );
+    Arc::new(source)
+}
+fn graphql_router_policy(publisher: &PluginPublisher, policy: Value) {
+    let mut source = (*config("policy-a", policy)).clone();
+    source.spec.global_plugins_ref = None;
+    publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(source))]));
+}
+
+#[test]
+fn graphql_router_admission_revalidates_unselected_targets_and_pins_exact_route_generation() {
+    let publisher = publisher();
+    graphql_router_policy(&publisher, json!({}));
+    let route = graphql_router_route();
+    publisher.replace_routes(
+        RouteKind::Http,
+        HashMap::from([("apps/route".into(), RouteInput::from_http(route.clone()))]),
+    );
+    update_source(&publisher, graphql_router_source("orders", None), false);
+    let old = scope(&publisher, "apps/a");
+    assert!(old.graphql_rule(&route, 0));
+    update_source(&publisher, graphql_router_source("undeclared", None), false);
+    assert!(!scope(&publisher, "apps/a").graphql_rule(&route, 0));
+    assert!(old.graphql_rule(&route, 0));
+    let mut changed = (*route).clone();
+    changed.spec.rules.as_mut().unwrap()[0]
+        .backend_refs
+        .as_mut()
+        .unwrap()
+        .push(serde_json::from_value(json!({"name":"undeclared","port":82})).unwrap());
+    let changed = Arc::new(changed);
+    publisher.update_routes(
+        RouteKind::Http,
+        HashMap::from([("apps/route".into(), RouteInput::from_http(changed.clone()))]),
+        &HashSet::new(),
+    );
+    let new = scope(&publisher, "apps/a");
+    assert!(new.graphql_rule(&changed, 0));
+    assert!(!new.graphql_rule(&route, 0));
+    assert!(!old.graphql_rule(&changed, 0));
+}
+
+#[tokio::test]
+async fn graphql_router_masks_and_mixed_invalid_updates_preserve_current_policy() {
+    let publisher = publisher();
+    graphql_router_policy(&publisher, json!({}));
+    let route = graphql_router_route();
+    publisher.replace_routes(
+        RouteKind::Http,
+        HashMap::from([("apps/route".into(), RouteInput::from_http(route.clone()))]),
+    );
+    update_source(&publisher, graphql_router_source("undeclared", None), false);
+    assert!(!scope(&publisher, "apps/a").graphql_rule(&route, 0));
+    graphql_router_policy(
+        &publisher,
+        json!({"deny":[{"name":"http/GraphqlOperationRouter","action":"bypass"}]}),
+    );
+    let bypass = view(&publisher);
+    assert!(!bypass.plugin_runtime.has_graphql_operation_router());
+    assert!(!scope(&publisher, "apps/a").graphql_rule(&route, 0));
+    update_source(&publisher, graphql_router_source("orders", None), false);
+    assert!(scope(&publisher, "apps/a").graphql_rule(&route, 0));
+    graphql_router_policy(
+        &publisher,
+        json!({"deny":[{"name":"http/GraphqlOperationRouter","blockStatus":451}]}),
+    );
+    assert!(matches!(
+        first_result(&view(&publisher)).await,
+        PluginRunningResult::ErrResponse { status: 451, .. }
+    ));
+    graphql_router_policy(&publisher, json!({}));
+    update_source(&publisher, graphql_router_source("orders", Some("let a = 1")), false);
+    let valid = view(&publisher);
+    assert!(valid.is_activatable);
+    update_source(
+        &publisher,
+        graphql_router_source("undeclared", Some("invalid @@@")),
+        false,
+    );
+    let invalid = view(&publisher);
+    assert!(!invalid.is_activatable);
+    assert!(!Arc::ptr_eq(&valid, &invalid));
+    assert!(!scope(&publisher, "apps/a").graphql_rule(&route, 0));
+}
+
+#[test]
+fn graphql_router_binding_allows_bypassed_conflicting_publishers_but_not_undeclared_defaults() {
+    let publisher = publisher();
+    graphql_router_policy(&publisher, json!({}));
+    let route = graphql_router_route();
+    publisher.replace_routes(
+        RouteKind::Http,
+        HashMap::from([("apps/route".into(), RouteInput::from_http(route.clone()))]),
+    );
+    let mut source = (*graphql_router_source("orders", None)).clone();
+    source.spec.request_plugins.as_mut().unwrap().push(
+        serde_json::from_value(json!({"type":"DirectEndpoint","config":{"from":{"type":"header","name":"X-Target"}}}))
+            .unwrap(),
+    );
+    update_source(&publisher, Arc::new(source), false);
+    assert!(!scope(&publisher, "apps/a").graphql_rule(&route, 0));
+    graphql_router_policy(
+        &publisher,
+        json!({"deny":[{"name":"http/DirectEndpoint","action":"bypass"}]}),
+    );
+    assert!(scope(&publisher, "apps/a").graphql_rule(&route, 0));
+    let mut source = (*graphql_router_source("orders", None)).clone();
+    if let edgion_resources::EdgionPlugin::GraphqlOperationRouter(config) =
+        &mut source.spec.request_plugins.as_mut().unwrap()[0].plugin
+    {
+        config.default_backend_ref = Some(edgion_resources::plugin_configs::DynUpstreamTarget {
+            name: "undeclared".into(),
+            namespace: None,
+        });
+    }
+    graphql_router_policy(
+        &publisher,
+        json!({"deny":[{"name":"http/GraphqlOperationRouter","action":"bypass"}]}),
+    );
+    update_source(&publisher, Arc::new(source), false);
+    assert!(!scope(&publisher, "apps/a").graphql_rule(&route, 0));
+}

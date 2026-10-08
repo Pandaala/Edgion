@@ -534,6 +534,12 @@ pub async fn upstream_peer_http(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
+    if ctx.has_strict_jump_conflict() {
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(500),
+            "conflicting upstream selection",
+        ));
+    }
     finalize_request_uri(session, ctx)?;
 
     // AI forwarding owns a typed external peer path and never writes the
@@ -791,13 +797,26 @@ pub async fn select_http_backend(
     let backend_tls_policy = crate::backends::query_backend_tls_policy_for_logical_backend(&backend_ref, service_port);
 
     let backend_plugin_runtime = Arc::clone(&backend_ref.compiled().plugin_runtime);
-    if !backend_plugin_runtime.grpc_backend_compatible(ctx) {
-        return Err(crate::plugins::http::grpc_json_transcoder::failure());
+    if !backend_plugin_runtime.backend_compatible(ctx) {
+        if ctx.grpc_transcoding.is_some() {
+            return Err(crate::plugins::http::grpc_json_transcoder::failure());
+        }
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(500),
+            "incompatible selected backend plugins",
+        ));
     }
     backend_plugin_runtime.run_backend_request_plugins(session, ctx).await;
     if ctx.plugin_terminated() {
         let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
         return Err(PingoraError::new(ErrorType::InternalError));
+    }
+
+    if ctx.has_strict_jump_conflict() {
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(500),
+            "conflicting upstream selection",
+        ));
     }
 
     ctx.selected_backend = Some(match backend_ref.target() {

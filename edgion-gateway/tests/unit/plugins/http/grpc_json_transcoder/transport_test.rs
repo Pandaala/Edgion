@@ -224,7 +224,7 @@ fn correction_backend_checks_actual_pinned_target_not_wrapper_shape() {
         assert!(!target.rejects_invalid_config());
         let mut ctx = context();
         ctx.pinned_backend_ext_ref("default/companion", || Some(target));
-        assert_eq!(outer.grpc_backend_compatible(&mut ctx), compatible);
+        assert_eq!(outer.backend_compatible(&mut ctx), compatible);
         assert_eq!(
             ctx.grpc_transcoding.as_ref().unwrap().conflict.load(Ordering::Acquire),
             !compatible

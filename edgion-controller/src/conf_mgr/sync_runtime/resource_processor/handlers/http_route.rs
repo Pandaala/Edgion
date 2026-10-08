@@ -499,7 +499,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         if let Some(rules) = &mut route.spec.resolved_rules {
             let mut resolved_index = 0usize;
             rules.retain(|rule| {
-                let reason = backend_plugin_scope_invalid_reason(rule, route_ns, _ctx.runtime(), false);
+                let reason = super::route_utils::graphql_router_rule_error(rule, route_ns, _ctx.runtime(), true)
+                    .or_else(|| backend_plugin_scope_invalid_reason(rule, route_ns, _ctx.runtime(), false));
                 let keep = reason.is_none();
                 if let Some(reason) = reason {
                     delegation_outcome.issues.push(DelegationIssue::RuleDropped {
@@ -1230,7 +1231,10 @@ fn find_controller_invalid_rule_details(
         if already_invalid.contains(&index) {
             continue;
         }
-        if let Some(reason) = backend_plugin_scope_invalid_reason(rule, route_ns, runtime, false) {
+        if let Some(reason) =
+            super::route_utils::graphql_router_rule_error(rule, route_ns, runtime, route.spec.resolved_rules.is_some())
+                .or_else(|| backend_plugin_scope_invalid_reason(rule, route_ns, runtime, false))
+        {
             details.push((index, reason));
             continue;
         }

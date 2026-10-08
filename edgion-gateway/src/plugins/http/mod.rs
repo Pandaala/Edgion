@@ -21,6 +21,7 @@ pub mod fault_injection;
 pub mod form_json_transform;
 pub mod forward_auth;
 pub mod geoip_location;
+pub mod graphql_operation_router;
 pub mod graphql_rate_limit;
 pub mod guardrail;
 pub mod header_cert_auth;

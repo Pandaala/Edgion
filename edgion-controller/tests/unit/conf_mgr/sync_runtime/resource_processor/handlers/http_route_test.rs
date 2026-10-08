@@ -2344,3 +2344,51 @@ fn invalid_request_mirror_fields_drop_only_the_owning_rules() {
             && condition.message.contains("1 of 3 rules active")
     }));
 }
+
+#[tokio::test]
+async fn graphql_router_uses_raw_desired_membership_and_preserves_sibling_rules() {
+    use super::super::EdgionPluginsHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use edgion_resources::EdgionPlugins;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        16,
+        Arc::new(EdgionPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    let source = |second: &str| -> Arc<EdgionPlugins> {
+        Arc::new(
+            serde_json::from_value(serde_json::json!({
+            "apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{"namespace":"apps","name":"routing"},
+            "spec":{"requestPlugins":[{"type":"GraphqlOperationRouter","config":{"rules":[
+                {"operationType":"query","operationName":"GetUser","backendRef":{"name":"users"}},
+                {"operationType":"mutation","operationName":"CreateOrder","backendRef":{"name":second}}
+            ]}}]}}))
+            .unwrap(),
+        )
+    };
+    raw.upsert("apps/routing".into(), source("orders"));
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor);
+    let route:HTTPRoute=serde_json::from_value(serde_json::json!({"apiVersion":"gateway.networking.k8s.io/v1","kind":"HTTPRoute",
+        "metadata":{"namespace":"apps","name":"graphql"},"spec":{"rules":[
+            {"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"routing"}}],
+             "backendRefs":[{"name":"users","port":80},{"name":"orders","port":81}]},
+            {"backendRefs":[{"name":"healthy","port":80}]}
+        ]}})).unwrap();
+    assert!(find_controller_invalid_rule_details(&route, "apps", &runtime).is_empty());
+    raw.upsert("apps/routing".into(), source("not-declared"));
+    let errors = find_controller_invalid_rule_details(&route, "apps", &runtime);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].0, 0);
+    assert!(errors[0].1.contains("not declared"));
+    raw.upsert("apps/routing".into(), source("orders"));
+    assert!(find_controller_invalid_rule_details(&route, "apps", &runtime).is_empty());
+    let mut delegated = route.clone();
+    delegated.spec.resolved_rules = delegated.spec.rules.clone();
+    assert!(find_controller_invalid_rule_details(&delegated, "apps", &runtime)[0]
+        .1
+        .contains("delegation"));
+}

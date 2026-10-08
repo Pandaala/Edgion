@@ -4,7 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::common::KeyGet;
-use crate::graphql_cost::{CompiledGraphqlCost, MAX_ENVELOPE_BYTES};
+use crate::graphql_cost::CompiledGraphqlCost;
+use crate::graphql_request::MAX_ENVELOPE_BYTES;
 use crate::resources::edgion_plugins::{BodyRequirement, PluginValidation};
 
 use super::json_schema_validation::bounded_structured_body_validation_errors;

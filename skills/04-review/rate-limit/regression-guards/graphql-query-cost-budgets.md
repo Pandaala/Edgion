@@ -16,8 +16,10 @@ composition, entry scope, timeout, headers and failure policy. GraphQL defaults
 Redis failure to Deny without changing ordinary RateLimitRedis's accepted Allow.
 
 The supported scope is early global/Gateway/route request-stage query/mutation
-admission. Subscription execution, operation routing, caches, REST conversion,
-ES DSL and SQL are outside the feature. The cost is a trusted-chain snapshot:
+admission. Subscription execution, caches, REST conversion,
+ES DSL and SQL are outside the cost feature. Operation routing is a separate
+HTTPRoute-only GraphqlOperationRouter plugin sharing the canonical bounded
+frontend in edgion-resources/src/graphql_request and Gateway common/graphql_request. The cost is a trusted-chain snapshot:
 operators must put authentication and all request rewrites before the plugin,
 and later plugins/route/backend filters must not change the admitted operation.
 There is no final-forwarding mutation seal. Entry conditions and policy masks
@@ -59,7 +61,9 @@ against both leaf rejection and retained composite/fixed-weight charging tests.
 The pinned Apollo0.8.6/Rowan0.16.1 parser allocation ledger uses lexical preflight,
 4096 native tokens,256-byte nontrivia tokens,64 native recursion, bounded JSON and
 model cardinalities,32768 evaluation work steps and4 process-wide nonwaiting
-permits. The conservative96MiB per evaluation excludes shared BodyStorage,
+permits shared by the router and limiter. Frontend selection and cost evaluation
+carry one work counter without resetting it; parsed variables and CST metadata
+are borrowed from one owner. The conservative96MiB per evaluation excludes shared BodyStorage,
 compiled schema generations and allocator-wide RSS. Parser upgrades, cloning
 variables/CST subtrees, retaining error diagnostics, collecting expanded fragments
 or moving permit release across Redis require renewed resource review.

@@ -1,0 +1,29 @@
+{
+  "apiVersion": "discovery.k8s.io/v1",
+  "kind": "EndpointSlice",
+  "metadata": {
+    "name": "graphql-core-slice",
+    "namespace": "edgion-default",
+    "labels": {
+      "kubernetes.io/service-name": "graphql-core"
+    }
+  },
+  "addressType": "IPv4",
+  "ports": [
+    {
+      "name": "http",
+      "port": 30003,
+      "protocol": "TCP"
+    }
+  ],
+  "endpoints": [
+    {
+      "addresses": [
+        "127.0.0.1"
+      ],
+      "conditions": {
+        "ready": true
+      }
+    }
+  ]
+}

@@ -1689,3 +1689,40 @@ async fn native_guard_invocation_marker_respects_disable_condition_and_policy_by
         assert!(ctx.ai_state.is_none(), "ordinary traffic must not allocate an AI box");
     }
 }
+
+#[test]
+fn graphql_strict_backend_admission_checks_selected_direct_and_pinned_effective_owners() {
+    let entry:RequestFilterEntry=serde_json::from_value(serde_json::json!({"type":"AiGuard","config":{"rules":[{"name":"tripwire","match":{"type":"regex","pattern":"never-present"},"action":"reject"}]}})).unwrap();
+    let active = compile_scoped_request_entries(vec![entry.clone()], serde_json::json!([]));
+    let bypassed = compile_scoped_request_entries(
+        vec![entry],
+        serde_json::json!([{"name":"http/AiGuard","action":"bypass"}]),
+    );
+    let ctx = || {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.try_set_strict_jump(crate::UpstreamJumpTarget::Internal(crate::InternalJumpPreset {
+            backend_ref_name: "users".into(),
+            backend_ref_namespace: Some("apps".into()),
+        }));
+        ctx
+    };
+    assert!(!active.plugin_runtime.backend_compatible(&mut ctx()));
+    assert!(bypassed.plugin_runtime.backend_compatible(&mut ctx()));
+    assert!(active
+        .plugin_runtime
+        .backend_compatible(&mut EdgionHttpContext::default()));
+    let filter=serde_json::from_value(serde_json::json!({"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"backend"}})).unwrap();
+    let backend = PluginRuntime::from_httproute_filters_for_backend(
+        &[filter],
+        "apps",
+        &edgion_resources::MirrorTuning::default(),
+    );
+    let mut selected = ctx();
+    selected.pinned_backend_ext_ref("apps/backend", || Some(Arc::clone(&active.plugin_runtime)));
+    assert!(!backend.backend_compatible(&mut selected));
+    // An unrelated unselected backend owner never participates in this admission.
+    let mut selected = ctx();
+    selected.pinned_backend_ext_ref("apps/backend", || Some(Arc::clone(&bypassed.plugin_runtime)));
+    selected.pinned_backend_ext_ref("apps/unselected", || Some(Arc::clone(&active.plugin_runtime)));
+    assert!(backend.backend_compatible(&mut selected));
+}

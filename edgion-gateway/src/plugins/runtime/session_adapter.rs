@@ -2260,6 +2260,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         }
     }
 
+    fn set_strict_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
+        self.ctx.try_set_strict_jump(target)
+    }
+
     fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
         self.ctx.try_set_jump(target)
     }

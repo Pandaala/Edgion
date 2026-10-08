@@ -74,6 +74,8 @@ impl CompiledPlugins {
             && !previous.has_enabled_jwe()
             && !self.spec.has_active_grpc_transcoder()
             && !previous.spec.has_active_grpc_transcoder()
+            && !self.spec.has_active_graphql_operation_router()
+            && !previous.spec.has_active_graphql_operation_router()
     }
 
     fn has_cross_namespace_mirror(&self) -> bool {

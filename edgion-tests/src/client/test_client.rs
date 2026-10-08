@@ -54,6 +54,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "JsonSchemaValidationDynamic",
     "GrpcJsonTranscoderDynamic",
     "GraphqlRateLimitDynamic",
+    "GraphqlOperationRouterDynamic",
     "FormJsonTransformDynamic",
     "BasicAuthDynamic",
     "BasicAuthDynamicGrouped",
@@ -1616,6 +1617,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/BodyPlugins" => "EdgionPlugins",
         "EdgionPlugins/JsonSchemaValidation"
         | "EdgionPlugins/GrpcJsonTranscoder"
+        | "EdgionPlugins/GraphqlOperationRouter"
         | "EdgionPlugins/GraphqlRateLimit" => "EdgionPlugins",
         "EdgionPlugins/BodyDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
@@ -1708,6 +1710,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "FormJsonTransformDynamic"
         | "GrpcJsonTranscoderDynamic"
         | "GraphqlRateLimitDynamic"
+        | "GraphqlOperationRouterDynamic"
         | "JsonSchemaValidationDynamic"
         | "PmdRefFlap"
         | "RegionRouteValidation"
@@ -3074,6 +3077,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::JsonSchemaValidationTestSuite));
+        }
+        "EdgionPlugins/GraphqlOperationRouter" => {
+            if !gateway {
+                eprintln!("GraphqlOperationRouter requires --gateway");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GraphqlOperationRouterTestSuite));
         }
         "EdgionPlugins/GraphqlRateLimit" => {
             if !gateway {

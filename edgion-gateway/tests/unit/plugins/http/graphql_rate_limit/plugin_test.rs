@@ -85,6 +85,7 @@ fn constructor_independently_rejects_leaf_multiplier_rules() {
 // deliberately held process-wide budget cannot race another evaluation test.
 #[tokio::test]
 async fn bounded_admission_and_early_replies_do_not_materialize_rejected_input() {
+    let _evaluation_test_guard = EVALUATION_TEST_LOCK.lock().await;
     let filter = filter(None);
     let mut log = PluginLog::new("GraphqlRateLimit");
 

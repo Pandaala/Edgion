@@ -65,3 +65,5 @@ pub mod ai_messages_binding;
 pub mod ai_responses_continuation;
 pub mod graphql_rate_limit;
 pub mod grpc_json_transcoder;
+
+pub mod graphql_operation_router;

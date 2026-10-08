@@ -165,9 +165,9 @@ pub(super) fn backend_request_scope_extension_ref_error(
     extension_ref: &LocalObjectReference,
 ) -> Option<String> {
     let (plugin, _) = backend_request_scope_violation(runtime, route_namespace, extension_ref)?;
-    if plugin.starts_with("GrpcJsonTranscoder") {
+    if plugin.starts_with("GrpcJsonTranscoder") || plugin.starts_with("GraphqlOperationRouter") {
         return Some(format!(
-            "backendRefs[{backend_index}] GrpcJsonTranscoder requires HTTPRoute rule scope"
+            "backendRefs[{backend_index}] {plugin} requires HTTPRoute rule scope"
         ));
     }
     Some(format!(
@@ -185,7 +185,7 @@ pub(super) fn backend_request_scope_route_wide_error(
 ) -> Option<String> {
     let (plugin, route_wide) = backend_request_scope_violation(runtime, route_namespace, extension_ref)?;
     route_wide.then(|| {
-        if plugin.starts_with("GrpcJsonTranscoder") { return format!("backendRefs[{backend_index}] GrpcJsonTranscoder requires HTTPRoute rule scope"); }
+        if plugin.starts_with("GrpcJsonTranscoder") || plugin.starts_with("GraphqlOperationRouter") { return format!("backendRefs[{backend_index}] {plugin} requires HTTPRoute rule scope"); }
         format!(
             "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"
         )
@@ -210,6 +210,8 @@ fn backend_request_scope_violation(
         Some(("WAF", true))
     } else if plugins.has_active_grpc_transcoder() {
         Some(("GrpcJsonTranscoder (HTTPRoute rule only)", true))
+    } else if plugins.has_active_graphql_operation_router() {
+        Some(("GraphqlOperationRouter (HTTPRoute rule only)", false))
     } else if plugins.has_active_request_id() {
         Some(("RequestId", true))
     } else if let Some(entry) = plugins
@@ -997,13 +999,13 @@ fn hostname_intersection<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
 mod tests;
 
 /// Route-kind validation uses the same raw source generation as dependencies.
-pub(super) fn contains_grpc_transcoder(
+pub(super) fn http_route_only_plugin(
     runtime: &ControllerRuntime,
     namespace: &str,
     reference: &LocalObjectReference,
-) -> bool {
+) -> Option<&'static str> {
     if !is_supported_edgion_plugins_ref(reference) {
-        return false;
+        return None;
     }
     let namespace = reference.resolved_namespace.as_deref().unwrap_or(namespace);
     runtime
@@ -1011,5 +1013,33 @@ pub(super) fn contains_grpc_transcoder(
         .get("EdgionPlugins")
         .and_then(|p| p.get_raw_any(&format!("{namespace}/{}", reference.name)))
         .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())
-        .is_some_and(|plugins| plugins.has_active_grpc_transcoder())
+        .and_then(|plugins| plugins.http_route_only_plugin())
+}
+
+/// Inspect raw desired generations before processed plugin cache replacement.
+pub(super) fn graphql_router_rule_error(
+    rule: &edgion_resources::HTTPRouteRule,
+    namespace: &str,
+    runtime: &ControllerRuntime,
+    delegated: bool,
+) -> Option<String> {
+    let processor = runtime.processor_registry.get("EdgionPlugins")?;
+    let plugins: Vec<_> = rule
+        .filters
+        .iter()
+        .flatten()
+        .filter(|f| f.filter_type == edgion_resources::HTTPRouteFilterType::ExtensionRef)
+        .filter_map(|f| f.extension_ref.as_ref())
+        .filter(|r| is_supported_edgion_plugins_ref(r))
+        .filter_map(|r| {
+            processor.get_raw_any(&format!(
+                "{}/{}",
+                r.resolved_namespace.as_deref().unwrap_or(namespace),
+                r.name
+            ))
+        })
+        .filter_map(|p| p.downcast::<EdgionPlugins>().ok())
+        .collect();
+    let views: Vec<_> = plugins.iter().map(|p| p.as_ref()).collect();
+    edgion_resources::plugin_configs::graphql_router_rule_binding_error(rule, namespace, &views, delegated)
 }

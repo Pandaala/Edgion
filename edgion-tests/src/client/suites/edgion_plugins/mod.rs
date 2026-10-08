@@ -169,3 +169,6 @@ pub use webhook_key_get::WebhookKeyGetTestSuite;
 
 mod grpc_json_transcoder;
 pub use grpc_json_transcoder::{GrpcJsonTranscoderDynamicSuite, GrpcJsonTranscoderTestSuite};
+
+mod graphql_operation_router;
+pub use graphql_operation_router::{GraphqlOperationRouterDynamicSuite, GraphqlOperationRouterTestSuite};

@@ -252,6 +252,7 @@ impl EdgionPluginsHandler {
                 | EdgionPlugin::GrpcJsonTranscoder(_)
                 | EdgionPlugin::JsonSchemaValidation(_)
                 | EdgionPlugin::GraphqlRateLimit(_)
+                | EdgionPlugin::GraphqlOperationRouter(_)
                 | EdgionPlugin::FormJsonTransform(_)
                 | EdgionPlugin::RequestRestriction(_)
                 | EdgionPlugin::ResponseRewrite(_)

@@ -9,12 +9,12 @@ use super::plugin_configs::{
     AiGuardConfig, AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig,
     CorsConfig, CredentialInjectorConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig,
     DslConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig,
-    FormJsonTransformConfig, ForwardAuthConfig, GeoIpLocationConfig, GraphqlRateLimitConfig, GuardrailConfig,
-    HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig,
-    JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig,
-    RateLimitLocalConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig, RequestAccessPolicyConfig,
-    RequestBodyBufferConfig, RequestIdConfig, RequestMirrorPluginConfig, RequestRestrictionConfig,
-    ResponseRewriteConfig, WasmConfig, WebhookKeyGetConfig, DEFAULT_INSTANCE_MAX_BYTES,
+    FormJsonTransformConfig, ForwardAuthConfig, GeoIpLocationConfig, GraphqlOperationRouterConfig,
+    GraphqlRateLimitConfig, GuardrailConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig,
+    JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
+    OpenidConnectConfig, ProxyRewriteConfig, RateLimitLocalConfig, RateLimitRedisConfig, RealIpConfig,
+    RegionRouteConfig, RequestAccessPolicyConfig, RequestBodyBufferConfig, RequestIdConfig, RequestMirrorPluginConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig, WasmConfig, WebhookKeyGetConfig, DEFAULT_INSTANCE_MAX_BYTES,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
 
@@ -107,6 +107,7 @@ pub enum EdgionPlugin {
     JsonSchemaValidation(JsonSchemaValidationConfig),
     /// Schema-aware GraphQL query-cost budgets using the canonical Redis limiter.
     GraphqlRateLimit(GraphqlRateLimitConfig),
+    GraphqlOperationRouter(GraphqlOperationRouterConfig),
     /// Convert REST JSON to native upstream gRPC using compiled descriptors.
     GrpcJsonTranscoder(super::plugin_configs::GrpcJsonTranscoderConfig),
     /// Transform a bounded request body between form URL encoding and flat JSON.
@@ -224,8 +225,8 @@ impl EdgionPlugin {
                 max_body_size: Some(DEFAULT_INSTANCE_MAX_BYTES.to_string()),
                 ..BodyRequirement::fail_close()
             }),
-            GraphqlRateLimit(_) if stage == BodyStage::Request => Some(BodyRequirement {
-                max_body_size: Some(crate::graphql_cost::MAX_ENVELOPE_BYTES.to_string()),
+            GraphqlRateLimit(_) | GraphqlOperationRouter(_) if stage == BodyStage::Request => Some(BodyRequirement {
+                max_body_size: Some(crate::graphql_request::MAX_ENVELOPE_BYTES.to_string()),
                 ..BodyRequirement::fail_close()
             }),
             FormJsonTransform(_) if stage == BodyStage::Request => Some(BodyRequirement {
@@ -288,6 +289,7 @@ impl EdgionPlugin {
             | GrpcJsonTranscoder(_)
             | JsonSchemaValidation(_)
             | GraphqlRateLimit(_)
+            | GraphqlOperationRouter(_)
             | FormJsonTransform(_)
             | RequestRestriction(_)
             | ResponseRewrite(_)
@@ -332,7 +334,7 @@ impl EdgionPlugin {
 
     /// Shared Controller/Gateway validation for bounded structured consumers.
     pub fn structured_body_validation_errors(&self, body: &super::BodyRequirement) -> Vec<String> {
-        if matches!(self, Self::GraphqlRateLimit(_)) {
+        if matches!(self, Self::GraphqlRateLimit(_) | Self::GraphqlOperationRouter(_)) {
             super::plugin_configs::graphql_body_validation_errors(body)
         } else {
             super::plugin_configs::bounded_structured_body_validation_errors(body)
@@ -366,6 +368,7 @@ impl EdgionPlugin {
             EdgionPlugin::RequestBodyBuffer(_) => "RequestBodyBuffer",
             EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
             EdgionPlugin::GraphqlRateLimit(_) => "GraphqlRateLimit",
+            EdgionPlugin::GraphqlOperationRouter(_) => "GraphqlOperationRouter",
             EdgionPlugin::GrpcJsonTranscoder(_) => "GrpcJsonTranscoder",
             EdgionPlugin::FormJsonTransform(_) => "FormJsonTransform",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
@@ -394,6 +397,11 @@ impl EdgionPlugin {
             EdgionPlugin::Canary(_) => "Canary",
             EdgionPlugin::Wasm(_) => "Wasm",
         }
+    }
+
+    /// Attachment classification shared by Controller and Gateway.
+    pub fn requires_http_route_rule_scope(&self) -> bool {
+        matches!(self, Self::GrpcJsonTranscoder(_) | Self::GraphqlOperationRouter(_))
     }
 
     /// Whether this request plugin can publish an upstream jump.
@@ -445,6 +453,7 @@ impl EdgionPlugin {
                 OnRedisFailure::Allow => DYE_FAIL_OPEN_ONLY,
                 OnRedisFailure::Deny => DYE_FAIL_CLOSE_ONLY,
             },
+            EdgionPlugin::GraphqlOperationRouter(_) => &[],
             EdgionPlugin::GraphqlRateLimit(c) => match c.on_redis_failure {
                 OnRedisFailure::Allow => DYE_FAIL_OPEN_ONLY,
                 OnRedisFailure::Deny => DYE_FAIL_CLOSE_ONLY,
@@ -544,6 +553,7 @@ impl EdgionPlugin {
             EdgionPlugin::RegionRoute(_) => "region_route",
             EdgionPlugin::RateLimitRedis(_) => "rate_limit_redis",
             EdgionPlugin::GraphqlRateLimit(_) => "graphql_rate_limit",
+            EdgionPlugin::GraphqlOperationRouter(_) => "graphql_operation_router",
             EdgionPlugin::ExtProc(_) => "ext_proc",
             EdgionPlugin::Wasm(_) => "wasm",
             EdgionPlugin::Dsl(_) => "dsl",
@@ -634,6 +644,7 @@ impl EdgionPlugin {
                 names
             }
             EdgionPlugin::GraphqlRateLimit(c) => headers_of(c.key.iter()),
+            EdgionPlugin::GraphqlOperationRouter(_) => Vec::new(),
             // No header-typed routing key source to protect. Canary is here
             // deliberately: profile selection is driven by
             // `activeProfile`/`activeProfileRef`, not a request key, and it was
@@ -709,6 +720,7 @@ impl EdgionPlugin {
             EdgionPlugin::RequestBodyBuffer(c) => c.validation_error(),
             EdgionPlugin::JsonSchemaValidation(c) => c.validation_error(),
             EdgionPlugin::GraphqlRateLimit(c) => c.validation_error(),
+            EdgionPlugin::GraphqlOperationRouter(c) => c.validation_error(),
             EdgionPlugin::GrpcJsonTranscoder(c) => c.validation_error(),
             EdgionPlugin::FormJsonTransform(c) => c.validation_error(),
             EdgionPlugin::RequestRestriction(c) => c.validation_error(),
@@ -754,7 +766,12 @@ impl EdgionPlugin {
 pub fn is_upstream_jump_plugin_type(name: &str) -> bool {
     matches!(
         name,
-        "DirectEndpoint" | "DynamicInternalUpstream" | "DynamicExternalUpstream" | "RegionRoute" | "Canary"
+        "DirectEndpoint"
+            | "DynamicInternalUpstream"
+            | "DynamicExternalUpstream"
+            | "RegionRoute"
+            | "Canary"
+            | "GraphqlOperationRouter"
     )
 }
 

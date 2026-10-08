@@ -53,6 +53,7 @@ use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::form_json_transform::FormJsonTransform;
 use crate::plugins::http::forward_auth::ForwardAuth;
 use crate::plugins::http::geoip_location::GeoIpLocation;
+use crate::plugins::http::graphql_operation_router::GraphqlOperationRouter;
 use crate::plugins::http::graphql_rate_limit::GraphqlRateLimit;
 use crate::plugins::http::grpc_json_transcoder::GrpcJsonTranscoder;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
@@ -116,6 +117,7 @@ pub struct PluginRuntime {
     rate_limit_local_outcome_slots: usize,
     has_upstream_jump_plugin: bool,
     has_grpc_transcoder: bool,
+    has_graphql_operation_router: bool,
     backend_ext_ref_keys: Vec<String>,
     /// Plugins for request stage (async)
     request_plugins: Vec<Arc<dyn RequestFilter>>,
@@ -271,6 +273,7 @@ impl PluginRuntime {
         Self {
             has_upstream_jump_plugin: false,
             has_grpc_transcoder: false,
+            has_graphql_operation_router: false,
             backend_ext_ref_keys: Vec::new(),
             request_plugins: vec![],
             backend_request_header_modifier: None,
@@ -310,6 +313,7 @@ impl PluginRuntime {
     }
 
     fn append_entry_bundle(&mut self, bundle: &EntryBundle) {
+        self.has_graphql_operation_router |= bundle.request.iter().any(|f| f.name() == "GraphqlOperationRouter");
         self.has_grpc_transcoder |= bundle
             .request
             .iter()
@@ -418,6 +422,14 @@ impl PluginRuntime {
         self.waf_candidate.is_some()
     }
 
+    pub(crate) fn has_graphql_operation_router(&self) -> bool {
+        self.has_graphql_operation_router
+    }
+
+    pub(crate) fn requires_http_route_rule_scope(&self) -> bool {
+        self.has_grpc_transcoder || self.has_graphql_operation_router
+    }
+
     pub(crate) fn has_grpc_transcoder(&self) -> bool {
         self.has_grpc_transcoder
     }
@@ -429,18 +441,23 @@ impl PluginRuntime {
     }
 
     /// Inspect the same pinned target that ExtensionRef executes, before any
-    /// selected-backend plugin or origin can observe this RPC request.
-    pub(crate) fn grpc_backend_compatible(&self, ctx: &mut EdgionHttpContext) -> bool {
-        let Some(plan) = ctx.grpc_transcoding.clone() else {
+    /// selected-backend plugin or origin observes a converted or routed request.
+    pub(crate) fn backend_compatible(&self, ctx: &mut EdgionHttpContext) -> bool {
+        let plan = ctx.grpc_transcoding.clone();
+        if plan.is_none() && !ctx.has_strict_jump() {
             return true;
-        };
+        }
         let incompatible = |runtime: &Self| {
             runtime.has_ai_conversion_owner()
                 || runtime.has_grpc_transcoder()
-                || (!plan.streaming() && runtime.has_unary_body_consumer())
+                || plan
+                    .as_ref()
+                    .is_some_and(|plan| !plan.streaming() && runtime.has_unary_body_consumer())
         };
         if incompatible(self) {
-            plan.reject_mutation();
+            if let Some(plan) = plan {
+                plan.reject_mutation();
+            }
             return false;
         }
         for key in &self.backend_ext_ref_keys {
@@ -448,7 +465,9 @@ impl PluginRuntime {
                 .resolve_pinned_backend_ext_ref(key)
                 .is_some_and(|runtime| incompatible(&runtime))
             {
-                plan.reject_mutation();
+                if let Some(plan) = plan {
+                    plan.reject_mutation();
+                }
                 return false;
             }
         }
@@ -870,6 +889,9 @@ impl PluginRuntime {
             self.invalid_plugins.record_non_retainable("GrpcJsonTranscoder");
             errors.extend(transcoding_errors);
         }
+        self.has_graphql_operation_router |= entries
+            .iter()
+            .any(|e| e.is_enabled() && matches!(e.plugin, EdgionPlugin::GraphqlOperationRouter(_)));
         self.has_grpc_transcoder |= entries
             .iter()
             .any(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::GrpcJsonTranscoder(_)));
@@ -914,6 +936,7 @@ impl PluginRuntime {
                         | EdgionPlugin::GrpcJsonTranscoder(_)
                         | EdgionPlugin::JsonSchemaValidation(_)
                         | EdgionPlugin::GraphqlRateLimit(_)
+                        | EdgionPlugin::GraphqlOperationRouter(_)
                         | EdgionPlugin::ProxyRewrite(edgion_resources::resources::edgion_plugins::ProxyRewriteConfig {
                             json_body: Some(_),
                             ..
@@ -1853,6 +1876,9 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(Box::new(JweDecrypt::new(config, namespace.to_string()))))
             }
             EdgionPlugin::JsonSchemaValidation(config) => CreateResult::Ok(JsonSchemaValidation::create(config)),
+            EdgionPlugin::GraphqlOperationRouter(config) => {
+                CreateResult::Ok(GraphqlOperationRouter::create(config, body_requirement))
+            }
             EdgionPlugin::GraphqlRateLimit(config) => {
                 CreateResult::Ok(GraphqlRateLimit::create(config, entry_scope, body_requirement))
             }
@@ -1944,6 +1970,7 @@ impl PluginRuntime {
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::GraphqlRateLimit(_)
+            | EdgionPlugin::GraphqlOperationRouter(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::HmacAuth(_)
             | EdgionPlugin::HeaderCertAuth(_)
@@ -2018,6 +2045,7 @@ impl PluginRuntime {
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::GraphqlRateLimit(_)
+            | EdgionPlugin::GraphqlOperationRouter(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimitLocal(_)
@@ -2069,6 +2097,7 @@ impl PluginRuntime {
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::GraphqlRateLimit(_)
+            | EdgionPlugin::GraphqlOperationRouter(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::HmacAuth(_)
             | EdgionPlugin::HeaderCertAuth(_)
@@ -2124,6 +2153,7 @@ impl PluginRuntime {
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
             EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
             EdgionPlugin::GraphqlRateLimit(_) => "GraphqlRateLimit",
+            EdgionPlugin::GraphqlOperationRouter(_) => "GraphqlOperationRouter",
             EdgionPlugin::GrpcJsonTranscoder(_) => "GrpcJsonTranscoder",
             EdgionPlugin::FormJsonTransform(_) => "FormJsonTransform",
             EdgionPlugin::HmacAuth(_) => "HmacAuth",

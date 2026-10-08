@@ -64,6 +64,8 @@ before applying a decision to current code.
 - [UDPRoute `edgion.io/edgion-stream-plugins` annotation wiring (udp-F012)](regression-guards/udproute-stream-plugins-annotation-wiring.md)
 - [Weighted Invalid BackendRefs Retain Their Traffic Share](regression-guards/weighted-invalid-backendrefs-retain-traffic-share.md)
 
+- [GraphQL operation routing requires declared same-rule backends](regression-guards/graphql-operation-router-declared-backends.md)
+
 ## Review evidence
 
 - [Retry Keeps the Logical Backend Selection — NOT AN ISSUE](review-evidence/retry-keeps-logical-backend-selection.md)

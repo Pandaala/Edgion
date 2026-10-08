@@ -302,6 +302,22 @@ impl EdgionPlugins {
             .any(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::GrpcJsonTranscoder(_)))
     }
 
+    pub fn has_active_graphql_operation_router(&self) -> bool {
+        self.spec
+            .request_plugins
+            .iter()
+            .flatten()
+            .any(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::GraphqlOperationRouter(_)))
+    }
+    pub fn http_route_only_plugin(&self) -> Option<&'static str> {
+        self.spec
+            .request_plugins
+            .iter()
+            .flatten()
+            .find(|entry| entry.is_enabled() && entry.plugin.requires_http_route_rule_scope())
+            .map(|entry| entry.plugin.type_name())
+    }
+
     /// Whether this resource contributes RequestId rules at an active attachment.
     pub fn has_active_request_id(&self) -> bool {
         self.spec
@@ -313,8 +329,8 @@ impl EdgionPlugins {
 
     /// Early attachments may only depend on parsed headers, method and W3C ID.
     pub fn validate_request_id_early_attachment(&self) -> Vec<String> {
-        if self.has_active_grpc_transcoder() {
-            return vec!["GrpcJsonTranscoder requires HTTPRoute rule scope".into()];
+        if let Some(plugin) = self.http_route_only_plugin() {
+            return vec![format!("{plugin} requires HTTPRoute rule scope")];
         }
         use super::conditions::Condition;
         use crate::common::KeyGet;
@@ -504,6 +520,7 @@ impl EdgionPlugins {
                                         | EdgionPlugin::GrpcJsonTranscoder(_)
                                         | EdgionPlugin::JsonSchemaValidation(_)
                                         | EdgionPlugin::GraphqlRateLimit(_)
+                                        | EdgionPlugin::GraphqlOperationRouter(_)
                                         | EdgionPlugin::ProxyRewrite(super::plugin_configs::ProxyRewriteConfig {
                                             json_body: Some(_),
                                             ..
@@ -709,6 +726,7 @@ impl EdgionPlugins {
                                 | EdgionPlugin::GrpcJsonTranscoder(_)
                                 | EdgionPlugin::JsonSchemaValidation(_)
                                 | EdgionPlugin::GraphqlRateLimit(_)
+                                | EdgionPlugin::GraphqlOperationRouter(_)
                                 | EdgionPlugin::ProxyRewrite(_)
                         ) {
                             for error in entry.plugin.structured_body_validation_errors(body) {

@@ -1,4 +1,4 @@
-use super::{name, parse_document, CompiledGraphqlCost, GraphqlCostError, Work};
+use super::{name, parse_document, CompiledGraphqlCost, GraphqlError, Work};
 use crate::resources::edgion_plugins::plugin_configs::GraphqlCostRule;
 use apollo_parser::cst;
 use std::collections::{HashMap, HashSet};
@@ -9,10 +9,10 @@ pub(super) struct TypeRef {
     pub nulls: Vec<bool>,
 }
 impl TypeRef {
-    pub fn parse(ty: cst::Type) -> Result<Self, GraphqlCostError> {
-        fn walk(ty: cst::Type, nulls: &mut Vec<bool>) -> Result<String, GraphqlCostError> {
+    pub fn parse(ty: cst::Type) -> Result<Self, GraphqlError> {
+        fn walk(ty: cst::Type, nulls: &mut Vec<bool>) -> Result<String, GraphqlError> {
             if nulls.len() >= 64 {
-                return Err(GraphqlCostError::Invalid);
+                return Err(GraphqlError::Invalid);
             }
             match ty {
                 cst::Type::NamedType(n) => {
@@ -21,17 +21,14 @@ impl TypeRef {
                 }
                 cst::Type::ListType(l) => {
                     nulls.push(false);
-                    walk(l.ty().ok_or(GraphqlCostError::Invalid)?, nulls)
+                    walk(l.ty().ok_or(GraphqlError::Invalid)?, nulls)
                 }
                 cst::Type::NonNullType(n) => {
                     nulls.push(true);
                     if let Some(named) = n.named_type() {
                         name(named.name())
                     } else {
-                        walk(
-                            n.list_type().and_then(|l| l.ty()).ok_or(GraphqlCostError::Invalid)?,
-                            nulls,
-                        )
+                        walk(n.list_type().and_then(|l| l.ty()).ok_or(GraphqlError::Invalid)?, nulls)
                     }
                 }
             }
@@ -56,10 +53,10 @@ pub(super) enum DefaultValue {
     Other,
 }
 impl DefaultValue {
-    fn parse(value: Option<cst::DefaultValue>) -> Result<Self, GraphqlCostError> {
+    fn parse(value: Option<cst::DefaultValue>) -> Result<Self, GraphqlError> {
         match value.and_then(|v| v.value()) {
             None => Ok(Self::Missing),
-            Some(cst::Value::IntValue(i)) => i32::try_from(i).map(Self::Int).map_err(|_| GraphqlCostError::Invalid),
+            Some(cst::Value::IntValue(i)) => i32::try_from(i).map(Self::Int).map_err(|_| GraphqlError::Invalid),
             Some(cst::Value::NullValue(_)) => Ok(Self::Null),
             Some(_) => Ok(Self::Other),
         }
@@ -117,22 +114,22 @@ pub(super) struct Schema {
     pub mutation: Option<String>,
 }
 
-fn no_directives(d: Option<cst::Directives>) -> Result<(), GraphqlCostError> {
+fn no_directives(d: Option<cst::Directives>) -> Result<(), GraphqlError> {
     if d.is_some() {
-        Err(GraphqlCostError::Invalid)
+        Err(GraphqlError::Invalid)
     } else {
         Ok(())
     }
 }
-fn argument(input: cst::InputValueDefinition) -> Result<(String, Argument), GraphqlCostError> {
+fn argument(input: cst::InputValueDefinition) -> Result<(String, Argument), GraphqlError> {
     no_directives(input.directives())?;
-    let ty = TypeRef::parse(input.ty().ok_or(GraphqlCostError::Invalid)?)?;
+    let ty = TypeRef::parse(input.ty().ok_or(GraphqlError::Invalid)?)?;
     let default = DefaultValue::parse(input.default_value())?;
     if ty.required() && matches!(default, DefaultValue::Null) {
-        return Err(GraphqlCostError::Invalid);
+        return Err(GraphqlError::Invalid);
     }
     if ty.scalar_int() && matches!(default, DefaultValue::Other) {
-        return Err(GraphqlCostError::Invalid);
+        return Err(GraphqlError::Invalid);
     }
     Ok((name(input.name())?, Argument { ty, default }))
 }
@@ -140,52 +137,49 @@ fn fields(
     source: Option<cst::FieldsDefinition>,
     total: &mut usize,
     args_total: &mut usize,
-) -> Result<HashMap<String, Field>, GraphqlCostError> {
+) -> Result<HashMap<String, Field>, GraphqlError> {
     let mut fields = HashMap::new();
     if let Some(source) = source {
         for field in source.field_definitions() {
             no_directives(field.directives())?;
             if *total >= 2048 {
-                return Err(GraphqlCostError::Invalid);
+                return Err(GraphqlError::Invalid);
             }
             *total += 1;
             let mut args = HashMap::new();
             if let Some(defs) = field.arguments_definition() {
                 for input in defs.input_value_definitions() {
                     if *args_total >= 4096 {
-                        return Err(GraphqlCostError::Invalid);
+                        return Err(GraphqlError::Invalid);
                     }
                     *args_total += 1;
                     let (n, a) = argument(input)?;
                     if args.insert(n, a).is_some() {
-                        return Err(GraphqlCostError::Invalid);
+                        return Err(GraphqlError::Invalid);
                     }
                 }
             }
             let n = name(field.name())?;
-            let ty = TypeRef::parse(field.ty().ok_or(GraphqlCostError::Invalid)?)?;
+            let ty = TypeRef::parse(field.ty().ok_or(GraphqlError::Invalid)?)?;
             if fields.insert(n, Field { ty, args }).is_some() {
-                return Err(GraphqlCostError::Invalid);
+                return Err(GraphqlError::Invalid);
             }
         }
     }
     Ok(fields)
 }
-fn interfaces(
-    source: Option<cst::ImplementsInterfaces>,
-    membership: &mut usize,
-) -> Result<Vec<String>, GraphqlCostError> {
+fn interfaces(source: Option<cst::ImplementsInterfaces>, membership: &mut usize) -> Result<Vec<String>, GraphqlError> {
     let mut result = Vec::new();
     let mut seen = HashSet::new();
     if let Some(source) = source {
         for ty in source.named_types() {
             if *membership >= 4096 {
-                return Err(GraphqlCostError::Invalid);
+                return Err(GraphqlError::Invalid);
             }
             *membership += 1;
             let n = name(ty.name())?;
             if !seen.insert(n.clone()) {
-                return Err(GraphqlCostError::Invalid);
+                return Err(GraphqlError::Invalid);
             }
             result.push(n);
         }
@@ -194,7 +188,7 @@ fn interfaces(
 }
 
 impl Schema {
-    fn compile(source: &str) -> Result<(Self, Work), GraphqlCostError> {
+    fn compile(source: &str) -> Result<(Self, Work), GraphqlError> {
         let doc = parse_document(source)?;
         let mut types = HashMap::new();
         for n in ["Int", "Float", "String", "Boolean", "ID"] {
@@ -207,12 +201,12 @@ impl Schema {
             let (n, t) = match definition {
                 cst::Definition::SchemaDefinition(d) => {
                     if explicit {
-                        return Err(GraphqlCostError::Invalid);
+                        return Err(GraphqlError::Invalid);
                     }
                     explicit = true;
                     no_directives(d.directives())?;
                     for root in d.root_operation_type_definitions() {
-                        let op = root.operation_type().ok_or(GraphqlCostError::Invalid)?;
+                        let op = root.operation_type().ok_or(GraphqlError::Invalid)?;
                         let key = if op.query_token().is_some() {
                             "query"
                         } else if op.mutation_token().is_some() {
@@ -222,7 +216,7 @@ impl Schema {
                         };
                         let n = name(root.named_type().and_then(|t| t.name()))?;
                         if roots.insert(key, n).is_some() {
-                            return Err(GraphqlCostError::Invalid);
+                            return Err(GraphqlError::Invalid);
                         }
                     }
                     continue;
@@ -237,7 +231,7 @@ impl Schema {
                 cst::Definition::InterfaceTypeDefinition(d) => {
                     no_directives(d.directives())?;
                     if d.implements_interfaces().is_some() {
-                        return Err(GraphqlCostError::Invalid);
+                        return Err(GraphqlError::Invalid);
                     }
                     let mut t = TypeDef::new(Kind::Interface);
                     t.fields = fields(d.fields_definition(), &mut fields_total, &mut args_total)?;
@@ -250,12 +244,12 @@ impl Schema {
                     if let Some(members) = d.union_member_types() {
                         for member in members.named_types() {
                             if membership >= 4096 {
-                                return Err(GraphqlCostError::Invalid);
+                                return Err(GraphqlError::Invalid);
                             }
                             membership += 1;
                             let n = name(member.name())?;
                             if !seen.insert(n.clone()) {
-                                return Err(GraphqlCostError::Invalid);
+                                return Err(GraphqlError::Invalid);
                             }
                             t.possible.push(n);
                         }
@@ -273,7 +267,7 @@ impl Schema {
                         for value in defs.enum_value_definitions() {
                             no_directives(value.directives())?;
                             if values.len() >= 256 || !values.insert(name(value.enum_value().and_then(|e| e.name()))?) {
-                                return Err(GraphqlCostError::Invalid);
+                                return Err(GraphqlError::Invalid);
                             }
                         }
                     }
@@ -285,25 +279,25 @@ impl Schema {
                     if let Some(defs) = d.input_fields_definition() {
                         for input in defs.input_value_definitions() {
                             if fields_total >= 2048 {
-                                return Err(GraphqlCostError::Invalid);
+                                return Err(GraphqlError::Invalid);
                             }
                             fields_total += 1;
                             let (n, a) = argument(input)?;
                             if t.inputs.insert(n, a).is_some() {
-                                return Err(GraphqlCostError::Invalid);
+                                return Err(GraphqlError::Invalid);
                             }
                         }
                     }
                     (name(d.name())?, t)
                 }
-                _ => return Err(GraphqlCostError::Invalid),
+                _ => return Err(GraphqlError::Invalid),
             };
             if types.len() >= 256 || n.starts_with("__") || types.insert(n, t).is_some() {
-                return Err(GraphqlCostError::Invalid);
+                return Err(GraphqlError::Invalid);
             }
         }
         let query = if explicit {
-            roots.get("query").cloned().ok_or(GraphqlCostError::Invalid)?
+            roots.get("query").cloned().ok_or(GraphqlError::Invalid)?
         } else {
             "Query".to_string()
         };
@@ -317,7 +311,7 @@ impl Schema {
             .chain(roots.get("subscription"))
         {
             if types.get(n).is_none_or(|t| t.kind != Kind::Object) {
-                return Err(GraphqlCostError::Invalid);
+                return Err(GraphqlError::Invalid);
             }
         }
         let mut work = Work::default();
@@ -328,7 +322,7 @@ impl Schema {
                 for interface in &t.interfaces {
                     work.step()?;
                     if types.get(interface).is_none_or(|i| i.kind != Kind::Interface) {
-                        return Err(GraphqlCostError::Invalid);
+                        return Err(GraphqlError::Invalid);
                     }
                     memberships.entry(interface.clone()).or_default().push(n.clone());
                 }
@@ -337,14 +331,14 @@ impl Schema {
                 for n in &t.possible {
                     work.step()?;
                     if types.get(n).is_none_or(|t| t.kind != Kind::Object) {
-                        return Err(GraphqlCostError::Invalid);
+                        return Err(GraphqlError::Invalid);
                     }
                 }
             }
             for field in t.fields.values() {
                 work.step()?;
                 if types.get(&field.ty.name).is_none_or(|t| t.kind == Kind::Input) {
-                    return Err(GraphqlCostError::Invalid);
+                    return Err(GraphqlError::Invalid);
                 }
                 for arg in field.args.values() {
                     work.step()?;
@@ -369,20 +363,20 @@ impl Schema {
                 let contract = &types[iface];
                 for (n, expected) in &contract.fields {
                     work.step()?;
-                    let actual = t.fields.get(n).ok_or(GraphqlCostError::Invalid)?;
+                    let actual = t.fields.get(n).ok_or(GraphqlError::Invalid)?;
                     if !covariant(&types, &actual.ty, &expected.ty, &mut work)? {
-                        return Err(GraphqlCostError::Invalid);
+                        return Err(GraphqlError::Invalid);
                     }
                     for (n, arg) in &expected.args {
                         work.step()?;
                         if actual.args.get(n).is_none_or(|a| a.ty != arg.ty) {
-                            return Err(GraphqlCostError::Invalid);
+                            return Err(GraphqlError::Invalid);
                         }
                     }
                     for (n, arg) in &actual.args {
                         work.step()?;
                         if !expected.args.contains_key(n) && arg.ty.required() && arg.default.absent() {
-                            return Err(GraphqlCostError::Invalid);
+                            return Err(GraphqlError::Invalid);
                         }
                     }
                 }
@@ -391,14 +385,14 @@ impl Schema {
         Ok((Self { types, query, mutation }, work))
     }
 }
-fn check_input(types: &HashMap<String, TypeDef>, ty: &TypeRef) -> Result<(), GraphqlCostError> {
+fn check_input(types: &HashMap<String, TypeDef>, ty: &TypeRef) -> Result<(), GraphqlError> {
     if types
         .get(&ty.name)
         .is_some_and(|t| matches!(t.kind, Kind::Scalar | Kind::Enum | Kind::Input))
     {
         Ok(())
     } else {
-        Err(GraphqlCostError::Invalid)
+        Err(GraphqlError::Invalid)
     }
 }
 fn covariant(
@@ -406,7 +400,7 @@ fn covariant(
     actual: &TypeRef,
     expected: &TypeRef,
     work: &mut Work,
-) -> Result<bool, GraphqlCostError> {
+) -> Result<bool, GraphqlError> {
     if actual.nulls.len() != expected.nulls.len() {
         return Ok(false);
     }
@@ -451,9 +445,9 @@ impl CompiledGraphqlCost {
         rules: &[GraphqlCostRule],
         max_cost: u32,
         max_depth: usize,
-    ) -> Result<Self, GraphqlCostError> {
+    ) -> Result<Self, GraphqlError> {
         if !(1..=1_000_000).contains(&max_cost) || !(1..=32).contains(&max_depth) || rules.len() > 256 {
-            return Err(GraphqlCostError::Invalid);
+            return Err(GraphqlError::Invalid);
         }
         let (schema, mut work) = Schema::compile(source)?;
         let mut compiled = HashMap::new();
@@ -463,45 +457,44 @@ impl CompiledGraphqlCost {
                 || rule.default_multiplier > 1_000_000
                 || rule.multipliers.len() > 8
             {
-                return Err(GraphqlCostError::Invalid);
+                return Err(GraphqlError::Invalid);
             }
-            let (ty, field) = rule.field.split_once('.').ok_or(GraphqlCostError::Invalid)?;
+            let (ty, field) = rule.field.split_once('.').ok_or(GraphqlError::Invalid)?;
             let ty = schema
                 .types
                 .get(ty)
                 .filter(|t| matches!(t.kind, Kind::Object | Kind::Interface))
-                .ok_or(GraphqlCostError::Invalid)?;
-            let field = ty.fields.get(field).ok_or(GraphqlCostError::Invalid)?;
+                .ok_or(GraphqlError::Invalid)?;
+            let field = ty.fields.get(field).ok_or(GraphqlError::Invalid)?;
             if !rule.multipliers.is_empty() && !schema.types[&field.ty.name].composite() {
-                return Err(GraphqlCostError::Invalid);
+                return Err(GraphqlError::Invalid);
             }
             let mut names = HashSet::new();
             for n in &rule.multipliers {
                 work.step()?;
-                let arg = field.args.get(n).ok_or(GraphqlCostError::Invalid)?;
+                let arg = field.args.get(n).ok_or(GraphqlError::Invalid)?;
                 if !names.insert(n) || !arg.ty.scalar_int() {
-                    return Err(GraphqlCostError::Invalid);
+                    return Err(GraphqlError::Invalid);
                 }
                 match arg.default {
                     DefaultValue::Missing => {}
                     DefaultValue::Int(i) if (0..=1_000_000).contains(&i) => {}
-                    _ => return Err(GraphqlCostError::Invalid),
+                    _ => return Err(GraphqlError::Invalid),
                 }
                 // The concrete field's default wins even for an interface rule.
                 for concrete in &ty.possible {
                     work.step()?;
-                    let a = &schema.types[concrete].fields
-                        [rule.field.split_once('.').ok_or(GraphqlCostError::Invalid)?.1]
+                    let a = &schema.types[concrete].fields[rule.field.split_once('.').ok_or(GraphqlError::Invalid)?.1]
                         .args[n];
                     match a.default {
                         DefaultValue::Missing => {}
                         DefaultValue::Int(i) if (0..=1_000_000).contains(&i) => {}
-                        _ => return Err(GraphqlCostError::Invalid),
+                        _ => return Err(GraphqlError::Invalid),
                     }
                 }
             }
             if compiled.insert(rule.field.clone(), rule.clone()).is_some() {
-                return Err(GraphqlCostError::Invalid);
+                return Err(GraphqlError::Invalid);
             }
         }
         Ok(Self {
