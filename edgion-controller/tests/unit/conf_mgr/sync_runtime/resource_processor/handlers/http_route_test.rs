@@ -2559,3 +2559,17 @@ fn extension_ref_unsupported_group_kind_retains_exact_diagnostic_with_invalid_na
         );
     }
 }
+
+#[tokio::test]
+async fn malformed_mirror_target_does_not_register_service_or_grant_recovery() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
+    let route: HTTPRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"invalid-mirror","namespace":"app"},"spec":{"rules":[{"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"bad/name","namespace":"target","port":80}}}]}]}})).unwrap();
+    let owner = HttpRouteHandler::create_resource_ref(&route);
+    let ProcessResult::Continue(parsed) = HttpRouteHandler::default().parse(route, &ctx).await else {
+        panic!("parse continues for status")
+    };
+    assert!(runtime.service_ref_mgr.get_dependencies(&owner.key()).is_empty());
+    assert!(runtime.cross_ns_ref_mgr.get_dependencies(&owner.key()).is_empty());
+    assert!(!find_invalid_rule_details(&parsed, "app").is_empty());
+}

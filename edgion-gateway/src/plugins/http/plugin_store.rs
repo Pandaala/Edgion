@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 use crate::plugins::runtime::conditions::PluginConditionsExt;
 use crate::plugins::runtime::entry_bundle::EntryCache;
 use crate::plugins::runtime::{InvalidUpdatePolicy, PluginRuntime};
+#[cfg(test)]
 use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use edgion_resources::resources::EdgionPlugins;
@@ -152,11 +153,6 @@ pub(crate) fn compile_plugins_with_cache(
         !ep.validate_request_id_early_attachment().is_empty(),
     );
     let namespace = spec.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
-    // Identity of the resource as the store keys it, so a plugin-entry scope
-    // derived from it is unique exactly when the store entry is: re-deriving
-    // `ns/name` here instead would normalize a missing namespace to "default"
-    // and alias two distinct store entries.
-    let resource_key = spec.key_name();
 
     if let Some(waf) = spec.spec.waf.as_ref() {
         errors.extend(runtime.add_waf_with_cache(waf, cache));
@@ -212,8 +208,8 @@ pub(crate) fn compile_plugins_with_cache(
         });
     }
 
-    if let Some(request_plugins) = &spec.spec.request_plugins {
-        errors.extend(runtime.add_from_request_filters_with_cache(request_plugins, &namespace, &resource_key, cache));
+    if spec.spec.request_plugins.is_some() {
+        errors.extend(runtime.add_from_request_filters_with_cache(&spec, cache));
     }
     if let Some(filter_plugins) = &spec.spec.upstream_response_filter_plugins {
         errors.extend(runtime.add_from_upstream_response_filters_with_cache(filter_plugins, &namespace, cache));

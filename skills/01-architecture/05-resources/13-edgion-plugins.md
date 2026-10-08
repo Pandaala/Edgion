@@ -90,3 +90,20 @@ policy-restriction condition or serialized entry action is produced. See
 | EdgionPlugins ← SecretRefManager | Secret | cascading requeue | Secret changes automatically re-process EdgionPlugins |
 | EdgionPlugins ← ServiceRefManager | Service / EndpointSlice | cascading requeue | Mirror target availability changes automatically re-process EdgionPlugins |
 | EdgionPlugins ← EdgionConfigDataRefManager | EdgionConfigData | cascading requeue | EdgionConfigData changes automatically re-process EdgionPlugins (recomputes ref_denied + status) |
+
+### RequestMirror actual entry ownership (R3b)
+
+`PluginMirrorRefs` borrows the actual EdgionPlugins and original request-entry
+ordinal, independently of credential topology. Authored validated MirrorCore
+loans alone mint Grant queries. Valid enabled mirrors register Service dependencies
+before permission reads; all valid mirror entries, including disabled entries,
+refresh cross-namespace repair dependencies and denial metadata. Service status
+checks remain enabled-entry-only and preserve missing-Service precedence.
+
+Gateway compilation receives the actual equal-length policy-masked resource.
+Disabled entries retain their positions, and the owning mirror field is validated
+before entry-cache reuse. Source replacement owns a new generation cache. Effective
+targets compile Service/section keys cold and expose no Grant capability; invalid
+or denied mirrors cannot consume Session/body/endpoint/writer state. Existing
+cross-namespace mirror LKG exclusions and primary-request best-effort behavior
+remain unchanged.

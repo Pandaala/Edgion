@@ -445,3 +445,23 @@ fn managed_output_rejects_static_and_non_credential_fields_and_inactive_entries(
     let entry = binding.response_entries().next().unwrap();
     assert!(entry.references().unwrap().credential().is_none());
 }
+
+#[test]
+fn mirror_plugin_loans_keep_disabled_original_ordinals_and_source_identity() {
+    let owner: EdgionPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"plugins","namespace":"app","uid":"plugins-uid","generation":4},"spec":{"requestPlugins":[
+        {"type":"RequestMirror","enable":false,"config":{"backendRef":{"name":"first","port":80}}},
+        {"type":"RequestMirror","config":{"backendRef":{"name":"second","namespace":"target","port":81}}}
+    ]}})).unwrap();
+    let refs = PluginMirrorRefs::from_plugins(&owner);
+    for (index, field) in refs.authored().enumerate() {
+        let terminal = field.validated().unwrap().unwrap();
+        assert_eq!(
+            terminal.reference().field().slot(),
+            super::super::route_fields::MirrorSlot::Plugin(index)
+        );
+        assert_eq!(terminal.reference().field().source_uid(), Some("plugins-uid"));
+        assert_eq!(terminal.reference().field().source_generation(), Some(4));
+        assert_eq!(terminal.grant_query().source().group_kind().group(), "edgion.io");
+    }
+    assert!(refs.effective_at(2).is_none());
+}

@@ -146,7 +146,7 @@ COLD_FUNCTION_REGISTRATIONS = [
     ("plugins/http/request_access_policy/plugin.rs", "RequestAccessPolicy", "create", "plugin construction"),
     ("plugins/http/request_mirror/plugin.rs", "RequestMirrorPlugin", "new", "plugin construction"),
     ("plugins/http/wasm/plugin.rs", "WasmPlugin", "build", "plugin construction"),
-    ("plugins/runtime/plugin_runtime.rs", "PluginRuntime", "add_from_request_filters_with_cache", "configuration publication assembles cached plugin entries"),
+    ("plugins/runtime/plugin_runtime.rs", "PluginRuntime", "add_request_entries", "configuration publication assembles cached plugin entries"),
     (
         "plugins/stream/ip_restriction/stream_ip_restriction.rs",
         "<free>",

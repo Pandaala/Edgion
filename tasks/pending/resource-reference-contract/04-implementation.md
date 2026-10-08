@@ -2101,3 +2101,88 @@ commands/exits/source/binary hashes are preserved in the same verification
 directory. Refreshed workspace lint/guards, replacement independent result
 reviews and commit remain coordinator-owned pending gates; no warning-free final
 lint or overall conformance acceptance is claimed here.
+
+## R3b implementation evidence (2026-10-08, review pending)
+
+The approved owner-bound MirrorCore migration starts at local commit
+`75a5363f52275a7e48252308f1f351c4a51504a7`. The immutable original 31-path baseline
+contains 291 scoped test identities with zero ignores and complete compiled lists
+of Resources 1925, Controller 1743 and Gateway 5144 tests. Baseline listing ran no
+test bodies. Evidence is under `tmp/resource-reference-contract/r3b-baseline-20261008`
+and `r3b-verification-20261008-r1`.
+
+The implementation separates actual source authority from the published root's
+raw wake identity. HTTP rule/backend and EP request-entry loans validate the exact
+Service descriptor; authored loans alone mint Grant queries. Service/Grant repair
+dependencies precede permission reads. Effective Gateway targets compile keys cold;
+EP policy masks keep original entry ordinals and owner validation precedes cache
+reuse. The existing native post-authorization cached-presence boolean preserves
+BackendNotFound precedence. Disabled EP mirrors retain Grant-namespace repair only.
+
+HTTP Service clear-before-add now begins before mirror authorization and finalizes
+additively. Valid dropped-child mirror edges survive. An omitted source namespace
+stays omitted in dependency and workqueue keys; only Service target and semantic
+GatewayRouteIndex identities default to `default`. Forwarding policy wakeups and
+ancestor lookup use their appropriate identities, without changing ResourceRef's
+global key behavior or other route kinds.
+
+The independently reviewed supporting amendment adds only
+`handlers/route_backend_refs_test.rs`: its two expected owner expressions now
+select raw None for HTTP and retain Some(default) for the other four route kinds.
+All six supporting tests passed. The amended scope is 32 paths (12 production,
+14 mirrored test files, six docs), with 297 original scoped identities.
+
+Final stable r4 execution in `r3b-verification-20261008-r1` passed:
+
+- Controller: six exact supporting tests, then 927 resource_processor tests;
+  zero ignored in both selections.
+- Resources: 1601 resource tests; doctests 27 passed and 10 ignored.
+- Gateway: 2254 plugin tests passed and 17 ignored, including the existing
+  no-network mirror writer, budget, cancellation and policy/LKG regressions.
+- Source identities: 297 to 311, no removals, zero scoped ignores unchanged.
+- Complete compiled identities: Resources 1925 to 1929, Controller 1743 to 1749,
+  Gateway 5144 to 5148, no removals. Direct binary listings executed no test bodies.
+
+`final-r4-source.json` freezes all 26 Rust inputs; each r4 result records command,
+exit, elapsed time, log hash and test-binary hash when applicable.
+`identity-comparison-r4.json` records full comparisons and current ignored IDs.
+The initial callback borrow and new-fixture import compile errors, and the
+924-pass/two-old-expectation-failure Controller run, remain in the raw history.
+The new delegated-drop and Service/EndpointSlice queue/raw-store/processor tests
+passed; they establish in-process recovery, not live delivery or conformance.
+Workspace gates and both independent actual-result reviews remain pending under
+root ownership. These results do not close the whole finite reference contract.
+
+Static follow-up: GRPCRoute/TCPRoute/TLSRoute/UDPRoute continue to use the unchanged
+namespace-normalizing Service registration wrapper. The source-key distinction for
+omitted namespaces is not fixed or worker-verified for those kinds by R3b. Track
+that finite remaining lifecycle boundary with R4; do not infer coverage from the
+old registry assertions. Native Kubernetes namespaced objects already carry a
+namespace. No global metadata injection is proposed.
+
+### R3b first-result correction and tracing registry amendment
+
+The exact scope is now 33 existing technical paths: the approved tracing-guard
+amendment changes only `COLD_FUNCTION_REGISTRATIONS`'s PluginRuntime helper name
+from `add_from_request_filters_with_cache` to `add_request_entries`, retaining its
+path, impl owner and cold-publication reason. The original root tracing failure
+is retained. The corrected guard and its 18 unchanged Python self-tests passed;
+no tracing exception, broad pattern or runtime behavior was added.
+
+Root's initial workspace check and Clippy commands both exited zero but emitted
+one unused `ResourceMeta` import warning plus its summary. The gate runner failed
+intentionally, and the first independent actual review returned SCOPED BLOCK for
+R3b-F1. The correction adds only `#[cfg(test)]` to that import in
+`plugins/http/plugin_store.rs`; all callers needing it are tests. No warning
+suppression, production behavior, fixture or assertion changed.
+
+Fresh r5 Gateway verification passed 2254 plugin tests with 17 ignored.
+Complete binary listings preserve Resources 1925 to 1929, Controller 1743 to
+1749 and Gateway 5144 to 5148 identities, with no removals; scoped source
+identities remain 297 to 311 with unchanged ignores. Resources/Controller r4
+evidence is retained for unchanged source bytes, not represented as newly
+executed. `gateway-plugins-r5.json`, `final-r5-source.json` and
+`identity-comparison-r5.json` retain command, exit, source and binary provenance. Corrected workspace gates, renewed first actual
+review and a second independent deep result review remain pending. The initial
+root warning logs, tracing failure and all preceding verification failures remain
+part of the evidence history.

@@ -28,7 +28,7 @@ an existing target, while an absent target remains `BackendNotFound`.
 ## Rationale and evidence
 
 The authoritative field and referent requirements are in the vendored Gateway
-API v1.5 HTTPRoute CRD. Kubernetes schema and CEL validation do not cover file,
+API v1.6.2 standard and experimental HTTPRoute CRDs. Kubernetes schema and CEL validation do not cover file,
 etcd, Admin API, or the preserved EdgionPlugins config object, so validation in
 the shared resource type is load-bearing.
 
@@ -54,10 +54,14 @@ Apply reconciliation clears all prior keys before registering the current
 generation, and delete clears the resource's keys. Service requeue runs from
 `after_publish` and `after_unpublish`, so dependent status evaluation observes
 the newly published Service or its confirmed absence rather than the preceding
-cache generation. HTTPRoute mirror registration uses the same namespace-normalized
-owner identity as forwarding registration and deletion; file input with an
-omitted namespace therefore cannot leave a `request-mirror:` edge under a raw
-namespace-less owner.
+cache generation. HTTPRoute mirror and forwarding dependencies use the actual
+root ResourceRef, including an omitted namespace. Service and EndpointSlice events
+therefore wake the exact raw worker key. Only target defaults and the semantic
+GatewayRouteIndex lookup project an omitted namespace to `default`. Registration,
+policy wakeups and deletion must not reconstruct a different normalized owner.
+The previous registry-only replacement/deletion test established consistent
+normalization, but did not prove that the resulting key could load the actual
+namespace-less source from RawStore; R3b corrects that limitation.
 
 ## Alternatives and limits
 
@@ -103,3 +107,32 @@ a different route rule-admission model, or a replacement for `service_ref_mgr`.
 - `complete-request-mirror-standard-validation-and-service-status` — confirmed
   correctness defect; fixed across shared validation, both publishers, status,
   and Service dependency lifecycle.
+
+## R3b owner-bound reference boundary
+
+The current schema authority is the vendored standard and experimental Gateway
+API v1.6.2 contract. Recorded historical results retain their original
+execution dates; they are not fresh conformance evidence.
+
+HttpRouteMirrorRefs and PluginMirrorRefs borrow actual owners and original filter
+or request-entry ordinals. MirrorCore accepts only omitted/empty core group and
+omitted/Service kind, with canonical lexical name/namespace and required port
+validation. Literal `core` is not an alias. Invalid descriptors register no new
+Service or Grant-namespace dependency and perform no presence query; clearing
+old generation dependencies remains necessary.
+
+HTTP parse snapshots old forwarding targets and clears Service roles once before
+mirror authorization. Final forwarding registration is additive, preserving valid
+child mirror recovery edges even when the child rule is dropped. Dropped forwarding
+targets still wake policies, and role-qualified mirrors remain excluded from policy
+ancestors. The absent-Service versus denied-Service status priority is unchanged:
+a narrow cached-presence boolean after authorization may select BackendNotFound
+before RefNotPermitted. It never authorizes material consumption.
+
+R3b stable in-process verification (2026-10-08): Controller 927 tests passed,
+Resources 1601 tests passed plus 27 doctests/10 ignored, and Gateway 2254 plugin
+tests passed/17 ignored. The amended 297 original scoped tests are preserved,
+with 14 additions and unchanged ignores; complete three-crate compiled lists have
+no removals. Raw commands, failures, source/binary hashes and identity comparisons
+are retained in `tmp/resource-reference-contract/r3b-verification-20261008-r1`.
+Workspace gates and independent actual-result review remain separate pending gates.

@@ -1,6 +1,7 @@
 //! Actual EdgionPlugins credential fields, prepared once and lent under owner borrows.
 //!
-//! No accessor takes a raw reference, field index, profile or source identity.
+//! Credential accessors take no raw reference, field index, profile or source identity.
+//! Mirror accessors index the actual owning resource without extending credential topology.
 use super::owned::{topology_revision, TopologyLoan};
 use super::owned::{FieldContract, FieldSlot, FieldWire, OwnerSnapshot, PreparedSlot};
 use super::template_fields::{PreparedTemplateAtom, TemplateAtom};
@@ -987,6 +988,27 @@ impl TlsReferences<'_> {
     }
     pub fn client_certificate(&self) -> Option<ReferenceToken<'_>> {
         self.entry.single(Role::Client)
+    }
+}
+
+/// RequestMirror loans stay separate from credential topology and retain entry ordinals.
+pub struct PluginMirrorRefs<'a> {
+    owner: &'a EdgionPlugins,
+}
+impl<'a> PluginMirrorRefs<'a> {
+    pub fn from_plugins(owner: &'a EdgionPlugins) -> Self {
+        Self { owner }
+    }
+    pub fn authored_at(&self, index: usize) -> Option<super::route_fields::AuthoredMirrorField<'a>> {
+        super::route_fields::plugin_mirror_field(self.owner, index)
+    }
+    pub fn authored(&self) -> impl Iterator<Item = super::route_fields::AuthoredMirrorField<'a>> + 'a {
+        let owner = self.owner;
+        (0..owner.spec.request_plugins.as_ref().map_or(0, Vec::len))
+            .filter_map(move |index| super::route_fields::plugin_mirror_field(owner, index))
+    }
+    pub fn effective_at(&self, index: usize) -> Option<super::route_fields::EffectiveMirrorField<'a>> {
+        self.authored_at(index).map(|field| field.field())
     }
 }
 

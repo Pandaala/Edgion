@@ -2,18 +2,16 @@
 //!
 //! Handles HTTPRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
+use edgion_resources::resources::refs::route_fields::{HttpRouteMirrorRefs, MirrorSlot, TerminalMirrorReference};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::super::ref_grant::{
-    is_cross_ns_ref_allowed, read_after_registering_cross_ns_dependency, validate_http_route_if_enabled,
-};
+use super::super::ref_grant::validate_http_route_if_enabled;
 use super::route_backend_refs::{self, BackendDependencyReceipt};
 use super::route_delegation::{flatten_route, populate_terminal_rule_identities, DelegationLookup};
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_backend_targets,
-    requeue_backend_policies_for_route, requeue_backend_policies_for_services, requeue_parent_gateways,
-    update_gateway_route_index,
+    requeue_backend_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
@@ -88,30 +86,10 @@ impl DelegationLookup for RuntimeDelegationLookup<'_> {
         keys
     }
 
-    fn cross_ns_ref_allowed(
-        &self,
-        from_ns: &str,
-        group: Option<&str>,
-        kind: Option<&str>,
-        name: &str,
-        to_ns: &str,
-    ) -> bool {
-        let group = group.map(str::to_string);
-        let kind = kind.map(str::to_string);
-        let read = || {
-            is_cross_ns_ref_allowed(
-                from_ns,
-                "HTTPRoute",
-                to_ns,
-                group.as_ref(),
-                kind.as_ref(),
-                name,
-                self.runtime,
-            )
-        };
-        self.grant_owner.as_ref().map_or_else(read, |owner| {
-            read_after_registering_cross_ns_dependency(self.runtime, to_ns, owner, read)
-        })
+    fn mirror_ref_denied(&self, terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
+        self.grant_owner
+            .as_ref()
+            .and_then(|root| super::request_mirror::authorize(terminal, root, true, self.runtime))
     }
     fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
         self.grant_owner
@@ -147,50 +125,26 @@ impl HttpRouteHandler {
     ///
     /// `extra_dependencies` carries the flattened delegation backendRefs (with
     /// explicit namespaces) so Service changes under delegated children
-    /// requeue this parent route directly. Registration replaces the
-    /// resource's whole ref set, so own-rule and flattened refs must land in
-    /// this single call.
+    /// requeue this parent route directly. Parse already cleared the old set
+    /// before mirror authorization. Add forwarding edges without clearing the
+    /// valid child mirror edges retained through delegation and rule drops.
     fn register_service_refs(
         route: &HTTPRoute,
         extra_dependencies: &[BackendDependencyReceipt],
         ctx: &HandlerContext,
+        old: HashSet<String>,
     ) -> Vec<String> {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let route_name = route.metadata.name.as_deref().unwrap_or("");
-
         let mut backend_refs_list = HttpRouteBackendRefs::from_route(route)
             .map(|references| route_backend_refs::collect_dependencies(references.authored()))
             .unwrap_or_default();
         backend_refs_list.extend_from_slice(extra_dependencies);
 
-        let dropped = super::route_utils::register_service_backend_refs(
-            ResourceKind::HTTPRoute,
-            route_ns,
-            route_name,
+        super::route_utils::finish_service_refs(
+            &Self::create_resource_ref(route),
             &backend_refs_list,
+            old,
             ctx.runtime(),
-        );
-        // Keep the owner identity identical to register_service_backend_refs()
-        // and clear_service_backend_refs(). File input can omit namespace;
-        // namespaced route semantics normalize that case to "default".
-        let owner = ResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some(route_ns.to_string()),
-            route_name.to_string(),
-        );
-        if HttpRouteBackendRefs::from_route(route).is_ok() {
-            super::request_mirror::register_service_refs(
-                &owner,
-                route_ns,
-                route
-                    .effective_rules()
-                    .into_iter()
-                    .flatten()
-                    .flat_map(super::request_mirror::refs),
-                ctx.runtime(),
-            );
-        }
-        dropped
+        )
     }
 
     /// Record cross-namespace references from backend_refs.
@@ -203,19 +157,7 @@ impl HttpRouteHandler {
         if HttpRouteBackendRefs::from_route(route).is_err() {
             return;
         }
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let owner = Self::create_resource_ref(route);
-        for rule in route.spec.rules.iter().flatten() {
-            for mirror in super::request_mirror::refs(rule) {
-                if let Some(namespace) = mirror
-                    .namespace
-                    .as_ref()
-                    .filter(|namespace| namespace.as_str() != route_ns)
-                {
-                    ctx.runtime().cross_ns_ref_mgr.add_ref(namespace.clone(), owner.clone());
-                }
-            }
-        }
         for namespace in extra_namespaces {
             ctx.runtime().cross_ns_ref_mgr.add_ref(namespace.clone(), owner.clone());
         }
@@ -312,6 +254,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let grant_owner = Self::create_resource_ref(&route);
         _ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&grant_owner);
         _ctx.runtime().plugin_ref_mgr.clear_value_refs(&grant_owner);
+        let old_services = super::route_utils::begin_service_refs(&grant_owner, _ctx.runtime());
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let route_ns = route_ns.as_str();
 
@@ -323,6 +266,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             route.spec.resolved_rules = None;
             route.spec.resolved_listeners = None;
             route.spec.resolved_hostnames = None;
+            requeue_backend_policies_for_services(&old_services.iter().cloned().collect::<Vec<_>>(), _ctx).await;
             return ProcessResult::Continue(route);
         }
 
@@ -351,17 +295,22 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // delegated child terminals are stamped by the flattener itself.
         populate_terminal_rule_identities(&mut route);
 
-        // Mirror resolution remains its separate existing field contract.
-        if source_valid {
-            for rule in route.spec.rules.iter_mut().flatten() {
-                super::request_mirror::resolve_rule(rule, route_ns, |backend| {
-                    read_after_registering_cross_ns_dependency(
-                        _ctx.runtime(),
-                        backend.namespace.as_deref().unwrap_or(route_ns),
-                        &grant_owner,
-                        || super::request_mirror::allowed(backend, route_ns, ResourceKind::HTTPRoute, _ctx.runtime()),
-                    )
-                });
+        let mirror_decisions = HttpRouteMirrorRefs::from_route(&route)
+            .map(|refs| {
+                refs.authored()
+                    .map(|field| {
+                        super::request_mirror::resolve(field, |terminal| {
+                            super::request_mirror::authorize(terminal, &grant_owner, true, _ctx.runtime())
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for decision in mirror_decisions {
+            if let MirrorSlot::Route(slot) = decision.slot() {
+                if let Some(rule) = route.spec.rules.as_mut().and_then(|rules| rules.get_mut(slot.rule())) {
+                    decision.apply_rule(rule);
+                }
             }
         }
         // Authorize actual authored loans before cloning any effective rules.
@@ -448,7 +397,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // Register Service backend references for cross-resource requeue, then
         // requeue BTPs bound to any Service dropped from backendRefs (the apply
         // path otherwise only requeues BTPs for the route's current backends).
-        let dropped_service_keys = Self::register_service_refs(&route, &delegation_outcome.backend_dependencies, _ctx);
+        let dropped_service_keys =
+            Self::register_service_refs(&route, &delegation_outcome.backend_dependencies, _ctx, old_services);
         requeue_backend_policies_for_services(&dropped_service_keys, _ctx).await;
 
         // Register dependencies before reading backend source facts. Recompute
@@ -585,7 +535,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         }
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
-        requeue_backend_policies_for_route(ResourceKind::HTTPRoute, route_ns, route_name, ctx).await;
+        super::requeue_backend_policies_for_owner(&Self::create_resource_ref(route), ctx).await;
 
         // This route may be someone's delegation child: requeue the parents so
         // they re-flatten with the new child spec.
@@ -602,10 +552,10 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
-        requeue_backend_policies_for_route(ResourceKind::HTTPRoute, route_ns, route_name, ctx).await;
+        super::requeue_backend_policies_for_owner(&Self::create_resource_ref(route), ctx).await;
         let removed_backend_targets = ctx.runtime().backend_ref_mgr.clear_value_refs(&resource_ref);
         requeue_backend_policies_for_backend_targets(&removed_backend_targets, ctx).await;
-        super::route_utils::clear_service_backend_refs(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
+        ctx.runtime().service_ref_mgr.clear_value_refs(&resource_ref);
 
         remove_from_gateway_route_index(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
 
@@ -679,16 +629,9 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // by Gateway API's PartiallyInvalid condition.
 
         let mut resolved_refs_errors = validate_http_backend_refs(route, _ctx.runtime());
-        resolved_refs_errors.extend(super::request_mirror::errors(
-            route_ns,
-            ResourceKind::HTTPRoute,
-            route
-                .effective_rules()
-                .into_iter()
-                .flatten()
-                .flat_map(super::request_mirror::refs),
-            _ctx.runtime(),
-        ));
+        if let Ok(refs) = HttpRouteMirrorRefs::from_route(route) {
+            resolved_refs_errors.extend(super::request_mirror::errors(refs.effective(), _ctx.runtime()));
+        }
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
             route_ns,

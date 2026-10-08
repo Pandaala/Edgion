@@ -219,3 +219,20 @@ Live failures of a valid Service section/endpoints retain their existing 503 map
 | HTTPRoute → EdgionBackend | EdgionBackend | shared `backend_ref_mgr` | AI capability drives rule validation; apply/delete requeues the route |
 | HTTPRoute → Secret | Secret | indirect, via plugins | Plugins such as JWT/BasicAuth reference Secrets |
 | HTTPRoute ← ReferenceGrant | ReferenceGrant | cross-namespace backendRef | Authorizes cross-namespace backend references |
+
+### RequestMirror owner-bound references (R3b)
+
+Native rule/backend mirror fields use `HttpRouteMirrorRefs` actual-owner loans.
+Authored loans alone authorize core Service targets; effective loans compile cold
+Gateway Service/section keys and carry no Grant authority. Delegation resolves the
+original child slot before cloning or rule drops. Valid Service and Grant-namespace
+recovery edges register before authorization under the published root's actual
+ResourceRef. An invalid mirror owner, union, target, name, namespace or port contributes no
+new mirror dependency or mirror-target lookup. HTTP parse clears Service roles once after snapshotting old forwarding
+targets; final forwarding registration adds to surviving child mirror edges.
+
+An omitted metadata namespace remains omitted in the dependency owner and worker
+wake key. `default` applies to target semantics and GatewayRouteIndex lookup only.
+Current/dropped forwarding policy notifications and mirror-role exclusion remain
+separate from mirror recovery. Status retains the narrow post-authorization cached
+presence check that gives a missing Service BackendNotFound precedence over denial.

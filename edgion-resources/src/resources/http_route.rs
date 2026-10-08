@@ -950,7 +950,7 @@ pub struct HTTPRequestMirrorFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fraction: Option<Fraction>,
 
-    /// Percent of requests to mirror (0-100). Gateway API v1.5 field name.
+    /// Percent of requests to mirror (0-100). Gateway API v1.6.2 field name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percent: Option<i32>,
 }
@@ -993,7 +993,11 @@ impl HTTPRequestMirrorFilter {
                 crate::gwapi_types::PORT_MAX
             )),
             None => Some("backendRef.port is required for a Service reference".to_string()),
-            Some(_) => None,
+            Some(_) => self
+                .backend_ref
+                .validated_target("default")
+                .err()
+                .map(|_| "backendRef name and namespace must be valid Kubernetes object names".to_string()),
         }
     }
 }

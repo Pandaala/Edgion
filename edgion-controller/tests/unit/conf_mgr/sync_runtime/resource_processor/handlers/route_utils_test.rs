@@ -639,3 +639,77 @@ fn registration_only_extension_pass_does_not_inspect_ineligible_rule_material() 
     );
     assert!(registered.get());
 }
+
+#[tokio::test]
+async fn raw_http_owner_clear_finalize_preserves_child_mirror_and_policy_ancestry() {
+    use crate::conf_mgr::sync_runtime::resource_processor::service_ref::mirror_service_key;
+    use crate::conf_mgr::sync_runtime::resource_processor::HandlerContext;
+    use crate::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor, ResourceRef};
+    use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+    use edgion_resources::{EdgionBackendTrafficPolicy, ResourceKind};
+    use std::sync::Arc;
+    struct Noop;
+    #[async_trait::async_trait]
+    impl ProcessorHandler<EdgionBackendTrafficPolicy> for Noop {}
+    let runtime = Arc::new(ControllerRuntime::default());
+    let policies = Arc::new(ResourceProcessor::<EdgionBackendTrafficPolicy>::new(
+        "EdgionBackendTrafficPolicy",
+        16,
+        Arc::new(Noop),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(policies.clone());
+    let root = ResourceRef::new(ResourceKind::HTTPRoute, None, "root".into());
+    let policy = ResourceRef::new(
+        ResourceKind::EdgionBackendTrafficPolicy,
+        Some("default".into()),
+        "policy".into(),
+    );
+    runtime.service_ref_mgr.add_ref("default/forward".into(), root.clone());
+    runtime.service_ref_mgr.add_ref("default/forward".into(), policy);
+    runtime
+        .service_ref_mgr
+        .add_ref(mirror_service_key("children", "copy"), root.clone());
+    let old = begin_service_refs(&root, &runtime);
+    assert_eq!(old, HashSet::from(["default/forward".to_string()]));
+    runtime
+        .service_ref_mgr
+        .add_ref(mirror_service_key("children", "copy"), root.clone());
+    let dropped = finish_service_refs(&root, &[], old, &runtime);
+    assert_eq!(dropped, vec!["default/forward"]);
+    assert_eq!(
+        runtime
+            .service_ref_mgr
+            .get_refs(&mirror_service_key("children", "copy")),
+        vec![root.clone()]
+    );
+    let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
+    super::super::requeue_backend_policies_for_services(&dropped, &ctx).await;
+    let queue = policies.workqueue();
+    let item = queue.dequeue().await.unwrap();
+    assert_eq!(item.key, "default/policy");
+    queue.done(&item.key);
+    runtime.service_ref_mgr.add_ref("default/forward".into(), root.clone());
+    super::super::requeue_backend_policies_for_owner(&root, &ctx).await;
+    let item = queue.dequeue().await.unwrap();
+    assert_eq!(item.key, "default/policy");
+    queue.done(&item.key);
+    let parent: edgion_resources::resources::common::ParentReference =
+        serde_json::from_value(serde_json::json!({"name":"gateway"})).unwrap();
+    runtime
+        .gateway_route_index
+        .update_route(ResourceKind::HTTPRoute, "default/root", &[parent], "default");
+    let target = PolicyTargetKey {
+        target_kind: PolicyTargetKind::Service,
+        namespace: "default".into(),
+        name: "forward".into(),
+    };
+    let ancestors = super::super::resolve_policy_ancestor_gateways_for_targets(&[target], "default/policy", &ctx);
+    assert!(ancestors.contains_key("default/gateway"));
+    let mirror = PolicyTargetKey {
+        target_kind: PolicyTargetKind::Service,
+        namespace: "children".into(),
+        name: "copy".into(),
+    };
+    assert!(super::super::resolve_policy_ancestor_gateways_for_targets(&[mirror], "default/policy", &ctx).is_empty());
+}

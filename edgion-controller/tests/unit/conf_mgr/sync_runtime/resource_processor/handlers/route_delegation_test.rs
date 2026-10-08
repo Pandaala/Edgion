@@ -48,16 +48,19 @@ impl DelegationLookup for FakeLookup {
         keys.sort_unstable();
         keys
     }
-    fn cross_ns_ref_allowed(
-        &self,
-        from_ns: &str,
-        _group: Option<&str>,
-        _kind: Option<&str>,
-        _name: &str,
-        to_ns: &str,
-    ) -> bool {
-        self.allowed_cross_ns
-            .contains(&(from_ns.to_string(), to_ns.to_string()))
+    fn mirror_ref_denied(&self, terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
+        let query = terminal.grant_query();
+        let source = query.source().scope().namespace().unwrap();
+        let target = query.target().scope().namespace().unwrap();
+        (source != target
+            && !self
+                .allowed_cross_ns
+                .contains(&(source.to_string(), target.to_string())))
+        .then(|| RefDenied {
+            target_namespace: target.to_string(),
+            target_name: query.target().name().to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        })
     }
     fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
         let query = terminal.grant_query();
@@ -594,7 +597,6 @@ fn malformed_extension_ref_in_child_drops_only_that_http_rule() {
 
 #[test]
 fn mirror_delegation_preserves_declaring_namespace_and_revalidates_raw_children() {
-    use super::super::request_mirror;
     for backend_filter in [false, true] {
         for target_ns in [None, Some("infra"), Some("shadow")] {
             let mirror = serde_json::json!({"type": "RequestMirror", "requestMirror": {
@@ -617,7 +619,7 @@ fn mirror_delegation_preserves_declaring_namespace_and_revalidates_raw_children(
                 let result = flatten_route(&parent, &lookup);
                 let rules = result.resolved_rules.as_ref().unwrap();
                 assert_eq!(rules.len(), 1);
-                let backend = request_mirror::refs(&rules[0]).next().unwrap();
+                let backend = mirror_backends(&rules[0]).next().unwrap();
                 assert_eq!(backend.namespace.as_deref(), Some(target_ns.unwrap_or("billing")));
                 assert_eq!(backend.ref_denied.is_some(), target_ns.is_some() && !allowed);
                 if let Some(ns) = target_ns {
@@ -630,7 +632,6 @@ fn mirror_delegation_preserves_declaring_namespace_and_revalidates_raw_children(
 
 #[test]
 fn mirror_inherited_from_intermediate_route_keeps_its_identity() {
-    use super::super::request_mirror;
     let parent = simple_parent("/api", "billing", "middle");
     let mut middle_rule = delegating_rule("/api", "leaf", "terminal");
     middle_rule["filters"] = serde_json::json!([{"type": "RequestMirror", "requestMirror": {
@@ -647,7 +648,7 @@ fn mirror_inherited_from_intermediate_route_keeps_its_identity() {
         let result = flatten_route(&parent, &lookup);
         let rules = result.resolved_rules.as_ref().unwrap();
         assert_eq!(rules.len(), 1);
-        let backend = request_mirror::refs(&rules[0]).next().unwrap();
+        let backend = mirror_backends(&rules[0]).next().unwrap();
         assert_eq!(backend.ref_denied.is_none(), grant_from == "billing");
         assert!(result.cross_ns_target_namespaces.contains("shadow"));
     }
@@ -1264,14 +1265,7 @@ impl DelegationLookup for NativeReadSpy {
         self.lists.set(self.lists.get() + 1);
         self.inner.list_route_keys_in_namespace(ns)
     }
-    fn cross_ns_ref_allowed(
-        &self,
-        _from: &str,
-        _group: Option<&str>,
-        _kind: Option<&str>,
-        _name: &str,
-        _to: &str,
-    ) -> bool {
+    fn mirror_ref_denied(&self, _terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
         panic!("no mirror in native fixtures")
     }
     fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
@@ -1409,14 +1403,7 @@ impl DelegationLookup for ExtensionReadSpy {
     fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String> {
         self.inner.list_route_keys_in_namespace(ns)
     }
-    fn cross_ns_ref_allowed(
-        &self,
-        _from: &str,
-        _group: Option<&str>,
-        _kind: Option<&str>,
-        _name: &str,
-        _to: &str,
-    ) -> bool {
+    fn mirror_ref_denied(&self, _terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
         panic!("no mirror in extension fixture")
     }
     fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
@@ -1547,5 +1534,86 @@ fn delegated_invalid_extension_names_preserve_name_diagnostic_and_create_no_plug
             assert_eq!(dropped_messages(&outcome), vec![expected]);
             assert!(outcome.named_children.contains("billing/child"));
         }
+    }
+}
+
+fn mirror_backends(
+    rule: &edgion_resources::HTTPRouteRule,
+) -> impl Iterator<Item = &edgion_resources::resources::http_route::BackendObjectReference> {
+    rule.filters
+        .iter()
+        .flatten()
+        .chain(
+            rule.backend_refs
+                .iter()
+                .flatten()
+                .flat_map(|backend| backend.filters.iter().flatten()),
+        )
+        .filter_map(|filter| filter.request_mirror.as_ref().map(|mirror| &mirror.backend_ref))
+}
+
+#[test]
+fn mirror_child_owner_is_borrowed_before_dropped_rule_and_uid_replacement() {
+    struct MirrorSpy {
+        inner: FakeLookup,
+        seen: std::cell::RefCell<Vec<(String, i64, String, MirrorSlot)>>,
+    }
+    impl DelegationLookup for MirrorSpy {
+        fn get_route(&self, key: &str) -> Option<Arc<HTTPRoute>> {
+            self.inner.get_route(key)
+        }
+        fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String> {
+            self.inner.list_route_keys_in_namespace(ns)
+        }
+        fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
+            self.inner.terminal_ref_denied(terminal)
+        }
+        fn extension_ref_error(&self, _field: RouteExtensionField<'_>, _inspect: bool) -> Option<String> {
+            None
+        }
+        fn mirror_ref_denied(&self, terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
+            let reference = terminal.reference();
+            let field = reference.field();
+            let original = &self.inner.routes["billing/child"];
+            let MirrorSlot::Route(slot) = field.slot() else {
+                panic!("actual route slot required")
+            };
+            let actual = HttpRouteMirrorRefs::from_route(original)
+                .unwrap()
+                .authored_at(slot.rule(), slot.backend(), slot.filter())
+                .unwrap();
+            assert!(std::ptr::eq(actual.field().config().unwrap(), reference.config()));
+            self.seen.borrow_mut().push((
+                field.source_uid().unwrap().into(),
+                field.source_generation().unwrap(),
+                terminal.grant_query().source().scope().namespace().unwrap().into(),
+                field.slot(),
+            ));
+            self.inner.mirror_ref_denied(terminal)
+        }
+    }
+    let parent = simple_parent("/api", "billing", "child");
+    for uid in ["old-child", "recreated-child"] {
+        let mut child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules":[{"filters":[
+            {"type":"RequestMirror","requestMirror":{"backendRef":{"name":"copy","namespace":"target","port":80}}},
+            {"type":"ExtensionRef"}
+        ],"backendRefs":[{"name":"primary","port":80}]}]}),
+        );
+        child.metadata.uid = Some(uid.into());
+        child.metadata.generation = Some(4);
+        let spy = MirrorSpy {
+            inner: FakeLookup::new(vec![child]),
+            seen: Default::default(),
+        };
+        let result = flatten_route(&parent, &spy);
+        assert!(result.resolved_rules.as_ref().unwrap().is_empty());
+        let seen = spy.seen.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, uid);
+        assert_eq!(seen[0].1, 4);
+        assert_eq!(seen[0].2, "billing");
     }
 }

@@ -204,7 +204,14 @@ pub(crate) fn resolve_policy_ancestor_gateways_for_targets(
             PolicyTargetKind::EdgionBackend => ctx.runtime().backend_ref_mgr.get_refs(&target.to_string()),
         };
         for route_ref in refs {
-            for gateway_key in route_index.get_gateways_for_route(route_ref.kind, &route_ref.resource_key()) {
+            for gateway_key in route_index.get_gateways_for_route(
+                route_ref.kind,
+                &format!(
+                    "{}/{}",
+                    route_ref.namespace.as_deref().unwrap_or("default"),
+                    route_ref.name
+                ),
+            ) {
                 map.entry(gateway_key).or_default().insert(target.clone());
             }
         }
@@ -240,6 +247,10 @@ pub(crate) async fn requeue_backend_policies_for_route(
     ctx: &HandlerContext,
 ) {
     let route_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
+    requeue_backend_policies_for_owner(&route_ref, ctx).await;
+}
+
+pub(crate) async fn requeue_backend_policies_for_owner(route_ref: &ResourceRef, ctx: &HandlerContext) {
     let service_keys = crate::conf_mgr::sync_runtime::resource_processor::service_ref::forwarding_service_dependencies(
         &ctx.runtime().service_ref_mgr,
         &route_ref.key(),

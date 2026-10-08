@@ -1,7 +1,10 @@
 use super::super::{EdgionPluginsHandler, HttpRouteHandler};
 use super::*;
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler, ResourceRef};
+use edgion_resources::resources::refs::plugin_fields::PluginMirrorRefs;
+use edgion_resources::resources::refs::route_fields::HttpRouteMirrorRefs;
 use edgion_resources::resources::ReferenceGrant;
+use edgion_resources::ResourceKind;
 use std::sync::Arc;
 
 fn grant(group: &str, kind: &str, name: &str) -> ReferenceGrant {
@@ -37,20 +40,24 @@ fn mirror_grant_matches_declaring_identity_and_target_name() {
             (ResourceKind::EdgionPlugins, plugin_allowed),
         ] {
             assert_eq!(
-                resolve(&mut backend, "app", |b| allowed(b, "app", owner, &runtime)),
+                resolve_owned(&mut backend, owner, &runtime, |query| runtime
+                    .ref_grant_store
+                    .check_query(query)),
                 Some("target".to_string())
             );
             assert_eq!(backend.ref_denied.is_none(), permitted);
         }
     }
     runtime.ref_grant_store.remove("target/mirror");
-    resolve(&mut backend, "app", |b| {
-        allowed(b, "app", ResourceKind::HTTPRoute, &runtime)
+    resolve_owned(&mut backend, ResourceKind::HTTPRoute, &runtime, |query| {
+        runtime.ref_grant_store.check_query(query)
     });
     assert!(backend.ref_denied.is_some());
     backend.namespace = None;
     assert_eq!(
-        resolve(&mut backend, "app", |_| panic!("same namespace needs no grant")),
+        resolve_owned(&mut backend, ResourceKind::HTTPRoute, &runtime, |_| panic!(
+            "same namespace needs no grant"
+        )),
         None
     );
     assert!(backend.ref_denied.is_none());
@@ -84,7 +91,12 @@ async fn mirror_http_parse_tracks_rule_and_backend_refs_and_clears_old_dependenc
         .service_ref_mgr
         .get_refs(&mirror_service_key("target", "shadow"))
         .contains(&owner));
-    let mirrors: Vec<_> = route.effective_rules().into_iter().flatten().flat_map(refs).collect();
+    let mirrors: Vec<_> = route
+        .effective_rules()
+        .into_iter()
+        .flatten()
+        .flat_map(mirror_backends)
+        .collect();
     assert!(
         route.spec.resolved_rules.is_some(),
         "must exercise the compiled sibling copy"
@@ -94,7 +106,7 @@ async fn mirror_http_parse_tracks_rule_and_backend_refs_and_clears_old_dependenc
         .iter()
         .all(|b| b.ref_denied.as_ref().unwrap().target_namespace == "target"));
     assert_eq!(
-        errors("app", ResourceKind::HTTPRoute, mirrors.into_iter(), &runtime).len(),
+        errors(HttpRouteMirrorRefs::from_route(&route).unwrap().effective(), &runtime).len(),
         2
     );
     runtime.ref_grant_store.upsert(
@@ -109,7 +121,7 @@ async fn mirror_http_parse_tracks_rule_and_backend_refs_and_clears_old_dependenc
         .effective_rules()
         .into_iter()
         .flatten()
-        .flat_map(refs)
+        .flat_map(mirror_backends)
         .all(|b| b.ref_denied.is_none()));
     route.spec.rules = None;
     let ProcessResult::Continue(_) = handler.parse(route, &ctx).await else {
@@ -156,11 +168,7 @@ async fn mirror_http_missing_namespace_uses_one_owner_for_replace_and_delete() {
         "spec": {"rules": []}
     }))
     .unwrap();
-    let owner = ResourceRef::new(
-        ResourceKind::HTTPRoute,
-        Some("default".to_string()),
-        "mirrors".to_string(),
-    );
+    let owner = ResourceRef::new(ResourceKind::HTTPRoute, None, "mirrors".to_string());
     let service_key = mirror_service_key("default", "shadow");
     let handler = HttpRouteHandler::default();
 
@@ -296,7 +304,8 @@ async fn mirror_missing_service_reports_backend_not_found() {
     }))
     .unwrap();
 
-    let errors = errors("app", ResourceKind::HTTPRoute, std::iter::once(&backend), &runtime);
+    let owner = mirror_route(&backend);
+    let errors = errors(HttpRouteMirrorRefs::from_route(&owner).unwrap().effective(), &runtime);
     assert_eq!(
         errors,
         vec![ResolvedRefsError::BackendNotFound {
@@ -364,4 +373,83 @@ fn invalid_mirror_standard_fields_set_plugin_accepted_false() {
         .unwrap();
     assert_eq!(accepted.status, "False");
     assert_eq!(accepted.reason, "Invalid");
+}
+
+fn mirror_route(backend: &BackendObjectReference) -> edgion_resources::HTTPRoute {
+    serde_json::from_value(serde_json::json!({"metadata":{"name":"owner","namespace":"app"},"spec":{"rules":[{"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":backend}}]}]}})).unwrap()
+}
+fn resolve_owned(
+    backend: &mut BackendObjectReference,
+    kind: ResourceKind,
+    runtime: &ControllerRuntime,
+    check: impl FnOnce(GrantQuery<'_>) -> bool,
+) -> Option<String> {
+    let root = ResourceRef::new(kind, Some("app".into()), "owner".into());
+    let route = mirror_route(backend);
+    let plugins: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"owner","namespace":"app"},"spec":{"requestPlugins":[{"type":"RequestMirror","config":{"backendRef":backend}}]}})).unwrap();
+    let field = if kind == ResourceKind::HTTPRoute {
+        HttpRouteMirrorRefs::from_route(&route)
+            .unwrap()
+            .authored_at(0, None, 0)
+            .unwrap()
+    } else {
+        PluginMirrorRefs::from_plugins(&plugins).authored_at(0).unwrap()
+    };
+    let decision = resolve(field, |terminal| authorize_with(terminal, &root, true, runtime, check));
+    decision.apply_backend(backend);
+    decision.cross_namespace().map(str::to_string)
+}
+fn mirror_backends(rule: &edgion_resources::HTTPRouteRule) -> impl Iterator<Item = &BackendObjectReference> {
+    rule.filters
+        .iter()
+        .flatten()
+        .chain(
+            rule.backend_refs
+                .iter()
+                .flatten()
+                .flat_map(|backend| backend.filters.iter().flatten()),
+        )
+        .filter_map(|filter| filter.request_mirror.as_ref().map(|mirror| &mirror.backend_ref))
+}
+
+#[test]
+fn mirror_invalid_fields_never_read_and_valid_edges_precede_grant_reads() {
+    let runtime = ControllerRuntime::default();
+    let root = ResourceRef::new(ResourceKind::HTTPRoute, None, "published".into());
+    for backend in [
+        serde_json::json!({"name":"bad/name","namespace":"target","port":80}),
+        serde_json::json!({"name":"copy","namespace":"bad/ns","port":80}),
+        serde_json::json!({"name":"copy","namespace":"target","group":"core","port":80}),
+        serde_json::json!({"name":"copy","namespace":"target","port":0}),
+    ] {
+        let route = mirror_route(&serde_json::from_value(backend).unwrap());
+        let field = HttpRouteMirrorRefs::from_route(&route)
+            .unwrap()
+            .authored_at(0, None, 0)
+            .unwrap();
+        resolve(field, |_| panic!("invalid descriptor must not authorize or register"));
+        assert!(runtime.service_ref_mgr.get_dependencies(&root.key()).is_empty());
+        assert!(runtime.cross_ns_ref_mgr.get_dependencies(&root.key()).is_empty());
+    }
+    for allowed in [false, true] {
+        let route = mirror_route(
+            &serde_json::from_value(serde_json::json!({"name":"copy","namespace":"target","port":80})).unwrap(),
+        );
+        let field = HttpRouteMirrorRefs::from_route(&route)
+            .unwrap()
+            .authored_at(0, None, 0)
+            .unwrap();
+        let decision = resolve(field, |terminal| {
+            authorize_with(terminal, &root, true, &runtime, |query| {
+                assert_eq!(query.source().scope().namespace(), Some("app"));
+                assert_eq!(
+                    runtime.service_ref_mgr.get_refs(&mirror_service_key("target", "copy")),
+                    vec![root.clone()]
+                );
+                assert_eq!(runtime.cross_ns_ref_mgr.get_refs("target"), vec![root.clone()]);
+                allowed
+            })
+        });
+        assert_eq!(decision.denied.is_none(), allowed);
+    }
 }

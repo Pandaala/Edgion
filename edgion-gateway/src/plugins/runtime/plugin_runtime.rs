@@ -1,5 +1,8 @@
 //! Plugin runtime - manages plugin execution across different stages
 
+use edgion_resources::resource::meta::ResourceMeta;
+use edgion_resources::resources::refs::plugin_fields::PluginMirrorRefs;
+use edgion_resources::resources::refs::route_fields::{EffectiveMirrorField, HttpRouteMirrorRefs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -581,10 +584,14 @@ impl PluginRuntime {
         if let Some((references, filters)) = owned {
             runtime.add_from_httproute_filters_inner(
                 filters,
-                route.metadata.namespace.as_deref().unwrap_or("default"),
                 backend.is_none(),
                 mirror_tuning,
                 |filter| references.effective_at(rule, backend, filter),
+                |filter| {
+                    HttpRouteMirrorRefs::from_route(route)
+                        .ok()?
+                        .effective_at(rule, backend, filter)
+                },
             );
         } else {
             runtime.invalid_plugins.record_non_retainable("ExtensionRef");
@@ -596,10 +603,10 @@ impl PluginRuntime {
     fn add_from_httproute_filters_inner<'a>(
         &mut self,
         filters: &[HTTPRouteFilter],
-        namespace: &str,
         assign_indices: bool,
         mirror_tuning: &MirrorTuning,
         field: impl Fn(usize) -> Option<RouteExtensionField<'a>>,
+        mirror_field: impl Fn(usize) -> Option<EffectiveMirrorField<'a>>,
     ) {
         if filters.iter().enumerate().any(|(index, _)| {
             matches!(
@@ -663,14 +670,15 @@ impl PluginRuntime {
                     }
                 }
                 HTTPRouteFilterType::RequestMirror => {
-                    if let Some(config) = &filter.request_mirror {
-                        self.add_request_filter(Box::new(RequestMirrorPlugin::new(
-                            config.clone(),
-                            mirror_tuning.clone(),
-                            namespace.to_string(),
-                        )));
+                    if let Some(plugin) = mirror_field(filter_index)
+                        .and_then(|field| RequestMirrorPlugin::new(field, mirror_tuning.clone()))
+                    {
+                        self.add_request_filter(Box::new(plugin));
+                    } else {
+                        self.invalid_plugins.record_non_retainable("RequestMirror");
                     }
                 }
+
                 HTTPRouteFilterType::CORS => {
                     if let Some(config) = &filter.cors {
                         // Controller status and Gateway route publication both reject
@@ -840,15 +848,30 @@ impl PluginRuntime {
         namespace: &str,
         resource_key: &str,
     ) -> Vec<String> {
-        self.add_from_request_filters_with_cache(entries, namespace, resource_key, &mut EntryCache::default())
+        self.add_request_entries(entries, namespace, resource_key, &mut EntryCache::default(), None)
     }
 
     pub(crate) fn add_from_request_filters_with_cache(
+        &mut self,
+        owner: &edgion_resources::EdgionPlugins,
+        cache: &mut EntryCache,
+    ) -> Vec<String> {
+        self.add_request_entries(
+            owner.spec.request_plugins.as_deref().unwrap_or_default(),
+            owner.metadata.namespace.as_deref().unwrap_or("default"),
+            &owner.key_name(),
+            cache,
+            Some(owner),
+        )
+    }
+
+    fn add_request_entries(
         &mut self,
         entries: &[RequestFilterEntry],
         namespace: &str,
         resource_key: &str,
         cache: &mut EntryCache,
+        owner: Option<&edgion_resources::EdgionPlugins>,
     ) -> Vec<String> {
         let mut errors = Vec::new();
         // Keep source aliases for dependency semantics even when an invalid or
@@ -971,6 +994,19 @@ impl PluginRuntime {
                     stage: EntryStage::Request,
                     index,
                 };
+                let mirror_field = owner.and_then(|owner| PluginMirrorRefs::from_plugins(owner).effective_at(index));
+                if matches!(entry.plugin, EdgionPlugin::RequestMirror(_))
+                    && !matches!(mirror_field.map(|field| field.validated()), Some(Ok(Some(_))))
+                {
+                    self.invalid_plugins.record_non_retainable("RequestMirror");
+                    errors.push(format!(
+                        "requestPlugins[{index}] (RequestMirror): {}",
+                        config_validation_errors[index]
+                            .as_deref()
+                            .unwrap_or("invalid owning mirror reference")
+                    ));
+                    continue;
+                }
                 if let Some(outcome) = cache.get(slot) {
                     self.append_entry_bundle(outcome.bundle());
                     errors.extend(outcome.bundle().errors.iter().cloned());
@@ -1189,6 +1225,11 @@ impl PluginRuntime {
                     }
 
                     let created = match &entry.plugin {
+                        EdgionPlugin::RequestMirror(config) => CreateResult::Ok(
+                            mirror_field
+                                .and_then(|field| RequestMirrorPlugin::new(field, config.tuning.clone()))
+                                .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
+                        ),
                         EdgionPlugin::RateLimitLocal(config) => {
                             CreateResult::Ok(Some(RateLimitLocal::create_with_outcome_slot(
                                 config,
@@ -1849,11 +1890,7 @@ impl PluginRuntime {
                     .ok()
                     .map(|filter| Box::new(filter) as Box<dyn RequestFilter>),
             ),
-            EdgionPlugin::RequestMirror(config) => CreateResult::Ok(Some(Box::new(RequestMirrorPlugin::new(
-                config.filter.clone(),
-                config.tuning.clone(),
-                namespace.to_string(),
-            )))),
+            EdgionPlugin::RequestMirror(_) => CreateResult::WrongStage,
             EdgionPlugin::BasicAuth(config) => CreateResult::Ok(Some(Box::new(BasicAuth::new(config)))),
             EdgionPlugin::AiProxy(config) => CreateResult::Ok(AiProxy::create(config, namespace, entry_scope)),
             EdgionPlugin::AiGuard(config) => CreateResult::Ok(AiGuard::create(config, entry_scope)),

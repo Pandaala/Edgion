@@ -2353,3 +2353,19 @@ fn responses_guard_capability_rejection_has_shared_validation_and_policy_parity(
         assert!(bypassed.is_activatable);
     }
 }
+
+#[test]
+fn mirror_invalid_actual_owner_cannot_reuse_cached_entry() {
+    let mut source: EdgionPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"mirrors","namespace":"app"},"spec":{"requestPlugins":[{"type":"RequestMirror","config":{"backendRef":{"name":"copy","port":80}}}]}})).unwrap();
+    let mut cache = crate::plugins::runtime::entry_bundle::EntryCache::default();
+    let valid = compile_plugins_with_cache(&source, &mut cache, &[], Vec::new());
+    assert!(valid.is_activatable);
+    assert_eq!(cache.len(), 1);
+    source.metadata.name = Some("invalid/name".into());
+    let invalid = compile_plugins_with_cache(&source, &mut cache, &[], Vec::new());
+    assert!(!invalid.is_activatable);
+    assert!(invalid
+        .plugin_runtime
+        .request_plugins_iter()
+        .all(|filter| filter.name() != "RequestMirror"));
+}

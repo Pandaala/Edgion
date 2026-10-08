@@ -589,6 +589,267 @@ extension_facade!(GrpcRouteExtensionRefs, GRPCRoute, Grpc);
 /// ```
 const _: () = ();
 
+/// Stable location of an actual RequestMirror declaration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MirrorSlot {
+    Route(RouteFilterSlot),
+    Plugin(usize),
+}
+
+#[derive(Clone, Copy)]
+enum MirrorOwner<'a> {
+    Route(&'a HTTPRoute),
+    Plugin(&'a crate::resources::edgion_plugins::EdgionPlugins),
+}
+impl<'a> MirrorOwner<'a> {
+    fn metadata(self) -> &'a ObjectMeta {
+        match self {
+            Self::Route(owner) => &owner.metadata,
+            Self::Plugin(owner) => &owner.metadata,
+        }
+    }
+    fn kind(self) -> ResourceKind {
+        match self {
+            Self::Route(_) => ResourceKind::HTTPRoute,
+            Self::Plugin(_) => ResourceKind::EdgionPlugins,
+        }
+    }
+    fn namespace(self) -> &'a str {
+        self.metadata().namespace.as_deref().unwrap_or("default")
+    }
+    fn source(self) -> Result<ReferenceSource<'a>, ReferenceError> {
+        let group = match self {
+            Self::Route(_) => GATEWAY_API_GROUP,
+            Self::Plugin(_) => "edgion.io",
+        };
+        ObjectIdentity::checked(
+            group,
+            self.kind().as_str(),
+            ResourceScope::Namespaced(self.namespace()),
+            self.metadata().name.as_deref().unwrap_or_default(),
+        )?;
+        ReferenceSource::checked(group, self.kind().as_str(), ResourceScope::Namespaced(self.namespace()))
+    }
+}
+
+/// A target-only loan from an actual Route filter or plugin entry. It cannot authorize.
+/// ```compile_fail
+/// use edgion_resources::resources::refs::route_fields::EffectiveMirrorField;
+/// fn authorize(field: EffectiveMirrorField<'_>) { field.grant_query(); }
+/// ```
+#[derive(Clone, Copy)]
+pub struct EffectiveMirrorField<'a> {
+    owner: MirrorOwner<'a>,
+    slot: MirrorSlot,
+    config: Option<&'a crate::resources::http_route::HTTPRequestMirrorFilter>,
+    is_mirror: bool,
+}
+impl<'a> EffectiveMirrorField<'a> {
+    pub fn slot(self) -> MirrorSlot {
+        self.slot
+    }
+    pub fn config(self) -> Option<&'a crate::resources::http_route::HTTPRequestMirrorFilter> {
+        self.config
+    }
+    pub fn source(self) -> Result<ReferenceSource<'a>, ReferenceError> {
+        self.owner.source()
+    }
+    pub fn source_kind(self) -> ResourceKind {
+        self.owner.kind()
+    }
+    pub fn source_name(self) -> &'a str {
+        self.owner.metadata().name.as_deref().unwrap_or_default()
+    }
+    pub fn source_uid(self) -> Option<&'a str> {
+        self.owner.metadata().uid.as_deref()
+    }
+    pub fn source_generation(self) -> Option<i64> {
+        self.owner.metadata().generation
+    }
+    pub fn validated(self) -> Result<Option<MirrorTarget<'a>>, ReferenceError> {
+        self.owner.source()?;
+        match (self.is_mirror, self.config) {
+            (false, None) => Ok(None),
+            (true, Some(config)) => {
+                let target = config.backend_ref.validated_target(self.owner.namespace())?;
+                Ok(Some(MirrorTarget { field: self, target }))
+            }
+            _ => Err(ReferenceError::UnsupportedTarget),
+        }
+    }
+}
+
+/// Validated effective mirror target, without ReferenceGrant authority.
+/// ```compile_fail
+/// use edgion_resources::resources::refs::route_fields::MirrorTarget;
+/// fn authorize(target: MirrorTarget<'_>) { target.grant_query(); }
+/// ```
+#[derive(Clone, Copy)]
+pub struct MirrorTarget<'a> {
+    field: EffectiveMirrorField<'a>,
+    target: ObjectIdentity<'a>,
+}
+impl<'a> MirrorTarget<'a> {
+    pub fn target(self) -> ObjectIdentity<'a> {
+        self.target
+    }
+    pub fn field(self) -> EffectiveMirrorField<'a> {
+        self.field
+    }
+    pub fn config(self) -> &'a crate::resources::http_route::HTTPRequestMirrorFilter {
+        self.field
+            .config
+            .expect("validated mirror targets are constructed only with an actual mirror payload")
+    }
+    pub fn port(self) -> i32 {
+        self.config()
+            .backend_ref
+            .port
+            .expect("validated Service mirror targets require a port")
+    }
+}
+
+/// An authored declaration loan; no detached constructor is exposed.
+/// ```compile_fail
+/// use edgion_resources::resources::refs::route_fields::AuthoredMirrorField;
+/// let field = AuthoredMirrorField {};
+/// ```
+#[derive(Clone, Copy)]
+pub struct AuthoredMirrorField<'a> {
+    field: EffectiveMirrorField<'a>,
+}
+impl<'a> AuthoredMirrorField<'a> {
+    pub fn field(self) -> EffectiveMirrorField<'a> {
+        self.field
+    }
+    pub fn validated(self) -> Result<Option<TerminalMirrorReference<'a>>, ReferenceError> {
+        let source = self.field.owner.source()?;
+        Ok(self
+            .field
+            .validated()?
+            .map(|reference| TerminalMirrorReference { reference, source }))
+    }
+}
+#[derive(Clone, Copy)]
+pub struct TerminalMirrorReference<'a> {
+    reference: MirrorTarget<'a>,
+    source: ReferenceSource<'a>,
+}
+impl<'a> TerminalMirrorReference<'a> {
+    pub fn grant_query(self) -> GrantQuery<'a> {
+        GrantQuery::new(self.source, self.reference.target)
+    }
+    pub fn reference(self) -> MirrorTarget<'a> {
+        self.reference
+    }
+}
+
+pub struct HttpRouteMirrorRefs<'a> {
+    route: &'a HTTPRoute,
+}
+impl<'a> HttpRouteMirrorRefs<'a> {
+    pub fn from_route(route: &'a HTTPRoute) -> Result<Self, ReferenceError> {
+        MirrorOwner::Route(route).source()?;
+        Ok(Self { route })
+    }
+    fn at(
+        &self,
+        rule: usize,
+        backend: Option<usize>,
+        filter: usize,
+        effective: bool,
+    ) -> Option<EffectiveMirrorField<'a>> {
+        let rules = if effective {
+            self.route.effective_rules()
+        } else {
+            self.route.spec.rules.as_ref()
+        }?;
+        let value = rules.get(rule)?;
+        let filters = match backend {
+            Some(index) => value.backend_refs.as_ref()?.get(index)?.filters.as_ref(),
+            None => value.filters.as_ref(),
+        }?;
+        let value = filters.get(filter)?;
+        Some(EffectiveMirrorField {
+            owner: MirrorOwner::Route(self.route),
+            slot: MirrorSlot::Route(RouteFilterSlot { rule, backend, filter }),
+            config: value.request_mirror.as_ref(),
+            is_mirror: value.filter_type == HTTPRouteFilterType::RequestMirror,
+        })
+    }
+    pub fn authored_at(&self, rule: usize, backend: Option<usize>, filter: usize) -> Option<AuthoredMirrorField<'a>> {
+        self.at(rule, backend, filter, false)
+            .map(|field| AuthoredMirrorField { field })
+    }
+    pub fn effective_at(&self, rule: usize, backend: Option<usize>, filter: usize) -> Option<EffectiveMirrorField<'a>> {
+        self.at(rule, backend, filter, true)
+    }
+    fn fields(&self, effective: bool) -> impl Iterator<Item = EffectiveMirrorField<'a>> + 'a {
+        let route = self.route;
+        let rules = if effective {
+            route.effective_rules()
+        } else {
+            route.spec.rules.as_ref()
+        };
+        rules.into_iter().flatten().enumerate().flat_map(move |(rule, value)| {
+            value
+                .filters
+                .iter()
+                .flatten()
+                .enumerate()
+                .map(move |(filter, value)| (None, filter, value))
+                .chain(
+                    value
+                        .backend_refs
+                        .iter()
+                        .flatten()
+                        .enumerate()
+                        .flat_map(|(backend, value)| {
+                            value
+                                .filters
+                                .iter()
+                                .flatten()
+                                .enumerate()
+                                .map(move |(filter, value)| (Some(backend), filter, value))
+                        }),
+                )
+                .map(move |(backend, filter, value)| EffectiveMirrorField {
+                    owner: MirrorOwner::Route(route),
+                    slot: MirrorSlot::Route(RouteFilterSlot { rule, backend, filter }),
+                    config: value.request_mirror.as_ref(),
+                    is_mirror: value.filter_type == HTTPRouteFilterType::RequestMirror,
+                })
+        })
+    }
+    pub fn authored(&self) -> impl Iterator<Item = AuthoredMirrorField<'a>> + 'a {
+        self.fields(false).map(|field| AuthoredMirrorField { field })
+    }
+    pub fn effective(&self) -> impl Iterator<Item = EffectiveMirrorField<'a>> + 'a {
+        self.fields(true)
+    }
+}
+
+// The sibling facade passes the actual owner and indexes its actual vector here.
+pub(super) fn plugin_mirror_field(
+    owner: &crate::resources::edgion_plugins::EdgionPlugins,
+    index: usize,
+) -> Option<AuthoredMirrorField<'_>> {
+    use crate::resources::edgion_plugins::EdgionPlugin;
+    let entry = owner.spec.request_plugins.as_ref()?.get(index)?;
+    let config = match &entry.plugin {
+        EdgionPlugin::RequestMirror(config) => Some(&config.filter),
+        _ => None,
+    };
+    Some(AuthoredMirrorField {
+        field: EffectiveMirrorField {
+            owner: MirrorOwner::Plugin(owner),
+            slot: MirrorSlot::Plugin(index),
+            is_mirror: config.is_some(),
+            config,
+        },
+    })
+}
+
 #[cfg(test)]
 #[path = "../../../tests/unit/resources/refs/route_fields_test.rs"]
 mod tests;

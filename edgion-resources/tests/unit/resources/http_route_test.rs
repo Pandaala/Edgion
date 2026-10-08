@@ -686,3 +686,21 @@ fn test_no_timeouts_returns_none() {
     };
     assert!(ParsedRouteTimeouts::from_config(&config).is_none());
 }
+
+#[test]
+fn request_mirror_lexical_namespaces_and_names_use_canonical_service_validation() {
+    for backend in [
+        serde_json::json!({"name":"bad/name","port":80}),
+        serde_json::json!({"name":"copy","namespace":"bad/ns","port":80}),
+    ] {
+        let filter: HTTPRequestMirrorFilter =
+            serde_json::from_value(serde_json::json!({"backendRef":backend})).unwrap();
+        assert!(filter
+            .validation_error()
+            .unwrap()
+            .contains("valid Kubernetes object names"));
+    }
+    let filter: HTTPRequestMirrorFilter =
+        serde_json::from_value(serde_json::json!({"backendRef":{"name":"copy","group":"","port":80}})).unwrap();
+    assert!(filter.validation_error().is_none());
+}

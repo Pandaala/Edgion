@@ -155,7 +155,7 @@ fn test_plugin_with_tuning(mut tuning: MirrorTuning) -> RequestMirrorPlugin {
     // The mirror access log needs process-wide log infrastructure that a
     // unit test does not bootstrap.
     tuning.mirror_log = false;
-    RequestMirrorPlugin::new(
+    owned_plugin(
         HTTPRequestMirrorFilter {
             backend_ref: BackendObjectReference {
                 group: Some(String::new()),
@@ -169,8 +169,16 @@ fn test_plugin_with_tuning(mut tuning: MirrorTuning) -> RequestMirrorPlugin {
             percent: None,
         },
         tuning,
-        TEST_NS.to_string(),
     )
+}
+
+fn owned_plugin(config: HTTPRequestMirrorFilter, tuning: MirrorTuning) -> RequestMirrorPlugin {
+    let route: edgion_resources::HTTPRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"mirror-owner","namespace":TEST_NS},"spec":{"rules":[{"filters":[{"type":"RequestMirror","requestMirror":config}]}]}})).unwrap();
+    let field = edgion_resources::resources::refs::route_fields::HttpRouteMirrorRefs::from_route(&route)
+        .unwrap()
+        .effective_at(0, None, 0)
+        .unwrap();
+    RequestMirrorPlugin::new(field, tuning).unwrap()
 }
 
 fn test_plugin() -> RequestMirrorPlugin {
@@ -264,14 +272,15 @@ async fn denied_or_wrong_kind_mirror_never_arms_or_uses_session() {
         (false, "example.com", "Service", "mirror invalid kind"),
         (false, "", "Secret", "mirror invalid kind"),
     ] {
-        let mut plugin = test_plugin();
-        plugin.config.backend_ref.group = Some(group.to_string());
-        plugin.config.backend_ref.kind = Some(kind.to_string());
-        plugin.config.backend_ref.ref_denied = denied.then(|| edgion_resources::resources::common::RefDenied {
+        let mut config = test_plugin().config;
+        config.backend_ref.group = Some(group.to_string());
+        config.backend_ref.kind = Some(kind.to_string());
+        config.backend_ref.ref_denied = denied.then(|| edgion_resources::resources::common::RefDenied {
             target_namespace: TEST_NS.to_string(),
             target_name: TEST_SERVICE.to_string(),
             reason: None,
         });
+        let mut plugin = owned_plugin(config, MirrorTuning::default());
         let mut events = observe_writer(&mut plugin);
         // No session expectation is installed: even reading the request
         // context or preparing its body before rejecting fails this test.
@@ -429,4 +438,35 @@ async fn frozen_body_stage_refuses_streaming_mirror_install() {
     assert_eq!(log.render_for_test(), "err: mirror body stage frozen");
     // Cancellation is already ready and wins without polling the body/send future.
     assert_finished(&mut events, &plugin, ("body_abandoned", 0, 0)).await;
+}
+
+#[tokio::test]
+async fn invalid_mirror_targets_are_cold_and_never_use_session_or_writer() {
+    for backend in [
+        serde_json::json!({"name":"bad/name","namespace":TEST_NS,"port":TEST_PORT}),
+        serde_json::json!({"name":TEST_SERVICE,"namespace":"bad/ns","port":TEST_PORT}),
+        serde_json::json!({"name":TEST_SERVICE,"namespace":TEST_NS,"group":"core","port":TEST_PORT}),
+        serde_json::json!({"name":TEST_SERVICE,"namespace":TEST_NS,"port":0}),
+    ] {
+        let config = serde_json::from_value(serde_json::json!({"backendRef":backend})).unwrap();
+        let mut plugin = owned_plugin(config, MirrorTuning::default());
+        assert!(plugin.target.is_err());
+        let mut events = observe_writer(&mut plugin);
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestMirror");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert!(events.try_recv().is_err());
+        assert_eq!(plugin.semaphore.available_permits(), plugin.tuning.max_concurrent);
+    }
+    insert_test_endpoint_slice();
+    let mut plugin = test_plugin();
+    let key = plugin.target.as_ref().ok().unwrap().service_key.clone();
+    assert_eq!(key, format!("{TEST_NS}/{TEST_SERVICE}"));
+    // The runtime target is immutable even if diagnostic config is changed in this private test.
+    plugin.config.backend_ref.name = "decoy".into();
+    assert!(plugin.resolve_target(true).is_ok());
+    assert_eq!(plugin.target.as_ref().ok().unwrap().service_key, key);
 }

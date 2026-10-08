@@ -25,7 +25,9 @@ use edgion_resources::resources::edgion_plugins::{
     EdgionPlugin, EdgionPluginsStatus, PluginValidation, ResolvedWafBundle, WafBundleResolutionError,
     WafBundleResolutionKind,
 };
+use edgion_resources::resources::refs::plugin_fields::PluginMirrorRefs;
 use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+use edgion_resources::resources::refs::route_fields::MirrorSlot;
 use edgion_resources::ResourceKind;
 
 use super::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
@@ -447,36 +449,37 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         Self::mark_config_data_ref_denials(&mut ep, ctx);
         resolve_waf_bundles(&mut ep, ctx);
 
-        for entry in ep.spec.request_plugins.iter_mut().flatten() {
-            if let EdgionPlugin::RequestMirror(config) = &mut entry.plugin {
-                super::request_mirror::resolve(&mut config.filter.backend_ref, &ns, |backend| {
-                    // Subscribe before reading the grant so concurrent revocation
-                    // either changes this read or requeues this resource.
-                    cross_mgr.add_ref(
-                        backend.namespace.as_deref().unwrap_or(&ns).to_string(),
-                        resource_ref.clone(),
-                    );
-                    super::request_mirror::allowed(backend, &ns, ResourceKind::EdgionPlugins, ctx.runtime())
-                });
+        let mirror_decisions: Vec<_> = PluginMirrorRefs::from_plugins(&ep)
+            .authored()
+            .map(|field| {
+                let enabled = match field.field().slot() {
+                    MirrorSlot::Plugin(index) => ep
+                        .spec
+                        .request_plugins
+                        .as_ref()
+                        .and_then(|entries| entries.get(index))
+                        .is_some_and(|entry| entry.is_enabled()),
+                    _ => false,
+                };
+                super::request_mirror::resolve(field, |terminal| {
+                    super::request_mirror::authorize(terminal, &resource_ref, enabled, ctx.runtime())
+                })
+            })
+            .collect();
+        for decision in mirror_decisions {
+            if let MirrorSlot::Plugin(index) = decision.slot() {
+                if let Some(entry) = ep
+                    .spec
+                    .request_plugins
+                    .as_mut()
+                    .and_then(|entries| entries.get_mut(index))
+                {
+                    if let EdgionPlugin::RequestMirror(config) = &mut entry.plugin {
+                        decision.apply_backend(&mut config.filter.backend_ref);
+                    }
+                }
             }
         }
-        super::request_mirror::register_service_refs(
-            &resource_ref,
-            &ns,
-            ep.spec
-                .request_plugins
-                .iter()
-                .flatten()
-                .filter(|entry| entry.is_enabled())
-                .filter_map(|entry| {
-                    if let EdgionPlugin::RequestMirror(config) = &entry.plugin {
-                        Some(&config.filter.backend_ref)
-                    } else {
-                        None
-                    }
-                }),
-            ctx.runtime(),
-        );
 
         // Two ordered passes over every Condition tree: ConfigData expansion
         // (resolved_profiles / resolved_candidates / ipRefs) then credentials
@@ -627,20 +630,18 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             }
         }
         resolved_errors.extend(super::request_mirror::errors(
-            ep.metadata.namespace.as_deref().unwrap_or("default"),
-            ResourceKind::EdgionPlugins,
-            ep.spec
-                .request_plugins
-                .iter()
-                .flatten()
-                .filter(|entry| entry.is_enabled())
-                .filter_map(|entry| {
-                    if let EdgionPlugin::RequestMirror(config) = &entry.plugin {
-                        Some(&config.filter.backend_ref)
-                    } else {
-                        None
-                    }
-                }),
+            PluginMirrorRefs::from_plugins(ep)
+                .authored()
+                .filter(|field| match field.field().slot() {
+                    MirrorSlot::Plugin(index) => ep
+                        .spec
+                        .request_plugins
+                        .as_ref()
+                        .and_then(|entries| entries.get(index))
+                        .is_some_and(|entry| entry.is_enabled()),
+                    _ => false,
+                })
+                .map(|field| field.field()),
             ctx.runtime(),
         ));
         dedup_resolved_ref_errors(&mut resolved_errors);

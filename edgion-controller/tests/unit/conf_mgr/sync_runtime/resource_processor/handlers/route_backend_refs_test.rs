@@ -178,7 +178,7 @@ async fn all_five_invalid_owners_fail_closed_in_direct_status_and_recover_after_
                 assert!(repaired.spec.resolved_listeners.is_some(),"{} repaired attachment",$kind.as_str());
                 assert!(repaired.status.as_ref().unwrap().parents.iter().any(|parent|parent.conditions.iter().any(|condition|condition.type_=="Accepted" && condition.status=="True")));
                 assert_eq!($facade::from_route(&repaired).unwrap().effective().count(),1);
-                assert!(runtime.service_ref_mgr.get_refs("default/service").contains(&ResourceRef::new($kind,Some("default".into()),"owner".into())));
+                assert!(runtime.service_ref_mgr.get_refs("default/service").contains(&ResourceRef::new($kind,if $kind == ResourceKind::HTTPRoute { None } else { Some("default".into()) },"owner".into())));
             }
         }};
     }
@@ -238,7 +238,7 @@ async fn all_five_apply_replace_dependencies_and_clear_stale_denial_for_invalid_
             let ProcessResult::Continue(mut route)=handler.parse(route,&ctx).await else {panic!("first parse")};
             assert_eq!(runtime.cross_ns_ref_mgr.get_refs("old"),vec![owner.clone()]);
             assert_eq!(runtime.cross_ns_ref_mgr.get_refs("second"),vec![owner.clone()]);
-            assert_eq!(runtime.service_ref_mgr.get_refs("old/service"),vec![ResourceRef::new($kind,Some("default".into()),"owner".into())]);
+            assert_eq!(runtime.service_ref_mgr.get_refs("old/service"),vec![ResourceRef::new($kind,if $kind == ResourceKind::HTTPRoute { None } else { Some("default".into()) },"owner".into())]);
             for backend in route.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap() {
                 backend.port=Some(0);
                 backend.ref_denied=Some(RefDenied{target_namespace:"old".into(),target_name:"service".into(),reason:Some("stale".into())});

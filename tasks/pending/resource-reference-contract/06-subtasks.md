@@ -704,3 +704,42 @@ commands/exits/source/binary hashes are preserved in the same verification
 directory. Refreshed workspace lint/guards, replacement independent result
 reviews and commit remain coordinator-owned pending gates; no warning-free final
 lint or overall conformance acceptance is claimed here.
+
+## R3b current execution boundary
+
+The independently approved R3b scope is 33 existing files after the narrow
+supporting-test and tracing-registry amendments: 12 production, 14 mirrored tests,
+six owning docs and one Python guard.
+Root owns progress07 and commit gates. The exact plan, amendment and immutable
+baseline are in `tmp/resource-reference-contract/r3b-plan-20261008` and
+`r3b-baseline-20261008`.
+
+Actual HTTP/EP mirror owner loans, authored-only Grant queries, dependencies before
+permission reads, additive child-edge retention and cold Gateway targets are
+implemented. The HTTP raw-None wake-key correction changes two expected owners in
+`handlers/route_backend_refs_test.rs`, preserving all six IDs, all target/default,
+replacement/cleanup/recovery assertions and all non-HTTP expectations.
+
+Stable r4 verification passed Controller 927 tests (including all six supporting
+tests), Resources 1601 tests plus 27 doctests/10 ignored, and Gateway 2254 plugin
+tests/17 ignored. Scoped source identities are 297 to 311 with no removals or
+changed ignores; complete compiled lists are 1925 to 1929, 1743 to 1749 and
+5144 to 5148, with no removals. All earlier compile/assertion failures remain
+recorded. See [04-implementation.md](04-implementation.md) for evidence detail and
+[07-progress.md](07-progress.md) for workspace checks, independent result reviews
+and commit authority, which remain separate gates.
+
+Other native omitted-namespace Service worker keys remain an explicit R4 follow-up,
+not part of R3b acceptance. Mirror in-process tests do not establish live
+conformance; descriptor R3c and remaining finite-contract work remain open.
+
+The first actual R3b review returned SCOPED BLOCK for R3b-F1: a test-only
+ResourceMeta import was unconditional in production. Root check/Clippy exited zero
+with that warning, so the clean gate failed. The correction gates precisely that
+import with `#[cfg(test)]`; fresh Gateway r5 verification passed 2254 tests
+with 17 ignored, while unchanged Resources/Controller r4 evidence is retained.
+Complete compiled and scoped source identities remain unchanged from the r4
+comparison, with no removed original test or changed ignore. The exact cold-helper
+tracing registration amendment passed its guard and 18 unchanged Python tests.
+Corrected workspace gates and both independent actual-result approvals are still
+required; no final acceptance is inferred from these corrections.

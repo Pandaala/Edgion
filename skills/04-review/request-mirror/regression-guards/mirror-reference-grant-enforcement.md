@@ -31,10 +31,10 @@ same-named Service. This does not expand the mirror's backend capabilities.
 
 ## Rationale and evidence
 
-The repository's vendored Gateway API v1.5 HTTPRoute schema requires a denied
+The repository's vendored Gateway API v1.6.2 HTTPRoute schema requires a denied
 cross-namespace mirror to report `ResolvedRefs=False/RefNotPermitted` and not be
 configured for delivery. The canonical authority is
-`config/crd/gateway-api/gateway-api-standard-v1.5.0.yaml`, the `requestMirror.backendRef`
+`config/crd/gateway-api/gateway-api-standard-v1.6.2.yaml`, the `requestMirror.backendRef`
 description. The existing named-jump fix did not cover mirror references.
 
 - `edgion-resources/src/resources/http_route.rs`: the mirror reference keeps
@@ -155,3 +155,33 @@ delegation inheritance, grant identity rules, or request-snapshot revocation pol
 
 - `request-mirror-reference-grant-enforcement`: confirmed authorization defect;
   full HTTPRoute/delegation/EdgionPlugins scope and skip-mirror behavior approved.
+
+## R3b field ownership and cold targets
+
+Only a validated authored mirror loan can mint the ReferenceGrant query. HTTP
+loans retain the original declaring Route and rule/backend/filter slot; plugin
+loans retain the actual EdgionPlugins and request-entry ordinal. UID/generation
+are borrowed where present, without adding transport metadata. Delegation borrows
+child fields before cloning or dropping rules, authorizes that child, and registers
+Service plus Grant-namespace recovery under the actual published root wake key.
+Valid Service and cross-namespace dependencies precede the Grant read. Disabled
+plugin mirrors still refresh denial and Grant-namespace dependencies, while Service
+dependencies and status remain enabled-entry-only.
+
+Gateway effective loans cannot mint Grant queries. Runtime construction computes
+the canonical Service/section keys once; invalid and denied targets exit before
+Session access, endpoint selection, task/body admission or writer creation. The
+EP compiler uses the actual equal-length policy-masked owner and validates the
+original mirror ordinal before cache reuse. No owner is synthesized from a store
+key, and mirror references do not enter credential topology. Existing generation
+cache, policy/LKG, cancellation, body-budget and separate mirror-client boundaries
+remain in force. These are in-process boundaries, not a live delivery or conformance
+claim. Historical September verification remains historical evidence.
+
+R3b stable in-process verification (2026-10-08): Controller 927 tests passed,
+Resources 1601 tests passed plus 27 doctests/10 ignored, and Gateway 2254 plugin
+tests passed/17 ignored. The amended 297 original scoped tests are preserved,
+with 14 additions and unchanged ignores; complete three-crate compiled lists have
+no removals. Raw commands, failures, source/binary hashes and identity comparisons
+are retained in `tmp/resource-reference-contract/r3b-verification-20261008-r1`.
+Workspace gates and independent actual-result review remain separate pending gates.

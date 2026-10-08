@@ -1625,3 +1625,27 @@ async fn native_guard_invocation_marker_respects_disable_condition_and_policy_by
         assert!(ctx.ai_state.is_none(), "ordinary traffic must not allocate an AI box");
     }
 }
+
+#[test]
+fn native_mirror_runtime_uses_actual_rule_and_backend_slots() {
+    let route: edgion_resources::HTTPRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"route","namespace":"app"},"spec":{"rules":[{"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"rule-copy","port":80}}}],"backendRefs":[{"name":"primary","port":80,"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"backend-copy","port":81}}}]}]}]}})).unwrap();
+    let rule = PluginRuntime::from_httproute_filters_for_rule(&route, 0, &MirrorTuning::default());
+    let backend = PluginRuntime::from_httproute_filters_for_backend(&route, 0, 0, &MirrorTuning::default());
+    assert_eq!(
+        rule.request_plugins_iter()
+            .filter(|filter| filter.name() == "RequestMirror")
+            .count(),
+        1
+    );
+    assert_eq!(
+        backend
+            .request_plugins_iter()
+            .filter(|filter| filter.name() == "RequestMirror")
+            .count(),
+        1
+    );
+    let missing = PluginRuntime::from_httproute_filters_for_backend(&route, 0, 9, &MirrorTuning::default());
+    assert!(missing
+        .request_plugins_iter()
+        .all(|filter| filter.name() != "RequestMirror"));
+}

@@ -1,3 +1,4 @@
+use edgion_resources::resources::refs::route_fields::EffectiveMirrorField;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -30,12 +31,19 @@ use super::MirrorBodyBudget;
 
 pub struct RequestMirrorPlugin {
     config: HTTPRequestMirrorFilter,
+    target: Result<CompiledMirrorTarget, &'static str>,
     tuning: MirrorTuning,
     semaphore: Arc<Semaphore>,
     #[cfg(test)]
     writer_events: Option<mpsc::UnboundedSender<arming_tests::WriterEvent>>,
     budget: Arc<MirrorBudget>,
     max_buffered_bytes: usize,
+}
+
+struct CompiledMirrorTarget {
+    service_key: String,
+    section: crate::backends::discovery::ServiceSectionKey,
+    scheme: &'static str,
 }
 
 struct PreparedSnapshot {
@@ -124,8 +132,27 @@ fn mirror_abandon_status(reason: &std::sync::atomic::AtomicU8) -> Option<&'stati
 }
 
 impl RequestMirrorPlugin {
-    pub fn new(config: HTTPRequestMirrorFilter, tuning: MirrorTuning, default_namespace: String) -> Self {
-        let mut cfg = config;
+    pub fn new(field: EffectiveMirrorField<'_>, tuning: MirrorTuning) -> Option<Self> {
+        let cfg = field.config()?.clone();
+        let target = if cfg.backend_ref.ref_denied.is_some() {
+            Err("mirror ref denied")
+        } else {
+            match field.validated() {
+                Ok(Some(reference)) => service_section_key_from_port(Some(reference.port()))
+                    .map(|section| CompiledMirrorTarget {
+                        service_key: format!(
+                            "{}/{}",
+                            reference.target().scope().namespace().unwrap_or_default(),
+                            reference.target().name()
+                        ),
+                        section,
+                        scheme: if reference.port() == 443 { "https" } else { "http" },
+                    })
+                    .map_err(|_| "mirror resolve error"),
+                Err(edgion_resources::resources::refs::ReferenceError::UnsupportedTarget) => Err("mirror invalid kind"),
+                _ => Err("mirror resolve error"),
+            }
+        };
         let mut tuning = tuning;
         let limits = tuning.normalize_limits();
         // Hard cap: channel_full_timeout_ms must not exceed 1000ms.
@@ -138,12 +165,8 @@ impl RequestMirrorPlugin {
             tuning.channel_full_timeout_ms = 1000;
         }
 
-        // If backendRef.namespace is absent, default to current route/plugin namespace.
-        if cfg.backend_ref.namespace.is_none() {
-            cfg.backend_ref.namespace = Some(default_namespace);
-        }
-
-        Self {
+        Some(Self {
+            target,
             semaphore: Arc::new(Semaphore::new(tuning.max_concurrent)),
             budget: global_budget(),
             max_buffered_bytes: limits.max_buffered_bytes,
@@ -151,7 +174,7 @@ impl RequestMirrorPlugin {
             tuning,
             #[cfg(test)]
             writer_events: None,
-        }
+        })
     }
 
     /// Returns `Some(reason)` when mirroring should be skipped, `None` when it should proceed.
@@ -202,34 +225,17 @@ impl RequestMirrorPlugin {
     }
 
     fn resolve_target(&self, allow_loopback_upstream: bool) -> Result<(String, String), String> {
-        let port = self
-            .config
-            .backend_ref
-            .port
-            .ok_or_else(|| "backend_ref.port is required for RequestMirror".to_string())?;
-        if !edgion_resources::gwapi_types::is_valid_port(port as i64) {
-            return Err(format!(
-                "backend_ref.port must be in {}..={}",
-                edgion_resources::gwapi_types::PORT_MIN,
-                edgion_resources::gwapi_types::PORT_MAX
-            ));
-        }
-        if self.config.backend_ref.name.is_empty() {
-            return Err("backend_ref.name is required for RequestMirror".to_string());
-        }
-        // TODO: Use BackendTLSPolicy to determine TLS instead of port heuristic.
-        let scheme = if port == 443 { "https" } else { "http" };
-
-        // namespace is always Some here: filled in from default_namespace at construction time.
-        let ns = self.config.backend_ref.namespace.as_deref().unwrap_or_default();
-        let service_key = format!("{}/{}", ns, self.config.backend_ref.name);
-
-        // Use the gateway's standard backend resolution and selector cache.
-        let section = service_section_key_from_port(Some(port))
-            .map_err(|_| "mirror backend_ref.port is missing or invalid".to_string())?;
-        if let Ok(endpoint) =
-            select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
-        {
+        let target = self.target.as_ref().map_err(|reason| (*reason).to_string())?;
+        let scheme = target.scheme;
+        if let Ok(endpoint) = select_service_endpoint(
+            &target.service_key,
+            target.section.clone(),
+            &None,
+            ServiceDegradePolicy::Live,
+            None,
+            "",
+            None,
+        ) {
             let addr = endpoint.backend.inner().addr.clone();
             if validate_endpoint_backend_addr(&addr, allow_loopback_upstream).is_err() {
                 return Err("mirror backend resolved to loopback/link-local/metadata address (rejected)".to_string());
@@ -277,13 +283,8 @@ impl RequestFilter for RequestMirrorPlugin {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        if self.config.backend_ref.ref_denied.is_some() {
-            log.push_err("mirror ref denied");
-            return PluginRunningResult::GoodNext;
-        }
-        // Never authorize one resource kind and dial a same-named Service.
-        if !self.config.backend_ref.is_service() {
-            log.push_err("mirror invalid kind");
+        if let Err(reason) = &self.target {
+            log.push_err(reason);
             return PluginRunningResult::GoodNext;
         }
         if let Some(reason) = self.skip_reason() {

@@ -487,3 +487,45 @@ async fn unsupported_types_fail_closed_even_when_disabled_or_policy_masked() {
     let corrected = resource(json!({"requestPlugins":[{"type":"RequestHeaderModifier", "config":{}}]}));
     assert!(PluginGeneration::new(corrected).compile(None).is_activatable);
 }
+
+#[test]
+fn mirror_generation_policy_masks_keep_owner_ordinals_and_generation_cache() {
+    let mut source = resource(json!({"requestPlugins":[
+        {"type":"RequestMirror","enable":false,"config":{"backendRef":{"name":"disabled","port":80}}},
+        {"type":"RequestMirror","config":{"backendRef":{"name":"active","port":80}}}
+    ]}));
+    source.metadata.uid = Some("generation-a".into());
+    source.metadata.generation = Some(3);
+    let mut generation = PluginGeneration::new(source.clone());
+    let active = generation.compile(None);
+    assert!(active.is_activatable);
+    assert_eq!(active.spec.spec.request_plugins.as_ref().unwrap().len(), 2);
+    assert!(generation
+        .cache
+        .get(EntrySlot {
+            stage: EntryStage::Request,
+            index: 0
+        })
+        .is_none());
+    assert!(generation
+        .cache
+        .get(EntrySlot {
+            stage: EntryStage::Request,
+            index: 1
+        })
+        .is_some());
+    let original = request_filter(&active, "RequestMirror");
+    let masked = generation.compile(Some(&restriction(&["RequestMirror"], PolicyActionKind::Bypass)));
+    assert_eq!(masked.spec.spec.request_plugins.as_ref().unwrap().len(), 2);
+    assert!(masked
+        .plugin_runtime
+        .request_plugins_iter()
+        .all(|filter| filter.name() != "RequestMirror"));
+    assert_eq!(masked.spec.metadata.uid.as_deref(), Some("generation-a"));
+    let reopened = generation.compile(None);
+    assert!(Arc::ptr_eq(&original, &request_filter(&reopened, "RequestMirror")));
+    source.metadata.uid = Some("generation-b".into());
+    source.metadata.generation = Some(1);
+    let newer = PluginGeneration::new(source).compile(None);
+    assert!(!Arc::ptr_eq(&original, &request_filter(&newer, "RequestMirror")));
+}

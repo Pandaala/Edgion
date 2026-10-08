@@ -226,3 +226,93 @@ fn extension_field_validation_rejects_bad_union_and_target_without_compacting_po
         assert_eq!(valid.target().name(), "valid");
     }
 }
+
+#[test]
+fn mirror_actual_owner_slots_and_effective_targets_preserve_authority_boundary() {
+    let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"owner","uid":"source-uid","generation":7},
+        "spec":{"rules":[{"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"rule-copy","port":80}}}],
+            "backendRefs":[{"name":"primary","port":80,"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"backend-copy","namespace":"target","port":8080}}}]}]}]}
+    })).unwrap();
+    let refs = HttpRouteMirrorRefs::from_route(&route).unwrap();
+    let rule = refs.authored_at(0, None, 0).unwrap().validated().unwrap().unwrap();
+    let backend = refs.authored_at(0, Some(0), 0).unwrap().validated().unwrap().unwrap();
+    assert_eq!(rule.grant_query().source().scope().namespace(), Some("default"));
+    assert_eq!(rule.reference().target().scope().namespace(), Some("default"));
+    assert_eq!(backend.reference().target().scope().namespace(), Some("target"));
+    assert_ne!(rule.reference().field().slot(), backend.reference().field().slot());
+    assert_eq!(backend.reference().field().source_uid(), Some("source-uid"));
+    assert_eq!(backend.reference().field().source_generation(), Some(7));
+    assert!(refs.effective_at(3, None, 0).is_none());
+    route.spec.resolved_rules = route.spec.rules.clone();
+    route.spec.resolved_rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0]
+        .request_mirror
+        .as_mut()
+        .unwrap()
+        .backend_ref
+        .namespace = Some("child".into());
+    let refs = HttpRouteMirrorRefs::from_route(&route).unwrap();
+    assert_eq!(
+        refs.authored_at(0, None, 0)
+            .unwrap()
+            .validated()
+            .unwrap()
+            .unwrap()
+            .reference()
+            .target()
+            .scope()
+            .namespace(),
+        Some("default")
+    );
+    assert_eq!(
+        refs.effective_at(0, None, 0)
+            .unwrap()
+            .validated()
+            .unwrap()
+            .unwrap()
+            .target()
+            .scope()
+            .namespace(),
+        Some("child")
+    );
+}
+
+#[test]
+fn mirror_fields_reject_invalid_owner_target_and_union_without_aliases() {
+    for backend in [
+        serde_json::json!({"name":"bad/name","port":80}),
+        serde_json::json!({"name":"copy","namespace":"bad/ns","port":80}),
+        serde_json::json!({"name":"copy","group":"core","port":80}),
+        serde_json::json!({"name":"copy","kind":"Secret","port":80}),
+        serde_json::json!({"name":"copy","port":0}),
+        serde_json::json!({"name":"copy"}),
+    ] {
+        let route: HTTPRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"owner","namespace":"app"},"spec":{"rules":[{"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":backend}}]}]}})).unwrap();
+        assert!(HttpRouteMirrorRefs::from_route(&route)
+            .unwrap()
+            .authored_at(0, None, 0)
+            .unwrap()
+            .validated()
+            .is_err());
+    }
+    for name in ["", "bad/name"] {
+        let route: HTTPRoute =
+            serde_json::from_value(serde_json::json!({"metadata":{"name":name},"spec":{"rules":[]}})).unwrap();
+        assert!(HttpRouteMirrorRefs::from_route(&route).is_err());
+    }
+    for filter in [
+        serde_json::json!({"type":"RequestMirror"}),
+        serde_json::json!({"type":"RequestHeaderModifier","requestMirror":{"backendRef":{"name":"copy","port":80}}}),
+    ] {
+        let route: HTTPRoute = serde_json::from_value(
+            serde_json::json!({"metadata":{"name":"owner"},"spec":{"rules":[{"filters":[filter]}]}}),
+        )
+        .unwrap();
+        assert!(HttpRouteMirrorRefs::from_route(&route)
+            .unwrap()
+            .effective_at(0, None, 0)
+            .unwrap()
+            .validated()
+            .is_err());
+    }
+}

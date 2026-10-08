@@ -503,3 +503,248 @@ async fn delegated_extension_dependency_repairs_dropped_child_and_replaces_coale
     assert!(invalid.spec.resolved_rules.as_ref().unwrap().is_empty());
     assert!(runtime.plugin_ref_mgr.get_dependencies(&invalid_owner.key()).is_empty());
 }
+
+#[tokio::test]
+async fn mirror_service_worker_uses_raw_none_key_and_latest_recreated_owner() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::ServiceHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::service_ref::mirror_service_key;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, RawStore, ResourceRef};
+    use edgion_resources::ResourceKind;
+    use k8s_openapi::api::core::v1::Service;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let routes = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+        "HTTPRoute",
+        16,
+        Arc::new(HttpRouteHandler::default()),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    routes.set_raw_store(raw.clone());
+    runtime.processor_registry.register(routes.clone());
+    let services = Arc::new(ResourceProcessor::<Service>::new(
+        "Service",
+        16,
+        Arc::new(ServiceHandler::new()),
+        runtime.clone(),
+    ));
+    let service_raw = Arc::new(LocalRawStore::new());
+    services.set_raw_store(service_raw.clone());
+    runtime.processor_registry.register(services.clone());
+    let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"mirror-root","uid":"old","generation":1},"spec":{"rules":[{"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"shadow","port":80}}}]}]}})).unwrap();
+    raw.upsert("mirror-root".into(), Arc::new(route.clone()));
+    async fn route_worker(routes: &ResourceProcessor<HTTPRoute>, raw: &LocalRawStore<HTTPRoute>) {
+        let queue = routes.workqueue();
+        let item = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.key, "mirror-root");
+        let source = raw.get(&item.key).map(|value| (*value).clone());
+        routes
+            .process_work_item(&item.key, source, None, item.trigger_chain)
+            .await;
+        queue.done(&item.key);
+    }
+    routes.on_event_key("mirror-root".into()).await;
+    route_worker(&routes, &raw).await;
+    let root = ResourceRef::new(ResourceKind::HTTPRoute, None, "mirror-root".into());
+    assert_eq!(
+        runtime
+            .service_ref_mgr
+            .get_refs(&mirror_service_key("default", "shadow")),
+        vec![root.clone()]
+    );
+    for (index, present) in [true, false, true].into_iter().enumerate() {
+        route.metadata.generation = Some(index as i64 + 2);
+        route.metadata.uid = Some(format!("replacement-{index}"));
+        raw.remove("mirror-root");
+        raw.upsert("mirror-root".into(), Arc::new(route.clone()));
+        if present {
+            let service: Service = serde_json::from_value(serde_json::json!({"metadata":{"name":"shadow","namespace":"default","uid":format!("service-{index}")}})).unwrap();
+            service_raw.upsert("default/shadow".into(), Arc::new(service));
+        } else {
+            service_raw.remove("default/shadow");
+        }
+        services.on_event_key("default/shadow".into()).await;
+        let queue = services.workqueue();
+        let item = queue.dequeue().await.unwrap();
+        let source = service_raw.get(&item.key).map(|value| (*value).clone());
+        services
+            .process_work_item(&item.key, source, None, item.trigger_chain)
+            .await;
+        queue.done(&item.key);
+        route_worker(&routes, &raw).await;
+        let published = routes.get("mirror-root").unwrap();
+        assert_eq!(published.metadata.uid, route.metadata.uid);
+        assert_eq!(published.metadata.generation, route.metadata.generation);
+        assert_eq!(
+            runtime
+                .service_ref_mgr
+                .get_refs(&mirror_service_key("default", "shadow")),
+            vec![root.clone()]
+        );
+    }
+    // EndpointSlice events use the same role-qualified dependency and exact raw wake key.
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EndpointSliceHandler;
+    use k8s_openapi::api::discovery::v1::EndpointSlice;
+    let slices = Arc::new(ResourceProcessor::<EndpointSlice>::new(
+        "EndpointSlice",
+        16,
+        Arc::new(EndpointSliceHandler::new()),
+        runtime.clone(),
+    ));
+    let slice_raw = Arc::new(LocalRawStore::new());
+    slices.set_raw_store(slice_raw.clone());
+    runtime.processor_registry.register(slices.clone());
+    let slice: EndpointSlice = serde_json::from_value(serde_json::json!({"metadata":{"name":"shadow-slice","namespace":"default","labels":{"kubernetes.io/service-name":"shadow"}},"addressType":"IPv4","endpoints":[]})).unwrap();
+    slice_raw.upsert("default/shadow-slice".into(), Arc::new(slice));
+    slices.on_event_key("default/shadow-slice".into()).await;
+    let queue = slices.workqueue();
+    let item = queue.dequeue().await.unwrap();
+    slices
+        .process_work_item(
+            &item.key,
+            slice_raw.get(&item.key).map(|value| (*value).clone()),
+            None,
+            item.trigger_chain,
+        )
+        .await;
+    queue.done(&item.key);
+    route_worker(&routes, &raw).await;
+    assert_eq!(routes.get("mirror-root").unwrap().metadata.uid, route.metadata.uid);
+    route.spec.rules = Some(vec![]);
+    raw.upsert("mirror-root".into(), Arc::new(route));
+    routes.on_event_key("mirror-root".into()).await;
+    route_worker(&routes, &raw).await;
+    assert!(runtime
+        .service_ref_mgr
+        .get_refs(&mirror_service_key("default", "shadow"))
+        .is_empty());
+    raw.remove("mirror-root");
+    routes.on_event_key("mirror-root".into()).await;
+    route_worker(&routes, &raw).await;
+    assert!(routes.get("mirror-root").is_none());
+}
+
+#[tokio::test]
+async fn dropped_child_mirror_service_repairs_actual_root_from_latest_raw_child() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::ServiceHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::service_ref::mirror_service_key;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, RawStore, ResourceRef};
+    use edgion_resources::ResourceKind;
+    use k8s_openapi::api::core::v1::Service;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let routes = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+        "HTTPRoute",
+        16,
+        Arc::new(HttpRouteHandler::default()),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    routes.set_raw_store(raw.clone());
+    runtime.processor_registry.register(routes.clone());
+    let mut child: HTTPRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"child","namespace":"children","uid":"child-old","generation":1},"spec":{"rules":[{"backendRefs":[{"name":"primary","port":80}],"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"copy","port":80}}},{"type":"ExtensionRef"}]}]}})).unwrap();
+    raw.upsert("children/child".into(), Arc::new(child.clone()));
+    // Seed a published child: named delegation intentionally requires cache visibility.
+    routes.save(child.clone(), None);
+    let parent: HTTPRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"parent","uid":"root","generation":3},"spec":{"rules":[{"backendRefs":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","namespace":"children","name":"child"}]}]}})).unwrap();
+    raw.upsert("parent".into(), Arc::new(parent));
+    routes.on_event_key("parent".into()).await;
+    let queue = routes.workqueue();
+    let item = queue.dequeue().await.unwrap();
+    routes
+        .process_work_item(
+            &item.key,
+            raw.get(&item.key).map(|value| (*value).clone()),
+            None,
+            item.trigger_chain,
+        )
+        .await;
+    queue.done(&item.key);
+    assert!(routes
+        .get("parent")
+        .unwrap()
+        .spec
+        .resolved_rules
+        .as_ref()
+        .unwrap()
+        .is_empty());
+    let root = ResourceRef::new(ResourceKind::HTTPRoute, None, "parent".into());
+    assert_eq!(
+        runtime
+            .service_ref_mgr
+            .get_refs(&mirror_service_key("children", "copy")),
+        vec![root.clone()]
+    );
+    // Drain only the initial delegation-edge notification before testing Service repair.
+    let child_notification = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(child_notification.key, "children/child");
+    queue.done(&child_notification.key);
+    child.metadata.uid = Some("child-recreated".into());
+    child.metadata.generation = Some(2);
+    child.spec.rules.as_mut().unwrap()[0].filters.as_mut().unwrap().pop();
+    raw.remove("children/child");
+    raw.upsert("children/child".into(), Arc::new(child));
+    let services = Arc::new(ResourceProcessor::<Service>::new(
+        "Service",
+        16,
+        Arc::new(ServiceHandler::new()),
+        runtime.clone(),
+    ));
+    let service_raw = Arc::new(LocalRawStore::new());
+    services.set_raw_store(service_raw.clone());
+    runtime.processor_registry.register(services.clone());
+    let service: Service =
+        serde_json::from_value(serde_json::json!({"metadata":{"name":"copy","namespace":"children"}})).unwrap();
+    service_raw.upsert("children/copy".into(), Arc::new(service));
+    services.on_event_key("children/copy".into()).await;
+    let service_queue = services.workqueue();
+    let event = service_queue.dequeue().await.unwrap();
+    services
+        .process_work_item(
+            &event.key,
+            service_raw.get(&event.key).map(|value| (*value).clone()),
+            None,
+            event.trigger_chain,
+        )
+        .await;
+    service_queue.done(&event.key);
+    let wake = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(wake.key, "parent");
+    let source = raw.get(&wake.key).unwrap();
+    assert_eq!(source.metadata.uid.as_deref(), Some("root"));
+    routes
+        .process_work_item(&wake.key, Some((*source).clone()), None, wake.trigger_chain)
+        .await;
+    queue.done(&wake.key);
+    let published = routes.get("parent").unwrap();
+    let rules = published.spec.resolved_rules.as_ref().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        rules[0].filters.as_ref().unwrap()[0]
+            .request_mirror
+            .as_ref()
+            .unwrap()
+            .backend_ref
+            .namespace
+            .as_deref(),
+        Some("children")
+    );
+    assert_eq!(
+        runtime
+            .service_ref_mgr
+            .get_refs(&mirror_service_key("children", "copy")),
+        vec![root]
+    );
+    assert_eq!(
+        routes.get("children/child").unwrap().metadata.uid.as_deref(),
+        Some("child-old"),
+        "root consumed the desired raw child, not stale processed generation"
+    );
+}

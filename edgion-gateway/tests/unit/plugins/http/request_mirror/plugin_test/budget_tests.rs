@@ -7,6 +7,15 @@ fn filter() -> HTTPRequestMirrorFilter {
     serde_json::from_value(serde_json::json!({ "backendRef": { "name": "mirror", "port": 8080 } })).unwrap()
 }
 
+fn owned_plugin(tuning: MirrorTuning) -> RequestMirrorPlugin {
+    let route: edgion_resources::HTTPRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"mirror-owner","namespace":"default"},"spec":{"rules":[{"filters":[{"type":"RequestMirror","requestMirror":filter()}]}]}})).unwrap();
+    let field = edgion_resources::resources::refs::route_fields::HttpRouteMirrorRefs::from_route(&route)
+        .unwrap()
+        .effective_at(0, None, 0)
+        .unwrap();
+    RequestMirrorPlugin::new(field, tuning).unwrap()
+}
+
 #[test]
 fn mirror_direct_construction_normalizes_before_tokio_allocation() {
     for value in [0, usize::MAX] {
@@ -16,7 +25,7 @@ fn mirror_direct_construction_normalizes_before_tokio_allocation() {
             max_buffered_bytes: "999999999999999999999GiB".to_string(),
             ..Default::default()
         };
-        let plugin = RequestMirrorPlugin::new(filter(), tuning, "default".to_string());
+        let plugin = owned_plugin(tuning);
         assert_eq!(plugin.semaphore.available_permits(), 1024);
         assert_eq!(plugin.max_buffered_bytes, 1024 * 1024);
         let (_tx, _rx) = mpsc::channel::<Bytes>(plugin.mirror_config().max_buffered_chunks);
@@ -27,7 +36,7 @@ fn mirror_direct_construction_normalizes_before_tokio_allocation() {
         max_buffered_bytes: MirrorTuning::MAX_BUFFERED_BYTES.to_string(),
         ..Default::default()
     };
-    let plugin = RequestMirrorPlugin::new(filter(), tuning, "default".to_string());
+    let plugin = owned_plugin(tuning);
     assert_eq!(plugin.semaphore.available_permits(), MirrorTuning::MAX_CONCURRENT);
     let (_tx, _rx) = mpsc::channel::<Bytes>(plugin.mirror_config().max_buffered_chunks);
     let budget = plugin.budget.body_budget(plugin.max_buffered_bytes);
@@ -85,8 +94,8 @@ fn mirror_controller_gateway_validation_matches_at_all_capacity_boundaries() {
 async fn mirror_old_generation_holds_global_capacity_without_blocking_main_request() {
     use crate::plugins::runtime::traits::session::MockPluginSession;
     let shared = MirrorBudget::new(1, 8).unwrap();
-    let mut old = RequestMirrorPlugin::new(filter(), MirrorTuning::default(), "default".to_string());
-    let mut new = RequestMirrorPlugin::new(filter(), MirrorTuning::default(), "default".to_string());
+    let mut old = owned_plugin(MirrorTuning::default());
+    let mut new = owned_plugin(MirrorTuning::default());
     assert!(Arc::ptr_eq(&old.budget, &new.budget));
     old.budget = Arc::clone(&shared);
     new.budget = shared;

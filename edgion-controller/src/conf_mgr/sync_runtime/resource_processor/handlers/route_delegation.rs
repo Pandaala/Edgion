@@ -23,6 +23,7 @@ use edgion_resources::resources::refs::route_fields::{
     AuthoredBackendReference, AuthoredRouteTarget, HttpRouteBackendRefs, HttpRouteExtensionRefs, RouteExtensionField,
     TerminalBackendReference,
 };
+use edgion_resources::resources::refs::route_fields::{HttpRouteMirrorRefs, MirrorSlot, TerminalMirrorReference};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -72,14 +73,7 @@ pub trait DelegationLookup {
     /// expansion order).
     fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String>;
     /// Mirror-only ReferenceGrant callback. Native backendRefs use terminal loans.
-    fn cross_ns_ref_allowed(
-        &self,
-        from_ns: &str,
-        group: Option<&str>,
-        kind: Option<&str>,
-        name: &str,
-        to_ns: &str,
-    ) -> bool;
+    fn mirror_ref_denied(&self, terminal: TerminalMirrorReference<'_>) -> Option<RefDenied>;
     /// Authorize only the original declaring Route's validated terminal field.
     fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied>;
     /// Register actual declaring fields before drops; inspect content only for
@@ -518,6 +512,21 @@ fn flatten_child_rules(
         .collect();
 
     for (idx, rule) in rules.iter().enumerate() {
+        let mirror_decisions = HttpRouteMirrorRefs::from_route(child)
+            .map(|refs| {
+                refs.authored()
+                    .filter(|field| matches!(field.field().slot(), MirrorSlot::Route(slot) if slot.rule() == idx))
+                    .map(|field| {
+                        super::request_mirror::resolve(field, |terminal| ctx.lookup.mirror_ref_denied(terminal))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        ctx.cross_ns_target_namespaces.extend(
+            mirror_decisions
+                .iter()
+                .filter_map(|decision| decision.cross_namespace().map(str::to_string)),
+        );
         if let Some(reason) = invalid_details.get(&idx) {
             ctx.issues.push(DelegationIssue::RuleDropped {
                 message: format!("child '{child_key}' rules[{idx}] dropped: {reason}"),
@@ -557,16 +566,9 @@ fn flatten_child_rules(
         // Resolve mirrors before inheritance, using this declaring child even
         // when a terminal rule belongs to a deeper descendant.
         let mut resolved_rule = rule.clone();
-        let targets = super::request_mirror::resolve_rule(&mut resolved_rule, child_ns, |backend| {
-            ctx.lookup.cross_ns_ref_allowed(
-                child_ns,
-                backend.group.as_deref(),
-                backend.kind.as_deref(),
-                &backend.name,
-                backend.namespace.as_deref().unwrap_or(child_ns),
-            )
-        });
-        ctx.cross_ns_target_namespaces.extend(targets);
+        for decision in mirror_decisions {
+            decision.apply_rule(&mut resolved_rule);
+        }
         let rule = &resolved_rule;
 
         let is_delegating = rule

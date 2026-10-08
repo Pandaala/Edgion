@@ -686,29 +686,39 @@ pub(super) fn register_service_backend_refs(
 
     let resource_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
 
+    let old = begin_service_refs(&resource_ref, runtime);
+    finish_service_refs(&resource_ref, backend_refs, old, runtime)
+}
+
+pub(super) fn begin_service_refs(
+    resource_ref: &crate::conf_mgr::sync_runtime::resource_processor::ResourceRef,
+    runtime: &ControllerRuntime,
+) -> HashSet<String> {
     let manager = &runtime.service_ref_mgr;
+    let old = crate::conf_mgr::sync_runtime::resource_processor::service_ref::forwarding_service_dependencies(
+        manager,
+        &resource_ref.key(),
+    )
+    .into_iter()
+    .collect();
+    manager.clear_value_refs(resource_ref);
+    old
+}
 
-    // Snapshot the Services this route referenced before this reconcile so the
-    // caller can requeue BTPs bound to any Service dropped from backendRefs.
-    let old_service_keys: HashSet<String> =
-        crate::conf_mgr::sync_runtime::resource_processor::service_ref::forwarding_service_dependencies(
-            manager,
-            &resource_ref.key(),
-        )
-        .into_iter()
-        .collect();
-
-    manager.clear_value_refs(&resource_ref);
-
-    let mut new_service_keys = HashSet::new();
+pub(super) fn finish_service_refs(
+    resource_ref: &crate::conf_mgr::sync_runtime::resource_processor::ResourceRef,
+    backend_refs: &[super::route_backend_refs::BackendDependencyReceipt],
+    old: HashSet<String>,
+    runtime: &ControllerRuntime,
+) -> Vec<String> {
+    let mut current = HashSet::new();
     for receipt in backend_refs {
-        if let Some(service_key) = receipt.service_key() {
-            manager.add_ref(service_key.to_string(), resource_ref.clone());
-            new_service_keys.insert(service_key.to_string());
+        if let Some(key) = receipt.service_key() {
+            runtime.service_ref_mgr.add_ref(key.to_string(), resource_ref.clone());
+            current.insert(key.to_string());
         }
     }
-
-    old_service_keys.difference(&new_service_keys).cloned().collect()
+    old.difference(&current).cloned().collect()
 }
 
 /// Clear Service backend references for a deleted route.
