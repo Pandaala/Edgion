@@ -203,3 +203,43 @@ fn stream_routes_select_their_existing_stage_and_annotation_contract() {
     assert!(!tls.stages.connection && tls.stages.tls_route);
     assert!(tls.http_keys.is_empty() && tls.http_route.is_none());
 }
+
+#[test]
+fn owning_reference_demand_rejects_invalid_sources_names_and_stamps_per_descriptor() {
+    for kind in ["HTTPRoute", "GRPCRoute"] {
+        for (field, value) in [
+            ("name", ""),
+            ("name", "bad/name"),
+            ("group", ""),
+            ("group", "core"),
+            ("kind", "Secret"),
+            ("resolvedNamespace", "UPPER"),
+        ] {
+            let mut invalid = extension("decoy");
+            invalid["extensionRef"][field] = json!(value);
+            let mut raw = route(
+                kind,
+                json!([{ "filters": [invalid, extension("valid")], "backendRefs":[{"name":"service","port":80,"filters":[extension("backend")]}] }]),
+            );
+            raw["spec"]["resolvedRules"] = raw["spec"]["rules"].take();
+            let keys = if kind == "HTTPRoute" {
+                RouteInput::from_http(Arc::new(crate::test_current_status::from_value(raw).unwrap())).http_keys
+            } else {
+                RouteInput::from_grpc(&crate::test_current_status::from_value(raw).unwrap()).http_keys
+            };
+            assert_eq!(
+                keys,
+                HashSet::from(["apps/valid".into(), "apps/backend".into()]),
+                "{kind} {field}"
+            );
+        }
+        let mut raw = route(kind, json!([{ "filters": [extension("valid")] }]));
+        raw["metadata"]["name"] = json!("bad/name");
+        let keys = if kind == "HTTPRoute" {
+            RouteInput::from_http(Arc::new(crate::test_current_status::from_value(raw).unwrap())).http_keys
+        } else {
+            RouteInput::from_grpc(&crate::test_current_status::from_value(raw).unwrap()).http_keys
+        };
+        assert!(keys.is_empty());
+    }
+}

@@ -363,6 +363,7 @@ fn retained_keys_match_route_plugin_target_and_catalog_models() {
         .as_mut()
         .unwrap()
         .resolved_namespace = Some("child-ns".to_string());
+    delegated.spec.resolved_rules = delegated.spec.rules.take();
     assert_eq!(collect_for_test(delegated, "child-ns/adaptive"), expected);
 
     let mut cross_namespace = adaptive_route();
@@ -598,4 +599,34 @@ fn concurrent_recording_is_atomic_and_boundary_rotation_isolated() {
     state.tick(7);
     assert_eq!(state.snapshot().latency_samples, 8_000);
     assert_eq!(state.snapshot().charged_tokens_60s, 16_000);
+}
+
+#[test]
+fn invalid_owning_extension_never_queries_adaptive_plugin_or_catalog() {
+    for (field, value) in [
+        ("name", ""),
+        ("name", "bad/name"),
+        ("group", ""),
+        ("kind", "Secret"),
+        ("resolvedNamespace", "UPPER"),
+    ] {
+        let mut raw = serde_json::to_value(adaptive_route()).unwrap();
+        raw["spec"]["rules"][0]["filters"][0]["extensionRef"][field] = serde_json::json!(value);
+        let mut route: HTTPRoute = serde_json::from_value(raw).unwrap();
+        route.spec.resolved_rules = route.spec.rules.take();
+        let keys = collect_retained_keys(
+            &[Arc::new(route)],
+            |_| panic!("invalid field must not query plugin"),
+            |_| panic!("invalid field must not query catalog"),
+        );
+        assert!(keys.is_empty(), "{field}");
+    }
+    let mut route = adaptive_route();
+    route.metadata.name = None;
+    assert!(collect_retained_keys(
+        &[Arc::new(route)],
+        |_| panic!("invalid owner queried"),
+        |_| panic!("invalid owner queried")
+    )
+    .is_empty());
 }

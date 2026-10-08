@@ -15,8 +15,7 @@ use edgion_resources::path_normalization::get_path_normalization_config;
 use edgion_resources::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
 };
-use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
-use edgion_resources::resources::{CorsConfig, HTTPRouteFilter, HTTPRouteFilterType};
+use edgion_resources::resources::{CorsConfig, HTTPRouteFilterType};
 use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
@@ -305,11 +304,8 @@ pub async fn request_filter(
             // Get CORS config dynamically from matched route's EdgionPlugins
             // This ensures we always get the latest config even if EdgionPlugin is updated
             let route_ext_refs = ctx.resolved_route_ext_refs();
-            let cors_config = if let Some(ref route_unit) = ctx.route_unit {
-                extract_cors_config_from_route_filters(
-                    &route_unit.rule.filters,
-                    route_ext_refs.as_deref().unwrap_or_default(),
-                )
+            let cors_config = if ctx.route_unit.is_some() {
+                extract_cors_config_from_route_filters(route_ext_refs.as_deref().unwrap_or_default())
             } else if let Some(_grpc_route_unit) = &ctx.grpc_route_unit {
                 // gRPC routes don't have CORS config yet, so None
                 None
@@ -742,35 +738,9 @@ mod protocol_detection_tests;
 /// preparse, so hot-reload semantics are preserved while the preflight hot
 /// path avoids deep-cloning the full `CorsConfig` per request.
 fn extract_cors_config_from_route_filters(
-    filters: &Option<Vec<HTTPRouteFilter>>,
     resolved: &[Option<Arc<crate::plugins::runtime::PluginRuntime>>],
 ) -> Option<Arc<CorsConfig>> {
-    let filters = filters.as_ref()?;
-    let mut extension_index = 0;
-
-    for filter in filters {
-        if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
-            continue;
-        }
-
-        let Some(ext_ref) = filter.extension_ref.as_ref() else {
-            continue;
-        };
-        let runtime = resolved.get(extension_index).and_then(Option::as_ref);
-        extension_index += 1;
-
-        // Check if it's EdgionPlugins
-        if !is_supported_edgion_plugins_ref(ext_ref) {
-            continue;
-        }
-
-        let cors = runtime.and_then(|runtime| runtime.cors_config_arc());
-        if cors.is_some() {
-            return cors;
-        }
-    }
-
-    None
+    resolved.iter().flatten().find_map(|runtime| runtime.cors_config_arc())
 }
 
 pub(super) fn capture_tls_metadata(session: &Session, ctx: &mut EdgionHttpContext) {

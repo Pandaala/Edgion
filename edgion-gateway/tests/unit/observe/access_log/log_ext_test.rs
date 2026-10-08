@@ -189,3 +189,70 @@ fn masking_decision_table() {
     assert!(should_mask(&w, LogExtSource::Cookie, "session"));
     assert!(should_mask(&w, LogExtSource::Ctx, "other"));
 }
+
+#[tokio::test]
+async fn invalid_route_reference_cannot_consume_same_name_log_declaration() {
+    use crate::plugins::publication::{
+        inputs::{GatewayInput, RouteInput, RouteKind},
+        PluginPublisher,
+    };
+    use crate::routes::http::{conf_handler_impl::build_domain_route_rules_from_routes, routes_mgr::DomainRouteRules};
+    use edgion_resources::{EdgionPlugins, Gateway, GatewayClass, HTTPRoute};
+    use std::{collections::HashMap, sync::Arc};
+    use tokio::io::AsyncWriteExt;
+    let publisher = PluginPublisher::new();
+    let class: GatewayClass = serde_json::from_value(
+        serde_json::json!({"metadata":{"name":"class"},"spec":{"controllerName":"edgion.io/gateway-controller"}}),
+    )
+    .unwrap();
+    publisher.replace_gateway_classes(HashMap::from([("class".into(), Arc::new(class))]));
+    let gateway: Gateway = crate::test_current_status::from_value(serde_json::json!({"metadata":{"name":"gateway","namespace":"default"},"spec":{"gatewayClassName":"class","listeners":[{"name":"web","port":8080,"protocol":"HTTP"}]}})).unwrap();
+    publisher.replace_gateways(HashMap::from([(
+        "default/gateway".into(),
+        GatewayInput::from_gateway(&gateway),
+    )]));
+    let plugin: EdgionPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"decoy","namespace":"default"},"spec":{"accessLogExtern":[{"key":"tenant","from":"header","name":"x-tenant"}]}})).unwrap();
+    publisher.replace_http_plugins(HashMap::from([("default/decoy".into(), Arc::new(plugin))]));
+    let route: HTTPRoute = crate::test_current_status::from_value(serde_json::json!({
+        "metadata":{"name":"route","namespace":"default"}, "spec":{"resolvedStatusController":"edgion.io/gateway-controller","parentRefs":[{"name":"gateway"}],"resolvedListeners":["0.0.0.0:8080/HTTP"],"rules":[{"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"decoy"}}]}]}
+    })).unwrap();
+    let route = Arc::new(route);
+    publisher.replace_routes(
+        RouteKind::Http,
+        HashMap::from([("default/route".into(), RouteInput::from_http(route.clone()))]),
+    );
+    let owner = publisher.snapshot().gateway("default/gateway").unwrap();
+    assert!(owner.scope.http("default/decoy").is_some());
+    assert!(owner.scope.global_keys.is_empty() && owner.http_keys.is_empty());
+    let (mut client, server) = tokio::io::duplex(4096);
+    let mut session = Session::new_h1(Box::new(server));
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: test\r\nx-tenant: sentinel\r\n\r\n")
+        .await
+        .unwrap();
+    assert!(session.read_request().await.unwrap());
+    for invalid in [false, true] {
+        let mut source = (*route).clone();
+        if invalid {
+            source.spec.rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0]
+                .extension_ref
+                .as_mut()
+                .unwrap()
+                .group = "".into();
+        }
+        let table = build_domain_route_rules_from_routes(
+            &HashMap::from([("default/route".into(), Arc::new(source))]),
+            &DomainRouteRules::new(),
+        );
+        let unit = table.catch_all_routes.as_ref().unwrap().route_rules_list[0].clone();
+        let mut ctx = EdgionHttpContext::new();
+        ctx.route_unit = Some(unit);
+        assert!(ctx.capture_plugin_scope(owner.clone()));
+        let ext = collect(&session, &ctx);
+        if invalid {
+            assert!(ext.is_empty());
+        } else {
+            assert!(json_of(&ext).contains("sentinel"));
+        }
+    }
+}

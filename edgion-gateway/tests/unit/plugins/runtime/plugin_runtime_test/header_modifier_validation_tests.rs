@@ -54,10 +54,10 @@ async fn header_modifier_invalid_native_lists_seal_all_four_constructors() {
         let grpc: Vec<GRPCRouteFilter> = serde_json::from_value(filters).unwrap();
         let tuning = MirrorTuning::default();
         for runtime in [
-            PluginRuntime::from_httproute_filters_for_rule(&http, "default", &tuning),
-            PluginRuntime::from_httproute_filters_for_backend(&http, "default", &tuning),
-            PluginRuntime::from_grpcroute_filters_for_rule(&grpc, "default"),
-            PluginRuntime::from_grpcroute_filters_for_backend(&grpc, "default"),
+            owned_http_rule(&http, "default", &tuning),
+            owned_http_backend(&http, "default", &tuning),
+            owned_grpc_rule(&grpc, "default"),
+            owned_grpc_backend(&grpc, "default"),
         ] {
             assert_rejected(&runtime).await;
         }
@@ -128,10 +128,10 @@ fn header_modifier_valid_generation_keeps_native_operations() {
     let http: Vec<HTTPRouteFilter> = serde_json::from_value(config.clone()).unwrap();
     let grpc: Vec<GRPCRouteFilter> = serde_json::from_value(config).unwrap();
     for runtime in [
-        PluginRuntime::from_httproute_filters_for_rule(&http, "default", &MirrorTuning::default()),
-        PluginRuntime::from_httproute_filters_for_backend(&http, "default", &MirrorTuning::default()),
-        PluginRuntime::from_grpcroute_filters_for_rule(&grpc, "default"),
-        PluginRuntime::from_grpcroute_filters_for_backend(&grpc, "default"),
+        owned_http_rule(&http, "default", &MirrorTuning::default()),
+        owned_http_backend(&http, "default", &MirrorTuning::default()),
+        owned_grpc_rule(&grpc, "default"),
+        owned_grpc_backend(&grpc, "default"),
     ] {
         assert!(!runtime.has_invalid_plugins());
         assert_eq!(runtime.request_plugins_count(), 1);
@@ -141,4 +141,42 @@ fn header_modifier_valid_generation_keeps_native_operations() {
         );
         assert_eq!(runtime.upstream_response_plugins.len(), 1);
     }
+}
+
+fn owned_http_rule(
+    filters: &[edgion_resources::HTTPRouteFilter],
+    namespace: &str,
+    tuning: &MirrorTuning,
+) -> PluginRuntime {
+    let route: edgion_resources::HTTPRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "route", "namespace": namespace}, "spec": {"rules": [{"filters": filters}]}
+    }))
+    .unwrap();
+    PluginRuntime::from_httproute_filters_for_rule(&route, 0, tuning)
+}
+
+fn owned_http_backend(
+    filters: &[edgion_resources::HTTPRouteFilter],
+    namespace: &str,
+    tuning: &MirrorTuning,
+) -> PluginRuntime {
+    let route: edgion_resources::HTTPRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "route", "namespace": namespace}, "spec": {"rules": [{"backendRefs": [{"name": "service", "port": 80, "filters": filters}]}]}
+    })).unwrap();
+    PluginRuntime::from_httproute_filters_for_backend(&route, 0, 0, tuning)
+}
+
+fn owned_grpc_rule(filters: &[edgion_resources::GRPCRouteFilter], namespace: &str) -> PluginRuntime {
+    let route: edgion_resources::GRPCRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "route", "namespace": namespace}, "spec": {"rules": [{"filters": filters}]}
+    }))
+    .unwrap();
+    PluginRuntime::from_grpcroute_filters_for_rule(&route, 0)
+}
+
+fn owned_grpc_backend(filters: &[edgion_resources::GRPCRouteFilter], namespace: &str) -> PluginRuntime {
+    let route: edgion_resources::GRPCRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "route", "namespace": namespace}, "spec": {"rules": [{"backendRefs": [{"name": "service", "port": 80, "filters": filters}]}]}
+    })).unwrap();
+    PluginRuntime::from_grpcroute_filters_for_backend(&route, 0, 0)
 }

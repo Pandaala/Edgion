@@ -158,9 +158,18 @@ For a valid owner, parse is the sole dependency-clear boundary and status only
 extends the set. A standalone status call for an invalid source may withdraw
 stale dependencies and derived rules/listeners/hostnames; an invalid target,
 dropped rule or missing plugin under a valid owner does not permit that cleanup.
-This completes the Controller owning-reference slice only. Gateway cold key
-validation before all early lookup consumers and request snapshot capture remain
-R3a2 work; existing runtime execution gates alone do not prove those boundaries.
+Gateway rule and selected-backend builders now borrow the actual Route and
+its effective rule/backend/filter slots through the same canonical facade. A
+validated local target becomes one cold complete store key; invalid descriptors
+retain a positional `None` and cannot query or consume a same-name plugin.
+Publication demand, AI admission and adaptive facts use that same projection.
+Request resolution, CORS/WAF selection and access-log declarations consume these
+validated keys or their positional results under the captured class scope.
+Authored stamps are ignored even on direct Gateway input; only actual
+`resolved_rules` can supply validated child-local namespace stamps. These loans
+still carry no Grant authority or original-child identity beyond the transport.
+R3a2 verification is scoped to these consumers; mirror/descriptor work and live
+conformance remain separate.
 
 ## Gateway-side processing
 

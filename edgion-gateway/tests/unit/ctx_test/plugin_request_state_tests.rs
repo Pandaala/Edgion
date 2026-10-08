@@ -117,3 +117,45 @@ fn dangling_route_and_backend_refs_remain_request_pinned() {
         .is_none());
     assert_eq!(resolve_calls, 1);
 }
+
+#[test]
+fn backend_hits_and_misses_stay_pinned_through_stage_and_retry_reentry() {
+    let original = std::sync::Arc::new(crate::plugins::runtime::PluginRuntime::new());
+    let replacement = std::sync::Arc::new(crate::plugins::runtime::PluginRuntime::new());
+    let mut ctx = EdgionHttpContext::new();
+    let mut reads = 0;
+    for attempt in 0..3 {
+        for _stage in 0..4 {
+            let hit = ctx
+                .pinned_backend_ext_ref("default/hit", || {
+                    reads += 1;
+                    Some(if attempt == 0 {
+                        original.clone()
+                    } else {
+                        replacement.clone()
+                    })
+                })
+                .unwrap();
+            assert!(std::sync::Arc::ptr_eq(&hit, &original));
+            assert!(ctx
+                .pinned_backend_ext_ref("default/missing", || {
+                    reads += 1;
+                    (attempt > 0).then(|| replacement.clone())
+                })
+                .is_none());
+        }
+    }
+    assert_eq!(reads, 2);
+    assert!(ctx.stage_logs().is_empty());
+    let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+        assert!(ctx
+            .pinned_backend_ext_ref("default/missing", || panic!("cached miss"))
+            .is_none());
+        assert!(std::sync::Arc::ptr_eq(
+            &ctx.pinned_backend_ext_ref("default/hit", || panic!("cached hit"))
+                .unwrap(),
+            &original
+        ));
+    });
+    assert_eq!(allocations.calls, 0);
+}

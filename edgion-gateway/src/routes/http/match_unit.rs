@@ -261,19 +261,28 @@ impl HttpRouteRuleUnit {
         Self::compile_with_factories(
             route,
             rule_index,
-            |rule, namespace| {
-                let tuning = rule.parsed_mirror_tuning.clone().unwrap_or_default();
-                Arc::new(match &rule.filters {
-                    Some(filters) => PluginRuntime::from_httproute_filters_for_rule(filters, namespace, &tuning),
-                    None => PluginRuntime::new(),
-                })
+            |route, rule_index| {
+                let tuning = route
+                    .effective_rules()
+                    .and_then(|rules| rules.get(rule_index))
+                    .and_then(|rule| rule.parsed_mirror_tuning.clone())
+                    .unwrap_or_default();
+                Arc::new(PluginRuntime::from_httproute_filters_for_rule(
+                    route, rule_index, &tuning,
+                ))
             },
-            |backend, rule, namespace| {
-                let tuning = rule.parsed_mirror_tuning.clone().unwrap_or_default();
-                Arc::new(match &backend.filters {
-                    Some(filters) => PluginRuntime::from_httproute_filters_for_backend(filters, namespace, &tuning),
-                    None => PluginRuntime::new(),
-                })
+            |route, rule_index, backend_index| {
+                let tuning = route
+                    .effective_rules()
+                    .and_then(|rules| rules.get(rule_index))
+                    .and_then(|rule| rule.parsed_mirror_tuning.clone())
+                    .unwrap_or_default();
+                Arc::new(PluginRuntime::from_httproute_filters_for_backend(
+                    route,
+                    rule_index,
+                    backend_index,
+                    &tuning,
+                ))
             },
         )
     }
@@ -281,13 +290,13 @@ impl HttpRouteRuleUnit {
     fn compile_with_factories(
         route: &HTTPRoute,
         rule_index: usize,
-        mut rule_factory: impl FnMut(&HTTPRouteRule, &str) -> Arc<PluginRuntime>,
-        mut backend_factory: impl FnMut(&HTTPBackendRef, &HTTPRouteRule, &str) -> Arc<PluginRuntime>,
+        mut rule_factory: impl FnMut(&HTTPRoute, usize) -> Arc<PluginRuntime>,
+        mut backend_factory: impl FnMut(&HTTPRoute, usize, usize) -> Arc<PluginRuntime>,
     ) -> Option<HttpRuleRuntime> {
         let references = HttpRouteBackendRefs::from_route(route).ok()?;
         let rule = route.effective_rules()?.get(rule_index)?;
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-        let plugin_runtime = rule_factory(rule, namespace);
+        let plugin_runtime = rule_factory(route, rule_index);
         let backends = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
             let identities = edgion_resources::logical_backend_slot_identities(refs, namespace);
             refs.iter()
@@ -300,7 +309,7 @@ impl HttpRouteRuleUnit {
                     let target = CompiledBackendTarget::from_reference(reference, schema.backend_kind());
                     let plugin_runtime =
                         if schema.ref_denied.is_none() && !matches!(target, CompiledBackendTarget::Invalid { .. }) {
-                            backend_factory(schema, rule, namespace)
+                            backend_factory(route, rule_index, slot)
                         } else {
                             Arc::new(PluginRuntime::new())
                         };

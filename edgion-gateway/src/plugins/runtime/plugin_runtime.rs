@@ -14,9 +14,12 @@ use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
 use edgion_resources::resources::edgion_plugins::{CorsConfig, WafConfig};
 use edgion_resources::resources::header_modifier::{validate_grpc_filter_list, validate_http_filter_list};
 use edgion_resources::resources::http_route::MirrorTuning;
-use edgion_resources::resources::refs::extension_ref::{validate_extension_ref_filter, ExtensionRefValidationError};
+use edgion_resources::resources::refs::extension_ref::ExtensionRefValidationError;
+use edgion_resources::resources::refs::route_fields::{
+    GrpcRouteExtensionRefs, HttpRouteExtensionRefs, RouteExtensionField,
+};
 use edgion_resources::resources::{
-    EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
+    EdgionPlugin, GRPCRoute, GRPCRouteFilter, GRPCRouteFilterType, HTTPRoute, HTTPRouteFilter, HTTPRouteFilterType,
 };
 use edgion_resources::resources::{
     RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry,
@@ -126,14 +129,15 @@ pub struct PluginRuntime {
     upstream_response_body_plugins: Vec<Arc<dyn UpstreamResponseBodyFilter>>,
     /// Plugins for response_filter stage (async)
     upstream_response_async_plugins: Vec<Arc<dyn UpstreamResponse>>,
-    /// (namespace, name) of every ExtensionRef in this runtime, in build order.
+    /// Optional validated complete key of each ExtensionRef, in build order.
     /// Position == index assigned via `ExtensionRefFilter::set_index`. Empty
     /// when this runtime is built via the backend-scope path
     /// (`from_httproute_filters_for_backend` / `from_grpcroute_filters_for_backend`),
     /// because backend-scope ExtensionRefFilters keep `index = None`; their
     /// first result from the request-captured class scope, including a miss, is
     /// pinned in the logical request context instead.
-    ext_ref_keys: Vec<(String, String)>,
+    ext_ref_keys: Vec<Option<String>>,
+    invalid_extension_gate: Option<Arc<dyn RequestFilter>>,
     /// Pre-resolved Arc to the first enabled `EdgionPlugin::Cors` config in
     /// `request_plugins`. Built once at preparse so the global CORS preflight
     /// handler (`pg_request_filter::extract_cors_config_from_route_filters`)
@@ -275,6 +279,7 @@ impl PluginRuntime {
             upstream_response_body_plugins: vec![],
             upstream_response_async_plugins: vec![],
             ext_ref_keys: Vec::new(),
+            invalid_extension_gate: None,
             cors_config: None,
             invalid_plugins: InvalidPlugins::default(),
             invalid_config_sealed: false,
@@ -519,7 +524,7 @@ impl PluginRuntime {
     /// in the order they were added. Position == `ExtensionRefFilter.index`.
     /// Populated only by `from_httproute_filters_for_rule` /
     /// `from_grpcroute_filters_for_rule`. Returns an empty slice for backend-scope.
-    pub fn ext_ref_keys(&self) -> &[(String, String)] {
+    pub fn ext_ref_keys(&self) -> &[Option<String>] {
         &self.ext_ref_keys
     }
 
@@ -535,49 +540,72 @@ impl PluginRuntime {
 
     /// Build a runtime for a route rule. Assigns ExtensionRef indices for
     /// positional resolution from the request-captured class scope and records
-    /// (ns, name) in `ext_ref_keys`.
+    /// optional complete keys in `ext_ref_keys`.
     /// `mirror_tuning` carries the route-level `edgion.io/mirror-*` annotation
     /// values (pre-parsed onto the rule) applied to every RequestMirror filter.
-    pub fn from_httproute_filters_for_rule(
-        filters: &[HTTPRouteFilter],
-        namespace: &str,
-        mirror_tuning: &MirrorTuning,
-    ) -> Self {
-        let mut runtime = Self::new();
-        runtime.add_from_httproute_filters_inner(filters, namespace, true, mirror_tuning);
-        runtime.seal_fail_closed();
-        runtime
+    pub fn from_httproute_filters_for_rule(route: &HTTPRoute, rule: usize, mirror_tuning: &MirrorTuning) -> Self {
+        Self::from_http_route_slot(route, rule, None, mirror_tuning)
     }
 
-    /// Build a runtime for a backend reference. ExtensionRef filters retain
-    /// `index = None`; first use resolves from the request-captured class scope
-    /// and pins either the hit or miss across retries.
+    /// Build selected-backend filters from their actual owning fields.
     pub fn from_httproute_filters_for_backend(
-        filters: &[HTTPRouteFilter],
-        namespace: &str,
+        route: &HTTPRoute,
+        rule: usize,
+        backend: usize,
+        mirror_tuning: &MirrorTuning,
+    ) -> Self {
+        Self::from_http_route_slot(route, rule, Some(backend), mirror_tuning)
+    }
+
+    fn from_http_route_slot(
+        route: &HTTPRoute,
+        rule: usize,
+        backend: Option<usize>,
         mirror_tuning: &MirrorTuning,
     ) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_httproute_filters_inner(filters, namespace, false, mirror_tuning);
+        let owned = HttpRouteExtensionRefs::from_route(route).ok().and_then(|references| {
+            let value = route.effective_rules()?.get(rule)?;
+            let filters = match backend {
+                Some(index) => value
+                    .backend_refs
+                    .as_ref()?
+                    .get(index)?
+                    .filters
+                    .as_deref()
+                    .unwrap_or_default(),
+                None => value.filters.as_deref().unwrap_or_default(),
+            };
+            Some((references, filters))
+        });
+        if let Some((references, filters)) = owned {
+            runtime.add_from_httproute_filters_inner(
+                filters,
+                route.metadata.namespace.as_deref().unwrap_or("default"),
+                backend.is_none(),
+                mirror_tuning,
+                |filter| references.effective_at(rule, backend, filter),
+            );
+        } else {
+            runtime.invalid_plugins.record_non_retainable("ExtensionRef");
+        }
         runtime.seal_fail_closed();
         runtime
     }
 
-    fn add_from_httproute_filters_inner(
+    fn add_from_httproute_filters_inner<'a>(
         &mut self,
         filters: &[HTTPRouteFilter],
         namespace: &str,
         assign_indices: bool,
         mirror_tuning: &MirrorTuning,
+        field: impl Fn(usize) -> Option<RouteExtensionField<'a>>,
     ) {
-        if filters.iter().any(|filter| {
+        if filters.iter().enumerate().any(|(index, _)| {
             matches!(
-                validate_extension_ref_filter(
-                    filter.filter_type == HTTPRouteFilterType::ExtensionRef,
-                    filter.extension_ref.as_ref(),
-                ),
-                Err(ExtensionRefValidationError::MissingConfiguration)
-                    | Err(ExtensionRefValidationError::UnexpectedConfiguration)
+                field(index).map(|field| field.validated()),
+                None | Some(Err(ExtensionRefValidationError::MissingConfiguration))
+                    | Some(Err(ExtensionRefValidationError::UnexpectedConfiguration))
             )
         }) {
             self.invalid_plugins.record_non_retainable("ExtensionRef");
@@ -594,7 +622,7 @@ impl PluginRuntime {
             self.invalid_plugins.record_non_retainable("RequestTransform");
             return;
         }
-        for filter in filters {
+        for (filter_index, filter) in filters.iter().enumerate() {
             match filter.filter_type {
                 HTTPRouteFilterType::RequestHeaderModifier => {
                     if let Some(config) = &filter.request_header_modifier {
@@ -668,19 +696,15 @@ impl PluginRuntime {
                     // Unsupported targets retain the existing ExtensionRef
                     // runtime so their kind-specific diagnostics remain
                     // attributable. Missing payloads were rejected above.
-                    if let Some(ext_ref) = &filter.extension_ref {
-                        let extension_namespace = ext_ref.resolved_namespace.as_deref().unwrap_or(namespace);
-                        let mut ext_filter = ExtensionRefFilter::new(extension_namespace.to_string(), ext_ref.clone());
-                        if assign_indices {
-                            let idx = self.ext_ref_keys.len();
-                            self.ext_ref_keys
-                                .push((extension_namespace.to_string(), ext_ref.name.clone()));
-                            ext_filter.set_index(idx);
-                        }
-                        self.add_request_filter(Box::new(ext_filter.clone()));
-                        self.add_upstream_response_filter(Box::new(ext_filter.clone()));
-                        self.add_upstream_response_body_filter(Box::new(ext_filter.clone()));
-                        self.add_upstream_response(Box::new(ext_filter));
+                    if let Some(field) = field(filter_index) {
+                        self.add_extension_field(
+                            field,
+                            filter
+                                .extension_ref
+                                .as_ref()
+                                .map_or("", |reference| reference.name.as_str()),
+                            assign_indices,
+                        );
                     }
                 }
             }
@@ -689,33 +713,54 @@ impl PluginRuntime {
 
     /// Build a runtime for a gRPC route rule. Assigns ExtensionRef indices for
     /// positional resolution from the request-captured class scope and records
-    /// (ns, name) in `ext_ref_keys`.
-    pub fn from_grpcroute_filters_for_rule(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
+    /// optional complete keys in `ext_ref_keys`.
+    pub fn from_grpcroute_filters_for_rule(route: &GRPCRoute, rule: usize) -> Self {
+        Self::from_grpc_route_slot(route, rule, None)
+    }
+
+    /// Build selected-backend filters from their actual owning fields.
+    pub fn from_grpcroute_filters_for_backend(route: &GRPCRoute, rule: usize, backend: usize) -> Self {
+        Self::from_grpc_route_slot(route, rule, Some(backend))
+    }
+
+    fn from_grpc_route_slot(route: &GRPCRoute, rule: usize, backend: Option<usize>) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_grpcroute_filters_inner(filters, namespace, true);
+        let owned = GrpcRouteExtensionRefs::from_route(route).ok().and_then(|references| {
+            let value = route.effective_rules()?.get(rule)?;
+            let filters = match backend {
+                Some(index) => value
+                    .backend_refs
+                    .as_ref()?
+                    .get(index)?
+                    .filters
+                    .as_deref()
+                    .unwrap_or_default(),
+                None => value.filters.as_deref().unwrap_or_default(),
+            };
+            Some((references, filters))
+        });
+        if let Some((references, filters)) = owned {
+            runtime.add_from_grpcroute_filters_inner(filters, backend.is_none(), |filter| {
+                references.effective_at(rule, backend, filter)
+            });
+        } else {
+            runtime.invalid_plugins.record_non_retainable("ExtensionRef");
+        }
         runtime.seal_fail_closed();
         runtime
     }
 
-    /// Build a runtime for a gRPC backend reference. ExtensionRef filters retain
-    /// `index = None`; first use resolves from the request-captured class scope
-    /// and pins either the hit or miss across retries.
-    pub fn from_grpcroute_filters_for_backend(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
-        let mut runtime = Self::new();
-        runtime.add_from_grpcroute_filters_inner(filters, namespace, false);
-        runtime.seal_fail_closed();
-        runtime
-    }
-
-    fn add_from_grpcroute_filters_inner(&mut self, filters: &[GRPCRouteFilter], namespace: &str, assign_indices: bool) {
-        if filters.iter().any(|filter| {
+    fn add_from_grpcroute_filters_inner<'a>(
+        &mut self,
+        filters: &[GRPCRouteFilter],
+        assign_indices: bool,
+        field: impl Fn(usize) -> Option<RouteExtensionField<'a>>,
+    ) {
+        if filters.iter().enumerate().any(|(index, _)| {
             matches!(
-                validate_extension_ref_filter(
-                    filter.filter_type == GRPCRouteFilterType::ExtensionRef,
-                    filter.extension_ref.as_ref(),
-                ),
-                Err(ExtensionRefValidationError::MissingConfiguration)
-                    | Err(ExtensionRefValidationError::UnexpectedConfiguration)
+                field(index).map(|field| field.validated()),
+                None | Some(Err(ExtensionRefValidationError::MissingConfiguration))
+                    | Some(Err(ExtensionRefValidationError::UnexpectedConfiguration))
             )
         }) {
             self.invalid_plugins.record_non_retainable("ExtensionRef");
@@ -725,7 +770,7 @@ impl PluginRuntime {
             self.invalid_plugins.record_non_retainable("HeaderModifier");
             return;
         }
-        for filter in filters {
+        for (filter_index, filter) in filters.iter().enumerate() {
             match filter.filter_type {
                 GRPCRouteFilterType::RequestHeaderModifier => {
                     if let Some(config) = &filter.request_header_modifier {
@@ -744,23 +789,37 @@ impl PluginRuntime {
                     }
                 }
                 GRPCRouteFilterType::ExtensionRef => {
-                    if let Some(ext_ref) = &filter.extension_ref {
-                        let extension_namespace = ext_ref.resolved_namespace.as_deref().unwrap_or(namespace);
-                        let mut ext_filter = ExtensionRefFilter::new(extension_namespace.to_string(), ext_ref.clone());
-                        if assign_indices {
-                            let idx = self.ext_ref_keys.len();
-                            self.ext_ref_keys
-                                .push((extension_namespace.to_string(), ext_ref.name.clone()));
-                            ext_filter.set_index(idx);
-                        }
-                        self.add_request_filter(Box::new(ext_filter.clone()));
-                        self.add_upstream_response_filter(Box::new(ext_filter.clone()));
-                        self.add_upstream_response_body_filter(Box::new(ext_filter.clone()));
-                        self.add_upstream_response(Box::new(ext_filter));
+                    if let Some(field) = field(filter_index) {
+                        self.add_extension_field(
+                            field,
+                            filter
+                                .extension_ref
+                                .as_ref()
+                                .map_or("", |reference| reference.name.as_str()),
+                            assign_indices,
+                        );
                     }
                 }
             }
         }
+    }
+
+    fn add_extension_field(&mut self, field: RouteExtensionField<'_>, diagnostic_name: &str, assign_indices: bool) {
+        let mut filter = ExtensionRefFilter::new(field, diagnostic_name);
+        if assign_indices {
+            filter.set_index(self.ext_ref_keys.len());
+            self.ext_ref_keys.push(filter.plugin_key().map(str::to_owned));
+        }
+        let invalid = filter.plugin_key().is_none();
+        let filter = Arc::new(filter);
+        let request: Arc<dyn RequestFilter> = filter.clone();
+        if assign_indices && invalid && self.invalid_extension_gate.is_none() {
+            self.invalid_extension_gate = Some(Arc::clone(&request));
+        }
+        self.request_plugins.push(request);
+        self.upstream_response_plugins.push(filter.clone());
+        self.upstream_response_body_plugins.push(filter.clone());
+        self.upstream_response_async_plugins.push(filter);
     }
 
     /// Add request filters from entries (only enabled)
@@ -2206,7 +2265,7 @@ impl PluginRuntime {
 
     /// Run request stage filters (async)
     pub async fn run_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
-        self.run_request_plugins_impl(s, ctx, false, RequestIdPhase::Normal)
+        self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::Normal)
             .await;
     }
 
@@ -2224,6 +2283,11 @@ impl PluginRuntime {
                 .is_some_and(|filter| matches!(filter.name(), "PluginPolicyBlock" | "RejectInvalidConfig"))
         {
             self.run_request_plugins(s, ctx).await;
+        } else if !ctx.plugin_terminated() {
+            if let Some(gate) = &self.invalid_extension_gate {
+                self.run_request_plugins_impl(std::slice::from_ref(gate), s, ctx, false, RequestIdPhase::Normal)
+                    .await;
+            }
         }
     }
 
@@ -2231,7 +2295,7 @@ impl PluginRuntime {
     /// Only a first-attempt read-only mirror tee may be installed after the
     /// request-body policy freeze; capture and mutation remain unavailable.
     pub(crate) async fn run_backend_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
-        self.run_request_plugins_impl(s, ctx, true, RequestIdPhase::Normal)
+        self.run_request_plugins_impl(&self.request_plugins, s, ctx, true, RequestIdPhase::Normal)
             .await;
     }
 
@@ -2239,24 +2303,25 @@ impl PluginRuntime {
         if self.invalid_early_request_id || (self.has_request_id && !self.invalid_plugins.is_empty()) {
             return false;
         }
-        self.run_request_plugins_impl(s, ctx, false, RequestIdPhase::Early)
+        self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::Early)
             .await;
         !ctx.plugin_terminated()
     }
 
     pub(crate) async fn run_request_plugins_after_early_ids(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
-        self.run_request_plugins_impl(s, ctx, false, RequestIdPhase::AfterEarly)
+        self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::AfterEarly)
             .await;
     }
 
     async fn run_request_plugins_impl(
         &self,
+        filters: &[Arc<dyn RequestFilter>],
         s: &mut Session,
         ctx: &mut EdgionHttpContext,
         backend_request: bool,
         phase: RequestIdPhase,
     ) {
-        if self.request_plugins.is_empty() {
+        if filters.is_empty() {
             return;
         }
 
@@ -2275,7 +2340,7 @@ impl PluginRuntime {
             PingoraSessionAdapter::new(s, ctx)
         };
 
-        for filter in &self.request_plugins {
+        for filter in filters {
             let is_request_id = filter.name() == "RequestId";
             if (phase == RequestIdPhase::Early && !is_request_id)
                 || (phase == RequestIdPhase::AfterEarly && is_request_id)
@@ -2315,7 +2380,7 @@ impl PluginRuntime {
             }
             if !suppress_log {
                 if filter_logs.is_empty() {
-                    filter_logs.reserve(self.request_plugins.len());
+                    filter_logs.reserve(filters.len());
                 }
                 filter_logs.push(plugin_log);
             }

@@ -7,11 +7,12 @@ use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use crate::plugins::runtime::gateway_api_filters::extension_ref::extension_ref_key;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
-use edgion_resources::resources::http_route::HTTPRouteFilterType;
 use edgion_resources::resources::http_route_ai_admission::{ai_rule_invalid_reason, AiProxyAdmission};
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily, PluginPolicyAction};
-use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
+use edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs;
+
 use edgion_resources::{EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, GatewayClass, HTTPRoute, ListenerKey};
 
 use super::inputs::{effective_http_rules, GatewayInput, RouteInput, RouteKind};
@@ -751,23 +752,24 @@ fn rule_admission(route: &Arc<HTTPRoute>, scope: &PluginScope) -> RuleAdmission 
     let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
     let count = route.effective_rules().map_or(0, |rules| rules.len());
     let mut allowed = vec![false; count];
+    let Ok(references) = HttpRouteExtensionRefs::from_route(route) else {
+        return RuleAdmission {
+            source: Arc::downgrade(route),
+            allowed,
+        };
+    };
     for (index, rule) in effective_http_rules(route) {
         let mut active_count = 0;
         let mut configs = Vec::new();
         let mut missing = None;
-        for reference in rule
+        for key in rule
             .filters
             .iter()
             .flatten()
-            .filter(|filter| filter.filter_type == HTTPRouteFilterType::ExtensionRef)
-            .filter_map(|filter| filter.extension_ref.as_ref())
-            .filter(|reference| is_supported_edgion_plugins_ref(reference))
+            .enumerate()
+            .filter_map(|(filter, _)| references.effective_at(index, None, filter))
+            .filter_map(extension_ref_key)
         {
-            let key = format!(
-                "{}/{}",
-                reference.resolved_namespace.as_deref().unwrap_or(namespace),
-                reference.name
-            );
             match scope.http.get(&key) {
                 Some(view) => {
                     for entry in view

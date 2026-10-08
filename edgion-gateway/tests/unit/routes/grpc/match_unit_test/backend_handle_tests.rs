@@ -360,7 +360,7 @@ fn actual_owner_gates_factories_and_effective_backend_proofs() {
                 rule_reads += 1;
                 Arc::new(PluginRuntime::new())
             },
-            |_, _| {
+            |_, _, _| {
                 backend_reads += 1;
                 Arc::new(PluginRuntime::new())
             }
@@ -394,7 +394,7 @@ fn actual_owner_gates_factories_and_effective_backend_proofs() {
                 rule_reads += 1;
                 Arc::new(PluginRuntime::new())
             },
-            |_, _| {
+            |_, _, _| {
                 backend_reads += 1;
                 Arc::new(PluginRuntime::new())
             },
@@ -416,12 +416,12 @@ fn actual_owner_gates_factories_and_effective_backend_proofs() {
     let authored = GrpcRouteRuleUnit::compile_with_factories(
         &route,
         0,
-        |_, ns| {
-            assert_eq!(ns, "default");
+        |owner, _| {
+            assert_eq!(owner.metadata.namespace.as_deref().unwrap_or("default"), "default");
             Arc::new(PluginRuntime::new())
         },
-        |_, ns| {
-            assert_eq!(ns, "default");
+        |owner, _, _| {
+            assert_eq!(owner.metadata.namespace.as_deref().unwrap_or("default"), "default");
             calls += 1;
             Arc::new(PluginRuntime::new())
         },
@@ -439,7 +439,7 @@ fn actual_owner_gates_factories_and_effective_backend_proofs() {
         &route,
         0,
         |_, _| Arc::new(PluginRuntime::new()),
-        |_, _| {
+        |_, _, _| {
             calls += 1;
             Arc::new(PluginRuntime::new())
         },

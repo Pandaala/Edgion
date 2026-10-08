@@ -128,6 +128,24 @@ RequestId runs only after unambiguous Gateway ownership and the scope gate.
 Atomic publication does not make separately arriving configuration events a
 cross-kind transaction. See [scoped policy publication](../../04-review/plugin-runtime/regression-guards/scoped-policy-runtime-publication.md).
 
+Route ExtensionRef construction borrows the actual HTTPRoute/GRPCRoute and
+indexed effective field. One canonical validated projection produces optional
+complete cold keys, preserving ExtensionRef ordinals and invalid/missing holes.
+The four stage filters share immutable target metadata; neither request resolution
+nor access-log collection formats route keys. Publication demand and AI/adaptive
+consumers apply the same projection before any plugin lookup.
+
+Malformed discriminator/payload unions retain the whole-runtime configuration
+gate. An unsupported target, invalid name or invalid effective namespace retains
+its original ExtensionRef filter and fixed diagnostic. The first invalid rule
+filter is also captured for preflight dispatch through the ordinary request
+runner using a borrowed one-element slice. Leading policy/configuration gates
+keep precedence; earlier ordinary/CORS filters cannot bypass this rejection.
+The runner uses the supplied slice for iteration and log reservation and retains
+entry identity restoration, canonical logs and terminal response handling.
+Backend filters remain selected-only. Their captured-context cache pins both hits
+and misses through all response stages and retries; body resolution remains silent.
+
 Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`, unique within its stage array — a duplicate is a validation error in both layers), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log. The alias is also the discriminator in the entry's runtime identity `<resource key>/<alias or #index>` (`plugins::common::entry_scope`), which namespaces state a plugin keeps outside its own instance — `RateLimitRedis` Redis buckets today.
 
 ## Conditional execution

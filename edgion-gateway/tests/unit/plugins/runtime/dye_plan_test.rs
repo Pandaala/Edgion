@@ -92,7 +92,7 @@ fn dye_producer_inventory_matches_declared_capability_union() {
         ),
         (
             "AiProxy",
-            &[r#"{}"#],
+            &[r#"{"api":"openaiChat"}"#],
             &[include_str!("../../../../src/ai/http/proxy.rs")],
         ),
     ];

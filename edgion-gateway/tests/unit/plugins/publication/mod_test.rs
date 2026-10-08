@@ -894,3 +894,78 @@ async fn unsupported_plugin_update_replaces_previous_runtime_and_correction_reco
         assert!(view(&publisher).is_activatable);
     }
 }
+
+#[tokio::test]
+async fn owning_extension_lifecycle_pins_old_scope_and_rebuilds_new_requests() {
+    let publisher = publisher();
+    // Remove global demand: this test exercises the actual route's local reference.
+    let mut policy = (*config("policy-a", json!({}))).clone();
+    policy.spec.global_plugins_ref = None;
+    publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(policy))]));
+    let mut source = (*route()).clone();
+    source.spec.rules.as_mut().unwrap()[0].filters = Some(
+        serde_json::from_value(json!([{
+            "type":"ExtensionRef", "extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins"}
+        }]))
+        .unwrap(),
+    );
+    let source = Arc::new(source);
+    publisher.replace_routes(
+        RouteKind::Http,
+        HashMap::from([("apps/route".into(), RouteInput::from_http(source.clone()))]),
+    );
+    let mut missing = crate::EdgionHttpContext::new();
+    assert!(missing.capture_plugin_scope(publisher.snapshot().gateway("apps/a").unwrap()));
+    let missing_scope = missing.plugin_scope().unwrap().scope.clone();
+    assert!(missing
+        .pinned_backend_ext_ref("apps/plugins", || missing_scope
+            .http("apps/plugins")
+            .map(|view| view.plugin_runtime.clone()))
+        .is_none());
+    update_source(&publisher, plugin("dsl", true), false);
+    let created = view(&publisher);
+    let mut captured = crate::EdgionHttpContext::new();
+    assert!(captured.capture_plugin_scope(publisher.snapshot().gateway("apps/a").unwrap()));
+    let captured_scope = captured.plugin_scope().unwrap().scope.clone();
+    let original = captured
+        .pinned_backend_ext_ref("apps/plugins", || {
+            captured_scope
+                .http("apps/plugins")
+                .map(|view| view.plugin_runtime.clone())
+        })
+        .unwrap();
+    assert!(Arc::ptr_eq(&original, &created.plugin_runtime));
+    let mut updated = (*plugin("dsl", true)).clone();
+    updated.metadata.uid = Some("replacement".into());
+    updated.metadata.generation = Some(2);
+    update_source(&publisher, Arc::new(updated), false);
+    assert!(!Arc::ptr_eq(&created, &view(&publisher)));
+    publisher.update_http_plugins(HashMap::new(), HashMap::new(), &HashSet::from(["apps/plugins".into()]));
+    assert!(scope(&publisher, "apps/a").http("apps/plugins").is_none());
+    update_source(&publisher, plugin("dsl", true), false);
+    assert!(scope(&publisher, "apps/a").http("apps/plugins").is_some());
+    update_policy(
+        &publisher,
+        json!({"deny":[{"name":"http/RateLimitLocal","action":"block"}]}),
+        false,
+    );
+    assert!(matches!(
+        first_result(&view(&publisher)).await,
+        PluginRunningResult::ErrResponse { .. }
+    ));
+    assert!(captured.capture_plugin_scope(publisher.snapshot().gateway("apps/a").unwrap()));
+    assert!(Arc::ptr_eq(&captured.plugin_scope().unwrap().scope, &captured_scope));
+    for _ in 0..3 {
+        assert!(Arc::ptr_eq(
+            &captured
+                .pinned_backend_ext_ref("apps/plugins", || panic!("captured hit must stay pinned"))
+                .unwrap(),
+            &original
+        ));
+        assert!(missing
+            .pinned_backend_ext_ref("apps/plugins", || panic!("captured miss must stay pinned"))
+            .is_none());
+    }
+    assert!(captured_scope.ai_rule(&source, 0));
+    assert!(missing_scope.http("apps/plugins").is_none());
+}

@@ -382,31 +382,20 @@ impl GrpcRouteRuleUnit {
         Self::compile_with_factories(
             route,
             rule_index,
-            |rule, namespace| {
-                Arc::new(match &rule.filters {
-                    Some(filters) => PluginRuntime::from_grpcroute_filters_for_rule(filters, namespace),
-                    None => PluginRuntime::new(),
-                })
-            },
-            |backend, namespace| {
-                Arc::new(match &backend.filters {
-                    Some(filters) => PluginRuntime::from_grpcroute_filters_for_backend(filters, namespace),
-                    None => PluginRuntime::new(),
-                })
-            },
+            |route, rule| Arc::new(PluginRuntime::from_grpcroute_filters_for_rule(route, rule)),
+            |route, rule, backend| Arc::new(PluginRuntime::from_grpcroute_filters_for_backend(route, rule, backend)),
         )
     }
 
     fn compile_with_factories(
         route: &GRPCRoute,
         rule_index: usize,
-        mut rule_factory: impl FnMut(&GRPCRouteRule, &str) -> Arc<PluginRuntime>,
-        mut backend_factory: impl FnMut(&GRPCBackendRef, &str) -> Arc<PluginRuntime>,
+        mut rule_factory: impl FnMut(&GRPCRoute, usize) -> Arc<PluginRuntime>,
+        mut backend_factory: impl FnMut(&GRPCRoute, usize, usize) -> Arc<PluginRuntime>,
     ) -> Option<GrpcRuleRuntime> {
         let references = GrpcRouteBackendRefs::from_route(route).ok()?;
         let rule = route.effective_rules()?.get(rule_index)?;
-        let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-        let plugin_runtime = rule_factory(rule, namespace);
+        let plugin_runtime = rule_factory(route, rule_index);
         let backends = rule
             .backend_refs
             .iter()
@@ -420,7 +409,7 @@ impl GrpcRouteRuleUnit {
                     CompiledBackendTarget::from_reference(reference, edgion_resources::HTTPBackendRefKind::Unsupported);
                 let plugin_runtime =
                     if schema.ref_denied.is_none() && matches!(target, CompiledBackendTarget::Service(_)) {
-                        backend_factory(schema, namespace)
+                        backend_factory(route, rule_index, slot)
                     } else {
                         Arc::new(PluginRuntime::new())
                     };

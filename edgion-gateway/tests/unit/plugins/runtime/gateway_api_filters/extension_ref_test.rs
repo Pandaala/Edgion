@@ -4,12 +4,13 @@ use crate::plugins::runtime::traits::session::MockPluginSession;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use edgion_resources::resources::edgion_plugins::{EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry};
 use edgion_resources::resources::http_route::HTTPHeaderFilter;
+use edgion_resources::resources::LocalObjectReference;
 use kube::core::ObjectMeta;
 use mockall::predicate::eq;
 
 #[test]
 fn plugin_key_accessor_is_allocation_free() {
-    let filter = ExtensionRefFilter::new(
+    let filter = owned_extension_filter(
         "production".to_string(),
         LocalObjectReference {
             group: "edgion.io".into(),
@@ -22,7 +23,7 @@ fn plugin_key_accessor_is_allocation_free() {
     let (key, allocations) =
         crate::test_allocation_counter::count_allocation_stats(|| std::hint::black_box(filter.plugin_key()));
 
-    assert_eq!(key, "production/api-guard");
+    assert_eq!(key, Some("production/api-guard"));
     assert_eq!(allocations.calls, 0);
 }
 
@@ -100,7 +101,7 @@ async fn request_inner_identity_restores_outer_on_early_result() {
     session.expect_set_response_header().times(1).returning(|_, _| Ok(()));
     session.expect_push_to_edgion_plugins_log().times(1).return_const(());
 
-    let mut filter = ExtensionRefFilter::new(
+    let mut filter = owned_rule_extension_filter(
         "ns".to_string(),
         LocalObjectReference {
             group: "edgion.io".into(),
@@ -160,7 +161,7 @@ async fn request_extension_suppresses_inner_waf_plugin_log() {
     });
     session.expect_push_to_edgion_plugins_log().times(0);
 
-    let mut filter = ExtensionRefFilter::new(
+    let mut filter = owned_rule_extension_filter(
         "ns".to_string(),
         LocalObjectReference {
             group: "edgion.io".into(),
@@ -196,7 +197,7 @@ fn backend_scope_uses_request_pinned_runtime_across_attempts() {
         .times(2)
         .returning(|_| EdgionPluginsLogToken::new(0));
 
-    let filter = ExtensionRefFilter::new(
+    let filter = owned_extension_filter(
         "ns".to_string(),
         LocalObjectReference {
             group: "edgion.io".into(),
@@ -239,7 +240,7 @@ fn backend_scope_rejects_upstream_jump_runtime() {
         .with(eq("ns/jump"))
         .once()
         .returning(move |_| Some(Arc::clone(&runtime)));
-    let filter = ExtensionRefFilter::new(
+    let filter = owned_extension_filter(
         "ns".to_string(),
         LocalObjectReference {
             group: "edgion.io".into(),
@@ -278,7 +279,7 @@ fn index_hit_uses_resolved_target() {
         .expect_start_edgion_plugins_log()
         .returning(|_| EdgionPluginsLogToken::new(0));
 
-    let mut filter = ExtensionRefFilter::new(
+    let mut filter = owned_rule_extension_filter(
         "ns".to_string(),
         LocalObjectReference {
             group: "edgion.io".into(),
@@ -309,7 +310,7 @@ fn index_miss_returns_500() {
         .times(1)
         .return_const(None);
 
-    let mut filter = ExtensionRefFilter::new(
+    let mut filter = owned_rule_extension_filter(
         "ns".to_string(),
         LocalObjectReference {
             group: "edgion.io".into(),
@@ -353,7 +354,7 @@ async fn unsupported_kind_fails_closed() {
         .times(1)
         .returning(|_body, _eos| Ok(()));
 
-    let filter = ExtensionRefFilter::new(
+    let filter = owned_extension_filter(
         "default".to_string(),
         LocalObjectReference {
             group: "edgion.io".into(),
@@ -373,7 +374,7 @@ async fn unsupported_kind_fails_closed() {
 #[test]
 fn empty_group_does_not_alias_edgion_io() {
     let mut session = MockPluginSession::new();
-    let filter = ExtensionRefFilter::new(
+    let filter = owned_extension_filter(
         "default".to_string(),
         LocalObjectReference {
             group: String::new(),
@@ -390,4 +391,145 @@ fn empty_group_does_not_alias_edgion_io() {
             body: None,
         }
     );
+}
+
+fn owned_extension_filter(namespace: String, reference: LocalObjectReference) -> ExtensionRefFilter {
+    owned_extension_at(namespace, reference, Some(0))
+}
+
+fn owned_rule_extension_filter(namespace: String, reference: LocalObjectReference) -> ExtensionRefFilter {
+    owned_extension_at(namespace, reference, None)
+}
+
+fn owned_extension_at(
+    namespace: String,
+    reference: LocalObjectReference,
+    backend: Option<usize>,
+) -> ExtensionRefFilter {
+    let filters = serde_json::json!([{"type":"ExtensionRef", "extensionRef":reference}]);
+    let rule = if backend.is_some() {
+        serde_json::json!({"backendRefs":[{"name":"service","port":80,"filters":filters}]})
+    } else {
+        serde_json::json!({"filters":filters})
+    };
+    let route: edgion_resources::HTTPRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "route", "namespace": namespace}, "spec": {"rules": [rule]}
+    }))
+    .unwrap();
+    let references =
+        edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs::from_route(&route).unwrap();
+    ExtensionRefFilter::new(references.effective_at(0, backend, 0).unwrap(), &reference.name)
+}
+
+#[tokio::test]
+async fn invalid_name_never_resolves_at_any_stage_or_allocates_body_logs() {
+    for index in [None, Some(2)] {
+        let mut filter = owned_extension_at(
+            "default".into(),
+            LocalObjectReference {
+                group: "edgion.io".into(),
+                kind: "EdgionPlugins".into(),
+                name: "bad/name".into(),
+                resolved_namespace: None,
+            },
+            if index.is_some() { None } else { Some(0) },
+        );
+        if let Some(index) = index {
+            filter.set_index(index);
+        }
+        let mut session = MockPluginSession::new();
+        session.expect_resolved_route_ext_ref().never();
+        session.expect_pinned_backend_ext_ref().never();
+        session.expect_start_edgion_plugins_log().never();
+        session.expect_write_response_header().times(1).returning(|header, _| {
+            assert_eq!(header.status.as_u16(), 500);
+            Ok(())
+        });
+        session.expect_write_response_body().times(1).returning(|body, end| {
+            assert_eq!(body.unwrap().as_ref(), EXTENSION_REF_ERROR_BODY.as_bytes());
+            assert!(end);
+            Ok(())
+        });
+        let mut log = PluginLog::new("ExtensionRef");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+        assert!(log.render_for_test().contains("extension ref target not supported"));
+        assert_eq!(
+            filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log),
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        );
+        assert_eq!(
+            filter
+                .run_extension_async(PluginRunningStage::UpstreamResponse, &mut session, &mut log)
+                .await,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        );
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            for _ in 0..16 {
+                assert!(filter.resolve_runtime_silent(&mut session).is_none());
+            }
+        });
+        assert_eq!(allocations.calls, 0);
+    }
+}
+
+#[tokio::test]
+async fn backend_actual_context_cache_survives_all_four_stages_and_retries() {
+    let runtime = Arc::new(PluginRuntime::new());
+    let state = Arc::new(parking_lot::Mutex::new((crate::EdgionHttpContext::new(), 0usize)));
+    let observed = state.clone();
+    let expected = runtime.clone();
+    let mut session = MockPluginSession::new();
+    session.expect_pinned_backend_ext_ref().returning(move |key| {
+        let mut state = observed.lock();
+        let (ctx, reads) = &mut *state;
+        let hit = ctx.pinned_backend_ext_ref(key, || {
+            *reads += 1;
+            Some(runtime.clone())
+        });
+        assert!(Arc::ptr_eq(hit.as_ref().unwrap(), &expected));
+        hit
+    });
+    session
+        .expect_start_edgion_plugins_log()
+        .times(6)
+        .returning(|_| EdgionPluginsLogToken::new(0));
+    let filter = owned_extension_filter(
+        "default".into(),
+        LocalObjectReference {
+            group: "edgion.io".into(),
+            kind: "EdgionPlugins".into(),
+            name: "plugins".into(),
+            resolved_namespace: None,
+        },
+    );
+    for _attempt in 0..3 {
+        let mut log = PluginLog::new("ExtensionRef");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert_eq!(
+            filter.run_upstream_response_filter(&mut session, &mut log),
+            PluginRunningResult::GoodNext
+        );
+        assert_eq!(
+            filter.run_upstream_response(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert!(filter
+            .run_upstream_response_body_filter(&Some(Bytes::from_static(b"chunk")), false, &mut session)
+            .is_none());
+    }
+    let state = state.lock();
+    assert_eq!(state.1, 1);
+    assert!(state.0.stage_logs().is_empty());
 }

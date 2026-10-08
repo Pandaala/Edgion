@@ -34,10 +34,16 @@ provenance or mint a Grant query. Authored views ignore supplied stamps.
 An omitted root namespace remains absent in wakeup keys, separately from the
 canonical `default` namespace used by the local plugin target.
 
-The Controller migration is R3a1. Gateway early global/CORS/WAF/access-log lookup
-and generation capture remain R3a2 work; this page does not certify those paths.
-Re-evaluate source binding, stamp handling, query ordering and repair behavior
-when these consumers or the published transport change.
+R3a1 supplies the Controller boundary. R3a2 migrates Gateway constructors,
+publication/AI/adaptive discovery, positional runtime resolution, CORS/WAF and
+access-log consumers to actual effective loans and optional cold complete keys.
+An authored stamp never changes locality. Invalid effective namespace stamps
+produce no target key; a missing valid child-local plugin never falls back to the
+parent namespace. Existing request scopes and backend hit/miss pinning retain
+one publication generation through retries. Re-evaluate source binding, stamp
+handling, query ordering and repair behavior when these consumers or the
+published transport change. In-process lifecycle tests do not establish live
+Kubernetes admission or whole-task conformance.
 
 ## Compatibility posture
 

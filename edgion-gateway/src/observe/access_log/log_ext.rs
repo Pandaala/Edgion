@@ -157,7 +157,7 @@ pub fn collect(session: &Session, ctx: &EdgionHttpContext) -> LogExt {
     }
     let global_keys = &store.global_keys;
     let gateway_keys = &owner.http_keys;
-    let route_keys: &[(String, String)] = match (&ctx.route_unit, &ctx.grpc_route_unit) {
+    let route_keys: &[Option<String>] = match (&ctx.route_unit, &ctx.grpc_route_unit) {
         (Some(u), _) => u.plugin_runtime.ext_ref_keys(),
         (_, Some(u)) => u.plugin_runtime.ext_ref_keys(),
         _ => &[],
@@ -186,9 +186,8 @@ pub fn collect(session: &Session, ctx: &EdgionHttpContext) -> LogExt {
     }
     // Tier 3: route ExtensionRef. Last, so a route field shadows the tiers above
     // it (documented risk: name global fields with a distinct prefix).
-    for (ns, name) in route_keys {
-        let key = format!("{}/{}", ns, name);
-        apply_declarations(store, &key, whitelist, session, ctx, &mut ext);
+    for key in route_keys.iter().flatten() {
+        apply_declarations(store, key, whitelist, session, ctx, &mut ext);
     }
 
     ext

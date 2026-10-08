@@ -38,7 +38,7 @@ already have run in Pingora's early hook before route matching identifies a
 malformed route. A source-only AI diagnostic does not imply a dropped or
 fallback rule and must not be represented by `PartiallyInvalid`.
 
-## Controller owning-reference migration and remaining Gateway work
+## Owning-reference boundaries
 
 R3a1 binds Controller plugin keys to actual HTTP/GRPC owners and rule/backend
 filter positions. Invalid source/target identities create no new plugin edge or
@@ -54,12 +54,24 @@ missing plugins and scope errors under a valid owner retain additive status
 registration. Zero-read guarantees here concern plugin reference discovery and
 consumption, not unrelated status operations.
 
-Existing Gateway execution rejection is separate from lookup admission. Cold
-optional target keys, early global/CORS/WAF/access-log consumers, and request
-snapshot capture are still R3a2 work. The shared pure discriminator checker and
-existing runtime gate are not evidence that every Gateway lookup is owner-bound
-or that an unsupported target currently performs zero early lookup. Independent
-Gateway name/owner validation before lookup and consumption remains part of R3a2.
+Gateway lookup admission now uses the same actual-owner field loans through
+one cold key projection. HTTP/GRPC rule and backend builders receive actual
+Routes and indexed fields. Invalid descriptors retain `None` in the rule key
+vector and invoke no target lookup. Valid missing descriptors retain their keys
+and fixed missing-reference error. Publication demand, AI/adaptive discovery,
+CORS/WAF selection and access-log declarations cannot consume invalid same-name
+references. Authored fields ignore stamps; effective stamps apply only to actual
+`resolved_rules`, with canonical namespace validation.
+
+Whole-runtime malformed-union rejection remains separate from invalid-target
+positioning. The latter keeps every original ExtensionRef stage filter and its
+fixed error attribution. Preflight captures the first invalid rule filter's
+existing Arc and dispatches a borrowed one-element slice through the ordinary
+request runner. Leading policy/configuration gates retain precedence, and an
+earlier CORS filter cannot terminate successfully first. Backend filters have no
+rule preflight gate and execute only for the selected backend. The request's
+captured class scope and existing backend cache preserve hits and misses through
+stages and retries; body resolution creates no plugin log or key allocation.
 
 ## Rationale and evidence
 
@@ -145,6 +157,21 @@ log and binary hashes are retained in
 `tmp/resource-reference-contract/r3a1-verification-20261008-r3`. Refreshed lint
 gates and independent byte review remain pending. This adds no Gateway
 owner/name validation claim.
+
+R3a1 subsequently committed locally as `05e7debf5`; its pending-gate statements
+above describe earlier evidence checkpoints. R3a2 uses the reviewed 31-path
+scope, including a supporting test-only AiProxy `api` fixture correction. Fresh
+stable r4 verification passed the full Gateway runtime (424), publication (25),
+adaptive (21), request-filter (29), resolver (nine), HTTP/GRPC match-unit (12/nine),
+log-extension (15), context (eight), native-WAF (38), early-request (11), and
+plugin-store (41) selections. Full compiled identities remain intact (5132 to
+5144; 12 additions), and all 122 original scoped source tests, including the
+four support tests, remain with unchanged ignore attributes. Raw failed attempts,
+commands, exits and stable source/binary hashes are retained under
+`tmp/resource-reference-contract/r3a2-verification-20261008-r1`. Workspace gates,
+independent result reviews and the R3a2 commit remain coordinator-owned pending
+steps. In-process missing/create/update/delete/recreate and policy-capture tests
+are not live admission/conformance verification.
 
 ## Resolution references
 

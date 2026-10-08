@@ -15,8 +15,13 @@ use crate::plugins::runtime::traits::{
 };
 use crate::plugins::runtime::PluginRuntime;
 use edgion_resources::filters::{PluginRunningResult, PluginRunningStage};
-use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
-use edgion_resources::resources::LocalObjectReference;
+use edgion_resources::resources::refs::route_fields::RouteExtensionField;
+
+/// Project only an actual validated local field into a cold store key.
+pub(crate) fn extension_ref_key(field: RouteExtensionField<'_>) -> Option<String> {
+    let target = field.validated().ok().flatten()?.target();
+    Some(format!("{}/{}", target.scope().namespace()?, target.name()))
+}
 
 /// Error response body written when an ExtensionRef cannot be resolved
 /// (cycle, depth exceeded, referenced EdgionPlugins not found).
@@ -46,8 +51,7 @@ async fn write_extension_ref_error_response(session: &mut dyn PluginSession) {
 /// Precomputed ExtensionRef target shared by all stage-specific filter clones.
 struct ExtensionRefTarget {
     name: String,
-    lookup_key: String,
-    supported: bool,
+    lookup_key: Option<String>,
 }
 
 /// Filter that handles ExtensionRef to EdgionPlugins
@@ -64,15 +68,11 @@ pub struct ExtensionRefFilter {
 }
 
 impl ExtensionRefFilter {
-    pub fn new(namespace: String, ext_ref: LocalObjectReference) -> Self {
-        let supported = is_supported_edgion_plugins_ref(&ext_ref);
-        let lookup_key = format!("{}/{}", namespace, ext_ref.name);
+    pub fn new(field: RouteExtensionField<'_>, diagnostic_name: &str) -> Self {
+        let lookup_key = extension_ref_key(field);
+        let name = diagnostic_name.to_owned();
         Self {
-            target: Arc::new(ExtensionRefTarget {
-                name: ext_ref.name,
-                lookup_key,
-                supported,
-            }),
+            target: Arc::new(ExtensionRefTarget { name, lookup_key }),
             index: None,
         }
     }
@@ -85,13 +85,8 @@ impl ExtensionRefFilter {
     }
 
     /// Return the precomputed lookup key: namespace/name.
-    fn plugin_key(&self) -> &str {
-        &self.target.lookup_key
-    }
-
-    /// Check if this extension ref points to EdgionPlugins
-    fn is_edgion_plugins(&self) -> bool {
-        self.target.supported
+    pub(crate) fn plugin_key(&self) -> Option<&str> {
+        self.target.lookup_key.as_deref()
     }
 
     /// Resolve the referenced plugin runtime without touching PluginLog or
@@ -104,12 +99,10 @@ impl ExtensionRefFilter {
     /// lifetime (one entry per chunk on long streams). This sibling helper
     /// returns just the runtime, with no log side-effects at all.
     fn resolve_runtime_silent(&self, session: &mut dyn PluginSession) -> Option<Arc<PluginRuntime>> {
-        if !self.is_edgion_plugins() {
-            return None;
-        }
+        let key = self.plugin_key()?;
         let runtime = match self.index {
             Some(idx) => session.resolved_route_ext_ref(idx),
-            None => session.pinned_backend_ext_ref(self.plugin_key()),
+            None => session.pinned_backend_ext_ref(key),
         }?;
         if self.index.is_none()
             && (runtime.has_waf()
@@ -130,14 +123,14 @@ impl ExtensionRefFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> Result<(Arc<PluginRuntime>, EdgionPluginsLogToken), ()> {
-        if !self.is_edgion_plugins() {
+        let Some(key) = self.plugin_key() else {
             // An unsupported ExtensionRef target is a static config error caught
             // at preparse time (`find_invalid_rule_details` /
             // `find_invalid_rule_indices`). This is the runtime backstop — fail
             // closed via `Err(())`, which both callers map to HTTP 500.
             log.push_err("extension ref target not supported");
             return Err(());
-        }
+        };
 
         log.set_refer_to(self.target.name.clone());
 
@@ -151,7 +144,7 @@ impl ExtensionRefFilter {
                     return Err(());
                 }
             },
-            None => match session.pinned_backend_ext_ref(self.plugin_key()) {
+            None => match session.pinned_backend_ext_ref(key) {
                 Some(rt) => rt,
                 None => {
                     log.push_err("extension ref not found");

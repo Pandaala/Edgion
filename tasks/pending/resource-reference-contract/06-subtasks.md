@@ -629,3 +629,78 @@ Resources 1922 -> 1925, Controller 1731 -> 1743 and source 188 -> 203 identities
 remain unchanged from r2, with no original removals or changed ignore attributes.
 Refreshed warning-free coordinator gates and renewed independent byte review
 remain pending; R3a2 is still open.
+
+### R3a2 Gateway owning ExtensionRef slice
+
+R3a1 committed locally as `05e7debf53e87ab3709e7d2090c0b3e7356244ca`.
+The reviewed R3a2 plan freezes 30 existing paths (10 production, 12 mirrored
+tests, eight owning documents), with baseline manifest SHA256
+`e8505004cc3d148af68e968c1f2db747e9a36bc7d8f9e501adac1f1c6fe94ff5`.
+The baseline has 118 scoped source tests and 5132 compiled Gateway tests.
+Actual Route/slot loans now supply optional cold keys for runtime construction,
+publication/AI/adaptive discovery, captured request resolution, CORS/WAF and
+access-log consumers. Invalid targets keep their positions and ExtensionRef
+errors; preflight reuses their existing filter through the canonical dispatcher.
+Malformed-union and policy gate precedence, selected-backend scope, and captured
+hit/miss pinning remain intact. No Resources/Common/transport/Grant expansion,
+legacy constructor shim, RequestMirror, descriptor or native ExternalAuth change.
+
+The original gRPC and adaptive child-namespace fixtures now place the same stamped
+rules in actual `resolved_rules`; expected locality and telemetry assertions stay
+unchanged. The missing-payload CORS scanner fixture retains its explicit `None`
+ordinal and original selected-config Arc assertion; separate OPTIONS tests prove
+that malformed runtimes and invalid targets cannot admit preflight.
+
+Preliminary moving-source runtime verification exited 101: 419 passed and the
+existing dye producer inventory failed because its AiProxy fixture omitted `api`.
+The raw failure remains preserved. Independent static comparison confirmed the
+fixture was unchanged from committed HEAD; no executed baseline body is claimed.
+A separately reviewed supporting amendment adds the existing dye test file as
+path 31 and changes only its AiProxy config to `{"api":"openaiChat"}`, retaining
+all four test identities and assertions. The final allowlist has 10 production,
+13 test and eight documentation paths; the separate immutable dye baseline is
+`tmp/resource-reference-contract/r3a2-baseline-20261008/dye-support-baseline.json`.
+Stable r2 targeted selections passed before supplemental boundary tests were added.
+Stable r3 then exposed a new CORS/WAF decoy fixture error: republishing compiled
+plugin metadata had discarded resolved WAF bundles. The fixture now supplies the
+original processed source through the existing publisher and asserts its WAF is
+present before testing valid/invalid selection. No production change or weakened
+expectation was used. The original r3 failure is retained.
+All R3a2 raw commands, exits, logs and source/binary hashes are retained in
+`tmp/resource-reference-contract/r3a2-verification-20261008-r1`. In-process
+publication lifecycle evidence does not establish live Kubernetes admission,
+whole ExtensionRef/conformance acceptance, or completion of R3b/R3c and R4-R8.
+
+Final stable r4 verification on 2026-10-08 passed: full Gateway plugin runtime
+424; exact dye producer inventory one (included in runtime); publication 25;
+adaptive routing 21; request filter 29; positional resolver nine; HTTP match units
+12; gRPC match units nine; access-log extensions 15; context pinning eight; native
+WAF 38; early request capture 11; plugin store 41. Selections can overlap and are
+not a full-suite result. All 23 Rust file hashes remained unchanged throughout
+this compile and test run. Source identities are 122 to 134, including the four
+approved dye tests; complete compiled identities are 5132 to 5144. Exactly 12
+new tests were added, with no old identity removed and scoped ignore attributes
+unchanged. Source/binary/log hashes and comparisons are retained alongside the
+raw commands. Scoped formatting and `git diff --check` passed. No executable
+documentation example changed, so no Gateway doctest run was required.
+
+Coordinator workspace checks, guards, immutable final reviews and commit remain
+pending. These in-process tests do not claim live Kubernetes admission or whole
+resource-reference-contract/conformance completion.
+
+R3a2-F1: the first independent r4 result review blocked on one new test-only
+`clippy::disallowed_types` warning: the real-context cache fixture used
+`std::sync::Mutex`. Workspace check and all 11 repository guards passed; Clippy
+exited zero but was not warning-free. A separately reviewed precision correction
+changes only that fixture to `parking_lot::Mutex` and its two infallible `.lock()`
+calls, preserving all assertions and synchronous guard lifetimes. Stable r5
+verification passed the complete runtime selection (424) and the exact cache
+regression (one, also included in runtime). Source identities remain 134 (122
+baseline plus 12 additions); compiled identities remain 5144 (5132 baseline plus
+12 additions), with no removals or changed scoped ignore attributes. All 23 Rust
+hashes stayed fixed during r5 compilation/tests. Other unchanged selections retain
+their explicitly recorded r4 evidence. Raw r4 lint, earlier failures, and new r5
+commands/exits/source/binary hashes are preserved in the same verification
+directory. Refreshed workspace lint/guards, replacement independent result
+reviews and commit remain coordinator-owned pending gates; no warning-free final
+lint or overall conformance acceptance is claimed here.

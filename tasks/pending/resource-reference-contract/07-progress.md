@@ -66,7 +66,13 @@ or historical conformance. Record commit hashes only after successful commits.
   passed two new independent Astra result rounds, fresh scoped/live verification
   and all workspace gates, then committed locally as
   f65b863c7cda6ec9936569d91e7bd8897824c4b2. Post-commit status contained only
-  unrelated review-results; no push occurred. R3a1 ExtensionRef Resources/Controller plan has independent Astra SCOPED PLAN PASS; baseline identity capture completed and implementation is active. Gateway R3a2 remains open.
+  unrelated review-results; no push occurred. R3a1 ExtensionRef Resources/Controller
+  passed both Astra final reviews and warning-free gates, then committed locally
+  as 05e7debf53e87ab3709e7d2090c0b3e7356244ca. Post-commit status again contained
+  only unrelated review-results; no push occurred. Gateway R3a2 implementation,
+  stable tests and both corrected-result Astra reviews passed. Its test-only
+  Mutex warning is resolved and fresh workspace gates are warning-free. The
+  exact local commit gate follows; mirror and descriptor migration remain open.
 - The first checkpoint audit and workspace commit gates passed. The user
   committed the accumulated code snapshot
   as 0f40e2708496e9aacafb0dc2fbd2cdd786ffa9e8 (`tmp commit`) while verification
@@ -75,7 +81,7 @@ or historical conformance. Record commit hashes only after successful commits.
   documentation and execution records. No push occurred. The user's commit
   remains unchanged.
 - The earlier external baseline was 4dbcc5495; current HEAD is the completed
-  R2c commit f65b863c7. Revalidate each batch against its current HEAD.
+  R3a1 commit 05e7debf5. Revalidate each batch against its current HEAD.
   The independently owned, untracked `review-results/` artifacts remain outside
   this task's mutation and staging scope.
 
@@ -647,7 +653,7 @@ requires it; do not silently expand an approved allowlist.
 | C0: current checkpoint | Independent accumulated-diff audit, resolve immediate introduced blockers, run required pre-commit gates, stage only verified task changes; describe partial completion honestly | complete; scoped final PASS and all gates passed | user snapshot 0f40e2708; closing 8dab81bc6 |
 | R1: native Route backends and delegation | Actual five-Route owners; authored terminal loans alone mint Grant; invalid descriptors cause no lookup/edge; child authorizes delegated targets, root owns wakeup; dependencies precede Grant reads; preserve slots/weights, AI facts and coalesced recovery | complete; fresh independent Astra scoped PASS and all gates passed | 0fea0a618 |
 | R2: final Gateway backend selection | Consume cold canonical targets through HTTP/GRPC/L4 final dial; retain weighted invalid slots and denial behavior; no new request allocations, locks or duplicate classifier; preserve direct endpoint/retry semantics | complete; R2c two fresh Astra rounds, identity/live proof and all gates passed | R2a d37b890a8; R2b 5cf413bbc; R2c f65b863c7 |
-| R3: filters, ExtensionRef and mirror | Actual HTTP/GRPC filter owners and child namespaces; authored/resolved coverage; correct runtime compilation, local descriptor ownership and recovery; mirror denial affects only mirror with role-qualified dependencies | R3a1 exact 23-path plan PASS; implementation active; Gateway R3a2, mirror and descriptor portions pending | pending |
+| R3: filters, ExtensionRef and mirror | Actual HTTP/GRPC filter owners and child namespaces; authored/resolved coverage; correct runtime compilation, local descriptor ownership and recovery; mirror denial affects only mirror with role-qualified dependencies | R3a1 complete; R3a2 implementation, two Astra result reviews and all final gates passed; exact commit gate active; mirror and descriptor portions pending | R3a1 05e7debf5; R3a2 pending |
 | R4: generic dependency and status | Replace remaining raw plugin credential/ConfigMap dependency and status paths with actual-owner authority; exact generation/disabled/delete/recreate handling; readonly status agrees with acquisition and runtime | pending | pending |
 | R5: attachment and policy references | parentRefs, allowedRoutes, GatewayClass parameters, GatewayRouteIndex and policy targets use appropriate object/type/selector identities; preserve namespace selectors, consent, controller ownership and ACME strictness | pending | pending |
 | R6: annotations and fixed identities | Preserve per-field annotation parsing; bind DNS LinkSys and fixed output references to actual owners; retain separate malformed EndpointSlice fallbacks; verify dedicated Service producer parity and process Gateway scope | pending | pending |
@@ -871,3 +877,107 @@ The commit gate is the exact 23 reviewed paths plus this coordinator ledger,
 after final metadata doc/English/diff checks. Unrelated review-results remain
 untouched; Gateway R3a2, R3b/R3c, R4-R8 and whole-task admission/conformance and
 closure remain pending. No push is authorized.
+
+R3a1 committed locally as `05e7debf53e87ab3709e7d2090c0b3e7356244ca`
+(`Bind ExtensionRef resolution to owning Route fields`), parent f65b863c7.
+The exact staged 24 paths matched reviewed technical bytes plus the coordinator
+ledger; staged diff and final metadata guards passed. Root verified all committed
+technical bytes against immutable r3, an empty index and post-commit status only
+`?? review-results/`. Stage and commit proofs remain in r3 verification. No push.
+
+Root promoted the read-only R3a2 inventory to plan-only IMPL at this new HEAD.
+The 30-path candidate has ten Gateway production files, twelve existing mirrored
+tests and eight owning documentation/task files; no supporting Resources/Common
+change is justified. Actual owning Route field loans must reach cold optional
+keys and every early/final consumer, preserving positional holes and captured
+scope hits/misses. Malformed-union gates and individual unsupported-target
+positions, CORS fixture ordinals and real resolved-rule stamp tests require
+explicit review. Inventory is not acceptance or execution; independent plan
+approval and fresh baseline controls are required before edits. Root retains
+07, the sole mutation lane, final gates/reviews and local commits.
+
+R3a2's nine-point plan at 05e7debf5 received independent Astra SCOPED PLAN PASS
+from `r3a1_fresh_astra`, restricted to the 30 proposed existing paths. The
+reviewer traced all builders/factories, consumers and canonical dispatch; the
+one-filter borrowed preflight slice must reuse existing identity/log/response
+machinery and slice-based reservation, preserve leading policy/config precedence
+and four-stage counts/order, and leave backend rejection selected-only. All
+invalid descriptors have zero lookup, while valid sibling demand and missing
+key recovery remain. Diagnostic names come only from the same indexed source
+field; owning validation and effective locality stay canonical. No transport,
+Resources/Common, Grant or hot-path mechanism expansion is approved.
+
+Before execution, root froze all 30 immutable files at 05e7debf5 under
+`tmp/resource-reference-contract/r3a2-baseline-20261008`. Baseline manifest SHA256
+is `e8505004cc3d148af68e968c1f2db747e9a36bc7d8f9e501adac1f1c6fe94ff5`;
+all 118 original attributed source tests and zero scoped ignores are recorded.
+Fresh Gateway compiled list captured 5132 test identities, command exit zero
+in 1.85 seconds; listing executed no test bodies. Root now authorizes the sole
+implementer to execute this approved scope. The separate `r3a1_deep_astra` is
+reserved as the fresh R3a2 final reviewer and did not author/approve this plan.
+Final verification, two result rounds and local commit remain pending.
+
+R3a2 stable intermediate targeted verification passed runtime 61, ExtensionRef
+55, publication 25, adaptive 21, request filtering 28, resolution 9, HTTP match
+12, GRPC match 9, access-log 15 and context 8 (overlapping selections). These
+are intermediate actual execution, not the final candidate gate. The approved
+adaptive fixture relocation preserves the same delegated rule and telemetry
+assertions in actual resolved_rules.
+
+The retained preliminary broad runtime run failed 1 with 419 passing: unchanged
+dye inventory deserialized AiProxy {} despite required api. Static committed
+bytes establish the stale fixture; no baseline test-body execution is claimed.
+Independent Astra approved the exact test-only supporting path 31 replacement
+with {"api":"openaiChat"}, preserving every inventory assertion/ID/ignore and
+production behavior. Root froze its committed original bytes and identity
+controls before authorizing execution. The final broad runtime rerun remains
+required; original failure and intermediate provenance remain available.
+
+R3a2 final r4 source was stable across all tests. Root reproduced raw log hashes
+and results: runtime 424, exact dye one, publication 25, adaptive 21, request
+filter 29, resolver nine, HTTP/GRPC match 12/nine, log 15, context eight, WAF 38,
+early request 11 and plugin store 41; selections overlap. Source identities
+122 -> 134 and compiled 5132 -> 5144 preserve every original test and ignore.
+The immutable r1 31-path manifest is
+91af55bf9d6e7c8cc7a6d2b554ccf93b1fc9cb85f0a257382b05975af164ff1a;
+patch 783287d2fa34cff799095953c5b4c5a03798bed4bc5ff1870531fa47e28751bf.
+Root workspace check passed cleanly (57.36 seconds), as did formatting and all
+eleven guard checks. Clippy exited zero (61.842 seconds) but warned on the new
+test's disallowed std::sync::Mutex; the diagnostic and generated summary do not
+represent clean lint. Root deliberately blocked the commit gate.
+
+The first fresh independent Astra result review reproduced the exact frozen diff,
+identity and evidence controls and returned SCOPED BLOCK R3a2-F1 on that test-only
+rule violation, with no production correctness blocker. A separately approved
+precision correction replaces only that helper's Mutex and corresponding lock
+calls, preserving every assertion/identity. Root authorized execution; fresh
+stable affected verification, warning-free gates, replacement byte review and
+the second deep review remain required before local commit. No push.
+
+R3a2-F1 correction passed fresh r5 full runtime 424 and its exact cache regression
+(one, included in runtime). Source 122 -> 134 and compiled 5132 -> 5144 identities
+and zero scoped ignores remain intact. Only the three approved test mutex
+expressions and truthful 04/06 evidence changed from immutable r1; production
+and every assertion remained unchanged. Other focused r4 execution is retained
+and distinguished from fresh r5. All 23 Rust hashes matched compile-start r5.
+
+Corrected immutable r2 has manifest SHA256
+be3bc21450701cd607d8ecda364b1651af57238f580ce4deb491e6d6b0b49554 and patch
+7a0fa349d2f740ff3f5dcd74b2e64ff73fec7663a58eb4b19983d4d327627468.
+The first fresh Astra reviewer renewed SCOPED PASS, resolving F1. A second
+independent deep Astra result round reviewed the whole actual diff and consumers,
+reproduced baseline/current/frozen hashes, source/compiled identities and raw
+verification, and also returned SCOPED PASS with no blocking finding. Both
+confirmed owning projection, policy/preflight priority, positional holes,
+selected-backend scope, captured hits/misses and no new Grant authority.
+
+Fresh coordinator r5 workspace check and Clippy passed in 33.13 and 25.579
+seconds. Root and both reviewers inspected raw logs: zero warning/error
+diagnostics. Formatting and all eleven guards passed; all 31 reviewed technical
+hashes remained unchanged. The graded MUST scan confirms canonical validation
+and dispatch reuse, no new secret/schema/transport field, request key formatting,
+lock/snapshot/store, hot tracing, body log, queue/handler IO or alias/Grant policy.
+The exact commit gate stages only these 31 reviewed paths plus this ledger after
+final metadata checks. Unrelated review-results and the original issue remain
+untouched. R3b/R3c, R4-R8 and final migration/admission/conformance/closure remain
+open; no push is authorized.

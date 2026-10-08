@@ -8,11 +8,13 @@ use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::plugins::runtime::gateway_api_filters::extension_ref::extension_ref_key;
 use arc_swap::ArcSwap;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::{AiBackendSelection, EdgionPlugin, RequestFilterEntry};
-use edgion_resources::resources::http_route::{HTTPBackendRefKind, HTTPRoute, HTTPRouteFilterType};
-use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
+use edgion_resources::resources::http_route::{HTTPBackendRefKind, HTTPRoute};
+use edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs;
+
 use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -508,7 +510,10 @@ impl RouteAdaptiveFacts {
     fn from_route(route: &HTTPRoute) -> Self {
         let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         let mut facts = Self::default();
-        for rule in route.effective_rules().into_iter().flatten() {
+        let Ok(references) = HttpRouteExtensionRefs::from_route(route) else {
+            return facts;
+        };
+        for (rule_index, rule) in route.effective_rules().into_iter().flatten().enumerate() {
             let (Some(route_uid), Some(rule_identity)) = (
                 rule.resolved_terminal_route_uid.as_ref(),
                 rule.resolved_terminal_rule_identity.as_ref(),
@@ -519,17 +524,9 @@ impl RouteAdaptiveFacts {
                 .filters
                 .iter()
                 .flatten()
-                .filter_map(|filter| {
-                    if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
-                        return None;
-                    }
-                    let reference = filter.extension_ref.as_ref()?;
-                    if !is_supported_edgion_plugins_ref(reference) {
-                        return None;
-                    }
-                    let namespace = reference.resolved_namespace.as_deref().unwrap_or(route_namespace);
-                    Some(format!("{namespace}/{}", reference.name))
-                })
+                .enumerate()
+                .filter_map(|(filter, _)| references.effective_at(rule_index, None, filter))
+                .filter_map(extension_ref_key)
                 .collect();
             let targets: Vec<_> = rule
                 .backend_refs

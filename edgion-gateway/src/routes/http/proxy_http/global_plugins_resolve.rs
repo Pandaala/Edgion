@@ -33,16 +33,17 @@ pub(crate) fn resolve_global_plugins(scope: &PluginScope) -> Vec<Arc<PluginRunti
 ///
 /// Takes the captured `&PluginScope` so all references share the same policy within a
 /// request and share it across multiple resolve calls.
-pub(crate) fn resolve_route_ext_refs(
-    store: &PluginScope,
-    keys: &[(String, String)],
+pub(crate) fn resolve_route_ext_refs(store: &PluginScope, keys: &[Option<String>]) -> Vec<Option<Arc<PluginRuntime>>> {
+    resolve_route_ext_refs_with(keys, |key| {
+        store.http(key).map(|compiled| Arc::clone(&compiled.plugin_runtime))
+    })
+}
+
+fn resolve_route_ext_refs_with(
+    keys: &[Option<String>],
+    mut lookup: impl FnMut(&str) -> Option<Arc<PluginRuntime>>,
 ) -> Vec<Option<Arc<PluginRuntime>>> {
-    let mut out = Vec::with_capacity(keys.len());
-    for (ns, name) in keys {
-        let key = format!("{}/{}", ns, name);
-        out.push(store.http(&key).map(|compiled| Arc::clone(&compiled.plugin_runtime)));
-    }
-    out
+    keys.iter().map(|key| key.as_deref().and_then(&mut lookup)).collect()
 }
 
 /// Resolve already-formed "namespace/name" store keys (from a Gateway's

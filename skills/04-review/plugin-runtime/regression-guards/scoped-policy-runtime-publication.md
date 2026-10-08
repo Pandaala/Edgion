@@ -61,6 +61,22 @@ Controller-resolved backend facts. Block precedes the AI gate. Bypassed AiProxy
 cannot turn an AI target into ordinary upstream forwarding or drop the matched
 rule into a fallback route. A mismatched route generation fails closed.
 
+Route plugin demand, AI admission and adaptive facts project cold keys from
+canonical loans of actual effective HTTP/GRPC fields. Invalid owner, discriminator,
+target/name or effective namespace cannot borrow a same-name plugin. Valid
+sibling descriptors retain their demand; valid missing keys retain repair behavior.
+Optional cold rule keys preserve ordinals for captured-scope resolution, CORS/WAF
+selection and log declarations. Selected backend lookups use the same captured
+scope and retain both hits and misses through stages and retries.
+
+An invalid rule ExtensionRef retains its original four-stage position and fixed
+error attribution. Preflight dispatches its existing request-filter Arc through
+the canonical runner before ordinary/CORS filters; existing leading policy and
+configuration gates keep precedence. Backend restrictions remain selected-only.
+No reference creates a second policy snapshot, Grant authority or hot-path key
+formatting. Lifecycle verification below must distinguish in-process publication
+changes from live source/admission testing.
+
 ## Verification and limits
 
 Migration checkpoint evidence on 2026-09-11:

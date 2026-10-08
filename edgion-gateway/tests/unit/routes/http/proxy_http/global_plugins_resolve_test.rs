@@ -151,9 +151,9 @@ fn resolve_route_ext_refs_preserves_position_with_none_for_dangling() {
     install_plugins(&store, vec![("ns1", "p1")]);
     let p1 = store.get_plugin_runtime("ns1/p1").expect("p1 is installed");
     let keys = vec![
-        ("ns1".to_string(), "p1".to_string()),
-        ("ns1".to_string(), "missing".to_string()),
-        ("ns1".to_string(), "p1".to_string()), // duplicate ok
+        Some("ns1/p1".to_string()),
+        Some("ns1/missing".to_string()),
+        Some("ns1/p1".to_string()), // duplicate ok
     ];
     let resolved = resolve_route_ext_refs(&store.scope(), &keys);
     assert_eq!(resolved.len(), 3);
@@ -167,4 +167,26 @@ fn resolve_route_ext_refs_empty_keys_yields_empty_vec() {
     let store = PluginStore::new();
     let resolved = resolve_route_ext_refs(&store.scope(), &[]);
     assert!(resolved.is_empty());
+}
+
+#[test]
+fn invalid_slots_make_zero_queries_and_preserve_valid_missing_and_duplicate_positions() {
+    let target = Arc::new(PluginRuntime::new());
+    let keys = vec![
+        None,
+        Some("default/missing".into()),
+        Some("default/hit".into()),
+        None,
+        Some("default/hit".into()),
+    ];
+    let mut reads = Vec::new();
+    let resolved = resolve_route_ext_refs_with(&keys, |key| {
+        reads.push(key.to_owned());
+        (key == "default/hit").then(|| Arc::clone(&target))
+    });
+    assert_eq!(reads, ["default/missing", "default/hit", "default/hit"]);
+    assert_eq!(resolved.len(), 5);
+    assert!(resolved[0].is_none() && resolved[1].is_none() && resolved[3].is_none());
+    assert!(Arc::ptr_eq(resolved[2].as_ref().unwrap(), &target));
+    assert!(Arc::ptr_eq(resolved[4].as_ref().unwrap(), &target));
 }

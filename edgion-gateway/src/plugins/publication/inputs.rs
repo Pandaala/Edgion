@@ -4,13 +4,14 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::plugins::runtime::gateway_api_filters::extension_ref::extension_ref_key;
 use edgion_resources::constants::annotations::edgion as annotations;
 use edgion_resources::listener_key::resolve_listener_addr;
 use edgion_resources::resources::common::ParentReference;
 use edgion_resources::resources::gateway::AllowedRoutes;
-use edgion_resources::resources::grpc_route::GRPCRouteFilterType;
-use edgion_resources::resources::http_route::{HTTPRouteFilterType, LocalObjectReference, RouteParentStatus};
-use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
+use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::resources::refs::route_fields::{GrpcRouteExtensionRefs, HttpRouteExtensionRefs};
+
 use edgion_resources::{GRPCRoute, Gateway, HTTPRoute, HTTPRouteRule, ListenerKey, TCPRoute, TLSRoute, UDPRoute};
 use kube::api::ObjectMeta;
 
@@ -150,17 +151,14 @@ impl RouteInput {
             route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
-        for (_, rule) in effective_http_rules(&route) {
-            for filter in rule.filters.iter().flatten().chain(
-                rule.backend_refs
-                    .iter()
-                    .flatten()
-                    .flat_map(|backend| backend.filters.iter().flatten()),
-            ) {
-                if filter.filter_type == HTTPRouteFilterType::ExtensionRef {
-                    add_extension_ref(&mut input.http_keys, filter.extension_ref.as_ref(), &input.namespace);
-                }
-            }
+        if let Ok(references) = HttpRouteExtensionRefs::from_route(&route) {
+            let rules: HashSet<_> = effective_http_rules(&route).map(|(index, _)| index).collect();
+            input.http_keys.extend(
+                references
+                    .effective()
+                    .filter(|field| rules.contains(&field.slot().rule()))
+                    .filter_map(extension_ref_key),
+            );
         }
         input.http_route = Some(route);
         input
@@ -184,25 +182,13 @@ impl RouteInput {
         } else {
             route.spec.invalid_rule_indices.as_ref()
         };
-        for (index, rule) in route
-            .effective_rules()
-            .iter()
-            .flat_map(|rules| rules.iter())
-            .enumerate()
-        {
-            if invalid.is_some_and(|indices| indices.contains(&index)) {
-                continue;
-            }
-            for filter in rule.filters.iter().flatten().chain(
-                rule.backend_refs
-                    .iter()
-                    .flatten()
-                    .flat_map(|backend| backend.filters.iter().flatten()),
-            ) {
-                if filter.filter_type == GRPCRouteFilterType::ExtensionRef {
-                    add_extension_ref(&mut input.http_keys, filter.extension_ref.as_ref(), &input.namespace);
-                }
-            }
+        if let Ok(references) = GrpcRouteExtensionRefs::from_route(route) {
+            input.http_keys.extend(
+                references
+                    .effective()
+                    .filter(|field| !invalid.is_some_and(|indices| indices.contains(&field.slot().rule())))
+                    .filter_map(extension_ref_key),
+            );
         }
         input
     }
@@ -304,18 +290,6 @@ pub(crate) fn effective_http_rules(route: &HTTPRoute) -> impl Iterator<Item = (u
         .filter(move |(index, rule)| {
             !invalid.is_some_and(|indices| indices.contains(index)) && rule.unsupported_cors_reason().is_none()
         })
-}
-
-fn add_extension_ref(keys: &mut HashSet<String>, reference: Option<&LocalObjectReference>, namespace: &str) {
-    if let Some(reference) = reference {
-        if is_supported_edgion_plugins_ref(reference) {
-            keys.insert(format!(
-                "{}/{}",
-                reference.resolved_namespace.as_deref().unwrap_or(namespace),
-                reference.name
-            ));
-        }
-    }
 }
 
 #[cfg(test)]
