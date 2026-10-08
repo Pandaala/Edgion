@@ -73,8 +73,12 @@ or historical conformance. Record commit hashes only after successful commits.
   warning-free gates, then committed locally as
   75a5363f52275a7e48252308f1f351c4a51504a7. Its test-only Mutex finding is
   resolved. Post-commit tracked files and index were clean; no push occurred.
-  R3b mirror plan passed independent review; baseline is frozen and execution
-  is authorized. Descriptor migration remains open.
+  R3b mirror migration passed both independent Astra result rounds and all
+  warning-free root gates, then committed locally as
+  16e7be6dce9d9d7ffc9dd70fa6889a557043aace. No push occurred. R3c descriptor
+  migration has completed corrected implementation, two independent actual
+  Astra review passes and clean renewed root gates; local commit is next.
+  R4-R8 and F1/F2 remain pending.
 - The first checkpoint audit and workspace commit gates passed. The user
   committed the accumulated code snapshot
   as 0f40e2708496e9aacafb0dc2fbd2cdd786ffa9e8 (`tmp commit`) while verification
@@ -83,7 +87,7 @@ or historical conformance. Record commit hashes only after successful commits.
   documentation and execution records. No push occurred. The user's commit
   remains unchanged.
 - The earlier external baseline was 4dbcc5495; current HEAD is the completed
-  R3a2 commit 75a5363f5. Revalidate each batch against its current HEAD.
+  R3b commit 16e7be6dc. Revalidate each batch against its current HEAD.
   The independently owned, untracked `review-results/` artifacts remain outside
   this task's mutation and staging scope.
 
@@ -1099,3 +1103,109 @@ handler IO, runtime key formatting/lock/snapshot/metric or hot tracing, and
 preserved body/transport/failure contracts. Exact staging is limited to these
 33 reviewed technical paths plus this coordinator ledger. The original issue,
 unrelated review-results, R3c-R8, F1/F2 and live conformance remain open. No push.
+
+R3b committed locally as 16e7be6dce9d9d7ffc9dd70fa6889a557043aace
+(Bind RequestMirror references to owning resources), parent 75a5363f5. Root
+staged exactly 33 reviewed technical paths plus this ledger; every committed
+technical hash matches corrected r2. Post-commit proof confirms an empty index
+and clean tracked worktree with only unrelated review-results. Stage/commit
+proofs remain under r3b-verification-20261008-r1. No push was performed.
+
+Root has started R3c plan-only IMPL at this new immutable HEAD. The independent
+descriptor inventory must be revalidated against R3b's owner-aware builder:
+Controller acquisition already binds the actual local ConfigMap selector,
+while Gateway detached construction and weak descriptor-name validation require
+investigation. Preserve compiler/body/transport bounds, original masked ordinals,
+local-only semantics and existing dependencies; prove actual ConfigMap-to-plugin-
+Route/Gateway worker recovery. No R3c mutation or extra scope is authorized before
+the next plan review, frozen baseline and explicit EXECUTE. Generic dependency-
+status reads remain separately tracked in R4. The original issue remains open.
+
+R3c independent Astra plan review returned SCOPED PASS for exactly 15 paths.
+The material-free unsupported-stage contract includes Resources secondary body
+validation, and actual descriptor loans must gate request validation before
+cache lookup or construction. Root froze 235 original test identities and zero
+ignores (the preliminary 233 scan missed two parameterized Tokio tests).
+All three compiled baseline list-only commands exited zero: Resources 1929,
+Controller 1749, Gateway 5148. No test bodies ran; all 15 source hashes remained
+unchanged. Plan/review and baseline artifacts are under r3c-plan-20261008 and
+r3c-baseline-20261008. Root now authorizes the sole implementer to EXECUTE the
+reviewed scope. R4 identity/status boundaries remain open; no live conformance
+or whole-task completion is claimed. Root retains both actual-result review
+rounds, workspace gates, exact staging and local commit. No push.
+
+R3c implementation is frozen across the approved 15 technical paths. First actual
+independent Astra review returned SCOPED PASS, verifying ownership-before-material,
+cache gates, same-entry construction, unsupported-stage material-free ordering,
+real worker recovery, exact source/test/log/binary hashes and documentation limits.
+Resources resource/transcoding tests passed 1602/13; doctests 27/10 existing ignores;
+Controller processor 929; Gateway plugins 2260/17 existing ignores. Source test
+identities 235 -> 245 preserve every original assertion (seven original files are
+verbatim prefixes). Full compiled IDs 1929 -> 1931, 1749 -> 1751, 5148 -> 5154
+remove none. The r2 new-fixture failClose spelling failure was corrected to the
+existing fail-close enum without changing assertions; the raw failed log remains.
+Final retained-source evidence is explicit in identity-comparison-r4.json.
+
+All 14 root gates passed with unchanged technical hashes; workspace check took
+47.479 seconds and Clippy 80.239 seconds, both zero warnings/errors. Root reproduced
+all raw log hashes and gate outcomes. Frozen r1 manifest SHA256:
+40883af8a0dfd6f48239967f275ef248a4e464b1d711fb2d4787b91bcf2f2888;
+patch ac474c8bdb7085a0f55a56f75c459e5868a456b2fc09893f583d5432f4917720.
+Only a final evidence update to the four approved documents is now authorized,
+followed by a new immutable freeze and second actual deep review. No Rust changes,
+second-round acceptance, commit or conformance completion is claimed yet. R4
+raw-None lookup/status boundaries and remaining batches stay open. No push.
+
+Second R3c actual review BLOCKED on R3c-F1: although owner validation gates
+compilation/cache, add_request_entries still clones resolved descriptor bytes
+via entries.to_vec before rejecting invalid ownership; compile_plugins_with_cache
+also clones the entire EP earlier. The no-material-consumption contract includes
+copying bytes, so neither pre-existing behavior nor softer documentation closes
+this defect. All other reviewed source/evidence checks passed. Exact r2 remains
+frozen and uncommitted; the implementer is investigating a correction PLAN ONLY,
+including upstream generation/policy clone paths. Any added path needs an exact
+reviewed scope amendment and pre-edit baseline. Preserve rate-limit aliases,
+ordinals, masks, diagnostics and valid siblings. First scoped PASS and clean gates
+remain historical evidence; final acceptance is blocked until corrected and reviewed.
+
+R3c-F1 exact19-path correction plan passed independent Astra review. The four
+supporting originals are frozen at HEAD, including18 original publication tests
+and zero ignores (total253 original scoped tests). One actual-owner cold-copy
+helper will gate publisher/generation/compiled configuration payload copies;
+borrowed canonical rate-alias validation replaces runtime whole-entry cloning.
+Raw input retention/equality serialization remains input bookkeeping; masked-view
+zero-copy does not describe the earlier eligible source generation. No Grant,
+schema, queue, transport or hot-path change is approved. Root now authorizes
+EXECUTE within the amended19 paths; actual acceptance remains blocked pending
+corrected verification and renewed deep reviews. No staging, commit or push.
+
+R3c-F1 corrected19-path implementation is frozen as r3c-final-20261008-r3,
+manifest13f024a2c95cbd5520ba5c6418690963eb46bdeaaee2cdcadb34dc913c11a38b,
+patch9730d9d55fb969b7d855b923236a0a312e290e6e0c96044620aa1fc10042a26c.
+Fresh corrected tests passed Resources1602 plus transcoding13, doctests27/10
+existing ignores, Controller929 and Gateway2264/17 existing ignores. Source IDs
+253 -> 267 preserve all eight original test files verbatim and prior R3c additions;
+compiled IDs1929 -> 1931,1749 -> 1751,5148 -> 5158 have no removals. Raw failures
+and superseded review evidence remain available, not current acceptance.
+
+All14 renewed root r2 gates passed against unchanged19 technical hashes; check
+42.548 seconds and Clippy65.042 seconds with zero warnings/errors. Root reproduced
+all raw log hashes and the before/after/current/frozen manifests. A newly spawned
+confirmed gpt-6-astra reviewer, r3c_f1_fresh_result_astra, independently reviews the
+whole corrected result without participation in either plan review. Its final
+verdict and a second independent actual-result round remain pending; no commit yet.
+
+Both renewed independent actual R3c reviews return SCOPED PASS on the same frozen
+r3 candidate. Fresh reviewer r3c_f1_fresh_result_astra did not participate in plan
+review; second reviewer r3a1_fresh_astra independently confirms its R3c-F1 finding
+resolved through the complete construction chain. No scoped blocker remains.
+Both checked exact19 source hashes, baseline patch, original assertions, raw test
+and binary hashes, all14 renewed gate results and precise documented boundaries.
+
+Root graded MUST scan: canonical identity/borrowed rate dependency reuse, actual
+owner-before-payload construction, valid siblings/ordinals and policy preservation;
+no new schema/serialized field, Grant authority, queue/handler IO, hot tracing,
+metrics/locks/snapshots, body/transport mechanism or sensitive logging. English
+content and mirrored unit layout pass. Stage only the19 reviewed technical paths
+plus this coordinator ledger; unrelated review-results is excluded. Original issue,
+R4-R8 and F1/F2 remain open. Commit is authorized locally; never push.

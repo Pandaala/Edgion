@@ -2186,3 +2186,79 @@ executed. `gateway-plugins-r5.json`, `final-r5-source.json` and
 review and a second independent deep result review remain pending. The initial
 root warning logs, tracing failure and all preceding verification failures remain
 part of the evidence history.
+
+## R3c descriptor implementation evidence (2026-10-08)
+
+Base: local R3b commit `16e7be6dce9d9d7ffc9dd70fa6889a557043aace`.
+The approved scope contains 15 existing paths: four production, seven mirrored
+unit-test files and four owning documents. Root froze 235 attributed source tests
+with zero ignores and full compiled lists (Resources 1929, Controller 1749,
+Gateway 5148); baseline listing executed no test bodies.
+
+Shared Kubernetes name validation now protects descriptor material access. Gateway
+uses the actual owner/entry loan before validation, cache reuse and construction;
+inline construction remains object-independent. Unsupported ConfigMap response
+stages use material-free limits/name/key checks before alias/dye/wrong-stage checks,
+including Resources secondary body validation. This explicit precedence change
+preserves inline errors and all body/transport bounds.
+
+Stable evidence under `tmp/resource-reference-contract/r3c-verification-20261008-r1`:
+Resources r2 passed 1602 resource tests and 13 transcoding tests; unchanged Resources
+r1 doctests passed 27 with 10 ignored. Controller r4 passed 929 processor tests.
+Gateway r3 passed 2260 plugin tests with 17 ignored. Retained evidence is limited
+to unchanged owning/dependency Rust inputs; source snapshots and final execution
+records identify each run and binary hash. The r2 Gateway failure (2259 passed,
+one new fixture using failClose instead of the actual fail-close wire spelling)
+is preserved. The correction changed no production behavior or assertion.
+
+Full compiled identities are Resources 1929→1931, Controller 1749→1751,
+Gateway 5148→5154, with no removals. Scoped source identities are 235→245,
+zero ignores unchanged. Every original test file remains a verbatim prefix of
+its current file, preserving all old assertions. Direct binary listings executed
+no test bodies; `identity-comparison-r4.json` records comparisons and ignored IDs.
+
+Actual worker tests cover ConfigMap events, exact raw EP lookup, current UID and
+generation, changed material/Accepted status, deletion/recreation, selector
+replacement and disabled/dropped dependency cleanup, then Route/Gateway processing.
+Namespaced effective ExtensionRef targets match current raw EP UID and exact repair
+edges. Route conditions stay independent of EP Accepted; Gateway tests separately
+prove fail-closed material validation, cache gates, masked ordinals and old Arc
+retention. Raw-None EP recovery/notification is covered; broader semantic-target
+versus raw-key lookup and generic dependency-string status reads remain R4.
+No live conf_sync, admission or whole-task conformance claim follows.
+
+Historical initial-candidate evidence: the first Astra result review returned
+SCOPED PASS and all 14 workspace gates passed (check 47.479 seconds, Clippy 80.239
+seconds, zero warnings/errors, unchanged hashes). The second review subsequently
+returned R3c-F1 BLOCK for eager descriptor material copies; the initial PASS is
+superseded. Corrected-candidate acceptance, renewed reviews and commit status are
+recorded by the coordinator in [progress07](07-progress.md). Earlier R3b
+pending-review prose above is historical; its completion is recorded by the base
+commit and progress07.
+
+### R3c-F1 amended 19-path correction
+
+Independent amendment review approved four additional existing paths: Gateway
+plugin_store, plugin_generation, publication/publisher and its existing publication
+unit-test file. The supporting baseline contains 18 old tests, bringing the total
+original scope to 253 IDs with zero ignores. One actual-owner cold-copy helper now
+gates publication/generation/direct-compile descriptor payload copies; the runtime
+alias dependency pass uses the canonical borrowed projection instead of cloning
+entries. All other fields, source ordinals, masks, siblings and diagnostics remain.
+Raw input retention/equality serialization is explicitly outside executable
+construction. Masked-view no-copy applies to that view, not to an earlier eligible
+source generation. The R4 identity/status and live-evidence limits above remain.
+
+Fresh F1 r1 verification passed: Resources 1602 resource tests plus 13 transcoding
+tests; Resources doctests 27 passed/10 ignored; Controller 929; Gateway 2264 passed/
+17 ignored. Deterministic callback tests observe the actual descriptor-byte copy,
+with zero rejected/undemanded copies and exact positive controls; publication,
+policy/cache and old-Arc tests pass. Source IDs are 253→267 with zero removals;
+all eight original test files remain verbatim prefixes and initial R3c additions
+remain. Full compiled IDs: Resources 1929→1931, Controller 1749→1751,
+Gateway 5148→5158, no removals. All 15 Rust hashes stayed frozen during this run.
+Raw commands/exits, binary/source/log hashes and comparisons are under
+`tmp/resource-reference-contract/r3c-f1-verification-20261008-r1`; previous failures
+and superseded results remain in their original evidence directories. Scoped format,
+diff and owning-document checks accompany handoff. Renewed workspace gates and two
+actual-result reviews are required; progress07 owns their final state.

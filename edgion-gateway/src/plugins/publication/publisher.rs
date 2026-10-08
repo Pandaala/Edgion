@@ -272,8 +272,7 @@ impl Inputs {
             }
         }
         let id = self.id();
-        self.http_generations
-            .insert(id, PluginGeneration::new((*source).clone()));
+        self.http_generations.insert(id, PluginGeneration::from_source(&source));
         self.http_latest.insert(key.clone(), id);
         self.http_sources.insert(key, source);
     }

@@ -743,3 +743,46 @@ comparison, with no removed original test or changed ignore. The exact cold-help
 tracing registration amendment passed its guard and 18 unchanged Python tests.
 Corrected workspace gates and both independent actual-result approvals are still
 required; no final acceptance is inferred from these corrections.
+
+## R3c handoff (2026-10-08)
+
+R3b completed at local commit `16e7be6dce9d9d7ffc9dd70fa6889a557043aace`;
+earlier pending wording records its historical handoff. R3c implements the approved
+15-path descriptor boundary: canonical name checks, actual request-entry loans
+before material validation/cache/construction, and shared material-free unsupported
+ConfigMap stage validation. Inline diagnostics and body/transport contracts remain.
+
+Verification: Resources r2 1602 resource tests plus 13 transcoding tests; unchanged
+Resources r1 doctests 27 passed/10 ignored; Controller r4 929 passed; Gateway r3
+2260 passed/17 ignored. Raw r2's new dye fixture spelling failure is retained.
+Final evidence, per-run source/binary hashes and identity controls are under
+`tmp/resource-reference-contract/r3c-verification-20261008-r1`. All 235 old scoped
+IDs/assertions remain, with 10 additions and no changed ignores. Compiled lists:
+Resources 1929→1931, Controller 1749→1751, Gateway 5148→5154, no removals.
+
+Worker coverage uses actual queues/raw stores/process_work_item through ConfigMap,
+EP, Route and Gateway. Namespaced target/current UID and dependency/status assertions
+are explicit; EP Accepted does not control Route Accepted. Raw-None EP recovery
+and notification do not close R4 semantic-target/raw-key lookup or generic status
+reads. Gateway cache/decoy/policy-generation tests are in-process evidence only.
+The initial candidate's first Astra PASS and 14 clean gates (check 47.479 seconds,
+Clippy 80.239 seconds) are historical: the second review returned R3c-F1 BLOCK for
+upstream eager descriptor copies. That initial PASS is superseded. Corrected-candidate
+acceptance, renewed reviews and commit status are recorded in coordinator-owned
+[progress07](07-progress.md). No push or whole-contract/conformance acceptance is claimed.
+
+R3c-F1 correction: the independently approved scope is now 19 existing paths,
+including four supporting originals and 253 baseline test IDs. A shared actual-owner
+cold-copy helper covers publication, generation policy views and direct compilation;
+rate-dependency alias checks borrow entries. Raw input retention/equality remains
+opaque bookkeeping, and masked-view copy avoidance does not describe earlier
+eligible source copies. All fields/ordinals and R4/live limitations are preserved.
+
+Fresh F1 r1 passed Resources 1602+13 tests, doctests 27/10 ignored, Controller 929,
+and Gateway 2264/17 ignored. Deterministic copy-callback, field-preservation and
+publication/cache/mask/recreation/old-Arc controls passed. Source IDs 253→267 and
+compiled IDs Resources 1929→1931, Controller 1749→1751, Gateway 5148→5158 show
+no removals; all original assertions and previous R3c tests remain. Evidence is in
+`tmp/resource-reference-contract/r3c-f1-verification-20261008-r1`. Renewed workspace
+gates and two actual-result reviews are required before coordinator acceptance;
+the earlier first PASS does not accept the correction.

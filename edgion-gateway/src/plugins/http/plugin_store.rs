@@ -104,6 +104,144 @@ impl CompiledPlugins {
     }
 }
 
+/// Copy an executable source/view, never copying ConfigMap descriptor bytes until
+/// the actual owner and indexed entry authorize material consumption. Demand is
+/// applied before policy-view copying; raw input inventory/equality is separate.
+pub(crate) fn clone_for_compilation(
+    owner: &EdgionPlugins,
+    request_descriptor_demand: impl Fn(usize) -> bool,
+) -> EdgionPlugins {
+    clone_for_compilation_with(owner, request_descriptor_demand, <[u8]>::to_vec)
+}
+
+fn clone_for_compilation_with(
+    owner: &EdgionPlugins,
+    request_descriptor_demand: impl Fn(usize) -> bool,
+    mut copy_descriptor: impl FnMut(&[u8]) -> Vec<u8>,
+) -> EdgionPlugins {
+    use edgion_resources::grpc_transcoding::{GrpcDescriptorSource, GrpcJsonTranscoderConfig};
+    use edgion_resources::resources::edgion_plugins::{
+        EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
+        UpstreamResponseFilterEntry,
+    };
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+
+    let prepared = PreparedPluginReferences::from_plugins(owner);
+    let bindings = prepared.bind(owner).ok();
+    let bound: Vec<_> = bindings
+        .as_ref()
+        .into_iter()
+        .flat_map(|bindings| bindings.request_entries())
+        .collect();
+    let mut clone_plugin = |plugin: &EdgionPlugin, permitted: bool| {
+        match plugin {
+            EdgionPlugin::GrpcJsonTranscoder(config)
+                if matches!(config.descriptor, GrpcDescriptorSource::ConfigMapRef { .. }) =>
+            {
+                // Spell out every field: deriving/cloning an enclosing entry first
+                // would copy the material before the owning loan has been checked.
+                EdgionPlugin::GrpcJsonTranscoder(GrpcJsonTranscoderConfig {
+                    descriptor: config.descriptor.clone(),
+                    services: config.services.clone(),
+                    auto_mapping: config.auto_mapping,
+                    ignore_unknown_query_parameters: config.ignore_unknown_query_parameters,
+                    stream_format: config.stream_format,
+                    max_request_message_size: config.max_request_message_size.clone(),
+                    max_response_message_size: config.max_response_message_size.clone(),
+                    max_response_json_size: config.max_response_json_size.clone(),
+                    max_message_depth: config.max_message_depth,
+                    max_message_nodes: config.max_message_nodes,
+                    resolved_descriptor: if permitted {
+                        config.resolved_descriptor.as_deref().map(&mut copy_descriptor)
+                    } else {
+                        None
+                    },
+                    descriptor_error: config.descriptor_error.clone(),
+                })
+            }
+            _ => plugin.clone(),
+        }
+    };
+    let request_plugins = owner.spec.request_plugins.as_ref().map(|entries| {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let permitted = matches!(&entry.plugin, EdgionPlugin::GrpcJsonTranscoder(_))
+                    && entry.is_enabled()
+                    && request_descriptor_demand(index)
+                    && bound.get(index).is_some_and(|entry| {
+                        super::grpc_json_transcoder::GrpcJsonTranscoder::bound_config(entry).is_ok()
+                    });
+                RequestFilterEntry {
+                    enable: entry.enable,
+                    conditions: entry.conditions.clone(),
+                    alias: entry.alias.clone(),
+                    body: entry.body.clone(),
+                    dye: entry.dye.clone(),
+                    plugin: clone_plugin(&entry.plugin, permitted),
+                }
+            })
+            .collect()
+    });
+    let upstream_response_filter_plugins = owner.spec.upstream_response_filter_plugins.as_ref().map(|entries| {
+        entries
+            .iter()
+            .map(|entry| UpstreamResponseFilterEntry {
+                enable: entry.enable,
+                conditions: entry.conditions.clone(),
+                alias: entry.alias.clone(),
+                dye: entry.dye.clone(),
+                plugin: clone_plugin(&entry.plugin, false),
+            })
+            .collect()
+    });
+    let upstream_response_body_filter_plugins =
+        owner
+            .spec
+            .upstream_response_body_filter_plugins
+            .as_ref()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| UpstreamResponseBodyFilterEntry {
+                        enable: entry.enable,
+                        conditions: entry.conditions.clone(),
+                        alias: entry.alias.clone(),
+                        dye: entry.dye.clone(),
+                        plugin: clone_plugin(&entry.plugin, false),
+                    })
+                    .collect()
+            });
+    let upstream_response_plugins = owner.spec.upstream_response_plugins.as_ref().map(|entries| {
+        entries
+            .iter()
+            .map(|entry| UpstreamResponseEntry {
+                enable: entry.enable,
+                conditions: entry.conditions.clone(),
+                alias: entry.alias.clone(),
+                body: entry.body.clone(),
+                dye: entry.dye.clone(),
+                plugin: clone_plugin(&entry.plugin, false),
+            })
+            .collect()
+    });
+    EdgionPlugins {
+        metadata: owner.metadata.clone(),
+        status: owner.status.clone(),
+        spec: EdgionPluginsSpec {
+            current_status: owner.spec.current_status.clone(),
+            waf: owner.spec.waf.clone(),
+            request_plugins,
+            upstream_response_filter_plugins,
+            upstream_response_body_filter_plugins,
+            upstream_response_plugins,
+            access_log_extern: owner.spec.access_log_extern.clone(),
+            unknown_fields: owner.spec.unknown_fields.clone(),
+        },
+    }
+}
+
 /// Build the compiled runtime for an EdgionPlugins resource.
 ///
 /// Mirrors the former `EdgionPlugins::preparse()`: compile regex conditions on
@@ -125,7 +263,7 @@ pub(crate) fn compile_plugins_with_cache(
     policy_actions: &[(&str, edgion_resources::resources::plugin_policy::PluginPolicyAction)],
     mut errors: Vec<String>,
 ) -> Arc<CompiledPlugins> {
-    let mut spec = ep.clone();
+    let mut spec = clone_for_compilation(ep, |_| true);
     let mut runtime = PluginRuntime::new();
     let unsupported_errors = ep.unsupported_plugin_errors();
     if !unsupported_errors.is_empty() {

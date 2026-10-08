@@ -525,3 +525,39 @@ fn descriptor_reserved_option_shapes_cannot_shadow_admitted_wire() {
         .unwrap_err()
         .contains("shadows a reserved field"));
 }
+
+#[test]
+fn configmap_descriptor_rejects_malformed_names_before_valid_material() {
+    for name in ["", "bad/name", "Bad_Name", ".schema", "schema.", "a..b"] {
+        let mut c = config();
+        c.descriptor = GrpcDescriptorSource::ConfigMapRef {
+            name: name.into(),
+            key: "test.pb".into(),
+        };
+        c.resolved_descriptor = Some(DESCRIPTOR.to_vec());
+        assert_eq!(
+            c.validation_error().as_deref(),
+            Some("invalid descriptor ConfigMap reference")
+        );
+        assert_eq!(
+            c.descriptor_bytes().unwrap_err(),
+            "invalid descriptor ConfigMap reference"
+        );
+        assert_eq!(
+            c.compile().err().as_deref(),
+            Some("invalid descriptor ConfigMap reference")
+        );
+    }
+    let mut c = config();
+    c.descriptor = GrpcDescriptorSource::ConfigMapRef {
+        name: "schema.v1".into(),
+        key: "test.pb".into(),
+    };
+    c.resolved_descriptor = Some(DESCRIPTOR.to_vec());
+    assert!(c.compile().is_ok());
+    c.max_message_depth = 0;
+    assert_eq!(
+        c.validation_error().as_deref(),
+        Some("message complexity exceeds depth 32 or nodes 16384")
+    );
+}

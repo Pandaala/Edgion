@@ -465,3 +465,29 @@ fn mirror_plugin_loans_keep_disabled_original_ordinals_and_source_identity() {
     }
     assert!(refs.effective_at(2).is_none());
 }
+
+#[test]
+fn descriptor_generation_and_ordinal_are_bound_without_material_provenance_claim() {
+    let mut owner = descriptor_plugins();
+    owner.metadata.generation = Some(3);
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let bindings = prepared.bind(&owner).unwrap();
+    let entry = bindings.request_entries().next().unwrap();
+    let references = entry.references().unwrap();
+    let descriptor = references.grpc_descriptor().unwrap().unwrap();
+    let frozen = descriptor.reference().freeze().unwrap();
+    let mut replacement = owner.clone();
+    replacement.metadata.generation = Some(4);
+    assert!(!frozen.matches_plugins(&replacement));
+    assert!(prepared.bind(&replacement).is_err());
+    let mut shifted = owner.clone();
+    let mut disabled = shifted.spec.request_plugins.as_ref().unwrap()[0].clone();
+    disabled.enable = false;
+    shifted.spec.request_plugins.as_mut().unwrap().insert(0, disabled);
+    assert!(!frozen.matches_plugins(&shifted));
+    let current = PreparedPluginReferences::from_plugins(&shifted);
+    let bound = current.bind(&shifted).unwrap();
+    let entries: Vec<_> = bound.request_entries().collect();
+    assert!(entries[0].references().unwrap().grpc_descriptor().is_none());
+    assert!(entries[1].references().unwrap().grpc_descriptor().unwrap().is_ok());
+}

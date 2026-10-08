@@ -6,7 +6,7 @@ use std::sync::Arc;
 use edgion_resources::resources::edgion_plugins::{duplicate_alias_error, EdgionPlugins};
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily, PluginPolicyAction};
 
-use super::plugin_store::{compile_plugins_with_cache, CompiledPlugins};
+use super::plugin_store::{clone_for_compilation, compile_plugins_with_cache, CompiledPlugins};
 use crate::plugins::runtime::entry_bundle::{EntryCache, EntryDemand, EntrySlot, EntryStage};
 
 /// Slots never cross this immutable source boundary. Policy edits reuse this
@@ -18,6 +18,10 @@ pub(crate) struct PluginGeneration {
 }
 
 impl PluginGeneration {
+    pub(crate) fn from_source(source: &EdgionPlugins) -> Self {
+        Self::new(clone_for_compilation(source, |_| true))
+    }
+
     pub fn new(mut source: EdgionPlugins) -> Self {
         let mut cache = EntryCache::default();
         cache.prepare_request_outcomes(source.spec.request_plugins.as_deref().unwrap_or_default(), 0);
@@ -143,7 +147,12 @@ impl PluginGeneration {
         extra_actions: &[(&'static str, PluginPolicyAction)],
     ) -> Arc<CompiledPlugins> {
         let needed = self.demand(policy);
-        let mut effective = self.source.clone();
+        let mut effective = clone_for_compilation(&self.source, |index| {
+            needed.contains(&EntrySlot {
+                stage: EntryStage::Request,
+                index,
+            })
+        });
         let mut actions = extra_actions.to_vec();
         actions.extend(self.policy_actions(policy));
         let mut bypassed = HashSet::new();

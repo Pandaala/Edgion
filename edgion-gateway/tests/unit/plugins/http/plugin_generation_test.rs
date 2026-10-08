@@ -529,3 +529,92 @@ fn mirror_generation_policy_masks_keep_owner_ordinals_and_generation_cache() {
     let newer = PluginGeneration::new(source).compile(None);
     assert!(!Arc::ptr_eq(&original, &request_filter(&newer, "RequestMirror")));
 }
+
+#[test]
+fn descriptor_generations_preserve_masked_ordinals_and_old_runtime_lifetimes() {
+    let descriptor = include_bytes!("../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb");
+    let mut source = resource(json!({"requestPlugins":[
+        {"type":"GrpcJsonTranscoder","enable":false,"config":{
+            "descriptor":{"type":"configMapRef","name":"bad/name","key":""},"services":["test.TestService"],"resolvedDescriptor":descriptor.to_vec()}},
+        {"type":"GrpcJsonTranscoder","config":{
+            "descriptor":{"type":"configMapRef","name":"schema","key":"test.pb"},"services":["test.TestService"],"resolvedDescriptor":descriptor.to_vec()}}
+    ]}));
+    source.metadata.uid = Some("first".into());
+    source.metadata.generation = Some(1);
+    let mut generation = PluginGeneration::new(source.clone());
+    let bypass = restriction(&["GrpcJsonTranscoder"], PolicyActionKind::Bypass);
+    let masked = generation.compile(Some(&bypass));
+    assert!(masked.is_activatable);
+    assert_eq!(generation.cached_entry_count(), 0);
+    let active = generation.compile(None);
+    assert!(active.is_activatable, "{:?}", active.preparse_errors);
+    let original = request_filter(&active, "GrpcJsonTranscoder");
+    let keys: Vec<_> = generation.cached_entry_keys().collect();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].index, 1);
+    let again = generation.compile(None);
+    assert!(Arc::ptr_eq(&original, &request_filter(&again, "GrpcJsonTranscoder")));
+    let masked_again = generation.compile(Some(&bypass));
+    assert!(!masked_again
+        .plugin_runtime
+        .request_plugins_iter()
+        .any(|filter| filter.name() == "GrpcJsonTranscoder"));
+    let mut changed = source.clone();
+    changed.metadata.uid = Some("recreated".into());
+    changed.metadata.generation = Some(2);
+    let mut replacement = PluginGeneration::new(changed.clone());
+    let current = replacement.compile(None);
+    assert!(current.is_activatable);
+    assert!(!Arc::ptr_eq(&original, &request_filter(&current, "GrpcJsonTranscoder")));
+    let edgion_resources::resources::edgion_plugins::EdgionPlugin::GrpcJsonTranscoder(config) =
+        &mut changed.spec.request_plugins.as_mut().unwrap()[1].plugin
+    else {
+        panic!()
+    };
+    config.resolved_descriptor = None;
+    let mut missing = PluginGeneration::new(changed.clone());
+    assert!(!missing.compile(None).is_activatable);
+    changed.spec.request_plugins.as_mut().unwrap()[1].enable = false;
+    assert!(PluginGeneration::new(changed).compile(None).is_activatable);
+    drop(generation);
+    drop(replacement);
+    assert_eq!(original.name(), "GrpcJsonTranscoder");
+    assert!(Arc::ptr_eq(&original, &request_filter(&active, "GrpcJsonTranscoder")));
+}
+
+#[test]
+fn descriptor_policy_view_omits_material_before_copy_and_preserves_generation_source() {
+    let descriptor = include_bytes!("../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb");
+    let source = resource(json!({"requestPlugins":[
+        {"type":"RequestHeaderModifier","config":{"set":[{"name":"X-Sibling","value":"kept"}]}},
+        {"type":"GrpcJsonTranscoder","config":{"descriptor":{"type":"configMapRef","name":"schema","key":"test.pb"},"services":["test.TestService"],"resolvedDescriptor":descriptor.to_vec()}}
+    ]}));
+    let mut generation = PluginGeneration::from_source(&source);
+    let active = generation.compile(None);
+    assert!(active.is_activatable);
+    let previous = request_filter(&active, "GrpcJsonTranscoder");
+    let masked = generation.compile(Some(&restriction(&["GrpcJsonTranscoder"], PolicyActionKind::Bypass)));
+    assert!(masked.is_activatable);
+    assert_eq!(masked.spec.spec.request_plugins.as_ref().unwrap().len(), 2);
+    let edgion_resources::EdgionPlugin::GrpcJsonTranscoder(masked_config) =
+        &masked.spec.spec.request_plugins.as_ref().unwrap()[1].plugin
+    else {
+        panic!()
+    };
+    assert!(masked_config.resolved_descriptor.is_none());
+    let edgion_resources::EdgionPlugin::GrpcJsonTranscoder(source_config) =
+        &generation.source().spec.request_plugins.as_ref().unwrap()[1].plugin
+    else {
+        panic!()
+    };
+    assert_eq!(
+        source_config.resolved_descriptor.as_deref(),
+        Some(descriptor.as_slice())
+    );
+    assert!(Arc::ptr_eq(
+        &request_filter(&active, "RequestHeaderModifier"),
+        &request_filter(&masked, "RequestHeaderModifier")
+    ));
+    let resumed = generation.compile(None);
+    assert!(Arc::ptr_eq(&previous, &request_filter(&resumed, "GrpcJsonTranscoder")));
+}

@@ -2,6 +2,8 @@ use super::{budget::Reservation, GrpcTranscodingPlan};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use async_trait::async_trait;
 use bytes::Bytes;
+use edgion_resources::grpc_transcoding::GrpcDescriptorSource;
+use edgion_resources::resources::{edgion_plugins::EdgionPlugin, refs::plugin_fields::BoundPluginEntry};
 use edgion_resources::{
     filters::PluginRunningResult,
     grpc_transcoding::{CompiledGrpcTranscoder, GrpcJsonTranscoderConfig, TranscodingError, MAX_JSON_BYTES},
@@ -12,7 +14,43 @@ pub struct GrpcJsonTranscoder {
     compiled: Arc<CompiledGrpcTranscoder>,
 }
 impl GrpcJsonTranscoder {
-    pub fn create(config: &GrpcJsonTranscoderConfig) -> Option<Box<dyn RequestFilter>> {
+    /// The config and selector always come from the same actual owning entry.
+    pub(crate) fn bound_config<'a>(entry: &'a BoundPluginEntry<'_>) -> Result<&'a GrpcJsonTranscoderConfig, String> {
+        let EdgionPlugin::GrpcJsonTranscoder(config) = entry.config() else {
+            return Err("invalid owning descriptor reference".into());
+        };
+        if !entry.is_enabled() {
+            return Err("invalid owning descriptor reference".into());
+        }
+        if matches!(config.descriptor, GrpcDescriptorSource::ConfigMapRef { .. }) {
+            if let Some(error) =
+                edgion_resources::resources::edgion_plugins::validate::response_stage_plugin_validation_error(
+                    entry.config(),
+                )
+            {
+                return Err(error);
+            }
+            let references = entry.references().map_err(|_| "invalid owning descriptor reference")?;
+            references
+                .grpc_descriptor()
+                .ok_or("invalid owning descriptor reference")?
+                .map_err(|_| "invalid owning descriptor reference")?;
+        }
+        Ok(config)
+    }
+
+    pub(crate) fn create(entry: &BoundPluginEntry<'_>) -> Option<Box<dyn RequestFilter>> {
+        Self::compile(Self::bound_config(entry).ok()?)
+    }
+
+    pub(crate) fn create_inline(config: &GrpcJsonTranscoderConfig) -> Option<Box<dyn RequestFilter>> {
+        if !matches!(config.descriptor, GrpcDescriptorSource::Inline { .. }) {
+            return None;
+        }
+        Self::compile(config)
+    }
+
+    fn compile(config: &GrpcJsonTranscoderConfig) -> Option<Box<dyn RequestFilter>> {
         let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| config.compile()))
             .ok()?
             .ok()?;

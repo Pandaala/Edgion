@@ -107,3 +107,42 @@ targets compile Service/section keys cold and expose no Grant capability; invali
 or denied mirrors cannot consume Session/body/endpoint/writer state. Existing
 cross-namespace mirror LKG exclusions and primary-request best-effort behavior
 remain unchanged.
+
+### Descriptor runtime ownership and recovery
+
+ConfigMap-backed GrpcJsonTranscoder construction borrows the actual owning request
+entry through PreparedPluginReferences. The existing equal-length policy view keeps
+source ordinals; malformed source/name/key is rejected before config compilation,
+entry-cache reuse or material consumption. The same entry supplies config and loan.
+Inline construction remains independent of object references. Shared lexical name
+validation also protects direct descriptor_bytes/compile calls without inventing
+an owner or claiming that resolved bytes carry provenance.
+
+For unsupported response stages, ConfigMap descriptors receive material-free
+limits/name/key validation before existing alias/dye/wrong-stage checks, including
+the schema layer's secondary body pass. Inline compiler diagnostics and runtime
+body/transport boundaries are unchanged. See the
+[descriptor ownership guard](../../04-review/resources/regression-guards/grpc-descriptor-configmap-ownership.md)
+for scoped evidence. The initial result PASS and clean gates were superseded by
+R3c-F1: a second review found eager descriptor copies before validation. The
+corrected candidate requires renewed workspace gates and independent reviews.
+Final acceptance, review and commit status are recorded in
+[progress07](../../../tasks/pending/resource-reference-contract/07-progress.md).
+
+ConfigMap events preserve the EP's raw dependency owner key, including omitted
+namespace, and workers fetch the current raw UID/generation. Namespaced EP events
+continue through Route/Gateway workers. HTTP rule ExtensionRef discovery registers
+without reading plugin material: Route Accepted/ResolvedRefs do not mirror EP
+Accepted. Gateway descriptor compilation owns invalid-material rejection. The
+raw-None semantic-target/raw-key mismatch and generic dependency-string status
+reads remain R4 work; this batch proves raw-None EP recovery/notification only.
+
+The R3c-F1 cold-copy boundary covers publication source construction, generation
+policy views and direct compilation. It binds the actual owner/entry before the
+sole ConfigMap descriptor-byte copy operation, preserves all other fields and
+positions, and omits invalid/inactive/unsupported material. Policy demand suppresses
+copying into masked views; an earlier eligible source generation may already own
+valid bytes. Rate-limit dependency checks borrow original source aliases rather
+than cloning entries. Opaque raw input Arcs and source-equality serialization stay
+input bookkeeping: this is not a claim that invalid bytes are never stored or
+copied anywhere in the process. Inline descriptors remain object-independent.

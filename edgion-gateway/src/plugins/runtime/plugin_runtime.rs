@@ -1,7 +1,7 @@
 //! Plugin runtime - manages plugin execution across different stages
 
 use edgion_resources::resource::meta::ResourceMeta;
-use edgion_resources::resources::refs::plugin_fields::PluginMirrorRefs;
+use edgion_resources::resources::refs::plugin_fields::{PluginMirrorRefs, PreparedPluginReferences};
 use edgion_resources::resources::refs::route_fields::{EffectiveMirrorField, HttpRouteMirrorRefs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -874,18 +874,35 @@ impl PluginRuntime {
         owner: Option<&edgion_resources::EdgionPlugins>,
     ) -> Vec<String> {
         let mut errors = Vec::new();
+        // Bind once to the actual equal-length policy view. Never synthesize an owner
+        // from resource_key; all indexed entries retain their original positions.
+        let prepared = owner.map(PreparedPluginReferences::from_plugins);
+        let bindings = prepared
+            .as_ref()
+            .zip(owner)
+            .and_then(|(prepared, owner)| prepared.bind(owner).ok());
+        let descriptor_entries: Vec<_> = bindings
+            .as_ref()
+            .into_iter()
+            .flat_map(|bindings| bindings.request_entries())
+            .collect();
+        let descriptor_errors: Vec<_> = entries.iter().enumerate().map(|(index, entry)| {
+            if !entry.is_enabled() || !matches!(&entry.plugin, EdgionPlugin::GrpcJsonTranscoder(config)
+                if matches!(config.descriptor, edgion_resources::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef { .. })) {
+                return None;
+            }
+            descriptor_entries.get(index).ok_or_else(|| "invalid owning descriptor reference".to_string())
+                .and_then(GrpcJsonTranscoder::bound_config).err()
+        }).collect();
         // Keep source aliases for dependency semantics even when an invalid or
         // duplicate display identity has been sanitized by the generation.
         let outcome_aliases_owned = cache
             .prepare_request_outcomes(entries, self.rate_limit_local_outcome_slots)
             .clone();
         let source_aliases = cache.request_source_aliases().to_vec();
-        let mut dependency_entries = entries.to_vec();
-        for (entry, alias) in dependency_entries.iter_mut().zip(&source_aliases) {
-            entry.alias = alias.clone();
-        }
-        edgion_resources::resources::edgion_plugins::validate::collect_rate_limit_dependency_errors(
-            &dependency_entries,
+        edgion_resources::resources::edgion_plugins::validate::collect_rate_limit_dependency_errors_with_aliases(
+            entries,
+            |index| source_aliases[index].as_deref(),
             &mut errors,
         );
         if !errors.is_empty() {
@@ -923,9 +940,12 @@ impl PluginRuntime {
         // error-set drift when both parts are invalid.
         let config_validation_errors: Vec<Option<String>> = entries
             .iter()
-            .map(|entry| {
+            .enumerate()
+            .map(|(index, entry)| {
                 if entry.is_enabled() {
-                    Self::plugin_validation_error(&entry.plugin)
+                    descriptor_errors[index]
+                        .clone()
+                        .or_else(|| Self::plugin_validation_error(&entry.plugin))
                 } else {
                     None
                 }
@@ -1005,6 +1025,11 @@ impl PluginRuntime {
                             .as_deref()
                             .unwrap_or("invalid owning mirror reference")
                     ));
+                    continue;
+                }
+                if let Some(error) = &descriptor_errors[index] {
+                    self.invalid_plugins.record_non_retainable("GrpcJsonTranscoder");
+                    errors.push(format!("requestPlugins[{index}] (GrpcJsonTranscoder): {error}"));
                     continue;
                 }
                 if let Some(outcome) = cache.get(slot) {
@@ -1225,6 +1250,11 @@ impl PluginRuntime {
                     }
 
                     let created = match &entry.plugin {
+                        EdgionPlugin::GrpcJsonTranscoder(config) => CreateResult::Ok(
+                            descriptor_entries
+                                .get(index)
+                                .map_or_else(|| GrpcJsonTranscoder::create_inline(config), GrpcJsonTranscoder::create),
+                        ),
                         EdgionPlugin::RequestMirror(config) => CreateResult::Ok(
                             mirror_field
                                 .and_then(|field| RequestMirrorPlugin::new(field, config.tuning.clone()))
@@ -1344,7 +1374,7 @@ impl PluginRuntime {
                     // surface the error, and skip construction so an invalid config
                     // can never run in the request path. `seal_fail_closed` later
                     // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                    if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
+                    if let Some(error) = Self::response_plugin_validation_error(&entry.plugin) {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponseFilterPlugins[{}] ({}): {}",
@@ -1498,7 +1528,7 @@ impl PluginRuntime {
                     // surface the error, and skip construction so an invalid config
                     // can never run in the request path. `seal_fail_closed` later
                     // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                    if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
+                    if let Some(error) = Self::response_plugin_validation_error(&entry.plugin) {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponsePlugins[{}] ({}): {}",
@@ -1678,7 +1708,7 @@ impl PluginRuntime {
                     // surface the error, and skip construction so an invalid config
                     // can never run in the request path. `seal_fail_closed` later
                     // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                    if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
+                    if let Some(error) = Self::response_plugin_validation_error(&entry.plugin) {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
@@ -1803,6 +1833,15 @@ impl PluginRuntime {
     /// gateway-only checks that need resolved runtime state (e.g. the CSRF
     /// resolved-key guard below). DSL VM init remains covered by
     /// `seal_fail_closed` at construction time.
+    fn response_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
+        if matches!(plugin, EdgionPlugin::GrpcJsonTranscoder(_)) {
+            return edgion_resources::resources::edgion_plugins::validate::response_stage_plugin_validation_error(
+                plugin,
+            );
+        }
+        Self::plugin_validation_error(plugin)
+    }
+
     fn plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
         if let Some(e) = plugin.validation_error() {
             return Some(e);
@@ -1910,7 +1949,7 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(Box::new(JweDecrypt::new(config, namespace.to_string()))))
             }
             EdgionPlugin::JsonSchemaValidation(config) => CreateResult::Ok(JsonSchemaValidation::create(config)),
-            EdgionPlugin::GrpcJsonTranscoder(config) => CreateResult::Ok(GrpcJsonTranscoder::create(config)),
+            EdgionPlugin::GrpcJsonTranscoder(config) => CreateResult::Ok(GrpcJsonTranscoder::create_inline(config)),
             EdgionPlugin::FormJsonTransform(config) => {
                 CreateResult::Ok(FormJsonTransform::create(config, body_requirement))
             }

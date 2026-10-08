@@ -969,3 +969,75 @@ async fn owning_extension_lifecycle_pins_old_scope_and_rebuilds_new_requests() {
     assert!(captured_scope.ai_rule(&source, 0));
     assert!(missing_scope.http("apps/plugins").is_none());
 }
+
+#[test]
+fn descriptor_publication_rejects_constructor_material_but_retains_opaque_source_and_old_arcs() {
+    let publisher = publisher();
+    publisher.replace_gateway_configs(HashMap::from([(
+        "policy-a".into(),
+        Arc::new(serde_json::from_value(json!({"metadata":{"name":"policy-a"},"spec":{}})).unwrap()),
+    )]));
+    let listener = ListenerKey::new("0.0.0.0:18080".parse().unwrap(), "HTTP");
+    let route: HTTPRoute = crate::test_current_status::from_value(json!({
+        "metadata":{"name":"descriptor-route","namespace":"apps"},
+        "spec":{"parentRefs":[{"name":"a"}],"resolvedStatusController":"example.net/owner","resolvedListeners":[listener.to_string()],
+            "rules":[{"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins"}}]}]},
+        "status":{"parents":[{"parentRef":{"name":"a"},"controllerName":"example.net/owner","conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"","lastTransitionTime":"2026-10-08T00:00:00Z"}]}]}
+    })).unwrap();
+    publisher.replace_routes(
+        RouteKind::Http,
+        HashMap::from([("apps/descriptor-route".into(), RouteInput::from_http(Arc::new(route)))]),
+    );
+    let bytes = include_bytes!("../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb");
+    let source: EdgionPlugins = serde_json::from_value(json!({"metadata":{"name":"plugins","namespace":"apps","uid":"first","generation":1},"spec":{"requestPlugins":[
+        {"type":"RequestHeaderModifier","config":{"set":[{"name":"X-Sibling","value":"kept"}]}},
+        {"type":"GrpcJsonTranscoder","config":{"descriptor":{"type":"configMapRef","name":"schema","key":"test.pb"},"services":["test.TestService"],"resolvedDescriptor":bytes.to_vec()}}
+    ]}})).unwrap();
+    update_source(&publisher, Arc::new(source.clone()), false);
+    let first = view(&publisher);
+    assert!(first.is_activatable);
+    let old = filter(&first, "GrpcJsonTranscoder");
+    for full in [false, true] {
+        let mut invalid = source.clone();
+        invalid.metadata.uid = Some(format!("invalid-{full}"));
+        let edgion_resources::EdgionPlugin::GrpcJsonTranscoder(config) =
+            &mut invalid.spec.request_plugins.as_mut().unwrap()[1].plugin
+        else {
+            panic!()
+        };
+        config.descriptor = edgion_resources::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef {
+            name: "bad/name".into(),
+            key: "test.pb".into(),
+        };
+        update_source(&publisher, Arc::new(invalid), full);
+        let rejected = view(&publisher);
+        assert!(!rejected.is_activatable);
+        let edgion_resources::EdgionPlugin::GrpcJsonTranscoder(config) =
+            &rejected.spec.spec.request_plugins.as_ref().unwrap()[1].plugin
+        else {
+            panic!()
+        };
+        assert!(config.resolved_descriptor.is_none());
+        let snapshot = publisher.snapshot();
+        let raw = &snapshot.http_sources()["apps/plugins"];
+        let edgion_resources::EdgionPlugin::GrpcJsonTranscoder(config) =
+            &raw.spec.request_plugins.as_ref().unwrap()[1].plugin
+        else {
+            panic!()
+        };
+        assert_eq!(config.resolved_descriptor.as_deref(), Some(bytes.as_slice()));
+        assert!(Arc::ptr_eq(&old, &filter(&first, "GrpcJsonTranscoder")));
+    }
+    let mut recreated = source;
+    recreated.metadata.uid = Some("recreated".into());
+    recreated.metadata.generation = Some(2);
+    publisher.update_http_plugins(
+        HashMap::from([("apps/plugins".into(), Arc::new(recreated))]),
+        HashMap::new(),
+        &HashSet::new(),
+    );
+    let recovered = view(&publisher);
+    assert!(recovered.is_activatable);
+    assert!(!Arc::ptr_eq(&old, &filter(&recovered, "GrpcJsonTranscoder")));
+    assert_eq!(old.name(), "GrpcJsonTranscoder");
+}

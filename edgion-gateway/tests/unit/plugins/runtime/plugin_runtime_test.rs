@@ -1649,3 +1649,156 @@ fn native_mirror_runtime_uses_actual_rule_and_backend_slots() {
         .request_plugins_iter()
         .all(|filter| filter.name() != "RequestMirror"));
 }
+
+#[test]
+fn descriptor_actual_owner_gate_precedes_populated_entry_cache_and_detached_factory() {
+    use edgion_resources::EdgionPlugins;
+    let bytes = include_bytes!("../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb");
+    let owner: EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"descriptor-cache","namespace":"apps","uid":"first","generation":1},
+        "spec":{"requestPlugins":[{"type":"GrpcJsonTranscoder","config":{
+            "descriptor":{"type":"configMapRef","name":"schema","key":"test.pb"},
+            "services":["test.TestService"],"resolvedDescriptor":bytes.to_vec()
+        }}]}
+    }))
+    .unwrap();
+    let mut cache = EntryCache::default();
+    let mut first = PluginRuntime::new();
+    assert!(first.add_from_request_filters_with_cache(&owner, &mut cache).is_empty());
+    let first_filter = first.request_plugins_iter().next().unwrap().clone();
+    for case in ["owner", "namespace", "name", "key"] {
+        let mut invalid = owner.clone();
+        let EdgionPlugin::GrpcJsonTranscoder(config) = &mut invalid.spec.request_plugins.as_mut().unwrap()[0].plugin
+        else {
+            panic!()
+        };
+        let edgion_resources::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef { name, key } =
+            &mut config.descriptor
+        else {
+            panic!()
+        };
+        match case {
+            "owner" => invalid.metadata.name = Some("bad/name".into()),
+            "namespace" => invalid.metadata.namespace = Some("Bad_Namespace".into()),
+            "name" => *name = "bad/name".into(),
+            _ => key.clear(),
+        }
+        let mut runtime = PluginRuntime::new();
+        assert!(
+            !runtime
+                .add_from_request_filters_with_cache(&invalid, &mut cache)
+                .is_empty(),
+            "{case}"
+        );
+        assert_eq!(runtime.request_plugins_iter().count(), 0, "{case}");
+        let prepared = PreparedPluginReferences::from_plugins(&invalid);
+        let bindings = prepared.bind(&invalid).unwrap();
+        let entry = bindings.request_entries().next().unwrap();
+        assert!(GrpcJsonTranscoder::bound_config(&entry).is_err(), "{case}");
+        assert!(GrpcJsonTranscoder::create(&entry).is_none(), "{case}");
+    }
+    let mut resumed = PluginRuntime::new();
+    assert!(resumed
+        .add_from_request_filters_with_cache(&owner, &mut cache)
+        .is_empty());
+    assert!(Arc::ptr_eq(
+        &first_filter,
+        resumed.request_plugins_iter().next().unwrap()
+    ));
+    let mut detached = PluginRuntime::new();
+    assert!(!detached
+        .add_from_request_filters(
+            owner.spec.request_plugins.as_ref().unwrap(),
+            "apps",
+            "apps/descriptor-cache"
+        )
+        .is_empty());
+    assert_eq!(detached.request_plugins_iter().count(), 0);
+}
+
+#[test]
+fn inline_descriptor_factory_and_unsupported_stage_compiler_errors_remain_unchanged() {
+    use base64::Engine;
+    use edgion_resources::grpc_transcoding::{GrpcDescriptorSource, GrpcJsonTranscoderConfig};
+    let bytes = include_bytes!("../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb");
+    let config: GrpcJsonTranscoderConfig = serde_json::from_value(serde_json::json!({
+        "descriptor":{"type":"inline","base64":base64::engine::general_purpose::STANDARD.encode(bytes)},
+        "services":["test.TestService"]
+    }))
+    .unwrap();
+    let entry = RequestFilterEntry::new(EdgionPlugin::GrpcJsonTranscoder(config.clone()));
+    let mut runtime = PluginRuntime::new();
+    assert!(runtime
+        .add_from_request_filters(&[entry], "apps", "apps/inline")
+        .is_empty());
+    assert_eq!(
+        runtime.request_plugins_iter().next().unwrap().name(),
+        "GrpcJsonTranscoder"
+    );
+    let mut invalid = config;
+    invalid.descriptor = GrpcDescriptorSource::Inline {
+        base64: "not base64".into(),
+    };
+    for stage in [
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        let mut wire = serde_json::json!({"metadata":{"name":"inline-owner","namespace":"apps"},"spec":{}});
+        wire["spec"][stage] = serde_json::json!([{"type":"GrpcJsonTranscoder","config":invalid}]);
+        let owner: edgion_resources::EdgionPlugins = serde_json::from_value(wire).unwrap();
+        let expected = owner.validate_plugins();
+        assert_eq!(expected.len(), 1);
+        assert!(expected[0].ends_with("descriptor base64 is invalid"));
+        let compiled = crate::plugins::http::compile_plugins(&owner);
+        assert_eq!(compiled.preparse_errors, expected);
+        assert!(!compiled.is_activatable);
+    }
+}
+
+#[test]
+fn borrowed_rate_dependency_aliases_preserve_original_positions_and_error_precedence() {
+    use edgion_resources::resources::edgion_plugins::validate::collect_rate_limit_dependency_errors_with_aliases;
+    let source: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"alias-source"},"spec":{"requestPlugins":[
+            {"type":"RateLimitLocal","alias":"local","config":{"rate":10,"onLimitExceeded":"Continue"}},
+            {"type":"RateLimitRedis","conditions":{"run":{"allOf":[{"type":"rateLimitExceeded","pluginAlias":"local"}]}},"config":{"redisRef":"apps/cache","key":[],"policies":[{"rate":1,"interval":"1h","algorithm":"TokenBucket"}]}}
+        ]}
+    })).unwrap();
+    let entries = source.spec.request_plugins.unwrap();
+    let prefix = "requestPlugins[1] conditions: rateLimitExceeded.pluginAlias 'local': ";
+    for (aliases, expected) in [
+        ([Some("local"), None], None),
+        (
+            [None, None],
+            Some("must reference an active RateLimitLocal in the same requestPlugins array"),
+        ),
+        (
+            [Some("local"), Some("local")],
+            Some("must reference a unique active alias"),
+        ),
+        ([None, Some("local")], Some("must reference an earlier entry")),
+    ] {
+        let mut errors = Vec::new();
+        collect_rate_limit_dependency_errors_with_aliases(&entries, |index| aliases[index], &mut errors);
+        assert_eq!(
+            errors,
+            expected
+                .map(|error| vec![format!("{prefix}{error}")])
+                .unwrap_or_default()
+        );
+    }
+    let mut sanitized = entries.clone();
+    sanitized[0].alias = None;
+    let mut errors = Vec::new();
+    collect_rate_limit_dependency_errors_with_aliases(&sanitized, |index| entries[index].alias.as_deref(), &mut errors);
+    assert!(errors.is_empty());
+    sanitized[0].enable = false;
+    collect_rate_limit_dependency_errors_with_aliases(&sanitized, |index| entries[index].alias.as_deref(), &mut errors);
+    assert_eq!(
+        errors,
+        vec![format!(
+            "{prefix}must reference an active RateLimitLocal in the same requestPlugins array"
+        )]
+    );
+}

@@ -2369,3 +2369,236 @@ fn mirror_invalid_actual_owner_cannot_reuse_cached_entry() {
         .request_plugins_iter()
         .all(|filter| filter.name() != "RequestMirror"));
 }
+
+fn descriptor_publication_owner(stage: &str, bytes: Option<Vec<u8>>) -> EdgionPlugins {
+    let mut wire = serde_json::json!({"metadata":{"name":"descriptor-publication","namespace":"apps"},"spec":{}});
+    wire["spec"][stage] = serde_json::json!([{"type":"GrpcJsonTranscoder","config":{
+        "descriptor":{"type":"configMapRef","name":"schema","key":"test.pb"},
+        "services":["test.TestService"],"resolvedDescriptor":bytes
+    }}]);
+    serde_json::from_value(wire).unwrap()
+}
+
+#[tokio::test]
+async fn descriptor_publication_rejects_valid_material_decoys_and_missing_material() {
+    let bytes = include_bytes!("../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb").to_vec();
+    let valid = descriptor_publication_owner("requestPlugins", Some(bytes));
+    assert!(compile_plugins(&valid).is_activatable);
+    for case in ["owner", "namespace", "name", "key", "missing"] {
+        let mut owner = valid.clone();
+        let EdgionPlugin::GrpcJsonTranscoder(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin
+        else {
+            panic!()
+        };
+        let edgion_resources::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef { name, key } =
+            &mut config.descriptor
+        else {
+            panic!()
+        };
+        match case {
+            "owner" => owner.metadata.name = Some("bad/name".into()),
+            "namespace" => owner.metadata.namespace = Some("Bad_Namespace".into()),
+            "name" => *name = "bad/name".into(),
+            "key" => key.clear(),
+            _ => config.resolved_descriptor = None,
+        }
+        let compiled = compile_plugins(&owner);
+        assert!(!compiled.is_activatable, "{case}");
+        assert!(!compiled.preparse_errors.is_empty());
+        let reject = compiled.plugin_runtime.request_plugins_iter().next().unwrap();
+        assert_eq!(reject.name(), "RejectInvalidConfig");
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new("RejectInvalidConfig");
+        assert!(matches!(
+            reject.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse { status: 500, .. }
+        ));
+    }
+}
+
+#[test]
+fn unsupported_descriptor_stages_preserve_intrinsic_alias_body_and_stage_error_parity() {
+    for stage in [
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        for bytes in [
+            None,
+            Some(vec![0xff]),
+            Some(include_bytes!("../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb").to_vec()),
+        ] {
+            let owner = descriptor_publication_owner(stage, bytes);
+            let expected = owner.validate_plugins();
+            assert!(
+                expected.iter().any(|error| error.contains("plugin is not valid for")),
+                "{expected:?}"
+            );
+            assert!(
+                !expected.iter().any(|error| error.contains("descriptor")),
+                "{expected:?}"
+            );
+            let compiled = compile_plugins(&owner);
+            assert_eq!(compiled.preparse_errors, expected);
+            assert!(!compiled.is_activatable);
+        }
+        let mut wire = serde_json::to_value(descriptor_publication_owner(stage, Some(vec![0xff]))).unwrap();
+        wire["spec"][stage][0]["config"]["descriptor"]["name"] = serde_json::json!("bad/name");
+        let owner: EdgionPlugins = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(compile_plugins(&owner).preparse_errors, owner.validate_plugins());
+        assert!(owner.validate_plugins()[0].ends_with("invalid descriptor ConfigMap reference"));
+        wire["spec"][stage][0]["config"]["maxMessageDepth"] = serde_json::json!(0);
+        let owner: EdgionPlugins = serde_json::from_value(wire).unwrap();
+        assert_eq!(compile_plugins(&owner).preparse_errors, owner.validate_plugins());
+        assert!(owner.validate_plugins()[0].contains("message complexity"));
+    }
+    // Exercise the secondary response body-validation pass without consuming invalid bytes.
+    let mut wire = serde_json::to_value(descriptor_publication_owner(
+        "upstreamResponsePlugins",
+        Some(vec![0xff]),
+    ))
+    .unwrap();
+    wire["spec"]["upstreamResponsePlugins"][0]["body"] = serde_json::json!({"maxBodySize":"1MiB"});
+    wire["spec"]["upstreamResponsePlugins"][0]["alias"] = serde_json::json!("bad/name");
+    let owner: EdgionPlugins = serde_json::from_value(wire).unwrap();
+    let compiled = compile_plugins(&owner);
+    let mut expected = owner.validate_plugins();
+    let mut actual = compiled.preparse_errors.clone();
+    expected.sort();
+    actual.sort();
+    assert_eq!(actual, expected);
+    assert!(actual.iter().any(|error| error.contains("body:")));
+    assert!(actual.iter().any(|error| error.contains("alias")));
+}
+
+#[test]
+fn unsupported_configmap_descriptor_intrinsic_errors_precede_alias_dye_and_stage() {
+    for stage in [
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        for invalid in ["limits", "name", "key", "none"] {
+            let mut wire = serde_json::to_value(descriptor_publication_owner(stage, Some(vec![0xff]))).unwrap();
+            let entry = &mut wire["spec"][stage][0];
+            entry["alias"] = serde_json::json!("bad/name");
+            entry["dye"] = serde_json::json!({"response":[{"name":"X-Descriptor","on":["fail-close"]}]});
+            match invalid {
+                "limits" => entry["config"]["maxMessageDepth"] = serde_json::json!(0),
+                "name" => entry["config"]["descriptor"]["name"] = serde_json::json!("bad/name"),
+                "key" => entry["config"]["descriptor"]["key"] = serde_json::json!(""),
+                _ => {}
+            }
+            let owner: EdgionPlugins = serde_json::from_value(wire).unwrap();
+            let expected = owner.validate_plugins();
+            assert_eq!(compile_plugins(&owner).preparse_errors, expected, "{stage}/{invalid}");
+            if invalid == "none" {
+                assert!(expected.iter().any(|error| error.contains("alias")), "{expected:?}");
+                assert!(expected.iter().any(|error| error.contains("dye")), "{expected:?}");
+                assert!(
+                    expected.iter().any(|error| error.contains("plugin is not valid for")),
+                    "{expected:?}"
+                );
+            } else {
+                assert_eq!(expected.len(), 1, "{expected:?}");
+                assert!(expected[0].contains(if invalid == "limits" {
+                    "message complexity"
+                } else {
+                    "invalid descriptor ConfigMap reference"
+                }));
+            }
+        }
+    }
+}
+
+#[test]
+fn descriptor_cold_copy_observes_only_authorized_payload_and_preserves_all_entry_fields() {
+    let bytes = include_bytes!("../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb").to_vec();
+    let mut owner = descriptor_publication_owner("requestPlugins", Some(bytes.clone()));
+    owner.metadata.uid = Some("copy-owner".into());
+    owner.metadata.generation = Some(7);
+    owner.spec.unknown_fields = vec!["retained-unknown-field".into()];
+    let mut invalid = owner.spec.request_plugins.as_ref().unwrap()[0].clone();
+    invalid.alias = Some("invalid-descriptor".into());
+    let EdgionPlugin::GrpcJsonTranscoder(config) = &mut invalid.plugin else {
+        panic!()
+    };
+    config.descriptor = edgion_resources::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef {
+        name: "bad/name".into(),
+        key: "test.pb".into(),
+    };
+    config.descriptor_error = Some("retained diagnostic".into());
+    let mut inactive = owner.spec.request_plugins.as_ref().unwrap()[0].clone();
+    inactive.enable = false;
+    let sibling: RequestFilterEntry = serde_json::from_value(serde_json::json!({
+        "type":"RequestHeaderModifier","alias":"sibling","config":{"set":[{"name":"X-Test","value":"kept"}]},
+        "conditions":{"skip":{"allOf":[{"type":"keyExist","key":{"type":"header","name":"x-copy-test"}}]}}
+    }))
+    .unwrap();
+    owner
+        .spec
+        .request_plugins
+        .as_mut()
+        .unwrap()
+        .extend([invalid, inactive, sibling]);
+    let response = serde_json::to_value(descriptor_publication_owner(
+        "upstreamResponsePlugins",
+        Some(bytes.clone()),
+    ))
+    .unwrap();
+    let mut wire = serde_json::to_value(&owner).unwrap();
+    wire["spec"]["upstreamResponsePlugins"] = response["spec"]["upstreamResponsePlugins"].clone();
+    wire["spec"]["upstreamResponseFilterPlugins"] = response["spec"]["upstreamResponsePlugins"].clone();
+    wire["spec"]["upstreamResponseBodyFilterPlugins"] = response["spec"]["upstreamResponsePlugins"].clone();
+    owner = serde_json::from_value(wire).unwrap();
+    owner.spec.unknown_fields = vec!["retained-unknown-field".into()];
+    for demanded in [false, true] {
+        let mut copies = Vec::new();
+        let copied = clone_for_compilation_with(
+            &owner,
+            |_| demanded,
+            |material| {
+                copies.push(material.to_vec());
+                material.to_vec()
+            },
+        );
+        assert_eq!(copies, if demanded { vec![bytes.clone()] } else { vec![] });
+        let mut expected = serde_json::to_value(&owner).unwrap();
+        for stage in [
+            "requestPlugins",
+            "upstreamResponseFilterPlugins",
+            "upstreamResponseBodyFilterPlugins",
+            "upstreamResponsePlugins",
+        ] {
+            for (index, entry) in expected["spec"][stage].as_array_mut().unwrap().iter_mut().enumerate() {
+                if entry["type"] == "GrpcJsonTranscoder" && !(stage == "requestPlugins" && index == 0 && demanded) {
+                    entry["config"].as_object_mut().unwrap().remove("resolvedDescriptor");
+                }
+            }
+        }
+        assert_eq!(serde_json::to_value(&copied).unwrap(), expected);
+        assert_eq!(copied.spec.unknown_fields, owner.spec.unknown_fields);
+    }
+    for invalid_owner in ["name", "namespace"] {
+        let mut invalid = owner.clone();
+        if invalid_owner == "name" {
+            invalid.metadata.name = Some("bad/name".into());
+        } else {
+            invalid.metadata.namespace = Some("Bad_Namespace".into());
+        }
+        let mut copies = 0;
+        let copied = clone_for_compilation_with(
+            &invalid,
+            |_| true,
+            |_| {
+                copies += 1;
+                panic!("invalid owner reached payload copy")
+            },
+        );
+        assert_eq!(copies, 0);
+        let EdgionPlugin::GrpcJsonTranscoder(config) = &copied.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!()
+        };
+        assert!(config.resolved_descriptor.is_none());
+    }
+}

@@ -42,14 +42,16 @@ This is not a CA reference: converting ConfigMap contents to a Secret wrapper or
 reading ca.crt would grant the wrong material semantics. Protobuf services[] are
 not Kubernetes Service references. No new Gateway API field or CRD change follows.
 HTTPRoute rule ExtensionRef remains the only supported runtime attachment.
-The generic dependency-status scan and the complete ExtensionRef traversal audit
-remain unfinished in tasks/pending/resource-reference-contract/.
+The generic dependency-status scan remains separate R4 work. R3a's scoped
+ExtensionRef migration is recorded in tasks/pending/resource-reference-contract/;
+it does not establish descriptor-material or whole-task conformance acceptance.
 
 ## Verification and re-evaluation
 
-Scoped Astra implementation review passed. Fresh owning Resources tests passed
-65 tests; Resources doctests passed 16 with 10 existing ignored examples. Fresh
-Controller plugin handler tests passed 107 after sharing the key predicate.
+Historical Controller-owning implementation evidence: scoped Astra review passed,
+Resources tests passed 65, Resources doctests passed 16 with 10 ignored examples,
+and Controller plugin handler tests passed 107 after sharing the key predicate.
+These counts are historical, not the current Gateway verification.
 Coverage includes malformed source/name/key with no dependency, default namespace,
 all-stage clearing, exact binaryData selection, recovery and replacement/delete,
 readonly status and actual Accepted/ResolvedRefs conditions.
@@ -61,3 +63,65 @@ These results do not establish whole-task or live conformance completion.
 
 - core-api-group-alias-contract: in-progress unified reference migration, approved
   current-HEAD GrpcJsonTranscoder inventory addition.
+
+## R3c Gateway consumption boundary (2026-10-08)
+
+Gateway binds the actual equal-length, policy-masked EdgionPlugins request entries.
+For ConfigMap descriptors, the same bound entry supplies config and selector;
+validation precedes the config-compilation prepass, cache reuse and construction.
+Malformed source/name/key cannot consume resolved descriptor bytes or reuse a
+cached runtime. Shared name validation uses the canonical Kubernetes DNS predicate.
+The detached factory accepts only inline descriptors, which have no object edge.
+This validates ownership and target shape, not cryptographic material provenance.
+
+Unsupported response-stage ConfigMap entries perform shared material-free intrinsic
+limits/name/key checks, then existing alias/dye/stage checks. Intrinsic errors retain
+priority; otherwise wrong-stage replaces descriptor-byte compilation diagnostics.
+The Resources secondary body pass uses the same rule. Inline diagnostics, enabled
+masks, entry ordinals, request/response bounds and transport ownership are unchanged.
+
+Current in-process evidence: Resources resource tests 1602 and transcoding tests 13;
+Resources doctests 27 passed/10 ignored; Controller processor tests 929;
+Gateway plugin tests 2260 passed/17 ignored. Raw commands, source/binary hashes and
+identity comparisons are in tmp/resource-reference-contract/r3c-verification-20261008-r1.
+The new worker test drives ConfigMap, EP, HTTPRoute and Gateway queues through exact
+raw-store lookup and process_work_item, including changed bytes/status, deletion,
+recreation, coalesced UID/generation replacement and dependency replacement/removal.
+Namespaced effective Route targets match the current raw EP UID. Route conditions
+remain independent of plugin Accepted; Gateway compilation owns fail-closed material
+validation. Raw-None EP recovery and notification are proved, but semantic target
+lookup versus bare raw keys remains R4; no alias is fabricated. Live conf_sync and
+conformance are untested here. The initial candidate's first Astra result PASS and
+14 clean gates (check 47.479 seconds, Clippy 80.239 seconds) are historical and
+superseded by the second review's R3c-F1 BLOCK: upstream derived clones copied
+resolved descriptor bytes before the owning guard. Final acceptance, renewed review
+and commit status are owned by
+[progress07](../../../../tasks/pending/resource-reference-contract/07-progress.md).
+
+### R3c-F1 constructor-copy correction
+
+One private cold-copy implementation binds the actual source before copying a
+ConfigMap descriptor payload. Publication generation construction, policy-view
+construction and direct compile all use it. Explicit spec/entry/config copies
+preserve every other field and ordinal while invalid, inactive and unsupported
+ConfigMap entries omit resolved bytes. The policy-view demand applies before its
+copy; this does not retroactively prohibit an earlier eligible source generation
+from owning valid material. Runtime rate-dependency validation now borrows original
+aliases through the same canonical algorithm instead of cloning all entries.
+
+The actual payload-copy callback is observed in deterministic tests: rejected and
+undemanded payloads cause no copy invocation, while the eligible sibling copies
+exact bytes. Full-field comparison, policy/cache/old-Arc tests and actual HTTP rule
+publication delta/full/recreation tests cover the call sites. Source review remains
+necessary to exclude an enclosing derived Clone bypass. Opaque raw input retention,
+deserialization and source-equality serialization are input bookkeeping outside
+executable construction; no process-wide zero-copy claim follows.
+
+Fresh corrected verification in
+`tmp/resource-reference-contract/r3c-f1-verification-20261008-r1` passed Resources
+1602 resource tests plus 13 transcoding tests, doctests 27/10 ignored, Controller
+929 processor tests, and Gateway 2264 plugin tests/17 ignored. All 253 original
+scoped IDs/assertions and the initial R3c regressions remain; source IDs total 267.
+Complete compiled IDs are Resources 1931, Controller 1751 and Gateway 5158, with
+no baseline removals. The corrected 19-path candidate requires renewed coordinator
+gates and two independent actual-result reviews; earlier PASS does not accept it.

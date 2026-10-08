@@ -7361,3 +7361,50 @@ async fn grpc_descriptor_replacement_and_deletion_clear_prior_generation() {
         .get_refs(&format_configmap_ref_key(Some("tenant".into()).as_ref(), "grpc-schema"))
         .is_empty());
 }
+
+#[tokio::test]
+async fn descriptor_invalid_selector_replaces_prior_dependency_without_using_valid_decoy() {
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let mut owner = descriptor_owner("requestPlugins", true, "schema", "test.pb");
+    let resource = ResourceRef::new(
+        edgion_resources::ResourceKind::EdgionPlugins,
+        Some("apps".into()),
+        "descriptor-owner".into(),
+    );
+    let ProcessResult::Continue(_) = EdgionPluginsHandler.parse(owner.clone(), &ctx).await else {
+        panic!()
+    };
+    assert_eq!(
+        runtime.secret_ref_manager.get_refs("ConfigMap/apps/schema"),
+        vec![resource.clone()]
+    );
+    runtime.configmap_store.replace_all(HashMap::from([(
+        "apps/bad/name".into(),
+        ConfigMap {
+            binary_data: Some(BTreeMap::from([(
+                "test.pb".into(),
+                ByteString(
+                    include_bytes!("../../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb").to_vec(),
+                ),
+            )])),
+            ..Default::default()
+        },
+    )]));
+    let EdgionPlugin::GrpcJsonTranscoder(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        panic!()
+    };
+    config.descriptor = edgion_resources::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef {
+        name: "bad/name".into(),
+        key: "test.pb".into(),
+    };
+    let ProcessResult::Continue(parsed) = EdgionPluginsHandler.parse(owner, &ctx).await else {
+        panic!()
+    };
+    let EdgionPlugin::GrpcJsonTranscoder(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+        panic!()
+    };
+    assert!(config.resolved_descriptor.is_none());
+    assert!(config.descriptor_error.is_some());
+    assert!(runtime.secret_ref_manager.get_dependencies(&resource.key()).is_empty());
+    assert!(runtime.cross_ns_ref_mgr.get_dependencies(&resource.key()).is_empty());
+}

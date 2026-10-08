@@ -112,7 +112,24 @@ impl TranscodingError {
 }
 
 impl GrpcJsonTranscoderConfig {
+    fn descriptor_reference_error(&self) -> Option<String> {
+        if let GrpcDescriptorSource::ConfigMapRef { name, key } = &self.descriptor {
+            if !crate::resources::common::kubernetes_name::is_dns_subdomain(name, 253) || !valid_descriptor_key(key) {
+                return Some("invalid descriptor ConfigMap reference".into());
+            }
+        }
+        None
+    }
+
+    /// Intrinsic checks for unsupported ConfigMap stages must not consume material.
+    pub(crate) fn material_free_validation_error(&self) -> Option<String> {
+        self.limits().err().or_else(|| self.descriptor_reference_error())
+    }
+
     pub fn descriptor_bytes(&self) -> Result<Vec<u8>, String> {
+        if let Some(error) = self.descriptor_reference_error() {
+            return Err(error);
+        }
         if self.descriptor_error.is_some() {
             return Err("descriptor resolution failed".into());
         }
@@ -264,13 +281,10 @@ impl GrpcJsonTranscoderConfig {
 }
 impl PluginValidation for GrpcJsonTranscoderConfig {
     fn validation_error(&self) -> Option<String> {
-        if let Err(e) = self.limits() {
-            return Some(e);
+        if let Some(error) = self.material_free_validation_error() {
+            return Some(error);
         }
-        if let GrpcDescriptorSource::ConfigMapRef { name, key } = &self.descriptor {
-            if name.is_empty() || name.len() > 253 || !valid_descriptor_key(key) {
-                return Some("invalid descriptor ConfigMap reference".into());
-            }
+        if let GrpcDescriptorSource::ConfigMapRef { .. } = &self.descriptor {
             // Ingest validation precedes store resolution. Gateway compilation
             // always requires resolved content; resolution failures are explicit.
             if self.resolved_descriptor.is_none() && self.descriptor_error.is_none() {

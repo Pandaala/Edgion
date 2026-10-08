@@ -99,3 +99,253 @@ async fn configmap_delete_then_recreate_preserves_typed_edge_and_requeues_twice(
     assert_eq!(second.key, "default/gateway");
     processor.workqueue().done(&second.key);
 }
+
+#[tokio::test]
+async fn descriptor_configmap_events_recover_exact_raw_owner_and_notify_route_gateway_workers() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::{
+        EdgionPluginsHandler, GatewayHandler, HttpRouteHandler,
+    };
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, RawStore};
+    use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+    use edgion_resources::{EdgionPlugins, HTTPRoute};
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+    macro_rules! work {
+        ($processor:expr, $raw:expr, $key:expr) => {{
+            let queue = $processor.workqueue();
+            let item = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(item.key, $key);
+            let source = $raw.get(&item.key).map(|source| (*source).clone());
+            $processor
+                .process_work_item(&item.key, source, None, item.trigger_chain)
+                .await;
+            queue.done(&item.key);
+        }};
+    }
+    for namespace in [None, Some("default")] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let plugins = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            32,
+            Arc::new(EdgionPluginsHandler),
+            runtime.clone(),
+        ));
+        let plugin_raw = Arc::new(LocalRawStore::new());
+        plugins.set_raw_store(plugin_raw.clone());
+        runtime.processor_registry.register(plugins.clone());
+        let configmaps = Arc::new(ResourceProcessor::<ConfigMap>::new(
+            "ConfigMap",
+            32,
+            Arc::new(ConfigMapHandler::new()),
+            runtime.clone(),
+        ));
+        let configmap_raw = Arc::new(LocalRawStore::new());
+        configmaps.set_raw_store(configmap_raw.clone());
+        runtime.processor_registry.register(configmaps.clone());
+        let routes = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+            "HTTPRoute",
+            32,
+            Arc::new(HttpRouteHandler::default()),
+            runtime.clone(),
+        ));
+        let route_raw = Arc::new(LocalRawStore::new());
+        routes.set_raw_store(route_raw.clone());
+        runtime.processor_registry.register(routes.clone());
+        let gateways = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            32,
+            Arc::new(GatewayHandler::new(None, None)),
+            runtime.clone(),
+        ));
+        let gateway_raw = Arc::new(LocalRawStore::new());
+        gateways.set_raw_store(gateway_raw.clone());
+        runtime.processor_registry.register(gateways.clone());
+        let gateway: Gateway = serde_json::from_value(serde_json::json!({"metadata":{"name":"descriptor-gateway","namespace":"default"},"spec":{"gatewayClassName":"edgion","listeners":[{"name":"http","protocol":"HTTP","port":80}]}})).unwrap();
+        gateway_raw.upsert("default/descriptor-gateway".into(), Arc::new(gateway));
+        gateways.on_event_key("default/descriptor-gateway".into()).await;
+        work!(gateways, gateway_raw, "default/descriptor-gateway");
+        let mut plugin: EdgionPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"descriptor-plugin","namespace":namespace,"uid":"first","generation":1},"spec":{"requestPlugins":[{"type":"GrpcJsonTranscoder","config":{"descriptor":{"type":"configMapRef","name":"schema","key":"test.pb"},"services":["test.TestService"]}}]}})).unwrap();
+        let owner_key = if namespace.is_some() {
+            "default/descriptor-plugin"
+        } else {
+            "descriptor-plugin"
+        };
+        plugin_raw.upsert(owner_key.into(), Arc::new(plugin.clone()));
+        plugins.on_event_key(owner_key.into()).await;
+        work!(plugins, plugin_raw, owner_key);
+        let owner = ResourceRef::new(
+            ResourceKind::EdgionPlugins,
+            namespace.map(str::to_string),
+            "descriptor-plugin".into(),
+        );
+        assert_eq!(
+            runtime.secret_ref_manager.get_refs("ConfigMap/default/schema"),
+            vec![owner.clone()]
+        );
+        let route: HTTPRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"descriptor-route","namespace":"default"},"spec":{"parentRefs":[{"name":"descriptor-gateway"}],"rules":[{"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"descriptor-plugin"}}]}]}})).unwrap();
+        route_raw.upsert("default/descriptor-route".into(), Arc::new(route));
+        routes.on_event_key("default/descriptor-route".into()).await;
+        work!(routes, route_raw, "default/descriptor-route");
+        work!(gateways, gateway_raw, "default/descriptor-gateway");
+        let descriptor = include_bytes!("../../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb");
+        for (generation, present) in [(2, true), (3, true), (4, false), (5, true)] {
+            plugin.metadata.uid = Some(format!("plugin-{generation}"));
+            plugin.metadata.generation = Some(generation);
+            // Coalesced replacement: the dependency event must fetch the current raw UID,
+            // never the processed generation or a fabricated default/name alias.
+            plugin_raw.remove(owner_key);
+            plugin_raw.upsert(owner_key.into(), Arc::new(plugin.clone()));
+            let updated_bytes = if generation == 3 {
+                vec![0xff]
+            } else {
+                descriptor.to_vec()
+            };
+            if present {
+                let cm = ConfigMap {
+                    metadata: ObjectMeta {
+                        name: Some("schema".into()),
+                        namespace: Some("default".into()),
+                        uid: Some(format!("schema-{generation}")),
+                        resource_version: Some(generation.to_string()),
+                        ..Default::default()
+                    },
+                    binary_data: Some(BTreeMap::from([("test.pb".into(), ByteString(updated_bytes.clone()))])),
+                    ..Default::default()
+                };
+                configmap_raw.upsert("default/schema".into(), Arc::new(cm));
+            } else {
+                configmap_raw.remove("default/schema");
+            }
+            configmaps.on_event_key("default/schema".into()).await;
+            work!(configmaps, configmap_raw, "default/schema");
+            work!(plugins, plugin_raw, owner_key);
+            let published = plugins.get(owner_key).unwrap();
+            assert_eq!(published.metadata.uid, plugin.metadata.uid);
+            assert_eq!(published.metadata.generation, Some(generation));
+            let EdgionPlugin::GrpcJsonTranscoder(config) = &published.spec.request_plugins.as_ref().unwrap()[0].plugin
+            else {
+                panic!()
+            };
+            assert_eq!(
+                config.resolved_descriptor.as_deref(),
+                present.then_some(updated_bytes.as_slice())
+            );
+            assert_eq!(config.compile().is_ok(), present && generation != 3);
+            let accepted = published
+                .status
+                .as_ref()
+                .unwrap()
+                .as_local()
+                .unwrap()
+                .conditions
+                .iter()
+                .find(|condition| condition.type_ == "Accepted")
+                .unwrap();
+            assert_eq!(accepted.status == "True", present && generation != 3);
+            assert_eq!(
+                runtime.secret_ref_manager.get_refs("ConfigMap/default/schema"),
+                vec![owner.clone()]
+            );
+            work!(routes, route_raw, "default/descriptor-route");
+            work!(gateways, gateway_raw, "default/descriptor-gateway");
+            let published_route = routes.get("default/descriptor-route").unwrap();
+            assert!(runtime
+                .plugin_ref_mgr
+                .get_refs("default/descriptor-plugin")
+                .contains(&ResourceRef::new(
+                    ResourceKind::HTTPRoute,
+                    Some("default".into()),
+                    "descriptor-route".into()
+                )));
+            if namespace.is_some() {
+                let references = edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs::from_route(
+                    &published_route,
+                )
+                .unwrap();
+                let reference = references
+                    .effective_at(0, None, 0)
+                    .unwrap()
+                    .validated()
+                    .unwrap()
+                    .unwrap();
+                let target = reference.target();
+                let target_key = format!("{}/{}", target.scope().namespace().unwrap(), target.name());
+                assert_eq!(target_key, owner_key);
+                assert_eq!(plugin_raw.get(&target_key).unwrap().metadata.uid, plugin.metadata.uid);
+                // HTTP rule discovery registers this edge without reading plugin material.
+                // Route conditions remain independent of EP Accepted; Gateway compilation
+                // owns descriptor fail-closed behavior, tested in the publication tests.
+                let conditions = &published_route.status.as_ref().unwrap().parents[0].conditions;
+                for kind in ["Accepted", "ResolvedRefs"] {
+                    assert_eq!(
+                        conditions
+                            .iter()
+                            .find(|condition| condition.type_ == kind)
+                            .unwrap()
+                            .status,
+                        "True"
+                    );
+                }
+            }
+            let published_gateway = gateways.get("default/descriptor-gateway").unwrap();
+            if namespace.is_some() {
+                assert_eq!(
+                    published_gateway.status.as_ref().unwrap().listeners.as_ref().unwrap()[0].attached_routes,
+                    1
+                );
+            }
+            if namespace.is_none() {
+                assert!(plugin_raw.get("default/descriptor-plugin").is_none());
+                // Notification is proved; semantic ExtensionRef lookup of raw None remains R4.
+            }
+        }
+        let EdgionPlugin::GrpcJsonTranscoder(config) = &mut plugin.spec.request_plugins.as_mut().unwrap()[0].plugin
+        else {
+            panic!()
+        };
+        config.descriptor = edgion_resources::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef {
+            name: "replacement-schema".into(),
+            key: "next.pb".into(),
+        };
+        plugin_raw.upsert(owner_key.into(), Arc::new(plugin.clone()));
+        plugins.on_event_key(owner_key.into()).await;
+        work!(plugins, plugin_raw, owner_key);
+        assert!(runtime
+            .secret_ref_manager
+            .get_refs("ConfigMap/default/schema")
+            .is_empty());
+        assert_eq!(
+            runtime
+                .secret_ref_manager
+                .get_refs("ConfigMap/default/replacement-schema"),
+            vec![owner.clone()]
+        );
+        // Disabled and dropped entries replace dependency side effects through the worker.
+        plugin.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+        plugin_raw.upsert(owner_key.into(), Arc::new(plugin.clone()));
+        plugins.on_event_key(owner_key.into()).await;
+        work!(plugins, plugin_raw, owner_key);
+        assert!(runtime
+            .secret_ref_manager
+            .get_refs("ConfigMap/default/schema")
+            .is_empty());
+        assert!(runtime
+            .secret_ref_manager
+            .get_refs("ConfigMap/default/replacement-schema")
+            .is_empty());
+        let published = plugins.get(owner_key).unwrap();
+        let EdgionPlugin::GrpcJsonTranscoder(config) = &published.spec.request_plugins.as_ref().unwrap()[0].plugin
+        else {
+            panic!()
+        };
+        assert!(config.resolved_descriptor.is_none() && config.descriptor_error.is_none());
+        plugin.spec.request_plugins = None;
+        plugin_raw.upsert(owner_key.into(), Arc::new(plugin));
+        plugins.on_event_key(owner_key.into()).await;
+        work!(plugins, plugin_raw, owner_key);
+        assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+    }
+}

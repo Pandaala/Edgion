@@ -30,6 +30,20 @@ use super::entry::{dye_set_clobber_error, RequestFilterEntry};
 use super::{EdgionPlugins, PluginValidation};
 use crate::resources::common::log_labels::LOG_LABEL_MAX_COUNT;
 
+/// Response stages reject ConfigMap-backed transcoders without consuming descriptor bytes.
+/// Intrinsic errors retain priority; alias, dye and wrong-stage checks remain with callers.
+pub fn response_stage_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
+    if let EdgionPlugin::GrpcJsonTranscoder(config) = plugin {
+        if matches!(
+            config.descriptor,
+            crate::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef { .. }
+        ) {
+            return config.material_free_validation_error();
+        }
+    }
+    plugin.validation_error()
+}
+
 /// Per-variant stage applicability, mirroring the four
 /// `PluginRuntime::create_*_from_edgion` matches in `edgion-gateway`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -183,6 +197,16 @@ pub fn collect_ai_guard_ordering_errors(entries: &[RequestFilterEntry], errors: 
 /// The caller must also apply ordinary entry/condition validation. No reference
 /// lookup crosses resource or stage boundaries; inactive consumers are inert.
 pub fn collect_rate_limit_dependency_errors(entries: &[RequestFilterEntry], errors: &mut Vec<String>) {
+    collect_rate_limit_dependency_errors_with_aliases(entries, |index| entries[index].alias.as_deref(), errors);
+}
+
+/// Validate the same dependency graph with borrowed source aliases when display
+/// aliases have been sanitized. The projection preserves original entry ordinals.
+pub fn collect_rate_limit_dependency_errors_with_aliases<'a>(
+    entries: &[RequestFilterEntry],
+    alias_at: impl Fn(usize) -> Option<&'a str>,
+    errors: &mut Vec<String>,
+) {
     for (index, entry) in entries.iter().enumerate() {
         if !entry.is_enabled() || !matches!(entry.plugin, EdgionPlugin::RateLimitRedis(_)) {
             continue;
@@ -198,8 +222,8 @@ pub fn collect_rate_limit_dependency_errors(entries: &[RequestFilterEntry], erro
             if super::entry::validate_alias_str(&reference.plugin_alias).is_some() {
                 continue;
             }
-            let mut targets = entries.iter().enumerate().filter(|(_, candidate)| {
-                candidate.is_enabled() && candidate.alias.as_deref() == Some(reference.plugin_alias.as_str())
+            let mut targets = entries.iter().enumerate().filter(|(candidate_index, candidate)| {
+                candidate.is_enabled() && alias_at(*candidate_index) == Some(reference.plugin_alias.as_str())
             });
             let target = targets.next();
             let reason = match target {
@@ -532,7 +556,12 @@ impl EdgionPlugins {
                         let name = entry.plugin.type_name();
                         // 1. Per-plugin config validation. On error, skip the
                         //    remaining checks (mirrors the gateway `continue`).
-                        if let Some(err) = entry.plugin.validation_error() {
+                        let config_error = if matches!($stage_word, "request") {
+                            entry.plugin.validation_error()
+                        } else {
+                            response_stage_plugin_validation_error(&entry.plugin)
+                        };
+                        if let Some(err) = config_error {
                             errors.push(format!("{}[{}] ({}): {}", $label, i, name, err));
                             continue;
                         }
@@ -689,7 +718,15 @@ impl EdgionPlugins {
             ($entries:expr, $label:literal, $stage:expr) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() || entry.plugin.validation_error().is_some() {
+                        if !entry.is_enabled() {
+                            continue;
+                        }
+                        let config_error = if matches!($stage, BodyStage::Request) {
+                            entry.plugin.validation_error()
+                        } else {
+                            response_stage_plugin_validation_error(&entry.plugin)
+                        };
+                        if config_error.is_some() {
                             continue;
                         }
                         let Some(body) = entry.body.as_ref() else { continue };
