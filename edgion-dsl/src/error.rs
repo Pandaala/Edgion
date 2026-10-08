@@ -151,6 +151,8 @@ pub enum RuntimeError {
     ValueKeysTooLong { limit: usize },
     /// Value traversal, cloning, and comparison exhausted the execution budget.
     ValueWorkLimitExceeded { limit: u64 },
+    /// A fixed XML structural/payload bound was exceeded.
+    XmlLimitExceeded { kind: &'static str, limit: usize },
     /// PluginSession API returned error
     ApiError { function: String, message: String },
     /// Request-body capture, storage, scan, or mutation failed.
@@ -193,6 +195,7 @@ impl fmt::Display for RuntimeError {
             Self::ValueTooManyItems { limit } => write!(f, "value item limit exceeded ({})", limit),
             Self::ValueKeysTooLong { limit } => write!(f, "value map-key byte limit exceeded ({})", limit),
             Self::ValueWorkLimitExceeded { limit } => write!(f, "value work budget exceeded ({})", limit),
+            Self::XmlLimitExceeded { kind, limit } => write!(f, "XML {kind} limit exceeded ({limit})"),
             Self::ApiError { function, message } => {
                 write!(f, "API error in {}: {}", function, message)
             }

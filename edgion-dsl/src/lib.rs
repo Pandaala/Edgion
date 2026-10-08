@@ -20,5 +20,6 @@ pub mod parser;
 mod script;
 pub mod validator;
 pub mod value;
+pub mod xml;
 
 pub use script::{check_redis_link_names, resolve_script};

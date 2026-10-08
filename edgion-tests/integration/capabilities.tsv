@@ -12,6 +12,7 @@ suite	EdgionPlugins/GraphqlRateLimit	body-buffering
 dynamic	GraphqlRateLimitDynamic	body-buffering
 dynamic	FormJsonTransformDynamic	body-buffering
 dynamic	BodyDynamic	body-buffering
+dynamic	DslXmlDynamic	body-buffering
 dynamic	RequestMirrorReferenceGrant	body-buffering
 dynamic	WafDynamic	body-buffering
 dynamic	WafExpensiveChecks	body-buffering

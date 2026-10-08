@@ -25,3 +25,5 @@ regex.workspace = true
 regex-automata.workspace = true
 # Value::Map ordering (value.rs)
 indexmap.workspace = true
+# Allocation-free XML 1.0 lexical tokenizer; semantic ownership stays here.
+xmlparser = "=0.13.6"

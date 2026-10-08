@@ -1,4 +1,19 @@
 use super::*;
+
+#[test]
+fn xml_set_body_has_capture_and_response_stage_guards_for_source_and_bytecode() {
+    let mut cfg = config("xml.set_body(xml.element(\"\", \"r\", {}, {}))\nreturn next()");
+    let script = cfg.compile_and_validate().unwrap();
+    assert!(script.references_request_body());
+    assert!(script.references_request_body_mutation());
+    assert!(!script.references_builtin(edgion_dsl::bytecode::BuiltinId::ReqBody));
+    assert!(DslPlugin::from_config(&cfg).is_some());
+    assert!(DslPlugin::from_config_response(&cfg).is_none());
+    cfg.bytecode = Some(script.serialize_base64().unwrap());
+    cfg.source = Some("return next()".into());
+    assert!(DslPlugin::from_config(&cfg).is_some());
+    assert!(DslPlugin::from_config_response(&cfg).is_none());
+}
 use edgion_resources::resources::common::external_http::MAX_OUTBOUND_TIMEOUT_MS;
 use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::{
     DSL_MAX_BODY_SCAN_PASSES, DSL_MAX_CALL_COUNT, DSL_MAX_HTTP_REQUEST_BODY_BYTES, DSL_MAX_HTTP_RESPONSE_BODY_BYTES,

@@ -1050,7 +1050,7 @@ impl TestSuite for DslBodyTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
+        let mut cases = vec![
             Self::test_late_body_read_requires_explicit_prebuffer(),
             Self::test_late_body_read_respects_body_conditions(),
             Self::test_body_read_methods_preserve_replay(),
@@ -1072,6 +1072,8 @@ impl TestSuite for DslBodyTestSuite {
             Self::test_body_http_call_memory_mutation_and_empty_framing(),
             Self::test_h2_spilled_body_http_call_streaming(),
             Self::test_body_http_call_preserves_invalid_utf8_bytes(),
-        ]
+        ];
+        cases.extend(super::xml::cases());
+        cases
     }
 }

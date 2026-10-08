@@ -45,6 +45,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "AiGuardOrderingDynamic",
     "GatewayDynamic",
     "DslDynamic",
+    "DslXmlDynamic",
     "DslTerminateDynamic",
     "BodyDynamic",
     "ConditionRefsDynamic",
@@ -278,7 +279,7 @@ mod capability_tests {
         )
     }
 
-    fn dynamic_runner_names_covered_by_default(targeted: &str, default_sweep: &str) -> BTreeSet<String> {
+    fn dynamic_runner_names_covered_by_default(runner: &str, targeted: &str, default_sweep: &str) -> BTreeSet<String> {
         if !default_sweep.contains("run_dynamic_scenarios || test_failed=true") {
             return BTreeSet::new();
         }
@@ -295,25 +296,124 @@ mod capability_tests {
                 let command = command.split_once("|| test_failed=true")?.0;
                 let id = command.split_once("--dynamic-scenario ")?.1;
                 let id = id.split_whitespace().next()?.trim_end_matches('"');
-                registered.contains(id).then(|| name.to_owned())
+                (registered.contains(id)
+                    && default_dispatches_registered_dynamic_suite(runner, default_sweep, &format!("Dyn_{id}")))
+                .then(|| name.to_owned())
             })
             .collect()
     }
 
     #[test]
     fn dynamic_default_coverage_requires_registered_id_and_actual_enumeration() {
+        let dispatcher = dynamic_dispatcher_fixture();
         let targeted = r#"
+run_test "Dyn_WafDynamic" "client -r EdgionPlugins" || test_failed=true
 run_test "StaticBeforeDynamic" "client -r EdgionPlugins" || test_failed=true
 run_test "NamedDynamic" "client --dynamic-scenario GraphqlRateLimitDynamic" || test_failed=true
 run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_failed=true
 "#;
         let default = "run_dynamic_scenarios || test_failed=true";
         assert_eq!(
-            dynamic_runner_names_covered_by_default(targeted, default),
+            dynamic_runner_names_covered_by_default(dispatcher, targeted, default),
             BTreeSet::from(["NamedDynamic".to_owned()])
         );
-        assert!(dynamic_runner_names_covered_by_default(targeted, "").is_empty());
-        assert!(dynamic_runner_names_covered_by_default(targeted, "run_dynamic_scenarios || true").is_empty());
+        assert!(dynamic_runner_names_covered_by_default(dispatcher, targeted, "").is_empty());
+        assert!(
+            dynamic_runner_names_covered_by_default(dispatcher, targeted, "run_dynamic_scenarios || true").is_empty()
+        );
+        for missing in [
+            "--list-dynamic-scenarios",
+            "for scenario in $ids; do",
+            r#"run_test "Dyn_${scenario}""#,
+        ] {
+            assert!(dynamic_runner_names_covered_by_default(
+                &dispatcher.replace(missing, "removed"),
+                targeted,
+                default
+            )
+            .is_empty());
+        }
+    }
+
+    fn default_dispatches_registered_dynamic_suite(runner: &str, default: &str, suite: &str) -> bool {
+        let Some(id) = suite.strip_prefix("Dyn_") else {
+            return false;
+        };
+        if !dynamic::all().iter().any(|scenario| scenario.id == id)
+            || !default.contains("run_dynamic_scenarios || test_failed=true")
+        {
+            return false;
+        }
+        let Some((function, _)) = runner
+            .split_once("run_dynamic_scenarios() {")
+            .and_then(|(_, body)| body.split_once("\n}\n"))
+        else {
+            return false;
+        };
+        let logical_lines = function.replace("\\\n", " ");
+        let normalized = logical_lines.split_whitespace().collect::<Vec<_>>().join(" ");
+        function.contains(r#"if ! ids=$("$test_client" --list-dynamic-scenarios); then"#)
+            && function.contains("for scenario in $ids; do")
+            && normalized.contains(r#"run_test "Dyn_${scenario}" "${test_client} -g --dynamic-scenario ${scenario}""#)
+    }
+
+    fn dynamic_dispatcher_fixture() -> &'static str {
+        concat!(
+            "run_dynamic_scenarios() {\n",
+            "    if ! ids=$(\"$test_client\" --list-dynamic-scenarios); then\n        return 1\n    fi\n",
+            "    for scenario in $ids; do\n",
+            "        run_test \"Dyn_${scenario}\" \"${test_client} -g --dynamic-scenario ${scenario}\"\n",
+            "    done\n}\n"
+        )
+    }
+
+    #[test]
+    fn dynamic_default_coverage_requires_registry_enumeration_and_dispatch() {
+        let dispatcher = dynamic_dispatcher_fixture();
+        let default = "run_dynamic_scenarios || test_failed=true";
+        let suite = "Dyn_WafDynamic";
+        assert!(default_dispatches_registered_dynamic_suite(dispatcher, default, suite));
+        let continued = dispatcher.replace("\" \"${test_client}", "\" \\\n            \"${test_client}");
+        assert!(default_dispatches_registered_dynamic_suite(&continued, default, suite));
+        assert!(!default_dispatches_registered_dynamic_suite(
+            dispatcher,
+            default,
+            "Dyn_UnknownScenario"
+        ));
+        assert!(!default_dispatches_registered_dynamic_suite(
+            dispatcher,
+            default,
+            "DownstreamTlsOffloadTimeout"
+        ));
+        assert!(!default_dispatches_registered_dynamic_suite(dispatcher, "", suite));
+        for missing in [
+            "--list-dynamic-scenarios",
+            "for scenario in $ids; do",
+            "run_test \"Dyn_${scenario}\"",
+        ] {
+            assert!(!default_dispatches_registered_dynamic_suite(
+                &dispatcher.replace(missing, "removed"),
+                default,
+                suite
+            ));
+        }
+    }
+
+    #[test]
+    fn default_tls_offload_timeout_retains_both_opt_in_conditions() {
+        let runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+        let (_, default) = runner_suite_sweeps(runner).unwrap();
+        let opt_in = "if $FULL_TEST && [ \"${EDGION_TEST_DOWNSTREAM_TLS_OFFLOAD:-0}\" = \"1\" ]; then";
+        let body = default
+            .split_once(opt_in)
+            .and_then(|(_, tail)| tail.split_once("\n        fi"))
+            .unwrap()
+            .0;
+        assert!(body.contains("run_test \"DownstreamTlsOffloadTimeout\""));
+        assert_eq!(default.matches("run_test \"DownstreamTlsOffloadTimeout\"").count(), 1);
     }
 
     #[test]
@@ -561,6 +661,19 @@ run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_
     }
 
     #[test]
+    fn xml_fixture_plugins_validate_before_wire_execution() {
+        for source in [
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/integration/conf/EdgionPlugins/DslBody/EdgionPlugins_dsl-xml.yaml")),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/integration/conf/EdgionPlugins/DslBody/DynamicTest/initial/EdgionPlugins_dsl-xml-dynamic.yaml")),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/integration/conf/EdgionPlugins/DslBody/DynamicTest/updates/to_updated/EdgionPlugins_dsl-xml-dynamic.yaml")),
+        ] {
+            let plugin: edgion_resources::EdgionPlugins = serde_yaml::from_str(source).unwrap();
+            let errors = plugin.validate_plugins();
+            assert!(errors.is_empty(), "XML fixture {}: {errors:?}", plugin.metadata.name.unwrap());
+        }
+    }
+
+    #[test]
     fn body_suites_are_registered_in_resource_and_default_sweeps() {
         let runner = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -581,8 +694,15 @@ run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_
         for suite in ["DslBody", "BodyPlugins", "JsonSchemaValidation"] {
             let registration = format!("EdgionPlugins_{suite}");
             validate_single_runner_registration(runner, &registration).unwrap_or_else(|error| panic!("{error}"));
+            let resource_preloads = runner
+                .lines()
+                .find(|line| {
+                    line.trim_start()
+                        .starts_with("suites=\"${base_suites},EdgionBackend/SingleProvider,")
+                })
+                .expect("EdgionPlugins resource-wide preload list must exist");
             assert_eq!(
-                runner.matches(&format!("EdgionPlugins/{suite}")).count(),
+                resource_preloads.matches(&format!("EdgionPlugins/{suite}")).count(),
                 1,
                 "{suite} config must be included in the EdgionPlugins resource-wide load list"
             );
@@ -1083,7 +1203,7 @@ run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_
         const KNOWN_TARGETED_ONLY: &[(&str, &str)] = &[];
 
         let targeted_names = names(targeted);
-        let dynamic_covered = dynamic_runner_names_covered_by_default(targeted, default_sweep);
+        let dynamic_covered = dynamic_runner_names_covered_by_default(runner, targeted, default_sweep);
         assert!(
             targeted_names.len() > 50,
             "expected the targeted block to hold the bulk of the suite list, found {} — \
@@ -1583,6 +1703,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "CredentialInjectorDynamic"
         | "CsrfSecretRotation"
         | "DslDynamic"
+        | "DslXmlDynamic"
         | "DslTerminateDynamic"
         | "FormJsonTransformDynamic"
         | "GrpcJsonTranscoderDynamic"

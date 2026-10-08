@@ -17,8 +17,11 @@ use crate::request_body::{
 use super::super::runtime::DslRuntime;
 use super::body_scan_budget::BodyScanBudget;
 use super::error::RuntimeError;
+use super::value::ValueWorkBudget;
 use super::value::{BodyValue, Value};
 use super::vm::VmLimits;
+use super::xml_builtins::{XmlBodyScanner, XmlScanOutcome};
+use edgion_dsl::xml::MAX_XML_BYTES;
 
 pub(crate) fn body_access_error(message: impl Into<String>) -> RuntimeError {
     RuntimeError::BodyAccess {
@@ -50,6 +53,22 @@ pub(crate) struct DslBodyOps<'a> {
 }
 
 impl<'a> DslBodyOps<'a> {
+    pub(crate) async fn parse_xml(&mut self, work: ValueWorkBudget) -> Result<XmlScanOutcome, RuntimeError> {
+        let len = self.byte_len()?;
+        let cap = self.session.ctx().request_body_config.max_body_size_bytes;
+        if len > cap || len > MAX_XML_BYTES as u64 {
+            return Err(body_access_error("XML source exceeds the request XML byte limit"));
+        }
+        let reserved = self.reserve()?;
+        let scan = self
+            .session
+            .ctx()
+            .request_body
+            .scan_raw(XmlBodyScanner::new(work), reserved)
+            .await
+            .map_err(map_body_error)?;
+        Ok(self.settle(reserved, scan))
+    }
     pub(crate) fn new(
         session: &'a mut dyn PluginSession,
         budget: &'a mut BodyScanBudget,

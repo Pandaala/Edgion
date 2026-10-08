@@ -26,6 +26,11 @@ runtime-produced strings with `max_string_len`. The error contract in
 `skills/03-coding/dsl/builtin-error-semantics.md` requires an ordinary output
 limit breach to use `RuntimeError::StringTooLong`, with exact UTF-8 byte `len`
 and `limit` values.
+That exact-length rule applies when the complete result length is already known.
+Bounded producers such as Body reads and XML value/stringify stop at the first
+overflow and report `len = limit + 1` as a lower bound. They must not scan or
+materialize the rejected tail just to compute an exact diagnostic; no partial
+result is returned. XML set_body uses the separate fixed BodyAccess contract.
 
 `BuiltinId::Trim` previously returned both its unchanged and trimmed branches
 without calling the shared length check. A string constant may legally exceed

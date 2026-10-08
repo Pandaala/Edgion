@@ -1,0 +1,67 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-xml
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: bounded-xml
+        maxBodyScanPasses: 1
+        errorPolicy: ignore
+        source: |
+          let mode = req.header("X-XML-Mode")
+          if mode == "build" || mode == "build-json" {
+            let mut input = req.header("X-Name")
+            if mode == "build-json" { input = req.body.json_get("$.name") }
+            if input == nil { return deny(400, "Missing name") }
+            let name = xml.element("", "name", {}, {"value": xml.text(input)})
+            xml.set_body(xml.element("", "request", {}, {"name": name}))
+          } else {
+            let root = xml.parse(req.body)
+            if root == nil {
+              return deny(400, "Invalid XML")
+            }
+            if mode == "inspect" {
+              let body = xml.find(root, "urn:soap", "Body", 0)
+              let name = xml.find(body, "urn:soap", "name", 0)
+              if xml.value(name) != "alice" || xml.attr_value(name, "", "id") != "7" {
+                return deny(422, "XML selection mismatch")
+              }
+              if xml.find(body, "urn:soap", "name", 1) == nil {
+                return deny(422, "XML repeated element missing")
+              }
+            } else if mode == "json" {
+              let selected = xml.find(root, "", "name", 0)
+              if selected == nil { return deny(400, "Missing XML name") }
+              let name = xml.value(selected)
+              let mapped = "{\"nameBase64\":\"" + base64_encode(name) + "\"}"
+              req.body.clear()
+              req.body.append(mapped)
+              req.set_header("Content-Type", "application/json")
+            } else if mode == "normalize" {
+              xml.set_body(root)
+            } else if mode == "compact" {
+              let selected = xml.find(root, "", "v", 0)
+              if selected == nil { return deny(400, "Missing XML value") }
+              xml.set_body(selected)
+            }
+          }
+          return next()
+    - enable: true
+      type: RequestMirror
+      conditions:
+        run:
+          allOf:
+            - type: keyMatch
+              key: {type: path}
+              values: ["/mirror/capture"]
+      config:
+        backendRef: {name: test-http, namespace: edgion-test, port: 30001}
+        connectTimeoutMs: 500
+        writeTimeoutMs: 1000
+        maxBufferedChunks: 10
+        mirrorLog: true
+        maxConcurrent: 100

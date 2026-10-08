@@ -35,6 +35,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::ai_guard_ordering::SCENARIO,
         crate::dynamic::scenarios::gateway_dynamic::SCENARIO,
         crate::dynamic::scenarios::dsl_dynamic::SCENARIO,
+        crate::dynamic::scenarios::dsl_xml_dynamic::SCENARIO,
         crate::dynamic::scenarios::dsl_terminate_dynamic::SCENARIO,
         crate::dynamic::scenarios::body_dynamic::SCENARIO,
         crate::dynamic::scenarios::condition_refs_dynamic::SCENARIO,

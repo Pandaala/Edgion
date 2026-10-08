@@ -1,5 +1,52 @@
 use super::*;
 
+#[tokio::test]
+async fn xml_body_admission_exhaustion_fails_closed_before_session_access() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_dsl::value::{BodyValue, MAX_VALUE_WORK_UNITS};
+    use edgion_dsl::xml::XmlValue;
+
+    let vm = Vm::new(script_with_constants(vec![]), VmLimits::default()).unwrap();
+    for remaining in [0, 15] {
+        for id in [BuiltinId::XmlParse, BuiltinId::XmlSetBody] {
+            let mut state = VmState::new(0, &vm.limits);
+            let argument = if id == BuiltinId::XmlParse {
+                Value::Body(BodyValue::Request)
+            } else {
+                Value::Xml(XmlValue::element("", "r", vec![], vec![], &mut ValueWorkBudget::default()).unwrap())
+            };
+            state.push(argument, vm.limits.max_stack_depth).unwrap();
+            state
+                .value_work_budget
+                .charge(MAX_VALUE_WORK_UNITS - remaining)
+                .unwrap();
+            let error = vm
+                .call_builtin_xml(id, &mut state, &mut MockPluginSession::new(), &DslRuntime::default())
+                .await
+                .unwrap_err();
+            assert!(matches!(error, RuntimeError::BodyAccess { .. }), "{id:?}: {error:?}");
+        }
+        let mut state = VmState::new(0, &vm.limits);
+        state
+            .push(Value::Str(Arc::from("<r/>")), vm.limits.max_stack_depth)
+            .unwrap();
+        state
+            .value_work_budget
+            .charge(MAX_VALUE_WORK_UNITS - remaining)
+            .unwrap();
+        assert!(matches!(
+            vm.call_builtin_xml(
+                BuiltinId::XmlParse,
+                &mut state,
+                &mut MockPluginSession::new(),
+                &DslRuntime::default()
+            )
+            .await,
+            Err(RuntimeError::ValueWorkLimitExceeded { .. })
+        ));
+    }
+}
+
 /// Build a minimal CompiledScript with the given constants and no real code.
 fn script_with_constants(constants: Vec<Constant>) -> CompiledScript {
     CompiledScript {

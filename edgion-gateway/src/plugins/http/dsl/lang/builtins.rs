@@ -415,7 +415,7 @@ fn check_string_len(s: &str, limit: usize) -> Result<(), RuntimeError> {
     }
 }
 
-fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
+pub(crate) fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
     check_string_len(&s, limit)?;
     Ok(Value::Str(s.into()))
 }
@@ -1344,6 +1344,25 @@ impl Vm {
                 Ok(Value::Nil)
             }
 
+            BuiltinId::XmlParse
+            | BuiltinId::XmlKind
+            | BuiltinId::XmlName
+            | BuiltinId::XmlNamespace
+            | BuiltinId::XmlValue
+            | BuiltinId::XmlChildCount
+            | BuiltinId::XmlChild
+            | BuiltinId::XmlFind
+            | BuiltinId::XmlAttributeCount
+            | BuiltinId::XmlAttribute
+            | BuiltinId::XmlAttrValue
+            | BuiltinId::XmlText
+            | BuiltinId::XmlAttr
+            | BuiltinId::XmlElement
+            | BuiltinId::XmlStringify
+            | BuiltinId::XmlSetBody => Err(RuntimeError::Internal {
+                message: "XML builtin requires the XML dispatch boundary".into(),
+            }),
+
             // http.call is dispatched asynchronously by the VM before reaching call_builtin
             BuiltinId::HttpCall => Err(RuntimeError::Internal {
                 message: "HttpCall must be dispatched via call_builtin_http, not call_builtin".into(),
@@ -1953,7 +1972,23 @@ impl Vm {
             // All non-Redis builtins are dispatched via call_builtin / call_builtin_http and
             // must not reach here. Listed explicitly (no `_ =>` catch-all) so adding a new
             // BuiltinId variant fails to compile until it is routed to the right dispatcher.
-            BuiltinId::ReqHeader
+            BuiltinId::XmlParse
+            | BuiltinId::XmlKind
+            | BuiltinId::XmlName
+            | BuiltinId::XmlNamespace
+            | BuiltinId::XmlValue
+            | BuiltinId::XmlChildCount
+            | BuiltinId::XmlChild
+            | BuiltinId::XmlFind
+            | BuiltinId::XmlAttributeCount
+            | BuiltinId::XmlAttribute
+            | BuiltinId::XmlAttrValue
+            | BuiltinId::XmlText
+            | BuiltinId::XmlAttr
+            | BuiltinId::XmlElement
+            | BuiltinId::XmlStringify
+            | BuiltinId::XmlSetBody
+            | BuiltinId::ReqHeader
             | BuiltinId::ReqMethod
             | BuiltinId::ReqPath
             | BuiltinId::ReqQuery

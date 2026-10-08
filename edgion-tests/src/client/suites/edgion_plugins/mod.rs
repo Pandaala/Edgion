@@ -95,7 +95,7 @@ pub use direct_endpoint::DirectEndpointTestSuite;
 pub use dsl::{
     DslBodyTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite,
     DslTerminateDynamicInitialTestSuite, DslTerminateDynamicRestoredTestSuite, DslTerminateDynamicUpdatedTestSuite,
-    DslTerminateTestSuite, DslTestSuite,
+    DslTerminateTestSuite, DslTestSuite, DslXmlDynamicTestSuite,
 };
 pub use dynamic_external_upstream::DynamicExternalUpstreamTestSuite;
 pub use dynamic_internal_upstream::{DeniedNamedJumpTestSuite, DynamicInternalUpstreamTestSuite};

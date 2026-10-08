@@ -1938,7 +1938,9 @@ run_all_tests() {
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     local test_name="EdgionPlugins_${item_safe}"
-                    if ! should_skip_test "$test_name"; then
+                    if [ "$G_ITEM" = "DslXmlDynamic" ]; then
+                        run_test "Dyn_DslXmlDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario DslXmlDynamic" || test_failed=true
+                    elif ! should_skip_test "$test_name"; then
                         if $FULL_TEST && [ "$G_ITEM" = "ExtProc" ]; then
                             run_test "$test_name" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ${G_ITEM} --full-test" || test_failed=true
                         else
@@ -2531,6 +2533,8 @@ main() {
                     suites="${base_suites},EdgionPlugins/Dsl"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/DslGrpcError" ]; then
                     suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis,EdgionPlugins/Dsl"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/DslXmlDynamic" ]; then
+                    suites="${base_suites},EdgionPlugins/DslBody"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Dsl" ]; then
                     suites="${base_suites},LinkSys/Redis,EdgionPlugins/Dsl"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/RateLimitRedis" ]; then
@@ -2868,7 +2872,7 @@ main() {
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
         || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ]; }; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
-        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ]; }; }; then
+        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ]; }; }; then
         log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"
         report_test "Preflight_LoopbackAliases" "SKIP" "0" "not required by selected suites"
     elif ! ensure_loopback_aliases; then

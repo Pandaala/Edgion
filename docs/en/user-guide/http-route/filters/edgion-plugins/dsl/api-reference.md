@@ -2,7 +2,9 @@
 
 This document lists all built-in functions in EdgionDSL, organized by category. Each function includes its full signature, parameter descriptions, return values, constraints, and usage examples.
 
-**Type overview**: EdgionDSL has 7 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), `Body` (an opaque request-body handle), `List` (a list of strings; cannot be constructed directly by user code), and `Map` (an ordered string-keyed map; returned by `http.call()` and constructible via `{key: expr}` literals).
+**Type overview**: EdgionDSL has 8 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), `Body` (an opaque request-body handle), `List` (a list of strings; cannot be constructed directly by user code), and `Map` (an ordered string-keyed map; returned by `http.call()` and constructible via `{"key": expr}` literals).
+
+`Xml` is the eighth type: an opaque immutable XML node, accessed through `xml.*` primitives.
 
 **Phase overview**: Some functions are only valid in specific execution phases. `req.*` write operations affect the request phase; `resp.*` read and write operations apply to the response phase. `grpc_error()` is supported in both phases.
 
@@ -2275,6 +2277,94 @@ if sig == nil {
 
 ---
 
+## Bounded XML primitives
+
+`Xml` is an immutable element, attribute or text handle. Element and attribute
+names use a namespace URI and local name; prefixes are presentation only.
+Children retain mixed text/element order and repeated elements. Ordinary
+attributes retain source order; namespace declarations are scope metadata and
+are excluded from attribute iteration. Map keys in constructors are labels;
+Map insertion order supplies the attribute/child sequence.
+
+| Function | Arguments | Result |
+|----------|-----------|--------|
+| `xml.parse(source)` | `Str` or `req.body` | Root `Xml` element; malformed/unsupported input returns `nil` |
+| `xml.kind(node)` | `Xml\|Nil` | `"element"`, `"attribute"`, `"text"`, or `nil` |
+| `xml.name(node)` | `Xml\|Nil` | Local name; text/missing returns `nil` |
+| `xml.namespace(node)` | `Xml\|Nil` | Namespace URI; unqualified name is `""`; text/missing returns `nil` |
+| `xml.value(node)` | `Xml\|Nil` | Attribute/text value or concatenated descendant element text; missing returns `nil` |
+| `xml.child_count(element)` | Element `Xml\|Nil` | Ordered child count, including text; missing returns `nil` |
+| `xml.child(element, index)` | Element, zero-based `Int` | Ordered child; negative/missing index returns `nil` |
+| `xml.find(element, namespace, name, occurrence)` | Element, two `Str`, zero-based `Int` | Matching direct element child; missing/negative occurrence returns `nil` |
+| `xml.attribute_count(element)` | Element `Xml\|Nil` | Ordinary attribute count; missing returns `nil` |
+| `xml.attribute(element, index)` | Element, zero-based `Int` | Attribute `Xml`; missing/negative index returns `nil` |
+| `xml.attr_value(element, namespace, name)` | Element, two `Str` | Attribute `Str` or `nil` |
+| `xml.text(value)` | `Str` | Text `Xml` |
+| `xml.attr(namespace, name, value)` | Three `Str` | Attribute `Xml` |
+| `xml.element(namespace, name, attributes, children)` | Two `Str`, two ordered `Map` | Element `Xml`; attributes must contain attribute nodes, children contain element/text nodes |
+| `xml.stringify(element)` | Element `Xml\|Nil` | Complete serialized `Str`; missing returns `nil`; also obeys `maxStringLen` |
+| `xml.set_body(element)` | Element `Xml` | `nil`; atomically replaces the request body after complete bounded serialization |
+
+XML 1.0 with UTF-8 input is supported. CDATA becomes text; comments, processing
+instructions and declarations are validated and omitted from the value model.
+In the supported declaration subset, `<?xml` must be followed by an ASCII space;
+a tab, CR or LF at that position is unsupported and parse returns `nil`.
+XML newline and attribute whitespace normalization apply; numeric references
+retain their referenced whitespace. Serialization uses deterministic explicit
+prefixes, escapes markup and normalization-sensitive characters, and preserves
+expanded names and semantic text rather than source formatting.
+Equal namespace URIs share a prefix on each element. Generated namespace
+declarations also obey the 64-per-element ceiling; serializing a subtree alone
+can require extra local bindings and fail with the namespace limit.
+
+DTD (including empty DTD), custom/external entities, XInclude, invalid XML
+characters and unsupported encoding/version declarations return `nil` from
+parse. Only predefined and valid numeric character references are decoded.
+No entity, stylesheet, schema or include URL is fetched. XML Schema/WSDL
+validation and automatic XML-to-JSON mappings are outside this API.
+
+Local names must be NCNames. Constructors reject invalid characters/names,
+duplicate expanded attribute names, invalid node kinds and reserved `xmlns` or
+XInclude namespaces with `ApiError`. The standard XML namespace uses `xml`.
+Non-XML/non-nil getter inputs and incompatible argument types raise `TypeError`.
+`Xml` never implicitly converts to a string, including `to_str`, concatenation,
+headers, logging and `ctx.set`; use `xml.value` or `xml.stringify`. Equality
+means the same immutable handle, not structural equality.
+
+Hard ceilings: 1 MiB source, serialized output and aggregate decoded subtree
+payload; depth 32; 4,096 expanded element/text nodes and 4,096 attributes;
+64 ordinary attributes and 64 namespace declarations per element; 256-byte
+prefix/local names and 1,024-byte namespace URIs. Repeated shared handles count
+each logical occurrence. Parsing, construction, traversal and serialization
+consume the existing cumulative VM value-work budget; limits never truncate.
+
+`xml.parse(req.body)` reads the current shared request-body generation, including
+disk-backed bodies, under the resolved physical cap and `maxBodyScanPasses`.
+Malformed input is still `nil`, so authorization scripts must reject it
+explicitly. Body storage/scan/XML/work-limit failures and `xml.set_body`
+serialization/publication failures return the fixed 500 `Request body processing
+failed` regardless of `errorPolicy`. String XML limits follow the normal DSL
+policy; string result overflow is `StringTooLong`. `xml.set_body` is request-stage
+only, triggers body capture even for string-only construction, and leaves the
+previous body unchanged if serialization fails. Subsequent readers, retries and
+mirrors use the final generation. There is no response-body XML API.
+
+```rust
+let envelope = xml.parse(req.body)
+if envelope == nil { return deny(400, "Invalid XML") }
+let body = xml.find(envelope, "urn:soap", "Body", 0)
+let item = xml.find(body, "urn:example", "item", 0)
+if item == nil { return deny(400, "Missing item") }
+req.set_header("X-Item", xml.value(item))
+
+let id = xml.attr("", "id", "7")
+let value = xml.text("hello & goodbye")
+let request = xml.element("urn:legacy", "request", {"id": id}, {"value": value})
+xml.set_body(request)
+req.set_header("Content-Type", "application/xml")
+return next()
+```
+
 ## Appendix: Function Quick Reference
 
 | Function | Category | Return Type | Parameters |
@@ -2350,6 +2440,22 @@ if sig == nil {
 | `log_fmt(template_literal, value1, ...)` | Utility | `Nil` | 1–255 |
 | `log_warn(msg)` | Utility | `Nil` | 1 |
 | `log_error(msg)` | Utility | `Nil` | 1 |
+| `xml.parse(source)` | Bounded XML | `Xml\|Nil` | 1 |
+| `xml.kind(node)` | Bounded XML | `Str\|Nil` | 1 |
+| `xml.name(node)` | Bounded XML | `Str\|Nil` | 1 |
+| `xml.namespace(node)` | Bounded XML | `Str\|Nil` | 1 |
+| `xml.value(node)` | Bounded XML | `Str\|Nil` | 1 |
+| `xml.child_count(node)` | Bounded XML | `Int\|Nil` | 1 |
+| `xml.child(node, index)` | Bounded XML | `Xml\|Nil` | 2 |
+| `xml.find(node, namespace, name, occurrence)` | Bounded XML | `Xml\|Nil` | 4 |
+| `xml.attribute_count(node)` | Bounded XML | `Int\|Nil` | 1 |
+| `xml.attribute(node, index)` | Bounded XML | `Xml\|Nil` | 2 |
+| `xml.attr_value(node, namespace, name)` | Bounded XML | `Str\|Nil` | 3 |
+| `xml.text(value)` | Bounded XML | `Xml` | 1 |
+| `xml.attr(namespace, name, value)` | Bounded XML | `Xml` | 3 |
+| `xml.element(namespace, name, attributes, children)` | Bounded XML | `Xml` | 4 |
+| `xml.stringify(node)` | Bounded XML | `Str\|Nil` | 1 |
+| `xml.set_body(node)` | Bounded XML | `Nil` | 1 |
 
 ---
 

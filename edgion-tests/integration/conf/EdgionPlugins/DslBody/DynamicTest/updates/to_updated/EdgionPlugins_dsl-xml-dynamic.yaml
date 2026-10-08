@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-xml-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: Dsl
+      config:
+        name: xml-dynamic
+        errorPolicy: ignore
+        source: |
+          if xml.parse(req.body) == nil { return deny(400, "Invalid XML") }
+          xml.set_body(xml.element("", "v2", {}, {"value": xml.text("new-value")}))
+          return next()

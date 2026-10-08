@@ -145,6 +145,36 @@ The no-argument whole-body method and its opcode are removed in bytecode
 version 5, with no alias or implicit no-argument `read` replacement. Internal
 storage materialization APIs remain separate from the script API.
 
+### Bounded XML values
+
+`edgion-dsl::xml` owns immutable `Value::Xml` Arc nodes, allocation-free lexical
+tokenization, namespace/character/structure validation, cached expanded subtree
+summaries and bounded construction/serialization. XML uses the existing builtin
+resolution, arity and independent bytecode validation seams, with no grammar
+extension or workspace dependency edge. Prefixes normalize while expanded names,
+ordinary attribute order and mixed/repeated child order remain semantic.
+
+Gateway `lang/xml_builtins.rs` owns runtime policy and an owned raw scanner.
+`DslBodyOps::parse_xml` checks current physical/source admission, reserves the
+shared BodyScanBudget and moves the live ValueWorkBudget into the canonical
+permit-limited blocking scan lane. The VM holds an exhausted placeholder until
+the worker returns its account; it restores the account before interpreting nil
+or error. The at-most-1-MiB parser input is transient derived-operation scratch,
+not another cache/replay source. Bounded finish may complete after cancellation;
+the permit and owned state stay with the worker until exit.
+
+All XML producers precharge allocation/work; cached expanded summaries include
+repeated handles to bound alias expansion. Xml equality is handle identity and
+implicit string conversion is rejected. `XmlSetBody` triggers request capture
+and mutation-stage validation even without ReqBody; serialization finishes under
+both XML/output and physical limits before PluginSession::overwrite_request_body.
+Bytes consumes the output String; string-returning paths charge their final Arc
+copy separately. Existing replay/framing/retry/mirror owners remain canonical.
+Malformed/unsupported XML is nil; Body XML limits/storage/work and all set_body
+output/publication failures are fixed BodyAccess. Pure-string limits retain the
+normal DSL policy. There is no response-body XML API or external XML resolution.
+See [the regression contract](../../04-review/dsl/regression-guards/bounded-xml-primitives.md).
+
 ## 4. Async / sync bridging
 
 ### Explicit termination decisions

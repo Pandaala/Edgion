@@ -184,7 +184,7 @@ pub(crate) struct VmState {
     max_steps: u32,
     max_call_count: u32,
     pub(crate) body_scan_budget: BodyScanBudget,
-    value_work_budget: ValueWorkBudget,
+    pub(crate) value_work_budget: ValueWorkBudget,
 }
 
 impl VmState {
@@ -1187,7 +1187,9 @@ impl Vm {
                 // ===== Builtin Calls =====
                 OpCode::CallBuiltin(id, argc) => {
                     state.tick_call()?;
-                    let result = if id == BuiltinId::HttpCall {
+                    let result = if id.is_xml_builtin() {
+                        self.call_builtin_xml(id, &mut state, session, runtime).await?
+                    } else if id == BuiltinId::HttpCall {
                         self.call_builtin_http(argc, &mut state, session, runtime).await?
                     } else if id.is_redis_builtin() {
                         self.call_builtin_redis(id, argc, &mut state, runtime, log).await?
@@ -1313,6 +1315,7 @@ pub async fn execute_safe(
                 RuntimeError::ValueTooManyItems { .. } => "value item limit exceeded",
                 RuntimeError::ValueKeysTooLong { .. } => "value map-key byte limit exceeded",
                 RuntimeError::ValueWorkLimitExceeded { .. } => "value work limit exceeded",
+                RuntimeError::XmlLimitExceeded { .. } => "XML limit exceeded",
                 RuntimeError::ApiError { .. } => "api error",
                 RuntimeError::BodyAccess { .. } => unreachable!("handled above"),
                 RuntimeError::RegexError { .. } => "regex error",
