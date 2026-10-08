@@ -7408,3 +7408,324 @@ async fn descriptor_invalid_selector_replaces_prior_dependency_without_using_val
     assert!(runtime.secret_ref_manager.get_dependencies(&resource.key()).is_empty());
     assert!(runtime.cross_ns_ref_mgr.get_dependencies(&resource.key()).is_empty());
 }
+
+fn readonly_reference_families() -> Vec<EdgionPlugins> {
+    use serde_json::json;
+    let reference = json!({"name":"shared"});
+    let group = json!([{"name":"group","secretRefs":[reference]}]);
+    let mut families = Vec::new();
+    for (kind, config) in [
+        ("BasicAuth", json!({"secretGroups":group})),
+        ("KeyAuth", json!({"secretGroups":group})),
+        ("HmacAuth", json!({"secretGroups":group})),
+        (
+            "JwtAuth",
+            json!({"issuerGroups":[{"name":"group","issuers":["issuer"],"secretRefs":[reference]}]}),
+        ),
+        ("Csrf", json!({"secretRef":reference})),
+        ("JweDecrypt", json!({"secretRef":reference})),
+        ("HeaderCertAuth", json!({"caSecretRefs":[reference]})),
+        ("CredentialInjector", json!({"credentialRef":reference})),
+    ] {
+        families.push(serde_json::from_value(json!({"metadata":{"name":"readonly","namespace":"default"},"spec":{"requestPlugins":[{"type":kind,"config":config}]}})).unwrap());
+    }
+    for kind in ["OpenidConnect", "LdapAuth", "ExtProc"] {
+        families.push(owning_tls_fixture(
+            kind,
+            "requestPlugins",
+            true,
+            json!([{"kind":"ConfigMap","name":"shared"}]),
+        ));
+    }
+    for kind in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        families.push(managed_http_plugins(
+            kind,
+            "requestPlugins",
+            true,
+            true,
+            "${secretRef:default/shared:token}",
+        ));
+    }
+    families.push(owning_condition_fixture("requestPlugins", true, reference));
+    families.push(wasm_ep_with_fetch_auth("default", None, "shared", "authorization"));
+    families.push(wasm_ep_with_oci("default", None, "shared"));
+    families.push(wasm_ep_with_fetch_tls(
+        "default",
+        vec![ca_ref("ConfigMap", "shared", None)],
+        Some(SecretObjectReference {
+            name: "shared".into(),
+            group: None,
+            kind: None,
+            namespace: None,
+        }),
+    ));
+    families.push(descriptor_owner("requestPlugins", true, "shared", "test.pb"));
+    families
+}
+
+fn readonly_resolved_condition(ep: &mut EdgionPlugins, ctx: &HandlerContext) -> edgion_resources::Condition {
+    EdgionPluginsHandler.update_status(ep, ctx, &[]);
+    ep.status
+        .as_ref()
+        .unwrap()
+        .as_local()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == "ResolvedRefs")
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn readonly_current_fields_cover_every_material_family_without_dependency_authority() {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::observe_bound_reads;
+    for (index, mut ep) in readonly_reference_families().into_iter().enumerate() {
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let owner = ResourceRef::new(
+            edgion_resources::ResourceKind::EdgionPlugins,
+            ep.metadata.namespace.clone(),
+            ep.metadata.name.clone().unwrap(),
+        );
+        let (condition, calls) = observe_bound_reads(|| readonly_resolved_condition(&mut ep, &ctx));
+        assert_eq!(condition.status, "False", "{}", condition.message);
+        let expected = [1, 1, 1, 1, 1, 1, 1, 1, 4, 2, 2, 3, 3, 3, 5, 1, 1, 2, 1][index];
+        assert_eq!(
+            calls.iter().filter(|call| **call == "authorization").count(),
+            expected,
+            "family {index}"
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| **call == "secret" || **call == "configmap")
+                .count(),
+            expected,
+            "family {index}"
+        );
+        assert!(ctx.secret_ref_manager().get_dependencies(&owner.key()).is_empty());
+        assert!(runtime.cross_ns_ref_mgr.get_dependencies(&owner.key()).is_empty());
+        // Stale registry edges are not current fields and cannot add a diagnostic or read.
+        ctx.secret_ref_manager()
+            .add_ref("foreign/stale-secret".into(), owner.clone());
+        ctx.secret_ref_manager()
+            .add_ref("ConfigMap/foreign/stale-config".into(), owner.clone());
+        runtime.cross_ns_ref_mgr.add_ref("foreign".into(), owner.clone());
+        let mut before = ctx.secret_ref_manager().get_dependencies(&owner.key());
+        before.sort();
+        let (again, repeated) = observe_bound_reads(|| readonly_resolved_condition(&mut ep, &ctx));
+        assert_eq!((again.reason, again.message), (condition.reason, condition.message));
+        assert_eq!(calls, repeated);
+        let mut after = ctx.secret_ref_manager().get_dependencies(&owner.key());
+        after.sort();
+        assert_eq!(after, before);
+        assert_eq!(runtime.cross_ns_ref_mgr.get_dependencies(&owner.key()), vec!["foreign"]);
+        for entry in ep.spec.request_plugins.as_mut().unwrap() {
+            entry.enable = false;
+        }
+        let (inactive, calls) = observe_bound_reads(|| readonly_resolved_condition(&mut ep, &ctx));
+        assert_eq!(inactive.status, "True");
+        assert!(calls.is_empty());
+        let mut after = ctx.secret_ref_manager().get_dependencies(&owner.key());
+        after.sort();
+        assert_eq!(after, before);
+        for entry in ep.spec.request_plugins.as_mut().unwrap() {
+            entry.enable = true;
+        }
+        ep.metadata.name = Some("bad/name".into());
+        let (_, calls) = observe_bound_reads(|| readonly_resolved_condition(&mut ep, &ctx));
+        assert!(calls.is_empty());
+    }
+}
+
+#[test]
+fn readonly_injector_aggregate_reports_missing_and_denied_once_and_ignores_stale_decoys() {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::observe_bound_reads;
+    use serde_json::json;
+    for namespace in [None, Some("foreign")] {
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ep: EdgionPlugins = serde_json::from_value(
+            json!({"metadata":{"name":"readonly","namespace":"default"},"spec":{"requestPlugins":[
+                {"type":"CredentialInjector","config":{"credentialRef":{"name":"shared","namespace":namespace}}},
+                {"type":"CredentialInjector","config":{"credentialRef":{"name":"shared","namespace":namespace}}}
+            ]}}),
+        )
+        .unwrap();
+        let owner = ResourceRef::new(
+            edgion_resources::ResourceKind::EdgionPlugins,
+            Some("default".into()),
+            "readonly".into(),
+        );
+        let (condition, calls) = observe_bound_reads(|| readonly_resolved_condition(&mut ep, &ctx));
+        assert_eq!(
+            condition.reason,
+            if namespace.is_some() {
+                "RefNotPermitted"
+            } else {
+                "SecretNotFound"
+            }
+        );
+        assert_eq!(condition.message.matches("shared").count(), 1);
+        assert_eq!(calls.iter().filter(|call| **call == "authorization").count(), 2);
+        assert_eq!(
+            calls.iter().filter(|call| **call == "secret").count(),
+            if namespace.is_some() { 0 } else { 2 }
+        );
+        assert!(ctx.secret_ref_manager().get_dependencies(&owner.key()).is_empty());
+        assert!(runtime.cross_ns_ref_mgr.get_dependencies(&owner.key()).is_empty());
+    }
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([(
+        "default/shared".into(),
+        build_secret("default", "shared", "bearerToken", "actual-token"),
+    )]));
+    let mut ep:EdgionPlugins=serde_json::from_value(json!({"metadata":{"name":"readonly","namespace":"default"},"spec":{"requestPlugins":[{"type":"CredentialInjector","config":{"credentialRef":{"name":"shared"}}}]}})).unwrap();
+    let owner = ResourceRef::new(
+        edgion_resources::ResourceKind::EdgionPlugins,
+        Some("default".into()),
+        "readonly".into(),
+    );
+    ctx.secret_ref_manager()
+        .add_ref("foreign/obsolete".into(), owner.clone());
+    let (condition, calls) = observe_bound_reads(|| readonly_resolved_condition(&mut ep, &ctx));
+    assert_eq!(condition.status, "True");
+    assert_eq!(calls, vec!["authorization", "secret"]);
+    for reference in [
+        json!({"name":"shared","group":"foreign"}),
+        json!({"name":"shared","kind":"ConfigMap"}),
+        json!({"name":"bad/name"}),
+        json!({"name":"shared","namespace":""}),
+    ] {
+        let mut wire = serde_json::to_value(&ep).unwrap();
+        wire["spec"]["requestPlugins"][0]["config"]["credentialRef"] = reference;
+        let mut invalid: EdgionPlugins = serde_json::from_value(wire).unwrap();
+        let (condition, calls) = observe_bound_reads(|| readonly_resolved_condition(&mut invalid, &ctx));
+        assert_eq!(condition.reason, "InvalidKind");
+        assert!(calls.is_empty());
+    }
+    assert_eq!(
+        ctx.secret_ref_manager().get_dependencies(&owner.key()),
+        vec!["foreign/obsolete"]
+    );
+    assert!(runtime.cross_ns_ref_mgr.get_dependencies(&owner.key()).is_empty());
+}
+
+#[test]
+fn readonly_descriptor_uses_exact_kind_and_skips_invalid_or_unsupported_selection() {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::observe_bound_reads;
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([(
+        "apps/shared".into(),
+        build_secret("apps", "shared", "test.pb", "decoy"),
+    )]));
+    let mut ep = descriptor_owner("requestPlugins", true, "shared", "test.pb");
+    let (condition, calls) = observe_bound_reads(|| readonly_resolved_condition(&mut ep, &ctx));
+    assert_eq!(condition.reason, "ConfigMapNotFound");
+    assert_eq!(calls, vec!["authorization", "configmap"]);
+    runtime
+        .configmap_store
+        .replace_all(HashMap::from([("apps/shared".into(), ConfigMap::default())]));
+    let (condition, calls) = observe_bound_reads(|| readonly_resolved_condition(&mut ep, &ctx));
+    assert_eq!(condition.status, "True");
+    assert_eq!(calls, vec!["authorization", "configmap"]);
+    for (stage, enabled, name, key) in [
+        ("requestPlugins", false, "shared", "test.pb"),
+        ("upstreamResponsePlugins", true, "shared", "test.pb"),
+        ("requestPlugins", true, "bad/name", "test.pb"),
+        ("requestPlugins", true, "shared", ""),
+    ] {
+        let mut invalid = descriptor_owner(stage, enabled, name, key);
+        let (_, calls) = observe_bound_reads(|| readonly_resolved_condition(&mut invalid, &ctx));
+        assert!(calls.is_empty(), "{stage}/{name}/{key}");
+    }
+}
+
+#[tokio::test]
+async fn readonly_field_status_recovers_through_secret_and_configmap_event_workers() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{
+        handlers::{ConfigMapHandler, SecretHandler},
+        LocalRawStore, RawStore, ResourceProcessor,
+    };
+    use serde_json::json;
+    macro_rules! step {
+        ($processor:expr,$raw:expr,$key:expr) => {{
+            let queue = $processor.workqueue();
+            let item = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(item.key, $key);
+            let source = $raw.get(&item.key).map(|value| (*value).clone());
+            $processor
+                .process_work_item(&item.key, source, None, item.trigger_chain)
+                .await;
+            queue.done(&item.key);
+        }};
+    }
+    macro_rules! lifecycle {
+        ($resource:ty,$kind:expr,$handler:expr,$entry:expr,$first:expr,$second:expr,$field:expr,$index_key:expr) => {{
+            let runtime=Arc::new(ControllerRuntime::default());
+            let plugins=Arc::new(ResourceProcessor::<EdgionPlugins>::new("EdgionPlugins",32,Arc::new(EdgionPluginsHandler),runtime.clone()));
+            let raw=Arc::new(LocalRawStore::new());plugins.set_raw_store(raw.clone());runtime.processor_registry.register(plugins.clone());
+            let objects=Arc::new(ResourceProcessor::<$resource>::new($kind,32,Arc::new($handler),runtime.clone()));
+            let object_raw=Arc::new(LocalRawStore::new());objects.set_raw_store(object_raw.clone());runtime.processor_registry.register(objects.clone());
+            let mut ep:EdgionPlugins=serde_json::from_value(json!({"metadata":{"name":"recover","namespace":"apps","uid":"initial","generation":1},"spec":{"requestPlugins":[$entry]}})).unwrap();
+            let owner=ResourceRef::new(edgion_resources::ResourceKind::EdgionPlugins,Some("apps".into()),"recover".into());
+            raw.upsert("apps/recover".into(),Arc::new(ep.clone()));plugins.on_event_key("apps/recover".into()).await;step!(plugins,raw,"apps/recover");
+            assert_eq!(runtime.secret_ref_manager.get_refs($index_key),vec![owner.clone()]);
+            let status=plugins.get("apps/recover").unwrap();assert_eq!(status.status.as_ref().unwrap().as_local().unwrap().conditions.iter().find(|condition|condition.type_=="ResolvedRefs").unwrap().status,"False");
+            for (index,present,uid,rv,data) in [(0,true,"object-a","1",$first.clone()),(1,true,"object-a","2",$second.clone()),(2,false,"object-a","3",$second.clone()),(3,true,"object-b","4",$first.clone())] {
+                ep.metadata.uid=Some(format!("consumer-{index}"));ep.metadata.generation=Some(index+2);
+                raw.upsert("apps/recover".into(),Arc::new(ep.clone()));
+                if present {
+                    let mut wire=json!({"metadata":{"name":"shared","namespace":"apps","uid":uid,"resourceVersion":rv}});
+                    wire[$field]=data.clone();
+                    let object:$resource=serde_json::from_value(wire).unwrap();object_raw.upsert("apps/shared".into(),Arc::new(object));
+                } else {object_raw.remove("apps/shared");}
+                objects.on_event_key("apps/shared".into()).await;step!(objects,object_raw,"apps/shared");step!(plugins,raw,"apps/recover");
+                let current=plugins.get("apps/recover").unwrap();assert_eq!(current.metadata.uid,ep.metadata.uid);assert_eq!(current.metadata.generation,ep.metadata.generation);
+                let condition=current.status.as_ref().unwrap().as_local().unwrap().conditions.iter().find(|condition|condition.type_=="ResolvedRefs").unwrap();assert_eq!(condition.status,if present {"True"} else {"False"});
+                assert_eq!(runtime.secret_ref_manager.get_refs($index_key),vec![owner.clone()]);
+                assert_eq!(runtime.secret_ref_manager.get_dependencies(&owner.key()),vec![$index_key]);
+                if present {
+                    let object=objects.get("apps/shared").unwrap();assert_eq!(object.metadata.uid.as_deref(),Some(uid));assert_eq!(object.metadata.resource_version.as_deref(),Some(rv));assert_eq!(serde_json::to_value(&object).unwrap()[$field],data);
+                } else {assert!(objects.get("apps/shared").is_none());}
+                match &current.spec.request_plugins.as_ref().unwrap()[0].plugin {
+                    EdgionPlugin::CredentialInjector(config)=>assert_eq!(config.resolved_credential.as_ref().map(|credential|credential.value.as_str()),if present {Some(if index==1 {"updated-token"}else{"first-token"})}else{None}),
+                    EdgionPlugin::GrpcJsonTranscoder(config)=>{
+                        assert_eq!(config.resolved_descriptor.is_some(),present);
+                        if present {assert_eq!(serde_json::to_value(ByteString(config.resolved_descriptor.clone().unwrap())).unwrap(),data["test.pb"]);}
+                    }
+                    _=>panic!("unexpected fixture"),
+                }
+            }
+            raw.remove("apps/recover");plugins.on_event_key("apps/recover".into()).await;step!(plugins,raw,"apps/recover");
+            assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+        }};
+    }
+    let first = json!({"bearerToken":ByteString(b"first-token".to_vec())});
+    let second = json!({"bearerToken":ByteString(b"updated-token".to_vec())});
+    lifecycle!(
+        Secret,
+        "Secret",
+        SecretHandler::new(),
+        json!({"type":"CredentialInjector","config":{"credentialRef":{"name":"shared"}}}),
+        first,
+        second,
+        "data",
+        "apps/shared"
+    );
+    let bytes = include_bytes!("../../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb").to_vec();
+    let mut updated = bytes.clone();
+    updated.extend_from_slice(&[0xa0, 0x06, 0x01]);
+    let first = json!({"test.pb":ByteString(bytes)});
+    let second = json!({"test.pb":ByteString(updated)});
+    lifecycle!(
+        ConfigMap,
+        "ConfigMap",
+        ConfigMapHandler::new(),
+        json!({"type":"GrpcJsonTranscoder","config":{"descriptor":{"type":"configMapRef","name":"shared","key":"test.pb"},"services":["test.TestService"]}}),
+        first,
+        second,
+        "binaryData",
+        "ConfigMap/apps/shared"
+    );
+}

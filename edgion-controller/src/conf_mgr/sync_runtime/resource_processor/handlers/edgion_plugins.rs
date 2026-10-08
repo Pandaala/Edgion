@@ -15,7 +15,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     update_condition, ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    condition_types, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef, CONFIG_MAP_REF_KEY_PREFIX,
+    condition_types, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::prelude_resources::EdgionPlugins;
@@ -583,8 +583,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ep.metadata.namespace.clone(),
             ep.metadata.name.clone().unwrap_or_default(),
         );
-        let mut resolved_errors = Self::resolve_secret_refs(ep, ctx);
-        resolved_errors.extend(super::plugins::grpc_descriptor::status_errors(ep, &resource_ref, ctx));
+        let mut resolved_errors = super::plugins::grpc_descriptor::status_errors(ep, &resource_ref, ctx);
         resolved_errors.extend(cred::bound_credential_status_errors(ep, &resource_ref, ctx));
         resolved_errors.extend(cred::credential_injector_status_errors(ep, &resource_ref, ctx));
         resolved_errors.extend(cred::jwe_status_errors(ep));
@@ -653,11 +652,8 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                 generation,
             )
         } else {
-            // Use the shared priority helper rather than `errors[0]` —
-            // `SecretRefManager::get_dependencies` iterates a set with no
-            // stable order, so taking the first element would make the
-            // surfaced reason depend on hashing. `pick_resolved_refs_reason`
-            // deterministically picks the most severe variant.
+            // Classifier order determines message order; the shared priority
+            // helper independently selects the most severe reason.
             let reason = pick_resolved_refs_reason(&resolved_errors);
             let message = resolved_errors
                 .iter()
@@ -707,79 +703,11 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 }
 
 /// Preserve first-occurrence ordering while removing exact duplicate status
-/// errors. Guardrail's read-only classifier intentionally reports
-/// SecretNotFound itself, while the generic dependency scan reports the same
-/// missing object; the condition must contain it only once.
+/// errors. Multiple current owning fields may report the same missing or denied
+/// object; the aggregate condition must contain that diagnostic only once.
 fn dedup_resolved_ref_errors(errors: &mut Vec<ResolvedRefsError>) {
     let mut seen = std::collections::BTreeSet::new();
     errors.retain(|error| seen.insert((error.reason(), error.message())));
-}
-
-impl EdgionPluginsHandler {
-    /// Inspect every Secret or ConfigMap this EdgionPlugins depends on (tracked
-    /// in `SecretRefManager` by the `parse()` resolvers) and flag missing or
-    /// unauthorized material using its encoded target kind.
-    fn resolve_secret_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-        let owner_namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
-        let resource_ref = ResourceRef::new(
-            ResourceKind::EdgionPlugins,
-            ep.metadata.namespace.clone(),
-            ep.metadata.name.clone().unwrap_or_default(),
-        );
-
-        let mut errors = Vec::new();
-        // Sort dependency keys so the joined condition.message is deterministic
-        // across reconciles. get_dependencies' backing HashSet has non-deterministic
-        // iteration order; without sorting, status_diff::condition_fields_equal
-        // (which compares `message`) would trigger spurious K8s status writes.
-        let mut deps = ctx.secret_ref_manager().get_dependencies(&resource_ref.key());
-        deps.sort();
-        for dep_key in deps {
-            let (to_kind, object_key) = match dep_key.strip_prefix(CONFIG_MAP_REF_KEY_PREFIX) {
-                Some(key) => ("ConfigMap", key),
-                None => ("Secret", dep_key.as_str()),
-            };
-            // object_key is "<ns>/<name>" (or just "<name>" for a
-            // namespace-less Secret, per format_secret_key).
-            let (ns, name) = match object_key.split_once('/') {
-                Some((ns, name)) => (ns.to_string(), name.to_string()),
-                None => (String::new(), object_key.to_string()),
-            };
-            let ns_opt = if ns.is_empty() { None } else { Some(ns.as_str()) };
-            if let Some(target_namespace) = ns_opt.filter(|target_namespace| *target_namespace != owner_namespace) {
-                let allowed = ctx.runtime().ref_grant_store.check_reference_allowed(
-                    owner_namespace,
-                    "edgion.io",
-                    "EdgionPlugins",
-                    target_namespace,
-                    "",
-                    to_kind,
-                    Some(&name),
-                );
-                if !allowed {
-                    errors.push(ResolvedRefsError::RefNotPermitted {
-                        from_namespace: owner_namespace.to_string(),
-                        from_kind: "EdgionPlugins",
-                        target_namespace: target_namespace.to_string(),
-                        target_name: name,
-                    });
-                    continue;
-                }
-            }
-            let missing = match to_kind {
-                "ConfigMap" => ctx.runtime().configmap_store.get(ns_opt, &name).is_none(),
-                _ => ctx.runtime().secret_store.get(ns_opt, &name).is_none(),
-            };
-            if missing {
-                let namespace = if ns.is_empty() { "default".to_string() } else { ns };
-                errors.push(match to_kind {
-                    "ConfigMap" => ResolvedRefsError::ConfigMapNotFound { namespace, name },
-                    _ => ResolvedRefsError::SecretNotFound { namespace, name },
-                });
-            }
-        }
-        errors
-    }
 }
 
 /// Resolve every named WAF profile. Required sources are atomic; optional sources

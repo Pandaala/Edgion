@@ -98,6 +98,17 @@ pub enum FetchOutcome<T> {
     Pending(PendingReason),
 }
 
+// Production expands directly to the operation; test recording lives in the
+// mirrored module and preserves the same evaluation order and return value.
+#[cfg(not(test))]
+macro_rules! bound_read {
+    ($boundary:literal, $operation:expr) => {
+        $operation
+    };
+}
+#[cfg(test)]
+use tests::bound_read;
+
 /// A lookup from an actual owning-field loan. Invalid identities never create
 /// dependency edges or reach an object store.
 #[derive(Debug)]
@@ -320,11 +331,12 @@ fn authorize_bound_object<'a>(
                 .add_ref(namespace.to_string(), dependency_owner.clone());
         }
     }
-    let Some(revision) = ctx
-        .runtime()
-        .ref_grant_store
-        .query_authorization_revision(reference.grant_query())
-    else {
+    let Some(revision) = bound_read!(
+        "authorization",
+        ctx.runtime()
+            .ref_grant_store
+            .query_authorization_revision(reference.grant_query())
+    ) else {
         return BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
             from_ns: reference.source().scope().namespace().unwrap_or("").to_string(),
             to_ns: namespace.to_string(),
@@ -345,7 +357,10 @@ fn fetch_bound_reference(
     register: bool,
 ) -> BoundFetchOutcome<AuthorizedSecret> {
     authorize_bound_object(ctx, owner, reference, register, CoreMaterialKind::Secret).and_then(|object| {
-        match ctx.runtime().secret_store.get(Some(object.namespace), object.name) {
+        match bound_read!(
+            "secret",
+            ctx.runtime().secret_store.get(Some(object.namespace), object.name)
+        ) {
             Some(secret) => BoundFetchOutcome::Ok(AuthorizedSecret {
                 secret: super::ca_refs::ordinary_secret_material(secret),
                 authorization_revision: object.revision,
@@ -410,7 +425,10 @@ fn fetch_bound_configmap_inner(
         Err(error) => return BoundFetchOutcome::Invalid(error),
     };
     authorize_bound_object(ctx, owner, reference, register, CoreMaterialKind::ConfigMap).and_then(|object| {
-        match ctx.runtime().configmap_store.get(Some(object.namespace), object.name) {
+        match bound_read!(
+            "configmap",
+            ctx.runtime().configmap_store.get(Some(object.namespace), object.name)
+        ) {
             Some(configmap) => BoundFetchOutcome::Ok(configmap),
             None => BoundFetchOutcome::Pending(PendingReason::SecretNotFound {
                 namespace: object.namespace.to_string(),
@@ -703,3 +721,6 @@ pub async fn resolve_credential<R: SecretMaterialResolver>(
 #[cfg(test)]
 #[path = "../../../../../tests/unit/conf_mgr/sync_runtime/resource_processor/credential/pipeline_test.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::observe_bound_reads;

@@ -451,3 +451,38 @@ async fn test_secret_ref_manager_registered_when_cross_ns_grant_missing() {
         "owner must be registered for Secret wakeups, got {refs:?}"
     );
 }
+
+thread_local! {
+    static BOUND_READS: std::cell::RefCell<Option<Vec<&'static str>>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn record_bound_read(kind: &'static str) {
+    BOUND_READS.with(|reads| {
+        if let Some(reads) = reads.borrow_mut().as_mut() {
+            reads.push(kind);
+        }
+    });
+}
+
+/// Observe synchronous canonical boundary calls, not internal Grant-store reads.
+pub(crate) fn observe_bound_reads<T>(operation: impl FnOnce() -> T) -> (T, Vec<&'static str>) {
+    struct Restore(Option<Vec<&'static str>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BOUND_READS.with(|reads| *reads.borrow_mut() = self.0.take());
+        }
+    }
+    let restore = Restore(BOUND_READS.with(|reads| reads.replace(Some(Vec::new()))));
+    let result = operation();
+    let reads = BOUND_READS.with(|reads| reads.borrow_mut().take().unwrap());
+    drop(restore);
+    (result, reads)
+}
+
+macro_rules! bound_read {
+    ($boundary:literal, $operation:expr) => {{
+        $crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::tests::record_bound_read($boundary);
+        $operation
+    }};
+}
+pub(super) use bound_read;

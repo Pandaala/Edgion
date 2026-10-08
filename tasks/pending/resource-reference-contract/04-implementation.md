@@ -2289,3 +2289,30 @@ establish live delivery, all other event-source wake identities, Admin/source
 collision handling, raw-None EP lookup or generic EP status-scan correctness.
 Final gates, both independent result reviews and commit status are maintained in
 [07-progress.md](07-progress.md).
+
+
+### R4b: current-field readonly material status
+
+At base `f8bfbf6a52aa509db50366fe3f6521e931d56835`, the approved ten-path batch
+removes EdgionPlugins' registry-string Secret/ConfigMap status scan. Existing
+actual-field classifiers cover all inventoried families; CredentialInjector now
+reports its own missing-Secret and denial errors. Exact final deduplication and
+deterministic classifier ordering remain. Two explicitly reviewed helper-test
+empty-error expectations now require the corresponding single error; all other
+original assertions and identities remain. Persist-off LinkSys/Grant policy,
+memory UID/binding/expiry and retained Arcs are unchanged.
+
+Stable r4 verification passed 935 Controller resource_processor tests. Scoped
+source IDs are 136 to 140 and complete compiled IDs 1753 to 1757, with no removals
+or changed ignores. New cases cover fresh status, stale registry edges,
+invalid/inactive current fields, exact kind, aggregate deduplication and readonly
+index preservation. Test-only observers measure canonical authorization and
+Secret/ConfigMap call boundaries, not internal Grant reads. Actual source events
+and exact raw EP workers cover create, ordinary same-UID material/RV update,
+delete and recreate for Secret and ConfigMap inputs.
+
+Commands, source/binary hashes, identity controls and initial fixture failures
+are retained in `tmp/resource-reference-contract/r4b-verification-20261008-r1`.
+This does not close Admin/source collisions, raw-None EP semantic lookup or live
+conformance. Final gates, both independent result reviews and commit status are
+maintained in [07-progress.md](07-progress.md).

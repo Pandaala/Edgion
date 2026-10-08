@@ -30,7 +30,7 @@ The EdgionPluginsHandler parse stage performs extensive Secret-reference resolut
 6. **KeyAuth Secret resolution**: read API keys from each Secret, populate `resolved_keys`
 7. **OIDC Secret resolution**: read client_secret and session_secret from the Secret
 8. **CertAuth certificate resolution**: based on `cert_source` mode (Inline/Secret/SecretCa), read the CA certificate from a Secret
-9. **Every Secret reference** is registered in SecretRefManager so that Secret changes automatically requeue this resource
+9. **Valid active Secret references** are registered before authorization/material acquisition so changes can requeue this resource; invalid references create no dependency or material read
 10. **Enabled RequestMirror Service references** are registered under mirror-qualified ServiceRefManager keys so Service and EndpointSlice changes requeue this resource without treating the mirror as a forwarding backend-policy ancestor
 
 GrpcJsonTranscoder descriptor ConfigMap references use the shared owning plugin
@@ -54,7 +54,7 @@ Two Gateway-API-style conditions (`k8s_openapi::Condition` type):
 
 - **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist. Stays `True` even when inline IP lists have bad entries (partial-good; see `PartiallyInvalid` below).
 - **`ResolvedRefs`**: checks credential-material references and EdgionConfigData cross-namespace refs:
-  - Secret/ConfigMap material refs: aggregate via `SecretRefManager::get_dependencies(ep_key)`. Secret keys retain `ns/name`; ConfigMap keys use `ConfigMap/ns/name`, so status applies the declared ReferenceGrant kind and queries the matching store without colliding with a same-name Secret. Missing material reports `SecretNotFound` or `ConfigMapNotFound` respectively.
+  - Secret/ConfigMap material refs: readonly classifiers bind the current actual owning fields, validate identity/activity, authorize and query the exact target kind. Dependency registry strings are recovery indexes, never status authority. Fresh status works without parse; stale or disabled-field edges cannot authorize reads or add errors. Missing material reports `SecretNotFound` or `ConfigMapNotFound`. CredentialInjector reports its own missing/denied errors, and final exact deduplication emits one diagnostic for repeated fields. Classifier/field order determines stable messages; the shared priority helper selects the reason. Readonly classification does not register dependencies.
   - Enabled RequestMirror refs: require a core Service with a valid name and port. A missing target sets `ResolvedRefs=False/BackendNotFound`; cross-namespace authorization still uses ReferenceGrant and `RefNotPermitted`.
   - JWE credential content: a present Secret missing `data.secret`, containing invalid inner Base64 for `base64Secret`, or decoding to a non-32-byte A256GCM key sets `ResolvedRefs=False` with `MissingKeys` or `DecodeError`. The Gateway still publishes a fail-closed JWE runtime for that generation and never retains the prior key.
   - EdgionConfigData cross-ns refs (`overrideRef`, `RequestAccessPolicy.activeProfileRef`, WAF policyRef (→ WafPolicy) and plugin activeProfileRef (→ Selector), policy bundle references, RequestAccessPolicy nested IpList refs, `allowRefs`/`denyRefs`): if `ref_denied` is set on the ref (cross-ns without a matching `ReferenceGrant` and target `visibility ≠ Cluster`), → `ResolvedRefsError::RefNotPermitted` (reason `RefNotPermitted`). If the target is missing/disabled/wrong-type → reason `InvalidEdgionConfigDataRef`.
@@ -146,3 +146,21 @@ valid bytes. Rate-limit dependency checks borrow original source aliases rather
 than cloning entries. Opaque raw input Arcs and source-equality serialization stay
 input bookkeeping: this is not a claim that invalid bytes are never stored or
 copied anywhere in the process. Inline descriptors remain object-independent.
+
+
+## Readonly material-status verification boundary
+
+R4b focused Controller verification passed 935 tests. The family matrix covers
+grouped credentials, individual Secrets, local TLS CA/client refs, managed HTTP
+templates, conditions, Wasm, descriptors and CredentialInjector without relying
+on registry edges. Test-only observers count canonical authorization entry calls
+and Secret/ConfigMap store calls. Recording is implemented in the mirrored test
+module through an expression macro; production expands directly to the original
+operation. An authorization entry call is not necessarily
+an internal ReferenceGrant-store read (same-namespace authorization can bypass
+that query). Actual event/RawStore/worker tests cover creation, same-UID material
+updates, deletion and recreation. Persist-off LinkSys authorization, memory
+binding/expiry and retained-generation behavior remain unchanged. This is
+in-process evidence, not live delivery or global source-identity closure; see
+[coordinator progress](../../../tasks/pending/resource-reference-contract/07-progress.md)
+for final gates, independent reviews and commit status.

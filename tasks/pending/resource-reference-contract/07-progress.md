@@ -78,8 +78,10 @@ or historical conformance. Record commit hashes only after successful commits.
   16e7be6dce9d9d7ffc9dd70fa6889a557043aace. No push occurred. R3c descriptor
   migration completed corrected implementation, two independent actual Astra
   review passes and clean renewed root gates, then committed locally as
-  ca7bdaf79bed40287505287345e5ddb5f443ae84. No push occurred. R4a is in plan
-  preparation; the rest of R4-R8 and F1/F2 remain pending.
+  ca7bdaf79bed40287505287345e5ddb5f443ae84. R4a subsequently passed both
+  independent Astra reviews and clean gates, then committed locally as
+  f8bfbf6a52aa509db50366fe3f6521e931d56835. No push occurred. R4b is in
+  plan preparation; remaining R4-R8 and F1/F2 remain pending.
 - The first checkpoint audit and workspace commit gates passed. The user
   committed the accumulated code snapshot
   as 0f40e2708496e9aacafb0dc2fbd2cdd786ffa9e8 (`tmp commit`) while verification
@@ -88,7 +90,7 @@ or historical conformance. Record commit hashes only after successful commits.
   documentation and execution records. No push occurred. The user's commit
   remains unchanged.
 - The earlier external baseline was 4dbcc5495; current HEAD is the completed
-  R3c commit ca7bdaf79. Revalidate each batch against its current HEAD.
+  R4a commit f8bfbf6a5. Revalidate each batch against its current HEAD.
   The independently owned, untracked `review-results/` artifacts remain outside
   this task's mutation and staging scope.
 
@@ -1260,3 +1262,59 @@ unchanged, no added queue/handler IO/schema/logging/metrics/hotpath work, preser
 assertions except3 reviewed owner expectations. Stage exactly14 reviewed technical
 files plus this ledger; unrelated review-results remains excluded. Local commit
 next; no push. Broader R4-R8/F1/F2 and original issue remain open.
+
+R4a committed f8bfbf6a52aa509db50366fe3f6521e931d56835 locally, parentca7bdaf79.
+Root verified exact14 committed technical hashes,15-path staging, empty index and
+clean tracked tree. Only unrelated review-results remained. No push. Proofs are in
+r4a-verification-20261008-r1.
+
+R4b now PLAN ONLY: revalidate generic EdgionPlugins dependency-string status reads
+against actual current fields and inventory all diagnostics they currently own.
+CredentialInjector suppression is coupled to this scanner; replace with exactly
+one correct readonly missing/denied diagnostic, not silent loss. Preserve persist-off
+LinkSys authority/memory semantics. New plan, independent review and baselines must
+precede edits. Admin namespace and EP source-collision contracts remain separate.
+
+R4b exact10 plan passed independent Astra review. Root froze136 original tests/zero
+ignores and fresh compiled Controller1753 list-only baseline. EXECUTE is authorized
+within reviewed scope: actual-field readonly classifiers replace registry-string
+status authority, Injector missing/denied diagnostics become owner-derived, exact
+aggregate dedup and deterministic priority remain. Observer scope is canonical
+boundary calls, with same-namespace authorization distinct from Grant-store query.
+Preserve persist-off/memory/expiry/binding/global-switch behavior and readonly edges;
+prove real Secret/ConfigMap lifecycle including ordinary same-UID updates. No broader
+R4 collision/admission/conformance claim. Artifacts r4b-plan/baseline-20261008.
+
+R4b focused935 tests passed, source136 ->140 and compiled1753 ->1757 retain originals.
+First actual independent review found only mandatory layout failure R4b-F1: three
+source-local cfg(test) observation statements are test implementation in src. The
+other13 root gates passed, check/Clippy warning-free; originalinputs remained frozen.
+A precise two-file correction plan moves observation implementation into mirrored
+tests through a transparent expression macro, keeping production expressions and
+all observer assertions unchanged. No guard exception/weakening or runtime overhead.
+Independent amendment review is required before execution; no commit acceptance yet.
+
+R4b-F1 correction passes the unmodified layout guard: mirrored test macro records
+then evaluates each original expression exactly once, while the non-test macro
+expands directly to that expression. First independent actual reviewer returned
+SCOPED PASS on corrected frozen r2, preserving all prior full-review conclusions.
+Fresh Controller935 tests pass; source136 ->140 and compiled1753 ->1757 retain
+originals/ignores. All14 renewed root r2 gates pass, check17.374s/Clippy22.279s,
+zero warnings/errors. Root reproduced all rawlog hashes and stable10-file manifests.
+
+Corrected manifest c4a4e2494b7121cf2a3bab7408b2fb018c3ffe79c8e127f90d48040dfbdfad37;
+patch c3527e82efdc4364934d163bc3ef6b527a1e429e252ef9ba662df8b9ade9accf.
+After a user-turn interruption removed prior agents from the live roster, root
+started new confirmed gpt-6-astra r4b_second_astra for the required second whole
+actual-result review against the same immutable evidence. No result is presumed;
+commit remains gated. No push, no broader identity/conformance acceptance.
+
+Second independent Astra whole-result review returns SCOPED PASS for corrected
+R4b r2. Both reviews independently checked classifier coverage, restored Injector
+diagnostics, readonly/stale-edge safety, original assertions, test macro production
+transparency, rawlogs/binaryhashes and all14 clean gates. No scoped blocker remains.
+Root graded MUST scan confirms canonical reference/Grant ownership, unchanged
+credential memory/expiry/binding semantics, no new runtime observer or logs/metrics,
+queue/handler IO/schema/transport changes, and compliant mirrored test ownership.
+Stage exactly10 frozen technical paths plus this ledger; review-results is excluded.
+Original issue and remaining R4-R8/F1/F2 remain open. Local commit, no push.

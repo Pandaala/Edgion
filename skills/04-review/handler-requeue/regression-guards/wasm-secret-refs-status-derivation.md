@@ -28,9 +28,12 @@ TLS suppresses CA/client acquisition independently of fetch auth and OCI pull.
 Read-only status evaluates identity, authorization, object existence and the same
 `read_secret_utf8` usability predicate as parse. It reports invalid identity even
 without a parse dependency edge, and reports missing objects itself. The handler's
-exact final deduplication prevents duplicate generic dependency messages. This
+exact final deduplication prevents duplicate messages from current owning fields. This
 supersedes the historical rule forbidding missing-object reports in the Wasm
-classifier, which depended on the old raw dependency scan.
+classifier, which depended on the old raw dependency scan. R4b removes that scan:
+registry edges remain recovery indexes and cannot authorize readonly status
+lookups after fields are changed, disabled or invalidated. CredentialInjector
+also reports its own missing/denied outcomes rather than relying on the scan.
 
 Fetch auth missing, empty or invalid UTF-8 data keys produce DecodeError. OCI
 requires type `kubernetes.io/dockerconfigjson` and a nonempty UTF-8
@@ -65,6 +68,10 @@ activity coverage checks supported/unsupported stages, disabled entries, and aut
 or pull independence from disabled TLS. Consult fresh test results in
 `tasks/pending/resource-reference-contract/04-implementation.md`; overall reference
 manifest closure and Common owning material/replay proof remain in progress.
+R4b focused Controller verification passed 935 tests, including canonical-call
+positive/zero controls, stale-edge isolation and actual Secret/ConfigMap worker
+recovery through same-UID updates and delete/recreate. Observer counts concern
+canonical authorization/store calls, not internal Grant-map reads.
 Re-evaluate when supported stages, field roles, activity rules or transport
 material semantics change. Historical verdicts do not suppress a current defect.
 

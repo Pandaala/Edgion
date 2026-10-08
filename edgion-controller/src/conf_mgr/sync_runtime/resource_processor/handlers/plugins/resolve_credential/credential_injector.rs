@@ -477,9 +477,6 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn status_er
         let Some(token) = references.credential() else {
             continue;
         };
-        let is_link_sys = token
-            .validated()
-            .is_ok_and(|reference| reference.target().group_kind().kind() == "LinkSys");
         if let Err(error) = injector_material(
             config,
             token,
@@ -489,13 +486,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn status_er
             ep.metadata.generation.unwrap_or_default(),
             false,
         ) {
-            // Valid pending targets are reported by the dependency classifier.
-            // Invalid identities have no dependency edge and must remain visible.
-            if !matches!(error, ResolvedRefsError::SecretNotFound { .. })
-                && (!matches!(error, ResolvedRefsError::RefNotPermitted { .. }) || is_link_sys)
-            {
-                errors.push(error);
-            }
+            errors.push(error);
         }
     }
     errors

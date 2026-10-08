@@ -806,3 +806,21 @@ See [04-implementation.md](04-implementation.md) for scope and evidence, and
 [07-progress.md](07-progress.md) for final gates, independent reviews and commit.
 Other event-source identities, Admin/source collision, raw-None EP lookup,
 generic EP status scans and live conformance remain separate work.
+
+
+### R4b execution evidence
+
+The ten-path readonly-status batch removes registry-string material authority
+and restores CredentialInjector's missing/denied diagnostics at its actual field
+classifier. Other existing bound families, exact aggregate deduplication,
+activity/stage rules and persist-off LinkSys policies remain intact.
+
+Stable focused verification passed 935 Controller tests. Source IDs 136 to 140
+and compiled IDs 1753 to 1757 retain all originals and ignores. Canonical-call
+observers, stale-edge/fresh-status tests and actual Secret/ConfigMap workers
+cover ordinary same-UID updates as well as create/delete/recreate. Internal
+Grant-store read counts and live delivery are not claimed. Raw failures and
+hash/identity controls remain in `tmp/resource-reference-contract/r4b-verification-20261008-r1`.
+See [04-implementation.md](04-implementation.md) for bounded evidence and
+[07-progress.md](07-progress.md) for final gates, independent reviews and commit.
+Admin/source collision and raw-None EP semantic lookup remain separate R4 work.

@@ -230,7 +230,8 @@ async fn missing_secret_clears_material_and_readonly_status_avoids_duplicate() {
         context.secret_ref_manager().get_dependencies(&owner.key()),
         vec!["default/provider-token"]
     );
-    assert!(status_errors(&ep, &owner, &context).is_empty());
+    assert!(matches!(status_errors(&ep, &owner, &context).as_slice(),
+        [ResolvedRefsError::SecretNotFound { namespace, name }] if namespace == "default" && name == "provider-token"));
 }
 
 #[tokio::test]
@@ -280,7 +281,8 @@ fn readonly_status_does_not_register_or_duplicate_grant_denial() {
     };
     config.credential_ref.namespace = Some("shared".to_string());
 
-    assert!(status_errors(&ep, &owner, &context).is_empty());
+    assert!(matches!(status_errors(&ep, &owner, &context).as_slice(),
+        [ResolvedRefsError::RefNotPermitted { target_namespace, target_name, .. }] if target_namespace == "shared" && target_name == "provider-token"));
     assert!(context.secret_ref_manager().get_dependencies(&owner.key()).is_empty());
 }
 
