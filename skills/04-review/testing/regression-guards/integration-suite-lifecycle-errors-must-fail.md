@@ -90,6 +90,41 @@ identify the failed bind, owning PID, and listener before proposing a fix. A
 `SIGKILL after 5s` line alone is not evidence of port retention. Continue to
 fail closed on an actual startup, readiness, or listener-contract failure.
 
+## Healthy Redis admission requires pool readiness
+
+`TCPRoute/StreamPlugins::tcp_stream_plugin_conn_rate_limit_redis` exercises
+healthy Redis admission, so it checks the Gateway's Redis pool before opening
+the six measured connections. The existing authenticated testing PING endpoint
+uses `all_members=true` to bind a PING to each concrete Fred client. It must
+report the declared fixture pool size within an overall ten-second deadline.
+Repeated ordinary pool PINGs do not establish this: Fred advances its routing
+counter multiple times per command and can repeatedly select only a subset.
+The default PING and aggregate production health contracts remain unchanged. An unavailable client, invalid response or expired deadline
+fails the case. PING does not consume the rate-limit bucket, and the original
+six-connection admission and rejection assertions remain unchanged.
+
+On 2026-10-08, a default full sweep admitted all six connections and recorded
+four Redis runtime failures. Existing Fred diagnostics showed four EOFs when
+the previously idle pool was first used. Four independent read-only connections
+through the same OrbStack-published port also returned EOF after 375 seconds,
+while the Redis container remained running without restart. A paired control
+with thirty-second TCP keepalive and ten-second probe intervals returned EOF
+on all eight connections, so enabling TCP keepalive was not a verified fix.
+The [accepted Redis failure policy](../../rate-limit/intentional-design/redis-fail-open.md)
+still applies to real operation failures; no uncertain Lua command is replayed.
+
+The fixture precondition uses the existing Gateway admin authentication helpers
+and reads the pool size from the committed LinkSys fixture. It proves readiness
+for this standalone positive-path test, not future availability, complete
+Cluster coverage or immunity to every forwarding timeout. Re-evaluate when
+changing the fixture topology, pool routing or the measured failure-policy case.
+The first consecutive-PING attempt still admitted all six connections in a
+full sweep and is rejected as insufficient. With explicit member probes, the
+2026-10-08 default candidate sweep passed all seven TCP stream-plugin cases:
+four idle-connection EOFs were detected before measurement, then the six
+connections produced three admissions and three rejections. The complete
+sweep passed 266 checks with zero failures and nine existing skips.
+
 ## Resolution references
 
 - `ITEST-009` — 2026-08-26.

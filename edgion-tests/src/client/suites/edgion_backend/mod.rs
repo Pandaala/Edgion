@@ -1,6 +1,6 @@
 mod anthropic_provider;
 mod credential_exhaustion;
-mod gateway_admin;
+pub(crate) mod gateway_admin;
 mod resilience;
 mod single_provider;
 

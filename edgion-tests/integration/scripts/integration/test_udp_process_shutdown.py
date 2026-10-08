@@ -312,6 +312,9 @@ udp_log:
   output:
     localFile:
       path: {self.work / 'udp-access.log'}
+      # Test-only sink: shutdown assertions require terminal records regardless
+      # of host disk utilization. Actual write failures still fail assertions.
+      diskUsageThresholdPercent: 0
       rotation:
         strategy: never
         maxFiles: 1
@@ -533,6 +536,7 @@ udp_log:
 
 def prepare_certificates(run_root, env):
     command = r'''
+set -e
 source "$1"
 conf_sync_distribute_certs "$2"
 conf_sync_security_block server > "$2/server-tls.yaml"
@@ -643,7 +647,12 @@ def main():
     run_base = ROOT / "tmp/integration_testing"
     run_base.mkdir(parents=True, exist_ok=True)
     run_root = Path(tempfile.mkdtemp(prefix="udp-shutdown.", dir=run_base))
-    env = {key: value for key, value in os.environ.items() if not key.startswith("EDGION_")}
+    # Preserve the explicit CLI binary override for certificate generation.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("EDGION_") or key == "EDGION_CLI_BIN"
+    }
     success = False
     try:
         prepare_certificates(run_root, env)

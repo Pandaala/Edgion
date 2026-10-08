@@ -1,23 +1,39 @@
 use super::{budget::Reservation, GrpcTranscodingPlan};
+use crate::plugins::runtime::body_gate::{body_read_failure_result, record_body_read_error_status};
+use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::{
     filters::PluginRunningResult,
     grpc_transcoding::{CompiledGrpcTranscoder, GrpcJsonTranscoderConfig, TranscodingError, MAX_JSON_BYTES},
+    resources::edgion_plugins::BodyRequirement,
 };
 use std::sync::Arc;
 
 pub struct GrpcJsonTranscoder {
     compiled: Arc<CompiledGrpcTranscoder>,
+    body_requirement: BodyRequirement,
+    max_request_bytes: u64,
 }
 impl GrpcJsonTranscoder {
-    pub fn create(config: &GrpcJsonTranscoderConfig) -> Option<Box<dyn RequestFilter>> {
+    pub fn create(
+        config: &GrpcJsonTranscoderConfig,
+        body_requirement: BodyRequirement,
+    ) -> Option<Box<dyn RequestFilter>> {
         let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| config.compile()))
             .ok()?
             .ok()?;
+        let max_request_bytes = body_requirement
+            .max_body_size_bytes()
+            .transpose()
+            .ok()?
+            .unwrap_or(MAX_JSON_BYTES as u64)
+            .min(MAX_JSON_BYTES as u64);
         Some(Box::new(Self {
             compiled: Arc::new(compiled),
+            body_requirement,
+            max_request_bytes,
         }))
     }
 }
@@ -51,11 +67,25 @@ impl RequestFilter for GrpcJsonTranscoder {
                 return reject(session, error.request_status()).await;
             }
         };
-        let Ok(len) = session.request_body_available_len(session.declares_body() == Some(false)) else {
-            log.push_err("body unavailable");
-            return reject(session, 500).await;
+        // Own capture admission so every refusal retains the REST error dialect.
+        // The shared helper still owns failure classification and diagnostics.
+        let cap = session.ctx().request_body_config.max_body_size_bytes;
+        let len = match session.ensure_request_body(Some(cap)).await {
+            Ok(len) => len,
+            Err(error) => {
+                return match body_read_failure_result(session, &self.body_requirement, log, &error) {
+                    PluginRunningResult::ErrResponse { status, .. } => reject(session, status).await,
+                    result => result,
+                };
+            }
         };
-        if len > MAX_JSON_BYTES as u64 {
+        if len > self.max_request_bytes {
+            record_body_read_error_status(
+                session,
+                &BodyReadError::TooLarge {
+                    limit: self.max_request_bytes,
+                },
+            );
             log.push("deny input limit");
             return reject(session, 413).await;
         }

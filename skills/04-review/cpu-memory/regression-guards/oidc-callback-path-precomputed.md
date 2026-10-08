@@ -15,7 +15,11 @@ normalization configuration, or allocate a normalized path per request.
 
 This is safe because `redirectUri` is immutable for the plugin instance and the
 path normalization configuration is process-lifetime state initialized through a
-`OnceLock` before requests are served. Plugin configuration changes construct a
+`OnceLock` before resource watches start. Route and plugin compilation may read
+the global configuration during the first snapshot, before listeners serve
+requests. Initializing it after `start_watch_kinds` races with lazy default
+initialization, causing a debug startup panic or retaining the wrong policy in
+release builds. Plugin configuration changes construct a
 new instance and therefore a new cached callback path.
 
 ## Review rule

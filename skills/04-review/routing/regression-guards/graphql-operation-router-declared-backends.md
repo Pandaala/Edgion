@@ -41,13 +41,12 @@ frontend counter forward without resetting. No AST/body cache or response buffer
 is added. Auth and rewrites precede both plugins; operators keep later request
 mutation out of the admitted chain. Quota debit is not refunded on routing failure.
 
-Evidence: [specification](../../../../tasks/pending/graphql-operation-routing.md),
+Evidence: [current architecture](../../../01-architecture/02-gateway/00-overview.md#httproute-graphql-operation-routing),
 [structural validator](../../../../edgion-resources/src/resources/edgion_plugins/plugin_configs/graphql_operation_router.rs),
 [publication](../../../../edgion-gateway/src/plugins/publication/publisher.rs),
 [runtime](../../../../edgion-gateway/src/plugins/http/graphql_operation_router/plugin.rs),
 [focused tests](../../../../edgion-gateway/tests/unit/plugins/publication/mod_test.rs),
 and [shared integration](../../../../edgion-tests/src/client/suites/edgion_plugins/graphql_operation_router/mod.rs).
-Verification outcomes are recorded in the specification after their fresh runs.
 Re-evaluate changes to parser ownership, masks, delegation, target lookup, tokens,
 last-known-good retention, or strict jump guards against these tests and the
 [shared cost budget guard](../../rate-limit/regression-guards/graphql-query-cost-budgets.md).

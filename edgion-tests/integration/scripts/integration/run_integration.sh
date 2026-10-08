@@ -308,9 +308,12 @@ SLOW_TESTS=(
     "HTTPRoute_Backend_Timeout"
     "HTTPRoute_Backend_PerTryTimeout"
     "HTTPRoute_Backend_HealthCheckTransition"
+    "HTTPRoute_Transport"
     "EdgionPlugins_AllEndpointStatus"
     "EdgionPlugins_LdapAuth"
     "EdgionPlugins_LdapAuthTls"
+    "Dyn_WafDynamic"
+    "Dyn_EncryptedActiveHealthChecks"
 )
 
 is_slow_test() {
@@ -2647,6 +2650,20 @@ main() {
         unset EDGION_EXT_PROC_EXTERNAL_TLS_MATERIAL_DIR
     fi
 
+    # Skip targeted slow suites before preparing their shared topology.
+    local targeted_slow_test=""
+    case "${G_RESOURCE}/${G_ITEM}" in
+        Gateway/WafDynamic) targeted_slow_test="Dyn_WafDynamic" ;;
+        HTTPRoute/Transport) targeted_slow_test="HTTPRoute_Transport" ;;
+    esac
+    if [ -n "$targeted_slow_test" ] && should_skip_test "$targeted_slow_test"; then
+        log_info "${G_RESOURCE}/${G_ITEM} requires --full-test"
+        report_test "$targeted_slow_test" "SKIP" "0" "requires --full-test"
+        finalize_report "PASS"
+        DO_CLEANUP=false
+        exit 0
+    fi
+
     # Fast mode guard: LDAP integration test is complex (Docker-required), full-test only.
     if ! $FULL_TEST && [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "LdapAuth" ]; then
         log_info "EdgionPlugins/LdapAuth is a complex Docker-based test and requires --full-test"
@@ -3163,6 +3180,11 @@ main() {
     run_test() {
         local name=$1
         local cmd=$2
+        if should_skip_test "$name"; then
+            log_info "Skipping slow test: ${name} (use --full-test to run)"
+            report_test "$name" "SKIP" "0" "requires --full-test"
+            return 0
+        fi
         local log_file="${TEST_LOG_DIR}/${name}.log"
         local start_time=$(date +%s)
         

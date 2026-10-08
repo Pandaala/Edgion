@@ -31,6 +31,14 @@ The first decisive failure survives cancellation; universal logging enriches the
 original plugin entry once and publishes validated status through RequestInfo. There
 are no per-chunk logs, payload/grpc-message diagnostics, new metrics or request tracing.
 
+Request capture admission also belongs to the transcoder: a generic body-gate
+wrapper can reject before its request callback and emit an empty text/plain 500,
+violating the fixed REST error dialect. The runtime passes the resolved body
+requirement into its constructor instead. Capture failures reuse the shared
+body-read classification and diagnostics, then render the fixed JSON error.
+The operator's stricter request limit is compiled once and enforced before
+materialization, independently of the 1 MiB conversion cap and physical cap.
+
 Resources normalizes bounded JSON before reflection: validate names and aliases first;
 remove ordinary null fields, including whole repeated/map fields; preserve singular
 and element Value nulls. Count the protobuf/WKT shape, including Struct entries,

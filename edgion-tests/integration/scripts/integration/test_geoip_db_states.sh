@@ -106,11 +106,9 @@ fi
 # Shared helpers
 # =============================================================================
 
-# Keep every isolated process directory on the repository's filesystem. A bare
-# `mktemp -d` uses the host's system TMPDIR (for example `/private/var/folders`
-# on macOS), which may have different free space from the integration workspace.
-# That is correctness-significant here: the LocalFile access-log sink sheds at
-# its disk-usage threshold, while Phases 2 and 3 assert on the resulting file.
+# Keep isolated process directories in the integration workspace. The access-log
+# sink below disables percentage-based disk shedding
+# so Phases 2 and 3 can assert on logs independently of host volume utilization.
 TEST_WORK_ROOT=""
 
 init_test_work_root() {
@@ -123,39 +121,6 @@ init_test_work_root() {
 new_test_dir() {
     local label="$1"
     mktemp -d "${TEST_WORK_ROOT}/${label}.XXXXXX"
-}
-
-# The gateway's LocalFile access-log sink sheds to unhealthy — and then silently
-# drops every access-log entry — once the log volume reaches
-# `disk_usage_threshold_percent` (product default 90, see
-# `default_disk_usage_threshold_percent` in edgion-resources/src/output.rs).
-# Phases 2 and 3 assert on access-log content (the geo block's status/country
-# fields, masked geo.remote.coord), so on a >=90%-full host those assertions fail
-# for a reason
-# unrelated to geoip. Detect the unfit environment up front (same precedent as
-# test_plugin_policy.sh's precheck_disk_space) rather than letting it surface
-# later as a confusing content-assertion failure. We do NOT override the
-# product threshold — the disk check is correct and must keep its production
-# default.
-readonly ACCESS_LOG_DISK_THRESHOLD_PERCENT=90
-
-precheck_disk_space() {
-    local dir="$1"
-    # Replicate the gateway's own disk_usage_percent() formula rather than trust
-    # df's Capacity column — see test_plugin_policy.sh's identical helper for
-    # the full rationale on the denominator mismatch.
-    local pct
-    pct=$(df -P "$dir" 2>/dev/null | awk 'NR==2 && $2+0>0 { printf "%d", (($2-$4)*100)/$2 }')
-    if [ -z "$pct" ]; then
-        echo "WARN: could not determine disk usage for $dir; skipping disk precheck"
-        return 0
-    fi
-    if [ "$pct" -ge "$ACCESS_LOG_DISK_THRESHOLD_PERCENT" ]; then
-        echo "FAIL: disk for $dir computes to ${pct}% full by the gateway's own formula (sheds at >= ${ACCESS_LOG_DISK_THRESHOLD_PERCENT}%)"
-        echo "FAIL: the gateway would silently drop access-log entries, so Phase 2/3's log assertions cannot pass"
-        echo "FAIL: free enough space to drop BELOW ${ACCESS_LOG_DISK_THRESHOLD_PERCENT}% and re-run — this is an environment issue, not a geoip failure"
-        return 1
-    fi
 }
 
 precheck_port() {
@@ -987,6 +952,14 @@ logging:
   log_dir: "${LOG_DIR}"
 metrics:
   listen: "127.0.0.1:${GW_METRICS_PORT}"
+# Test-only sink: GeoIP assertions require logs even on a >90%-used volume.
+# Actual write failures remain failures; the production default stays at 90%.
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: "${ACCESS_LOG}"
+      diskUsageThresholdPercent: 0
 EOF
         "$geoip_fn"
     } > "${GW_TMPDIR}/gateway.yaml"
@@ -1297,7 +1270,6 @@ run_phase4() {
 # =============================================================================
 main() {
     init_test_work_root
-    precheck_disk_space "$TEST_WORK_ROOT" || exit 2
     start_backends
     start_controller
     run_phase1

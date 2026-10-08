@@ -425,8 +425,10 @@ finally:
 PY
     local dumper_pid=$!
     sleep 1
-    # One connection through the proxy is enough; the payload is irrelevant.
-    docker run --rm --network "$DOCKER_NET" --ip "$CLIENT_IP" "$LB_IMAGE" \
+    # This probe checks only the emitted protocol version. Reuse the running
+    # load balancer so container startup cannot consume the capture deadline.
+    # Address adoption is tested separately with the pinned client container.
+    docker exec "$LB_CT" \
         wget -q -T 5 -O - "http://${probe_target}/" >/dev/null 2>&1 || true
     wait "$dumper_pid" 2>/dev/null || true
 }

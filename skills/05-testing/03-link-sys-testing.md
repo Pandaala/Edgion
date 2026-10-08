@@ -152,7 +152,7 @@ These endpoints are **only available when Gateway runs with `--integration-testi
 | `GET` | `/api/v1/testing/link-sys/redis/clients` | List all registered Redis client names |
 | `GET` | `/api/v1/testing/link-sys/redis/health` | Health check ALL Redis clients |
 | `GET` | `/api/v1/testing/link-sys/redis/{name}/health` | Health check a single client |
-| `GET` | `/api/v1/testing/link-sys/redis/{name}/ping` | PING with latency measurement |
+| `GET` | `/api/v1/testing/link-sys/redis/{name}/ping` | PING with latency measurement; `?all_members=true` checks each fixed Fred pool member and returns `checked_members` |
 
 ### Key-Value Operations
 

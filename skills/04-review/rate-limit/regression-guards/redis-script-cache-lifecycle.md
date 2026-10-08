@@ -88,6 +88,14 @@ Standalone execution does not establish Cluster or failover behavior. Re-evaluat
 when the Redis client error representation, Lua sources, script deployment model,
 cluster routing, or retry policy changes.
 
+Fixture follow-up on 2026-10-08: the ignored lifecycle test uses
+`RedisLinkClient::init_for_test`, like the credential-reservation and token-bucket
+fixtures, so its exclusively owned loopback server uses the canonical test
+resolver. Production clients retain `init` and its dial-time egress policy.
+The complete lifecycle test passed against an isolated `redis:7-alpine` instance;
+this is fresh script-cache evidence, not proof that every gateway integration
+scenario passes.
+
 ## Resolution references
 
 - `redis-rate-limit-practices` — user-approved shared script-lifecycle optimization,

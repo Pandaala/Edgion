@@ -1059,6 +1059,87 @@ async fn json_schema_default_limit_rejects_64_kib_plus_one_before_materializatio
 }
 
 #[tokio::test]
+async fn transcoder_body_admission_preserves_json_errors_and_operator_limit() {
+    use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+    use crate::EdgionHttpContext;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use edgion_resources::grpc_transcoding::GrpcJsonTranscoderConfig;
+    use edgion_resources::resources::edgion_plugins::BodyRequirement;
+
+    let config: GrpcJsonTranscoderConfig = serde_json::from_value(serde_json::json!({
+        "descriptor": {
+            "type": "inline",
+            "base64": STANDARD.encode(include_bytes!("../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb"))
+        },
+        "services": ["test.TestService"]
+    }))
+    .unwrap();
+    for (capture, status, diagnostic) in [
+        (Err(BodyReadError::NotBuffered), 500, None),
+        (
+            Err(BodyReadError::StorageFailure),
+            500,
+            Some(edgion_resources::EdgionErrorCode::BodyCaptureStorageFailed),
+        ),
+        (
+            Err(BodyReadError::BufferLimitExceeded {
+                limit: 32 * 1024 * 1024,
+            }),
+            413,
+            Some(edgion_resources::EdgionErrorCode::BodyReadTooLarge),
+        ),
+        (Ok(33), 413, Some(edgion_resources::EdgionErrorCode::BodyReadTooLarge)),
+    ] {
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::GrpcJsonTranscoder(config.clone()));
+        entry.body = Some(BodyRequirement {
+            max_body_size: Some("32".into()),
+            ..BodyRequirement::fail_close()
+        });
+        let mut runtime = PluginRuntime::new();
+        assert!(runtime
+            .add_from_request_filters(&[entry], "default", "test-transcoder")
+            .is_empty());
+        let filter = runtime.request_plugins_iter().next().unwrap();
+        let mut session = MockPluginSession::new();
+        session.expect_grpc_transcoding_allowed().times(1).return_const(true);
+        session.expect_get_method().return_const("POST".to_string());
+        session.expect_get_path().return_const("/v1/hello".to_string());
+        session.expect_get_query().return_const(None);
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_ensure_request_body()
+            .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
+            .times(1)
+            .return_once(move |_| capture);
+        session
+            .expect_set_response_header()
+            .with(
+                mockall::predicate::eq("content-type"),
+                mockall::predicate::eq("application/json"),
+            )
+            .times(1)
+            .return_once(|_, _| Ok(()));
+        if let Some(diagnostic) = diagnostic {
+            session
+                .expect_record_error()
+                .with(mockall::predicate::eq(diagnostic))
+                .times(1)
+                .return_const(());
+        }
+        let mut log = PluginLog::new("GrpcJsonTranscoder");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status,
+                body: Some(bytes::Bytes::from_static(
+                    b"{\"error\":\"gRPC transcoding request failed\"}"
+                )),
+            }
+        );
+    }
+}
+
+#[tokio::test]
 async fn request_body_buffer_fails_closed_when_capture_is_unimplemented() {
     use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
     use crate::EdgionHttpContext;

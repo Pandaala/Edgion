@@ -11,7 +11,7 @@ use crate::runtime::server::http_to_grpc_status;
 use crate::EdgionHttpContext;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
-use edgion_resources::resources::edgion_plugins::{CorsConfig, WafConfig};
+use edgion_resources::resources::edgion_plugins::{BodyRequirement, CorsConfig, WafConfig};
 use edgion_resources::resources::extension_ref::{validate_extension_ref_filter, ExtensionRefValidationError};
 use edgion_resources::resources::header_modifier::{validate_grpc_filter_list, validate_http_filter_list};
 use edgion_resources::resources::http_route::MirrorTuning;
@@ -1815,7 +1815,7 @@ impl PluginRuntime {
 
     fn use_generic_body_gate(plugin: &EdgionPlugin) -> bool {
         match plugin {
-            EdgionPlugin::HmacAuth(_) => false,
+            EdgionPlugin::HmacAuth(_) | EdgionPlugin::GrpcJsonTranscoder(_) => false,
             EdgionPlugin::RequestRestriction(config) => !RequestRestriction::would_fail_construction(config),
             _ => true,
         }
@@ -1882,7 +1882,10 @@ impl PluginRuntime {
             EdgionPlugin::GraphqlRateLimit(config) => {
                 CreateResult::Ok(GraphqlRateLimit::create(config, entry_scope, body_requirement))
             }
-            EdgionPlugin::GrpcJsonTranscoder(config) => CreateResult::Ok(GrpcJsonTranscoder::create(config)),
+            EdgionPlugin::GrpcJsonTranscoder(config) => CreateResult::Ok(GrpcJsonTranscoder::create(
+                config,
+                body_requirement.unwrap_or_else(BodyRequirement::fail_close),
+            )),
             EdgionPlugin::FormJsonTransform(config) => {
                 CreateResult::Ok(FormJsonTransform::create(config, body_requirement))
             }
