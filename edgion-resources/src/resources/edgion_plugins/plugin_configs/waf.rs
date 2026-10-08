@@ -1,5 +1,6 @@
 //! Native WAF logical-plugin configuration.
 
+use crate::resources::refs::waf_fields::validated_bundle_target;
 use edgion_waf::matcher::RegexProgramError;
 use edgion_waf::seclang::{
     compile_rule_bundles, compile_with_includes, inspect_compatibility, CompatibilityLimits, CompatibilityReport,
@@ -963,8 +964,10 @@ impl WafConfig {
                     let owner_namespace = self.owner_namespace.as_deref().ok_or_else(|| {
                         WafCompileFailure::Config("bundleRefs owner namespace is missing".to_string())
                     })?;
-                    let namespace = reference.target.namespace.as_deref().unwrap_or(owner_namespace);
-                    let expected_identity = format!("{namespace}/{}", reference.target.name);
+                    let target = validated_bundle_target(reference, owner_namespace)
+                        .map_err(|error| WafCompileFailure::Config(format!("invalid bundleRefs identity: {error}")))?;
+                    let namespace = target.scope().namespace().expect("namespaced bundle target");
+                    let expected_identity = format!("{namespace}/{}", target.name());
                     if reference.target.ref_denied.is_some()
                         || bundle.identity != expected_identity
                         || reference

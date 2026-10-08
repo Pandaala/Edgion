@@ -3014,11 +3014,6 @@ async fn waf_bundle_reference_limit_stops_subscription_and_source_capture() {
             ),
         ),
     ]));
-    let (captured_policy, captured_children) = runtime
-        .edgion_config_data_store
-        .get_waf_policy_snapshot("default/waf-policy", None);
-    assert!(captured_policy.is_some());
-    assert!(captured_children.is_empty());
     let mut resource = EdgionPlugins::new("waf-owner", EdgionPluginsSpec::default());
     resource.metadata.namespace = Some("default".into());
     resource.spec.waf = Some(WafConfig {
@@ -3028,6 +3023,12 @@ async fn waf_bundle_reference_limit_stops_subscription_and_source_capture() {
         },
         ..WafConfig::default()
     });
+
+    let (captured_policy, captured_children) = runtime
+        .edgion_config_data_store
+        .get_waf_policy_snapshot(&super::WafPluginReferences::from_plugins(&resource).unwrap());
+    assert!(captured_policy.is_some());
+    assert!(captured_children.is_empty());
 
     assert_eq!(
         EdgionPluginsHandler::get_waf_policy_ref_key(&resource).as_deref(),
@@ -7944,4 +7945,312 @@ async fn standalone_ip_slots_keep_disabled_dependencies_raw_owner_and_retarget_c
     EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
     EdgionPluginsHandler.on_delete(&parsed, &ctx).await;
     assert!(runtime.edgion_config_data_refs.get_refs("default/next").is_empty());
+}
+
+fn waf_identity_fixture() -> (
+    EdgionPlugins,
+    edgion_resources::EdgionConfigData,
+    edgion_resources::EdgionConfigData,
+) {
+    let plugin = serde_json::from_value(serde_json::json!({
+        "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins", "metadata":{"name":"waf-owner"},
+        "spec":{"waf":{"policyRef":{"name":"policy"}}}
+    }))
+    .unwrap();
+    let policy = serde_json::from_value(serde_json::json!({
+        "apiVersion":"edgion.io/v1", "kind":"EdgionConfigData", "metadata":{"name":"policy","namespace":"default"},
+        "spec":{"data":{"type":"WafPolicy","config":{"defaultProfile":"base","profiles":{"base":{"bundleRefs":[{"name":"rules"}]}}}}}
+    })).unwrap();
+    let bundle = serde_json::from_value(serde_json::json!({
+        "apiVersion":"edgion.io/v1", "kind":"EdgionConfigData", "metadata":{"name":"rules","namespace":"default"},
+        "spec":{"data":{"type":"WafRuleBundle","config":{"version":"1","profile":"test","provenance":"test/revision","roots":["main.conf"],"rules":[{"name":"main.conf","content":"SecAction \"id:9851,phase:1,pass\"\n"}]}}}
+    })).unwrap();
+    (plugin, policy, bundle)
+}
+
+#[tokio::test]
+async fn waf_invalid_slots_preserve_selector_fallback_and_optional_profile_contract() {
+    use edgion_resources::resources::edgion_config_data::WafBundleRef;
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let (owner, policy, bundle) = waf_identity_fixture();
+    let handler = EdgionPluginsHandler::new();
+    for namespace in ["", "bad/ns", "Bad"] {
+        let mut candidate = owner.clone();
+        candidate.spec.waf.as_mut().unwrap().active_profile_ref = Some(EdgionConfigDataRef {
+            name: "selector".into(),
+            namespace: Some(namespace.into()),
+            ref_denied: None,
+        });
+        let mut policy = policy.clone();
+        let ConfigEntry::WafPolicy(data) = &mut policy.spec.data else {
+            unreachable!()
+        };
+        data.profiles.get_mut("base").unwrap().bundle_refs.push(WafBundleRef {
+            target: EdgionConfigDataRef {
+                name: "poison".into(),
+                namespace: Some(namespace.into()),
+                ref_denied: None,
+            },
+            optional: true,
+            expected_digest: None,
+        });
+        runtime.edgion_config_data_store.replace_all(HashMap::from([
+            ("default/policy".into(), policy.clone()),
+            ("default/rules".into(), bundle.clone()),
+            (format!("{namespace}/poison"), bundle.clone()),
+            (format!("{namespace}/selector"), policy.clone()),
+        ]));
+        let ProcessResult::Continue(parsed) = handler.parse(candidate.clone(), &ctx).await else {
+            panic!("parse")
+        };
+        let waf = parsed.spec.waf.as_ref().unwrap();
+        assert_eq!(waf.selected_profile.as_deref(), Some("base"));
+        assert_eq!(waf.selector_resolved, Some(false));
+        assert_eq!(waf.resolved_ref_indices, [0]);
+        assert!(waf.compile_generation().is_ok());
+        assert!(waf
+            .resolution_warnings
+            .iter()
+            .any(|warning| warning.contains("optional")));
+        assert!(matches!(
+            super::resolve_waf_active_profile_ref(&parsed).as_slice(),
+            [ResolvedRefsError::InvalidReference { .. }]
+        ));
+        assert!(runtime
+            .edgion_config_data_refs
+            .get_refs(&format!("{namespace}/selector"))
+            .is_empty());
+        // A required failure outside the default profile preserves the default executable.
+        let mut fallback_policy = policy.clone();
+        let ConfigEntry::WafPolicy(fallback_data) = &mut fallback_policy.spec.data else {
+            unreachable!()
+        };
+        let mut high = fallback_data.profiles["base"].clone();
+        high.bundle_refs.remove(0);
+        high.bundle_refs[0].optional = false;
+        fallback_data.profiles.insert("high".into(), high);
+        runtime.edgion_config_data_store.update(
+            HashMap::from([("default/policy".into(), fallback_policy)]),
+            &Default::default(),
+        );
+        let mut requested_high = candidate.clone();
+        requested_high.spec.waf.as_mut().unwrap().active_profile_ref = None;
+        requested_high.spec.waf.as_mut().unwrap().active_profile = Some("high".into());
+        let ProcessResult::Continue(fallback) = handler.parse(requested_high, &ctx).await else {
+            panic!("parse")
+        };
+        let fallback = fallback.spec.waf.as_ref().unwrap();
+        assert_eq!(fallback.selected_profile.as_deref(), Some("base"));
+        assert_eq!(fallback.resolved_ref_indices, [0]);
+        assert!(fallback.compile_generation().is_ok());
+        assert!(fallback
+            .resolution_warnings
+            .iter()
+            .any(|warning| warning.contains("profile high unavailable")));
+        let ConfigEntry::WafPolicy(data) = &mut policy.spec.data else {
+            unreachable!()
+        };
+        data.profiles.get_mut("base").unwrap().bundle_refs[1].optional = false;
+        runtime
+            .edgion_config_data_store
+            .update(HashMap::from([("default/policy".into(), policy)]), &Default::default());
+        let ProcessResult::Continue(parsed) = handler.parse(candidate, &ctx).await else {
+            panic!("parse")
+        };
+        let waf = parsed.spec.waf.as_ref().unwrap();
+        assert!(waf.resolved_bundles.is_none());
+        assert_eq!(waf.resolution_errors.len(), 1);
+        assert!(waf.compile_generation().is_err());
+        let mut invalid_policy = owner.clone();
+        invalid_policy.spec.waf.as_mut().unwrap().policy_ref.namespace = Some(namespace.into());
+        let ProcessResult::Continue(parsed) = handler.parse(invalid_policy, &ctx).await else {
+            panic!("parse")
+        };
+        assert_eq!(parsed.spec.waf.as_ref().unwrap().policy_resolved, Some(false));
+        assert!(matches!(
+            super::resolve_waf_policy_ref(&parsed).as_slice(),
+            [ResolvedRefsError::InvalidReference { .. }]
+        ));
+        assert!(runtime
+            .edgion_config_data_refs
+            .get_refs(&format!("{namespace}/policy"))
+            .is_empty());
+    }
+    let mut invalid_owner = owner;
+    invalid_owner.metadata.namespace = Some("".into());
+    let ProcessResult::Continue(parsed) = handler.parse(invalid_owner, &ctx).await else {
+        panic!("parse")
+    };
+    assert!(parsed.spec.waf.unwrap().resolved_bundles.is_none());
+    assert!(runtime.edgion_config_data_refs.get_refs("default/policy").is_empty());
+}
+
+#[tokio::test]
+async fn waf_bundle_grants_use_policy_source_through_add_and_revocation() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::edgion_config_data::EdgionConfigDataHandler;
+    use edgion_resources::ReferenceGrant;
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let (mut owner, mut policy, mut bundle) = waf_identity_fixture();
+    owner.metadata.namespace = Some("apps".into());
+    owner.spec.waf.as_mut().unwrap().policy_ref.namespace = Some("policies".into());
+    policy.metadata.namespace = Some("policies".into());
+    bundle.metadata.namespace = Some("bundles".into());
+    let ConfigEntry::WafPolicy(data) = &mut policy.spec.data else {
+        unreachable!()
+    };
+    data.profiles.get_mut("base").unwrap().bundle_refs[0].target.namespace = Some("bundles".into());
+    let _ = EdgionConfigDataHandler::new().parse(policy.clone(), &ctx).await;
+    runtime.edgion_config_data_store.replace_all(HashMap::from([
+        ("policies/policy".into(), policy),
+        ("bundles/rules".into(), bundle),
+    ]));
+    let grant = |namespace: &str, kind: &str, source: &str| -> ReferenceGrant {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion":"gateway.networking.k8s.io/v1beta1","kind":"ReferenceGrant","metadata":{"name":"allow","namespace":namespace},
+            "spec":{"from":[{"group":"edgion.io","kind":kind,"namespace":source}],"to":[{"group":"edgion.io","kind":"EdgionConfigData"}]}
+        })).unwrap()
+    };
+    runtime.ref_grant_store.upsert(
+        "policies/allow".into(),
+        Arc::new(grant("policies", "EdgionPlugins", "apps")),
+    );
+    for source in [
+        Some(("EdgionPlugins", "apps")),
+        Some(("EdgionConfigData", "policies")),
+        None,
+    ] {
+        runtime.ref_grant_store.remove("bundles/allow");
+        if let Some((kind, namespace)) = source {
+            runtime
+                .ref_grant_store
+                .upsert("bundles/allow".into(), Arc::new(grant("bundles", kind, namespace)));
+        }
+        let ProcessResult::Continue(parsed) = EdgionPluginsHandler::new().parse(owner.clone(), &ctx).await else {
+            panic!("parse")
+        };
+        assert_eq!(
+            runtime.edgion_config_data_refs.get_refs("bundles/rules"),
+            ["EdgionConfigData:policies/policy"]
+        );
+        let waf = parsed.spec.waf.as_ref().unwrap();
+        let allowed = source == Some(("EdgionConfigData", "policies"));
+        assert_eq!(waf.compile_generation().is_ok(), allowed);
+        assert!(waf.policy_ref.ref_denied.is_none());
+        let reference = &waf.resolved_policy.as_ref().unwrap().profiles["base"].bundle_refs[0];
+        assert_eq!(reference.target.ref_denied.is_none(), allowed);
+        let mut policy_status = runtime
+            .edgion_config_data_store
+            .get(Some("policies"), "policy")
+            .unwrap();
+        EdgionConfigDataHandler::new().update_status(&mut policy_status, &ctx, &[]);
+        let condition = policy_status
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(condition.status, if allowed { "True" } else { "False" });
+        if !allowed {
+            assert_eq!(condition.reason, "RefNotPermitted");
+        }
+        if !allowed {
+            assert!(matches!(
+                waf.resolution_errors[0].kind,
+                super::WafBundleResolutionKind::Denied
+            ));
+        }
+        assert!(runtime
+            .edgion_config_data_refs
+            .get_refs("policies/policy")
+            .contains(&"EdgionPlugins:apps/waf-owner".into()));
+    }
+}
+
+#[tokio::test]
+async fn waf_policy_and_selector_grants_require_ep_source_through_revocation() {
+    use edgion_resources::ReferenceGrant;
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let (mut owner, mut policy, bundle) = waf_identity_fixture();
+    owner.spec.waf.as_mut().unwrap().policy_ref.namespace = Some("ops".into());
+    owner.spec.waf.as_mut().unwrap().active_profile_ref = Some(EdgionConfigDataRef {
+        name: "selector".into(),
+        namespace: Some("ops".into()),
+        ref_denied: None,
+    });
+    policy.metadata.namespace = Some("ops".into());
+    let ConfigEntry::WafPolicy(data) = &mut policy.spec.data else {
+        unreachable!()
+    };
+    data.profiles.get_mut("base").unwrap().bundle_refs[0].target.namespace = Some("default".into());
+    let mut bundle = bundle;
+    bundle.spec.visibility = edgion_resources::resources::edgion_config_data::ConfigDataVisibility::Cluster;
+    let selector = serde_json::from_value(serde_json::json!({
+        "apiVersion":"edgion.io/v1", "kind":"EdgionConfigData", "metadata":{"name":"selector","namespace":"ops"},
+        "spec":{"data":{"type":"Selector","config":{"active":"base"}}}
+    }))
+    .unwrap();
+    runtime.edgion_config_data_store.replace_all(HashMap::from([
+        ("ops/policy".into(), policy),
+        ("default/rules".into(), bundle),
+        ("ops/selector".into(), selector),
+    ]));
+    let grant = |name: &str, kind: &str| -> ReferenceGrant {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion":"gateway.networking.k8s.io/v1beta1","kind":"ReferenceGrant","metadata":{"name":name,"namespace":"ops"},
+            "spec":{"from":[{"group":"edgion.io","kind":kind,"namespace":"default"}],"to":[{"group":"edgion.io","kind":"EdgionConfigData","name":name}]}
+        })).unwrap()
+    };
+    for role in ["policy", "selector"] {
+        for name in ["policy", "selector"] {
+            runtime
+                .ref_grant_store
+                .upsert(format!("ops/{name}"), Arc::new(grant(name, "EdgionPlugins")));
+        }
+        for source in [Some("EdgionConfigData"), Some("EdgionPlugins"), None] {
+            runtime.ref_grant_store.remove(&format!("ops/{role}"));
+            if let Some(kind) = source {
+                runtime
+                    .ref_grant_store
+                    .upsert(format!("ops/{role}"), Arc::new(grant(role, kind)));
+            }
+            let ProcessResult::Continue(parsed) = EdgionPluginsHandler::new().parse(owner.clone(), &ctx).await else {
+                panic!("parse")
+            };
+            let waf = parsed.spec.waf.as_ref().unwrap();
+            let allowed = source == Some("EdgionPlugins");
+            if role == "policy" {
+                assert_eq!(waf.policy_ref.ref_denied.is_none(), allowed);
+                assert_eq!(waf.compile_generation().is_ok(), allowed);
+                if !allowed {
+                    assert_eq!(waf.selector_resolved, None);
+                }
+            } else {
+                assert_eq!(waf.active_profile_ref.as_ref().unwrap().ref_denied.is_none(), allowed);
+                assert_eq!(waf.selector_resolved, Some(allowed));
+                assert_eq!(waf.selected_profile.as_deref(), Some("base"));
+                assert!(waf.compile_generation().is_ok());
+            }
+            let errors = if role == "policy" {
+                super::resolve_waf_policy_ref(&parsed)
+            } else {
+                super::resolve_waf_active_profile_ref(&parsed)
+            };
+            assert_eq!(errors.is_empty(), allowed);
+            if !allowed {
+                assert!(matches!(
+                    errors[0],
+                    ResolvedRefsError::RefNotPermitted {
+                        from_kind: "EdgionPlugins",
+                        ..
+                    }
+                ));
+            }
+            assert!(runtime
+                .edgion_config_data_refs
+                .get_refs(&format!("ops/{role}"))
+                .contains(&"EdgionPlugins:waf-owner".into()));
+        }
+    }
 }

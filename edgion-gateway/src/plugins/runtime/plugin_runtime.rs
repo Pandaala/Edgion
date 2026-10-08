@@ -1,9 +1,11 @@
 //! Plugin runtime - manages plugin execution across different stages
 
 use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+use edgion_resources::refs::waf_fields::WafPluginReferences;
 use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::refs::plugin_fields::{PluginMirrorRefs, PreparedPluginReferences};
 use edgion_resources::resources::refs::route_fields::{EffectiveMirrorField, HttpRouteMirrorRefs};
+use edgion_resources::EdgionPlugins;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -343,7 +345,18 @@ impl PluginRuntime {
         }
     }
 
-    pub(crate) fn add_waf_with_cache(&mut self, config: &WafConfig, cache: &mut EntryCache) -> Vec<String> {
+    pub(crate) fn add_waf_with_cache(&mut self, owner: &EdgionPlugins, cache: &mut EntryCache) -> Vec<String> {
+        let config = owner.spec.waf.as_ref().expect("WAF owner selected");
+        // Inline rules are a non-serialized local inspection fixture. Resource
+        // generations validate their actual policy field before cache access.
+        if config.resolved_policy.is_some() || config.rules.trim().is_empty() {
+            if let Err(error) = WafPluginReferences::from_plugins(owner).and_then(|fields| fields.policy().map(|_| ()))
+            {
+                self.invalid_plugins
+                    .record_with_policy("Waf", InvalidUpdatePolicy::RetainPrevious);
+                return vec![format!("waf: {error}")];
+            }
+        }
         let slot = EntrySlot {
             stage: EntryStage::Waf,
             index: 0,

@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use edgion_resources::prelude_resources::EdgionConfigData;
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
+use edgion_resources::resources::refs::waf_fields::{WafPluginReferences, WafPolicyReferences};
 
 /// Store for EdgionConfigData resources (controller-side, low-frequency access).
 ///
@@ -36,31 +37,38 @@ impl EdgionConfigDataStore {
     /// under one read guard. Compilation runs after the guard drops.
     pub fn get_waf_policy_snapshot(
         &self,
-        policy_key: &str,
-        selector_key: Option<&str>,
+        references: &WafPluginReferences<'_>,
     ) -> (Option<EdgionConfigData>, HashMap<String, Option<EdgionConfigData>>) {
+        let Ok(policy) = references.policy() else {
+            return (None, HashMap::new());
+        };
+        let policy_key = policy.key();
+        let selector_key = references.selector().and_then(Result::ok).map(|field| field.key());
         let map = self.data.read();
-        let policy_source = map.get(policy_key);
+        let policy_source = map.get(&policy_key);
         let mut children = HashMap::new();
         if let Some(ed) = policy_source {
             if let ConfigEntry::WafPolicy(data) = &ed.spec.data {
                 if data.validate_shape().is_err() {
                     return (policy_source.cloned(), children);
                 }
-                let namespace = ed.metadata.namespace.as_deref().unwrap_or("default");
-                let references = data
-                    .profiles
-                    .values()
-                    .flat_map(|profile| profile.bundle_refs.iter().map(|reference| &reference.target));
-                for reference in references {
-                    let target_namespace = reference.namespace.as_deref().unwrap_or(namespace);
-                    let key = format!("{target_namespace}/{}", reference.name);
+                let Ok(fields) = WafPolicyReferences::from_policy(ed) else {
+                    return (None, children);
+                };
+                if fields.identity() != policy.target() {
+                    return (None, children);
+                }
+                for (_, _, _, field) in fields.fields() {
+                    let Ok(field) = field else {
+                        continue;
+                    };
+                    let key = field.key();
                     children.entry(key.clone()).or_insert_with(|| map.get(&key).cloned());
                 }
             }
         }
         if let Some(key) = selector_key {
-            children.entry(key.to_string()).or_insert_with(|| map.get(key).cloned());
+            children.entry(key.clone()).or_insert_with(|| map.get(&key).cloned());
         }
         (policy_source.cloned(), children)
     }
@@ -106,3 +114,7 @@ impl Default for EdgionConfigDataStore {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/unit/conf_mgr/sync_runtime/resource_processor/edgion_config_data_utils/edgion_config_data_store_test.rs"]
+mod tests;

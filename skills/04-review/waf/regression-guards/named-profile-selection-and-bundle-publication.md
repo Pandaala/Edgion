@@ -108,3 +108,17 @@ neither test directly measures process allocator usage.
 
 - `tasks/todo/waf-crs-version-selection-and-tuning.md`: implemented as
   operator-owned named rule bundles and Selector-controlled WAF profiles.
+
+## WAF owning reference identity
+
+The finite WAF fields use synchronous actual-owner loans: EP owns policyRef and activeProfileRef;
+the captured WafPolicy ConfigData owns bundleRefs. Validate owner first and each target before
+lookup, dependency registration or Grant query. Owner namespace omission supplies semantic `default`
+without rewriting raw owner/store keys or aliasing bare ConfigData targets. Capture still holds one
+map read guard; policy limits precede child copies, and only selected accepted bundles survive in
+resolved material. Existing blank/slash shape failures remain structural. Newly invalid optional
+bundle slots are skipped with bounded warnings; required slots invalidate their profile and an invalid
+default invalidates the candidate. Selector identity failure retains existing default fallback.
+Gateway checks actual EP policy identity at its cold cache boundary and selected transport bundle
+identity in the compiler; transported policy/namespace values never become resource capabilities.
+Existing current policy, LKG, scoped source-copy and in-flight pinning rules remain unchanged.

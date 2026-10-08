@@ -1288,3 +1288,25 @@ fn class_parameters_contract_is_shared_across_full_and_delta_repair() {
         assert!(scope(&publisher, "apps/a").available);
     }
 }
+
+#[test]
+fn invalid_waf_policy_identity_retains_prior_generation_and_pinned_view() {
+    let publisher = publisher();
+    update_source(&publisher, plugin("waf", true), false);
+    let pinned = view(&publisher);
+    let old = filter(&pinned, "Waf");
+    let mut invalid = plugin("waf", true);
+    Arc::make_mut(&mut invalid)
+        .spec
+        .waf
+        .as_mut()
+        .unwrap()
+        .policy_ref
+        .namespace = Some("".into());
+    update_source(&publisher, invalid, false);
+    assert!(Arc::ptr_eq(&old, &filter(&view(&publisher), "Waf")));
+    assert!(Arc::ptr_eq(&old, &filter(&pinned, "Waf")));
+    update_source(&publisher, plugin("waf", true), false);
+    assert!(!Arc::ptr_eq(&old, &filter(&view(&publisher), "Waf")));
+    assert!(Arc::ptr_eq(&old, &filter(&pinned, "Waf")));
+}

@@ -1641,3 +1641,66 @@ Stage38 technical paths plus this ledger and commit locally, without push.
 Direct handler/store and generation tests do not establish live queue/network or
 conformance acceptance. R5d/R5e, R6-R8 and F1/F2 remain open. Unrelated review-results
 and the concurrent untracked abstraction-simplification task are excluded.
+
+R5c2 committed745850e98f58c65b5128faa6719954ec71934a0f locally, parent291a4e08e.
+All39 staged file hashes match HEAD; tracked/index state is clean before this
+continuation. Unrelated untracked artifacts remain untouched, no push.
+R5d begins PLAN ONLY for finite WAF policy/Selector/bundle owning references.
+Revalidate the prior inventory on this HEAD; preserve one-lock source capture,
+distinct EP versus WafPolicy authorization, required/optional semantics and LKG.
+
+R5d exact19-path plan (8 production,7 tests,4 docs) is submitted for independent
+Astra review. Small borrowed owning facades replace reconstructed keys without
+another Prepared catalogue. Single-lock capture validates the captured policy
+identity before child access; Gateway checks actual EP policy identity before
+cache use and validates selected bundle transport without new Grant authority.
+One old over-limit test needs its unchanged EP fixture moved before capture and
+only the string snapshot call replaced; assertions/IDs remain frozen. Existing
+bundle-denial tests do not prove Grant add/revoke source isolation, so explicit
+transitions are required. No production mutation or Cargo before plan approval.
+
+R5d independent Astra PLAN PASS; EXECUTE authorized for the exact19 paths after
+original/fresh1944/1784/5187 baseline capture. Preserve shape-vs-identity failure
+boundaries, actual-owner authorization, one capture lock/copy bounds, optional and
+required semantics, LKG/pins and the sole documented old-test call amendment.
+The allowlisted ConfigData architecture must correct its stale claims of always-
+true own ResolvedRefs, IpList-only PartiallyInvalid and EP/ESP-only Grant sources
+to include actual WafPolicy bundle behavior. Final actual reviews/gates remain open.
+
+Read-only R6 test inventory revalidates the raw Service DNS producer permission
+gap and same-fingerprint EndpointSlice skip without Service UID comparison at
+745850e98. Existing mock-API/skip/preparation helpers are identified; forced SSA,
+LKG and failed-preparation fallback remain counterevidence. No async fencing
+design or next implementation scope is inferred. Evidence is in ignored
+r6-service-dns-test-inventory-20261008.md for later independent planning.
+
+R5d production migration has provisional source approval from both independent
+reviewers; final tests/docs and frozen evidence remain pending. Resources WAF
+r1 passes41/0/0. Explicit EP policy/Selector and policy-owned bundle Grant
+wrong-source/add/revoke transitions are required before final acceptance.
+An initial observation of newly eager Grant reads was retracted after inspecting
+the old helper: it already computed grant_allows before the permission decision.
+Preserve existing behavior rather than introduce an unrelated optimization.
+
+R5d final19-path candidate unifies actual EP policy/Selector loans and actual
+WafPolicy ConfigData bundle loans. Invalid identities stop before owned target
+access, authorization and dependencies; valid missing/denied edges survive.
+Single-lock capture, required/optional profile outcomes, Selector fallback,
+selected transport checks, raw source keys and Gateway LKG/pins are preserved.
+There is no new Prepared catalogue, schema surface, queue or request-path work.
+Focused verification passes286 unit tests and2 actual-owner E0505 doctests.
+Compiled identities1944->1947 /1784->1790 /5187->5189 lose no old tests. Four
+old test files retain exact prefixes; the sole EP test amendment is independently
+normalized to its original prefix with every assertion preserved. Final manifest:
+6cce6afd4e2f288e86b9091c19d47886d89e3a92083e74a66fdbf95a23050fd4.
+Initial test-only missing imports and Arc mutation errors were fixed. Root r1
+Clippy found5 unique warnings; three narrowly corrected production paths passed
+both independent delta reviews and affected tests. All14 root r2 gates now pass
+with unchanged source and zero warnings/errors. Prior failures/freezes remain in
+ignored evidence directories. Final reviewer gate confirmations precede staging.
+These checks establish direct handler/store/publication behavior and one actual
+queue enqueue/dequeue, not live traffic, worker replay or conformance acceptance.
+R5e, R6-R8 and F1/F2 remain open; the selected original issue stays open.
+Both independent reviewers confirmed final R5d SCOPED PASS against the final
+manifest and all14 root gate logs. Stage the19 technical paths plus this ledger;
+commit locally without push. Unrelated untracked artifacts remain excluded.

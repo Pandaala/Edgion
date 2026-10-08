@@ -10,7 +10,7 @@
 //! - On update_status: set `Accepted` (from preparse errors) and `ResolvedRefs`
 //!   (from ref resolution) conditions per Gateway API conventions.
 
-use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::is_edgion_config_data_ref_allowed;
+use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::decide_edgion_config_data_ref;
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, partially_invalid_condition, update_condition,
 };
@@ -19,9 +19,8 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 };
 use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::prelude_resources::EdgionConfigData;
-use edgion_resources::resources::edgion_config_data::{
-    ConfigEntry, EdgionConfigDataRef, EdgionConfigDataStatus, WafPolicyData,
-};
+use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataStatus};
+use edgion_resources::resources::refs::waf_fields::{WafPolicyReferences, WafReference};
 use edgion_resources::ResourceKind;
 
 /// Kind string used when an EdgionConfigData registers a cross-EdgionConfigData reference in the shared
@@ -38,9 +37,7 @@ impl EdgionConfigDataHandler {
     }
 
     fn self_ref_key(ed: &EdgionConfigData) -> String {
-        let ns = ed.metadata.namespace.as_deref().unwrap_or("");
-        let name = ed.metadata.name.as_deref().unwrap_or("");
-        format!("{}:{}/{}", SELF_KIND, ns, name)
+        format!("{}:{}", SELF_KIND, Self::resource_ref(ed).resource_key())
     }
 
     fn resource_ref(ed: &EdgionConfigData) -> ResourceRef {
@@ -50,13 +47,6 @@ impl EdgionConfigDataHandler {
             ed.metadata.name.clone().unwrap_or_default(),
         )
     }
-}
-
-fn policy_refs(policy: &WafPolicyData) -> impl Iterator<Item = &EdgionConfigDataRef> {
-    policy
-        .profiles
-        .values()
-        .flat_map(|profile| profile.bundle_refs.iter().map(|reference| &reference.target))
 }
 
 fn register_policy_refs(ed: &EdgionConfigData, ctx: &HandlerContext) {
@@ -71,11 +61,17 @@ fn register_policy_refs(ed: &EdgionConfigData, ctx: &HandlerContext) {
     if policy.validate_shape().is_err() {
         return;
     }
-    let namespace = ed.metadata.namespace.as_deref().unwrap_or("default");
-    let own_key = EdgionConfigDataStore::make_key(Some(namespace), ed.metadata.name.as_deref().unwrap_or(""));
-    for reference in policy_refs(policy) {
-        let target_ns = reference.namespace.as_deref().unwrap_or(namespace);
-        let target_key = EdgionConfigDataStore::make_key(Some(target_ns), &reference.name);
+    let Ok(fields) = WafPolicyReferences::from_policy(ed) else {
+        return;
+    };
+    let namespace = fields.identity().scope().namespace().expect("namespaced owner");
+    let own_key = EdgionConfigDataStore::make_key(Some(namespace), fields.identity().name());
+    for (_, _, _, field) in fields.fields() {
+        let Ok(field) = field else {
+            continue;
+        };
+        let target_ns = field.target().scope().namespace().expect("namespaced target");
+        let target_key = field.key();
         if target_key != own_key {
             ctx.runtime()
                 .edgion_config_data_refs
@@ -89,24 +85,16 @@ fn register_policy_refs(ed: &EdgionConfigData, ctx: &HandlerContext) {
     }
 }
 
-fn policy_ref_error(
-    reference: &EdgionConfigDataRef,
-    namespace: &str,
-    expected_digest: Option<&str>,
-    ctx: &HandlerContext,
-) -> Option<String> {
-    let target_ns = reference.namespace.as_deref().unwrap_or(namespace);
+fn policy_ref_error(field: &WafReference<'_>, expected_digest: Option<&str>, ctx: &HandlerContext) -> Option<String> {
+    let target_ns = field.target().scope().namespace().expect("namespaced target");
+    let name = field.target().name();
     // Names are bounded here because they originate in operator-authored data.
     let label = format!(
         "{}/{}",
         target_ns.chars().take(64).collect::<String>(),
-        reference.name.chars().take(64).collect::<String>()
+        name.chars().take(64).collect::<String>()
     );
-    let Some(target) = ctx
-        .runtime()
-        .edgion_config_data_store
-        .get(Some(target_ns), &reference.name)
-    else {
+    let Some(target) = ctx.runtime().edgion_config_data_store.get(Some(target_ns), name) else {
         return Some(format!("WafRuleBundle {label} is unavailable"));
     };
     if !target.spec.enable {
@@ -115,13 +103,12 @@ fn policy_ref_error(
     if !matches!(&target.spec.data, ConfigEntry::WafRuleBundle(_)) {
         return Some(format!("WafRuleBundle {label} has the wrong type"));
     }
-    if !is_edgion_config_data_ref_allowed(
-        ctx.runtime(),
-        namespace,
-        SELF_KIND,
-        target_ns,
-        &reference.name,
+    let query = field.query();
+    if !decide_edgion_config_data_ref(
+        crate::config::is_reference_grant_validation_enabled(),
+        query.source().scope() == query.target().scope(),
         target.spec.visibility,
+        ctx.runtime().ref_grant_store.check_query(query),
     ) {
         return Some(format!("WafRuleBundle {label} is not permitted"));
     }
@@ -273,16 +260,20 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
         let mut optional_errors = Vec::new();
         if let ConfigEntry::WafPolicy(policy) = &ed.spec.data {
             if policy.validate_shape().is_ok() {
-                let namespace = ed.metadata.namespace.as_deref().unwrap_or("default");
-                for profile in policy.profiles.values() {
-                    for reference in &profile.bundle_refs {
-                        if let Some(error) =
-                            policy_ref_error(&reference.target, namespace, reference.expected_digest.as_deref(), ctx)
-                        {
-                            if reference.optional {
-                                optional_errors.push(error);
-                            } else {
-                                required_errors.push(error);
+                match WafPolicyReferences::from_policy(ed) {
+                    Err(error) => required_errors.push(format!("Invalid WafPolicy owner: {error}")),
+                    Ok(fields) => {
+                        for (_, _, reference, field) in fields.fields() {
+                            let error = match field {
+                                Ok(field) => policy_ref_error(&field, reference.expected_digest.as_deref(), ctx),
+                                Err(error) => Some(format!("Invalid WafRuleBundle reference: {error}")),
+                            };
+                            if let Some(error) = error {
+                                if reference.optional {
+                                    optional_errors.push(error);
+                                } else {
+                                    required_errors.push(error);
+                                }
                             }
                         }
                     }

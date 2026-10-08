@@ -218,8 +218,8 @@ Namespace-visible targets require an exact grant from `gateway.networking.k8s.io
 | Condition | Semantics |
 |-----------|-----------|
 | `Accepted` | Spec passes preparse validation. For `IpList`, always `True` even when entries are bad (partial-good). |
-| `ResolvedRefs` | EdgionConfigData itself carries no external cross-resource refs; own `ResolvedRefs` is always `True`. Note: `IpList` variants are ref targets — when `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile fail to resolve an `IpList`, `ResolvedRefs=False` is set on the *referring* EdgionPlugins/EdgionStreamPlugins, not on the `IpList` EdgionConfigData itself. |
-| `PartiallyInvalid` | **`IpList` only**: `status=True`/`reason=RuleInvalid` (with message listing bad entries) when `collect_entry_errors` finds invalid CIDRs, empty groups, duplicate group names, invalid group names, or cross-group duplicate CIDRs (keep-first). `status=False`/`reason=AllRulesValid` when clean. `Accepted` stays `True`; partial-good entries are admitted and the rest still compile. |
+| `ResolvedRefs` | WafPolicy owns bundle references: required failures set its own `ResolvedRefs=False` (`RefNotPermitted` or `InvalidEdgionConfigDataRef`); other ConfigData variants have no such outgoing bundle references. Note: `IpList` variants are ref targets — when `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile fail to resolve an `IpList`, `ResolvedRefs=False` is set on the *referring* EdgionPlugins/EdgionStreamPlugins, not on the `IpList` EdgionConfigData itself. |
+| `PartiallyInvalid` | **`IpList`**: `status=True`/`reason=RuleInvalid` (with message listing bad entries) when `collect_entry_errors` finds invalid CIDRs, empty groups, duplicate group names, invalid group names, or cross-group duplicate CIDRs (keep-first). `status=False`/`reason=AllRulesValid` when clean. `Accepted` stays `True`; partial-good entries are admitted and the rest still compile. **WafPolicy** also reports optional bundle failures through `PartiallyInvalid`; required failures belong to `ResolvedRefs`. |
 | `UnknownConfigFields` | Present as `True/UnknownFieldsDetected` when a typed payload contains keys the generated schema does not recognize; removed entirely after a clean reapply. Advisory for ordinary data variants. `ProxyProtocolTrust` and `WafRuleBundle` reject unknown config fields through `Accepted=False` as well. |
 
 ## Gateway-Side Processing
@@ -316,7 +316,7 @@ Cross-namespace EdgionConfigData references — all ref types: `allowRefs`/`deny
    - Same-namespace refs are **always** permitted regardless of `visibility`.
 
 2. **Gateway-API `ReferenceGrant`** in the target namespace (required when `visibility: Namespace`).
-   Grant shape — `from.kind` must be `EdgionPlugins` or `EdgionStreamPlugins`:
+   Grant source follows the actual owner: `EdgionPlugins` or `EdgionStreamPlugins` for plugin fields, and `EdgionConfigData` for WafPolicy bundle fields. The EP owning policyRef and Selector does not authorize the policy-owned bundles:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1beta1
@@ -327,7 +327,7 @@ metadata:
 spec:
   from:
     - group: edgion.io
-      kind: EdgionPlugins           # or EdgionStreamPlugins
+      kind: EdgionPlugins           # EdgionStreamPlugins for stream fields; EdgionConfigData for WafPolicy bundles
       namespace: team-a
   to:
     - group: edgion.io
@@ -355,7 +355,7 @@ withholds that ref at runtime:
 
 ### Status Conditions on the Referrer
 
-`ResolvedRefs=False` is set on the **referrer** (`EdgionPlugins` or `EdgionStreamPlugins`) — not on
+`ResolvedRefs=False` is set on the **referrer** (`EdgionPlugins`, `EdgionStreamPlugins`, or the WafPolicy `EdgionConfigData`) — not on
 the EdgionConfigData target itself:
 
 | Reason | Meaning |
@@ -524,3 +524,15 @@ The Gateway retains only canonical target keys in the compiled plugin. It contin
 to capture one immutable ConfigData snapshot per decision, preserving atomic IpList
 updates and live content refresh for pinned plugin generations. Selector and other
 ConfigData target roles are not migrated by this change.
+
+### WAF reference identity boundary
+
+WAF policyRef and Selector loans borrow the actual EdgionPlugins; bundle loans borrow the captured
+WafPolicy ConfigData. Omitted namespaces use the actual owner's effective namespace (`default` when
+owner metadata omits it). Raw source storage and dependency owner keys remain unchanged. Invalid
+owner/target identities cause no target lookup, Grant query or outgoing edge. Valid missing or denied
+references retain recovery edges. Snapshot capture validates these fields under one existing read guard,
+with policy bounds checked before child copies. Existing shape failures stay structural; newly invalid
+optional targets are unavailable units, while required targets invalidate their profile. Selector target
+identity failure keeps the validated default fallback. Gateway selected-bundle transport checks establish
+lexical consistency only, never WafPolicy ownership or Grant authority.

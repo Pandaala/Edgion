@@ -290,3 +290,90 @@ fn unsupported_bundle_cannot_satisfy_strict_waf_policy_reference() {
     assert_eq!(refs.status, "False");
     assert!(refs.message.contains("has the wrong type"));
 }
+
+#[tokio::test]
+async fn waf_bare_owner_keeps_raw_wake_key_and_cleans_retargeted_edges() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<EdgionConfigData>::new(
+        "EdgionConfigData",
+        100,
+        Arc::new(ConfigDataNoop),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let handler = EdgionConfigDataHandler::new();
+    let mut policy = waf_policy();
+    policy.metadata.namespace = None;
+    let _ = handler.parse(policy.clone(), &ctx).await;
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/rules"),
+        ["EdgionConfigData:policy"]
+    );
+    assert!(runtime.edgion_config_data_store.get(None, "policy").is_some());
+    assert!(runtime
+        .edgion_config_data_store
+        .get(Some("default"), "policy")
+        .is_none());
+    let mut child = resource();
+    child.metadata.name = Some("rules".into());
+    handler.on_change(&child, &ctx).await;
+    let item = tokio::time::timeout(Duration::from_secs(1), processor.workqueue().dequeue())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.key, "policy");
+    processor.workqueue().done(&item.key);
+    let ConfigEntry::WafPolicy(data) = &mut policy.spec.data else {
+        unreachable!()
+    };
+    data.profiles.get_mut("base").unwrap().bundle_refs[0].target.name = "replacement".into();
+    let _ = handler.parse(policy.clone(), &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("default/rules").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/replacement"),
+        ["EdgionConfigData:policy"]
+    );
+    handler.on_delete(&policy, &ctx).await;
+    assert!(runtime
+        .edgion_config_data_refs
+        .get_refs("default/replacement")
+        .is_empty());
+    assert!(runtime.edgion_config_data_store.get(None, "policy").is_none());
+}
+
+#[test]
+fn waf_policy_invalid_optional_identity_is_partial_and_keeps_valid_missing_edge() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let mut policy = waf_policy();
+    let ConfigEntry::WafPolicy(data) = &mut policy.spec.data else {
+        unreachable!()
+    };
+    let mut invalid = data.profiles["base"].bundle_refs[0].clone();
+    invalid.target.namespace = Some("".into());
+    invalid.optional = true;
+    data.profiles.get_mut("base").unwrap().bundle_refs.push(invalid);
+    register_policy_refs(&policy, &ctx);
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/rules"),
+        ["EdgionConfigData:default/policy"]
+    );
+    assert!(runtime.edgion_config_data_refs.get_refs("/rules").is_empty());
+    EdgionConfigDataHandler::new().update_status(&mut policy, &ctx, &[]);
+    let conditions = &policy.status.as_ref().unwrap().conditions;
+    let partial = conditions
+        .iter()
+        .find(|condition| condition.type_ == "PartiallyInvalid")
+        .unwrap();
+    assert_eq!(partial.status, "True");
+    assert!(partial.message.contains("invalid reference namespace"));
+    let resolved = conditions
+        .iter()
+        .find(|condition| condition.type_ == "ResolvedRefs")
+        .unwrap();
+    assert_eq!(resolved.status, "False");
+    assert_eq!(resolved.reason, "InvalidEdgionConfigDataRef");
+    assert!(resolved.message.contains("unavailable"));
+    assert!(!resolved.message.contains("invalid reference namespace"));
+}

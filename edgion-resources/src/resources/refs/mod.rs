@@ -22,6 +22,7 @@ pub mod route_fields;
 pub mod source_contract;
 pub mod targets;
 mod template_fields;
+pub mod waf_fields;
 
 pub use grants::GrantQuery;
 pub use identity::{GroupKind, ObjectIdentity, ReferenceError, ReferenceSource, ResourceScope};

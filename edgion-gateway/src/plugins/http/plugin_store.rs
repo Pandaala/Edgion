@@ -303,8 +303,8 @@ pub(crate) fn compile_plugins_with_cache(
     );
     let namespace = spec.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
 
-    if let Some(waf) = spec.spec.waf.as_ref() {
-        errors.extend(runtime.add_waf_with_cache(waf, cache));
+    if spec.spec.waf.is_some() {
+        errors.extend(runtime.add_waf_with_cache(ep, cache));
     }
 
     // Compile regex conditions on all plugin entries once, before building the

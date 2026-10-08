@@ -2602,3 +2602,22 @@ fn descriptor_cold_copy_observes_only_authorized_payload_and_preserves_all_entry
         assert!(config.resolved_descriptor.is_none());
     }
 }
+
+#[test]
+fn waf_resource_policy_identity_is_checked_before_cached_construction() {
+    let mut resource = EdgionPlugins::new("waf-owner", EdgionPluginsSpec::default());
+    resource.metadata.namespace = Some("default".into());
+    resource.spec.waf = Some(crate::plugins::http::waf::fixture::config_in_namespace(
+        "SecAction \"id:9861,phase:1,pass\"\n",
+        "default",
+    ));
+    let mut cache = EntryCache::default();
+    let valid = compile_plugins_with_cache(&resource, &mut cache, &[], Vec::new());
+    assert!(valid.plugin_runtime.waf_candidate().is_some());
+    for namespace in ["", "bad/ns", "Bad"] {
+        resource.spec.waf.as_mut().unwrap().policy_ref.namespace = Some(namespace.into());
+        let invalid = compile_plugins_with_cache(&resource, &mut cache, &[], Vec::new());
+        assert!(invalid.plugin_runtime.waf_candidate().is_none());
+        assert!(invalid.can_retain_previous(&valid));
+    }
+}

@@ -250,7 +250,9 @@ The implementation plan freezes each embedding's operator path and consumers.
 | IpRestrictionConfig.allow_refs/deny_refs | Fixed ConfigData; existing allow/deny failure asymmetry |
 | RegionRouteConfig.override_ref | Fixed ConfigData; fail-to-base overlay |
 | CanaryConfig.active_profile_ref | Fixed ConfigData; existing profile behavior |
-| WafConfig.policy_ref/active_profile_ref, WafProfile.bundle_refs[].target | Fixed ConfigData; digest/pinning and eligible whole-generation retention |
+| EdgionPlugins.spec.waf.policyRef | Fixed edgion.io/EdgionConfigData WafPolicy; actual EP source and EP-local/default namespace; EP Grant/visibility; invalid identity has zero access/edges, unresolved candidate preserves existing Gateway LKG eligibility |
+| EdgionPlugins.spec.waf.activeProfileRef | Fixed edgion.io/EdgionConfigData Selector; actual EP source independently of policy namespace; EP-local/default target; EP Grant/visibility; invalid/unavailable Selector follows validated default fallback and readonly diagnostics |
+| EdgionConfigData.spec.data WafPolicy.profiles[*].bundleRefs[*].target | Fixed edgion.io/EdgionConfigData WafRuleBundle; actual WafPolicy ConfigData source and policy-local/default target; ConfigData Grant/visibility; required profile atomicity, optional partial-good units, digest/pinning and selected-generation LKG; raw owner keys unchanged |
 | RequestAccessPolicyConfig.active_profile_ref, UrlAccessRuleConfig.config_refs[].reference | Fixed ConfigData; bounded binding and visibility |
 | GlobalConnectionIpRestrictionConfig.active_profile_ref/allow_refs/deny_refs | Fixed ConfigData; exact owning context and visibility |
 | ConnectionIpRestrictionRules.allow_refs/deny_refs, IpAccessMatch.ip_refs[] | Fixed ConfigData; actual condition/connection owner |

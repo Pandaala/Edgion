@@ -906,3 +906,49 @@ fn xml_dynamic_fixtures_pin_valid_bundles_and_strict_static_xml_demands() {
         }
     }
 }
+
+#[test]
+fn selected_bundle_transport_identity_is_lexical_and_optional_slots_stay_optional() {
+    let (reference, bundle) = test_bundle("rules", 9821);
+    let mut optional = reference.clone();
+    optional.optional = true;
+    optional.target.namespace = Some("".into());
+    let mut config = WafConfig {
+        policy_ref: EdgionConfigDataRef {
+            name: "policy".into(),
+            ..Default::default()
+        },
+        resolved_policy: Some(WafPolicyData {
+            profiles: BTreeMap::from([(
+                "base".into(),
+                WafProfile {
+                    bundle_refs: vec![reference, optional],
+                },
+            )]),
+            default_profile: "base".into(),
+        }),
+        selected_profile: Some("base".into()),
+        resolved_ref_indices: vec![0],
+        resolved_bundles: Some(vec![bundle]),
+        owner_namespace: Some("default".into()),
+        ..Default::default()
+    };
+    assert!(config.compile_generation().is_ok());
+    for namespace in ["", "bad/ns", "Bad"] {
+        config
+            .resolved_policy
+            .as_mut()
+            .unwrap()
+            .profiles
+            .get_mut("base")
+            .unwrap()
+            .bundle_refs[0]
+            .target
+            .namespace = Some(namespace.into());
+        config.resolved_bundles.as_mut().unwrap()[0].identity = format!("{namespace}/rules");
+        assert!(
+            config.compile_generation().is_err(),
+            "matching transport strings cannot legitimize invalid identity"
+        );
+    }
+}
