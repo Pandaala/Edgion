@@ -35,10 +35,24 @@ pub(crate) fn envelope_limit(body: Option<BodyRequirement>) -> Option<usize> {
     usize::try_from(limit).ok()
 }
 
-pub(crate) fn reject(status: u16) -> PluginRunningResult {
+pub(crate) fn error_body(status: u16) -> Bytes {
+    Bytes::from_static(match status {
+        400 => br#"{"errors":[{"message":"GraphQL request rejected","extensions":{"code":"GRAPHQL_REQUEST_INVALID"}}]}"#,
+        403 => br#"{"errors":[{"message":"GraphQL request rejected","extensions":{"code":"GRAPHQL_OPERATION_FORBIDDEN"}}]}"#,
+        405 => br#"{"errors":[{"message":"GraphQL request rejected","extensions":{"code":"METHOD_NOT_ALLOWED"}}]}"#,
+        413 => br#"{"errors":[{"message":"GraphQL request rejected","extensions":{"code":"PAYLOAD_TOO_LARGE"}}]}"#,
+        415 => br#"{"errors":[{"message":"GraphQL request rejected","extensions":{"code":"UNSUPPORTED_MEDIA_TYPE"}}]}"#,
+        429 => br#"{"errors":[{"message":"GraphQL request rejected","extensions":{"code":"RATE_LIMITED"}}]}"#,
+        503 => br#"{"errors":[{"message":"GraphQL request rejected","extensions":{"code":"GRAPHQL_ADMISSION_BUSY"}}]}"#,
+        _ => br#"{"errors":[{"message":"GraphQL request rejected","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]}"#,
+    })
+}
+
+pub(crate) fn reject(session: &mut dyn PluginSession, status: u16) -> PluginRunningResult {
+    let _ = session.set_response_header("Content-Type", "application/json");
     PluginRunningResult::ErrResponse {
         status,
-        body: Some(Bytes::from_static(b"GraphQL request rejected")),
+        body: Some(error_body(status)),
     }
 }
 
@@ -54,7 +68,7 @@ where
     let ctx = session.ctx();
     if !ctx.request_info.in_request_body_stage {
         log.push_err("invalid request stage");
-        return Err(reject(500));
+        return Err(reject(session, 500));
     }
     if ctx.request_info.is_grpc_request
         || ctx.is_grpc_route_matched
@@ -67,7 +81,7 @@ where
         || session.request_header_map().contains_key(http::header::UPGRADE)
     {
         log.push("deny protocol");
-        return Err(reject(400));
+        return Err(reject(session, 400));
     }
 
     let is_post = match session.get_method() {
@@ -75,12 +89,12 @@ where
         "GET" => false,
         _ => {
             log.push("deny method");
-            return Err(reject(405));
+            return Err(reject(session, 405));
         }
     };
     if is_post && session.request_query().is_some_and(|query| !query.is_empty()) {
         log.push("deny POST query params");
-        return Err(reject(400));
+        return Err(reject(session, 400));
     }
     let known_bodyless = session.declares_body() == Some(false);
     let body_len = match session.request_body_available_len(known_bodyless) {
@@ -88,7 +102,7 @@ where
         Err(error) => {
             record_body_read_error_status(session, &error);
             log.push_err("body length unavailable");
-            return Err(reject(500));
+            return Err(reject(session, 500));
         }
     };
     if body_len > envelope_limit as u64
@@ -99,22 +113,22 @@ where
     {
         session.record_error(EdgionErrorCode::BodyReadTooLarge);
         log.push("deny envelope cap");
-        return Err(reject(413));
+        return Err(reject(session, 413));
     }
     if !is_post && (!known_bodyless || body_len != 0) {
         log.push("deny GET body");
-        return Err(reject(400));
+        return Err(reject(session, 400));
     }
     if (is_post && !json_request_headers_are_supported(session.request_header_map()))
         || (!is_post && !supported_identity_encoding(session.request_header_map()))
     {
         log.push("deny media type");
-        return Err(reject(415));
+        return Err(reject(session, 415));
     }
 
     let Ok(_permit) = EVALUATIONS.try_acquire() else {
         log.push_err("query budget exhausted");
-        return Err(reject(503));
+        return Err(reject(session, 503));
     };
     let result = if is_post {
         let body = match session.read_request_body(None).await {
@@ -122,7 +136,7 @@ where
             Err(error) => {
                 record_body_read_error_status(session, &error);
                 log.push_err("body materialization failed");
-                return Err(reject(500));
+                return Err(reject(session, 500));
             }
         };
         catch_redacted_panic(|| ParsedGraphqlRequest::parse_post(&body, envelope_limit).and_then(compute))
@@ -137,19 +151,23 @@ where
         Ok(Err(GraphqlError::TooLarge)) => {
             session.record_error(EdgionErrorCode::BodyReadTooLarge);
             log.push("deny envelope cap");
-            Err(reject(413))
+            Err(reject(session, 413))
         }
         Ok(Err(GraphqlError::MethodNotAllowed)) => {
             log.push("deny GET mutation");
-            Err(reject(405))
+            Err(reject(session, 405))
+        }
+        Ok(Err(GraphqlError::Forbidden)) => {
+            log.push("deny");
+            Err(reject(session, 403))
         }
         Ok(Err(GraphqlError::Invalid)) => {
             log.push("deny invalid query");
-            Err(reject(400))
+            Err(reject(session, 400))
         }
         Err(_) => {
             log.push_err("query evaluation panic");
-            Err(reject(500))
+            Err(reject(session, 500))
         }
     }
 }

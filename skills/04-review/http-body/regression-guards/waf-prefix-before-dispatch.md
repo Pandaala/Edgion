@@ -104,9 +104,10 @@ The phase execution timer still excludes body capture and parser publication.
 Completed execution plans were removed during task cleanup. Current structured
 inspection contracts live in the [JSON guard](../../waf/regression-guards/fused-json-inspection.md)
 and [XML guard](../../waf/regression-guards/native-xml-inspection.md).
-Remaining validation is tracked separately in the
-[Gateway performance task](../../../../tasks/todo/waf-validation/waf-production-performance-baseline.md)
-and [Kubernetes admission task](../../../../tasks/todo/waf-validation/waf-kubernetes-admission-validation.md).
+Gateway performance and Kubernetes admission/reload require fresh verification
+using the [testing guide](../../../05-testing/01-integration-testing.md). The
+historical task records are absent from the current tree; their removal does
+not establish completed validation.
 Historical prefix evidence below does not prove current JSON timing or wire gates.
 
 Prefix rules execute lazily in the canonical phase schedule. An enforced deny

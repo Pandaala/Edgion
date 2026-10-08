@@ -251,6 +251,8 @@ impl EdgionPluginsHandler {
                 | EdgionPlugin::RequestBodyBuffer(_)
                 | EdgionPlugin::GrpcJsonTranscoder(_)
                 | EdgionPlugin::JsonSchemaValidation(_)
+                | EdgionPlugin::GraphqlGuard(_)
+                | EdgionPlugin::GraphqlSafelist(_)
                 | EdgionPlugin::GraphqlRateLimit(_)
                 | EdgionPlugin::GraphqlOperationRouter(_)
                 | EdgionPlugin::FormJsonTransform(_)

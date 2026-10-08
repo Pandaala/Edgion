@@ -115,3 +115,5 @@ route/backend filter、DSL、ExtProc 不得再修改 query、body、方法或表
 后恢复使用新的成本模型。禁用入口不参与验证。插件不聚合响应，也不执行 resolver。
 插件日志不记录查询和变量；已有的可选 `access_log_options.includeRawUri=true`
 可能在访问日志中包含 GET 查询。
+
+插件自身的 HTTP 拒绝响应采用 [GraphQL JSON 错误合约](graphql-errors.md)。

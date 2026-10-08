@@ -21,17 +21,18 @@ Check the current compiler, transaction, and detector code before applying a pas
 
 ## Reviewed optimization design
 
-The [specification](../../../tasks/pending/waf-optimization-design/01-spec.md)
-and [serial plan](../../../tasks/pending/waf-optimization-design/02-plan.md)
-consolidate the remaining candidates and evidence-triggered deferrals. Design
-review is complete; implementation and measured adoption remain separate gates.
+The historical specification and serial plan under
+`tasks/pending/waf-optimization-design/` are absent from the current tree. The
+regression guards above record current implementation boundaries. Historical
+design approval does not establish implementation or measured adoption.
 
 ## Remaining standalone tasks
 
 - [Trusted language policy profiles](../../../tasks/todo/waf-language-policy-profiles.md)
-- [Representative Gateway performance](../../../tasks/todo/waf-validation/waf-production-performance-baseline.md)
-- [Kubernetes admission and reload](../../../tasks/todo/waf-validation/waf-kubernetes-admission-validation.md)
-- [x86-64 verification](../../../tasks/todo/waf-validation/waf-x86-64-verification.md)
+- Representative Gateway performance, Kubernetes admission/reload and x86-64
+  verification require fresh evidence via the
+  [testing guide](../../05-testing/01-integration-testing.md). Their historical
+  task records are absent; removal does not establish completed validation.
 - [Contiguous cached JSON borrowing](../../../tasks/todo/waf-cached-json-input-borrowing.md)
 - [JSON token growth hint](../../../tasks/todo/waf-json-token-growth-hint.md)
 - [Shared request-body inspection](../../../tasks/todo/waf-shared-request-body-inspection.md)

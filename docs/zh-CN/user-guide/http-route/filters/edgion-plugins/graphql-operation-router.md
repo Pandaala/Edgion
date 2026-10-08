@@ -11,3 +11,5 @@ POST 使用 JSON 对象；GET 使用 URL 参数且不能携带请求体，GET mu
 请求上限为 64 KiB，可配置更小值。解析还限制 JSON 深度、token、递归和工作量，并与成本限流共用四个非等待解析名额，繁忙返回 503。不支持订阅、批量、APQ、压缩、multipart、委派路由、全局/Gateway/backendRef 挂载或 AI/gRPC 转换链路。
 
 插件与 backendRefs 热更新都会重新校验；非法 rule 会被 Controller 移除，合法兄弟 rule 保留，此时请求可能返回 404。Gateway 对仍匹配到的非法挂载返回 500。成本限流独立配置 SDL 与 Redis，发生后续路由失败时不会退还已扣成本。
+
+插件自身的 HTTP 拒绝响应采用 [GraphQL JSON 错误合约](graphql-errors.md)。

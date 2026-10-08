@@ -55,6 +55,8 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "GrpcJsonTranscoderDynamic",
     "GraphqlRateLimitDynamic",
     "GraphqlOperationRouterDynamic",
+    "GraphqlGuardDynamic",
+    "GraphqlSafelistDynamic",
     "FormJsonTransformDynamic",
     "BasicAuthDynamic",
     "BasicAuthDynamicGrouped",
@@ -1617,6 +1619,8 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/BodyPlugins" => "EdgionPlugins",
         "EdgionPlugins/JsonSchemaValidation"
         | "EdgionPlugins/GrpcJsonTranscoder"
+        | "EdgionPlugins/GraphqlGuard"
+        | "EdgionPlugins/GraphqlSafelist"
         | "EdgionPlugins/GraphqlOperationRouter"
         | "EdgionPlugins/GraphqlRateLimit" => "EdgionPlugins",
         "EdgionPlugins/BodyDynamic" => "EdgionPlugins",
@@ -1710,6 +1714,8 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "FormJsonTransformDynamic"
         | "GrpcJsonTranscoderDynamic"
         | "GraphqlRateLimitDynamic"
+        | "GraphqlGuardDynamic"
+        | "GraphqlSafelistDynamic"
         | "GraphqlOperationRouterDynamic"
         | "JsonSchemaValidationDynamic"
         | "PmdRefFlap"
@@ -3077,6 +3083,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::JsonSchemaValidationTestSuite));
+        }
+        "EdgionPlugins/GraphqlGuard" => {
+            if !gateway {
+                eprintln!("GraphqlGuard requires --gateway");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GraphqlGuardTestSuite));
+        }
+        "EdgionPlugins/GraphqlSafelist" => {
+            if !gateway {
+                eprintln!("GraphqlSafelist requires --gateway");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GraphqlSafelistTestSuite));
         }
         "EdgionPlugins/GraphqlOperationRouter" => {
             if !gateway {

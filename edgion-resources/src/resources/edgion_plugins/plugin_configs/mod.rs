@@ -198,3 +198,11 @@ pub use graphql_operation_router::{
     graphql_router_attachment_error, graphql_router_binding_error, graphql_router_rule_binding_error,
     graphql_router_rule_error, GraphqlOperationRouteRule, GraphqlOperationRouterConfig,
 };
+
+pub mod graphql_guard;
+pub use graphql_guard::{
+    CompiledGraphqlGuard, GraphqlGuardConfig, GraphqlRootFieldRuleConfig, GraphqlRootFieldsConfig,
+};
+
+mod graphql_safelist;
+pub use graphql_safelist::{CompiledGraphqlSafelist, GraphqlSafelistConfig, GraphqlTrustedOperation};

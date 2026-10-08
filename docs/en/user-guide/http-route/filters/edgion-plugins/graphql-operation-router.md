@@ -91,3 +91,5 @@ The router validates operation selection and bounded syntax, not backend SDL or
 field authorization. GraphqlRateLimit remains optional and keeps its own static
 SDL and Redis quota configuration. Its debit is not refunded if later routing or
 upstream processing fails.
+
+Local HTTP rejections use the [GraphQL JSON error contract](graphql-errors.md).

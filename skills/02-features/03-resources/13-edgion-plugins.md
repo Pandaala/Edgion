@@ -91,6 +91,8 @@ generation. See
 | `RateLimitLocal` | Local rate limiting (CMS algorithm) |
 | `RateLimitRedis` | Distributed rate limiting (Redis backend) |
 | `GraphqlRateLimit` | Request-stage static SDL query-cost budgets over the canonical Redis limiter. Default Redis failure Deny; GET/POST envelopes64KiB, depth20, maxCost10000. Place after trusted request rewrites; no final-forwarding mutation seal. See [user guide](../../../docs/en/user-guide/http-route/filters/edgion-plugins/graphql-rate-limit.md). |
+| `GraphqlGuard` | Independent selected-operation shape/introspection checks; defaults depth20/aliases64/roots32/fields1024. Optional static SDL maxCost without Redis. Explicit null disables business limits but preserves hard frontend bounds. See [user guide](../../../docs/en/user-guide/http-route/filters/edgion-plugins/graphql-guard.md). |
+| `GraphqlSafelist` | Static whole-document and actual selected-operation authorization; 1..128 registrations, source total512KiB, native parser bounds. Variables remain parameters; unknown trust returns403. See [user guide](../../../docs/en/user-guide/http-route/filters/edgion-plugins/graphql-safelist.md). |
 | `BandwidthLimit` | Bandwidth limiting |
 | `FaultInjection` | Probabilistic delay and abort for controlled fault testing |
 | `Canary` | Route all traffic to one named backend, switchable by Selector ConfigData |
@@ -314,4 +316,4 @@ The original baseline still compiles and passes the actual body-mode admission.
 Controller and Gateway independently use the same leaf compiler; no request-time
 condition evaluator or rewritten source is introduced. See the
 [operator guide](../../../docs/en/user-guide/http-route/filters/edgion-plugins/waf.md#static-rule-selection)
-and [implementation specification](../../../tasks/pending/waf-tag-selection/01-spec.md).
+and [current implementation guard](../../04-review/waf/regression-guards/static-tag-selection-before-compilation.md).

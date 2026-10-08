@@ -172,3 +172,8 @@ pub use grpc_json_transcoder::{GrpcJsonTranscoderDynamicSuite, GrpcJsonTranscode
 
 mod graphql_operation_router;
 pub use graphql_operation_router::{GraphqlOperationRouterDynamicSuite, GraphqlOperationRouterTestSuite};
+
+mod graphql_guard;
+mod graphql_safelist;
+pub use graphql_guard::{GraphqlGuardDynamicSuite, GraphqlGuardTestSuite};
+pub use graphql_safelist::{GraphqlSafelistDynamicSuite, GraphqlSafelistTestSuite};

@@ -29,6 +29,7 @@ fn filter(cap: Option<&str>) -> Box<dyn RequestFilter> {
 
 fn session(method: &'static str, body_len: u64, declared: bool, query: Option<&'static str>) -> MockPluginSession {
     let mut session = MockPluginSession::new();
+    session.expect_set_response_header().returning(|_, _| Ok(()));
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.in_request_body_stage = true;
     session.expect_ctx().return_const(ctx);

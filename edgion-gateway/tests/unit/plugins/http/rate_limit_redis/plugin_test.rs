@@ -73,6 +73,64 @@ fn scoped_key_prefix_namespaces_by_entry_identity() {
     assert_ne!(a.scoped_key_prefix, a_second_entry.scoped_key_prefix);
 }
 
+#[tokio::test]
+async fn graphql_body_override_preserves_canonical_retry_and_quota_headers() {
+    use crate::plugins::http::common::graphql_request;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let config = unreachable_redis_config("default/graphql-reply-test", OnRedisFailure::Deny);
+    let ordinary = RateLimitRedis::new(&config, "default/reply/#0");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&ordinary.reject_body).unwrap(),
+        serde_json::json!({"message":"Rate limit exceeded"})
+    );
+    let body = graphql_request::error_body(429);
+    let plugin = ordinary.with_json_rejection_body(body.clone());
+    for retry in [Duration::ZERO, Duration::from_millis(500)] {
+        let mut session = MockPluginSession::new();
+        session.expect_set_response_header().times(1).returning(|name, value| {
+            assert_eq!(name, "Content-Type");
+            assert_eq!(value, "application/json");
+            Ok(())
+        });
+        session
+            .expect_write_response_header()
+            .times(1)
+            .returning(move |header, end| {
+                assert!(!end);
+                assert_eq!(header.status.as_u16(), 429);
+                assert_eq!(header.headers["content-type"], "application/json");
+                assert_eq!(header.headers["X-RateLimit-Limit"], "100");
+                assert_eq!(header.headers["X-RateLimit-Remaining"], "0");
+                if retry.is_zero() {
+                    assert!(!header.headers.contains_key("Retry-After"));
+                } else {
+                    assert_eq!(header.headers["Retry-After"], "1");
+                }
+                Ok(())
+            });
+        let expected = body.clone();
+        session
+            .expect_write_response_body()
+            .times(1)
+            .returning(move |actual, end| {
+                assert!(end);
+                assert_eq!(actual.as_ref(), Some(&expected));
+                Ok(())
+            });
+        let result = RateLimitResult {
+            allowed: false,
+            current: 100,
+            remaining: 0,
+            limit: 100,
+            retry_ms: 500,
+        };
+        assert_eq!(
+            plugin.reject_request(&mut session, retry, Some(&result)).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+    }
+}
+
 #[test]
 fn test_format_duration_milliseconds() {
     assert_eq!(format_duration(Duration::from_millis(500)), "500ms");

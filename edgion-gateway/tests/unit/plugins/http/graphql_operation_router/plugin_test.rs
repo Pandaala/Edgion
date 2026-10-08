@@ -189,6 +189,7 @@ async fn selected_target_is_authorized_before_strict_jump_publication_without_fa
         ctx.request_info.in_request_body_stage = true;
         let body = br#"{"query":"query GetUser { user { id } }"}"#;
         let mut session = MockPluginSession::new();
+        session.expect_set_response_header().returning(|_, _| Ok(()));
         session.expect_ctx().return_const(ctx);
         session.expect_get_method().return_const("POST".to_owned());
         session.expect_declares_body().return_const(Some(true));

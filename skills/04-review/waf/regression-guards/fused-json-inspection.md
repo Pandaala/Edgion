@@ -482,8 +482,9 @@ Ordered outcomes, selected TX values and multipart counters matched the baseline
 post-Drop live deltas were unchanged, not proven zero. Source bindings were
 checked against the unchanged WAF implementation at cleanup. Raw process artifacts
 were removed with completed tasks. These results do not measure Gateway latency,
-throughput or RSS; see the
-[remaining performance measurement task](../../../../tasks/todo/waf-validation/waf-production-performance-baseline.md).
+throughput or RSS. Establish fresh Gateway performance evidence using the
+[testing guide](../../../05-testing/01-integration-testing.md); the historical
+performance task record is absent and its removal does not establish measurement.
 
 Capture-hit acceleration adds generation memory and conservative admission cost:
 its measured engine-plus-metadata delta was 668,878 bytes and incremental scratch

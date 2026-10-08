@@ -19,6 +19,8 @@ before applying a decision to current code.
 ## Regression guards
 
 - [GraphQL query-cost budgets and bounded parsing](regression-guards/graphql-query-cost-budgets.md)
+- [Independent GraphQL selected-operation shape guard](regression-guards/graphql-guard-selected-shape.md)
+- [Static GraphQL whole-document safelist](regression-guards/graphql-static-safelist.md)
 - [Rate-limit response header names are validated at the resource boundary](regression-guards/response-header-name-validation.md)
 - [Local allowance and Redis overflow admission](regression-guards/local-allowance-redis-overflow.md)
 

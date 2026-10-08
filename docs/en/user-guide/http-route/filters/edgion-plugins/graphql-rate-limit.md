@@ -114,6 +114,8 @@ disabled entries and plugin policies can skip the complete protection.
 
 ## Outcomes
 
+Local HTTP rejections use the [GraphQL JSON error contract](graphql-errors.md).
+
 | Condition | Status |
 |-----------|--------|
 | Valid request within budget | Proxy unchanged; X-RateLimit headers report cost units |

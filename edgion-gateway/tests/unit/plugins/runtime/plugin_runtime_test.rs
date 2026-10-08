@@ -48,6 +48,34 @@ fn elapsed_micros_saturates_a_future_start_to_zero() {
 
 struct FixedResultFilter(PluginRunningResult);
 
+struct GraphqlLocalErrorFilter;
+
+struct QueuedPlainHeaderFilter;
+
+#[async_trait]
+impl RequestFilter for QueuedPlainHeaderFilter {
+    fn name(&self) -> &str {
+        "QueuedPlainHeader"
+    }
+    async fn run_request(&self, session: &mut dyn PluginSession, _plugin_log: &mut PluginLog) -> PluginRunningResult {
+        session.set_response_header("Content-Type", "text/plain").unwrap();
+        PluginRunningResult::GoodNext
+    }
+}
+
+#[async_trait]
+impl RequestFilter for GraphqlLocalErrorFilter {
+    fn name(&self) -> &str {
+        "GraphqlLocalError"
+    }
+
+    async fn run_request(&self, session: &mut dyn PluginSession, _plugin_log: &mut PluginLog) -> PluginRunningResult {
+        assert!(session.set_response_header("Content-Length", "999").is_err());
+        assert!(session.set_response_header("Transfer-Encoding", "chunked").is_err());
+        crate::plugins::http::common::graphql_request::reject(session, 400)
+    }
+}
+
 #[async_trait]
 impl RequestFilter for FixedResultFilter {
     fn name(&self) -> &str {
@@ -324,6 +352,79 @@ async fn err_response_writer_failures_record_client_closed_once() {
 
     assert_eq!(ctx.final_downstream_status(), Some(403));
     assert_eq!(client_closed_count(&ctx), 1);
+}
+
+#[tokio::test]
+async fn graphql_local_error_uses_http_json_framing_and_preserves_native_grpc_owner() {
+    for grpc in [false, true] {
+        let (mut session, mut client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = grpc;
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(GraphqlLocalErrorFilter));
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+        let bytes = read_client_response(&mut client).await;
+        let raw = String::from_utf8(bytes).unwrap();
+        let (headers, body) = raw.split_once("\r\n\r\n").unwrap();
+        let headers = headers.to_ascii_lowercase();
+        assert!(!headers.contains("content-length: 999"));
+        assert!(!headers.contains("transfer-encoding:"));
+        if grpc {
+            assert!(headers.starts_with("http/1.1 200"));
+            assert!(headers.contains("content-type: application/grpc"));
+            assert!(!headers.contains("content-type: application/json"));
+            assert!(headers.contains("grpc-status:"));
+            assert!(body.is_empty());
+        } else {
+            assert!(headers.starts_with("http/1.1 400"));
+            assert!(headers.contains("content-type: application/json"));
+            assert!(headers.contains(&format!("content-length: {}", body.len())));
+            assert_eq!(
+                body.as_bytes(),
+                crate::plugins::http::common::graphql_request::error_body(400).as_ref()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn graphql_limiter_json_rejection_overrides_earlier_queued_type_without_changing_ordinary_limiter() {
+    use crate::plugins::http::common::graphql_request;
+    use crate::plugins::http::rate_limit_redis::RateLimitRedis;
+    use edgion_resources::plugin_configs::RateLimitRedisConfig;
+    let config: RateLimitRedisConfig = serde_json::from_value(serde_json::json!({
+        "redisRef":"default/unused-graphql-header-test",
+        "key":[{"type":"header","name":"x-missing-identity"}],
+        "policies":[{"rate":100,"interval":"1s"}],
+        "onKeyMiss":"Deny"
+    }))
+    .unwrap();
+    for graphql in [false, true] {
+        let (mut session, mut client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(QueuedPlainHeaderFilter));
+        let limiter = RateLimitRedis::new(&config, "default/header-test/#0");
+        let limiter = if graphql {
+            limiter.with_json_rejection_body(graphql_request::error_body(429))
+        } else {
+            limiter
+        };
+        runtime.add_request_filter(Box::new(limiter));
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+        let raw = String::from_utf8(read_client_response(&mut client).await).unwrap();
+        let (headers, body) = raw.split_once("\r\n\r\n").unwrap();
+        let headers = headers.to_ascii_lowercase();
+        assert!(headers.starts_with("http/1.1 429"));
+        assert!(!headers.contains("retry-after:"));
+        if graphql {
+            assert!(headers.contains("content-type: application/json"));
+            assert!(body.contains(std::str::from_utf8(&graphql_request::error_body(429)).unwrap()));
+        } else {
+            assert!(headers.contains("content-type: text/plain"));
+            assert!(body.contains("Rate limit exceeded"));
+        }
+    }
 }
 
 #[tokio::test]

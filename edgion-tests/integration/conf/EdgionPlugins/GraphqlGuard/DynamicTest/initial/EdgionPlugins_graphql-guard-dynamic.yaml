@@ -1,0 +1,21 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "graphql-guard-dynamic",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "GraphqlGuard",
+        "config": {
+          "maxDepth": 2,
+          "maxAliases": 1,
+          "maxRootFields": 2,
+          "maxFields": 3
+        }
+      }
+    ]
+  }
+}

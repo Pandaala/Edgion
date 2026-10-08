@@ -53,8 +53,10 @@ use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::form_json_transform::FormJsonTransform;
 use crate::plugins::http::forward_auth::ForwardAuth;
 use crate::plugins::http::geoip_location::GeoIpLocation;
+use crate::plugins::http::graphql_guard::GraphqlGuard;
 use crate::plugins::http::graphql_operation_router::GraphqlOperationRouter;
 use crate::plugins::http::graphql_rate_limit::GraphqlRateLimit;
+use crate::plugins::http::graphql_safelist::GraphqlSafelist;
 use crate::plugins::http::grpc_json_transcoder::GrpcJsonTranscoder;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
 use crate::plugins::http::hmac_auth::HmacAuth;
@@ -935,6 +937,8 @@ impl PluginRuntime {
                     EdgionPlugin::FormJsonTransform(_)
                         | EdgionPlugin::GrpcJsonTranscoder(_)
                         | EdgionPlugin::JsonSchemaValidation(_)
+                        | EdgionPlugin::GraphqlGuard(_)
+                        | EdgionPlugin::GraphqlSafelist(_)
                         | EdgionPlugin::GraphqlRateLimit(_)
                         | EdgionPlugin::GraphqlOperationRouter(_)
                         | EdgionPlugin::ProxyRewrite(edgion_resources::resources::edgion_plugins::ProxyRewriteConfig {
@@ -1879,6 +1883,10 @@ impl PluginRuntime {
             EdgionPlugin::GraphqlOperationRouter(config) => {
                 CreateResult::Ok(GraphqlOperationRouter::create(config, body_requirement))
             }
+            EdgionPlugin::GraphqlGuard(config) => CreateResult::Ok(GraphqlGuard::create(config, body_requirement)),
+            EdgionPlugin::GraphqlSafelist(config) => {
+                CreateResult::Ok(GraphqlSafelist::create(config, body_requirement))
+            }
             EdgionPlugin::GraphqlRateLimit(config) => {
                 CreateResult::Ok(GraphqlRateLimit::create(config, entry_scope, body_requirement))
             }
@@ -1972,6 +1980,8 @@ impl PluginRuntime {
             | EdgionPlugin::JweDecrypt(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::GraphqlGuard(_)
+            | EdgionPlugin::GraphqlSafelist(_)
             | EdgionPlugin::GraphqlRateLimit(_)
             | EdgionPlugin::GraphqlOperationRouter(_)
             | EdgionPlugin::FormJsonTransform(_)
@@ -2047,6 +2057,8 @@ impl PluginRuntime {
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::GraphqlGuard(_)
+            | EdgionPlugin::GraphqlSafelist(_)
             | EdgionPlugin::GraphqlRateLimit(_)
             | EdgionPlugin::GraphqlOperationRouter(_)
             | EdgionPlugin::FormJsonTransform(_)
@@ -2099,6 +2111,8 @@ impl PluginRuntime {
             | EdgionPlugin::JweDecrypt(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::GraphqlGuard(_)
+            | EdgionPlugin::GraphqlSafelist(_)
             | EdgionPlugin::GraphqlRateLimit(_)
             | EdgionPlugin::GraphqlOperationRouter(_)
             | EdgionPlugin::FormJsonTransform(_)
@@ -2155,6 +2169,8 @@ impl PluginRuntime {
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
             EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
+            EdgionPlugin::GraphqlGuard(_) => "GraphqlGuard",
+            EdgionPlugin::GraphqlSafelist(_) => "GraphqlSafelist",
             EdgionPlugin::GraphqlRateLimit(_) => "GraphqlRateLimit",
             EdgionPlugin::GraphqlOperationRouter(_) => "GraphqlOperationRouter",
             EdgionPlugin::GrpcJsonTranscoder(_) => "GrpcJsonTranscoder",

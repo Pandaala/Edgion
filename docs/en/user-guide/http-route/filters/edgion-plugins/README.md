@@ -49,6 +49,8 @@ rule without echoing the realm. Disabled entries remain inert.
 | [grpc-json-transcoder.md](grpc-json-transcoder.md) | Descriptor-backed REST JSON to native gRPC over mandatory upstream HTTP/2 |
 | [graphql-operation-router.md](graphql-operation-router.md) | Exact operation selection among declared HTTPRoute Service backends |
 | [graphql-rate-limit.md](graphql-rate-limit.md) | Static SDL query-cost budgets through Redis |
+| [graphql-guard.md](graphql-guard.md) | Independent shape and introspection protection with optional SDL cost ceiling |
+| [graphql-safelist.md](graphql-safelist.md) | Static trusted GraphQL documents |
 | [header-cert-auth.md](header-cert-auth.md) | Header/certificate authentication |
 | [hmac-auth.md](hmac-auth.md) | HMAC signature verification |
 | [ip-restriction.md](ip-restriction.md) | IP allowlist/denylist |

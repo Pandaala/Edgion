@@ -1,0 +1,38 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "graphql-root-fields",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "GraphqlGuard",
+        "config": {
+          "rootFields": {
+            "query": {
+              "allow": [
+                "ping",
+                "user",
+                "blocked",
+                "__typename"
+              ],
+              "deny": [
+                "blocked"
+              ]
+            },
+            "mutation": {
+              "allow": [
+                "update"
+              ],
+              "deny": [
+                "erase"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

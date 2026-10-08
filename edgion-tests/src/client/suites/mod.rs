@@ -156,3 +156,6 @@ pub use edgion_plugins::{GraphqlRateLimitDynamicSuite, GraphqlRateLimitTestSuite
 pub use edgion_plugins::{GrpcJsonTranscoderDynamicSuite, GrpcJsonTranscoderTestSuite};
 
 pub use edgion_plugins::{GraphqlOperationRouterDynamicSuite, GraphqlOperationRouterTestSuite};
+
+pub use edgion_plugins::{GraphqlGuardDynamicSuite, GraphqlGuardTestSuite};
+pub use edgion_plugins::{GraphqlSafelistDynamicSuite, GraphqlSafelistTestSuite};

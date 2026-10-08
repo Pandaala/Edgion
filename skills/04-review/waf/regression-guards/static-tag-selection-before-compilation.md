@@ -66,8 +66,9 @@ The canonical tests are leaf tag_selection/compiler tests, resource waf_policy,
 waf_tags and WafConfig tests, Controller optional/publication tests, Gateway store
 old/new ownership tests and CLI tests. The pinned language omission/score corpus
 is `edgion-resources/tests/waf_tag_selection.rs`; the existing shared WafDynamic
-scenario has a policy-only selection phase and restoration. Read the current
-[verification record](../../../../tasks/pending/waf-tag-selection/05-verification.md)
-for executed gates and environmental limitations; fixture presence is not live
-acceptance. Re-evaluate on frontend/compiler bounds, metadata syntax, policy
+scenario has a policy-only selection phase and restoration. The historical
+`tasks/pending/waf-tag-selection/05-verification.md` record is absent from the
+current tree. Run the canonical tests and shared scenario using the
+[testing guide](../../../05-testing/01-integration-testing.md) for fresh gates
+and environmental limitations; fixture presence is not live acceptance. Re-evaluate on frontend/compiler bounds, metadata syntax, policy
 transport, trial ownership, source graph or output-contract changes.

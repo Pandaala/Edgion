@@ -1,0 +1,29 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "graphql-safelist",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "GraphqlSafelist",
+        "config": {
+          "operations": [
+            {
+              "query": "{ ping }"
+            },
+            {
+              "query": "query Read($n:Int) { ping(n:$n) }"
+            },
+            {
+              "query": "query Chosen { ping } mutation Hidden { update }",
+              "operationName": "Chosen"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

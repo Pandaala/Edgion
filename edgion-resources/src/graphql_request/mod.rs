@@ -1,7 +1,11 @@
 //! Canonical bounded GraphQL parsing and verified operation selection.
 
 mod envelope;
+mod guard;
+mod safelist;
 mod selection;
+pub(crate) use guard::GraphqlRootFieldPolicy;
+pub use guard::GraphqlShapeLimits;
 pub(crate) use selection::directives;
 
 use apollo_parser::{cst, Lexer, Parser, TokenKind};
@@ -21,6 +25,7 @@ pub enum GraphqlError {
     Invalid,
     TooLarge,
     MethodNotAllowed,
+    Forbidden,
 }
 
 impl fmt::Display for GraphqlError {
@@ -29,6 +34,7 @@ impl fmt::Display for GraphqlError {
             Self::Invalid => "invalid or unsupported GraphQL request",
             Self::TooLarge => "GraphQL envelope exceeds its limit",
             Self::MethodNotAllowed => "GraphQL operation does not support this method",
+            Self::Forbidden => "GraphQL operation is forbidden",
         })
     }
 }

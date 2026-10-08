@@ -59,11 +59,11 @@ impl RequestFilter for GraphqlOperationRouter {
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         let Some(route) = session.ctx().route_unit.clone() else {
             log.push_err("invalid routing scope");
-            return graphql_request::reject(500);
+            return graphql_request::reject(session, 500);
         };
         if session.ctx().jump.is_some() {
             log.push_err("deny jump conflict");
-            return graphql_request::reject(500);
+            return graphql_request::reject(session, 500);
         }
         let target = match graphql_request::evaluate(session, log, self.envelope_limit, |parsed| {
             Ok(self.target(parsed.operation_type(), parsed.operation_name()))
@@ -73,7 +73,7 @@ impl RequestFilter for GraphqlOperationRouter {
             Ok(Some(target)) => target,
             Ok(None) => {
                 log.push("deny no mapping");
-                return graphql_request::reject(400);
+                return graphql_request::reject(session, 400);
             }
             Err(reply) => return reply,
         };
@@ -90,7 +90,7 @@ impl RequestFilter for GraphqlOperationRouter {
                 log.push_err("backend ref unusable");
                 500
             };
-            return graphql_request::reject(status);
+            return graphql_request::reject(session, status);
         }
         let jump = UpstreamJumpTarget::Internal(InternalJumpPreset {
             backend_ref_name: target.name.clone(),
@@ -98,7 +98,7 @@ impl RequestFilter for GraphqlOperationRouter {
         });
         if session.set_strict_upstream_jump(jump) == SetJumpOutcome::Rejected {
             log.push_err("deny jump conflict");
-            return graphql_request::reject(500);
+            return graphql_request::reject(session, 500);
         }
         log.push(if is_default { "route default" } else { "route exact" });
         PluginRunningResult::GoodNext

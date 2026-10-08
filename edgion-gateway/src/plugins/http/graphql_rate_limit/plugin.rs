@@ -34,7 +34,8 @@ impl GraphqlRateLimit {
         let policy_capacity = rate_config.policies.iter().map(|policy| policy.rate).min()?;
         Some(Box::new(Self {
             compiled,
-            limiter: RateLimitRedis::new(&rate_config, entry_scope),
+            limiter: RateLimitRedis::new(&rate_config, entry_scope)
+                .with_json_rejection_body(graphql_request::error_body(429)),
             envelope_limit,
             policy_capacity,
         }))
@@ -62,7 +63,7 @@ impl RequestFilter for GraphqlRateLimit {
         };
         if u64::from(cost) > self.policy_capacity {
             log.push("deny policy capacity");
-            return graphql_request::reject(429);
+            return graphql_request::reject(session, 429);
         }
         self.limiter.run_request_with_cost(session, log, cost).await
     }

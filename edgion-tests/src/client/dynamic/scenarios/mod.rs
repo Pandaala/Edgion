@@ -67,3 +67,6 @@ pub mod graphql_rate_limit;
 pub mod grpc_json_transcoder;
 
 pub mod graphql_operation_router;
+
+pub mod graphql_guard;
+pub mod graphql_safelist;

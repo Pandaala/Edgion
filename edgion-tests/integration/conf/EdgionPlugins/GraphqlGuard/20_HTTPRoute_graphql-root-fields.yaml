@@ -1,0 +1,39 @@
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "HTTPRoute",
+  "metadata": {
+    "name": "graphql-root-fields",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "parentRefs": [
+      {
+        "name": "edgion-plugins-gateway",
+        "namespace": "edgion-test"
+      }
+    ],
+    "hostnames": [
+      "graphql-root-fields.example.com"
+    ],
+    "rules": [
+      {
+        "filters": [
+          {
+            "type": "ExtensionRef",
+            "extensionRef": {
+              "group": "edgion.io",
+              "kind": "EdgionPlugins",
+              "name": "graphql-root-fields"
+            }
+          }
+        ],
+        "backendRefs": [
+          {
+            "name": "graphql-guard",
+            "port": 30001
+          }
+        ]
+      }
+    ]
+  }
+}

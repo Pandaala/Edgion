@@ -295,7 +295,7 @@ GraphqlOperationRouter selects a declared Service backend inside an already
 matched, undelegated HTTPRoute rule. Shared graphql_request frontends own bounded
 GET/POST envelopes, syntax and verified operation selection; cost evaluation stays
 in graphql_cost. Gateway common/graphql_request owns transport checks and four
-nonwaiting evaluation permits shared with GraphqlRateLimit, released before any
+nonwaiting evaluation permits shared with GraphqlRateLimit, GraphqlGuard and GraphqlSafelist, released before any
 upstream or Redis await. No second body cache or response aggregation is added.
 
 Resources separates raw source-enabled structural binding from effective chain

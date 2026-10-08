@@ -49,6 +49,7 @@ pub struct RateLimitRedis {
     config: RateLimitRedisConfig,
     config_valid: bool,
     reject_body: Bytes,
+    force_json_rejection: bool,
     /// `config.key_prefix` scoped by the owning entry's identity
     /// (`<namespace>/<name>/<alias or #index>`). Resolved once at build time;
     /// the request path never recomputes it.
@@ -91,9 +92,18 @@ impl RateLimitRedis {
             config: validated,
             config_valid,
             reject_body,
+            force_json_rejection: false,
             scoped_key_prefix,
             core: RedisRateLimiter::new(),
         }
+    }
+
+    /// Select a precomputed caller-specific body at cold construction time.
+    /// Rejection headers and writes remain owned by the canonical limiter.
+    pub(crate) fn with_json_rejection_body(mut self, body: Bytes) -> Self {
+        self.reject_body = body;
+        self.force_json_rejection = true;
+        self
     }
 
     /// Check all policies against Redis. Returns aggregate result.
@@ -197,6 +207,11 @@ impl RateLimitRedis {
             }
         }
 
+        if self.force_json_rejection {
+            // The adapter drains queued operations after this response header.
+            // Append last so earlier plugins cannot mislabel the fixed JSON body.
+            let _ = session.set_response_header("Content-Type", "application/json");
+        }
         if let Err(_e) = session.write_response_header(resp, false).await {
             return PluginRunningResult::ErrTerminateRequest;
         }
