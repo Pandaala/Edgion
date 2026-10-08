@@ -62,8 +62,11 @@ or historical conformance. Record commit hashes only after successful commits.
   HEAD passed focused tests, final workspace gates and a fresh independent Astra
   scoped result review. R2b was committed locally as
   5cf413bbc4e4b4b4a28be378e3994137779fc2d8; no push occurred. Post-commit status
-  contained only unrelated review-results. R2c's exact 31-path plan received
-  independent Astra scoped PASS; serial delegated implementation is authorized.
+  contained only unrelated review-results. R2c's effective 32-path implementation
+  passed two new independent Astra result rounds, fresh scoped/live verification
+  and all workspace gates, then committed locally as
+  f65b863c7cda6ec9936569d91e7bd8897824c4b2. Post-commit status contained only
+  unrelated review-results; no push occurred. R3a1 ExtensionRef Resources/Controller plan has independent Astra SCOPED PLAN PASS; baseline identity capture completed and implementation is active. Gateway R3a2 remains open.
 - The first checkpoint audit and workspace commit gates passed. The user
   committed the accumulated code snapshot
   as 0f40e2708496e9aacafb0dc2fbd2cdd786ffa9e8 (`tmp commit`) while verification
@@ -72,7 +75,7 @@ or historical conformance. Record commit hashes only after successful commits.
   documentation and execution records. No push occurred. The user's commit
   remains unchanged.
 - The earlier external baseline was 4dbcc5495; current HEAD is the completed
-  R2b commit 5cf413bbc. Revalidate each batch against its current HEAD.
+  R2c commit f65b863c7. Revalidate each batch against its current HEAD.
   The independently owned, untracked `review-results/` artifacts remain outside
   this task's mutation and staging scope.
 
@@ -599,6 +602,25 @@ The original issue remains open for R3 through R8 and whole-task closure. Stage
 only the approved 32 files plus this progress ledger and commit locally; never
 push or include independently owned review-results.
 
+R2c commit succeeded: `f65b863c7cda6ec9936569d91e7bd8897824c4b2`,
+`Select native Service backends from one captured generation`. Exactly the
+32 approved files plus this ledger were committed; the original issue and
+independent review-results were excluded. Post-commit status contained only
+unrelated untracked review-results. No push occurred.
+
+R3a planning starts from that clean checkpoint and is delegated plan-only.
+Revalidate ExtensionRef source, Controller dependencies/validation and Gateway
+publication/request consumers before freezing scope. Preserve the approved
+existing delegation transport: authored Controller loans use the real child
+identity/slot before cloning; Gateway effective target-only loans use the actual
+published root/field and controller-owned child-local resolved_namespace.
+Spec section 5 limits UID/generation/revision checks to existing binding protocols;
+do not invent a new provenance carrier or claim the Gateway receives an original
+child UID it does not carry. Effective views cannot mint Grant authority.
+Separate mirror, descriptor and later credential/parent/DNS/TLS consumers remain
+tracked. Any split needs coherent intermediate behavior, original test retention
+and independently reviewed exact scope before editing.
+
 The serial implementer is authorized to reuse one private attempt-scoped Service
 projection/section/membership-verified runtime for type dispatch, endpoint
 readiness, SP validation and LB. Exact actual `Service.spec.type=ExternalName`
@@ -624,8 +646,8 @@ requires it; do not silently expand an approved allowlist.
 | --- | --- | --- | --- |
 | C0: current checkpoint | Independent accumulated-diff audit, resolve immediate introduced blockers, run required pre-commit gates, stage only verified task changes; describe partial completion honestly | complete; scoped final PASS and all gates passed | user snapshot 0f40e2708; closing 8dab81bc6 |
 | R1: native Route backends and delegation | Actual five-Route owners; authored terminal loans alone mint Grant; invalid descriptors cause no lookup/edge; child authorizes delegated targets, root owns wakeup; dependencies precede Grant reads; preserve slots/weights, AI facts and coalesced recovery | complete; fresh independent Astra scoped PASS and all gates passed | 0fea0a618 |
-| R2: final Gateway backend selection | Consume cold canonical targets through HTTP/GRPC/L4 final dial; retain weighted invalid slots and denial behavior; no new request allocations, locks or duplicate classifier; preserve direct endpoint/retry semantics | R2a/R2b complete; R2c effective 32-path plan approved, fresh focused reruns passed, shared-topology verification active | R2a d37b890a8; R2b 5cf413bbc |
-| R3: filters, ExtensionRef and mirror | Actual HTTP/GRPC filter owners and child namespaces; authored/resolved coverage; correct runtime compilation, local descriptor ownership and recovery; mirror denial affects only mirror with role-qualified dependencies | pending | pending |
+| R2: final Gateway backend selection | Consume cold canonical targets through HTTP/GRPC/L4 final dial; retain weighted invalid slots and denial behavior; no new request allocations, locks or duplicate classifier; preserve direct endpoint/retry semantics | complete; R2c two fresh Astra rounds, identity/live proof and all gates passed | R2a d37b890a8; R2b 5cf413bbc; R2c f65b863c7 |
+| R3: filters, ExtensionRef and mirror | Actual HTTP/GRPC filter owners and child namespaces; authored/resolved coverage; correct runtime compilation, local descriptor ownership and recovery; mirror denial affects only mirror with role-qualified dependencies | R3a1 exact 23-path plan PASS; implementation active; Gateway R3a2, mirror and descriptor portions pending | pending |
 | R4: generic dependency and status | Replace remaining raw plugin credential/ConfigMap dependency and status paths with actual-owner authority; exact generation/disabled/delete/recreate handling; readonly status agrees with acquisition and runtime | pending | pending |
 | R5: attachment and policy references | parentRefs, allowedRoutes, GatewayClass parameters, GatewayRouteIndex and policy targets use appropriate object/type/selector identities; preserve namespace selectors, consent, controller ownership and ACME strictness | pending | pending |
 | R6: annotations and fixed identities | Preserve per-field annotation parsing; bind DNS LinkSys and fixed output references to actual owners; retain separate malformed EndpointSlice fallbacks; verify dedicated Service producer parity and process Gateway scope | pending | pending |
@@ -694,3 +716,158 @@ failures rather than substitute Experimental PASS or narrow the profile.
   task according to the project lifecycle without deleting unrelated tasks.
 - Commit final cleanup locally and report commit hashes, verified behavior and
   any explicit remaining limits. Never push.
+
+## R3a1 approved implementation gate
+
+At immutable HEAD f65b863c7, the actual-owner ExtensionRef migration is split
+serially into Resources/Controller (R3a1) and Gateway (R3a2), with a separate
+review, verification and local commit for each. Confirmed gpt-6-astra
+`/root/r2c_deep_result_astra` independently reviewed the ten-point plan and all
+23 existing paths and returned SCOPED PLAN PASS. This does not accept Gateway
+preflight closure or whole-task conformance.
+
+The private owning field loans distinguish authored references from effective
+resolved-rule stamps, retain actual child identity and field positions, and mint
+no Grant authority. Register all valid child dependencies before later drops;
+read targets only for structurally eligible existing scope checks, from the raw
+desired generation. Clear plugin dependencies once at parse entry and extend
+that set in subsequent root/status registration. Keep raw-None root wake keys
+separate from canonical default target namespaces. Invalid owner, field or stamp
+must produce zero dependency edges and target reads. Missing target repair,
+dropped-child recovery and coalesced replacement require meaningful coverage.
+
+The source baseline is retained under the ignored
+`tmp/resource-reference-contract/r3a1-baseline-20261008/`: 23 immutable files,
+188 attributed test functions, ignore attributes, original hashes and exact
+allowlist. Baseline manifest SHA is
+`b87bb3ec17dab744857913a69095f4dc725dab138de16df950725a8cd02a78ea`.
+Fresh baseline compiled listings completed before edits: Resources 1922
+and Controller 1731 tests, both command exits zero. Root explicitly
+authorized execution after both controls completed. Existing schema, transport, mirror, native ExternalAuth support and
+ReferenceGrant policy remain outside R3a1. Fresh final review, second deep Astra
+review, targeted verification, workspace gates and local commit are pending.
+
+A later continuation again found no surviving prior subagent threads. Source
+and all R3a1 persistent artifacts remained intact; there was no active owned
+Cargo process. New explicitly configured gpt-6-astra roles resume the same
+approved scope: `r3a1_impl_resume` is the sole implementer, `r3a1_fresh_astra`
+reserves the fresh first final review, and `r3a1_deep_astra` reserves amendment
+and second deep final review. No plan or acceptance is fabricated from the
+thread recovery. The first new Resources test compile failed on a Result
+equality assertion requiring an absent production PartialEq derive; the test
+was corrected to pattern matching without changing production schema. The
+retained second raw log reports 74 focused reference tests passed. Controller
+lifecycle coverage and owning documentation remain in progress.
+
+Execution recovery observed an extra task-local Controller test process and
+additional in-scope edits while the resumed implementer was active. The resumed
+implementer paused, root preserved all 23 scoped files plus its own ledger under
+`tmp/resource-reference-contract/r3a1-ownership-recovery-20261008-r1`, and the
+checkpoint remained byte-identical for 98 seconds. The extra task process ended;
+other workspace processes were verified unrelated and left untouched. No
+surviving old agent was manageable. With no renewed writes or extra task process
+observed, root resumed one implementer under existing user authority and retained
+continuous scope monitoring. This is an observed resolution, not user confirmation
+or a final acceptance claim.
+
+Controller handler attempt 1 failed because an existing test-support helper lost
+an implicitly imported pure validator; a cfg(test) import restored that fixture
+within the approved source path. Attempt 2 passed 660 cases and failed one new
+lifecycle test that assumed root-before-child queue order. The new assertion was
+changed to require the root wakeup under a bounded wait without imposing queue
+order; its dependency, status, recovery and replacement assertions remain. Both
+raw failure logs remain in the R3a1 verification directory. Reverification is
+pending.
+
+A narrow independent Astra adjudication found invalid-source-only status
+dependency withdrawal to be a requirement-preserving refinement: valid status
+remains additive, normal generation replacement clears at parse entry, and an
+invalid source has no valid child set to erase. Standalone invalid status may
+clear stale edges and withdraw derived fields, but must create no edges or reads.
+This is scope precision only, not final result approval.
+
+R3a1 candidate r1 passed workspace check and Clippy (exit zero, 264.08 and
+410.983 seconds) after all focused checks. The immutable 23-path result is
+retained in `tmp/resource-reference-contract/r3a1-final-20261008-r1`; its scope,
+manifest and patch SHA256 values are respectively
+`6550fcbc70097c7a4ac88a1583315407a29dac3d508c4be023c5c8d1449e3eae`,
+`2322bb1eecde0afb717cd1c9752e5d8b0730ef30811128cc6e8fa8b60873c471`, and
+`6498f11a9a0b8ce1d7f400673b420a4b73f2b836c2459ce333f0956179963081`.
+Gateway compiled identity control preserves all 5132 tests with no additions or
+removals. These are r1 evidence, not acceptance of later corrected bytes.
+
+The fresh first Astra result review returned SCOPED BLOCK for R3a1-F1: an empty
+or slash-containing ExtensionRef name with supported group/kind is safely
+rejected but HTTP status falsely claims the group/kind is unsupported. The
+separate deep Astra reviewer approved the narrow correction plan: distinguish
+the name error using the existing group/kind-only helper inside the canonical
+validator error branch, preserve unsupported-group/kind wording and priorities,
+and prove direct/delegated status and zero dependency edges. After both root
+Cargo gates ended, root explicitly authorized the sole implementer to execute
+within the same 23 paths. Replacement evidence and two result-review passes are
+required before local commit. R1 artifacts remain immutable; the original issue,
+Gateway R3a2 and subsequent batches remain open.
+
+The correction passed Controller `resource_processor` verification: 921 passed,
+zero failed/ignored, 822 filtered (r2 `controller-processor-r4`, exit zero).
+Three new fixture attempts remain recorded: missing Gateway masked the intended
+reason, a borrowed runtime was mistaken for an Arc, and a plain test lacked the
+Tokio reactor. The final actual RawStore Gateway/owning Arc/async fixture retains
+all assertions and test identity. Source identities are 188 -> 203 and compiled
+Resources 1922 -> 1925 / Controller 1731 -> 1743, with no old removals or ignore
+changes. The owning guard now distinguishes existing Gateway union/filter-list
+construction gates from still-pending independent name/owner consumption.
+
+Corrected immutable candidate r2 is
+`tmp/resource-reference-contract/r3a1-final-20261008-r2`, with scope SHA256
+`2d820cfc7da6bdb42881ac5feb1da2a8e293b05a833097b336af7d0376ab8aca`,
+manifest `bbd9ea9ed9f6175aad54d36e4a54e73a5b73953626be1c8d4fc0fc31397290ea`
+and patch `6764e45d99bcf20e9cf8d720f2b8bb42c4bd7df646cd18df9ba89b99f5665b8b`.
+Only six previously approved paths changed between r1 and r2. All r2 root gates
+passed: workspace check 24.188 seconds, Clippy 34.100 seconds; format, agent docs,
+SSA, metrics, Pingora, transform/reference drift, unit layout, gateway tracing,
+English and diff checks. Raw commands/results remain in the r2 verification
+directory. Resources/Gateway focused r1 results apply to unchanged relevant
+source; they are not represented as fresh r2 runs. The fresh first Astra reviewer
+is reviewing this corrected frozen result; the second deep result and local
+commit remain pending. No whole-task or conformance acceptance is claimed.
+
+Both explicitly configured Astra reviewers independently returned SCOPED PASS
+for frozen r2: fresh `r3a1_fresh_astra`, then deep `r3a1_deep_astra`. F1 is
+resolved and neither found another correctness blocker. Root's raw-log inspection
+found two introduced test-helper `question_mark` warnings in both r1 and r2
+Clippy output. The commands exited zero, but these bytes are not warning-free.
+The deep verdict explicitly retains that qualification. This does not change
+the earlier successful command exits or invent clean lint evidence.
+
+A separate narrow cleanup plan received independent Astra PASS before edits:
+replace the two new Option-returning spy helpers' equivalent let-Some-else
+early returns with `?`, preserving every assertion and identity, with no
+production or scope change. Root authorized the sole implementer after the
+second frozen r2 review ended. Fresh affected verification, warning-free root
+gates, replacement r3 hashes and both reviewers' renewed byte verification
+remain required before commit. Readonly R3a2 inventory identified the actual
+Gateway consumers but is not an approved or executed next plan.
+
+Final immutable candidate r3 is
+`tmp/resource-reference-contract/r3a1-final-20261008-r3`: scope SHA256
+`9d2585bb80aaf2130d8a247e870dc3f4ee9a09c28995663943cd58a4ea99074c`,
+manifest `64aef09f902a7f5b10d7aa146bc9389e5b19a1be687822e72a7a918ea800d0f4`,
+patch `375bf39681a45df981035fd2dbe7e0cc353254db306411b9268329417c8aa79b`.
+Both independent Astra result reviewers renewed SCOPED PASS on these final
+bytes. Each reproduced file/patch hashes, the old identity/ignore controls and
+equivalent helper simplifications; neither found a blocking finding. Root also
+matched the actual frozen result. Fresh Controller verification passed 921,
+with zero failed/ignored; unchanged identity totals remain 188 -> 203,
+Resources 1922 -> 1925 and Controller 1731 -> 1743.
+
+Final r3 workspace check and Clippy passed in 18.022 and 23.198 seconds. Root
+inspected both raw logs and confirmed zero warning/error diagnostics, rather
+than inferring that from the exit codes. All eleven recorded format/guard
+checks passed. Root's graded MUST scan found no new secret/schema/transport
+field, logging surface, request allocation, handler wait/IO, queue, Grant policy
+or alias; canonical lexical/owning validation and dependency recovery are used.
+The commit gate is the exact 23 reviewed paths plus this coordinator ledger,
+after final metadata doc/English/diff checks. Unrelated review-results remain
+untouched; Gateway R3a2, R3b/R3c, R4-R8 and whole-task admission/conformance and
+closure remain pending. No push is authorized.

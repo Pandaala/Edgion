@@ -1000,8 +1000,8 @@ fn ai_rule_rejects_more_than_seven_explicit_retries() {
     assert!(reason.contains("must not exceed 7"), "{reason}");
 }
 
-#[test]
-fn ai_and_plugin_reverse_refs_replace_old_effective_dependencies() {
+#[tokio::test]
+async fn ai_and_plugin_reverse_refs_replace_old_effective_dependencies() {
     let ctx = make_ctx();
     let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
@@ -1051,6 +1051,9 @@ fn ai_and_plugin_reverse_refs_replace_old_effective_dependencies() {
     .unwrap();
     let first_tuples =
         route_backend_refs::collect_dependencies(HttpRouteBackendRefs::from_route(&child).unwrap().authored());
+    // Parse owns generation replacement; this pass tests the existing effective
+    // projection's additive registration after that real entry boundary.
+    HttpRouteHandler::default().parse(route.clone(), &ctx).await;
     let first = HttpRouteHandler::register_backend_refs(&route, &first_tuples, &ctx);
     assert_eq!(
         first.affected,
@@ -1087,6 +1090,9 @@ fn ai_and_plugin_reverse_refs_replace_old_effective_dependencies() {
         vec!["edgion.io/EdgionBackend/child/models-a".to_string()]
     );
     assert_eq!(second.affected.len(), 2);
+    // Parse owns generation replacement; this pass tests the existing effective
+    // projection's additive registration after that real entry boundary.
+    HttpRouteHandler::default().parse(route.clone(), &ctx).await;
     HttpRouteHandler::register_plugin_refs(&route, &ctx);
     assert_eq!(
         ctx.runtime().plugin_ref_mgr.get_dependencies(&route_ref.key()),
@@ -1119,7 +1125,7 @@ async fn backend_waf_is_controller_invalid_and_registered_for_requeue() {
     let details = find_controller_invalid_rule_details(&route, "apps", ctx.runtime());
     assert_eq!(details.len(), 1);
     assert!(details[0].1.contains("cannot contain WAF"), "{:?}", details[0]);
-    let accepted = backend_route_wide_scope_errors(&route, "apps", ctx.runtime());
+    let accepted = backend_route_wide_scope_errors(&route, ctx.runtime());
     assert_eq!(accepted.len(), 1);
     assert_eq!(accepted[0].reason(), condition_reasons::UNSUPPORTED_VALUE);
     assert!(accepted[0].message().contains("rules[0]"));
@@ -2416,5 +2422,140 @@ fn native_ai_facts_keep_slots_and_skip_invalid_or_denied_target_reads() {
             .backends
             .iter()
             .all(|fact| matches!(fact, ResolvedForwardingTarget::Missing)));
+    }
+}
+
+#[tokio::test]
+async fn extension_owner_default_and_invalid_status_paths_never_create_forged_dependencies() {
+    let ctx = make_ctx();
+    let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"extension-owner"},"spec":{"rules":[{"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"rule","resolvedNamespace":"forged"}}],"backendRefs":[{"name":"service","port":80,"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"backend"}}]}]}]}})).unwrap();
+    let owner = HttpRouteHandler::create_resource_ref(&route);
+    HttpRouteHandler::register_plugin_refs(&route, &ctx);
+    let mut keys = ctx.runtime().plugin_ref_mgr.get_dependencies(&owner.key());
+    keys.sort();
+    assert_eq!(keys, vec!["default/backend", "default/rule"]);
+    assert!(owner.namespace.is_none());
+    route.metadata.namespace = Some("bad/ns".into());
+    let invalid_owner = HttpRouteHandler::create_resource_ref(&route);
+    ctx.runtime()
+        .plugin_ref_mgr
+        .add_ref("stale/old".into(), invalid_owner.clone());
+    HttpRouteHandler::default().update_status(&mut route, &ctx, &[]);
+    assert!(ctx
+        .runtime()
+        .plugin_ref_mgr
+        .get_dependencies(&invalid_owner.key())
+        .is_empty());
+    assert!(route.spec.resolved_rules.as_ref().unwrap().is_empty());
+    HttpRouteHandler::register_plugin_refs(&route, &ctx);
+    assert!(ctx
+        .runtime()
+        .plugin_ref_mgr
+        .get_dependencies(&invalid_owner.key())
+        .is_empty());
+    for bad in ["", "bad/name"] {
+        route.metadata.namespace = None;
+        route.metadata.name = Some(bad.into());
+        HttpRouteHandler::register_plugin_refs(&route, &ctx);
+        assert!(ctx
+            .runtime()
+            .plugin_ref_mgr
+            .get_dependencies(&HttpRouteHandler::create_resource_ref(&route).key())
+            .is_empty());
+    }
+}
+
+#[tokio::test]
+async fn extension_ref_invalid_name_diagnoses_rule_and_backend_status_without_dependencies() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use edgion_resources::Gateway;
+
+    let handler = HttpRouteHandler::default();
+    for name in ["", "bad/name"] {
+        for backend_scope in [false, true] {
+            let filter = serde_json::json!({"type":"ExtensionRef","extensionRef":{
+                "group":"edgion.io","kind":"EdgionPlugins","name":name
+            }});
+            let rule = if backend_scope {
+                serde_json::json!({"backendRefs":[{"name":"svc","port":80,"filters":[filter]}]})
+            } else {
+                serde_json::json!({"filters":[filter]})
+            };
+            let expected = if backend_scope {
+                "backendRefs[0] ExtensionRef name must be a valid Kubernetes object name"
+            } else {
+                "ExtensionRef name must be a valid Kubernetes object name"
+            };
+            let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+                "metadata":{"name":"name-diagnostic","namespace":"default"},
+                "spec":{"parentRefs":[{"name":"gw"}],"rules":[rule,{}]}
+            }))
+            .unwrap();
+            let runtime = Arc::new(ControllerRuntime::default());
+            let ctx = HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime.clone());
+            let gateways = Arc::new(ResourceProcessor::<Gateway>::new(
+                "Gateway",
+                16,
+                Arc::new(GatewayHandler::new(None, None)),
+                runtime,
+            ));
+            let raw = Arc::new(LocalRawStore::new());
+            let gateway: Gateway = serde_json::from_value(serde_json::json!({
+                "metadata":{"name":"gw","namespace":"default"},
+                "spec":{"gatewayClassName":"edgion","listeners":[{"name":"http","protocol":"HTTP","port":80}]}
+            }))
+            .unwrap();
+            raw.upsert("default/gw".into(), Arc::new(gateway));
+            gateways.set_raw_store(raw);
+            ctx.runtime().processor_registry.register(gateways);
+            let owner = HttpRouteHandler::create_resource_ref(&route);
+            assert_eq!(find_invalid_rule_details(&route, "default"), vec![(0, expected.into())]);
+            handler.update_status(&mut route, &ctx, &[]);
+            let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+            let partial = conditions.iter().find(|c| c.type_ == "PartiallyInvalid").unwrap();
+            assert_eq!(partial.status, "True");
+            assert!(conditions.iter().any(|c| c.type_ == "Accepted" && c.status == "True"));
+            assert!(partial.message.starts_with("Dropped Rule"));
+            assert!(partial.message.contains(expected));
+            assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0][..]));
+            assert!(ctx.runtime().plugin_ref_mgr.get_dependencies(&owner.key()).is_empty());
+
+            route.spec.rules.as_mut().unwrap().truncate(1);
+            handler.update_status(&mut route, &ctx, &[]);
+            let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+            let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+            assert_eq!(accepted.status, "False");
+            assert_eq!(accepted.reason, "UnsupportedValue");
+            assert!(accepted.message.contains(expected));
+            assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
+            assert!(ctx.runtime().plugin_ref_mgr.get_dependencies(&owner.key()).is_empty());
+        }
+    }
+}
+
+#[test]
+fn extension_ref_unsupported_group_kind_retains_exact_diagnostic_with_invalid_name() {
+    for (group, kind) in [
+        ("", "EdgionPlugins"),
+        ("example.com", "EdgionPlugins"),
+        ("edgion.io", "Secret"),
+    ] {
+        let route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"unsupported-target","namespace":"default"},
+            "spec":{"rules":[{"filters":[{"type":"ExtensionRef","extensionRef":{
+                "group":group,"kind":kind,"name":"bad/name"
+            }}]}]}
+        }))
+        .unwrap();
+        assert_eq!(
+            find_invalid_rule_details(&route, "default"),
+            vec![(
+                0,
+                format!(
+                    "ExtensionRef kind '{kind}' (group '{group}') is not supported; only edgion.io/EdgionPlugins is"
+                )
+            )]
+        );
     }
 }

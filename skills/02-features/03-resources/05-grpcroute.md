@@ -118,6 +118,16 @@ Same as the headers matching of HTTPRoute.
 | `RequestMirror` | Request mirroring |
 | `ExtensionRef` | Reference an EdgionPlugins resource |
 
+ExtensionRef requires exact `group: edgion.io`, `kind: EdgionPlugins`, and a
+valid resource name. It is local to the declaring Route, with `default` for an
+omitted Route namespace and no operator namespace selector. Controller owning
+filter loans reject invalid identities before plugin dependency registration or
+content reads. Valid missing bundles retain recovery edges, including valid
+references on later-dropped child rules. Authored namespace stamps are ignored;
+flattened copies carry Controller-owned child locality. Gateway early lookup and
+request-capture migration remains the separate R3a2 slice.
+
+
 **Note**: GRPCRoute does not support `RequestRedirect` or `URLRewrite`.
 
 ## gRPC-Web Support

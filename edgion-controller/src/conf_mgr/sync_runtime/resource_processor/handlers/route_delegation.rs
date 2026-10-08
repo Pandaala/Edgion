@@ -18,8 +18,10 @@
 //! via `parentRefs {kind: HTTPRoute}`); cycles and depth > 8 drop the edge.
 
 use super::route_backend_refs::{self, BackendDependencyReceipt};
+use super::route_utils::ExtensionDependencyReceipt;
 use edgion_resources::resources::refs::route_fields::{
-    AuthoredBackendReference, AuthoredRouteTarget, HttpRouteBackendRefs, TerminalBackendReference,
+    AuthoredBackendReference, AuthoredRouteTarget, HttpRouteBackendRefs, HttpRouteExtensionRefs, RouteExtensionField,
+    TerminalBackendReference,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -80,6 +82,9 @@ pub trait DelegationLookup {
     ) -> bool;
     /// Authorize only the original declaring Route's validated terminal field.
     fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied>;
+    /// Register actual declaring fields before drops; inspect content only for
+    /// structurally eligible rules, always after the recovery edge exists.
+    fn extension_ref_error(&self, field: RouteExtensionField<'_>, inspect: bool) -> Option<String>;
 }
 
 /// Result of flattening one parent route.
@@ -95,6 +100,7 @@ pub struct FlattenOutcome {
     pub wildcard_namespaces: HashSet<String>,
     /// Valid authored terminal dependencies, retained even when a rule is dropped.
     pub(super) backend_dependencies: Vec<BackendDependencyReceipt>,
+    pub(super) extension_dependencies: Vec<ExtensionDependencyReceipt>,
     /// Namespaces referenced cross-namespace by flattened Service backendRefs
     /// (target ns ≠ declaring child ns), for CrossNsRefManager registration on
     /// the parent so ReferenceGrant changes requeue it.
@@ -115,6 +121,7 @@ impl FlattenOutcome {
             named_children: HashSet::new(),
             wildcard_namespaces: HashSet::new(),
             backend_dependencies: Vec::new(),
+            extension_dependencies: Vec::new(),
 
             cross_ns_target_namespaces: HashSet::new(),
             expanded_children: HashSet::new(),
@@ -160,6 +167,7 @@ struct FlattenCtx<'a> {
     named_children: HashSet<String>,
     wildcard_namespaces: HashSet<String>,
     backend_dependencies: Vec<BackendDependencyReceipt>,
+    extension_dependencies: Vec<ExtensionDependencyReceipt>,
 
     cross_ns_target_namespaces: HashSet<String>,
     expanded_children: HashSet<String>,
@@ -169,8 +177,8 @@ struct FlattenCtx<'a> {
 
 /// Flatten the delegation tree rooted at `parent`.
 ///
-/// Pure over `lookup`; does not touch any runtime index (the caller registers
-/// `named_children` / `wildcard_namespaces` / `backend_dependencies`).
+/// Store interactions go through `lookup`; target inspection registers plugin
+/// recovery dependencies first. Other returned indexes are published by the caller.
 pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> FlattenOutcome {
     let parent_refs = match HttpRouteBackendRefs::from_route(parent) {
         Ok(references) => references,
@@ -205,11 +213,22 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
         named_children: HashSet::new(),
         wildcard_namespaces: HashSet::new(),
         backend_dependencies: route_backend_refs::collect_dependencies(parent_refs.authored()),
+        extension_dependencies: Vec::new(),
 
         cross_ns_target_namespaces: HashSet::new(),
         expanded_children: HashSet::new(),
         path: vec![parent_key],
     };
+
+    // Preserve every valid root declaration even when its rule is dropped.
+    if let Ok(references) = HttpRouteExtensionRefs::from_route(parent) {
+        for field in references.authored() {
+            if let Some(receipt) = ExtensionDependencyReceipt::from_field(field) {
+                ctx.extension_dependencies.push(receipt);
+            }
+            lookup.extension_ref_error(field, false);
+        }
+    }
 
     // Rules already invalid per the standing per-rule checks are dropped here;
     // the gateway does not apply `invalid_rule_indices` to resolved_rules.
@@ -282,6 +301,7 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
         named_children: ctx.named_children,
         wildcard_namespaces: ctx.wildcard_namespaces,
         backend_dependencies: ctx.backend_dependencies,
+        extension_dependencies: ctx.extension_dependencies,
 
         cross_ns_target_namespaces: ctx.cross_ns_target_namespaces,
         expanded_children: ctx.expanded_children,
@@ -432,6 +452,16 @@ fn expand_delegation_ref(
             });
             continue;
         }
+        let extension_refs = HttpRouteExtensionRefs::from_route(&child)
+            .expect("the immutable child passed the same owning-source validation");
+        // Register the entire child set before structural, scope, or inherited
+        // filter rejection; the root must recover when a missing bundle appears.
+        for field in extension_refs.authored() {
+            if let Some(receipt) = ExtensionDependencyReceipt::from_field(field) {
+                ctx.extension_dependencies.push(receipt);
+            }
+            ctx.lookup.extension_ref_error(field, false);
+        }
         if child.spec.hostnames.is_some() {
             ctx.issues.push(DelegationIssue::RuleDropped {
                 message: format!("child '{child_key}' skipped: child routes must not set spec.hostnames"),
@@ -476,6 +506,8 @@ fn flatten_child_rules(
             .filter_map(|receipt| receipt.cross_namespace().map(str::to_string)),
     );
     ctx.backend_dependencies.extend(receipts);
+    let extension_refs = HttpRouteExtensionRefs::from_route(child)
+        .expect("the immutable child already passed the same owning-source validation");
     let child_ns = child.metadata.namespace.as_deref().unwrap_or("default");
     let child_name = child.metadata.name.as_deref().unwrap_or("");
     let Some(rules) = &child.spec.rules else {
@@ -487,6 +519,17 @@ fn flatten_child_rules(
 
     for (idx, rule) in rules.iter().enumerate() {
         if let Some(reason) = invalid_details.get(&idx) {
+            ctx.issues.push(DelegationIssue::RuleDropped {
+                message: format!("child '{child_key}' rules[{idx}] dropped: {reason}"),
+            });
+            continue;
+        }
+
+        if let Some(reason) = extension_refs
+            .authored()
+            .filter(|field| field.slot().rule() == idx)
+            .find_map(|field| ctx.lookup.extension_ref_error(field, true))
+        {
             ctx.issues.push(DelegationIssue::RuleDropped {
                 message: format!("child '{child_key}' rules[{idx}] dropped: {reason}"),
             });

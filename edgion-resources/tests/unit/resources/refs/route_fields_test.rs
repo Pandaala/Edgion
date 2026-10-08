@@ -156,3 +156,73 @@ fn indexed_effective_loans_keep_actual_owner_rule_and_backend_positions() {
     check!(HTTPRoute, HttpRouteBackendRefs);
     check!(GRPCRoute, GrpcRouteBackendRefs);
 }
+
+#[test]
+fn extension_loans_bind_actual_owners_positions_and_authored_vs_effective_locality() {
+    macro_rules! check {
+        ($route:ty, $facade:ident, $kind:expr) => {{
+            let filter = json!({"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"bundle","resolvedNamespace":"forged"}});
+            let rule = json!({"filters":[filter.clone()],"backendRefs":[{"name":"service","port":80,"filters":[filter.clone(),filter.clone()]}]});
+            let mut route: $route = serde_json::from_value(json!({"metadata":{"name":"root","uid":"root-uid","generation":7},"spec":{"rules":[rule]}})).unwrap();
+            let refs = $facade::from_route(&route).unwrap();
+            for (index, field) in refs.authored().enumerate() {
+                let lookup = field.validated().unwrap().unwrap();
+                assert_eq!(lookup.source_kind(), $kind);
+                assert_eq!(lookup.source_uid(), Some("root-uid"));
+                assert_eq!(lookup.source_generation(), Some(7));
+                assert_eq!(lookup.target().scope().namespace(), Some("default"));
+                assert_eq!(lookup.source().scope().namespace(), Some("default"));
+                assert_eq!(lookup.slot().rule(), 0);
+                assert_eq!(lookup.slot().backend(), if index == 0 { None } else { Some(0) });
+                assert_eq!(lookup.slot().filter(), index.saturating_sub(1));
+            }
+            assert_eq!(refs.authored().count(), 3);
+            assert_eq!(refs.effective_at(0, None, 0).unwrap().validated().unwrap().unwrap().target().scope().namespace(), Some("default"));
+            route.spec.resolved_rules = route.spec.rules.clone();
+            let refs = $facade::from_route(&route).unwrap();
+            let actual = refs.effective_at(0, Some(0), 1).unwrap().validated().unwrap().unwrap();
+            assert_eq!(actual.target().scope().namespace(), Some("forged"));
+            assert_eq!(actual.source_uid(), Some("root-uid"), "effective transport describes root, not invented child provenance");
+            assert!(std::ptr::eq(actual.target().name().as_ptr(), route.spec.resolved_rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0].filters.as_ref().unwrap()[1].extension_ref.as_ref().unwrap().name.as_ptr()));
+            for bad in ["", "Bad", "bad/ns"] {
+                route.spec.resolved_rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0].extension_ref.as_mut().unwrap().resolved_namespace = Some(bad.into());
+                let refs = $facade::from_route(&route).unwrap();
+                assert!(refs.effective_at(0, None, 0).unwrap().validated().is_err());
+                assert!(refs.authored_at(0, None, 0).unwrap().validated().unwrap().is_some());
+            }
+            let mut missing_name = route.clone();
+            missing_name.metadata.name = None;
+            assert!($facade::from_route(&missing_name).is_err());
+            for (field, value) in [("name", ""), ("name", "bad/name"), ("namespace", ""), ("namespace", "Bad")] {
+                let mut invalid = serde_json::to_value(&route).unwrap(); invalid["metadata"][field] = json!(value);
+                let invalid: $route = serde_json::from_value(invalid).unwrap();
+                assert!($facade::from_route(&invalid).is_err(), "{field}={value}");
+            }
+        }};
+    }
+    check!(HTTPRoute, HttpRouteExtensionRefs, ResourceKind::HTTPRoute);
+    check!(GRPCRoute, GrpcRouteExtensionRefs, ResourceKind::GRPCRoute);
+}
+
+#[test]
+fn extension_field_validation_rejects_bad_union_and_target_without_compacting_positions() {
+    for patch in [
+        json!({"group":""}),
+        json!({"group":"core"}),
+        json!({"kind":"Secret"}),
+        json!({"name":""}),
+        json!({"name":"bad/name"}),
+    ] {
+        let mut reference = json!({"group":"edgion.io","kind":"EdgionPlugins","name":"bundle"});
+        reference
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let route:HTTPRoute=serde_json::from_value(json!({"metadata":{"name":"route","namespace":"apps"},"spec":{"rules":[{"filters":[{"type":"ExtensionRef","extensionRef":reference},{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"valid"}}]}]}})).unwrap();
+        let refs = HttpRouteExtensionRefs::from_route(&route).unwrap();
+        assert!(refs.authored_at(0, None, 0).unwrap().validated().is_err());
+        let valid = refs.authored_at(0, None, 1).unwrap().validated().unwrap().unwrap();
+        assert_eq!(valid.slot().filter(), 1);
+        assert_eq!(valid.target().name(), "valid");
+    }
+}

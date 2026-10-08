@@ -54,3 +54,20 @@ fn pairing_and_supported_target_match_gateway_api() {
         ));
     }
 }
+
+#[test]
+fn required_target_name_uses_canonical_kubernetes_syntax() {
+    for name in ["", "UPPER", "bad/name", "*", "-bad", "bad."] {
+        let mut target = reference("edgion.io", "EdgionPlugins");
+        target.name = name.into();
+        assert!(matches!(
+            validate_extension_ref_filter(true, Some(&target)),
+            Err(ExtensionRefValidationError::UnsupportedTarget)
+        ));
+    }
+    for name in ["plugins", "bundle.example", "a-1"] {
+        let mut target = reference("edgion.io", "EdgionPlugins");
+        target.name = name.into();
+        assert!(validate_extension_ref_filter(true, Some(&target)).unwrap().is_some());
+    }
+}

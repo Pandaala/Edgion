@@ -170,11 +170,11 @@ async fn backend_waf_is_controller_invalid_and_registered_for_requeue() {
         vec![0]
     );
     assert!(
-        backend_plugin_scope_invalid_reason(&route.spec.rules.as_ref().unwrap()[0], "apps", ctx.runtime(), false)
+        backend_plugin_scope_invalid_reason(&route, 0, false, ctx.runtime(), false)
             .unwrap()
             .contains("cannot contain WAF")
     );
-    let accepted = backend_route_wide_scope_errors(&route, "apps", ctx.runtime());
+    let accepted = backend_route_wide_scope_errors(&route, ctx.runtime());
     assert_eq!(accepted.len(), 1);
     assert_eq!(accepted[0].reason(), condition_reasons::UNSUPPORTED_VALUE);
     assert!(accepted[0].message().contains("rules[0]"));
@@ -969,4 +969,77 @@ async fn delegated_effective_targets_drive_missing_invalid_and_denied_status() {
     assert_eq!(condition.status, "False");
     assert!(condition.message.contains("delegated-missing"));
     assert!(condition.message.contains("delegated-denied"));
+}
+
+#[tokio::test]
+async fn extension_owner_default_and_invalid_status_paths_never_create_forged_dependencies() {
+    let ctx = make_ctx();
+    let mut route: GRPCRoute = serde_json::from_value(serde_json::json!({"metadata":{"name":"extension-owner"},"spec":{"rules":[{"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"rule","resolvedNamespace":"forged"}}],"backendRefs":[{"name":"service","port":80,"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"backend"}}]}]}]}})).unwrap();
+    let owner = GrpcRouteHandler::create_resource_ref(&route);
+    GrpcRouteHandler::register_plugin_refs(&route, &ctx);
+    let mut keys = ctx.runtime().plugin_ref_mgr.get_dependencies(&owner.key());
+    keys.sort();
+    assert_eq!(keys, vec!["default/backend", "default/rule"]);
+    assert!(owner.namespace.is_none());
+    route.metadata.namespace = Some("bad/ns".into());
+    let invalid_owner = GrpcRouteHandler::create_resource_ref(&route);
+    ctx.runtime()
+        .plugin_ref_mgr
+        .add_ref("stale/old".into(), invalid_owner.clone());
+    GrpcRouteHandler::default().update_status(&mut route, &ctx, &[]);
+    assert!(ctx
+        .runtime()
+        .plugin_ref_mgr
+        .get_dependencies(&invalid_owner.key())
+        .is_empty());
+    assert!(route.spec.resolved_rules.as_ref().unwrap().is_empty());
+    GrpcRouteHandler::register_plugin_refs(&route, &ctx);
+    assert!(ctx
+        .runtime()
+        .plugin_ref_mgr
+        .get_dependencies(&invalid_owner.key())
+        .is_empty());
+    for bad in ["", "bad/name"] {
+        route.metadata.namespace = None;
+        route.metadata.name = Some(bad.into());
+        GrpcRouteHandler::register_plugin_refs(&route, &ctx);
+        assert!(ctx
+            .runtime()
+            .plugin_ref_mgr
+            .get_dependencies(&GrpcRouteHandler::create_resource_ref(&route).key())
+            .is_empty());
+    }
+}
+
+#[tokio::test]
+async fn grpc_rule_transcoder_priority_precedes_backend_waf_and_request_id() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use edgion_resources::EdgionPlugins;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        16,
+        Arc::new(EdgionPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor);
+    let filter =
+        json!({"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"bundle"}});
+    let route:GRPCRoute=serde_json::from_value(json!({"metadata":{"name":"route","namespace":"apps"},"spec":{"rules":[{"filters":[filter.clone()],"backendRefs":[{"name":"service","port":80,"filters":[filter]}]}]}})).unwrap();
+    for enabled in [true, false, true] {
+        let plugins:EdgionPlugins=serde_json::from_value(json!({"metadata":{"namespace":"apps","name":"bundle"},"spec":{"waf":{"policyRef":{"name":"policy"}},"requestPlugins":[{"type":"RequestId","config":{}},{"type":"GrpcJsonTranscoder","enable":enabled,"config":{"descriptor":{"type":"configMapRef","name":"descriptor","key":"proto"},"services":["test.TestService"]}}]}})).unwrap();
+        raw.upsert("apps/bundle".into(), Arc::new(plugins));
+        let error = backend_plugin_scope_invalid_reason(&route, 0, false, &runtime, false).unwrap();
+        assert_eq!(
+            error,
+            if enabled {
+                "GrpcJsonTranscoder requires HTTPRoute rule scope"
+            } else {
+                "backendRefs[0] EdgionPlugins ExtensionRef cannot contain WAF; attach WAF at Global, Gateway, or Route scope"
+            }
+        );
+    }
 }

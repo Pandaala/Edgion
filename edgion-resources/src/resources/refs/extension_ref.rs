@@ -1,5 +1,6 @@
 //! Shared Gateway API `ExtensionRef` validation.
 
+use crate::resources::common::kubernetes_name::is_dns_subdomain;
 use crate::resources::http_route::LocalObjectReference;
 
 /// The only `ExtensionRef` target implemented by Edgion.
@@ -19,7 +20,8 @@ pub fn is_supported_edgion_plugins_ref(reference: &LocalObjectReference) -> bool
     reference.group == EDGION_PLUGINS_GROUP && reference.kind == EDGION_PLUGINS_KIND
 }
 
-/// Validate the Gateway API `type`/`extensionRef` union and Edgion's supported target.
+/// Validate the Gateway API `type`/`extensionRef` union, exact supported target,
+/// and required Kubernetes resource name.
 ///
 /// An empty group denotes the Kubernetes core API group; it never aliases the
 /// `edgion.io` API group.
@@ -31,7 +33,11 @@ pub fn validate_extension_ref_filter(
         (false, None) => Ok(None),
         (false, Some(_)) => Err(ExtensionRefValidationError::UnexpectedConfiguration),
         (true, None) => Err(ExtensionRefValidationError::MissingConfiguration),
-        (true, Some(reference)) if is_supported_edgion_plugins_ref(reference) => Ok(Some(reference)),
+        (true, Some(reference))
+            if is_supported_edgion_plugins_ref(reference) && is_dns_subdomain(&reference.name, 253) =>
+        {
+            Ok(Some(reference))
+        }
         (true, Some(_)) => Err(ExtensionRefValidationError::UnsupportedTarget),
     }
 }

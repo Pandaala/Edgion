@@ -11,21 +11,55 @@ knowledge_type: regression-guards
 HTTPRoute and GRPCRoute filters use one shared validation decision for the
 `type`/`extensionRef` union and Edgion's supported target. `type: ExtensionRef`
 requires an `extensionRef` payload, every other type forbids that payload, and
-the supported plugin target is exactly `edgion.io/EdgionPlugins`. An empty
+the supported plugin target is exactly `edgion.io/EdgionPlugins` with a valid
+required Kubernetes resource name. An empty
 group means the Kubernetes core API group; it is not an alias for `edgion.io`.
+
+HTTP status and delegation distinguish an invalid name on the supported target
+from an unsupported group/kind. After the canonical validator rejects the target,
+the existing group/kind predicate selects the name-specific diagnostic
+`ExtensionRef name must be a valid Kubernetes object name`. Unknown group/kind
+keeps its existing unsupported-target wording even when the name is also invalid.
+The shared validation result, filter-union priority and zero-plugin-edge behavior
+are unchanged; gRPC retains its generic invalid-rule diagnostic.
 
 The Controller applies this rule to rule and backendRef filters, including raw
 child routes during delegation flattening. Invalid rules are dropped by exact
 index. A surviving sibling produces `PartiallyInvalid=True` with a message
 starting with `Dropped Rule`; when no rule survives, the attachment is
 `Accepted=False` and `PartiallyInvalid` is absent. The Gateway independently
-seals each malformed runtime with the canonical generic 500 request gate. A
+seals malformed discriminator/payload unions and invalid filter-list construction
+with the canonical generic 500 request gate. This existing gate does not establish
+independent owner/name validation for ExtensionRef lookup or consumption. A
 rule-scoped gate runs before CORS preflight, ordinary plugin execution, or
 upstream processing; a backend-scoped gate runs only after that backend is
 selected and before forwarding. Global and Gateway request-ID plugins may
 already have run in Pingora's early hook before route matching identifies a
 malformed route. A source-only AI diagnostic does not imply a dropped or
 fallback rule and must not be represented by `PartiallyInvalid`.
+
+## Controller owning-reference migration and remaining Gateway work
+
+R3a1 binds Controller plugin keys to actual HTTP/GRPC owners and rule/backend
+filter positions. Invalid source/target identities create no new plugin edge or
+lookup. Authored stamps are ignored; effective loans validate existing derived
+locality. Original-child references register under the root wakeup before drops
+and before desired-generation RawStore inspection. Parse entry replaces the old
+set; later registration is additive, preserving valid missing/dropped targets
+for repair, deletion and recreation. Scope checks retain their existing WAF,
+RequestId, late-jump and gRPC-transcoder priority and disabled-entry semantics.
+A standalone status call may withdraw stale dependencies and derived publication
+state only when the source itself is invalid. Invalid targets, dropped rules,
+missing plugins and scope errors under a valid owner retain additive status
+registration. Zero-read guarantees here concern plugin reference discovery and
+consumption, not unrelated status operations.
+
+Existing Gateway execution rejection is separate from lookup admission. Cold
+optional target keys, early global/CORS/WAF/access-log consumers, and request
+snapshot capture are still R3a2 work. The shared pure discriminator checker and
+existing runtime gate are not evidence that every Gateway lookup is owner-bound
+or that an unsupported target currently performs zero early lookup. Independent
+Gateway name/owner validation before lookup and consumption remains part of R3a2.
 
 ## Rationale and evidence
 
@@ -35,7 +69,7 @@ also defines an empty value as the core API group. The standard's
 `PartiallyInvalid` condition is positive-only for implementations that drop
 invalid rules, and its message prefix identifies that behavior.
 
-`edgion_resources::resources::extension_ref::validate_extension_ref_filter`
+`edgion_resources::resources::refs::extension_ref::validate_extension_ref_filter`
 owns the shared decision. The HTTP and gRPC Controller handlers consume it for
 source rules; delegation calls those same validators against raw children. The
 Gateway HTTP and gRPC filter builders consume it before constructing any
@@ -79,7 +113,7 @@ preflight. Re-evaluate if Edgion supports another
 ExtensionRef group/kind, Gateway API changes the union or partial-validity
 contract, or the route ingestion architecture changes.
 
-Fresh verification on 2026-09-12 passed the focused resource, Controller,
+Historical verification on 2026-09-12 passed the focused resource, Controller,
 delegation, publication, adaptive-routing, ExtensionRef runtime, and real
 OPTIONS-session tests. `cargo check --workspace --all-targets`, `cargo clippy
 --workspace --all-targets`, the agent-doc validator, SSA force guard, metrics
@@ -87,6 +121,30 @@ inventory guard, and Pingora source-policy guard also completed successfully.
 Clippy reported only the repository's existing non-fatal warnings. Independent
 final review returned LGTM after the preflight, policy-bypass ordering, backend
 scope, and status corrections.
+
+Fresh scoped verification on 2026-10-08 passed Resources reference tests (74),
+Resources doctests (24 passed, 10 existing ignored), Controller resource-processor
+tests (918), and readonly Gateway filter/publication/preflight/WAF selections
+(53/23/23/65; filtered sets may overlap). Raw commands and exits are retained in
+`tmp/resource-reference-contract/r3a1-verification-20261008-r1`. This verifies the
+Controller migration and existing Gateway regressions; R3a2 lookup admission and
+whole-task conformance remain open. Independent result review remains pending.
+
+The F1 HTTP diagnostic correction subsequently passed 921 focused Controller
+resource-processor tests, including name-specific rule/backend status and
+delegated-child diagnostics with zero plugin dependencies. Correction logs and
+complete identity comparisons are under
+`tmp/resource-reference-contract/r3a1-verification-20261008-r2`; all original
+compiled and source test identities are preserved. Both independent Astra result
+reviewers accepted frozen r2 correctness with SCOPED PASS. Its Clippy command
+exited zero with two introduced `question_mark` warnings in test helpers, so it
+was not warning-free. A separately reviewed r3 cleanup replaces only those two
+equivalent early returns. Fresh r3 verification passed the same 921 Controller
+tests with preserved compiled/source identities and ignore attributes; command,
+log and binary hashes are retained in
+`tmp/resource-reference-contract/r3a1-verification-20261008-r3`. Refreshed lint
+gates and independent byte review remain pending. This adds no Gateway
+owner/name validation claim.
 
 ## Resolution references
 

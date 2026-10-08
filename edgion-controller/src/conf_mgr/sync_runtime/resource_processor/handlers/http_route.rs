@@ -34,7 +34,8 @@ use edgion_resources::resources::refs::extension_ref::{
     is_supported_edgion_plugins_ref, validate_extension_ref_filter, ExtensionRefValidationError,
 };
 use edgion_resources::resources::refs::route_fields::{
-    EffectiveBackendReference, HttpRouteBackendRefs, TerminalBackendReference,
+    EffectiveBackendReference, HttpRouteBackendRefs, HttpRouteExtensionRefs, RouteExtensionField,
+    TerminalBackendReference,
 };
 use edgion_resources::resources::refs::targets::BackendTarget;
 use edgion_resources::ResourceKind;
@@ -116,6 +117,11 @@ impl DelegationLookup for RuntimeDelegationLookup<'_> {
         self.grant_owner
             .as_ref()
             .and_then(|owner| route_backend_refs::authorize_terminal(terminal, owner, self.runtime))
+    }
+    fn extension_ref_error(&self, field: RouteExtensionField<'_>, inspect: bool) -> Option<String> {
+        self.grant_owner
+            .as_ref()
+            .and_then(|root| super::route_utils::delegated_extension_ref_error(self.runtime, root, field, inspect))
     }
 }
 
@@ -222,41 +228,15 @@ impl HttpRouteHandler {
     /// the full ref set on every reconcile also handles delete-to-create
     /// coalescing.
     fn register_plugin_refs(route: &HTTPRoute, ctx: &HandlerContext) {
-        let resource_ref = Self::create_resource_ref(route);
-        let manager = &ctx.runtime().plugin_ref_mgr;
-        manager.clear_value_refs(&resource_ref);
-        if HttpRouteBackendRefs::from_route(route).is_err() {
+        let Ok(references) = HttpRouteExtensionRefs::from_route(route) else {
             return;
-        }
-
-        let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-        // Keep dependencies declared on the operator route as well as those
-        // inherited by flattened child rules. This runs before protocol
-        // filtering so a withdrawn rule can still be restored when its
-        // PluginPolicy changes again.
-        for rules in [route.spec.rules.as_deref(), route.spec.resolved_rules.as_deref()]
-            .into_iter()
-            .flatten()
-        {
-            for rule in rules {
-                let filters = rule.filters.iter().flatten().chain(
-                    rule.backend_refs
-                        .iter()
-                        .flatten()
-                        .flat_map(|backend_ref| backend_ref.filters.iter().flatten()),
-                );
-                for filter in filters {
-                    if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
-                        continue;
-                    }
-                    let Some(extension_ref) = &filter.extension_ref else {
-                        continue;
-                    };
-                    if is_supported_edgion_plugins_ref(extension_ref) {
-                        let ref_namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(namespace);
-                        manager.add_ref(format!("{ref_namespace}/{}", extension_ref.name), resource_ref.clone());
-                    }
-                }
+        };
+        let root = Self::create_resource_ref(route);
+        // Parse entry clears the old generation. These additive passes retain
+        // valid dependencies from authored, inherited, and later-dropped rules.
+        for field in references.authored().chain(references.effective()) {
+            if let Some(receipt) = super::route_utils::ExtensionDependencyReceipt::from_field(field) {
+                receipt.register(&root, ctx.runtime());
             }
         }
     }
@@ -331,6 +311,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let source_valid = HttpRouteBackendRefs::from_route(&route).is_ok();
         let grant_owner = Self::create_resource_ref(&route);
         _ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&grant_owner);
+        _ctx.runtime().plugin_ref_mgr.clear_value_refs(&grant_owner);
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let route_ns = route_ns.as_str();
 
@@ -411,6 +392,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // controller-derived: clear any user-provided or stale values.
         route.spec.resolved_rules = None;
         route.spec.delegation_issues = Vec::new();
+        Self::register_plugin_refs(&route, _ctx);
         let mut delegation_outcome = {
             let adapter = RuntimeDelegationLookup {
                 runtime: _ctx.runtime(),
@@ -425,20 +407,31 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // Register before protocol filtering so a rule removed below retains
         // the dependency that can make it eligible again on a later reconcile.
         Self::register_plugin_refs(&route, _ctx);
+        for receipt in &delegation_outcome.extension_dependencies {
+            receipt.register(&grant_owner, _ctx.runtime());
+        }
 
+        let reasons: Vec<_> = route
+            .spec
+            .resolved_rules
+            .iter()
+            .flatten()
+            .enumerate()
+            .map(|(index, _)| backend_plugin_scope_invalid_reason(&route, index, true, _ctx.runtime(), false))
+            .collect();
         if let Some(rules) = &mut route.spec.resolved_rules {
-            let mut resolved_index = 0usize;
-            rules.retain(|rule| {
-                let reason = backend_plugin_scope_invalid_reason(rule, route_ns, _ctx.runtime(), false);
+            let mut reasons = reasons.into_iter().enumerate();
+            rules.retain(|_| {
+                let (resolved_index, reason) = reasons.next().expect("one decision per borrowed resolved rule");
                 let keep = reason.is_none();
                 if let Some(reason) = reason {
                     delegation_outcome.issues.push(DelegationIssue::RuleDropped {
                         message: format!("resolvedRules[{resolved_index}]: {reason}"),
                     });
                 }
-                resolved_index += 1;
                 keep
             });
+            delegation_outcome.resolved_rules = route.spec.resolved_rules.clone();
         }
 
         // Record cross-namespace references for revalidation when ReferenceGrant changes
@@ -659,9 +652,15 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     fn update_status(&self, route: &mut HTTPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
         let source_error = HttpRouteBackendRefs::from_route(route).err();
         if source_error.is_some() {
+            _ctx.runtime()
+                .plugin_ref_mgr
+                .clear_value_refs(&Self::create_resource_ref(route));
             route.spec.resolved_rules = Some(Vec::new());
             route.spec.resolved_listeners = None;
             route.spec.resolved_hostnames = None;
+        }
+        if source_error.is_none() {
+            Self::register_plugin_refs(route, _ctx);
         }
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
@@ -670,7 +669,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // `invalid_rule_indices` + PartiallyInvalid. They become
         // Accepted=False only when no effective rule remains.
         let plugin_scope_errors = if source_error.is_none() {
-            backend_route_wide_scope_errors(route, route_ns, _ctx.runtime())
+            backend_route_wide_scope_errors(route, _ctx.runtime())
         } else {
             Vec::new()
         };
@@ -1024,6 +1023,9 @@ fn invalid_extension_ref_reason(rule: &edgion_resources::resources::http_route::
             }
             Err(ExtensionRefValidationError::UnsupportedTarget) => {
                 let ext = f.extension_ref.as_ref().expect("unsupported target has a reference");
+                if is_supported_edgion_plugins_ref(ext) {
+                    return Some("ExtensionRef name must be a valid Kubernetes object name".to_string());
+                }
                 Some(format!(
                     "ExtensionRef kind '{}' (group '{}') is not supported; only edgion.io/EdgionPlugins is",
                     ext.kind, ext.group
@@ -1166,11 +1168,11 @@ fn find_controller_invalid_rule_details(
 ) -> Vec<(usize, String)> {
     let mut details = find_invalid_rule_details(route, route_ns);
     let already_invalid: HashSet<usize> = details.iter().map(|(index, _)| *index).collect();
-    for (index, rule) in route.spec.rules.iter().flatten().enumerate() {
+    for (index, _) in route.spec.rules.iter().flatten().enumerate() {
         if already_invalid.contains(&index) {
             continue;
         }
-        if let Some(reason) = backend_plugin_scope_invalid_reason(rule, route_ns, runtime, false) {
+        if let Some(reason) = backend_plugin_scope_invalid_reason(route, index, false, runtime, false) {
             details.push((index, reason));
             continue;
         }
@@ -1180,54 +1182,62 @@ fn find_controller_invalid_rule_details(
 }
 
 fn backend_plugin_scope_invalid_reason(
-    rule: &HTTPRouteRule,
-    route_namespace: &str,
+    route: &HTTPRoute,
+    rule_index: usize,
+    effective: bool,
     runtime: &ControllerRuntime,
     route_wide_only: bool,
 ) -> Option<String> {
-    rule.backend_refs
-        .iter()
-        .flatten()
-        .enumerate()
-        .find_map(|(index, backend_ref)| {
-            backend_ref.filters.iter().flatten().find_map(|filter| {
-                if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
-                    return None;
-                }
-                filter.extension_ref.as_ref().and_then(|extension_ref| {
-                    if route_wide_only {
-                        super::route_utils::backend_request_scope_route_wide_error(
-                            runtime,
-                            route_namespace,
-                            index,
-                            extension_ref,
-                        )
-                    } else {
-                        super::route_utils::backend_request_scope_extension_ref_error(
-                            runtime,
-                            route_namespace,
-                            index,
-                            extension_ref,
-                        )
-                    }
-                })
-            })
+    let references = HttpRouteExtensionRefs::from_route(route).ok()?;
+    let root = HttpRouteHandler::create_resource_ref(route);
+    let fields = || {
+        references
+            .authored()
+            .filter(|_| !effective)
+            .chain(references.effective().filter(|_| effective))
+            .filter(|field| field.slot().rule() == rule_index)
+    };
+    // Register the complete valid set before any applicable content inspection.
+    for field in fields() {
+        if let Some(receipt) = super::route_utils::ExtensionDependencyReceipt::from_field(field) {
+            receipt.register(&root, runtime);
+        }
+    }
+    if !effective
+        && find_invalid_rule_details(route, route.metadata.namespace.as_deref().unwrap_or("default"))
+            .iter()
+            .any(|(index, _)| *index == rule_index)
+    {
+        return None;
+    }
+    if effective && fields().any(|field| field.validated().is_err()) {
+        return Some("invalid ExtensionRef configuration or local target".into());
+    }
+    fields()
+        .filter(|field| field.slot().backend().is_some())
+        .find_map(|field| {
+            if route_wide_only {
+                super::route_utils::backend_request_scope_route_wide_error(runtime, &root, field)
+            } else {
+                super::route_utils::backend_request_scope_extension_ref_error(runtime, &root, field)
+            }
         })
 }
 
-fn backend_route_wide_scope_errors(
-    route: &HTTPRoute,
-    route_namespace: &str,
-    runtime: &ControllerRuntime,
-) -> Vec<AcceptedError> {
+fn backend_route_wide_scope_errors(route: &HTTPRoute, runtime: &ControllerRuntime) -> Vec<AcceptedError> {
+    let invalid = find_invalid_rule_details(route, route.metadata.namespace.as_deref().unwrap_or("default"))
+        .into_iter()
+        .map(|(index, _)| index)
+        .collect::<HashSet<_>>();
     route
         .spec
         .rules
         .iter()
         .flatten()
         .enumerate()
-        .filter_map(|(index, rule)| {
-            backend_plugin_scope_invalid_reason(rule, route_namespace, runtime, true).map(|message| {
+        .filter(|(index, _)| !invalid.contains(index))
+        .filter_map(|(index, _)| {
+            backend_plugin_scope_invalid_reason(route, index, false, runtime, true).map(|message| {
                 AcceptedError::UnsupportedValue {
                     message: format!("rules[{index}]: {message}"),
                 }

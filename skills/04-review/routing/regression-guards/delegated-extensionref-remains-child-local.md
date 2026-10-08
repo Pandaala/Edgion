@@ -16,6 +16,29 @@ Gateway consumes the stamped Namespace when compiling the shared plugin runtime.
 Parent and child plugin chains still concatenate in parent-first order. Locality controls lookup;
 it does not change execution order or permit an explicit cross-Namespace plugin reference.
 
+## Owning Controller boundary
+
+HTTP and gRPC Controller lookups borrow the actual declaring Route and original
+rule/backend/filter slot. The loan retains its actual UID and generation before
+flattening clones; a private receipt records that declaration while the root's
+raw ResourceRef independently owns wakeups. All valid child references register
+before later drops. Structurally eligible scope/transcoder checks then read the
+desired plugin generation through `get_raw_any`, never a stale processed-cache
+substitute. Missing bundles keep their recovery edge. Parse clears once and
+later registration only adds to that reconcile's set.
+
+The existing transport stamp carries locality, not original child UID/generation.
+Effective target-only loans validate the published root and actual effective
+field, including the stamp's namespace syntax; they cannot claim stronger child
+provenance or mint a Grant query. Authored views ignore supplied stamps.
+An omitted root namespace remains absent in wakeup keys, separately from the
+canonical `default` namespace used by the local plugin target.
+
+The Controller migration is R3a1. Gateway early global/CORS/WAF/access-log lookup
+and generation capture remain R3a2 work; this page does not certify those paths.
+Re-evaluate source binding, stamp handling, query ordering and repair behavior
+when these consumers or the published transport change.
+
 ## Compatibility posture
 
 Edgion is pre-release and carries no backward-compatibility burden. The earlier behavior that

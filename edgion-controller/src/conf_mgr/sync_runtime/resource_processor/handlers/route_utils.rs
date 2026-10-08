@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::Attachment;
 use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::{parent_is_owned, serving_gateway};
-use crate::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
+use crate::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError, ResourceRef};
 use crate::conf_mgr::ControllerRuntime;
 use edgion_algo::matcher::radix_hostname::RadixHostnamePatternRef;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
@@ -16,8 +16,8 @@ use edgion_resources::prelude_resources::{EdgionPlugins, Gateway};
 use edgion_resources::resources::common::{ParentReference, RefDenied};
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::resources::gateway::AllowedRoutes;
-use edgion_resources::resources::http_route::{LocalObjectReference, RouteParentStatus};
-use edgion_resources::resources::refs::extension_ref::is_supported_edgion_plugins_ref;
+use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::resources::refs::route_fields::{RouteExtensionField, RouteExtensionLookup, RouteFilterSlot};
 use edgion_resources::ResourceKind;
 
 /// Result of validating a parentRef for acceptance.
@@ -147,62 +147,69 @@ pub(crate) fn resolve_acme_listener_attachments(
     Ok(attachments)
 }
 
-/// Return the validation error for an EdgionPlugins backend filter whose
-/// desired resource declares a plugin unavailable at backend scope.
-///
-/// Backend filters execute only after backend selection, which is too late to
-/// participate in the Global/Gateway/Route WAF ownership election. The raw
-/// desired generation is intentional: EdgionPlugins requeues dependents before
-/// its processed cache is replaced, so the cache may still contain the prior
-/// generation during this route reconcile.
-pub(super) fn backend_request_scope_extension_ref_error(
-    runtime: &ControllerRuntime,
-    route_namespace: &str,
-    backend_index: usize,
-    extension_ref: &LocalObjectReference,
-) -> Option<String> {
-    let (plugin, _) = backend_request_scope_violation(runtime, route_namespace, extension_ref)?;
-    if plugin.starts_with("GrpcJsonTranscoder") {
-        return Some(format!(
-            "backendRefs[{backend_index}] GrpcJsonTranscoder requires HTTPRoute rule scope"
-        ));
+/// A dependency receipt retains the declaration that produced its valid target.
+/// It cannot authorize a lookup or mint a ReferenceGrant query.
+#[derive(Clone, Debug)]
+pub(super) struct ExtensionDependencyReceipt {
+    key: String,
+    _source: ResourceRef,
+    _source_uid: Option<String>,
+    _source_generation: Option<i64>,
+    _slot: RouteFilterSlot,
+}
+impl ExtensionDependencyReceipt {
+    pub(super) fn from_field(field: RouteExtensionField<'_>) -> Option<Self> {
+        let reference = field.validated().ok()??;
+        Some(Self::from_lookup(reference))
     }
-    Some(format!(
-        "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"
-    ))
+    fn from_lookup(reference: RouteExtensionLookup<'_>) -> Self {
+        let target = reference.target();
+        let source = reference.source();
+        Self {
+            key: format!(
+                "{}/{}",
+                target
+                    .scope()
+                    .namespace()
+                    .expect("ExtensionRef targets are local and namespaced"),
+                target.name()
+            ),
+            _source: ResourceRef::new(
+                reference.source_kind(),
+                source.scope().namespace().map(str::to_string),
+                source.name().to_string(),
+            ),
+            _source_uid: reference.source_uid().map(str::to_string),
+            _source_generation: reference.source_generation(),
+            _slot: reference.slot(),
+        }
+    }
+    pub(super) fn register(&self, root: &ResourceRef, runtime: &ControllerRuntime) {
+        runtime.plugin_ref_mgr.add_ref(self.key.clone(), root.clone());
+    }
 }
 
-/// The pre-existing WAF and RequestId ownership errors reject the whole route.
-/// A late upstream jump only invalidates its containing rule.
-pub(super) fn backend_request_scope_route_wide_error(
-    runtime: &ControllerRuntime,
-    route_namespace: &str,
-    backend_index: usize,
-    extension_ref: &LocalObjectReference,
-) -> Option<String> {
-    let (plugin, route_wide) = backend_request_scope_violation(runtime, route_namespace, extension_ref)?;
-    route_wide.then(|| {
-        if plugin.starts_with("GrpcJsonTranscoder") { return format!("backendRefs[{backend_index}] GrpcJsonTranscoder requires HTTPRoute rule scope"); }
-        format!(
-            "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"
-        )
-    })
-}
-
-fn backend_request_scope_violation(
-    runtime: &ControllerRuntime,
-    route_namespace: &str,
-    extension_ref: &LocalObjectReference,
+/// Register before consulting the desired plugin generation. The root owns the
+/// wakeup; only the actual field controls the target's namespace and identity.
+fn extension_scope_violation_with(
+    field: RouteExtensionField<'_>,
+    inspect: bool,
+    register: impl FnOnce(&ExtensionDependencyReceipt),
+    read: impl FnOnce(&str) -> Option<Arc<EdgionPlugins>>,
 ) -> Option<(&'static str, bool)> {
-    if !is_supported_edgion_plugins_ref(extension_ref) {
+    let reference = field.validated().ok()??;
+    let receipt = ExtensionDependencyReceipt::from_lookup(reference);
+    register(&receipt);
+    let backend = reference.slot().backend().is_some();
+    if !inspect || (!backend && reference.source_kind() != ResourceKind::GRPCRoute) {
         return None;
     }
-    let namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(route_namespace);
-    let processor = runtime.processor_registry.get("EdgionPlugins")?;
-    let key = format!("{namespace}/{}", extension_ref.name);
-    let plugins = processor
-        .get_raw_any(&key)
-        .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())?;
+    let plugins = read(&receipt.key)?;
+    if !backend {
+        return plugins
+            .has_active_grpc_transcoder()
+            .then_some(("GrpcJsonTranscoder", true));
+    }
     if plugins.spec.waf.is_some() {
         Some(("WAF", true))
     } else if plugins.has_active_grpc_transcoder() {
@@ -220,6 +227,67 @@ fn backend_request_scope_violation(
     } else {
         None
     }
+}
+
+fn extension_scope_violation(
+    runtime: &ControllerRuntime,
+    root: &ResourceRef,
+    field: RouteExtensionField<'_>,
+    inspect: bool,
+) -> Option<(&'static str, bool)> {
+    extension_scope_violation_with(
+        field,
+        inspect,
+        |receipt| receipt.register(root, runtime),
+        |key| {
+            runtime
+                .processor_registry
+                .get("EdgionPlugins")?
+                .get_raw_any(key)?
+                .downcast::<EdgionPlugins>()
+                .ok()
+        },
+    )
+}
+
+fn scope_error(field: RouteExtensionField<'_>, plugin: &'static str) -> String {
+    match field.slot().backend() {
+        Some(index) if plugin.starts_with("GrpcJsonTranscoder") =>
+            format!("backendRefs[{index}] GrpcJsonTranscoder requires HTTPRoute rule scope"),
+        Some(index) => format!("backendRefs[{index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"),
+        None => "GrpcJsonTranscoder requires HTTPRoute rule scope".into(),
+    }
+}
+
+/// Delegation always registers valid declarations before drops. Structurally
+/// ineligible rules register recovery edges without reading plugin content.
+pub(super) fn delegated_extension_ref_error(
+    runtime: &ControllerRuntime,
+    root: &ResourceRef,
+    field: RouteExtensionField<'_>,
+    inspect: bool,
+) -> Option<String> {
+    extension_scope_violation(runtime, root, field, inspect).map(|(plugin, _)| scope_error(field, plugin))
+}
+
+pub(super) fn backend_request_scope_extension_ref_error(
+    runtime: &ControllerRuntime,
+    root: &ResourceRef,
+    field: RouteExtensionField<'_>,
+) -> Option<String> {
+    let (plugin, _) = extension_scope_violation(runtime, root, field, true)?;
+    Some(scope_error(field, plugin))
+}
+
+/// WAF, RequestId and transcoder retain their route-wide authored rejection;
+/// a late upstream jump only invalidates the containing rule.
+pub(super) fn backend_request_scope_route_wide_error(
+    runtime: &ControllerRuntime,
+    root: &ResourceRef,
+    field: RouteExtensionField<'_>,
+) -> Option<String> {
+    let (plugin, route_wide) = extension_scope_violation(runtime, root, field, true)?;
+    route_wide.then(|| scope_error(field, plugin))
 }
 
 /// Check if a listener's namespace policy allows a route from the given namespace.
@@ -950,17 +1018,9 @@ mod tests;
 /// Route-kind validation uses the same raw source generation as dependencies.
 pub(super) fn contains_grpc_transcoder(
     runtime: &ControllerRuntime,
-    namespace: &str,
-    reference: &LocalObjectReference,
+    root: &ResourceRef,
+    field: RouteExtensionField<'_>,
 ) -> bool {
-    if !is_supported_edgion_plugins_ref(reference) {
-        return false;
-    }
-    let namespace = reference.resolved_namespace.as_deref().unwrap_or(namespace);
-    runtime
-        .processor_registry
-        .get("EdgionPlugins")
-        .and_then(|p| p.get_raw_any(&format!("{namespace}/{}", reference.name)))
-        .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())
-        .is_some_and(|plugins| plugins.has_active_grpc_transcoder())
+    extension_scope_violation(runtime, root, field, true)
+        .is_some_and(|(plugin, _)| plugin.starts_with("GrpcJsonTranscoder"))
 }

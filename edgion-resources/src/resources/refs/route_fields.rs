@@ -1,8 +1,10 @@
 //! Borrowed native Route fields. Only authored terminal fields carry Grant authority.
+use super::extension_ref::{validate_extension_ref_filter, ExtensionRefValidationError};
 use super::targets::{BackendTarget, NamespaceRoutesSelector};
 use super::{GrantQuery, ObjectIdentity, ReferenceError, ReferenceSource, ResourceScope};
 use crate::resources::common::RefDenied;
-use crate::resources::http_route::GATEWAY_API_GROUP;
+use crate::resources::grpc_route::{GRPCRouteFilter, GRPCRouteFilterType};
+use crate::resources::http_route::{HTTPRouteFilter, HTTPRouteFilterType, GATEWAY_API_GROUP};
 use crate::resources::{
     GRPCBackendRef, GRPCRoute, HTTPBackendRef, HTTPRoute, TCPBackendRef, TCPRoute, TLSBackendRef, TLSRoute,
     UDPBackendRef, UDPRoute,
@@ -355,6 +357,225 @@ route_facade!(UdpRouteBackendRefs, UDPRoute, Udp, |route: &'a UDPRoute| route
     .spec
     .rules
     .as_ref());
+
+/// Position of a filter in the actual Route vectors. No detached slot constructor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RouteFilterSlot {
+    rule: usize,
+    backend: Option<usize>,
+    filter: usize,
+}
+impl RouteFilterSlot {
+    pub fn rule(self) -> usize {
+        self.rule
+    }
+    pub fn backend(self) -> Option<usize> {
+        self.backend
+    }
+    pub fn filter(self) -> usize {
+        self.filter
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ExtensionField<'a> {
+    Http(&'a HTTPRouteFilter),
+    Grpc(&'a GRPCRouteFilter),
+}
+
+/// A filter loan always borrows an actual Route and its actual filter position.
+/// Effective loans describe the published root and existing child-local namespace
+/// stamp; the transport does not carry the original child's UID or generation.
+/// ```compile_fail
+/// use edgion_resources::resources::refs::route_fields::RouteExtensionField;
+/// let field = RouteExtensionField {};
+/// ```
+#[derive(Clone, Copy)]
+pub struct RouteExtensionField<'a> {
+    owner: RouteOwner<'a>,
+    slot: RouteFilterSlot,
+    field: ExtensionField<'a>,
+    resolved: bool,
+}
+impl<'a> RouteExtensionField<'a> {
+    pub fn slot(self) -> RouteFilterSlot {
+        self.slot
+    }
+    pub fn validated(self) -> Result<Option<RouteExtensionLookup<'a>>, ExtensionRefValidationError> {
+        let reference = match self.field {
+            ExtensionField::Http(filter) => validate_extension_ref_filter(
+                filter.filter_type == HTTPRouteFilterType::ExtensionRef,
+                filter.extension_ref.as_ref(),
+            ),
+            ExtensionField::Grpc(filter) => validate_extension_ref_filter(
+                filter.filter_type == GRPCRouteFilterType::ExtensionRef,
+                filter.extension_ref.as_ref(),
+            ),
+        }?;
+        let Some(reference) = reference else { return Ok(None) };
+        let namespace = if self.resolved {
+            reference
+                .resolved_namespace
+                .as_deref()
+                .unwrap_or(self.owner.namespace())
+        } else {
+            self.owner.namespace()
+        };
+        let target = ObjectIdentity::checked(
+            &reference.group,
+            &reference.kind,
+            ResourceScope::Namespaced(namespace),
+            &reference.name,
+        )
+        .map_err(|_| ExtensionRefValidationError::UnsupportedTarget)?;
+        Ok(Some(RouteExtensionLookup { field: self, target }))
+    }
+}
+
+/// An owner-bound local plugin lookup; neither authored nor effective views grant
+/// cross-namespace authority.
+/// ```compile_fail
+/// use edgion_resources::resources::refs::route_fields::RouteExtensionLookup;
+/// fn authorize(reference: RouteExtensionLookup<'_>) { reference.grant_query(); }
+/// ```
+#[derive(Clone, Copy)]
+pub struct RouteExtensionLookup<'a> {
+    field: RouteExtensionField<'a>,
+    target: ObjectIdentity<'a>,
+}
+impl<'a> RouteExtensionLookup<'a> {
+    pub fn target(self) -> ObjectIdentity<'a> {
+        self.target
+    }
+    pub fn source(self) -> ObjectIdentity<'a> {
+        self.field
+            .owner
+            .identity()
+            .expect("the owning Route facade validated this immutably borrowed source")
+    }
+    pub fn source_kind(self) -> ResourceKind {
+        self.field.owner.kind()
+    }
+    pub fn source_uid(self) -> Option<&'a str> {
+        self.field.owner.metadata().uid.as_deref()
+    }
+    pub fn source_generation(self) -> Option<i64> {
+        self.field.owner.metadata().generation
+    }
+    pub fn slot(self) -> RouteFilterSlot {
+        self.field.slot
+    }
+}
+
+macro_rules! extension_facade {
+    ($facade:ident, $route:ty, $variant:ident) => {
+        pub struct $facade<'a> {
+            route: &'a $route,
+        }
+        impl<'a> $facade<'a> {
+            pub fn from_route(route: &'a $route) -> Result<Self, ReferenceError> {
+                RouteOwner::$variant(route).identity()?;
+                Ok(Self { route })
+            }
+            pub fn authored(&self) -> impl Iterator<Item = RouteExtensionField<'a>> + 'a {
+                Self::fields(self.route, false)
+            }
+            pub fn effective(&self) -> impl Iterator<Item = RouteExtensionField<'a>> + 'a {
+                Self::fields(self.route, self.route.spec.resolved_rules.is_some())
+            }
+            pub fn authored_at(
+                &self,
+                rule: usize,
+                backend: Option<usize>,
+                filter: usize,
+            ) -> Option<RouteExtensionField<'a>> {
+                self.at(rule, backend, filter, false)
+            }
+            pub fn effective_at(
+                &self,
+                rule: usize,
+                backend: Option<usize>,
+                filter: usize,
+            ) -> Option<RouteExtensionField<'a>> {
+                self.at(rule, backend, filter, self.route.spec.resolved_rules.is_some())
+            }
+            fn at(
+                &self,
+                rule: usize,
+                backend: Option<usize>,
+                filter: usize,
+                resolved: bool,
+            ) -> Option<RouteExtensionField<'a>> {
+                let rules = if resolved {
+                    self.route.spec.resolved_rules.as_ref()
+                } else {
+                    self.route.spec.rules.as_ref()
+                };
+                let value = rules?.get(rule)?;
+                let filters = match backend {
+                    Some(index) => value.backend_refs.as_ref()?.get(index)?.filters.as_ref(),
+                    None => value.filters.as_ref(),
+                }?;
+                Some(RouteExtensionField {
+                    owner: RouteOwner::$variant(self.route),
+                    slot: RouteFilterSlot {
+                        rule,
+                        backend,
+                        filter,
+                    },
+                    field: ExtensionField::$variant(filters.get(filter)?),
+                    resolved,
+                })
+            }
+            fn fields(route: &'a $route, resolved: bool) -> impl Iterator<Item = RouteExtensionField<'a>> + 'a {
+                let rules = if resolved {
+                    route.spec.resolved_rules.as_ref()
+                } else {
+                    route.spec.rules.as_ref()
+                };
+                rules
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .flat_map(move |(rule, value)| {
+                        value
+                            .filters
+                            .iter()
+                            .flatten()
+                            .enumerate()
+                            .map(|(filter, field)| (None, filter, field))
+                            .chain(
+                                value
+                                    .backend_refs
+                                    .iter()
+                                    .flatten()
+                                    .enumerate()
+                                    .flat_map(|(backend, value)| {
+                                        value
+                                            .filters
+                                            .iter()
+                                            .flatten()
+                                            .enumerate()
+                                            .map(move |(filter, field)| (Some(backend), filter, field))
+                                    }),
+                            )
+                            .map(move |(backend, filter, field)| RouteExtensionField {
+                                owner: RouteOwner::$variant(route),
+                                slot: RouteFilterSlot {
+                                    rule,
+                                    backend,
+                                    filter,
+                                },
+                                field: ExtensionField::$variant(field),
+                                resolved,
+                            })
+                    })
+            }
+        }
+    };
+}
+extension_facade!(HttpRouteExtensionRefs, HTTPRoute, Http);
+extension_facade!(GrpcRouteExtensionRefs, GRPCRoute, Grpc);
 
 /// A live terminal retains its actual owning Route borrow.
 /// ```compile_fail

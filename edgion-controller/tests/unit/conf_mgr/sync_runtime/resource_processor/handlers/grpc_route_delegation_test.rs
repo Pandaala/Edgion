@@ -35,6 +35,10 @@ impl FakeLookup {
 }
 
 impl DelegationLookup for FakeLookup {
+    fn extension_ref_error(&self, _field: RouteExtensionField<'_>, _inspect: bool) -> Option<String> {
+        None
+    }
+
     fn get_route(&self, key: &str) -> Option<Arc<GRPCRoute>> {
         self.routes.get(key).cloned()
     }
@@ -1301,6 +1305,10 @@ impl NativeReadSpy {
     }
 }
 impl DelegationLookup for NativeReadSpy {
+    fn extension_ref_error(&self, _field: RouteExtensionField<'_>, _inspect: bool) -> Option<String> {
+        None
+    }
+
     fn get_route(&self, key: &str) -> Option<Arc<GRPCRoute>> {
         self.reads.set(self.reads.get() + 1);
         self.inner.get_route(key)
@@ -1430,4 +1438,114 @@ fn native_child_to_root_authority_and_invalid_weight_slots_preserve_declaring_ow
         assert_eq!(refs[2].ref_denied.is_some(), !allowed);
         assert!(refs[1].ref_denied.is_none());
     }
+}
+
+struct ExtensionReadSpy {
+    inner: FakeLookup,
+    registered: std::cell::RefCell<HashSet<(usize, Option<usize>, usize)>>,
+    inspected: std::cell::Cell<usize>,
+}
+impl DelegationLookup for ExtensionReadSpy {
+    fn get_route(&self, key: &str) -> Option<Arc<GRPCRoute>> {
+        self.inner.get_route(key)
+    }
+    fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String> {
+        self.inner.list_route_keys_in_namespace(ns)
+    }
+    fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
+        self.inner.terminal_ref_denied(terminal)
+    }
+    fn extension_ref_error(&self, field: RouteExtensionField<'_>, inspect: bool) -> Option<String> {
+        let reference = field.validated().ok().flatten()?;
+        let source = reference.source();
+        assert_eq!(source.name(), "child");
+        assert_eq!(source.scope().namespace(), Some("children"));
+        assert_eq!(reference.source_uid(), Some("child-uid"));
+        assert_eq!(reference.source_generation(), Some(8));
+        assert_eq!(reference.target().scope().namespace(), Some("children"));
+        let slot = reference.slot();
+        let actual = GrpcRouteExtensionRefs::from_route(&self.inner.routes["children/child"])
+            .unwrap()
+            .authored_at(slot.rule(), slot.backend(), slot.filter())
+            .unwrap()
+            .validated()
+            .unwrap()
+            .unwrap();
+        assert!(
+            std::ptr::eq(actual.target().name().as_ptr(), reference.target().name().as_ptr()),
+            "lookup borrows original child before clone"
+        );
+        if inspect {
+            assert_eq!(
+                self.registered.borrow().len(),
+                3,
+                "all valid child edges, including structurally dropped rules, precede inspection"
+            );
+            assert_eq!(slot.rule(), 0, "invalid rule material is never inspected");
+            self.inspected.set(self.inspected.get() + 1);
+            if slot.backend().is_some() {
+                return Some("backend scope rejected".into());
+            }
+        } else {
+            self.registered
+                .borrow_mut()
+                .insert((slot.rule(), slot.backend(), slot.filter()));
+        }
+        None
+    }
+}
+
+#[test]
+fn child_extension_loans_register_before_scope_drops_and_preserve_source_identity() {
+    let extension = serde_json::json!({"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"bundle","resolvedNamespace":"forged"}});
+    let mut valid = service_rule("demo.Service", "service");
+    valid["filters"] = serde_json::json!([extension.clone()]);
+    valid["backendRefs"][0]["filters"] = serde_json::json!([extension.clone()]);
+    let mut invalid = service_rule("demo.Service", "service");
+    invalid["filters"] = serde_json::json!([{"type":"ExtensionRef"},extension]);
+    let mut child = route("children", "child", serde_json::json!({"rules":[valid,invalid]}));
+    child.metadata.uid = Some("child-uid".into());
+    child.metadata.generation = Some(8);
+    let spy = ExtensionReadSpy {
+        inner: FakeLookup::new(vec![child.clone()]),
+        registered: Default::default(),
+        inspected: Default::default(),
+    };
+    let parent = simple_parent("demo.Service", "children", "child");
+    let outcome = flatten_route(&parent, &spy);
+    assert!(outcome.resolved_rules.as_ref().unwrap().is_empty());
+    assert_eq!(outcome.extension_dependencies.len(), 3);
+    assert_eq!(spy.registered.borrow().len(), 3);
+    assert_eq!(spy.inspected.get(), 2);
+    assert!(dropped_messages(&outcome)
+        .iter()
+        .any(|message| message.contains("backend scope rejected")));
+    assert!(outcome.named_children.contains("children/child"));
+
+    // Valid declarations retain recovery edges even if route-level child gates drop them.
+    child.spec.hostnames = Some(vec!["example.test".into()]);
+    let spy = ExtensionReadSpy {
+        inner: FakeLookup::new(vec![child.clone()]),
+        registered: Default::default(),
+        inspected: Default::default(),
+    };
+    let outcome = flatten_route(&parent, &spy);
+    assert!(outcome.resolved_rules.unwrap().is_empty());
+    assert_eq!(spy.registered.borrow().len(), 3);
+    assert_eq!(spy.inspected.get(), 0);
+    child.metadata.namespace = Some("bad/ns".into());
+    let mut inner = FakeLookup::new(vec![]);
+    inner.routes.insert("children/child".into(), Arc::new(child));
+    let spy = ExtensionReadSpy {
+        inner,
+        registered: Default::default(),
+        inspected: Default::default(),
+    };
+    assert!(flatten_route(&parent, &spy).resolved_rules.unwrap().is_empty());
+    assert!(spy.registered.borrow().is_empty());
+    assert_eq!(spy.inspected.get(), 0);
+    let mut invalid_parent = parent;
+    invalid_parent.metadata.name = Some("bad/name".into());
+    assert!(flatten_route(&invalid_parent, &spy).resolved_rules.unwrap().is_empty());
+    assert!(spy.registered.borrow().is_empty());
 }

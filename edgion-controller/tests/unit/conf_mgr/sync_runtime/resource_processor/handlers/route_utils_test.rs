@@ -1,3 +1,4 @@
+use edgion_resources::resources::http_route::LocalObjectReference;
 #[test]
 fn invalid_patterns_never_intersect() {
     for invalid in ["*", "A.example.com", "127.0.0.1", "a..b"] {
@@ -208,7 +209,13 @@ async fn backend_request_id_rejects_only_active_entries() {
         }))
         .unwrap();
         raw.upsert("apps/ids".to_string(), Arc::new(plugins));
-        let error = backend_request_scope_extension_ref_error(&runtime, "apps", 2, &reference);
+        let owner = backend_extension_owner(&reference, 2);
+        let root = ResourceRef::new(ResourceKind::HTTPRoute, Some("apps".into()), "route".into());
+        let field = edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs::from_route(&owner)
+            .unwrap()
+            .authored_at(0, Some(2), 0)
+            .unwrap();
+        let error = backend_request_scope_extension_ref_error(&runtime, &root, field);
         assert_eq!(error.is_some(), enabled);
         if let Some(error) = error {
             assert!(error.contains("backendRefs[2]"));
@@ -270,7 +277,13 @@ async fn backend_scope_rejects_active_upstream_jump_plugins() {
             }))
             .unwrap();
             raw.upsert("apps/jump".to_string(), Arc::new(plugins));
-            let error = backend_request_scope_extension_ref_error(&runtime, "apps", 0, &reference);
+            let owner = backend_extension_owner(&reference, 0);
+            let root = ResourceRef::new(ResourceKind::HTTPRoute, Some("apps".into()), "route".into());
+            let field = edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs::from_route(&owner)
+                .unwrap()
+                .authored_at(0, Some(0), 0)
+                .unwrap();
+            let error = backend_request_scope_extension_ref_error(&runtime, &root, field);
             assert_eq!(error.is_some(), enabled, "{plugin_type}");
             if let Some(error) = error {
                 assert!(error.contains(plugin_type), "{error}");
@@ -442,4 +455,187 @@ fn test_ns_policy_selector_with_store() {
 
     runtime.namespace_store.remove("allowed-ns");
     runtime.namespace_store.remove("denied-ns");
+}
+
+fn backend_extension_owner(reference: &LocalObjectReference, index: usize) -> edgion_resources::HTTPRoute {
+    let mut backends = vec![serde_json::json!({"name":"service","port":80}); index + 1];
+    backends[index]["filters"] = serde_json::json!([{"type":"ExtensionRef","extensionRef":reference}]);
+    serde_json::from_value(serde_json::json!({"metadata":{"name":"route","namespace":"apps","uid":"declaring-uid","generation":9},"spec":{"rules":[{"backendRefs":backends}]}})).unwrap()
+}
+
+#[tokio::test]
+async fn extension_lookup_registers_before_desired_generation_read_and_rejects_invalid_fields() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs;
+    use std::cell::Cell;
+
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        16,
+        Arc::new(EdgionPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor.clone());
+    let reference: LocalObjectReference = serde_json::from_value(serde_json::json!({
+        "group":"edgion.io","kind":"EdgionPlugins","name":"bundle","resolvedNamespace":"forged"
+    }))
+    .unwrap();
+    let route = backend_extension_owner(&reference, 2);
+    let field = HttpRouteExtensionRefs::from_route(&route)
+        .unwrap()
+        .authored_at(0, Some(2), 0)
+        .unwrap();
+    let root = ResourceRef::new(ResourceKind::HTTPRoute, None, "wake-root".into());
+    let reads = Cell::new(0);
+    let inspect = |field| {
+        extension_scope_violation_with(
+            field,
+            true,
+            |receipt| {
+                assert_eq!(receipt._source.namespace.as_deref(), Some("apps"));
+                assert_eq!(receipt._source_uid.as_deref(), Some("declaring-uid"));
+                assert_eq!(receipt._source_generation, Some(9));
+                assert_eq!(receipt._slot.backend(), Some(2));
+                receipt.register(&root, &runtime);
+            },
+            |key| {
+                reads.set(reads.get() + 1);
+                assert_eq!(key, "apps/bundle", "authored stamp never changes target");
+                assert_eq!(
+                    runtime.plugin_ref_mgr.get_dependencies(&root.key()),
+                    vec![key.to_string()]
+                );
+                runtime
+                    .processor_registry
+                    .get("EdgionPlugins")?
+                    .get_raw_any(key)?
+                    .downcast::<EdgionPlugins>()
+                    .ok()
+            },
+        )
+    };
+    assert_eq!(
+        inspect(field),
+        None,
+        "a valid missing target still registers before querying"
+    );
+    let make_plugins = |enabled, generation| {
+        serde_json::from_value::<EdgionPlugins>(serde_json::json!({
+            "metadata":{"namespace":"apps","name":"bundle","generation":generation},
+            "spec":{"requestPlugins":[{"type":"RequestId","enable":enabled,"config":{}}]}
+        }))
+        .unwrap()
+    };
+    processor.save(make_plugins(true, 1), None);
+    raw.upsert("apps/bundle".into(), Arc::new(make_plugins(false, 2)));
+    assert_eq!(
+        inspect(field),
+        None,
+        "desired raw generation overrides an active stale processed cache"
+    );
+    raw.upsert("apps/bundle".into(), Arc::new(make_plugins(true, 3)));
+    assert_eq!(inspect(field), Some(("RequestId", true)));
+    raw.remove("apps/bundle");
+    assert_eq!(
+        inspect(field),
+        None,
+        "deletion must not fall back to processed material"
+    );
+    raw.upsert("apps/bundle".into(), Arc::new(make_plugins(true, 1)));
+    assert_eq!(
+        inspect(field),
+        Some(("RequestId", true)),
+        "recreated desired material is observed"
+    );
+    assert_eq!(reads.get(), 5);
+
+    for (key, value) in [
+        ("group", ""),
+        ("group", "core"),
+        ("kind", "Secret"),
+        ("name", ""),
+        ("name", "bad/name"),
+    ] {
+        let mut bad = serde_json::to_value(&route).unwrap();
+        bad["spec"]["rules"][0]["backendRefs"][2]["filters"][0]["extensionRef"][key] = serde_json::json!(value);
+        let bad = serde_json::from_value(bad).unwrap();
+        let field = HttpRouteExtensionRefs::from_route(&bad)
+            .unwrap()
+            .authored_at(0, Some(2), 0)
+            .unwrap();
+        assert_eq!(
+            extension_scope_violation_with(
+                field,
+                true,
+                |_| panic!("invalid target registered"),
+                |_| panic!("invalid target read")
+            ),
+            None
+        );
+    }
+    let mut effective = route.clone();
+    effective.spec.resolved_rules = effective.spec.rules.clone();
+    effective.spec.resolved_rules.as_mut().unwrap()[0]
+        .backend_refs
+        .as_mut()
+        .unwrap()[2]
+        .filters
+        .as_mut()
+        .unwrap()[0]
+        .extension_ref
+        .as_mut()
+        .unwrap()
+        .resolved_namespace = Some("bad/ns".into());
+    let field = HttpRouteExtensionRefs::from_route(&effective)
+        .unwrap()
+        .effective_at(0, Some(2), 0)
+        .unwrap();
+    assert_eq!(
+        extension_scope_violation_with(
+            field,
+            true,
+            |_| panic!("invalid stamp registered"),
+            |_| panic!("invalid stamp read")
+        ),
+        None
+    );
+    for (key, value) in [
+        ("name", ""),
+        ("name", "bad/name"),
+        ("namespace", ""),
+        ("namespace", "Bad"),
+    ] {
+        let mut bad = serde_json::to_value(&route).unwrap();
+        bad["metadata"][key] = serde_json::json!(value);
+        let bad = serde_json::from_value(bad).unwrap();
+        assert!(HttpRouteExtensionRefs::from_route(&bad).is_err());
+    }
+}
+
+#[test]
+fn registration_only_extension_pass_does_not_inspect_ineligible_rule_material() {
+    use edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs;
+    let reference =
+        serde_json::from_value(serde_json::json!({"group":"edgion.io","kind":"EdgionPlugins","name":"bundle"}))
+            .unwrap();
+    let route = backend_extension_owner(&reference, 0);
+    let field = HttpRouteExtensionRefs::from_route(&route)
+        .unwrap()
+        .authored_at(0, Some(0), 0)
+        .unwrap();
+    let registered = std::cell::Cell::new(false);
+    assert_eq!(
+        extension_scope_violation_with(
+            field,
+            false,
+            |_| registered.set(true),
+            |_| panic!("structurally ineligible rule queried")
+        ),
+        None
+    );
+    assert!(registered.get());
 }

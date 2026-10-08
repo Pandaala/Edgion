@@ -498,7 +498,7 @@ the actual query boundary. Standard descriptors stay strict. Existing DNS modes,
 cache identity, SSRF, TLS, live runtime eligibility and SP behavior remain; L4
 self-resolution, annotation authority (R6), custom outbound modes (R7), schemas,
 Controller processing and new stores are excluded. Fresh verification evidence
-is recorded below; independent final result review remains pending.
+is recorded below; R2c acceptance completed as recorded in 07.
 
 R2c amendment 01 received independent Astra plan PASS and coordinator execution
 authorization: the effective allowlist is 32 paths. The existing
@@ -542,6 +542,90 @@ Fresh raw logs, binary/source hashes, ownership/restoration evidence and phase
 source hashes are in `tmp/resource-reference-contract/r2c-verification-20261008-r1`.
 The owned runtime logs remain under
 `tmp/integration_testing/testing_20261008_084440`. Original historical `/tmp`
-logs and the compiled identity listing remain unavailable. The coordinator is
-reconstructing the original full compiled identity control from immutable HEAD;
-required workspace gates and both independent final reviews remain pending.
+logs and the original compiled identity listing remain unavailable. The coordinator
+reconstructed the full control from immutable HEAD: 5120 original Gateway tests
+remain among 5132 current tests. Required workspace gates and both fresh independent
+Astra result reviews passed; R2c committed locally as
+`f65b863c7cda6ec9936569d91e7bd8897824c4b2`. See 07 for the accepted artifact hashes.
+
+### R3a1 approved owning ExtensionRef Controller slice
+
+Independent Astra plan review approved 23 existing paths at f65b863c7:
+seven production, eight mirrored test and eight documentation files. The
+immutable baseline is `tmp/resource-reference-contract/r3a1-baseline-20261008`
+(manifest SHA256 `b87bb3ec17dab744857913a69095f4dc725dab138de16df950725a8cd02a78ea`).
+All 188 original attributed test names and ignored cases must remain. The
+coordinator owns 07, workspace gates, independent result reviews and commits.
+
+Actual HTTP/GRPC owners mint borrowed filter loans. Authored loans ignore stale
+namespace stamps; effective loans validate the existing resolved-rule stamp.
+Original child identity and filter position are captured before cloning, while
+the published root separately owns dependency wakeups. Valid child references
+register before rule drops and before desired-generation RawStore reads. Parse
+clears once for valid reconciliation; later root/status registration is additive.
+An invalid-source standalone status call may withdraw stale dependencies and
+derived publication state; this exception never applies to target/scope failures
+under a valid owner. Invalid references register and read no plugin material. Existing filter scope/status/disabled semantics remain.
+No new transport field, Grant capability, store, queue, handler I/O or mirror
+behavior is introduced. Gateway early lookup/publication/request capture remains
+open for the next serial R3a2 batch; this slice does not close ExtensionRef overall.
+Focused verification is recorded below; independent final result acceptance is pending.
+
+Fresh R3a1 focused verification passed on 2026-10-08: Resources reference tests
+74; Resources doctests 24 passed with 10 existing ignored; Controller
+`resource_processor` tests 918; readonly Gateway filter/publication/preflight/WAF
+filters 53/23/23/65 respectively. These filtered sets may overlap. Exact commands,
+raw output and exit codes remain under
+`tmp/resource-reference-contract/r3a1-verification-20261008-r1` (Resources
+`resources-refs-r3` / `resources-docs-r2`, Controller `controller-processor-r3`,
+Gateway `gateway-{filters,publication,preflight,waf}-r1`). No full test suite or
+live conformance run was performed. Original failed compilation logs and the
+new lifecycle test's initial queue-order failure remain preserved; the latter
+now proves the root wakeup without assuming ordering relative to child wakeups.
+The initial implementation restored the existing test-support validator import
+under `cfg(test)` in the approved HTTP handler; F1 below also uses that predicate
+for production diagnostic discrimination. No support-file or allowlist expansion
+was needed.
+
+The coordinator's compiled identity control preserves all Resources 1922 and
+Controller 1731 original test identities among 1925 and 1740 current tests;
+the 188 scoped source identities remain among 200, with ignored cases unchanged.
+Workspace gates, both fresh independent result reviews and the local commit
+remain coordinator-owned pending gates. Gateway R3a2 and the rest of R3-R8 remain
+open; these checks establish neither whole-ExtensionRef closure nor conformance.
+
+R3a1-F1 independent result review found that HTTP name failures used the
+unsupported-kind diagnostic even for exact `edgion.io/EdgionPlugins`. The narrow
+correction plan received independent Astra scoped approval. The HTTP diagnostic
+now discriminates with the existing pure group/kind predicate only after the
+canonical validator returns `UnsupportedTarget`; no second name validator or
+new error enum was introduced. Wrong group/kind wording and union precedence
+remain unchanged. Added actual-owner cases cover empty/slash names at rule and
+backend scope, valid-sibling partial status, all-invalid attachment rejection,
+child-delegation drop reasons and absent plugin dependencies. Fresh correction
+verification is recorded in `tmp/resource-reference-contract/r3a1-verification-20261008-r2`;
+the frozen r2 correctness and subsequent lint results are recorded below.
+
+F1 correction verification passed: `cargo test -p edgion-controller --lib
+conf_mgr::sync_runtime::resource_processor::` completed with 921 passed,
+0 failed and 822 filtered out (`controller-processor-r4.log`, exit 0, in the
+r2 evidence directory). The three earlier correction attempts remain retained:
+the new fixture lacked its Gateway, then supplied a borrowed runtime where an
+Arc was required, then lacked the Tokio reactor required by the real workqueue.
+The final fixture uses the existing async RawStore/Gateway processor pattern;
+all requested assertions remain intact. Complete compiled identity comparison
+preserves Resources 1922 among 1925 and Controller 1731 among 1743 tests; source
+identities preserve 188 among 203, with unchanged ignore attributes. Both fresh
+and deep Astra result reviewers returned SCOPED PASS for frozen r2 correctness.
+Workspace checks and Clippy exited zero, but Clippy retained two introduced
+`question_mark` warnings in new delegation test helpers; r2 was not warning-free.
+The separately reviewed r3 cleanup uses the equivalent `?` early return in only
+those helpers, preserving production behavior, assertions and test identities.
+Fresh r3 Controller resource-processor verification passed 921 tests, with zero
+failures/ignores and 822 filtered (`controller-processor-r1.log`, exit 0, under
+`tmp/resource-reference-contract/r3a1-verification-20261008-r3`). Exact command,
+log/binary hashes and compiled/source identity comparisons are retained there.
+Resources 1922 -> 1925, Controller 1731 -> 1743 and source 188 -> 203 identities
+remain unchanged from r2, with no original removals or changed ignore attributes.
+Refreshed warning-free coordinator gates and renewed independent byte review
+remain pending; R3a2 is still open.

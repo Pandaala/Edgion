@@ -77,6 +77,31 @@ Same as HTTPRoute: produce a RouteParentStatus for each parentRef and set the Ac
 - Child-side delegation status: each `kind: GRPCRoute` parentRef (reverse lock) gets its own `Accepted` condition — True iff that parent currently delegates to this route (`DelegationAccepted` / `NoMatchingParent`, from `grpc_route_delegation_index`). The Gateway-acceptance loop must gate on `is_gateway_parent_ref` so this doesn't run `validate_parent_ref_accepted` against reverse-lock parentRefs.
 - `collect_ref_denied_list`-equivalent status folding scans `effective_rules()` so flattened children's ReferenceGrant denials surface on the parent.
 
+### ExtensionRef ownership and recovery
+
+The Controller consumes `GrpcRouteExtensionRefs` loans from actual authored or
+effective filter positions. Exact `edgion.io/EdgionPlugins`, a valid required name,
+and a valid owning Route identity precede dependency registration or content
+lookup. Authored loans ignore namespace stamps. Effective loans accept the existing
+controller-owned `resolved_namespace` only from `resolved_rules`; they describe the
+published root and field position, without claiming the original child's UID or
+generation. No ExtensionRef loan can mint a ReferenceGrant query.
+
+Delegation registers every valid original child's plugin dependency under the
+root wakeup identity before rule drops. Only structurally eligible scope checks
+read plugin content, using `get_raw_any` after registration so a pending desired
+generation is visible. Parse entry clears the prior plugin dependency set once;
+later authored/effective/status registration is additive. An omitted root namespace
+stays omitted in the manager wakeup key while local targets use `default`.
+Invalid owners and targets contribute no new plugin edge or content lookup.
+For a valid owner, parse is the sole dependency-clear boundary and status only
+extends the set. A standalone status call for an invalid source may withdraw
+stale dependencies and derived rules/listeners/hostnames; an invalid target,
+dropped rule or missing plugin under a valid owner does not permit that cleanup.
+This completes the Controller owning-reference slice only. Gateway cold key
+validation before all early lookup consumers and request snapshot capture remain
+R3a2 work; existing runtime execution gates alone do not prove those boundaries.
+
 ## Gateway-side processing
 
 GRPCRoute's ConfHandler compiles routes into `GlobalGrpcRouteManagers`:

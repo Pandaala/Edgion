@@ -249,7 +249,14 @@ rules:
 
 ### ExtensionRef Reuse Convention
 
-`ExtensionRef` is the standard Gateway API filter, referencing one `EdgionPlugins` resource by `namespace/name`. **The `type: ExtensionRef` (the "plugin referencing plugin" nested form) inside `EdgionPlugins.spec.\*Plugins` was removed in release `<version>`.** Multi-plugin reuse is expressed in two ways:
+Controller validation checks the actual rule/backend filter and owning Route.
+Malformed identities do not register plugin dependencies or read plugin content.
+Valid missing bundles retain recovery dependencies. Delegation preserves the
+original child's locality in controller-owned derived rules; authored namespace
+stamps cannot override it. Gateway migration of all early lookup consumers is a
+separate pending R3a2 slice, beyond the existing execution-time rejection gates.
+
+`ExtensionRef` is a standard Gateway API local reference: `group: edgion.io`, `kind: EdgionPlugins`, and a valid required resource `name`. It has no operator namespace selector. The declaring Route namespace supplies locality; omission means `default`. **The `type: ExtensionRef` (the "plugin referencing plugin" nested form) inside `EdgionPlugins.spec.\*Plugins` was removed in release `<version>`.** Multi-plugin reuse is expressed in two ways:
 
 - **Aggregate mode**: combine multiple plugins into one `EdgionPlugins` resource; the route only needs a single `ExtensionRef`.
 - **Side-by-side mode**: write multiple `ExtensionRef` entries side-by-side in `rules[].filters`, each pointing to a different `EdgionPlugins`.
