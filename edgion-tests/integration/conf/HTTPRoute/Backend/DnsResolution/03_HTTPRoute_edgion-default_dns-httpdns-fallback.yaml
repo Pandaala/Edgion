@@ -17,5 +17,5 @@ spec:
       backendRefs:
         - name: dns-httpdns-fallback
           namespace: edgion-default
-          kind: ServiceExternalName
+          kind: Service
           port: 30001

@@ -225,9 +225,12 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   stream into ldap3; openid_connect installs the same resolver on both IdP
   HTTP clients. Redis likewise adapts Fred's resolver hook to `EgressResolver`
   with `ResolverSpec::System`, so every actual topology dial is classified.
-- **Not DNS at all**: K8s Service backends dial EndpointSlice pod IPs /
-  ClusterIP directly; the upstream-authority outbound path uses
-  `AnchorPinnedResolver`.
+- **Native Service strategy**: ordinary Services dial proven EndpointSlice IPs.
+  HTTP/gRPC references to an actual `Service.spec.type: ExternalName` select
+  controller EndpointSlices or the canonical `ResolverSpec` DNS path from one
+  captured discovery projection; pseudo reference kinds do not select a strategy.
+  L4 has no Gateway self-resolution branch. The separate upstream-authority
+  outbound path uses `AnchorPinnedResolver`.
 
 ### 6. Redis access — Unified
 

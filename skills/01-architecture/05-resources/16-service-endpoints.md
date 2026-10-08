@@ -21,6 +21,12 @@ runtime-owned reference manager. A Service create/update/delete requeues those o
 
 The Gateway discovery coordinator combines Service port/protocol metadata with EndpointSlice
 sources and publishes one immutable generation of canonical Service sections.
+Native HTTP/gRPC selects ExternalName behavior from the actual Service type, using
+that same generation for its hostname, annotations, checked Service port, protocol
+and appProtocol across DNS resolution. The reference remains standard `Service`;
+pseudo kinds are unsupported. Subsequent attempts recapture geometry while
+request-captured policy and live health retain their existing boundaries. L4
+uses published slices and has no Gateway self-resolving DNS branch.
 
 ## EndpointSlice
 

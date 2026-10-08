@@ -1875,3 +1875,70 @@ their existing mirrored test modules. The failed guard logs remain under the
 runtime/TCP/UDP/TLS-r2 passed 12/24/51/83. Earlier final artifacts are archived as
 `/tmp/edgion-ref-r2b-final-r1` and `-r2`; the refreshed final snapshot supersedes
 their hashes. No test identities, assertions, inputs or production behavior changed.
+
+### R2c approved native ExternalName implementation
+
+Independent Astra plan review approved 31 paths at 5cf413bbc: three production,
+three unit-test files (one new mirror), seven DNS fixtures and 18 documents.
+The immutable baseline is `/tmp/edgion-ref-r2c-before-5cf413bbc`; all 15 original
+source test identities, 5120 compiled Gateway identities and ignored attributes
+must remain. The seven fixture files change only ten positive native backend
+kind values from ServiceExternalName to Service. The coordinator owns 07 and SCM.
+
+A private Service selection captures one AvailableServiceProjection, checked
+section and membership-matched runtime for one peer attempt. Native HTTP/gRPC
+strategy comes from that actual Service's type; its hostname, annotations, port
+and appProtocol remain coherent through DNS awaits. Endpoint and sticky selection
+reuse that capture; later attempts recapture geometry while retaining existing
+request policy/TLS ownership. Resolver callbacks borrow caller-owned inputs at
+the actual query boundary. Standard descriptors stay strict. Existing DNS modes,
+cache identity, SSRF, TLS, live runtime eligibility and SP behavior remain; L4
+self-resolution, annotation authority (R6), custom outbound modes (R7), schemas,
+Controller processing and new stores are excluded. Fresh verification evidence
+is recorded below; independent final result review remains pending.
+
+R2c amendment 01 received independent Astra plan PASS and coordinator execution
+authorization: the effective allowlist is 32 paths. The existing
+`edgion-gateway/tests/unit/backends/validation_test.rs` changes only its canonical
+ServiceSectionKey import; all three additional original test identities and
+bodies remain. Its immutable baseline is recorded separately under
+`/tmp/edgion-ref-r2c-before-5cf413bbc/amendment-01`. The first focused compile
+failed on that import and one new-test private-module import; a second attempt
+found an Option/Result assertion mismatch in the new gRPC test. Both were corrected.
+The original `/tmp` logs and compiled-identity listing were lost after a runtime
+reset; earlier reported results are historical and their raw evidence is unavailable.
+The baseline sources were recovered from immutable commit 5cf413bbc under
+`tmp/resource-reference-contract/r2c-recovery-20261008`, reproducing the original
+manifest SHA256 exactly. Fresh evidence uses
+`tmp/resource-reference-contract/r2c-verification-20261008-r1`.
+
+R2c fresh verification after recovery passed: native dispatch 12, complete
+backends 290, peer 101, gRPC 68, DirectEndpoint-filtered 16, session-persistence
+22, and Gateway doctests 11 with 7 existing ignored cases. Canonical prepare
+completed successfully. The 18 original source test identities and ignored
+attributes are unchanged; 12 new dispatch tests were added. Seven fixture files
+contain exactly ten approved `ServiceExternalName` to `Service` kind-value
+replacements; the import amendment changes no test body.
+
+The direct canonical shared-topology run passed all four static DNS cases and
+the complete DnsResolutionFlap scenario on one stack. Its unchanged scenario
+awaits eight phases sequentially: failing, working, failing, working, bounded,
+working, failing, working. The raw client reports scenario PASS and exit zero;
+individual successful phases are intentionally silent, so their completion is
+inferred from that unchanged fallible sequence, not a manufactured phase log.
+The main runner's earlier macOS alias preflight did not pass; this is explicitly
+a direct shared-topology result, not a full integration-runner or Kubernetes
+conformance claim. Existing runner quality/capability, nofile, resource-sync,
+single-Gateway and unknown-field gates passed. The sole owned stack was stopped;
+the pre-existing token, current-run marker and both shared certificate trees
+were restored exactly, with no matching product process left running. Original
+credential backup copies were removed after restoration was verified; only
+sanitized restoration metadata remains.
+
+Fresh raw logs, binary/source hashes, ownership/restoration evidence and phase
+source hashes are in `tmp/resource-reference-contract/r2c-verification-20261008-r1`.
+The owned runtime logs remain under
+`tmp/integration_testing/testing_20261008_084440`. Original historical `/tmp`
+logs and the compiled identity listing remain unavailable. The coordinator is
+reconstructing the original full compiled identity control from immutable HEAD;
+required workspace gates and both independent final reviews remain pending.

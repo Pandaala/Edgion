@@ -662,7 +662,7 @@ fn missing_service_and_invalid_section_fail_closed() {
         "10.8.0.3",
     );
     assert!(matches!(
-        prove_service_section(&published.service_key, &section_number(81)),
+        capture_fixture(&published.service_key, 81),
         Err(EdgionErrorCode::BackendPortResolutionFailed)
     ));
     assert!(matches!(
@@ -727,12 +727,17 @@ fn sticky_address_from_another_section_is_a_miss() {
     );
     let metrics_addr: StdSocketAddr = "10.8.0.5:8081".parse().unwrap();
     assert!(
-        resolved_endpoint_for_addr(&published.service_key, &section_number(80), metrics_addr).is_none(),
+        capture_fixture(&published.service_key, 80)
+            .unwrap()
+            .endpoint_for_addr(metrics_addr)
+            .is_none(),
         "a port-81 address must not resolve inside the port-80 section"
     );
     let http_addr: StdSocketAddr = "10.8.0.5:8080".parse().unwrap();
-    let (endpoint, eligible) =
-        resolved_endpoint_for_addr(&published.service_key, &section_number(80), http_addr).unwrap();
+    let (endpoint, eligible) = capture_fixture(&published.service_key, 80)
+        .unwrap()
+        .endpoint_for_addr(http_addr)
+        .unwrap();
     assert!(eligible);
     assert_eq!(endpoint.serving_port.get(), 8080);
 }
@@ -758,8 +763,10 @@ fn sticky_address_recognizes_unready_slot_but_marks_it_ineligible() {
     )
     .is_err());
     let unready_addr: StdSocketAddr = "10.8.0.6:8080".parse().unwrap();
-    let (endpoint, eligible) =
-        resolved_endpoint_for_addr(&unready.service_key, &section_number(80), unready_addr).unwrap();
+    let (endpoint, eligible) = capture_fixture(&unready.service_key, 80)
+        .unwrap()
+        .endpoint_for_addr(unready_addr)
+        .unwrap();
     assert!(!endpoint.ready);
     assert!(!eligible);
 
@@ -781,7 +788,24 @@ fn sticky_address_recognizes_unready_slot_but_marks_it_ineligible() {
     )
     .is_ok());
     let ready_addr: StdSocketAddr = "10.8.0.7:8080".parse().unwrap();
-    let (endpoint, eligible) = resolved_endpoint_for_addr(&ready.service_key, &section_number(80), ready_addr).unwrap();
+    let (endpoint, eligible) = capture_fixture(&ready.service_key, 80)
+        .unwrap()
+        .endpoint_for_addr(ready_addr)
+        .unwrap();
     assert!(endpoint.ready);
     assert!(eligible);
+}
+
+fn capture_fixture(service_key: &str, port: u16) -> Result<CapturedServiceSelection, EdgionErrorCode> {
+    let (namespace, name) = service_key.split_once('/').unwrap();
+    let compiled = crate::routes::http::match_unit::compile_http_backend_fixture(
+        serde_json::from_value(serde_json::json!({"name":name,"port":port})).unwrap(),
+        namespace,
+        0,
+        Arc::new(crate::plugins::PluginRuntime::new()),
+    );
+    CapturedServiceSelection::capture(
+        &get_service_discovery_coordinator(),
+        compiled.permitted_service().unwrap(),
+    )
 }

@@ -44,29 +44,30 @@ use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::runtime::{GatewayInfo, ServerHeaderOpts};
 use crate::EdgionHttpContext;
 use crate::{end_response_500, end_response_503};
+use discovery::DnsCache;
 use edgion_common::dns::resolver_select::{
     candidate_from_annotations, resolve_effective_spec, LinkSysKey, ResolverCandidate,
 };
-use edgion_common::dns::{resolve, ResolverSpec};
+use edgion_common::dns::{resolve, DnsError, ResolverSpec};
 use edgion_resources::constants::annotations::edgion as edgion_annotations;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::EdgionErrorCode;
 use peer_builder::first_safe_inet_addr;
 use peer_builder::{
     apply_backend_app_protocol, extract_tls_config, parse_backend_app_protocol, peer_from_backend_tls_lookup,
-    record_tls_to_upstream, validate_backend_addr,
+    record_tls_to_upstream,
 };
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
+use std::future::Future;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use std::sync::Arc;
 
-use crate::backends::discovery::ServiceSectionKey;
-use selector::{extract_hash_key, prove_service_section, resolved_endpoint_for_addr, ResolvedServiceEndpoint};
+use selector::{extract_hash_key, CapturedServiceSelection, ResolvedServiceEndpoint};
 
 #[derive(Debug)]
 struct ServicePeerInput<'a> {
@@ -124,6 +125,22 @@ pub(crate) async fn try_get_peer(
     is_grpc: bool,
     selected_http: Option<&SelectedLogicalBackend>,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode> {
+    try_get_peer_with_capture(ctx, session, is_grpc, selected_http, |target| {
+        CapturedServiceSelection::capture(&get_service_discovery_coordinator(), target)
+    })
+    .await
+}
+
+async fn try_get_peer_with_capture<C>(
+    ctx: &mut EdgionHttpContext,
+    session: &Session,
+    is_grpc: bool,
+    selected_http: Option<&SelectedLogicalBackend>,
+    capture: C,
+) -> Result<Box<HttpPeer>, EdgionErrorCode>
+where
+    C: FnOnce(&CompiledServiceTarget) -> Result<CapturedServiceSelection, EdgionErrorCode>,
+{
     // Keep the shared identity alive while peer selection mutates the context.
     let gateway_info = ctx.gateway_info.clone();
     let gateway_key_ref = gateway_info.as_deref().map(GatewayInfo::gateway_key);
@@ -162,267 +179,147 @@ pub(crate) async fn try_get_peer(
             None => return Err(EdgionErrorCode::UpstreamNotBackendRefs),
         }
     };
-    let ServicePeerInput {
-        service,
-        backend_tls_policy,
-        lb_policy,
-    } = input;
-    if backend_tls_policy.is_invalid() {
+    if input.backend_tls_policy.is_invalid() {
         return Err(EdgionErrorCode::BackendTlsPolicyInvalid);
     }
-    let service_key = service.key();
-    let section_key = service.section();
-    let br_port = match section_key {
-        ServiceSectionKey::Number(port) => Some(i32::from(port.get())),
-        ServiceSectionKey::Name(_) => unreachable!("native Route targets contain checked numeric Service ports"),
-    };
-    // Native references select the standard Service strategy. Custom outbound
-    // modes have a separate owning client; context cannot select these branches.
-    let service_type = ServiceBackendKind::Service;
+    let captured = capture(input.service)?;
     let degrade_policy = captured_degrade_policy(ctx.backend_context.as_ref());
-
-    match service_type {
-        ServiceBackendKind::Service => {
-            if !get_global_service_store().contains(service_key) {
-                return Err(EdgionErrorCode::BackendServiceNotFound);
-            }
-
-            // Only ConsistentHash consumes RemoteIp; skip the clone (and its
-            // allocation) for the RR/LeastConn/Ewma hot paths.
-            let remote_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
+    match native_service_path(&captured)? {
+        ExternalNamePath::EndpointSlice => {
+            // Only ConsistentHash consumes RemoteIp; other algorithms keep the
+            // existing allocation-free request input preparation.
+            let remote_ip = if matches!(input.lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
                 ctx.request_info.remote_ip.clone()
             } else {
                 String::new()
             };
             let query = ctx.query(session.req_header());
-            let endpoint = take_sp_target_or_select(ctx, service_key, section_key, || {
-                select_service_endpoint(
-                    service_key,
-                    section_key.clone(),
-                    &lb_policy,
-                    degrade_policy,
-                    Some(session),
-                    &remote_ip,
-                    query,
-                )
+            let endpoint = take_sp_target_or_select(ctx, &captured, || {
+                captured.select(&input.lb_policy, degrade_policy, Some(session), &remote_ip, query)
             })?;
-
             build_peer_from_lb_selection(
                 ctx,
                 session,
-                service_key,
-                &lb_policy,
-                backend_tls_policy,
+                input.service.key(),
+                &input.lb_policy,
+                input.backend_tls_policy,
                 endpoint,
                 gateway_key_ref,
             )
         }
-
-        ServiceBackendKind::ServiceClusterIp => {
-            let svc_store = get_global_service_store();
-            let service = svc_store
-                .get(service_key)
-                .ok_or(EdgionErrorCode::BackendServiceNotFound)?;
-
-            let cluster_ip = service
-                .spec
+        ExternalNamePath::SelfResolve { cache } => {
+            // This attempt owns one Service geometry and one resolver candidate/TTL
+            // generation through the await. A later attempt recaptures both.
+            let egc_default = crate::config::get_egc_dns_resolver_default();
+            let cache_ttl = egc_default
                 .as_ref()
-                .and_then(|spec| spec.cluster_ip.as_ref())
-                .ok_or(EdgionErrorCode::BackendClusterIpNotFound)?;
-
-            let section = prove_service_section(service_key, section_key)?;
-            let port = section.identity.number.get();
-            let backend_app_protocol = section
-                .identity
-                .app_protocol
-                .as_deref()
-                .and_then(parse_backend_app_protocol);
-
-            // cluster_ip is a bare IP literal (no brackets). Parse it as IpAddr and
-            // build the SocketAddr directly so IPv6 ClusterIP services work without
-            // manual bracketing (mirrors the EndpointSlice discovery_impl path).
-            let ip: std::net::IpAddr = cluster_ip
-                .parse()
-                .map_err(|_| EdgionErrorCode::BackendAddressParsingFailed)?;
-            let addr = SocketAddr::Inet(std::net::SocketAddr::new(ip, port));
-
-            // Security check: reject loopback / link-local / metadata (SSRF defense)
-            if let Err(status) = validate_backend_addr(&addr, ctx.allow_loopback_upstream) {
-                record_unsafe_upstream_attempt(ctx, &addr, status);
-                return Err(status);
-            }
-
-            // Extract TLS configuration and record to upstream
-            let (use_tls, sni) = extract_tls_config(backend_tls_policy);
-            record_tls_to_upstream(ctx, use_tls, &sni);
-
-            let mut peer = peer_from_backend_tls_lookup(addr, backend_tls_policy, gateway_key_ref)?;
-            apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
-            Ok(peer)
-        }
-
-        ServiceBackendKind::ServiceExternalName => {
-            let svc_store = get_global_service_store();
-            let service = svc_store
-                .get(service_key)
-                .ok_or(EdgionErrorCode::BackendServiceNotFound)?;
-
-            let external_name = service
-                .spec
-                .as_ref()
-                .and_then(|spec| spec.external_name.as_ref())
-                .ok_or(EdgionErrorCode::BackendExternalNameNotFound)?
-                .clone();
-
-            let section = prove_service_section(service_key, section_key)?;
-            let port = section.identity.number.get();
-            let backend_app_protocol = section
-                .identity
-                .app_protocol
-                .as_deref()
-                .and_then(parse_backend_app_protocol);
-
-            // Mode-first dispatch (edgion.io/dns-resolution-mode on the Service,
-            // default "controller"). `controller` prefers a controller-published
-            // EndpointSlice and bridges to self-resolution when it has no ready
-            // backend; `gateway`/`per-request` always self-resolve (cached / not).
-            let svc_annotations = service.metadata.annotations.as_ref();
-            let mode = DnsResolutionMode::parse(svc_annotations.and_then(|annotations| {
-                annotations
-                    .get(edgion_annotations::DNS_RESOLUTION_MODE)
-                    .map(String::as_str)
-            }));
-            // The controller EndpointSlice is only consulted in `controller` mode,
-            // so skip the (lock-taking, string-allocating) readiness scan otherwise.
-            let slice_has_ready = mode == DnsResolutionMode::Controller
-                && !get_roundrobin_store()
-                    .ready_endpoints_for_port(service_key, br_port)
-                    .is_empty();
-
-            match decide_external_name_path(mode, slice_has_ready) {
-                ExternalNamePath::EndpointSlice => {
-                    // Controller loop resolved this ExternalName to a ready
-                    // EndpointSlice — route through it like any LB-backed service.
-                    // Only ConsistentHash consumes RemoteIp; skip the clone
-                    // (and its allocation) for the RR/LeastConn/Ewma hot paths.
-                    let remote_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
-                        ctx.request_info.remote_ip.clone()
-                    } else {
-                        String::new()
-                    };
-                    let query = ctx.query(session.req_header());
-                    let endpoint = take_sp_target_or_select(ctx, service_key, section_key, || {
-                        select_service_endpoint(
-                            service_key,
-                            section_key.clone(),
-                            &lb_policy,
-                            degrade_policy,
-                            Some(session),
-                            &remote_ip,
-                            query,
-                        )
-                    })?;
-                    build_peer_from_lb_selection(
-                        ctx,
-                        session,
-                        service_key,
-                        &lb_policy,
-                        backend_tls_policy,
-                        endpoint,
-                        gateway_key_ref,
-                    )
-                }
-                ExternalNamePath::SelfResolve { cache } => {
-                    // Read the pre-resolved EGC data-plane default once. The Arc
-                    // pins a single candidate/TTL generation for this request.
-                    let egc_default = crate::config::get_egc_dns_resolver_default();
-                    let cache_ttl = egc_default
-                        .as_ref()
-                        .map(|resolved| resolved.cache_ttl())
-                        .unwrap_or(DEFAULT_DNS_CACHE_TTL);
-
-                    // Compute the effective resolver from the data-plane precedence
-                    // (Service annotation → Gateway annotation → EGC default → system).
-                    let spec = compute_external_name_resolver(
-                        svc_annotations,
-                        ctx,
-                        egc_default.as_ref().and_then(|resolved| resolved.candidate()),
-                    );
-
-                    let ips = resolve_external_ips(&external_name, &spec, service_key, cache, cache_ttl)
-                        .await
-                        .map_err(|e| {
-                            if let Some(upstream) = ctx.get_current_upstream_mut() {
-                                upstream.port = Some(port);
-                                upstream.err.push(format!("dns resolution failed: {e}"));
-                            }
-                            EdgionErrorCode::BackendDnsResolutionFailed
-                        })?;
-
-                    // SSRF: route only to the first resolved IP that passes the
-                    // loopback/link-local gate; reject when none are safe. On the
-                    // all-unsafe path `first_safe_inet_addr` returns the *last*
-                    // candidate's status, so record the last IP to keep the logged
-                    // address and reason consistent.
-                    let addr = match first_safe_inet_addr(&ips, port, ctx.allow_loopback_upstream) {
-                        Ok(addr) => addr,
-                        Err(status) => {
-                            if let Some(ip) = ips.last() {
-                                let rejected = SocketAddr::Inet(std::net::SocketAddr::new(*ip, port));
-                                record_unsafe_upstream_attempt(ctx, &rejected, status);
-                            }
-                            return Err(status);
-                        }
-                    };
-
-                    // TLS is disabled when no BackendTLSPolicy is attached — operators
-                    // must create one explicitly for FQDN ExternalName backends serving
-                    // TLS (e.g. port 443); otherwise the gateway sends plaintext.
-                    let (use_tls, sni) = extract_tls_config(backend_tls_policy);
-                    record_tls_to_upstream(ctx, use_tls, &sni);
-
-                    let mut peer = peer_from_backend_tls_lookup(addr, backend_tls_policy, gateway_key_ref)?;
-                    apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
-                    Ok(peer)
-                }
-            }
-        }
-
-        ServiceBackendKind::ServiceImport => Err(EdgionErrorCode::BackendServiceImportNotImplemented),
-
-        ServiceBackendKind::Unsupported(_) => Err(EdgionErrorCode::BackendUnsupportedKind),
-
-        ServiceBackendKind::ServiceEndpointSlice => {
-            // Only ConsistentHash consumes RemoteIp; skip the clone (and its
-            // allocation) for the RR/LeastConn/Ewma hot paths.
-            let remote_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
-                ctx.request_info.remote_ip.clone()
-            } else {
-                String::new()
+                .map(|resolved| resolved.cache_ttl())
+                .unwrap_or(DEFAULT_DNS_CACHE_TTL);
+            let spec = compute_external_name_resolver(
+                captured.source().metadata.annotations.as_ref(),
+                ctx,
+                egc_default.as_ref().and_then(|resolved| resolved.candidate()),
+            );
+            let dns_cache = get_global_dns_cache();
+            let dns = ExternalNameResolution {
+                spec: &spec,
+                cache,
+                ttl: cache_ttl,
+                dns_cache: &dns_cache,
             };
-            let query = ctx.query(session.req_header());
-            let endpoint = take_sp_target_or_select(ctx, service_key, section_key, || {
-                select_service_endpoint(
-                    service_key,
-                    section_key.clone(),
-                    &lb_policy,
-                    degrade_policy,
-                    Some(session),
-                    &remote_ip,
-                    query,
-                )
-            })?;
-            build_peer_from_lb_selection(
-                ctx,
-                session,
-                service_key,
-                &lb_policy,
-                backend_tls_policy,
-                endpoint,
-                gateway_key_ref,
-            )
+            // Self-resolution has no EndpointSlice affinity contract: a sticky
+            // target cannot replace the captured hostname's admitted DNS result.
+            build_external_name_peer_with_resolver(ctx, &input, &captured, gateway_key_ref, dns, resolve).await
         }
     }
+}
+
+fn external_name(captured: &CapturedServiceSelection) -> Result<&str, EdgionErrorCode> {
+    captured
+        .source()
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.external_name.as_deref())
+        .filter(|name| !name.is_empty())
+        .ok_or(EdgionErrorCode::BackendExternalNameNotFound)
+}
+
+fn native_service_path(captured: &CapturedServiceSelection) -> Result<ExternalNamePath, EdgionErrorCode> {
+    if captured.source().spec.as_ref().and_then(|spec| spec.type_.as_deref()) != Some("ExternalName") {
+        return Ok(ExternalNamePath::EndpointSlice);
+    }
+    external_name(captured)?;
+    let mode = DnsResolutionMode::parse(captured.source().metadata.annotations.as_ref().and_then(|annotations| {
+        annotations
+            .get(edgion_annotations::DNS_RESOLUTION_MODE)
+            .map(String::as_str)
+    }));
+    Ok(decide_external_name_path(
+        mode,
+        mode == DnsResolutionMode::Controller && !captured.section().ready_slots.is_empty(),
+    ))
+}
+
+struct ExternalNameResolution<'a> {
+    spec: &'a ResolverSpec,
+    dns_cache: &'a DnsCache,
+    cache: bool,
+    ttl: Duration,
+}
+
+async fn build_external_name_peer_with_resolver<'a, R, Fut>(
+    ctx: &mut EdgionHttpContext,
+    input: &ServicePeerInput<'_>,
+    captured: &'a CapturedServiceSelection,
+    gateway_key: Option<&str>,
+    dns: ExternalNameResolution<'a>,
+    resolver: R,
+) -> Result<Box<HttpPeer>, EdgionErrorCode>
+where
+    R: FnOnce(&'a ResolverSpec, &'a str) -> Fut,
+    Fut: Future<Output = Result<Vec<IpAddr>, DnsError>>,
+{
+    let hostname = external_name(captured)?;
+    let port = captured.section().identity.number.get();
+    let backend_app_protocol = captured
+        .section()
+        .identity
+        .app_protocol
+        .as_deref()
+        .and_then(parse_backend_app_protocol);
+    let ips = resolve_external_ips_with(
+        hostname,
+        dns.spec,
+        input.service.key(),
+        dns.cache,
+        dns.ttl,
+        dns.dns_cache,
+        resolver,
+    )
+    .await
+    .map_err(|error| {
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.port = Some(port);
+            upstream.err.push(format!("dns resolution failed: {error}"));
+        }
+        EdgionErrorCode::BackendDnsResolutionFailed
+    })?;
+    let addr = match first_safe_inet_addr(&ips, port, ctx.allow_loopback_upstream) {
+        Ok(addr) => addr,
+        Err(status) => {
+            if let Some(ip) = ips.last() {
+                let rejected = SocketAddr::Inet(std::net::SocketAddr::new(*ip, port));
+                record_unsafe_upstream_attempt(ctx, &rejected, status);
+            }
+            return Err(status);
+        }
+    };
+    // TLS absence remains plaintext, including Service port 443.
+    let (use_tls, sni) = extract_tls_config(input.backend_tls_policy);
+    record_tls_to_upstream(ctx, use_tls, &sni);
+    let mut peer = peer_from_backend_tls_lookup(addr, input.backend_tls_policy, gateway_key)?;
+    apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
+    Ok(peer)
 }
 
 /// Compute the effective [`ResolverSpec`] for an `ExternalName` self-resolution,
@@ -437,6 +334,18 @@ fn compute_external_name_resolver(
     ctx: &EdgionHttpContext,
     egc_candidate: Option<&ResolverCandidate>,
 ) -> ResolverSpec {
+    compute_external_name_resolver_with(svc_annotations, ctx, egc_candidate, httpdns_config_for_ref)
+}
+
+fn compute_external_name_resolver_with<F>(
+    svc_annotations: Option<&std::collections::BTreeMap<String, String>>,
+    ctx: &EdgionHttpContext,
+    egc_candidate: Option<&ResolverCandidate>,
+    lookup: F,
+) -> ResolverSpec
+where
+    F: Fn(&LinkSysKey) -> Option<Arc<edgion_common::dns::PreparedHttpDns>>,
+{
     let service_layer = svc_annotations.and_then(candidate_from_annotations);
     let gateway_layer = ctx
         .gateway_info
@@ -444,9 +353,7 @@ fn compute_external_name_resolver(
         .and_then(|info| info.dns_resolver_candidate.clone());
     let egc_layer = egc_candidate.cloned();
 
-    resolve_effective_spec(&[service_layer, gateway_layer, egc_layer], |key: &LinkSysKey| {
-        httpdns_config_for_ref(key)
-    })
+    resolve_effective_spec(&[service_layer, gateway_layer, egc_layer], lookup)
 }
 
 /// Resolve the request's Gateway-scoped DNS policy for a routed external
@@ -477,25 +384,30 @@ fn httpdns_config_for_ref(key: &LinkSysKey) -> Option<Arc<edgion_common::dns::Pr
 /// An IP-literal `external_name` short-circuits the resolver (and the cache):
 /// there is nothing to resolve, and running a name resolver on a literal would
 /// be both wrong and wasteful.
-async fn resolve_external_ips(
-    external_name: &str,
-    spec: &ResolverSpec,
+async fn resolve_external_ips_with<'a, R, Fut>(
+    external_name: &'a str,
+    spec: &'a ResolverSpec,
     service_key: &str,
     cache: bool,
     cache_ttl: Duration,
-) -> Result<Vec<IpAddr>, edgion_common::dns::DnsError> {
+    dns_cache: &DnsCache,
+    resolver: R,
+) -> Result<Vec<IpAddr>, DnsError>
+where
+    R: FnOnce(&'a ResolverSpec, &'a str) -> Fut,
+    Fut: Future<Output = Result<Vec<IpAddr>, DnsError>>,
+{
     if let Ok(ip) = external_name.parse::<IpAddr>() {
         return Ok(vec![ip]);
     }
     if !cache {
-        return resolve(spec, external_name).await;
+        return resolver(spec, external_name).await;
     }
-    let dns_cache = get_global_dns_cache();
     let fingerprint = spec.fingerprint();
     if let Some(cached) = dns_cache.get(service_key, external_name, &fingerprint, Instant::now()) {
         return Ok(cached);
     }
-    let ips = resolve(spec, external_name).await?;
+    let ips = resolver(spec, external_name).await?;
     dns_cache.insert(
         service_key,
         external_name,
@@ -507,23 +419,21 @@ async fn resolve_external_ips(
     Ok(ips)
 }
 
-/// Session-persistence-aware backend pick for the LB-based service kinds.
+/// Session-persistence-aware selection within one captured Service section.
 ///
 /// If session-persistence `target_addr` is set (the request carried a sticky-session token resolved
 /// to a known backend), use that target directly — skipping LB — provided the target
 /// is still healthy. The address is `take()`-d unconditionally so a follow-up retry on
 /// this request does not double-consume it.
 ///
-/// If `target_addr` is unset, or the sticky target is unhealthy, fall back to the
-/// caller-supplied `select_fn` (the kind's normal LB path).
+/// If `target_addr` is unset, call `select_fn` for the captured section's normal LB path.
 ///
 /// Note: an unhealthy sticky target returns `StickyBackendUnhealthy` rather than calling
 /// `select_fn`. Caller (`get_peer_with_sp_fallback` in upstream_peer) is responsible for
 /// deciding whether to re-run with normal LB based on `strict` mode.
 fn take_sp_target_or_select<F>(
     ctx: &mut EdgionHttpContext,
-    service_key: &str,
-    section: &ServiceSectionKey,
+    captured: &CapturedServiceSelection,
     select_fn: F,
 ) -> Result<ResolvedServiceEndpoint, EdgionErrorCode>
 where
@@ -541,7 +451,7 @@ where
         // operate on the same object that the selector tracks. Wrapping a fresh
         // LbBackend here would create an orphan: metric calls would be on a
         // throwaway object and the real cell backend would always show conn==0.
-        match resolved_endpoint_for_addr(service_key, section, target_addr) {
+        match captured.endpoint_for_addr(target_addr) {
             Some((endpoint, eligible)) => {
                 if eligible {
                     return Ok(endpoint);
@@ -557,7 +467,7 @@ where
     select_fn()
 }
 
-/// Shared logic for all three LB-based service kinds.
+/// Shared logic for ordinary and controller-resolved ExternalName Services.
 ///
 /// Takes the already-selected `ResolvedServiceEndpoint`, validates the proven
 /// serving address, writes upstream metadata, and constructs the peer.
@@ -687,3 +597,7 @@ pub async fn get_peer(
 #[cfg(test)]
 #[path = "../../tests/unit/backends/mod_test/selected_service_input_tests.rs"]
 mod selected_service_input_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/backends/mod_test/native_service_dispatch_tests.rs"]
+mod native_service_dispatch_tests;

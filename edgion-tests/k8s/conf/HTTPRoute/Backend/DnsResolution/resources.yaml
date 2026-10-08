@@ -133,7 +133,7 @@ spec:
   rules:
     - backendRefs:
         - name: dns-per-request
-          kind: ServiceExternalName
+          kind: Service
           port: 30001
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -149,7 +149,7 @@ spec:
   rules:
     - backendRefs:
         - name: dns-httpdns
-          kind: ServiceExternalName
+          kind: Service
           port: 30001
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -165,7 +165,7 @@ spec:
   rules:
     - backendRefs:
         - name: dns-gateway-cached
-          kind: ServiceExternalName
+          kind: Service
           port: 30001
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -181,5 +181,5 @@ spec:
   rules:
     - backendRefs:
         - name: dns-httpdns-fallback
-          kind: ServiceExternalName
+          kind: Service
           port: 30001

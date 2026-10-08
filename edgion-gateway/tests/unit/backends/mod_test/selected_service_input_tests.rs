@@ -46,7 +46,7 @@ fn selected_identity_is_the_http_service_resolution_source() {
 
     assert_eq!(
         input.service.section(),
-        &crate::backends::ServiceSectionKey::Number(std::num::NonZeroU16::new(8080).unwrap())
+        &crate::backends::discovery::ServiceSectionKey::Number(std::num::NonZeroU16::new(8080).unwrap())
     );
     assert_eq!(input.service.key(), "tenant/service-a");
     assert_eq!(

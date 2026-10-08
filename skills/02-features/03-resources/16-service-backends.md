@@ -34,6 +34,37 @@ delete/recreate, any membership-affecting Service-port change, and EndpointSlice
 publish a fresh membership. Health probes and passive-outlier attempt results are accepted only
 when both that membership and the captured policy generation are still current.
 
+
+## Native ExternalName attempts
+
+HTTP/gRPC use an ordinary permitted `Service` reference (omitted/empty group,
+omitted/exact Service kind, required declared port). The captured actual Service
+`spec.type: ExternalName` selects DNS behavior; pseudo backend kinds and literal
+`core` do not grant a native target. `CapturedServiceSelection` keeps the Service
+source Arc, checked section and membership-matched runtime snapshot from one
+joint discovery generation. Type, hostname, annotations, Service port, protocol
+and appProtocol therefore remain coherent through a DNS await. A later peer
+attempt recaptures geometry; request-captured EBTP/TLS policy, including absence,
+keeps its existing lifetime. Endpoint health/outlier atomics remain live.
+
+Controller mode uses the captured section when it has ready slots. Health or
+outlier rejection does not turn readiness into DNS fallback. Without ready slots
+it bridges through cached DNS; Gateway mode always uses cached DNS and per-request
+mode resolves without that cache. Resolver precedence remains Service -> Gateway
+-> EGC -> system through Common `ResolverSpec`, including prepared HTTPDNS. The
+cache key remains Service key + hostname + resolver fingerprint. Self-resolving
+DNS does not consume a sticky EndpointSlice target. Ordinary selection and sticky
+revalidation use the same captured section/runtime.
+
+An unavailable Service returns `BackendServiceNotFound` (500); a missing live
+section returns `BackendPortResolutionFailed` (503), and an absent/empty external
+hostname returns `BackendExternalNameNotFound` (503) without querying DNS. DNS
+results pass canonical address safety, including mapped IPv6, before the shared
+TLS peer builder. Without BackendTLSPolicy, even port 443 remains plaintext.
+TCP/UDP/TLS can consume controller-published slices but gain no asynchronous
+Gateway DNS fallback. Custom outbound reference modes and annotation reference
+authority are separate contracts.
+
 ## Health Checks, Circuit Breaking, and Load Balancing
 
 These are no longer Service annotations or route-level `ExtensionRef` filters —

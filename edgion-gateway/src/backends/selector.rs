@@ -1,11 +1,13 @@
 use crate::backends::discovery::{
-    get_service_discovery_coordinator, AvailableServiceProjection, ResolvedServiceSection, ServiceRuntimeSnapshot,
-    ServiceSectionKey,
+    get_service_discovery_coordinator, AvailableServiceProjection, ResolvedServiceSection, ServiceDiscoveryCoordinator,
+    ServiceRuntimeSnapshot, ServiceSectionKey,
 };
+use crate::backends::CompiledServiceTarget;
 use crate::lb::{compiled_selector, LbBackend, PolicyKind};
 use edgion_resources::resources::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
 use edgion_resources::uri_utils;
 use edgion_resources::EdgionErrorCode;
+use k8s_openapi::api::core::v1::Service;
 use pingora_proxy::Session;
 use std::net::SocketAddr;
 use std::num::NonZeroU16;
@@ -220,6 +222,129 @@ fn slot_for_backend<'a>(
         .map(Arc::as_ref)
 }
 
+/// One coherent discovery projection for a peer attempt. Runtime endpoint state
+/// remains live through its existing atomic handles; later attempts recapture.
+pub(crate) struct CapturedServiceSelection {
+    available: Arc<AvailableServiceProjection>,
+    section: Arc<ResolvedServiceSection>,
+    active: Arc<ServiceRuntimeSnapshot>,
+}
+
+impl CapturedServiceSelection {
+    pub(crate) fn capture(
+        coordinator: &ServiceDiscoveryCoordinator,
+        target: &CompiledServiceTarget,
+    ) -> Result<Self, EdgionErrorCode> {
+        let generation = coordinator.load_generation();
+        let available = Arc::clone(
+            generation
+                .available(target.key())
+                .ok_or(EdgionErrorCode::BackendServiceNotFound)?,
+        );
+        let active = available.runtime_cell.active.load_full();
+        if active.membership_identity != Some(available.membership_identity) {
+            return Err(endpoint_slice_not_found().empty);
+        }
+        Self::from_projection(available, active, target.section())
+    }
+
+    fn from_projection(
+        available: Arc<AvailableServiceProjection>,
+        active: Arc<ServiceRuntimeSnapshot>,
+        section: &ServiceSectionKey,
+    ) -> Result<Self, EdgionErrorCode> {
+        let section = available
+            .resolve_section(section)
+            .map_err(|_| EdgionErrorCode::BackendPortResolutionFailed)?;
+        Ok(Self {
+            available,
+            section,
+            active,
+        })
+    }
+
+    pub(crate) fn source(&self) -> &Service {
+        &self.available.raw.service
+    }
+
+    pub(crate) fn section(&self) -> &ResolvedServiceSection {
+        &self.section
+    }
+
+    pub(crate) fn select(
+        &self,
+        lb_policy: &Option<ParsedLBPolicy>,
+        degrade_policy: ServiceDegradePolicy,
+        session: Option<&Session>,
+        remote_ip: &str,
+        query: Option<&str>,
+    ) -> Result<ResolvedServiceEndpoint, EdgionErrorCode> {
+        let kind = policy_to_kind(lb_policy);
+        let section = &self.section;
+        let active = &self.active;
+        let not_found = endpoint_slice_not_found();
+        let selector = section.selectors.get(kind);
+        let (hash_key, hash_key_used) = match (kind, session) {
+            (PolicyKind::ConsistentHash, Some(session)) => {
+                let key = extract_hash_key(session, lb_policy, remote_ip, query);
+                let used = !key.is_empty();
+                (Some(key), used)
+            }
+            (PolicyKind::ConsistentHash, None) => (None, false),
+            _ => (None, false),
+        };
+
+        let now = crate::lb::ewma::score::now_units();
+        let result = if degrade_engaged(selector, active, degrade_policy.threshold(active)) {
+            if let Some(counter) = &active.degrade_selections {
+                counter.record_selection();
+            }
+            selector.select(hash_key, |_| true, now)
+        } else {
+            selector.select(hash_key, |b| runtime_eligible(active, b, true), now)
+        };
+        let backend = result.ok_or(not_found.for_kind(kind, hash_key_used))?;
+        let (ready, slot_proof) = slot_for_backend(section, &backend)
+            .map(|slot| (slot.ready, slot.proof))
+            .ok_or(EdgionErrorCode::BackendPortResolutionFailed)?;
+        let serving_port = backend
+            .addr
+            .as_inet()
+            .and_then(|addr| NonZeroU16::new(addr.port()))
+            .ok_or(EdgionErrorCode::BackendPortResolutionFailed)?;
+        Ok(ResolvedServiceEndpoint {
+            backend,
+            section: Arc::clone(section),
+            serving_port,
+            ready,
+            slot_proof,
+        })
+    }
+
+    pub(crate) fn endpoint_for_addr(&self, target: SocketAddr) -> Option<(ResolvedServiceEndpoint, bool)> {
+        let section = &self.section;
+        let slot = section
+            .all_slots
+            .iter()
+            .find(|slot| slot.backend.addr.as_inet().is_some_and(|addr| *addr == target))?;
+        let backend = Arc::clone(&slot.backend);
+        let ready = slot.ready;
+        let slot_proof = slot.proof;
+        let eligible = slot.ready && runtime_eligible(&self.active, &backend, true);
+        let serving_port = NonZeroU16::new(target.port())?;
+        Some((
+            ResolvedServiceEndpoint {
+                backend,
+                section: Arc::clone(section),
+                serving_port,
+                ready,
+                slot_proof,
+            },
+            eligible,
+        ))
+    }
+}
+
 pub fn select_service_endpoint(
     service_key: &str,
     section: ServiceSectionKey,
@@ -229,49 +354,14 @@ pub fn select_service_endpoint(
     remote_ip: &str,
     query: Option<&str>,
 ) -> Result<ResolvedServiceEndpoint, EdgionErrorCode> {
-    let not_found = endpoint_slice_not_found();
-    let (available, active) = load_active_projection(service_key).ok_or(not_found.empty)?;
-    let section = available
-        .resolve_section(&section)
-        .map_err(|_| EdgionErrorCode::BackendPortResolutionFailed)?;
-
-    let kind = policy_to_kind(lb_policy);
-    let selector = section.selectors.get(kind);
-    let (hash_key, hash_key_used) = match (kind, session) {
-        (PolicyKind::ConsistentHash, Some(session)) => {
-            let key = extract_hash_key(session, lb_policy, remote_ip, query);
-            let used = !key.is_empty();
-            (Some(key), used)
-        }
-        (PolicyKind::ConsistentHash, None) => (None, false),
-        _ => (None, false),
-    };
-
-    let now = crate::lb::ewma::score::now_units();
-    let result = if degrade_engaged(selector, &active, degrade_policy.threshold(&active)) {
-        if let Some(counter) = &active.degrade_selections {
-            counter.record_selection();
-        }
-        selector.select(hash_key, |_| true, now)
-    } else {
-        selector.select(hash_key, |b| runtime_eligible(&active, b, true), now)
-    };
-    let backend = result.ok_or(not_found.for_kind(kind, hash_key_used))?;
-    let (ready, slot_proof) = slot_for_backend(&section, &backend)
-        .map(|slot| (slot.ready, slot.proof))
-        .ok_or(EdgionErrorCode::BackendPortResolutionFailed)?;
-    let serving_port = backend
-        .addr
-        .as_inet()
-        .and_then(|addr| NonZeroU16::new(addr.port()))
-        .ok_or(EdgionErrorCode::BackendPortResolutionFailed)?;
-    Ok(ResolvedServiceEndpoint {
-        backend,
-        section,
-        serving_port,
-        ready,
-        slot_proof,
-    })
+    let (available, active) = load_active_projection(service_key).ok_or(endpoint_slice_not_found().empty)?;
+    CapturedServiceSelection::from_projection(available, active, &section)?.select(
+        lb_policy,
+        degrade_policy,
+        session,
+        remote_ip,
+        query,
+    )
 }
 
 /// Current backends for one proven Service section. Used by health-adjacent
@@ -289,48 +379,6 @@ pub fn backends_for_service_section(service_key: &str, section: &ServiceSectionK
             .into(),
         Err(_) => Arc::from(Vec::new()),
     }
-}
-
-pub(crate) fn resolved_endpoint_for_addr(
-    service_key: &str,
-    section: &ServiceSectionKey,
-    target: SocketAddr,
-) -> Option<(ResolvedServiceEndpoint, bool)> {
-    let (available, active) = load_active_projection(service_key)?;
-    let section = available.resolve_section(section).ok()?;
-    let slot = section
-        .all_slots
-        .iter()
-        .find(|slot| slot.backend.addr.as_inet().is_some_and(|addr| *addr == target))?;
-    let backend = Arc::clone(&slot.backend);
-    let ready = slot.ready;
-    let slot_proof = slot.proof;
-    let eligible = slot.ready && runtime_eligible(&active, &backend, true);
-    let serving_port = NonZeroU16::new(target.port())?;
-    Some((
-        ResolvedServiceEndpoint {
-            backend,
-            section,
-            serving_port,
-            ready,
-            slot_proof,
-        },
-        eligible,
-    ))
-}
-
-pub(crate) fn prove_service_section(
-    service_key: &str,
-    section: &ServiceSectionKey,
-) -> Result<Arc<ResolvedServiceSection>, EdgionErrorCode> {
-    let coordinator = get_service_discovery_coordinator();
-    let generation = coordinator.load_generation();
-    let available = generation
-        .available(service_key)
-        .ok_or(EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobinDefault)?;
-    available
-        .resolve_section(section)
-        .map_err(|_| EdgionErrorCode::BackendPortResolutionFailed)
 }
 
 #[cfg(test)]

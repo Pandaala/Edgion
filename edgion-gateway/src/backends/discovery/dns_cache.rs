@@ -93,7 +93,7 @@ pub fn decide_external_name_path(mode: DnsResolutionMode, slice_has_ready: bool)
 /// - `service_key` — which Service the entry belongs to, and the unit of
 ///   invalidation when that Service is removed.
 /// - `external_name` — the hostname actually handed to the resolver. It is read
-///   fresh from the `ServiceStore` on every request, so a Service whose
+///   from the pinned Service discovery projection for each attempt, so a Service whose
 ///   `spec.externalName` changes produces a *different* key and can never be
 ///   served the previous hostname's addresses.
 /// - `fingerprint` — the effective resolver identity (see

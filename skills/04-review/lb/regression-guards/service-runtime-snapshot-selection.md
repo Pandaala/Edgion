@@ -8,8 +8,10 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-`select_service_endpoint` captures one `Arc<ServiceRuntimeSnapshot>` for the
-selected Service before evaluating candidates. Panic-threshold survivor counting
+`CapturedServiceSelection` captures one actual Service projection, checked section
+and membership-matched `Arc<ServiceRuntimeSnapshot>` for a native HTTP/gRPC peer
+attempt. `select_service_endpoint` retains the same live capture for L4/mirror/custom
+callers and delegates to the shared selection body. Panic-threshold survivor counting
 and the subsequent selector use that same snapshot. Candidate eligibility reads
 the precompiled `EndpointRuntimeIdentity` from `LbBackend`, looks it up in the
 snapshot's endpoint map, and then reads the endpoint's live health and outlier
@@ -36,6 +38,13 @@ whose `ServiceRuntimeCell.active` holds the runtime snapshot. The selection path
 3. passes the captured snapshot to both `degrade_engaged` and
    `runtime_eligible`;
 4. resolves candidates through their immutable `EndpointRuntimeIdentity`.
+
+Native HTTP/gRPC also derives actual Service type, ExternalName hostname, annotations,
+port/protocol/appProtocol and sticky revalidation from that capture. No Service
+reload follows DNS await. A separate retry captures the current projection while
+request EBTP/TLS capture, including absence, remains unchanged. The ordinary healthy
+capture/selection allocation test is narrowly scoped; it does not erase the existing
+residual expiry/rejection costs below.
 
 `EndpointRuntimeState.health_eligible` and `outlier_ejected` read atomically
 updated state, so health transitions and ejections remain visible without

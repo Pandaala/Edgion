@@ -12,7 +12,7 @@ knowledge_type: regression-guards
 ## Conclusion
 
 `DnsCache` keyed self-resolved `ExternalName` addresses by `(service_key, fingerprint)` only.
-The queried hostname was read fresh from the `ServiceStore` on every request but was **not** part
+Historically, the queried hostname was read from `ServiceStore` but was **not** part
 of the key, so repointing a Service from hostname A to hostname B served A's addresses until TTL
 expiry — a window whose length is operator-controlled (`EdgionGatewayConfig.spec.dnsResolver.cacheTtl`
 is a free-form duration, not capped at the 5s default). The backing store was also an unbounded
@@ -21,9 +21,11 @@ is a free-form duration, not capped at the 5s default). The backing store was al
 The key is now the complete identity `(service_key, external_name, fingerprint)`, the store is a
 capacity-bounded `ShardedLruCache`, and the Service conf-handler invalidates on removal.
 
-Fix suggestions of the form "add a Service generation or `resourceVersion` to the key", "invalidate
-the DNS cache on every Service update", or "add a background sweep / expiry task for stale entries"
-are **not accepted**.
+Native HTTP/gRPC now capture the actual Service source, checked section and
+membership-matched runtime once per attempt. The hostname and resolver inputs
+remain borrowed from that capture through DNS completion. Current cache identity
+does not require a resourceVersion component because hostname and resolver
+identity describe the address answer; new evidence can change that conclusion.
 
 ## Core Rationale
 
@@ -37,25 +39,26 @@ Three inputs, all now in `DnsCacheKey`:
 - `fingerprint` — `ResolverSpec::fingerprint()`, so a resolver change cannot serve addresses
   resolved by a different resolver.
 
-Because the key is built from the same values the request path already reads, the identity is
-correct by construction rather than by an invalidation race. `DnsCache::get`/`insert` take
+The key is built from the captured hostname and resolver used by the actual query,
+so Service replacement cannot mix old geometry with a new DNS query. `DnsCache::get`/`insert` take
 `external_name` as a required parameter, so the wiring cannot silently regress — a future refactor
 would have to actively pass the wrong value.
 
 **2. A Service *update* needs no explicit invalidation; only *deletion* does**
 
-Once `external_name` and `fingerprint` are in the key, the previous generation's entry is already
-unreachable: no future request can construct its key. It then goes away by TTL or capacity. Adding
+When hostname or resolver changes, a new attempt uses a different key. An in-flight
+old attempt may still complete and populate its old key, including after deletion;
+that bounded entry cannot answer the new hostname/resolver. Unchanged content may
+reuse the cache across Service generations. Old entries expire or leave by capacity. Adding
 update-time invalidation would buy nothing for correctness while forcing a DNS re-resolution after
 any unrelated Service spec change (a port edit, a label edit) that happens to flow through
 conf_sync.
 
 Deletion is different: the entry is likewise unreachable, but nothing bounds *when* it is reclaimed
-— it would sit in the cache until unrelated traffic evicted it. `ServiceStore::full_set` and
-`partial_update` therefore call `DnsCache::invalidate_services` for removed keys, alongside the
-`runtime_state::remove_service` / `compiled_selector::drop_cell` cleanup that was already there.
-Both call it *after* the store swap, so the non-atomic scan-then-remove leaves the smallest window
-for an in-flight request to re-insert behind it.
+— it can remain until lazy expiry or unrelated eviction. The Service conf-handler
+calls `DnsCache::invalidate_services` for removed keys after discovery publication.
+This is prompt best-effort reclamation, not an atomic barrier against an in-flight
+old attempt inserting behind removal.
 
 The sweep walks the live key set, so an entry that had already expired at deletion time keeps its
 slot until capacity pressure prunes it. Prompt reclamation is therefore a claim about live entries;
@@ -97,7 +100,7 @@ One `service_key` can legitimately carry different effective resolvers at once (
 different `edgion.io/dns-resolver` annotations). Those are separate keys and neither evicts the
 other; only the shared capacity bound applies.
 
-## Fix Suggestions Not Accepted
+## Previously considered alternatives
 
 - **Add a Service generation / `resourceVersion` to the key** — redundant. The generation is only
   observable through the fields that actually affect resolution, and both are already in the key;
@@ -118,7 +121,7 @@ other; only the shared capacity bound applies.
 
 ## Re-evaluation Triggers
 
-Re-open this decision only if:
+Re-evaluate against current source and new evidence, including:
 
 - ExternalName resolution gains an input that is neither the Service key, the hostname, nor the
   resolver identity (it would have to enter the key).
@@ -140,7 +143,7 @@ Re-open this decision only if:
   promoted to a `tasks/todo` entry on 2026-09-01 and removed on closure; fixed 2026-09-03.
 - Source: `edgion-gateway/src/backends/discovery/dns_cache.rs`,
   `edgion-gateway/src/backends/discovery/services/conf_handler_impl.rs`,
-  `edgion-gateway/src/backends/mod.rs` (`resolve_external_ips`).
+  `edgion-gateway/src/backends/mod.rs` (`resolve_external_ips_with`).
 - Cache selection rule: `skills/01-architecture/00-common/05-unification-points.md`.
 - Related but separate: miss coalescing / failure backoff, declined 2026-09-03 —
   [externalname-dns-miss-coalescing-not-implemented.md](../intentional-design/externalname-dns-miss-coalescing-not-implemented.md).

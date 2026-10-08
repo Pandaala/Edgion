@@ -67,14 +67,22 @@ requests capture the added policy, and old retries do not fund its budget.
 
 **4. Captured Service overrides and live runtime have different boundaries**
 
-`backends::try_get_peer` passes the captured degrade policy to the Service,
-controller-resolved ExternalName, and ServiceEndpointSlice selection branches.
+`backends::try_get_peer` passes the captured degrade policy to the shared
+ordinary Service/controller-resolved ExternalName selector. Native pseudo-kind
+ServiceEndpointSlice dispatch is no longer present.
 `CapturedOverride(Some(0))` disables degrade even if a newer Service or global
 threshold enables it. `CapturedOverride(None)` uses the current process-global
 default, never the live Service override. EGC remains independently updated;
 this accepted cross-store default boundary does not merge EGC into EBTP.
 
-Each selector invocation still captures one live runtime snapshot for membership
+Each HTTP/gRPC peer attempt captures one actual Service projection, checked
+section and membership-matched runtime snapshot. Actual Service type selects
+EndpointSlice or ExternalName DNS; its source/hostname/annotations/port/appProtocol
+remain coherent through the attempt, including DNS await. Sticky revalidation
+uses that same capture. This per-attempt geometry is separate from the retained
+request policy Arc and does not freeze geometry across retries.
+
+Each selector invocation uses that runtime snapshot for membership
 and health/outlier eligibility. Neither retries nor this threshold argument freeze
 endpoints or their health. L4 and mirror selection retain RoundRobin and resolve
 the already published runtime threshold per selection; they do not acquire the
@@ -100,7 +108,7 @@ HTTP/gRPC request capture contract.
 
 ## Re-evaluation Triggers
 
-Re-open this decision only if:
+Re-evaluate against current evidence, including:
 
 - L4 or `request_mirror` grow a `BackendContext` and need the same capture
   contract (separate task; do not silently change L4 LB away from RoundRobin).
@@ -152,7 +160,7 @@ The `ServiceDegradeThreshold` dynamic scenario verifies new-request hot updates
 with shared-stack traffic and actual degrade Counter deltas. It does not claim
 an in-flight network retry barrier; deterministic capture coverage owns that case.
 
-Fresh verification on 2026-09-08:
+Historical verification on 2026-09-08 (not fresh R2c gates):
 
 - `cargo test -p edgion-gateway --lib degrade`: 21 passed.
 - The resulting Gateway libtest executable also ran the complete selector,

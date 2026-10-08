@@ -11,30 +11,32 @@ knowledge_type: intentional-design
 
 ## Conclusion
 
-`resolve_external_ips` (`edgion-gateway/src/backends/mod.rs`) checks `DnsCache`, and on a miss calls
+`resolve_external_ips_with` (`edgion-gateway/src/backends/mod.rs`) checks `DnsCache`, and on a miss calls
 `edgion_common::dns::resolve` directly. Concurrent callers for the same key therefore each issue
 their own resolver call, and a failed resolution is neither cached nor backed off, so the next
-request retries immediately. **This is accepted and will not be fixed on the current trigger
-surface.**
+request retries immediately. The recorded design accepted this cost without adding
+coordination; it is not evidence that the cost cannot matter on a current deployment.
 
 Fix suggestions of the form "add a per-key pending-query registry with a global admission budget
 and a fail-closed overflow result", "add a negative/failure backoff state machine with cancellation
-ownership rules", or "port Envoy's dynamic-forward-proxy DNS cache load coordination" are **not
-accepted** today. The re-evaluation triggers below define when they become worth revisiting, and
+ownership rules", or "port Envoy's dynamic-forward-proxy DNS cache load coordination" were declined in the historical review. The non-exhaustive triggers below describe
+reasons to revisit that judgment, and
 the shape section defines what a future fix should look like — which is materially smaller than
 any of those.
 
 ## Core Rationale
 
-**1. The default deployment never executes this path at all**
+**1. Controller mode usually resolves centrally but can enter the bridge**
 
 `mode=controller` is the default (`DnsResolutionMode::default()`), and in K8s conf_center mode the
 controller's leader-only background loop
 (`edgion-controller/src/services/dns_resolver/service.rs`, `enabled: true`, `refresh_interval: 15s`)
 resolves those Services centrally and publishes real EndpointSlices. `decide_external_name_path`
-then returns `ExternalNamePath::EndpointSlice` and the self-resolve branch is not entered.
+returns `ExternalNamePath::EndpointSlice` while the captured Service section has
+ready slots. Startup, missing/unready slices and failed controller resolution can
+enter the bridge even in default mode. Health/outlier rejection alone does not.
 
-The cached self-resolve path is reached only under a non-default choice:
+The cached self-resolve path is reached in these configurations or states:
 
 | Trigger | Nature |
 |---|---|
@@ -42,8 +44,9 @@ The cached self-resolve path is reached only under a non-default choice:
 | FileSystem / Etcd conf_center | The controller DNS resolver service is never started there, so `mode=controller` permanently uses the bridge |
 | `mode=controller` with no ready slice endpoint | Genuine degradation: controller down, not yet leader, before the first tick, or control-plane resolution failed |
 
-Only the third row is a "controller is broken" window, and in that window the deployment is already
-degraded on a broader axis than DNS query amplification.
+The third row includes normal startup as well as degraded control-plane states.
+Native references remain standard Service references; actual Service type, not a
+pseudo kind, activates ExternalName dispatch.
 
 **2. Where the path *is* reached, `DnsCache` already bounds the duplication**
 
@@ -52,9 +55,9 @@ cost is a small burst of duplicate queries at each TTL boundary, sized by `resol
 — single digits for a typical resolver. That is not a cost worth a new hot-path concurrency
 primitive.
 
-The genuinely bad shape needs **two** conditions at once: a non-default resolution mode *and* an
-unhealthy upstream resolver. Only then does the missing negative backoff turn every request into
-its own full DNS timeout. Note that `mode=per-request` is explicitly excluded from this finding —
+An unhealthy resolver can make each self-resolving request pay a full DNS timeout,
+including controller-mode bridging. Cache capacity bounds retained successful
+answers, not concurrent misses or failure amplification. Note that `mode=per-request` is explicitly excluded from this finding —
 it opts out of caching by definition, so coalescing would contradict its contract.
 
 **3. The nginx / OpenResty precedent argues the opposite way once the control plane is accounted for**
@@ -82,7 +85,8 @@ it.
 
 The fix adds shared state and an additional await point inside the `upstream_peer` path. Weighed
 against a `minor`-to-`moderate` harm that only materializes under a non-default configuration, the
-risk/benefit does not clear the bar. Recorded as `Value verdict: 🔴 Not worth fixing as specified`.
+historical risk/benefit review declined it (`Value verdict: 🔴 Not worth fixing as specified`).
+The corrected default-mode reachability must be considered in a new review.
 
 **5. Secondary costs that a future fix should account for (not reasons to fix now)**
 
@@ -129,10 +133,10 @@ already exists today, set by the gateway's in-flight request concurrency, and co
 ever *lower* it. An admission budget would be bounding something the fix does not make worse, at
 the price of a new fail-closed error path on the request hot path.
 
-## Fix Suggestions Not Accepted
+## Historically declined alternatives
 
-- **Per-key pending registry + global admission budget + fail-closed overflow** — Envoy-sized for a
-  trigger surface the default deployment never reaches. The budget also bounds a quantity coalescing
+- **Per-key pending registry + global admission budget + fail-closed overflow** — Envoy-sized for the
+  original trigger assessment, which overstated default-mode exclusion. The budget also bounds a quantity coalescing
   does not make worse: concurrent resolutions are already capped by in-flight request concurrency
   today, and adding a leader/waiter shape can only lower that count (see the Shape section — the
   bound is *not* the cache capacity, which governs resident entries rather than in-flight keys).
@@ -149,7 +153,7 @@ the price of a new fail-closed error path on the request hot path.
 
 ## Re-evaluation Triggers
 
-Re-open this decision only if:
+Re-evaluate with current source or deployment evidence, including:
 
 - `edgion.io/dns-resolution-mode: gateway` becomes a production deployment shape with meaningful
   QPS, rather than an opt-in escape hatch.
@@ -166,7 +170,7 @@ Re-open this decision only if:
   deleted on closure (2026-09-03) without implementation. Nothing else points to it: its
   requirements are the ones restated and rejected above, so this file is the complete record.
 - Prerequisite (implemented): [externalname-dns-cache-identity-and-lifecycle.md](../regression-guards/externalname-dns-cache-identity-and-lifecycle.md).
-- Source: `edgion-gateway/src/backends/mod.rs` (`resolve_external_ips`),
+- Source: `edgion-gateway/src/backends/mod.rs` (`resolve_external_ips_with`),
   `edgion-gateway/src/backends/discovery/dns_cache.rs`,
   `edgion-controller/src/services/dns_resolver/service.rs`.
 - Reference shape: `edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs`.

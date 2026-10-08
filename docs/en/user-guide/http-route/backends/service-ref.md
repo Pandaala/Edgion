@@ -17,7 +17,7 @@ backendRefs:
 | `name` | String | **Required** | Service name |
 | `port` | Integer | **Required** | Service port (the `port` exposed by the Service, not the Pod `targetPort`) |
 | `namespace` | String | Route's namespace | Service namespace; cross-namespace needs a ReferenceGrant |
-| `kind` | String | `Service` | Backend kind. Allowed values: `Service` \| `ServiceClusterIp` \| `ServiceExternalName` |
+| `kind` | String | `Service` | Only omitted or exact `Service` is supported for native Service references |
 | `group` | String | `""` | API group; `""` for core Services |
 | `weight` | Integer | `1` | Relative traffic weight. See [Weight Configuration](./weight.md) |
 
@@ -37,7 +37,11 @@ A Service change (such as a port rename) automatically triggers reprocessing of 
 ### `kind` field
 
 - When `kind` is not specified, it defaults to `Service`.
-- `ServiceExternalName` resolves the Service's `externalName` (DNS) target rather than in-cluster EndpointSlices.
+- The API group must be omitted or empty; literal `core` and pseudo kinds such as `ServiceExternalName` are unsupported.
+- For HTTP/gRPC, an actual Service with `spec.type: ExternalName` selects DNS behavior. Keep `kind: Service` (or omit it), and declare a valid Service port.
+- Its `edgion.io/dns-resolution-mode` annotation selects controller-provided ready EndpointSlices (default, with DNS fallback), Gateway cached DNS, or per-request DNS. The effective resolver follows Service, Gateway, EdgionGatewayConfig, then system precedence.
+- The selected Service generation supplies its hostname, port and protocol throughout one attempt; later attempts use the current generation. BackendTLSPolicy absence remains plaintext even on port 443.
+- TCP/UDP/TLS use published EndpointSlices; Gateway self-resolving DNS is not provided for those protocols.
 
 ### `namespace` field
 

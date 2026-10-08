@@ -1,6 +1,6 @@
 use super::*;
-use crate::backends::discovery::ServiceDiscoveryCoordinator;
-use crate::backends::{BackendTLSPolicyStore, ServiceSectionKey};
+use crate::backends::discovery::{ServiceDiscoveryCoordinator, ServiceSectionKey};
+use crate::backends::BackendTLSPolicyStore;
 use crate::plugins::PluginRuntime;
 use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
 use edgion_resources::resources::BackendTLSPolicy;

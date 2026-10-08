@@ -17,7 +17,7 @@ backendRefs:
 | `name` | String | **必填** | Service 名称 |
 | `port` | Integer | **必填** | Service 端口（Service 暴露的 `port`，非 Pod 的 `targetPort`） |
 | `namespace` | String | 路由所在命名空间 | Service 命名空间；跨命名空间需要 ReferenceGrant |
-| `kind` | String | `Service` | 后端类型。允许值：`Service` \| `ServiceClusterIp` \| `ServiceExternalName` |
+| `kind` | String | `Service` | 原生 Service 引用仅支持省略或精确值 `Service` |
 | `group` | String | `""` | API 组；核心 Service 使用 `""` |
 | `weight` | Integer | `1` | 相对流量权重，详见 [权重配置](./weight.md) |
 
@@ -37,7 +37,11 @@ Service 发生变更（例如端口重命名）时，所有引用该 Service 的
 ### kind 字段
 
 - 未指定 `kind` 时，默认为 `Service`。
-- `ServiceExternalName` 会解析 Service 的 `externalName`（DNS）目标，而非集群内部的 EndpointSlice。
+- API 组必须省略或为空；字面值 `core` 和 `ServiceExternalName` 等伪类型不受支持。
+- HTTP/gRPC 根据实际 Service 的 `spec.type: ExternalName` 选择 DNS 行为，引用仍使用 `kind: Service`（或省略），且必须声明有效的 Service 端口。
+- `edgion.io/dns-resolution-mode` 选择控制面发布的就绪 EndpointSlice（默认，无就绪端点时回退 DNS）、Gateway 缓存 DNS 或每请求 DNS。解析器优先级为 Service、Gateway、EdgionGatewayConfig、系统。
+- 一次连接尝试中的主机名、端口和协议来自同一 Service 版本；后续尝试重新读取当前版本。缺少 BackendTLSPolicy 时，即使端口为 443 也保持明文。
+- TCP/UDP/TLS 使用已发布的 EndpointSlice，不提供 Gateway 自解析 DNS。
 
 ### namespace 字段
 
