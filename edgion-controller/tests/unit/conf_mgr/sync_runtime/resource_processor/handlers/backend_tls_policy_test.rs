@@ -289,7 +289,7 @@ fn status_rebuild_preserves_foreign_controller_ancestors() {
         ancestors: vec![foreign.clone()],
     });
 
-    handler.update_policy_status(&policy.metadata, &policy.spec, &mut policy.status, &ctx, &[]);
+    handler.update_status(&mut policy, &ctx, &[]);
 
     assert!(policy
         .status
@@ -618,4 +618,61 @@ async fn backend_tls_policy_delete_requeues_dependent_ebtp() {
         1,
         "BackendTLSPolicy on_delete must requeue the dependent EdgionBackendTrafficPolicy"
     );
+}
+
+#[tokio::test]
+async fn bare_policy_keeps_raw_winner_identity_and_semantic_target_dependencies() {
+    let (ctx, runtime) = make_ctx();
+    let handler = BackendTlsPolicyHandler::default();
+    runtime.service_ref_mgr.add_ref(
+        "default/svc".into(),
+        ResourceRef::new(ResourceKind::HTTPRoute, Some("default".into()), "route".into()),
+    );
+    runtime.gateway_route_index.update_route(
+        ResourceKind::HTTPRoute,
+        "default/route",
+        &[ParentReference {
+            group: None,
+            kind: None,
+            namespace: None,
+            name: "gateway".into(),
+            section_name: None,
+            port: None,
+        }],
+        "default",
+    );
+    let mut source = make_btp("default", "bare", "svc", "2026-01-01T00:00:00Z");
+    source.metadata.namespace = None;
+    let owner = ResourceRef::new(ResourceKind::BackendTLSPolicy, None, "bare".into());
+    let ProcessResult::Continue(mut parsed) = handler.parse(source, &ctx).await else {
+        panic!()
+    };
+    assert_eq!(
+        parsed.spec.resolved_target_class,
+        Some(ResolvedPolicyTargetClass::Service)
+    );
+    handler.update_status(&mut parsed, &ctx, &[]);
+    assert!(parsed
+        .status
+        .as_ref()
+        .unwrap()
+        .ancestors
+        .iter()
+        .any(|a| a.conditions.iter().any(|c| c.type_ == "Accepted" && c.status == "True")));
+    assert_eq!(runtime.service_ref_mgr.get_dependencies(&owner.key()), ["default/svc"]);
+    parsed.spec.target_refs[0].name = "next".into();
+    let ProcessResult::Continue(mut replaced) = handler.parse(parsed, &ctx).await else {
+        panic!()
+    };
+    assert_eq!(runtime.service_ref_mgr.get_dependencies(&owner.key()), ["default/next"]);
+    replaced.metadata.namespace = Some("".into());
+    assert!(handler.evaluate_target(&replaced, &ctx).target.is_none());
+    replaced.metadata.namespace = None;
+    handler.on_delete(&replaced, &ctx).await;
+    assert!(runtime.service_ref_mgr.get_dependencies(&owner.key()).is_empty());
+    assert!(runtime
+        .backend_tls_policy
+        .target_mgr()
+        .get_dependencies(&owner.key())
+        .is_empty());
 }

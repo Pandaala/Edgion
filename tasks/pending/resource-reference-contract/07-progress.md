@@ -1439,3 +1439,43 @@ Coverage is config-name selection, actual Controller queues and immutable scopes
 not live listener reconstruction or conformance. Stage reviewed changes plus this
 ledger; local commit only. Evidence under r5a-verification, r5a-root-verification
 and r5a-final ignored artifacts. Remaining R5b/R5c/R5d/R6-R8/F1/F2 stay open.
+
+R5a committed4917ce7673a28ed47ff682d3295d1fb1eaf23236 locally, parentb872bc8c9.
+Exact15 paths include14 reviewed technical files plus this ledger; committed
+hashes, clean tracked/index state and untouched review-results verified. No push.
+
+R5b begins PLAN ONLY at this HEAD: actual-owner BTP/EBTP target validation must
+reject illegal slots atomically and align effective missing-owner namespace
+without altering raw source keys or deletion. Revalidate Service unbounded/idempotent
+fanout versus EdgionBackend max16/no duplicates, native strict groups, finite
+custom Service core alias, existing BTP invalid occupancy and dependency recovery.
+No CA/material/health-check TLS/ConfigData/Grant expansion. Exact plan must receive
+independent Astra approval before edits. R5c IpList and R5d WAF lexical/owning gaps
+remain recorded read-only candidates; parent/allowedRoutes/reverse-consent checks
+found no new semantic defect, and ProxyProtocol currently validates before reads.
+
+R5b independent Astra plan review passes the frozen17-path scope; EXECUTE authorized.
+Actual-owner policy target loans preserve strict native versus finite custom group
+semantics and raw owner keys. Identity-invalid EBTP returns before both target reads
+and the BTP hostname registry scan; valid sibling recovery dependencies survive.
+Native BTP invalid occupancy remains distinct from EBTP atomic eligibility. Service
+fanout stays unlimited/idempotent; AI-only16/unique limits remain unchanged. The
+sole existing-test amendment is the reviewed BTP status helper invocation; all
+assertions and identities remain. Fresh compiled baselines1934/1771/5166 captured
+before implementation. No Grant, TLS material, schema, queue or IO expansion.
+
+R5b implementation and both independent actual-source/frozen-evidence reviews
+pass. Focused Resources loan1/schema18/doc2, Controller BTP15/EBTP27 and Gateway
+TLS27/traffic53 pass on the first candidate, zero ignored or warnings. Compiled
+identities1934->1936 /1771->1774 /5166->5168 retain every original. Five old test
+bodies remain original prefixes after the sole approved BTP invocation amendment.
+Root reproduced all17 source hashes, raw log/list/binary hashes and original HEAD
+snapshots. All14 root gates pass, check88.584s/Clippy89.308s, stable source hashes.
+Graded MUST scan confirms canonical actual-owner references, no Grant/material
+authority expansion, unchanged schema/redaction, serial queues, handler IO and
+request lookup paths. BTP invalid occupancy and atomic target-local snapshots
+remain intact; Service fanout/duplicates and AI-only limits are preserved.
+Zero target/hostname reads for invalid identities is control-flow proof; recovery
+tests use direct handler calls, not actual queued events. No live or conformance
+claim. Evidence: r5b-verification, r5b-root-verification and r5b-final ignored
+artifacts. Stage exact17 technical paths plus this ledger, local commit only.

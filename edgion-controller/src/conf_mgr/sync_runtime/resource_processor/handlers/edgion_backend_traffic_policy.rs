@@ -70,15 +70,17 @@ use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessR
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use edgion_resources::prelude_resources::EdgionBackend;
-use edgion_resources::prelude_resources::EdgionBackendTrafficPolicy;
+use edgion_resources::prelude_resources::{BackendTLSPolicy, EdgionBackendTrafficPolicy};
 use edgion_resources::resources::common::{ParentReference, PolicyAncestorStatus};
 use edgion_resources::resources::edgion_backend_traffic_policy::{
     EdgionBackendTrafficPolicyStatus, PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
 };
+use edgion_resources::resources::refs::policy_fields::{BackendTlsPolicyTargets, BackendTrafficPolicyTargets};
 use edgion_resources::resources::upstream_authority::host_matches_pattern;
 use edgion_resources::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 /// EdgionBackendTrafficPolicy-specific condition reasons.
 ///
@@ -123,8 +125,7 @@ fn should_requeue_siblings(
 /// snapshotted once per `validate()` call.
 struct BackendTlsPolicyRecord {
     key: String,
-    target_refs: Vec<edgion_resources::resources::backend_tls_policy::BackendTLSPolicyTargetRef>,
-    hostname: String,
+    policy: Arc<BackendTLSPolicy>,
 }
 
 /// Load every canonical v1 BackendTLSPolicy visible in the processor registry.
@@ -139,8 +140,6 @@ struct BackendTlsPolicyRecord {
 /// so the registry lookup and the full `list_keys()` scan happen once per `validate()` call, not
 /// once per `EdgionBackendTrafficPolicy` targetRef.
 fn load_backend_tls_policies(ctx: &HandlerContext) -> Vec<BackendTlsPolicyRecord> {
-    use edgion_resources::prelude_resources::BackendTLSPolicy;
-
     let Some(processor) = ctx.runtime().processor_registry.get("BackendTLSPolicy") else {
         return Vec::new();
     };
@@ -151,11 +150,7 @@ fn load_backend_tls_policies(ctx: &HandlerContext) -> Vec<BackendTlsPolicyRecord
         .filter_map(|key| {
             let any = processor.get_raw_any(&key)?;
             let b = any.downcast::<BackendTLSPolicy>().ok()?;
-            Some(BackendTlsPolicyRecord {
-                key,
-                target_refs: b.spec.target_refs.clone(),
-                hostname: b.spec.validation.hostname.clone(),
-            })
+            Some(BackendTlsPolicyRecord { key, policy: b })
         })
         .collect()
 }
@@ -167,16 +162,20 @@ fn backend_tls_hostnames_for_service<'a>(
     service: &str,
     records: &'a [BackendTlsPolicyRecord],
 ) -> Vec<(&'a str, &'a str)> {
-    let prefix = format!("{namespace}/");
     records
         .iter()
-        .filter(|r| r.key.starts_with(&prefix))
-        .filter(|r| {
-            r.target_refs
-                .iter()
-                .any(|tr| tr.kind == "Service" && tr.group.is_empty() && tr.name == service)
+        .filter(|record| {
+            BackendTlsPolicyTargets::from_policy(&record.policy)
+                .fields()
+                .any(|field| {
+                    field.canonical_key().is_ok_and(|target| {
+                        target.target_kind == PolicyTargetKind::Service
+                            && target.namespace == namespace
+                            && target.name == service
+                    })
+                })
         })
-        .map(|r| (r.key.as_str(), r.hostname.as_str()))
+        .map(|record| (record.key.as_str(), record.policy.spec.validation.hostname.as_str()))
         .collect()
 }
 
@@ -200,11 +199,19 @@ fn evaluate_policy(p: &EdgionBackendTrafficPolicy, ctx: &HandlerContext) -> Poli
     };
     let namespace = p.metadata.namespace.as_deref().unwrap_or("default");
 
-    for target_ref in &p.spec.target_refs {
-        let Ok(target) = target_ref.canonical_key(namespace) else {
-            continue;
-        };
-        evaluation.targets.push(target);
+    let mut invalid_identity = false;
+    for field in BackendTrafficPolicyTargets::from_policy(p).fields() {
+        match field.canonical_key() {
+            Ok(target) => evaluation.targets.push(target),
+            Err(error) => {
+                invalid_identity = true;
+                evaluation.errors.push(error);
+            }
+        }
+    }
+    // Identity errors invalidate the whole policy before any cross-object reads.
+    if invalid_identity {
+        return evaluation;
     }
 
     if let Some(authority) = &p.spec.upstream_authority {
@@ -453,12 +460,9 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         // Register every syntactically canonical dependency before any
         // existence/capability lookup so target creation can wake a policy
         // that is currently unresolved.
-        let namespace = p.metadata.namespace.as_deref().unwrap_or("default");
-        for target in p
-            .spec
-            .target_refs
-            .iter()
-            .filter_map(|target_ref| target_ref.canonical_key(namespace).ok())
+        for target in BackendTrafficPolicyTargets::from_policy(&p)
+            .fields()
+            .filter_map(|field| field.canonical_key().ok())
         {
             match target.target_kind {
                 PolicyTargetKind::Service => ctx
@@ -535,9 +539,7 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
 
     fn update_status(&self, p: &mut EdgionBackendTrafficPolicy, ctx: &HandlerContext, _validation_errors: &[String]) {
         let generation = p.metadata.generation;
-        let policy_ns = p.metadata.namespace.as_deref().unwrap_or("default").to_string();
-        let policy_name = p.metadata.name.clone().unwrap_or_default();
-        let policy_key = format!("{}/{}", policy_ns, policy_name);
+        let policy_key = Self::resource_ref(p).resource_key();
 
         // GEP-2648: one status entry per ancestor Gateway. The resolver also
         // reports WHICH target Services reach each gateway, so Conflicted /

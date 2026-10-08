@@ -514,3 +514,35 @@ fn connection_connect_timeout_validation_rejects_bad_values() {
     // unparseable rejected
     assert!(!bad("targetRefs:\n  - kind: Service\n    name: x\nconnection:\n  connectTimeout: nope").is_empty());
 }
+
+#[test]
+fn malformed_target_name_is_invalid_without_changing_service_and_ai_bounds() {
+    use serde_json::json;
+    let mut spec: EdgionBackendTrafficPolicySpec = serde_json::from_value(
+        json!({"targetRefs":[{"kind":"Service","name":"valid"},{"kind":"Service","name":"bad/name"}]}),
+    )
+    .unwrap();
+    assert!(spec
+        .get_validation_errors()
+        .iter()
+        .any(|error| error.contains("valid resource name")));
+    spec.target_refs[1].name = "valid".into();
+    spec.target_refs = vec![spec.target_refs[0].clone(); 20];
+    assert!(spec.get_validation_errors().is_empty());
+    for count in [16, 17] {
+        spec.target_refs = (0..count)
+            .map(|index| {
+                serde_json::from_value(
+                    json!({"group":"edgion.io","kind":"EdgionBackend","name":format!("backend-{index}")}),
+                )
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(spec.get_validation_errors().is_empty(), count == 16);
+    }
+    spec.target_refs = vec![spec.target_refs[0].clone(); 2];
+    assert!(spec
+        .get_validation_errors()
+        .iter()
+        .any(|error| error.contains("duplicate")));
+}

@@ -105,3 +105,19 @@ or request lookup stops capturing one immutable snapshot.
   threshold implementation is superseded by this target-local publication.
 - `CAND-C-1` — narrowed the allocation claim to the tested snapshot lookup API;
   the existing Service wrapper was not changed.
+
+## Policy target owner identity
+
+The actual BTP/EBTP field loans in `refs::policy_fields` resolve omitted owner
+namespace to `default`; explicit empty namespace is invalid. Raw policy keys,
+queue ownership and exact deletion remain unchanged. Controller winner/status
+checks use the raw policy key separately from semantic target identity.
+
+Malformed EBTP target identities reject the whole policy before target or BTP
+hostname reads. Canonical valid siblings retain recovery dependencies and ancestor
+identity, but no partial conflict eligibility or resolved marker is published.
+Service fan-out/duplicates remain unrestricted; only EdgionBackend targets carry
+the existing 16-target and uniqueness limits. BTP still requires one eligible
+target and preserves invalid exact/whole occupancy for canonical target slots.
+Gateway target indexes share these loans without changing atomic publication,
+precedence, captured snapshots, or TLS/material ownership.

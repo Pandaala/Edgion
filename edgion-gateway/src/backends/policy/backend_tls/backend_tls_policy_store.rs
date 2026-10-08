@@ -7,6 +7,7 @@ use edgion_resources::resources::edgion_backend_traffic_policy::precedence_key;
 use edgion_resources::resources::edgion_backend_traffic_policy::{
     PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
 };
+use edgion_resources::resources::refs::policy_fields::BackendTlsPolicyTargets;
 use edgion_resources::resources::BackendTLSPolicy;
 use rpds::{HashTrieMapSync as PersistentHashMap, HashTrieSetSync as PersistentHashSet};
 use sha2::{Digest, Sha256};
@@ -231,11 +232,10 @@ impl BackendTLSPolicyStore {
         let Some(resolved_class) = policy.spec.resolved_target_class else {
             return false;
         };
-        let namespace = policy.namespace().unwrap_or("");
-        let Some(target_ref) = policy.spec.target_refs.first() else {
+        let Some(field) = BackendTlsPolicyTargets::from_policy(policy).fields().next() else {
             return false;
         };
-        let Ok(key) = target_ref.canonical_key(namespace) else {
+        let Ok(key) = field.canonical_key() else {
             return false;
         };
         let class_matches = matches!(
@@ -246,7 +246,7 @@ impl BackendTLSPolicyStore {
         if !class_matches {
             return false;
         }
-        if target_ref.section_name.is_some() && key.target_kind != PolicyTargetKind::Service {
+        if field.section_name().is_some() && key.target_kind != PolicyTargetKind::Service {
             return false;
         }
         if !backend_tls_identity_validation_errors(&policy.spec.validation).is_empty() {
@@ -280,9 +280,11 @@ impl BackendTLSPolicyStore {
 
     fn valid_target_key(policy: &BackendTLSPolicy) -> Option<PolicyTargetKey> {
         Self::is_valid_candidate(policy).then(|| {
-            let namespace = policy.namespace().unwrap_or("");
-            policy.spec.target_refs[0]
-                .canonical_key(namespace)
+            BackendTlsPolicyTargets::from_policy(policy)
+                .fields()
+                .next()
+                .expect("valid candidate has one target")
+                .canonical_key()
                 .expect("valid candidate has a typed target key")
         })
     }
@@ -379,12 +381,9 @@ impl BackendTLSPolicyStore {
     }
 
     fn canonical_targets(policy: &BackendTLSPolicy) -> HashSet<PolicyTargetKey> {
-        let namespace = policy.namespace().unwrap_or("");
-        policy
-            .spec
-            .target_refs
-            .iter()
-            .filter_map(|target_ref| target_ref.canonical_key(namespace).ok())
+        BackendTlsPolicyTargets::from_policy(policy)
+            .fields()
+            .filter_map(|field| field.canonical_key().ok())
             .collect()
     }
 
@@ -416,10 +415,9 @@ impl BackendTLSPolicyStore {
                 }
                 continue;
             }
-            let namespace = policy.namespace().unwrap_or("");
-            for target_ref in &policy.spec.target_refs {
-                if target_ref.canonical_key(namespace).as_ref() == Ok(target) {
-                    Self::mark_invalid(&mut invalid, target_ref.section_name.as_deref());
+            for field in BackendTlsPolicyTargets::from_policy(&policy).fields() {
+                if field.canonical_key().as_ref() == Ok(target) {
+                    Self::mark_invalid(&mut invalid, field.section_name());
                 }
             }
         }

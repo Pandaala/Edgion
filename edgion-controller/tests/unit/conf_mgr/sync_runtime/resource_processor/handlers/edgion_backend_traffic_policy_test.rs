@@ -1292,3 +1292,98 @@ async fn encrypted_health_cross_namespace_references_are_rejected_without_resolu
         Some(ResolvedPolicyTargetClass::Service)
     );
 }
+
+#[tokio::test]
+async fn invalid_identity_withdraws_whole_policy_but_keeps_valid_recovery_target() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::ServiceHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use k8s_openapi::api::core::v1::Service;
+    let (ctx, runtime) = make_ctx();
+    let handler = make_handler();
+    let processor = Arc::new(ResourceProcessor::<Service>::new(
+        "Service",
+        16,
+        Arc::new(ServiceHandler::new()),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor);
+    wire_service_to_gateway(&runtime, "default", "valid", "route", "gateway");
+    let mut source = make_policy("bare", "valid", "2026-01-01T00:00:00Z");
+    source.metadata.namespace = None;
+    let owner = EdgionBackendTrafficPolicyHandler::resource_ref(&source);
+    let mut invalid = source.spec.target_refs[0].clone();
+    invalid.name = "bad/name".into();
+    source.spec.target_refs.push(invalid);
+    let evaluation = evaluate_policy(&source, &ctx);
+    assert!(!evaluation.errors.is_empty());
+    assert!(
+        evaluation.missing_targets.is_empty(),
+        "identity failure returns before even valid sibling existence reads"
+    );
+    let ProcessResult::Continue(mut parsed) = handler.parse(source, &ctx).await else {
+        panic!()
+    };
+    assert!(parsed.spec.resolved_target_class.is_none());
+    assert!(runtime
+        .edgion_backend_traffic_policy
+        .target_mgr()
+        .get_dependencies(&owner.key())
+        .is_empty());
+    assert_eq!(
+        runtime.service_ref_mgr.get_dependencies(&owner.key()),
+        ["default/valid"]
+    );
+    handler.update_status(&mut parsed, &ctx, &[]);
+    let accepted = ancestor_condition(&parsed, "gateway", "Accepted");
+    assert_eq!((&*accepted.status, &*accepted.reason), ("False", "Invalid"));
+    parsed.spec.target_refs.pop();
+    let ProcessResult::Continue(mut pending) = handler.parse(parsed, &ctx).await else {
+        panic!()
+    };
+    handler.update_status(&mut pending, &ctx, &[]);
+    assert_eq!(
+        ancestor_condition(&pending, "gateway", "ResolvedRefs").reason,
+        "TargetNotFound"
+    );
+    raw.upsert(
+        "default/valid".into(),
+        Arc::new(serde_json::from_value(json!({"metadata":{"name":"valid","namespace":"default"},"spec":{}})).unwrap()),
+    );
+    let ProcessResult::Continue(mut repaired) = handler.parse(pending, &ctx).await else {
+        panic!()
+    };
+    handler.update_status(&mut repaired, &ctx, &[]);
+    assert_eq!(ancestor_condition(&repaired, "gateway", "Accepted").status, "True");
+    assert!(runtime.edgion_backend_traffic_policy.is_winner(
+        "bare",
+        &PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: "default".into(),
+            name: "valid".into()
+        }
+        .to_string()
+    ));
+    repaired.spec.target_refs[0].name = "next".into();
+    let ProcessResult::Continue(replaced) = handler.parse(repaired, &ctx).await else {
+        panic!()
+    };
+    assert_eq!(runtime.service_ref_mgr.get_dependencies(&owner.key()), ["default/next"]);
+    handler.on_delete(&replaced, &ctx).await;
+    assert!(runtime.service_ref_mgr.get_dependencies(&owner.key()).is_empty());
+}
+
+#[test]
+fn bare_tls_owner_participates_in_default_service_authority_validation() {
+    let policy = serde_json::from_value(json!({"metadata":{"name":"bare"},"spec":{"targetRefs":[{"group":"","kind":"Service","name":"backend"}],"validation":{"hostname":"backend.example","wellKnownCACertificates":"System"}}})).unwrap();
+    let records = vec![BackendTlsPolicyRecord {
+        key: "bare".into(),
+        policy: Arc::new(policy),
+    }];
+    assert_eq!(
+        backend_tls_hostnames_for_service("default", "backend", &records),
+        [("bare", "backend.example")]
+    );
+    assert!(backend_tls_hostnames_for_service("other", "backend", &records).is_empty());
+}

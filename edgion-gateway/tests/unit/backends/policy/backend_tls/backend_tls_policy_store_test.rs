@@ -939,3 +939,97 @@ fn missing_timestamp_loses_and_uid_change_replaces_arc() {
     let second = store.snapshot().get("tenant/dated").unwrap();
     assert!(!Arc::ptr_eq(&first, &second));
 }
+
+#[test]
+fn bare_owner_targets_default_without_losing_invalid_section_occupancy_or_raw_deletion() {
+    for full in [false, true] {
+        let store = BackendTLSPolicyStore::new();
+        let mut whole = (*policy(
+            "bare",
+            PolicyTargetKind::Service,
+            "backend",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        ))
+        .clone();
+        whole.metadata.namespace = None;
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: "default".into(),
+            name: "backend".into(),
+        };
+        store.replace_all(HashMap::from([("bare".into(), Arc::new(whole.clone()))]));
+        let pinned = store.snapshot();
+        assert!(matches!(
+            pinned.lookup(&target, None),
+            BackendTlsPolicyLookup::Effective(_)
+        ));
+        let mut invalid = whole.clone();
+        invalid.metadata.name = Some("invalid".into());
+        invalid.spec.target_refs[0].section_name = Some("https".into());
+        invalid.spec.target_refs.push(invalid.spec.target_refs[0].clone());
+        if full {
+            store.replace_all(HashMap::from([
+                ("bare".into(), Arc::new(whole.clone())),
+                ("invalid".into(), Arc::new(invalid)),
+            ]));
+        } else {
+            store.update(
+                HashMap::from([("invalid".into(), Arc::new(invalid))]),
+                HashMap::new(),
+                &HashSet::new(),
+            );
+        }
+        assert!(matches!(
+            store.snapshot().lookup(&target, Some("https")),
+            BackendTlsPolicyLookup::Invalid
+        ));
+        assert!(matches!(
+            store.snapshot().lookup(&target, None),
+            BackendTlsPolicyLookup::Effective(_)
+        ));
+        assert!(matches!(
+            pinned.lookup(&target, Some("https")),
+            BackendTlsPolicyLookup::Effective(_)
+        ));
+        store.update(HashMap::new(), HashMap::new(), &HashSet::from(["invalid".into()]));
+        assert!(matches!(
+            store.snapshot().lookup(&target, Some("https")),
+            BackendTlsPolicyLookup::Effective(_)
+        ));
+        whole.spec.target_refs[0].name = "next".into();
+        store.update(
+            HashMap::new(),
+            HashMap::from([("bare".into(), Arc::new(whole.clone()))]),
+            &HashSet::new(),
+        );
+        assert!(matches!(
+            store.snapshot().lookup(&target, None),
+            BackendTlsPolicyLookup::Absent
+        ));
+        let next = PolicyTargetKey {
+            name: "next".into(),
+            ..target.clone()
+        };
+        assert!(matches!(
+            store.snapshot().lookup(&next, None),
+            BackendTlsPolicyLookup::Effective(_)
+        ));
+        whole.metadata.namespace = Some("".into());
+        store.update(
+            HashMap::new(),
+            HashMap::from([("bare".into(), Arc::new(whole))]),
+            &HashSet::new(),
+        );
+        assert!(matches!(
+            store.snapshot().lookup(&next, None),
+            BackendTlsPolicyLookup::Absent
+        ));
+        store.update(HashMap::new(), HashMap::new(), &HashSet::from(["bare".into()]));
+        assert!(store.get("bare").is_none());
+        assert!(matches!(
+            pinned.lookup(&target, None),
+            BackendTlsPolicyLookup::Effective(_)
+        ));
+    }
+}

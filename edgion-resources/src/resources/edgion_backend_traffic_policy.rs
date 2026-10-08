@@ -279,15 +279,6 @@ pub struct EdgionBackendTrafficPolicyStatus {
 }
 
 impl EdgionBackendTrafficPolicySpec {
-    /// Return canonical typed identities for every target in the policy
-    /// namespace. Callers should use this only after validation succeeds.
-    pub fn canonical_target_keys(&self, namespace: &str) -> Result<Vec<PolicyTargetKey>, String> {
-        self.target_refs
-            .iter()
-            .map(|target| target.canonical_key(namespace))
-            .collect()
-    }
-
     pub fn get_validation_errors(&self) -> Vec<String> {
         let mut errors = Vec::new();
         if self.target_refs.is_empty() {
@@ -309,6 +300,8 @@ impl EdgionBackendTrafficPolicySpec {
             }
             if tr.name.is_empty() {
                 errors.push("targetRef name must not be empty".to_string());
+            } else if !super::common::kubernetes_name::is_dns_subdomain(&tr.name, 253) {
+                errors.push("targetRef name must be a valid resource name".to_string());
             }
         }
         if target_kinds.len() > 1 {

@@ -1331,3 +1331,67 @@ fn ai_policy_publication_gaps_never_alias_the_backend_fallback() {
     outliers.remove_credentials(&target);
     assert!(!outliers.keys().contains(&target.to_string()));
 }
+
+#[test]
+fn bare_policy_target_repair_preserves_raw_owner_and_atomic_eligibility() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    for full in [false, true] {
+        let store = BackendTrafficPolicyStore::new();
+        let mut source = (*policy(
+            "default",
+            "bare",
+            "backend",
+            None,
+            Some(LoadBalancerType::LeastConn),
+            None,
+            false,
+            false,
+        ))
+        .clone();
+        source.metadata.namespace = None;
+        store.full_set_policies(HashMap::from([("bare".into(), Arc::new(source.clone()))]));
+        let target = service_target("default", "backend");
+        let pinned = store.snapshot();
+        assert!(pinned.get_effective(&target).is_some());
+        let mut bad = source.spec.target_refs[0].clone();
+        bad.name = "bad/name".into();
+        source.spec.target_refs.push(bad);
+        let invalid = HashMap::from([("bare".into(), Arc::new(source.clone()))]);
+        if full {
+            store.full_set_policies(invalid);
+        } else {
+            store.partial_update_policies(HashMap::new(), invalid, HashSet::new());
+        }
+        assert!(store.get_effective(&target).is_none());
+        assert!(pinned.get_effective(&target).is_some());
+        source.spec.target_refs.pop();
+        source.spec.target_refs = vec![source.spec.target_refs[0].clone(); 20];
+        store.partial_update_policies(
+            HashMap::new(),
+            HashMap::from([("bare".into(), Arc::new(source.clone()))]),
+            HashSet::new(),
+        );
+        assert!(
+            store.get_effective(&target).is_some(),
+            "Service duplicates and fanout remain unbounded"
+        );
+        source.spec.target_refs = vec![source.spec.target_refs[0].clone()];
+        source.spec.target_refs[0].name = "next".into();
+        store.partial_update_policies(
+            HashMap::new(),
+            HashMap::from([("bare".into(), Arc::new(source.clone()))]),
+            HashSet::new(),
+        );
+        assert!(store.get_effective(&target).is_none());
+        assert!(store.get_effective(&service_target("default", "next")).is_some());
+        source.metadata.namespace = Some("".into());
+        store.partial_update_policies(
+            HashMap::new(),
+            HashMap::from([("bare".into(), Arc::new(source))]),
+            HashSet::new(),
+        );
+        assert!(store.get_effective(&service_target("default", "next")).is_none());
+        store.partial_update_policies(HashMap::new(), HashMap::new(), HashSet::from(["bare".into()]));
+        assert!(store.snapshot().get_effective(&target).is_none());
+    }
+}

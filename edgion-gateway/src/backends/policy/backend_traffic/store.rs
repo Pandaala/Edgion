@@ -15,6 +15,7 @@ use edgion_resources::resources::edgion_backend_traffic_policy::{
 };
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::resources::outlier_detection::OutlierDetectionResolved;
+use edgion_resources::resources::refs::policy_fields::BackendTrafficPolicyTargets;
 use edgion_resources::resources::upstream_authority::CompiledUpstreamAuthority;
 use edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig;
 use edgion_resources::resources::EdgionBackendTrafficPolicy;
@@ -202,8 +203,11 @@ impl BackendTrafficPolicyStore {
     }
 
     fn canonical_target_keys(policy: &EdgionBackendTrafficPolicy) -> Vec<PolicyTargetKey> {
-        let namespace = policy.metadata.namespace.as_deref().unwrap_or_default();
-        policy.spec.canonical_target_keys(namespace).unwrap_or_default()
+        BackendTrafficPolicyTargets::from_policy(policy)
+            .fields()
+            .map(|field| field.canonical_key())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap_or_default()
     }
 
     fn dedup_target_keys(keys: Vec<PolicyTargetKey>) -> Vec<PolicyTargetKey> {
