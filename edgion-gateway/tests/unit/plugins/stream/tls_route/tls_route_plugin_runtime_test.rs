@@ -171,3 +171,25 @@ async fn unsupported_direct_tls_route_entries_deny_before_disable_and_policy_che
         assert!(cache[0].is_none());
     }
 }
+
+use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+use edgion_resources::resources::edgion_stream_plugins::TlsRoutePluginEntry;
+impl TlsRoutePluginRuntime {
+    pub(crate) fn from_entries(entries: &[TlsRoutePluginEntry], namespace: &str) -> Self {
+        Self::from_cached_entries(entries, namespace, None, &mut vec![None; entries.len()])
+    }
+    pub(crate) fn from_cached_entries(
+        entries: &[TlsRoutePluginEntry],
+        namespace: &str,
+        policy: Option<&CompiledPluginPolicy>,
+        cache: &mut [Option<Arc<dyn TlsRoutePlugin>>],
+    ) -> Self {
+        let owner: edgion_resources::EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "fixture", "namespace": namespace}, "spec": {"tlsRoutePlugins": entries}
+        }))
+        .unwrap();
+        let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
+        let binding = prepared.bind_stream_plugins(&owner).unwrap();
+        Self::from_owner_cached(&binding, policy, cache)
+    }
+}

@@ -1147,4 +1147,20 @@ independently of credential supported-stage gating. Ordinary IP consumers remain
 unresolved on reference failure; RAP IP consumers retain partial-good unions and
 bounded warnings. The owning visitor binds warning application to the effective
 RAP entry, preserves URL-before-IP order, and traverses profile keys deterministically.
-Standalone HTTP/Stream IpRestriction reference migration remains R5c2.
+R5c2 binds standalone HTTP, connection, TLS-route and every GCIR profile's
+allowRefs/denyRefs through `PreparedIpListReferences`. The shared Controller resolver
+accepts only actual edgion.io EP/ESP sources and fixed edgion.io/EdgionConfigData
+IpList targets before reads or Grant queries. Source binding failures and target
+slot failures are distinct: a reference-bearing invalid owner cannot construct a
+runtime; an invalid target contributes no external set, while authored allow intent,
+inline rules and valid siblings remain effective. Deny-only invalid external sets
+retain the existing drop behavior. Existing blank-name structural validation remains
+unchanged. Controller status reports invalid identities and preserves dependencies
+for valid missing or denied targets, including disabled standalone entries.
+
+Gateway constructors borrow the actual immutable owner entry at compilation;
+production has no detached config/namespace constructor. Runtime disabled-entry and
+policy handling, raw rate/cache identity and one snapshot per decision remain unchanged.
+Old views retain their target keys while subsequent decisions observe live IpList
+publication. GCIR Selector, RegionRoute, WAF and other ConfigData roles are outside
+this standalone IpList migration.

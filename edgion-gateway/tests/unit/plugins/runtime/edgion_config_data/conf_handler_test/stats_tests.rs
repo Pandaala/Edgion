@@ -946,3 +946,36 @@ fn unsupported_extension_removes_indexes_and_recovers_full_and_partial() {
         }
     }
 }
+
+use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+pub(crate) fn resolve_ip_list_ref_keys(
+    refs: Option<&Vec<edgion_resources::resources::edgion_config_data::EdgionConfigDataRef>>,
+    namespace: &str,
+) -> Vec<String> {
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "fixture", "namespace": namespace},
+        "spec": {"requestPlugins": [{"type": "IpRestriction", "config": {"allowRefs": refs}}]}
+    }))
+    .unwrap();
+    let prepared = PreparedIpListReferences::from_plugins(&owner);
+    let binding = prepared.bind_plugins(&owner).unwrap();
+    super::super::resolve_bound_ip_list_keys(binding.http_entry(0).unwrap().references())
+        .unwrap()
+        .0
+}
+
+#[test]
+fn bound_standalone_keys_exclude_invalid_targets_without_erasing_allowed_siblings() {
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(
+        serde_json::json!({"metadata":{"name":"bare"},"spec":{"requestPlugins":[{"type":"IpRestriction","config":{
+        "allowRefs":[{"name":"bad/name"},{"name":"nets","namespace":""},{"name":"good"}],
+        "denyRefs":[{"name":"other","namespace":"ops"}]}}]}}),
+    )
+    .unwrap();
+    let prepared = PreparedIpListReferences::from_plugins(&owner);
+    let binding = prepared.bind_plugins(&owner).unwrap();
+    assert_eq!(
+        super::super::resolve_bound_ip_list_keys(binding.http_entry(0).unwrap().references()).unwrap(),
+        (vec!["default/good".to_owned()], vec!["ops/other".to_owned()])
+    );
+}

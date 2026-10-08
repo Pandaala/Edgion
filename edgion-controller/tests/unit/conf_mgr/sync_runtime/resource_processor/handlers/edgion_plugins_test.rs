@@ -7896,3 +7896,52 @@ async fn condition_ip_grant_recovery_keeps_only_valid_namespace_edges() {
     assert!(runtime.edgion_config_data_refs.get_refs("phantom/bad/name").is_empty());
     assert_eq!(super::resolve_ip_list_refs(&parsed, &ctx).len(), 2);
 }
+
+#[tokio::test]
+async fn standalone_ip_slots_keep_disabled_dependencies_raw_owner_and_retarget_cleanup() {
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let mut owner: EdgionPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"bare-standalone"},"spec":{"requestPlugins":[{
+        "type":"IpRestriction","enable":false,"config":{"allowRefs":[{"name":"missing"},{"name":"bad/name"}],"denyRefs":[{"name":"nets","namespace":""}]}
+    }]}})).unwrap();
+    let ProcessResult::Continue(parsed) = EdgionPluginsHandler.parse(owner.clone(), &ctx).await else {
+        panic!()
+    };
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/missing"),
+        ["EdgionPlugins:bare-standalone"]
+    );
+    assert!(runtime.edgion_config_data_refs.get_refs("default/bad/name").is_empty());
+    assert!(runtime.edgion_config_data_refs.get_refs("/nets").is_empty());
+    let errors = super::resolve_ip_list_refs(&parsed, &ctx);
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|e| matches!(e, super::ResolvedRefsError::InvalidReference { .. }))
+            .count(),
+        2
+    );
+    let EdgionPlugin::IpRestriction(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        panic!()
+    };
+    config.allow_refs = Some(vec![EdgionConfigDataRef {
+        name: "next".into(),
+        ..Default::default()
+    }]);
+    config.deny_refs = None;
+    let ProcessResult::Continue(mut parsed) = EdgionPluginsHandler.parse(owner, &ctx).await else {
+        panic!()
+    };
+    assert!(runtime.edgion_config_data_refs.get_refs("default/missing").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/next"),
+        ["EdgionPlugins:bare-standalone"]
+    );
+    runtime.edgion_config_data_store.replace_all(HashMap::from([(
+        "default/next".into(),
+        ip_list_config_data("default", "next", "192.0.2.0/24"),
+    )]));
+    assert!(super::resolve_ip_list_refs(&parsed, &ctx).is_empty());
+    EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+    EdgionPluginsHandler.on_delete(&parsed, &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("default/next").is_empty());
+}

@@ -378,4 +378,8 @@ roots above and RAP direct IP rule fields through `PreparedConditionReferences`.
 Tokens bind actual owner, placement and authored name/namespace; Controller-owned
 resolved payloads and denial markers do not change descriptor identity. These
 synchronous loans grant no Secret material role or asynchronous frozen authority.
-Standalone HTTP/Stream/connection/TLS allowRefs and denyRefs remain pending R5c2.
+R5c2 closes standalone HTTP IpRestriction, connection IpRestriction, TLS-route
+IpRestriction and every GCIR profile's allowRefs/denyRefs using actual owner loans.
+Invalid slots contribute no lookup, dependency or Grant query; valid missing and
+denied slots retain recovery edges under raw owner keys. GCIR activeProfileRef,
+RegionRoute, WAF and other non-IpList roles remain separate follow-up work.

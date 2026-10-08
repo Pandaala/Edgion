@@ -8,7 +8,7 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-`IpRestriction::create` (`edgion-gateway/src/plugins/http/ip_restriction/plugin.rs`) now clones
+`IpRestriction::create_bound` (`edgion-gateway/src/plugins/http/ip_restriction/plugin.rs`) clones
 the config, calls `config.validate_and_init()` to compile `allow_matcher`/`deny_matcher`, and
 stores an `init_failed` flag. `run_request` denies every request (HTTP 403, `plugin_log` =
 `"ip init fail"`) when `init_failed` is set, instead of falling through to the uncompiled
@@ -88,3 +88,14 @@ Re-open only if:
 - Source: `edgion-gateway/src/plugins/http/ip_restriction/plugin.rs` (`IpRestriction::create`, `run_request`),
   `edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs` (`TlsRouteIpRestriction::new`).
 - Final-status validation: [`request-local-reply-final-status-validation.md`](../../resources/regression-guards/request-local-reply-final-status-validation.md).
+
+## Owning constructor boundary (R5c2)
+
+The production entry point is now `create_bound(HttpIpListEntry)`. It validates the
+reference-bearing owner separately from target slots, then preserves the existing
+config clone and `validate_and_init` path described above. Canonically invalid
+external targets contribute no runtime key; authored allow mode and inline/permitted
+siblings remain effective, and deny-only failed sets are dropped. The old detached
+`create(config, namespace)` spelling exists only as a fixture wrapper in the mirrored
+test module and delegates through an actual fixture owner. Stream, TLS-route and GCIR
+constructors use the corresponding owning loans; no request-time parsing was added.

@@ -316,3 +316,104 @@ async fn profile_deny_refs_block_referenced_ip() {
     let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(plugin.on_connection(&ctx_ok).await, StreamPluginResult::Allow));
 }
+
+use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+// Detached convenience exists only in this mirrored test module.
+impl GlobalConnectionIpRestrictionPlugin {
+    pub(crate) fn new(config: &GlobalConnectionIpRestrictionConfig, namespace: &str) -> Result<Self, String> {
+        let owner: edgion_resources::EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "fixture", "namespace": namespace},
+            "spec": {"plugins": [{"type": "GlobalConnectionIpRestriction", "config": config}]}
+        }))
+        .unwrap();
+        let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
+        let binding = prepared.bind_stream_plugins(&owner).unwrap();
+        Self::from_bound(binding.global_entry(0).unwrap())
+    }
+}
+
+#[tokio::test]
+async fn owning_gcir_invalid_slots_keep_allow_intent_and_deny_set_drop() {
+    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+    use edgion_resources::EdgionConfigData;
+    let namespace = "r5c2-gcir";
+    for key in [
+        format!("{namespace}/bad/name"),
+        "/r5c2-gcir-nets".into(),
+        format!("{namespace}/good"),
+    ] {
+        let data: EdgionConfigData = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"decoy","namespace":namespace},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"set","cidrs":["198.51.100.8/32"]}]}}}
+        })).unwrap();
+        get_global_edgion_config_data_store().insert_raw_for_test(key, std::sync::Arc::new(data));
+    }
+    for bad in [
+        serde_json::json!({"name":"bad/name"}),
+        serde_json::json!({"name":"r5c2-gcir-nets","namespace":""}),
+    ] {
+        for (case, allow) in [
+            ("allow", false),
+            ("deny", true),
+            ("inline", true),
+            ("allow-sibling", true),
+            ("deny-sibling", false),
+        ] {
+            let mut config = serde_json::json!({"defaultAction":"allow"});
+            let side = if case.starts_with("deny") {
+                "denyRefs"
+            } else {
+                "allowRefs"
+            };
+            config[side] = serde_json::json!([bad]);
+            if case.ends_with("sibling") {
+                config[side]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"name":"good"}));
+            }
+            if case == "inline" {
+                config["allow"] = serde_json::json!([{"name":"inline","cidrs":["198.51.100.8/32"]}]);
+            }
+            let owner: edgion_resources::EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
+                "metadata":{"name":"actual","namespace":namespace},"spec":{"plugins":[{"type":"GlobalConnectionIpRestriction","config":serde_json::json!({"enable":true,"activeProfile":"main","profiles":{"main":config}})}]}
+            })).unwrap();
+            let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
+            let bound = prepared.bind_stream_plugins(&owner).unwrap();
+            let plugin = GlobalConnectionIpRestrictionPlugin::from_bound(bound.global_entry(0).unwrap()).unwrap();
+            let context = StreamContext::new("198.51.100.8".parse().unwrap(), 18498, StreamLayer::Stage1);
+            let result = plugin.on_connection(&context).await;
+            assert_eq!(matches!(result, StreamPluginResult::Allow), allow, "{case} / {bad}");
+        }
+    }
+}
+#[test]
+fn owning_gcir_invalid_owner_fails_separately_from_invalid_target() {
+    let config = serde_json::json!({"denyRefs":[{"name":"bad/name"}]});
+    let mut owner: edgion_resources::EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"actual","namespace":""},"spec":{"plugins":[{"type":"GlobalConnectionIpRestriction","config":serde_json::json!({"enable":true,"activeProfile":"main","profiles":{"main":config}})}]}
+    })).unwrap();
+    let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
+    let bound = prepared.bind_stream_plugins(&owner).unwrap();
+    assert!(GlobalConnectionIpRestrictionPlugin::from_bound(bound.global_entry(0).unwrap()).is_err());
+    owner.metadata.namespace = None;
+    let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
+    let bound = prepared.bind_stream_plugins(&owner).unwrap();
+    assert!(GlobalConnectionIpRestrictionPlugin::from_bound(bound.global_entry(0).unwrap()).is_ok());
+    owner.metadata.uid = Some("changed".into());
+    assert!(prepared.bind_stream_plugins(&owner).is_err());
+}
+
+#[tokio::test]
+async fn blank_reference_name_preserves_structural_constructor_failure() {
+    for side in ["allowRefs", "denyRefs"] {
+        let mut config = serde_json::json!({"defaultAction":"allow"});
+        config[side] = serde_json::json!([{"name":""}]);
+        let owner:edgion_resources::EdgionStreamPlugins=serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"actual","namespace":"default"},"spec":{"plugins":[{"type":"GlobalConnectionIpRestriction","config":serde_json::json!({"enable":true,"activeProfile":"main","profiles":{"main":config}})}]}
+        })).unwrap();
+        let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
+        let binding = prepared.bind_stream_plugins(&owner).unwrap();
+        let result = GlobalConnectionIpRestrictionPlugin::from_bound(binding.global_entry(0).unwrap());
+        assert!(result.is_err());
+    }
+}

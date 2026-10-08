@@ -183,3 +183,79 @@ async fn unsupported_stream_source_denies_both_stages_despite_disable_or_policy_
         }
     }
 }
+
+#[tokio::test]
+async fn standalone_generation_default_target_live_updates_and_disabled_owner_policy() {
+    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+    let seed = |name: &str, cidr: &str| {
+        let data: edgion_resources::EdgionConfigData = serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"default"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"nets","cidrs":[cidr]}]}}}})).unwrap();
+        get_global_edgion_config_data_store().insert_raw_for_test(format!("default/{name}"), Arc::new(data));
+    };
+    for kind in ["IpRestriction", "GlobalConnectionIpRestriction"] {
+        let name = if kind == "IpRestriction" {
+            "r5c2-stream-l4-live"
+        } else {
+            "r5c2-stream-gcir-live"
+        };
+        let rules = serde_json::json!({"allowRefs":[{"name":name}]});
+        let config = if kind == "IpRestriction" {
+            rules
+        } else {
+            serde_json::json!({"enable":true,"activeProfile":"main","profiles":{"main":rules}})
+        };
+        let owner: EdgionStreamPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"bare-generation"},"spec":{
+            "plugins":[{"type":kind,"config":config}],"tlsRoutePlugins":[{"type":"IpRestriction","config":{"allowRefs":[{"name":name}]}}]
+        }})).unwrap();
+        let mut generation = StreamPluginGeneration::new(Arc::new(owner.clone()));
+        let stages = StreamStages {
+            connection: true,
+            tls_route: true,
+        };
+        let allow = CompiledPluginPolicy::default();
+        let pinned = generation.compile(&allow, stages);
+        let again = generation.compile(&allow, stages);
+        assert_eq!(generation.cached_entry_count(), 2);
+        let context = StreamContext::new("198.51.100.8".parse().unwrap(), 18497, StreamLayer::Stage1);
+        let rsc = crate::Rsc::new("TLSRoute", "default", "r5c2-live");
+        let tls = crate::plugins::stream::TlsRouteContext {
+            direct_peer_ip: context.direct_peer_ip,
+            remote_ip: context.direct_peer_ip,
+            listener_port: 443,
+            sni: "test.example.com",
+            tls_id: None,
+            rsc: &rsc,
+            is_mtls: false,
+        };
+        assert!(matches!(
+            pinned.stream_plugin_runtime.run(&context).await,
+            StreamPluginResult::Deny(_)
+        ));
+        assert!(matches!(
+            pinned.tls_route_plugin_runtime.run(&tls).await,
+            StreamPluginResult::Deny(_)
+        ));
+        for (cidr, expected) in [("198.51.100.8/32", true), ("203.0.113.8/32", false)] {
+            seed(name, cidr);
+            for view in [&pinned, &again] {
+                assert_eq!(
+                    matches!(
+                        view.stream_plugin_runtime.run(&context).await,
+                        StreamPluginResult::Allow
+                    ),
+                    expected
+                );
+                assert_eq!(
+                    matches!(view.tls_route_plugin_runtime.run(&tls).await, StreamPluginResult::Allow),
+                    expected
+                );
+            }
+        }
+        let mut disabled = owner;
+        disabled.metadata.namespace = Some(String::new());
+        disabled.spec.plugins.as_mut().unwrap()[0].enable = false;
+        disabled.spec.tls_route_plugins.as_mut().unwrap()[0].enable = false;
+        let disabled = StreamPluginGeneration::new(Arc::new(disabled)).compile(&allow, stages);
+        assert!(disabled.stream_plugin_runtime.is_empty());
+        assert!(disabled.tls_route_plugin_runtime.is_empty());
+    }
+}

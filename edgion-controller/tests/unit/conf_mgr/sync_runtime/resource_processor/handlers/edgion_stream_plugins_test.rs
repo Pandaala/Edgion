@@ -913,3 +913,140 @@ fn unsupported_stream_types_report_invalid_status_and_survive_transport() {
         }
     }
 }
+
+#[tokio::test]
+async fn all_standalone_stream_slots_keep_raw_bare_owner_and_valid_recovery_edges() {
+    let ctx = make_ctx();
+    let owner: EdgionStreamPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"bare-ip"},"spec":{
+        "plugins":[{"type":"IpRestriction","enable":false,"config":{"allowRefs":[{"name":"l4"},{"name":"bad/name"}]}},
+          {"type":"GlobalConnectionIpRestriction","config":{"enable":true,"activeProfile":"main","profiles":{"main":{"denyRefs":[{"name":"profile"},{"name":"bad","namespace":""}]}}}}],
+        "tlsRoutePlugins":[{"type":"IpRestriction","enable":false,"config":{"denyRefs":[{"name":"tls"}]}}]
+    }})).unwrap();
+    let handler = EdgionStreamPluginsHandler::new();
+    let ProcessResult::Continue(parsed) = handler.parse(owner.clone(), &ctx).await else {
+        panic!()
+    };
+    for name in ["l4", "profile", "tls"] {
+        assert_eq!(
+            ctx.runtime()
+                .edgion_config_data_refs
+                .get_refs(&format!("default/{name}")),
+            ["EdgionStreamPlugins:bare-ip"]
+        );
+    }
+    for key in ["default/bad/name", "/bad"] {
+        assert!(ctx.runtime().edgion_config_data_refs.get_refs(key).is_empty());
+    }
+    assert_eq!(
+        resolve_ip_list_refs(&parsed, &ctx)
+            .iter()
+            .filter(|error| matches!(error, ResolvedRefsError::InvalidReference { .. }))
+            .count(),
+        2
+    );
+    let mut next = owner;
+    next.spec.plugins = None;
+    next.spec.tls_route_plugins =
+        serde_json::from_value(serde_json::json!([{"type":"IpRestriction","config":{"allowRefs":[{"name":"next"}]}}]))
+            .unwrap();
+    let ProcessResult::Continue(parsed) = handler.parse(next, &ctx).await else {
+        panic!()
+    };
+    for name in ["l4", "profile", "tls"] {
+        assert!(ctx
+            .runtime()
+            .edgion_config_data_refs
+            .get_refs(&format!("default/{name}"))
+            .is_empty());
+    }
+    assert_eq!(
+        ctx.runtime().edgion_config_data_refs.get_refs("default/next"),
+        ["EdgionStreamPlugins:bare-ip"]
+    );
+    let target: edgion_resources::EdgionConfigData = serde_json::from_value(serde_json::json!({"metadata":{"name":"next","namespace":"default"},"spec":{"data":{"type":"IpList","config":{"items":[]}}}})).unwrap();
+    ctx.runtime()
+        .edgion_config_data_store
+        .replace_all(std::collections::HashMap::from([("default/next".into(), target)]));
+    assert!(resolve_ip_list_refs(&parsed, &ctx).is_empty());
+    handler.on_delete(&parsed, &ctx).await;
+    assert!(ctx
+        .runtime()
+        .edgion_config_data_refs
+        .get_refs("default/next")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn standalone_stream_grant_source_isolation_add_and_revoke_preserve_edges() {
+    use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+    let ctx = make_ctx();
+    let target: edgion_resources::EdgionConfigData=serde_json::from_value(serde_json::json!({"metadata":{"name":"nets","namespace":"ops"},"spec":{"enable":true,"data":{"type":"IpList","config":{"items":[]}}}})).unwrap();
+    ctx.runtime()
+        .edgion_config_data_store
+        .replace_all(std::collections::HashMap::from([("ops/nets".into(), target)]));
+    let owner: EdgionStreamPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"bare-grant-ip"},"spec":{
+        "plugins":[{"type":"IpRestriction","config":{"allowRefs":[{"name":"nets","namespace":"ops"}]}},
+          {"type":"GlobalConnectionIpRestriction","config":{"enable":true,"activeProfile":"main","profiles":{"main":{"denyRefs":[{"name":"nets","namespace":"ops"}]}}}}],
+        "tlsRoutePlugins":[{"type":"IpRestriction","config":{"denyRefs":[{"name":"nets","namespace":"ops"}]}}]
+    }})).unwrap();
+    let raw = ResourceRef::new(ResourceKind::EdgionStreamPlugins, None, "bare-grant-ip".into());
+    let handler = EdgionStreamPluginsHandler::new();
+    for from in [None, Some("EdgionPlugins"), Some("EdgionStreamPlugins"), None] {
+        ctx.runtime().ref_grant_store.remove("ops/r5c2-grant");
+        if let Some(kind) = from {
+            let grant=serde_json::from_value(serde_json::json!({"metadata":{"name":"r5c2-grant","namespace":"ops"},"spec":{"from":[{"group":"edgion.io","kind":kind,"namespace":"default"}],"to":[{"group":"edgion.io","kind":"EdgionConfigData","name":"nets"}]}})).unwrap();
+            ctx.runtime()
+                .ref_grant_store
+                .upsert("ops/r5c2-grant".into(), Arc::new(grant));
+        }
+        let allowed = from == Some("EdgionStreamPlugins");
+        let ProcessResult::Continue(mut parsed) = handler.parse(owner.clone(), &ctx).await else {
+            panic!()
+        };
+        let prepared = PreparedIpListReferences::from_stream_plugins(&parsed);
+        let binding = prepared.bind_stream_plugins(&parsed).unwrap();
+        let markers: Vec<_> = binding
+            .references()
+            .flat_map(|refs| {
+                refs.allow()
+                    .chain(refs.deny())
+                    .map(|(_, denied)| denied)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(markers, vec![!allowed; 3]);
+        let errors = resolve_ip_list_refs(&parsed, &ctx);
+        assert_eq!(errors.is_empty(), allowed);
+        assert!(errors.iter().all(|e| matches!(
+            e,
+            ResolvedRefsError::RefNotPermitted {
+                from_kind: "EdgionStreamPlugins",
+                ..
+            }
+        )));
+        handler.update_status(&mut parsed, &ctx, &[]);
+        assert_eq!(
+            ctx.runtime().edgion_config_data_refs.get_refs("ops/nets"),
+            ["EdgionStreamPlugins:bare-grant-ip"]
+        );
+        assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("ops").contains(&raw));
+        let resolved = parsed
+            .status
+            .as_ref()
+            .expect("status must be published")
+            .as_local()
+            .expect("native status")
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .expect("ResolvedRefs condition");
+        assert_eq!(resolved.status, if allowed { "True" } else { "False" });
+        assert_eq!(
+            resolved.reason,
+            if allowed { "ResolvedRefs" } else { "RefNotPermitted" }
+        );
+    }
+    handler.on_delete(&owner, &ctx).await;
+    assert!(ctx.runtime().edgion_config_data_refs.get_refs("ops/nets").is_empty());
+    assert!(!ctx.runtime().cross_ns_ref_mgr.get_refs("ops").contains(&raw));
+}

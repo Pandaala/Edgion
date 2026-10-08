@@ -4,6 +4,7 @@ use super::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult
 use crate::plugins::stream::{
     ConnectionRateLimitPlugin, GeoIpLocationStreamPlugin, GlobalConnectionIpRestrictionPlugin, StreamIpRestriction,
 };
+use edgion_resources::refs::ip_list_fields::StreamIpListBindings;
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugin, StreamPluginEntry};
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily};
@@ -47,34 +48,15 @@ impl StreamPluginRuntime {
         }
     }
 
-    /// Create runtime from stream plugin entries.
-    ///
-    /// `parent_namespace` is the namespace of the owning `EdgionStreamPlugins` resource,
-    /// used by `GlobalConnectionIpRestrictionPlugin` to resolve `overrideRef` with no
-    /// explicit namespace.
-    ///
-    /// `resource_key` is that resource's store key; combined with the entry index it
-    /// gives `ConnectionRateLimit` the identity it needs to namespace its Redis
-    /// buckets and its local gate (see `plugins::common::entry_scope`).
-    pub fn from_stream_plugins(entries: &[StreamPluginEntry], parent_namespace: &str, resource_key: &str) -> Self {
-        Self::from_cached_entries(
-            entries,
-            parent_namespace,
-            resource_key,
-            None,
-            &mut vec![None; entries.len()],
-        )
-    }
-
     /// The caller binds these slots to one immutable source generation. Only
     /// allowed entries acquire executable references in the resulting view.
-    pub(super) fn from_cached_entries(
-        entries: &[StreamPluginEntry],
-        parent_namespace: &str,
+    pub(super) fn from_owner_cached(
+        binding: &StreamIpListBindings<'_>,
         resource_key: &str,
         policy: Option<&CompiledPluginPolicy>,
         cache: &mut [Option<StreamEntryOutcome>],
     ) -> Self {
+        let entries = binding.owner().spec.plugins.as_deref().unwrap_or_default();
         let mut plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
         // First policy Block reason encountered, if any. Inserted at the
         // front of `plugins` after the loop so it dominates the chain
@@ -109,7 +91,7 @@ impl StreamPluginRuntime {
             }
 
             let outcome = cache[index].get_or_insert_with(|| {
-                let outcome = Self::build_entry(entry, parent_namespace, resource_key, index);
+                let outcome = Self::build_entry(entry, binding, resource_key, index);
                 if outcome.is_err() {
                     tracing::error!(
                         component = "stream_plugin_runtime",
@@ -136,20 +118,27 @@ impl StreamPluginRuntime {
         Self { plugins }
     }
 
-    fn build_entry(entry: &StreamPluginEntry, namespace: &str, resource_key: &str, index: usize) -> StreamEntryOutcome {
+    fn build_entry(
+        entry: &StreamPluginEntry,
+        binding: &StreamIpListBindings<'_>,
+        resource_key: &str,
+        index: usize,
+    ) -> StreamEntryOutcome {
         match &entry.plugin {
             EdgionStreamPlugin::Unsupported => Err("unsupported stream plugin type"),
             EdgionStreamPlugin::IpRestriction(config) => {
                 if !config.legacy_http_fields().is_empty() || config.validation_error().is_some() {
                     return Err("invalid stream/IpRestriction configuration");
                 }
-                Ok(Arc::new(StreamIpRestriction::new(config, namespace)))
-            }
-            EdgionStreamPlugin::GlobalConnectionIpRestriction(config) => {
-                GlobalConnectionIpRestrictionPlugin::new(config, namespace)
+                StreamIpRestriction::from_bound(binding.connection_entry(index).ok_or("invalid owning IP reference")?)
                     .map(|plugin| Arc::new(plugin) as Arc<dyn StreamPlugin>)
-                    .map_err(|_| "invalid stream/GlobalConnectionIpRestriction configuration")
+                    .map_err(|_| "invalid owning IP reference")
             }
+            EdgionStreamPlugin::GlobalConnectionIpRestriction(_) => GlobalConnectionIpRestrictionPlugin::from_bound(
+                binding.global_entry(index).ok_or("invalid owning IP reference")?,
+            )
+            .map(|plugin| Arc::new(plugin) as Arc<dyn StreamPlugin>)
+            .map_err(|_| "invalid stream/GlobalConnectionIpRestriction configuration"),
             EdgionStreamPlugin::ConnectionRateLimit(config) => {
                 if config.validation_error().is_some() {
                     return Err("invalid stream/ConnectionRateLimit configuration");

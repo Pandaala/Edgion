@@ -33,6 +33,7 @@ pub(super) enum TopologyLoan<'a> {
     Plugins(&'a Arc<PluginSnapshot>),
     LinkSys(&'a Arc<LinkSysSnapshot>),
     Conditions(&'a super::condition_fields::ConditionSnapshot),
+    IpList(&'a super::ip_list_fields::IpListSnapshot),
     Egc(&'a super::egc_tls_fields::EgcTlsSnapshot),
 }
 impl<'a> TopologyLoan<'a> {
@@ -41,6 +42,7 @@ impl<'a> TopologyLoan<'a> {
             Self::Plugins(snapshot) => &snapshot.owner,
             Self::LinkSys(snapshot) => &snapshot.owner,
             Self::Conditions(snapshot) => &snapshot.owner,
+            Self::IpList(snapshot) => &snapshot.owner,
             Self::Egc(snapshot) => &snapshot.owner,
         }
     }
@@ -50,7 +52,7 @@ impl<'a> TopologyLoan<'a> {
             Self::LinkSys(snapshot) => Ok(FrozenTopology::LinkSys(Arc::clone(snapshot))),
             // Effective ConfigData-expanded conditions are synchronous loans.
             // They cannot be revalidated against an unexpanded raw-owner store.
-            Self::Conditions(_) | Self::Egc(_) => Err(ReferenceError::UnsupportedTarget),
+            Self::Conditions(_) | Self::IpList(_) | Self::Egc(_) => Err(ReferenceError::UnsupportedTarget),
         }
     }
 }
@@ -343,6 +345,11 @@ pub(super) enum FieldSlot {
         position: crate::resources::common::outbound_request::RequestTemplatePosition,
         segment: usize,
     },
+    IpList {
+        root: usize,
+        reference: usize,
+        deny: bool,
+    },
     ConditionIp {
         root: usize,
         leaf: Option<super::condition_fields::LeafPosition>,
@@ -392,6 +399,7 @@ impl FieldSlot {
                     && *current_reference == reference
             }
             Self::LinkSys { .. }
+            | Self::IpList { .. }
             | Self::ConditionIp { .. }
             | Self::Condition { .. }
             | Self::PluginTemplate { .. }

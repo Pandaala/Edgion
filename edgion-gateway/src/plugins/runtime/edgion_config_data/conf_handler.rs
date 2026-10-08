@@ -12,6 +12,9 @@
 //!   RegionRoute reads its matching validation proof in that same snapshot.
 
 use arc_swap::ArcSwap;
+use edgion_resources::refs::ip_list_fields::BoundIpListRefs;
+use edgion_resources::refs::ReferenceError;
+use edgion_resources::refs::ReferenceToken;
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -19,9 +22,7 @@ use std::sync::LazyLock;
 
 use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::resources::edgion_config_data::{
-    ConfigEntry, EdgionConfigData, EdgionConfigDataRef, RegionTableValidation,
-};
+use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigData, RegionTableValidation};
 
 static GLOBAL_EDGION_CONFIG_DATA_STORE: LazyLock<Arc<EdgionConfigDataStore>> =
     LazyLock::new(|| Arc::new(EdgionConfigDataStore::new()));
@@ -47,18 +48,29 @@ pub(crate) fn capture_global_edgion_config_data_snapshot_for_refs(
     }
 }
 
-/// Flatten optional `EdgionConfigDataRef`s into store keys ("namespace/name"),
-/// defaulting an unspecified ref namespace to `parent_namespace`. Pure; called at
-/// plugin construction (cold path).
-pub fn resolve_ip_list_ref_keys(refs: Option<&Vec<EdgionConfigDataRef>>, parent_namespace: &str) -> Vec<String> {
-    refs.map(|v| {
-        v.iter()
-            .filter(|r| r.ref_denied.is_none())
-            .map(|r| format!("{}/{}", r.namespace.as_deref().unwrap_or(parent_namespace), r.name))
-            .collect()
-    })
-    .unwrap_or_default()
+/// Compile keys from actual owning fields; owner failure is distinct from a bad target slot.
+pub(crate) fn resolve_bound_ip_list_keys(
+    refs: BoundIpListRefs<'_>,
+) -> Result<(Vec<String>, Vec<String>), ReferenceError> {
+    refs.validate_owner()?;
+    let project = |(token, denied): (ReferenceToken<'_>, bool)| {
+        if denied {
+            return None;
+        }
+        let bound = token.validated().ok()?;
+        Some(format!(
+            "{}/{}",
+            bound.target().scope().namespace().unwrap_or_default(),
+            bound.target().name()
+        ))
+    };
+    Ok((
+        refs.allow().filter_map(project).collect(),
+        refs.deny().filter_map(project).collect(),
+    ))
 }
+#[cfg(test)]
+pub(crate) use stats_tests::resolve_ip_list_ref_keys;
 
 pub fn create_edgion_config_data_handler() -> Box<dyn ConfHandler<EdgionConfigData> + Send + Sync> {
     Box::new(get_global_edgion_config_data_store())

@@ -1,5 +1,6 @@
 //! Plugin runtime - manages plugin execution across different stages
 
+use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
 use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::refs::plugin_fields::{PluginMirrorRefs, PreparedPluginReferences};
 use edgion_resources::resources::refs::route_fields::{EffectiveMirrorField, HttpRouteMirrorRefs};
@@ -850,15 +851,6 @@ impl PluginRuntime {
     ///
     /// # Returns
     /// A vector of validation error messages (empty if all plugins are valid)
-    pub fn add_from_request_filters(
-        &mut self,
-        entries: &[RequestFilterEntry],
-        namespace: &str,
-        resource_key: &str,
-    ) -> Vec<String> {
-        self.add_request_entries(entries, namespace, resource_key, &mut EntryCache::default(), None)
-    }
-
     pub(crate) fn add_from_request_filters_with_cache(
         &mut self,
         owner: &edgion_resources::EdgionPlugins,
@@ -884,6 +876,11 @@ impl PluginRuntime {
         let mut errors = Vec::new();
         // Bind once to the actual equal-length policy view. Never synthesize an owner
         // from resource_key; all indexed entries retain their original positions.
+        let ip_prepared = owner.map(PreparedIpListReferences::from_plugins);
+        let ip_binding = ip_prepared
+            .as_ref()
+            .zip(owner)
+            .and_then(|(prepared, owner)| prepared.bind_plugins(owner).ok());
         let prepared = owner.map(PreparedPluginReferences::from_plugins);
         let bindings = prepared
             .as_ref()
@@ -1032,6 +1029,19 @@ impl PluginRuntime {
                         config_validation_errors[index]
                             .as_deref()
                             .unwrap_or("invalid owning mirror reference")
+                    ));
+                    continue;
+                }
+                if matches!(entry.plugin, EdgionPlugin::IpRestriction(_))
+                    && owner.is_some()
+                    && ip_binding
+                        .as_ref()
+                        .and_then(|binding| binding.http_entry(index))
+                        .is_none_or(|entry| entry.references().validate_owner().is_err())
+                {
+                    self.invalid_plugins.record_non_retainable("IpRestriction");
+                    errors.push(format!(
+                        "requestPlugins[{index}] (IpRestriction): invalid owning IP reference"
                     ));
                     continue;
                 }
@@ -1258,6 +1268,11 @@ impl PluginRuntime {
                     }
 
                     let created = match &entry.plugin {
+                        EdgionPlugin::IpRestriction(_) => {
+                            let bound = ip_binding.as_ref().and_then(|binding| binding.http_entry(index));
+                            CreateResult::Ok(bound.and_then(IpRestriction::create_bound))
+                        }
+
                         EdgionPlugin::GrpcJsonTranscoder(config) => CreateResult::Ok(
                             descriptor_entries
                                 .get(index)
@@ -1944,7 +1959,7 @@ impl PluginRuntime {
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
             EdgionPlugin::CredentialInjector(config) => CreateResult::Ok(CredentialInjector::create(config)),
-            EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config, namespace))),
+            EdgionPlugin::IpRestriction(_) => CreateResult::WrongStage,
             EdgionPlugin::RequestAccessPolicy(config) => {
                 CreateResult::Ok(Some(RequestAccessPolicy::create(config, namespace, body_requirement)))
             }

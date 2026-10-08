@@ -1,10 +1,12 @@
 //! Stream IP Restriction plugin (inline L4 config).
 
 use async_trait::async_trait;
+use edgion_resources::refs::ip_list_fields::ConnectionIpListEntry;
+use edgion_resources::refs::ReferenceError;
 use smallvec::SmallVec;
 
 use crate::plugins::runtime::edgion_config_data::{
-    capture_global_edgion_config_data_snapshot_for_refs, resolve_ip_list_ref_keys,
+    capture_global_edgion_config_data_snapshot_for_refs, resolve_bound_ip_list_keys,
 };
 use crate::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
@@ -49,16 +51,16 @@ pub struct StreamIpRestriction {
 }
 
 impl StreamIpRestriction {
-    pub fn new(rules: &ConnectionIpRestrictionRules, parent_namespace: &str) -> Self {
+    pub(crate) fn from_bound(entry: ConnectionIpListEntry<'_>) -> Result<Self, ReferenceError> {
+        let (allow_ref_keys, deny_ref_keys) = resolve_bound_ip_list_keys(entry.references())?;
+        let rules = entry.config();
         let (rules, init_failed) = init_ip_restriction(rules, "stream plugin");
-        let allow_ref_keys = resolve_ip_list_ref_keys(rules.allow_refs.as_ref(), parent_namespace);
-        let deny_ref_keys = resolve_ip_list_ref_keys(rules.deny_refs.as_ref(), parent_namespace);
-        Self {
+        Ok(Self {
             rules,
             init_failed,
             allow_ref_keys,
             deny_ref_keys,
-        }
+        })
     }
 }
 

@@ -136,7 +136,7 @@ COLD_FUNCTION_REGISTRATIONS = [
     ("plugins/http/ext_proc/plugin.rs", "ExtProc", "build_with_identity", "plugin construction"),
     ("plugins/http/geoip_location/plugin.rs", "GeoIpLocation", "create", "plugin construction"),
     ("plugins/http/header_cert_auth/plugin.rs", "HeaderCertAuth", "load_ca_certs", "plugin construction"),
-    ("plugins/http/ip_restriction/plugin.rs", "IpRestriction", "create", "plugin construction"),
+    ("plugins/http/ip_restriction/plugin.rs", "IpRestriction", "create_bound", "plugin construction"),
     ("plugins/http/key_auth/plugin.rs", "KeyAuth", "create", "plugin construction"),
     ("plugins/http/ldap_auth/plugin.rs", "LdapAuth", "create", "plugin construction"),
     ("plugins/http/ldap_auth/plugin.rs", "LdapAuth", "new", "plugin construction"),
@@ -162,10 +162,10 @@ COLD_FUNCTION_REGISTRATIONS = [
     (
         "plugins/stream/stream_plugin_runtime.rs",
         "StreamPluginRuntime",
-        "from_cached_entries",
+        "from_owner_cached",
         "configuration publication assembles cached stream entries",
     ),
-    ("plugins/stream/tls_route/ip_restriction.rs", "TlsRouteIpRestriction", "new", "plugin construction"),
+    ("plugins/stream/tls_route/ip_restriction.rs", "TlsRouteIpRestriction", "from_bound", "plugin construction"),
     ("routes/grpc/match_unit.rs", "GrpcMatchInfo", "new", "route matcher construction"),
     ("routes/http/match_engine/radix_path.rs", "RadixPath", "new", "route matcher construction"),
     (

@@ -570,3 +570,124 @@ async fn denied_allow_ref_keeps_allow_mode_and_contributes_no_key() {
     );
     assert_eq!(log.render_for_test(), "deny:not-in-allow");
 }
+
+use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
+// Detached convenience exists only in this mirrored test module.
+impl IpRestriction {
+    pub(crate) fn create(config: &IpRestrictionConfig, namespace: &str) -> Box<dyn RequestFilter> {
+        let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "fixture", "namespace": namespace},
+            "spec": {"requestPlugins": [{"type": "IpRestriction", "config": config}]}
+        }))
+        .unwrap();
+        let prepared = PreparedIpListReferences::from_plugins(&owner);
+        let binding = prepared.bind_plugins(&owner).unwrap();
+        Self::create_bound(binding.http_entry(0).unwrap()).expect("valid fixture owner")
+    }
+}
+
+#[tokio::test]
+async fn owning_http_invalid_slots_keep_allow_intent_and_deny_set_drop() {
+    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+    use edgion_resources::EdgionConfigData;
+    let namespace = "r5c2-http";
+    for key in [
+        format!("{namespace}/bad/name"),
+        "/r5c2-http-nets".into(),
+        format!("{namespace}/good"),
+    ] {
+        let data: EdgionConfigData = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"decoy","namespace":namespace},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"set","cidrs":["198.51.100.8/32"]}]}}}
+        })).unwrap();
+        get_global_edgion_config_data_store().insert_raw_for_test(key, std::sync::Arc::new(data));
+    }
+    for bad in [
+        serde_json::json!({"name":"bad/name"}),
+        serde_json::json!({"name":"r5c2-http-nets","namespace":""}),
+    ] {
+        for (case, allow) in [
+            ("allow", false),
+            ("deny", true),
+            ("inline", true),
+            ("allow-sibling", true),
+            ("deny-sibling", false),
+        ] {
+            let mut config = serde_json::json!({"defaultAction":"allow"});
+            let side = if case.starts_with("deny") {
+                "denyRefs"
+            } else {
+                "allowRefs"
+            };
+            config[side] = serde_json::json!([bad]);
+            if case.ends_with("sibling") {
+                config[side]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"name":"good"}));
+            }
+            if case == "inline" {
+                config["allow"] = serde_json::json!([{"name":"inline","cidrs":["198.51.100.8/32"]}]);
+            }
+            let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+                "metadata":{"name":"actual","namespace":namespace},"spec":{"requestPlugins":[{"type":"IpRestriction","config":config}]}
+            })).unwrap();
+            let prepared = PreparedIpListReferences::from_plugins(&owner);
+            let bound = prepared.bind_plugins(&owner).unwrap();
+            let plugin = IpRestriction::create_bound(bound.http_entry(0).unwrap()).unwrap();
+            let mut session = MockPluginSession::new();
+            session.expect_remote_ip().return_const("198.51.100.8".to_owned());
+            if !allow {
+                session.expect_write_response_header().returning(|_, _| Ok(()));
+                session.expect_write_response_body().returning(|_, _| Ok(()));
+                session.expect_shutdown().returning(|| {});
+            }
+            let result = plugin
+                .run_request(&mut session, &mut PluginLog::new("IpRestriction"))
+                .await;
+            assert_eq!(result == PluginRunningResult::GoodNext, allow, "{case} / {bad}");
+        }
+    }
+}
+#[test]
+fn owning_http_invalid_owner_fails_separately_from_invalid_target() {
+    let config = serde_json::json!({"denyRefs":[{"name":"bad/name"}]});
+    let mut owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"actual","namespace":""},"spec":{"requestPlugins":[{"type":"IpRestriction","config":config}]}
+    }))
+    .unwrap();
+    let prepared = PreparedIpListReferences::from_plugins(&owner);
+    let bound = prepared.bind_plugins(&owner).unwrap();
+    assert!(IpRestriction::create_bound(bound.http_entry(0).unwrap()).is_none());
+    owner.metadata.namespace = None;
+    let prepared = PreparedIpListReferences::from_plugins(&owner);
+    let bound = prepared.bind_plugins(&owner).unwrap();
+    assert!(IpRestriction::create_bound(bound.http_entry(0).unwrap()).is_some());
+    owner.metadata.uid = Some("changed".into());
+    assert!(prepared.bind_plugins(&owner).is_err());
+}
+
+#[tokio::test]
+async fn blank_reference_name_preserves_structural_constructor_failure() {
+    for side in ["allowRefs", "denyRefs"] {
+        let mut config = serde_json::json!({"defaultAction":"allow"});
+        config[side] = serde_json::json!([{"name":""}]);
+        let owner:edgion_resources::EdgionPlugins=serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"actual","namespace":"default"},"spec":{"requestPlugins":[{"type":"IpRestriction","config":config}]}
+        })).unwrap();
+        let prepared = PreparedIpListReferences::from_plugins(&owner);
+        let binding = prepared.bind_plugins(&owner).unwrap();
+        let result = IpRestriction::create_bound(binding.http_entry(0).unwrap());
+        let plugin = result.unwrap();
+        let mut session = MockPluginSession::new();
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+        assert_eq!(
+            plugin
+                .run_request(&mut session, &mut PluginLog::new("IpRestriction"))
+                .await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+    }
+}

@@ -2,7 +2,9 @@
 
 use super::tls_route_plugin_trait::{TlsRouteContext, TlsRoutePlugin};
 use crate::plugins::stream::stream_plugin_trait::StreamPluginResult;
-use edgion_resources::resources::edgion_stream_plugins::{TlsRoutePluginEntry, TlsRouteStreamPlugin};
+use edgion_resources::refs::ip_list_fields::StreamIpListBindings;
+use edgion_resources::refs::ReferenceError;
+use edgion_resources::resources::edgion_stream_plugins::TlsRouteStreamPlugin;
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily};
 use std::sync::Arc;
 
@@ -46,17 +48,12 @@ impl TlsRoutePluginRuntime {
         Self { plugins }
     }
 
-    /// Build runtime from TLS route plugin entries.
-    pub fn from_entries(entries: &[TlsRoutePluginEntry], parent_namespace: &str) -> Self {
-        Self::from_cached_entries(entries, parent_namespace, None, &mut vec![None; entries.len()])
-    }
-
-    pub(crate) fn from_cached_entries(
-        entries: &[TlsRoutePluginEntry],
-        parent_namespace: &str,
+    pub(crate) fn from_owner_cached(
+        binding: &StreamIpListBindings<'_>,
         policy: Option<&CompiledPluginPolicy>,
         cache: &mut [Option<Arc<dyn TlsRoutePlugin>>],
     ) -> Self {
+        let entries = binding.owner().spec.tls_route_plugins.as_deref().unwrap_or_default();
         let mut plugins: Vec<Arc<dyn TlsRoutePlugin>> = Vec::new();
         // First policy Block reason encountered, if any. Inserted at the
         // front of `plugins` after the loop so it dominates the chain
@@ -95,9 +92,16 @@ impl TlsRoutePluginRuntime {
                 TlsRouteStreamPlugin::Unsupported => Arc::new(FailClosedTlsRoutePlugin {
                     reason: "unsupported TLS route plugin type".to_string(),
                 }),
-                TlsRouteStreamPlugin::IpRestriction(config) => {
-                    Arc::new(TlsRouteIpRestriction::new(config, parent_namespace))
-                }
+                TlsRouteStreamPlugin::IpRestriction(_) => match binding
+                    .tls_entry(index)
+                    .ok_or(ReferenceError::StaleBinding)
+                    .and_then(TlsRouteIpRestriction::from_bound)
+                {
+                    Ok(plugin) => Arc::new(plugin),
+                    Err(_) => Arc::new(FailClosedTlsRoutePlugin {
+                        reason: "invalid owning IP reference".into(),
+                    }),
+                },
             });
 
             plugins.push(Arc::clone(plugin));

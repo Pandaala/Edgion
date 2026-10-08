@@ -618,3 +618,78 @@ fn descriptor_policy_view_omits_material_before_copy_and_preserves_generation_so
     let resumed = generation.compile(None);
     assert!(Arc::ptr_eq(&previous, &request_filter(&resumed, "GrpcJsonTranscoder")));
 }
+
+#[tokio::test]
+async fn owning_ip_generation_defaults_namespace_keeps_pinned_target_and_live_content() {
+    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+    let seed = |name: &str, cidr: &str| {
+        let data: edgion_resources::EdgionConfigData = serde_json::from_value(json!({"metadata":{"name":name,"namespace":"default"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"nets","cidrs":[cidr]}]}}}})).unwrap();
+        get_global_edgion_config_data_store().insert_raw_for_test(format!("default/{name}"), Arc::new(data));
+    };
+    let mut owner = resource(
+        json!({"requestPlugins":[{"type":"IpRestriction","config":{"allowRefs":[{"name":"r5c2-http-old"}]}}]}),
+    );
+    owner.metadata.namespace = None;
+    let mut generation = PluginGeneration::new(owner.clone());
+    let first = generation.compile(None);
+    let filter = request_filter(&first, "IpRestriction");
+    let mut missing = MockPluginSession::new();
+    missing.expect_remote_ip().return_const("198.51.100.8".to_owned());
+    missing.expect_write_response_header().returning(|_, _| Ok(()));
+    missing.expect_write_response_body().returning(|_, _| Ok(()));
+    missing.expect_shutdown().returning(|| {});
+    assert_eq!(
+        filter
+            .run_request(&mut missing, &mut PluginLog::new("IpRestriction"))
+            .await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    seed("r5c2-http-old", "198.51.100.8/32");
+    assert!(Arc::ptr_eq(
+        &filter,
+        &request_filter(&generation.compile(None), "IpRestriction")
+    ));
+    let bypass = generation.compile(Some(&restriction(&["IpRestriction"], PolicyActionKind::Bypass)));
+    assert!(bypass
+        .plugin_runtime
+        .request_plugins_iter()
+        .all(|f| f.name() != "IpRestriction"));
+    let mut next = owner;
+    let edgion_resources::resources::edgion_plugins::EdgionPlugin::IpRestriction(config) =
+        &mut next.spec.request_plugins.as_mut().unwrap()[0].plugin
+    else {
+        panic!()
+    };
+    config.allow_refs.as_mut().unwrap()[0].name = "r5c2-http-new".into();
+    seed("r5c2-http-new", "203.0.113.8/32");
+    let next_view = PluginGeneration::new(next).compile(None);
+    let next_filter = request_filter(&next_view, "IpRestriction");
+    for (filter, allow) in [(&filter, true), (&next_filter, false)] {
+        let mut session = MockPluginSession::new();
+        session.expect_remote_ip().return_const("198.51.100.8".to_owned());
+        if !allow {
+            session.expect_write_response_header().returning(|_, _| Ok(()));
+            session.expect_write_response_body().returning(|_, _| Ok(()));
+            session.expect_shutdown().returning(|| {});
+        }
+        assert_eq!(
+            filter
+                .run_request(&mut session, &mut PluginLog::new("IpRestriction"))
+                .await
+                == PluginRunningResult::GoodNext,
+            allow
+        );
+    }
+    seed("r5c2-http-old", "203.0.113.8/32");
+    let mut session = MockPluginSession::new();
+    session.expect_remote_ip().return_const("198.51.100.8".to_owned());
+    session.expect_write_response_header().returning(|_, _| Ok(()));
+    session.expect_write_response_body().returning(|_, _| Ok(()));
+    session.expect_shutdown().returning(|| {});
+    assert_eq!(
+        filter
+            .run_request(&mut session, &mut PluginLog::new("IpRestriction"))
+            .await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+}

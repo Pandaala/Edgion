@@ -507,3 +507,20 @@ author a permissive profile in git and select it by name (explicit, reviewable, 
 
 **Fail-to-base:** if the overlay is absent or invalid, the gateway uses the default `regions` from the base
 config — traffic continues to flow (no BrokenRef fail-closed).
+
+## Standalone IpList owning references
+
+HTTP, connection, TLS-route and GCIR profile allowRefs/denyRefs use
+`PreparedIpListReferences` at cold construction. The Controller shares the condition
+IpList permission decision with fixed EP/ESP source and ConfigData target roles.
+An omitted owner namespace resolves targets in `default`; reverse dependencies and
+raw source/cache/rate identities retain the original resource key. Invalid target
+slots have no read, Grant query or dependency. Authored allow intent survives a
+filtered external set; deny-only failed external sets are dropped. Invalid owning
+bindings reject reference-bearing construction independently of target availability.
+Existing disabled-entry policy and structural config validation remain unchanged.
+
+The Gateway retains only canonical target keys in the compiled plugin. It continues
+to capture one immutable ConfigData snapshot per decision, preserving atomic IpList
+updates and live content refresh for pinned plugin generations. Selector and other
+ConfigData target roles are not migrated by this change.

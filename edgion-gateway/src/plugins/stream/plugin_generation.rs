@@ -1,5 +1,6 @@
 //! Source-bound stream implementations shared across policy views.
 
+use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
 use std::sync::Arc;
 
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily};
@@ -94,32 +95,25 @@ impl StreamPluginGeneration {
         policy: &CompiledPluginPolicy,
         stages: StreamStages,
     ) -> Arc<CompiledStreamPlugins> {
-        let namespace = self.source.metadata.namespace.as_deref().unwrap_or("default");
+        let prepared = PreparedIpListReferences::from_stream_plugins(&self.source);
+        let binding = prepared.bind_stream_plugins(&self.source);
         let unsupported = !self.source.unsupported_plugin_errors().is_empty();
-        let stream_plugin_runtime = if stages.connection && unsupported {
-            StreamPluginRuntime::unsupported_source()
-        } else if stages.connection {
-            StreamPluginRuntime::from_cached_entries(
-                self.source.spec.plugins.as_deref().unwrap_or_default(),
-                namespace,
+        let stream_plugin_runtime = match (&binding, stages.connection, unsupported) {
+            (_, false, _) => StreamPluginRuntime::new(),
+            (Ok(binding), true, false) => StreamPluginRuntime::from_owner_cached(
+                binding,
                 &self.source.key_name(),
                 Some(policy),
                 &mut self.connection,
-            )
-        } else {
-            StreamPluginRuntime::new()
+            ),
+            _ => StreamPluginRuntime::unsupported_source(),
         };
-        let tls_route_plugin_runtime = if stages.tls_route && unsupported {
-            TlsRoutePluginRuntime::unsupported_source()
-        } else if stages.tls_route {
-            TlsRoutePluginRuntime::from_cached_entries(
-                self.source.spec.tls_route_plugins.as_deref().unwrap_or_default(),
-                namespace,
-                Some(policy),
-                &mut self.tls_route,
-            )
-        } else {
-            TlsRoutePluginRuntime::new()
+        let tls_route_plugin_runtime = match (&binding, stages.tls_route, unsupported) {
+            (_, false, _) => TlsRoutePluginRuntime::new(),
+            (Ok(binding), true, false) => {
+                TlsRoutePluginRuntime::from_owner_cached(binding, Some(policy), &mut self.tls_route)
+            }
+            _ => TlsRoutePluginRuntime::unsupported_source(),
         };
         Arc::new(CompiledStreamPlugins {
             spec: Arc::clone(&self.source),

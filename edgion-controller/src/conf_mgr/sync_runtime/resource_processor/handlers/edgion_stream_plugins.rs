@@ -14,13 +14,11 @@ use edgion_resources::ResourceKind;
 
 use super::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
 use edgion_resources::prelude_resources::{EdgionConfigData, EdgionStreamPlugins};
-use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
+use edgion_resources::resources::edgion_config_data::ConfigEntry;
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::{
     EdgionStreamPlugin, EdgionStreamPluginsStatus, TlsRouteStreamPlugin,
 };
-
-const SELF_KIND: &str = "EdgionStreamPlugins";
 
 /// Prefix used to mark preparse errors that indicate a legacy-schema upgrade issue.
 /// When present, `update_status` maps the condition reason to `LegacySchemaDeprecated`
@@ -44,9 +42,12 @@ impl EdgionStreamPluginsHandler {
     }
 
     fn self_ref_key(esp: &EdgionStreamPlugins) -> String {
-        let ns = esp.metadata.namespace.as_deref().unwrap_or("");
-        let name = esp.metadata.name.as_deref().unwrap_or("");
-        format!("{}:{}/{}", SELF_KIND, ns, name)
+        let owner = ResourceRef::new(
+            ResourceKind::EdgionStreamPlugins,
+            esp.metadata.namespace.clone(),
+            esp.metadata.name.clone().unwrap_or_default(),
+        );
+        format!("{}:{}", owner.kind_str(), owner.resource_key())
     }
 
     /// Iterate each GlobalConnectionIpRestriction plugin that has an `activeProfileRef`
@@ -81,100 +82,22 @@ impl EdgionStreamPluginsHandler {
     /// those surface as `EdgionConfigDataNotFound` in `update_status`.
     fn mark_config_data_ref_denials(esp: &mut EdgionStreamPlugins, ctx: &HandlerContext) {
         let from_ns = esp.metadata.namespace.as_deref().unwrap_or("default").to_string();
-
-        // Stage 1: connection-filter plugins (exhaustive over EdgionStreamPlugin).
         for entry in esp.spec.plugins.iter_mut().flatten() {
-            match &mut entry.plugin {
-                EdgionStreamPlugin::IpRestriction(rules) => {
-                    for r in rules
-                        .allow_refs
-                        .iter_mut()
-                        .flatten()
-                        .chain(rules.deny_refs.iter_mut().flatten())
-                    {
-                        mark_one_ref(r, &from_ns, "EdgionStreamPlugins", ExpectedEntry::IpList, ctx);
-                    }
-                }
-                EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
-                    if let Some(r) = gcir.active_profile_ref.as_mut() {
-                        mark_one_ref(r, &from_ns, "EdgionStreamPlugins", ExpectedEntry::Selector, ctx);
-                    }
-                    for profile in gcir.profiles.values_mut() {
-                        for r in profile
-                            .allow_refs
-                            .iter_mut()
-                            .flatten()
-                            .chain(profile.deny_refs.iter_mut().flatten())
-                        {
-                            mark_one_ref(r, &from_ns, "EdgionStreamPlugins", ExpectedEntry::IpList, ctx);
-                        }
-                    }
-                }
-                EdgionStreamPlugin::ConnectionRateLimit(_) | EdgionStreamPlugin::Unsupported => {}
-                EdgionStreamPlugin::GeoIpLocation(_) => {}
-            }
-        }
-
-        // Stage 2: TLS-route plugins (exhaustive over TlsRouteStreamPlugin).
-        for entry in esp.spec.tls_route_plugins.iter_mut().flatten() {
-            match &mut entry.plugin {
-                TlsRouteStreamPlugin::Unsupported => {}
-                TlsRouteStreamPlugin::IpRestriction(config) => {
-                    for r in config
-                        .allow_refs
-                        .iter_mut()
-                        .flatten()
-                        .chain(config.deny_refs.iter_mut().flatten())
-                    {
-                        mark_one_ref(r, &from_ns, "EdgionStreamPlugins", ExpectedEntry::IpList, ctx);
-                    }
+            if let EdgionStreamPlugin::GlobalConnectionIpRestriction(config) = &mut entry.plugin {
+                if let Some(reference) = &mut config.active_profile_ref {
+                    mark_one_ref(reference, &from_ns, "EdgionStreamPlugins", ExpectedEntry::Selector, ctx);
                 }
             }
         }
+        super::ip_list_refs::mark_stream(esp, ctx);
     }
 
     /// Collect `(namespace, name)` for every IpList referenced by `allow_refs`/`deny_refs` on
     /// the L4 `IpRestriction`, each GCIR profile, and the TLS-route `IpRestriction`. Namespace
-    /// defaults to the ESP namespace. Returns a SORTED, de-duplicated Vec so the resulting
-    /// status `message` is stable (GCIR `profiles` is a `HashMap` with unstable order).
+    /// defaults to the effective ESP namespace. Sorted, de-duplicated dependency pairs
+    /// retain stable registration order across GCIR profile map iteration.
     fn iter_ip_list_refs(esp: &EdgionStreamPlugins) -> Vec<(String, String)> {
-        let esp_ns = esp.metadata.namespace.as_deref().unwrap_or("");
-        let mut out: Vec<(String, String)> = Vec::new();
-
-        // Stage 1: ConnectionFilter plugins.
-        for entry in esp.spec.plugins.iter().flatten() {
-            match &entry.plugin {
-                EdgionStreamPlugin::IpRestriction(rules) => {
-                    collect_ref_pairs(&mut out, esp_ns, rules.allow_refs.as_ref(), rules.deny_refs.as_ref());
-                }
-                EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
-                    for profile in gcir.profiles.values() {
-                        collect_ref_pairs(
-                            &mut out,
-                            esp_ns,
-                            profile.allow_refs.as_ref(),
-                            profile.deny_refs.as_ref(),
-                        );
-                    }
-                }
-                EdgionStreamPlugin::ConnectionRateLimit(_) | EdgionStreamPlugin::Unsupported => {}
-                EdgionStreamPlugin::GeoIpLocation(_) => {}
-            }
-        }
-
-        // Stage 2: TlsRoute plugins (HTTP-layer `IpRestrictionConfig`).
-        for entry in esp.spec.tls_route_plugins.iter().flatten() {
-            match &entry.plugin {
-                TlsRouteStreamPlugin::Unsupported => {}
-                TlsRouteStreamPlugin::IpRestriction(config) => {
-                    collect_ref_pairs(&mut out, esp_ns, config.allow_refs.as_ref(), config.deny_refs.as_ref());
-                }
-            }
-        }
-
-        out.sort();
-        out.dedup();
-        out
+        super::ip_list_refs::stream_pairs(esp)
     }
 }
 
@@ -419,132 +342,11 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
     }
 }
 
-/// Resolve each IpList `allow_refs`/`deny_refs` (L4, GCIR-per-profile, TLS-route) against the
-/// EdgionConfigData store. Returns one `RefNotPermitted` error when `ref_denied` is set
-/// (cross-namespace denial), or one `EdgionConfigDataNotFound { expected_type: "IpList" }` per
-/// missing or wrong-type reference. Mutually exclusive per ref via else-branch to avoid a TOCTOU
-/// double-message. GCIR profiles are iterated in sorted key order for deterministic message output.
+/// Recompute current canonical identity, availability and permission for every standalone
+/// IpList slot. Each slot contributes at most one diagnostic; persisted denial markers are
+/// not status authority. GCIR profile names are sorted, preserving deterministic order.
 fn resolve_ip_list_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    let from_ns = esp.metadata.namespace.as_deref().unwrap_or("default");
-    let mut errors = Vec::new();
-
-    // Stage 1: ConnectionFilter plugins.
-    for entry in esp.spec.plugins.iter().flatten() {
-        match &entry.plugin {
-            EdgionStreamPlugin::IpRestriction(rules) => {
-                for r in rules
-                    .allow_refs
-                    .iter()
-                    .flatten()
-                    .chain(rules.deny_refs.iter().flatten())
-                {
-                    let rns = r.namespace.as_deref().unwrap_or(from_ns);
-                    if r.ref_denied.is_some() {
-                        errors.push(ResolvedRefsError::RefNotPermitted {
-                            from_namespace: from_ns.to_string(),
-                            from_kind: "EdgionStreamPlugins",
-                            target_namespace: rns.to_string(),
-                            target_name: r.name.clone(),
-                        });
-                    } else {
-                        let target: Option<EdgionConfigData> =
-                            ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
-                        let resolved = target
-                            .as_ref()
-                            .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
-                        if !resolved {
-                            errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                                namespace: rns.to_string(),
-                                name: r.name.clone(),
-                                expected_type: "IpList".to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-            EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
-                // Iterate profiles in sorted key order for deterministic message output
-                // (HashMap iteration order is not stable).
-                let mut profile_names: Vec<&String> = gcir.profiles.keys().collect();
-                profile_names.sort();
-                for pname in profile_names {
-                    if let Some(profile) = gcir.profiles.get(pname) {
-                        for r in profile
-                            .allow_refs
-                            .iter()
-                            .flatten()
-                            .chain(profile.deny_refs.iter().flatten())
-                        {
-                            let rns = r.namespace.as_deref().unwrap_or(from_ns);
-                            if r.ref_denied.is_some() {
-                                errors.push(ResolvedRefsError::RefNotPermitted {
-                                    from_namespace: from_ns.to_string(),
-                                    from_kind: "EdgionStreamPlugins",
-                                    target_namespace: rns.to_string(),
-                                    target_name: r.name.clone(),
-                                });
-                            } else {
-                                let target: Option<EdgionConfigData> =
-                                    ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
-                                let resolved = target
-                                    .as_ref()
-                                    .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
-                                if !resolved {
-                                    errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                                        namespace: rns.to_string(),
-                                        name: r.name.clone(),
-                                        expected_type: "IpList".to_string(),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            EdgionStreamPlugin::ConnectionRateLimit(_) | EdgionStreamPlugin::Unsupported => {}
-            EdgionStreamPlugin::GeoIpLocation(_) => {}
-        }
-    }
-
-    // Stage 2: TLS-route plugins.
-    for entry in esp.spec.tls_route_plugins.iter().flatten() {
-        match &entry.plugin {
-            TlsRouteStreamPlugin::Unsupported => {}
-            TlsRouteStreamPlugin::IpRestriction(config) => {
-                for r in config
-                    .allow_refs
-                    .iter()
-                    .flatten()
-                    .chain(config.deny_refs.iter().flatten())
-                {
-                    let rns = r.namespace.as_deref().unwrap_or(from_ns);
-                    if r.ref_denied.is_some() {
-                        errors.push(ResolvedRefsError::RefNotPermitted {
-                            from_namespace: from_ns.to_string(),
-                            from_kind: "EdgionStreamPlugins",
-                            target_namespace: rns.to_string(),
-                            target_name: r.name.clone(),
-                        });
-                    } else {
-                        let target: Option<EdgionConfigData> =
-                            ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
-                        let resolved = target
-                            .as_ref()
-                            .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
-                        if !resolved {
-                            errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                                namespace: rns.to_string(),
-                                name: r.name.clone(),
-                                expected_type: "IpList".to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    errors
+    super::ip_list_refs::stream_errors(esp, ctx)
 }
 
 /// Requeue all Gateways that reference this EdgionStreamPlugins via
@@ -568,20 +370,6 @@ async fn requeue_referencing_gateways(esp: &EdgionStreamPlugins, ctx: &HandlerCo
     }
     for gw_ref in refs {
         ctx.requeue("Gateway", gw_ref.resource_key()).await;
-    }
-}
-
-/// Push `(namespace, name)` for each ref in `allow`/`deny`, defaulting an unset ref namespace
-/// to `esp_ns`.
-fn collect_ref_pairs(
-    out: &mut Vec<(String, String)>,
-    esp_ns: &str,
-    allow: Option<&Vec<EdgionConfigDataRef>>,
-    deny: Option<&Vec<EdgionConfigDataRef>>,
-) {
-    for r in allow.into_iter().flatten().chain(deny.into_iter().flatten()) {
-        let ns = r.namespace.clone().unwrap_or_else(|| esp_ns.to_string());
-        out.push((ns, r.name.clone()));
     }
 }
 

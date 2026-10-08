@@ -8,9 +8,12 @@ mod conf_handler;
 
 pub(crate) use conf_handler::{
     capture_global_edgion_config_data_snapshot, capture_global_edgion_config_data_snapshot_for_refs,
-    EdgionConfigDataSnapshot,
+    resolve_bound_ip_list_keys, EdgionConfigDataSnapshot,
 };
 pub use conf_handler::{
     count_edgion_config_data, create_edgion_config_data_handler, get_global_edgion_config_data_store,
-    resolve_ip_list_ref_keys, EdgionConfigDataStore,
+    EdgionConfigDataStore,
 };
+
+#[cfg(test)]
+pub(crate) use conf_handler::resolve_ip_list_ref_keys;

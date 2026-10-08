@@ -372,3 +372,25 @@ async fn unsupported_direct_stream_entries_deny_before_disable_and_policy_checks
         assert!(cache[0].is_none());
     }
 }
+
+use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+impl StreamPluginRuntime {
+    pub(crate) fn from_stream_plugins(entries: &[StreamPluginEntry], namespace: &str, resource_key: &str) -> Self {
+        Self::from_cached_entries(entries, namespace, resource_key, None, &mut vec![None; entries.len()])
+    }
+    pub(crate) fn from_cached_entries(
+        entries: &[StreamPluginEntry],
+        namespace: &str,
+        resource_key: &str,
+        policy: Option<&CompiledPluginPolicy>,
+        cache: &mut [Option<StreamEntryOutcome>],
+    ) -> Self {
+        let owner: edgion_resources::EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "fixture", "namespace": namespace}, "spec": {"plugins": entries}
+        }))
+        .unwrap();
+        let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
+        let binding = prepared.bind_stream_plugins(&owner).unwrap();
+        Self::from_owner_cached(&binding, resource_key, policy, cache)
+    }
+}

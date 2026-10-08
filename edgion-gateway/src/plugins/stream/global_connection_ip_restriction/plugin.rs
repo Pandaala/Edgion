@@ -19,6 +19,7 @@
 //! or inject rules. Every non-switch outcome falls back to `active_profile` (fail-to-base),
 //! so the base MUST be authored as the conservative/safe value (e.g. `defaultAction: Deny`).
 
+use edgion_resources::refs::ip_list_fields::GlobalIpListEntry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -28,7 +29,7 @@ use smallvec::SmallVec;
 use crate::observe::metrics::record_conn_ip_restriction_event;
 use crate::plugins::runtime::edgion_config_data::{
     capture_global_edgion_config_data_snapshot, capture_global_edgion_config_data_snapshot_for_refs,
-    resolve_ip_list_ref_keys, EdgionConfigDataSnapshot,
+    resolve_bound_ip_list_keys, EdgionConfigDataSnapshot,
 };
 use crate::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
@@ -58,7 +59,14 @@ impl GlobalConnectionIpRestrictionPlugin {
     /// Calls `validate_and_init` on the config to pre-compile IP matchers.
     /// Returns an error if the config is structurally invalid (this should not happen in
     /// practice if the controller validated before syncing).
-    pub fn new(config: &GlobalConnectionIpRestrictionConfig, parent_namespace: &str) -> Result<Self, String> {
+    pub(crate) fn from_bound(entry: GlobalIpListEntry<'_>) -> Result<Self, String> {
+        let config = entry.config();
+        let parent_namespace = entry.namespace();
+        let profile_ref_keys = entry
+            .profiles()
+            .map(|(name, refs)| resolve_bound_ip_list_keys(refs).map(|(allow, deny)| (name.to_string(), (deny, allow))))
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(|error| error.to_string())?;
         let mut base = config.clone();
         base.validate_and_init()
             .map_err(|e| format!("GlobalConnectionIpRestriction config validation failed: {e}"))?;
@@ -71,16 +79,6 @@ impl GlobalConnectionIpRestrictionPlugin {
                 let ns = r.namespace.as_deref().unwrap_or(parent_namespace);
                 format!("{}/{}", ns, r.name)
             });
-
-        let profile_ref_keys = config
-            .profiles
-            .iter()
-            .map(|(name, p)| {
-                let deny_keys = resolve_ip_list_ref_keys(p.deny_refs.as_ref(), parent_namespace);
-                let allow_keys = resolve_ip_list_ref_keys(p.allow_refs.as_ref(), parent_namespace);
-                (name.clone(), (deny_keys, allow_keys))
-            })
-            .collect();
 
         Ok(Self {
             base: Arc::new(base),

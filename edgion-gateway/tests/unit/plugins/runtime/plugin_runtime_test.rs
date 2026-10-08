@@ -1802,3 +1802,38 @@ fn borrowed_rate_dependency_aliases_preserve_original_positions_and_error_preced
         )]
     );
 }
+
+impl PluginRuntime {
+    pub fn add_from_request_filters(
+        &mut self,
+        entries: &[RequestFilterEntry],
+        namespace: &str,
+        resource_key: &str,
+    ) -> Vec<String> {
+        self.add_request_entries(entries, namespace, resource_key, &mut EntryCache::default(), None)
+    }
+}
+
+#[test]
+fn detached_mixed_ip_descriptor_and_mirror_entries_have_no_executable_fallback() {
+    let entries: Vec<RequestFilterEntry> = serde_json::from_value(serde_json::json!([
+        {"type":"IpRestriction","config":{"allowRefs":[{"name":"nets"}]}},
+        {"type":"GrpcJsonTranscoder","config":{"descriptor":{"type":"configMapRef","name":"schema","key":"test.pb"},"services":["test.TestService"]}},
+        {"type":"RequestMirror","config":{"backendRef":{"name":"copy","port":80}}}
+    ])).unwrap();
+    let mut runtime = PluginRuntime::new();
+    let errors = runtime.add_from_request_filters(&entries, "apps", "apps/detached");
+    for (kind, reason) in [
+        ("IpRestriction", "plugin construction failed"),
+        ("GrpcJsonTranscoder", "invalid owning descriptor reference"),
+        ("RequestMirror", "invalid owning mirror reference"),
+    ] {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains(kind) && error.contains(reason)),
+            "{kind}: {errors:?}"
+        );
+    }
+    assert_eq!(runtime.request_plugins_iter().count(), 0);
+}

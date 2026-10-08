@@ -1548,3 +1548,96 @@ resolver access and direct handler recovery, not live queue/network conformance.
 Stage exact16 technical paths plus this ledger, local commit only. Evidence under
 r5c-verification, r5c1-root-verification and r5c1-final ignored directories. R5c2,
 R5d/R5e, R6-R8 and F1/F2 remain open.
+
+R5c1 committed 291a4e08ee0d63303135f11ce564f420feeb482c locally, parent7e6c675eb.
+All16 technical hashes verified in HEAD; clean tracked/index state before this
+ledger continuation, unrelated review-results untouched, no push.
+R5c2 begins PLAN ONLY for standalone HTTP/connection/TLS/GCIR IpList references
+across Controller and Gateway cold construction/cache seams. Preserve allow intent
+versus deny-set omission, actual EP/ESP authorization and raw owner keys; unrelated
+Selector/Region/URL/WAF target semantics remain separately tracked.
+
+R5c2 exact plan submitted for independent Astra review:37 paths (18 production,
+14 tests,5 documentation). Actual EP/ESP standalone loans cover four constructor
+families and generation cache builders together. Shared Controller IpList resolution
+reuses R5c1 with explicit fixed target/source-role guards. Existing blank-name
+init failure remains; newly invalid target slots omit keys while preserving allow
+intent and valid siblings, whereas broken owning bindings fail closed. Detached
+convenience APIs may survive only as test fixtures; production requires actual
+owners. Disabled Controller processing versus inert Gateway entries and raw rate
+keys remain unchanged. No mutation before independent plan approval.
+
+R5c2 independent Astra PLAN PASS; required clarifications are incorporated and
+EXECUTE authorized for37 paths. Test wrapper bodies live only in mirrored test
+modules. Shared resolver checks exact edgion.io EP/ESP source and fixed ConfigData
+target before access. Owner/stale-binding failure is independently classified
+from target-slot invalidity, never guessed from overlapping error variants.
+Immutable generation caches/raw rate keys and one live ConfigData snapshot per
+decision remain intact. Freeze originals and fresh1939/1779/5171 baselines before
+mutation; all old tests stay unchanged. No Selector target migration is authorized.
+
+R5c2 fresh baseline capture completed at1939/1779/5171 with zero exits. The shared
+standalone adapter is implemented; Controller/Gateway migrations and focused
+verification remain in progress. Independent actual-code review has begun on the
+shared layer; no final verdict or commit acceptance is recorded yet.
+
+Read-only R8 native TLS inventory is complete (ignored r8-native-tls-inventory-
+20261008.md). Candidate gaps concern certificate registration before identity
+validation, frontend CA name validation, and BTP CA names/owner defaults. Existing
+frontend pre-projection validation, complete-trust protection and strict local BTP
+client-option grammar are counterevidence, not defects. Revalidate against the
+then-current HEAD before a separate R8 plan; no TLS mutation is authorized here.
+
+Read-only F1 documentation inventory (ignored f1-doc-inventory-20261008.md)
+records six reconciliation items against committed R1-R5c1: native BTP required
+group/kind mislabeled as defaults; conditional GatewayClass parametersRef fields;
+stale SupportedVersion claims; ordinary versus RAP condition failure wording;
+historical issue gates and proposed-alias labels. Final cleanup must reconcile
+English/Chinese tables together and clarify Grant name omission versus explicit
+empty, without turning finite custom aliases into universal native defaults.
+
+R5c2 live verification inventory found static HTTP IpList traffic assertions and
+Grant-only status transitions, but no four-family IpList-only hot-update scenario
+or Grant-revocation traffic assertion. Existing GCIR Selector-only updates use
+inline profiles; CanaryHotSwap also republishes its owner. These are explicit F2
+coverage gaps, not acceptance evidence for live IpList recovery. Exact existing
+runner commands are in ignored r5c2-live-verification-inventory-20261008.md.
+
+R5c2 two independent production reviews found no semantic blocker. Review-driven
+test additions cover actual ESP Grant source isolation/add/revoke, unconditional
+ResolvedRefs transitions, initially missing live targets, blank-name constructor
+failure, and side/order binding drift. Raw first-run failures are retained: a new
+GCIR fixture omitted enable; Controller exposed a returned-token borrow lifetime
+and new-test call/lifetime mistakes; Gateway missed a StreamPluginEntry import.
+Resources r3 passes90/0/0 and Controller r2 passes698/0/0. Controller r2 warnings
+and Gateway compilation errors were corrected; final reruns/review/gates remain
+pending. These intermediate results do not establish batch acceptance.
+
+R5c2 first root workspace check/Clippy pass without warnings, but tracing and
+unit-layout guards block commit. Independent Astra amendments authorize path38
+check_gateway_no_tracing.py solely to rename three existing cold registrations,
+and removal of an unused test-only IP fallback from production plus its mirrored
+helper. Six detached-helper caller files contain no IP entry; no cache-warming
+mechanism or guard exception is needed or approved. Add a focused ownerless IP
+rejection regression, preserve old bodies, refresh evidence and rerun gates.
+
+R5c2 final38-path candidate passes both independent final reviews and all14 root
+r2 gates with unchanged source and zero warnings/errors. Four standalone IpList
+families now borrow actual EP/ESP fields through one finite adapter, share the
+condition permission resolver, and compile only validated, permitted target keys.
+Owner/binding failure stays separate from unavailable individual targets; authored
+allow intent, deny-set omission, initialization, disabled-entry behavior, raw rate
+identity and immutable generation caching are preserved. ESP dependencies use raw
+source keys and retain valid missing/denied recovery edges. No new material role,
+schema field, Grant authority, handler IO/queue or request-path work was added.
+Focused Resources90, Controller698, Gateway2288 pass;17 Gateway ignores are pre-
+existing. Reference compile-fail docs30 and the strengthened escape example pass.
+Tracing regression tests18 pass; no guard exception or cache-warming seam was added.
+Compiled identities1939->1944 /1779->1784 /5171->5187 lose no old tests;12 original
+test files remain exact prefixes. Root final manifest SHA256 is
+212bd1e600c6e16436645eb15afad0c2398f56d0b98eac1bf1aa1db158484ce9.
+Earlier failures and pre-correction freezes remain under ignored evidence paths.
+Stage38 technical paths plus this ledger and commit locally, without push.
+Direct handler/store and generation tests do not establish live queue/network or
+conformance acceptance. R5d/R5e, R6-R8 and F1/F2 remain open. Unrelated review-results
+and the concurrent untracked abstraction-simplification task are excluded.

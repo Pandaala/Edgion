@@ -40,19 +40,20 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use edgion_resources::refs::ip_list_fields::HttpIpListEntry;
 use smallvec::SmallVec;
 use std::net::IpAddr;
 
 use crate::plugins::http::common::auth_common::send_gateway_plain_error_response;
 use crate::plugins::runtime::edgion_config_data::{
-    capture_global_edgion_config_data_snapshot_for_refs, resolve_ip_list_ref_keys,
+    capture_global_edgion_config_data_snapshot_for_refs, resolve_bound_ip_list_keys,
 };
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::matcher::ip_cidr_helpers::evaluate_ip_access_multi;
-use edgion_resources::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
+use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
 
 const PLUGIN_NAME: &str = "IpRestriction";
 const INIT_FAILURE_BODY: &[u8] = br#"{"message":"Access denied"}"#;
@@ -80,7 +81,9 @@ pub struct IpRestriction {
 
 impl IpRestriction {
     /// Create a new IpRestriction plugin from configuration
-    pub fn create(config: &IpRestrictionConfig, namespace: &str) -> Box<dyn RequestFilter> {
+    pub(crate) fn create_bound(entry: HttpIpListEntry<'_>) -> Option<Box<dyn RequestFilter>> {
+        let (allow_ref_keys, deny_ref_keys) = resolve_bound_ip_list_keys(entry.references()).ok()?;
+        let config = entry.config();
         // `allow_matcher` / `deny_matcher` are `#[serde(skip)]`, so they are `None`
         // after gRPC/YAML deserialization. Compile them here via `validate_and_init`;
         // without this the evaluator falls through to `Default(Allow)` and the ACL is
@@ -104,8 +107,6 @@ impl IpRestriction {
             }
         }
 
-        let allow_ref_keys = resolve_ip_list_ref_keys(config.allow_refs.as_ref(), namespace);
-        let deny_ref_keys = resolve_ip_list_ref_keys(config.deny_refs.as_ref(), namespace);
         let allow_mode = config.allow_mode();
         let deny_body = match config.message.as_deref() {
             Some(message) => Bytes::from(serde_json::json!({"message": message}).to_string()),
@@ -125,7 +126,7 @@ impl IpRestriction {
             deny_ref_keys,
         };
 
-        Box::new(ip_restriction)
+        Some(Box::new(ip_restriction))
     }
 
     /// Extract client IP from session based on configured source

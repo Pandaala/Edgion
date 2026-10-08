@@ -6,11 +6,13 @@
 //! ClientHello/SNI context before forwarding the end-to-end handshake.
 
 use async_trait::async_trait;
+use edgion_resources::refs::ip_list_fields::HttpIpListEntry;
+use edgion_resources::refs::ReferenceError;
 use smallvec::SmallVec;
 
 use super::tls_route_plugin_trait::{TlsRouteContext, TlsRoutePlugin};
 use crate::plugins::runtime::edgion_config_data::{
-    capture_global_edgion_config_data_snapshot_for_refs, resolve_ip_list_ref_keys,
+    capture_global_edgion_config_data_snapshot_for_refs, resolve_bound_ip_list_keys,
 };
 use crate::plugins::stream::stream_plugin_trait::access_decision_to_stream_result;
 use crate::plugins::stream::StreamPluginResult;
@@ -25,7 +27,9 @@ pub struct TlsRouteIpRestriction {
 }
 
 impl TlsRouteIpRestriction {
-    pub fn new(config: &IpRestrictionConfig, namespace: &str) -> Self {
+    pub(crate) fn from_bound(entry: HttpIpListEntry<'_>) -> Result<Self, ReferenceError> {
+        let (allow_ref_keys, deny_ref_keys) = resolve_bound_ip_list_keys(entry.references())?;
+        let config = entry.config();
         let mut config = config.clone();
         let init_failed = if let Err(e) = config.validate_and_init() {
             tracing::error!(
@@ -43,14 +47,12 @@ impl TlsRouteIpRestriction {
                 crate::observe::metrics::record_ip_deny_entries_skipped("tls_route");
             }
         }
-        let allow_ref_keys = resolve_ip_list_ref_keys(config.allow_refs.as_ref(), namespace);
-        let deny_ref_keys = resolve_ip_list_ref_keys(config.deny_refs.as_ref(), namespace);
-        Self {
+        Ok(Self {
             config,
             init_failed,
             allow_ref_keys,
             deny_ref_keys,
-        }
+        })
     }
 }
 

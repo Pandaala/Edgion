@@ -10,6 +10,7 @@ pub mod extension_ref;
 pub mod gateway_class_fields;
 pub(super) mod grants;
 mod identity;
+pub mod ip_list_fields;
 pub mod link_sys_fields;
 pub mod outbound_tls;
 mod owned;

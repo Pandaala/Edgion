@@ -14,19 +14,21 @@
 //! that sidecar.
 
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_bound_secret, BoundFetchOutcome};
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::ip_list_refs::{
+    resolve_ip_reference, validated_ip_reference,
+};
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::plugins::request_access_policy_data;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::plugins::resolve_credential as cred;
-use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::decide_edgion_config_data_ref;
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResolvedRefsError, ResourceRef};
 use crate::config::is_reference_grant_validation_enabled;
-use edgion_resources::prelude_resources::{EdgionConfigData, EdgionPlugins};
-use edgion_resources::resources::common::RefDenied;
-use edgion_resources::resources::edgion_config_data::{ConfigDataVisibility, ConfigEntry};
+#[cfg(test)]
+use edgion_resources::prelude_resources::EdgionConfigData;
+use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::edgion_config_data::ConfigEntry;
 use edgion_resources::resources::edgion_plugins::plugin_configs::Condition;
 use edgion_resources::resources::refs::condition_fields::{
     BoundConditionMut, BoundIpAccessMut, IpReferenceConsumer, PreparedConditionReferences,
 };
-use edgion_resources::resources::refs::{GrantQuery, ReferenceToken};
 
 /// Resolve every Condition tree on `ep`. Expansion always runs before credentials.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
@@ -70,84 +72,6 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve_c
     }
 }
 
-struct IpResolution {
-    denied: Option<RefDenied>,
-    error: Option<ResolvedRefsError>,
-    data: Option<EdgionConfigData>,
-    warning: Option<String>,
-}
-
-// The actual owning token is validated before either injected read boundary.
-fn resolve_ip_reference(
-    token: ReferenceToken<'_>,
-    validation_enabled: bool,
-    mut read: impl FnMut(&str, &str) -> Option<EdgionConfigData>,
-    mut grant: impl FnMut(GrantQuery<'_>) -> bool,
-) -> IpResolution {
-    let bound = match token.validated() {
-        Ok(bound) => bound,
-        Err(error) => {
-            return IpResolution {
-                denied: None,
-                data: None,
-                warning: Some(format!("RequestAccessPolicy IP data reference is invalid: {error}")),
-                error: Some(ResolvedRefsError::InvalidReference { error }),
-            }
-        }
-    };
-    let target = bound.target();
-    let namespace = target.scope().namespace().unwrap_or_default();
-    let name = target.name();
-    let unavailable = |suffix: &str| IpResolution {
-        denied: None,
-        data: None,
-        error: Some(ResolvedRefsError::EdgionConfigDataNotFound {
-            namespace: namespace.into(),
-            name: name.into(),
-            expected_type: "IpList".into(),
-        }),
-        warning: Some(format!("RequestAccessPolicy IP data ref {namespace}/{name} {suffix}")),
-    };
-    let Some(data) = read(namespace, name) else {
-        return unavailable("is unavailable");
-    };
-    let ConfigEntry::IpList(_) = &data.spec.data else {
-        return unavailable("has the wrong type");
-    };
-    let same_namespace = bound.is_same_namespace();
-    let grant_allows = !same_namespace
-        && validation_enabled
-        && data.spec.visibility != ConfigDataVisibility::Cluster
-        && grant(bound.grant_query());
-    if !decide_edgion_config_data_ref(validation_enabled, same_namespace, data.spec.visibility, grant_allows) {
-        return IpResolution {
-            denied: Some(RefDenied {
-                target_namespace: namespace.into(),
-                target_name: name.into(),
-                reason: Some("NoMatchingReferenceGrant".into()),
-            }),
-            error: Some(ResolvedRefsError::RefNotPermitted {
-                from_namespace: bound.source().scope().namespace().unwrap_or_default().into(),
-                from_kind: "EdgionPlugins",
-                target_namespace: namespace.into(),
-                target_name: name.into(),
-            }),
-            data: None,
-            warning: Some(format!(
-                "RequestAccessPolicy IP data ref {namespace}/{name} is not permitted"
-            )),
-        };
-    }
-    if !data.spec.enable {
-        return unavailable("is disabled");
-    }
-    IpResolution {
-        denied: None,
-        error: None,
-        data: Some(data),
-        warning: None,
-    }
-}
 fn resolve_ip_match(
     mut leaf: BoundIpAccessMut<'_>,
     owner: &ResourceRef,
@@ -163,7 +87,7 @@ fn resolve_ip_match(
     let mut failed = false;
     let markers: Option<Vec<_>> = match leaf.references() {
         Ok(tokens) => Some(tokens.map(|token| {
-            if let Ok(bound) = token.validated() {
+            if let Ok(bound) = validated_ip_reference(&token) {
                 let target = bound.target();
                 let namespace = target.scope().namespace().unwrap_or_default();
                 ctx.runtime().edgion_config_data_refs.add_ref(format!("{namespace}/{}", target.name()), format!("{}:{}", owner.kind_str(), owner.resource_key()));
@@ -174,7 +98,7 @@ fn resolve_ip_match(
             if let Some(data) = outcome.data {
                 if let ConfigEntry::IpList(ip) = data.spec.data {
                     if partial && !edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors(&ip.items).is_empty() {
-                        if let Ok(bound) = token.validated() {
+                        if let Ok(bound) = validated_ip_reference(&token) {
                             warning(format!("RequestAccessPolicy IP data ref {}/{} contains invalid entries; valid entries were retained", bound.target().scope().namespace().unwrap_or_default(), bound.target().name()));
                         }
                     }

@@ -122,25 +122,10 @@ impl EdgionPluginsHandler {
     /// plugin's `allow_refs`/`deny_refs`. Condition dependencies use owning loans.
     /// Namespace defaults to the EP namespace.
     fn get_ip_list_ref_keys(ep: &EdgionPlugins) -> Vec<String> {
-        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-        let mut keys = Vec::new();
-        if let Some(plugins) = &ep.spec.request_plugins {
-            for e in plugins {
-                if let EdgionPlugin::IpRestriction(config) = &e.plugin {
-                    for r in config
-                        .allow_refs
-                        .iter()
-                        .flatten()
-                        .chain(config.deny_refs.iter().flatten())
-                    {
-                        let rns = r.namespace.as_deref().unwrap_or(ns);
-                        keys.push(format!("{}/{}", rns, r.name));
-                    }
-                }
-            }
-        }
-
-        keys
+        super::ip_list_refs::http_pairs(ep)
+            .into_iter()
+            .map(|(ns, name)| format!("{ns}/{name}"))
+            .collect()
     }
 
     /// Collect "namespace/name" keys for every `RequestAccessPolicy` plugin's
@@ -209,16 +194,7 @@ impl EdgionPluginsHandler {
                         mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::RegionRouteOverride, ctx);
                     }
                 }
-                EdgionPlugin::IpRestriction(config) => {
-                    for r in config
-                        .allow_refs
-                        .iter_mut()
-                        .flatten()
-                        .chain(config.deny_refs.iter_mut().flatten())
-                    {
-                        mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::IpList, ctx);
-                    }
-                }
+                EdgionPlugin::IpRestriction(_) => {}
                 EdgionPlugin::RequestAccessPolicy(config) => {
                     if let Some(r) = config.active_profile_ref.as_mut() {
                         mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::Selector, ctx);
@@ -446,6 +422,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 
         // Mark cross-namespace EdgionConfigData refs as denied when no ReferenceGrant permits them.
         Self::mark_config_data_ref_denials(&mut ep, ctx);
+        super::ip_list_refs::mark_http(&mut ep, ctx);
         resolve_waf_bundles(&mut ep, ctx);
 
         let mirror_decisions: Vec<_> = PluginMirrorRefs::from_plugins(&ep)
@@ -1146,53 +1123,11 @@ pub fn resolve_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Re
     errors
 }
 
-/// Check each `IpRestriction` plugin's `allow_refs`/`deny_refs` against the EdgionConfigData
-/// store. Returns one `RefNotPermitted` error when `ref_denied` is set (cross-namespace denial),
-/// or one `EdgionConfigDataNotFound { expected_type: "IpList" }` per missing or wrong-type
-/// reference. Mutually exclusive per ref via else-branch to avoid a TOCTOU double-message.
-/// `request_plugins` is a Vec (stable order), so no extra sort needed.
+/// Recompute canonical identity, availability and permission for standalone IpList slots,
+/// then effective condition IP references. Each slot contributes at most one diagnostic;
+/// persisted denial markers are not status authority. Actual entry order remains stable.
 pub fn resolve_ip_list_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-    let mut errors = Vec::new();
-    let mut check_ref = |r: &edgion_resources::resources::edgion_config_data::EdgionConfigDataRef| {
-        let rns = r.namespace.as_deref().unwrap_or(ns);
-        if r.ref_denied.is_some() {
-            errors.push(ResolvedRefsError::RefNotPermitted {
-                from_namespace: ns.to_string(),
-                from_kind: "EdgionPlugins",
-                target_namespace: rns.to_string(),
-                target_name: r.name.clone(),
-            });
-        } else {
-            let target = ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
-            let resolved = target
-                .as_ref()
-                .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
-            if !resolved {
-                errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                    namespace: rns.to_string(),
-                    name: r.name.clone(),
-                    expected_type: "IpList".to_string(),
-                });
-            }
-        }
-    };
-    if let Some(plugins) = &ep.spec.request_plugins {
-        for entry in plugins {
-            if let EdgionPlugin::IpRestriction(config) = &entry.plugin {
-                for reference in config
-                    .allow_refs
-                    .iter()
-                    .flatten()
-                    .chain(config.deny_refs.iter().flatten())
-                {
-                    check_ref(reference);
-                }
-            }
-        }
-    }
-    // Operator-authored entry-level / RR / body / dye ipRefs fail closed.
-    // RAP sidecar ipRefs stay on PartiallyInvalid (existing partial-good).
+    let mut errors = super::ip_list_refs::http_errors(ep, ctx);
     errors.extend(super::plugins::condition_tree::ip_status_errors(ep, ctx));
     errors
 }
