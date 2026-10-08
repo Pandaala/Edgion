@@ -3,7 +3,8 @@
 use super::graphql_rate_limit::GraphqlCostRule;
 use crate::graphql_cost::CompiledGraphqlCost;
 use crate::graphql_request::{
-    GraphqlError, GraphqlOperationType, GraphqlRootFieldPolicy, GraphqlShapeLimits, ParsedGraphqlRequest,
+    GraphqlError, GraphqlOperationType, GraphqlRootFieldPolicy, GraphqlShapeLimits, GraphqlShapeReport,
+    ParsedGraphqlRequest,
 };
 use crate::resources::edgion_plugins::PluginValidation;
 use apollo_parser::{Lexer, TokenKind};
@@ -14,6 +15,10 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GraphqlGuardConfig {
+    #[serde(default)]
+    pub mode: GraphqlGuardMode,
+    #[serde(default)]
+    pub show_query_cost: bool,
     #[serde(default = "default_depth")]
     pub max_depth: Option<usize>,
     #[serde(default = "default_aliases")]
@@ -32,6 +37,23 @@ pub struct GraphqlGuardConfig {
     pub cost_rules: Vec<GraphqlCostRule>,
     #[serde(default)]
     pub root_fields: Option<GraphqlRootFieldsConfig>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum GraphqlGuardMode {
+    #[default]
+    Enforce,
+    Measure,
+}
+
+/// Complete scalar results; no document state escapes the evaluation owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphqlGuardReport {
+    pub shape: GraphqlShapeReport,
+    pub cost: Option<u32>,
+    /// Bits: depth=1, aliases=2, roots=4, fields=8, cost=16.
+    pub exceeded: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -91,6 +113,8 @@ fn default_fields() -> Option<u32> {
 
 #[derive(Debug)]
 pub struct CompiledGraphqlGuard {
+    mode: GraphqlGuardMode,
+    max_cost: Option<u32>,
     shape: GraphqlShapeLimits,
     cost: Option<CompiledGraphqlCost>,
     query_roots: Option<GraphqlRootFieldPolicy>,
@@ -98,21 +122,32 @@ pub struct CompiledGraphqlGuard {
 }
 
 impl CompiledGraphqlGuard {
-    pub fn check(&self, mut parsed: ParsedGraphqlRequest) -> Result<(), GraphqlError> {
+    pub fn check(&self, parsed: ParsedGraphqlRequest) -> Result<(), GraphqlError> {
+        self.inspect(parsed).map(|_| ())
+    }
+
+    pub fn inspect(&self, mut parsed: ParsedGraphqlRequest) -> Result<GraphqlGuardReport, GraphqlError> {
         let roots = match parsed.operation_type() {
             GraphqlOperationType::Query => self.query_roots.as_ref(),
             GraphqlOperationType::Mutation => self.mutation_roots.as_ref(),
         };
-        parsed.validate_shape_with_root_policy(&self.shape, roots)?;
-        if let Some(cost) = &self.cost {
-            cost.estimate(parsed)?;
-        }
-        Ok(())
+        let shape =
+            parsed.inspect_shape_with_root_policy(&self.shape, roots, self.mode == GraphqlGuardMode::Measure)?;
+        let cost = self.cost.as_ref().map(|cost| cost.estimate(parsed)).transpose()?;
+        let exceeded = u8::from(self.shape.max_depth.is_some_and(|n| shape.depth > n))
+            | (u8::from(self.shape.max_aliases.is_some_and(|n| shape.aliases > n)) << 1)
+            | (u8::from(self.shape.max_root_fields.is_some_and(|n| shape.root_fields > n)) << 2)
+            | (u8::from(self.shape.max_fields.is_some_and(|n| shape.fields > n)) << 3)
+            | (u8::from(self.max_cost.zip(cost).is_some_and(|(max, value)| value > max)) << 4);
+        Ok(GraphqlGuardReport { shape, cost, exceeded })
     }
 }
 
 impl GraphqlGuardConfig {
     pub fn compile(&self) -> Result<CompiledGraphqlGuard, String> {
+        if self.show_query_cost && self.max_cost.is_none() {
+            return Err("showQueryCost requires maxCost and schema".into());
+        }
         if self.max_depth.is_some_and(|n| !(1..=32).contains(&n)) {
             return Err("maxDepth must be null or 1..32".into());
         }
@@ -124,6 +159,9 @@ impl GraphqlGuardConfig {
             return Err("shape count limits must be null or 0..4096".into());
         }
         let cost = if let Some(max_cost) = self.max_cost {
+            if !(1..=1_000_000).contains(&max_cost) {
+                return Err("maxCost must be 1..1,000,000".into());
+            }
             if self.allow_introspection {
                 return Err("allowIntrospection must be false when maxCost is configured".into());
             }
@@ -131,8 +169,16 @@ impl GraphqlGuardConfig {
             Some(CompiledGraphqlCost::compile(
                 schema,
                 &self.cost_rules,
-                max_cost,
-                self.max_depth.unwrap_or(32),
+                if self.mode == GraphqlGuardMode::Measure {
+                    1_000_000
+                } else {
+                    max_cost
+                },
+                if self.mode == GraphqlGuardMode::Measure {
+                    32
+                } else {
+                    self.max_depth.unwrap_or(32)
+                },
             )?)
         } else {
             if self.schema.is_some() || !self.cost_rules.is_empty() {
@@ -141,6 +187,8 @@ impl GraphqlGuardConfig {
             None
         };
         Ok(CompiledGraphqlGuard {
+            mode: self.mode,
+            max_cost: self.max_cost,
             shape: GraphqlShapeLimits {
                 max_depth: self.max_depth,
                 max_aliases: self.max_aliases,

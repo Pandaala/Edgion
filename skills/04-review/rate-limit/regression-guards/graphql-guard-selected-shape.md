@@ -63,3 +63,27 @@ Re-evaluate parser upgrades, new fragment/count semantics, null serialization,
 cost/shape Work separation, introspection changes and mutation sealing against
 these invariants. Verification evidence belongs to the current task record;
 this knowledge conclusion does not substitute for fresh tests or review.
+
+## Numeric calibration boundary
+
+GraphqlGuard mode defaults to enforce. Explicit measure relaxes only configured
+numeric shape/cost business thresholds. The same bounded visitor returns complete
+scalar counts; it retains checked counters, carried Work and recursion, and enforces
+introspection/root permissions. Optional measure costing compiles under the existing
+supported hard ceiling1,000,000/depth32 after validating the original maxCost.
+Failure returns no report or saturated/exact-looking estimate. Enforce retains its
+early short-circuit behavior. Other plugins and Redis quotas are unaffected.
+
+Completed reports use existing bounded PluginLog numeric entries, with no query,
+operation-name or variable reflection. showQueryCost opt-in queues the completed
+estimate; Guard requires costing. Cost is an estimate, not a debit receipt. Shared
+GraphqlRateLimit records the estimate before capacity/dependency outcomes and passes
+the same scalar into the canonical weighted limiter; parsed owners/permits are
+released first. No tracing, metrics, full-body owner or report cache is added.
+
+Re-evaluate measurement changes against hard failure/no-estimate, permission, Work,
+mode-hot-reload and canonical quota/header tests.
+
+Guard optional SDL costing shares the canonical strict standard metadata compiler
+with GraphqlRateLimit. Accepted deprecated/specifiedBy metadata grants no root
+permission, cost exception or executable directive support.

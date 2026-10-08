@@ -28,7 +28,7 @@ __type are denied by default; __typename is allowed and counted.
 Omitted limits use the values above. Explicit null disables that business limit;
 the envelope, parser, recursion, work and shared admission limits remain active.
 Count limits accept 0..4096; zero forbids that shape. maxDepth accepts 1..32.
-The plugin returns 400 for shape or cost violations and preserves original request
+In the default enforce mode, the plugin returns 400 for shape or cost violations and preserves original request
 bytes. It does not implement backend field authorization or full GraphQL execution.
 
 For an optional cost ceiling, configure maxCost and static schema, with optional
@@ -93,3 +93,54 @@ This remains a trusted-chain inspection snapshot. The existing whole-resource
 DSL/WAF retention policy may preserve earlier root permissions when a valid
 restriction is bundled with invalid DSL/WAF changes. Put GraphqlGuard in a separate
 EdgionPlugins resource when these permission updates must be independent.
+
+## Calibration and cost visibility
+
+Use mode: measure before choosing numeric thresholds, then switch to mode: enforce
+(the default) to reject business-limit violations. For example:
+
+```yaml
+type: GraphqlGuard
+config:
+  mode: measure
+  maxDepth: 10
+  maxAliases: 16
+  maxCost: 100
+  showQueryCost: true
+  schema: |
+    type Query { users(first: Int = 10): [User] }
+    type User { id: ID }
+  costRules:
+    - field: Query.users
+      multipliers: [first]
+```
+
+Measurement relaxes only maxDepth/maxAliases/maxRootFields/maxFields/maxCost.
+Malformed requests, schema evaluation failures, introspection restrictions, root
+permissions, envelope/parser/work/recursion/admission bounds and arithmetic overflow
+still reject. Other plugins, including Safelist and Redis quotas, continue enforcing.
+When costing is enabled, measurement retains an independent maximum estimated cost
+of1,000,000 and field depth32; exceeding either rejects even in measure mode. A
+failed/incomplete evaluation reports no exact estimate.
+
+Canonical plugin access logs contain complete numeric shape counts and, when selected,
+`cost=<units>`. Measurement adds `measure exceeded=<mask>`: depth1, aliases2, roots4,
+fields8, cost16; zero means no business threshold was exceeded. The bits combine,
+so31 means all five were exceeded. No document, operation name or variable value
+is recorded. Counts include repeated fragments and all directive branches.
+
+showQueryCost defaults false and requires maxCost/schema on this plugin. When true,
+X-Graphql-Query-Cost reports a completed estimate through the ordinary response-header
+queue. Early enforce rejection may occur before an estimate completes and carry no
+cost header. Costs are estimates in local model units, not actual database work or
+a promise of Redis debit. The last queued cost-header operation wins when multiple
+GraphQL inspectors select it; use one cost-header producer for an unambiguous model.
+
+### Standard SDL metadata
+
+Optional Guard costing uses the same strict metadata support as
+[GraphqlRateLimit](graphql-rate-limit.md#standard-sdl-metadata): `@deprecated` at
+its standard field/argument/input-field/enum-value positions and `@specifiedBy`
+on custom scalars. This metadata changes neither cost nor root-field permissions.
+Malformed or unsupported metadata rejects configuration in both Controller and
+Gateway; no metadata URL is fetched.

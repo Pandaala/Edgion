@@ -14,6 +14,7 @@ use edgion_resources::resources::edgion_plugins::OnKeyMiss;
 pub mod auth_common;
 mod bounded_regex_replacement;
 mod capped_writer;
+pub mod graphql_log_consts;
 pub(crate) mod graphql_request;
 pub mod http_client;
 pub mod http_util;

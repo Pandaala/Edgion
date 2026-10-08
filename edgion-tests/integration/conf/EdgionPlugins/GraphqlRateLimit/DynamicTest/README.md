@@ -14,3 +14,5 @@ the Controller Accepted condition and Gateway traffic. Updates use wait_phase.
 
 Run through the targeted GraphqlRateLimit integration runner; its static suite
 is followed by GraphqlRateLimitDynamic before final residue validation.
+
+Standard SDL metadata phases accept deprecated fields and custom-scalar specifiedBy, reject null directive arguments with Accepted=False/fixed500, then recover without changing cost/debit semantics.

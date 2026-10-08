@@ -9,6 +9,7 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::graphql_request::{GraphqlError, ParsedGraphqlRequest, MAX_ENVELOPE_BYTES};
 use edgion_resources::resources::edgion_plugins::BodyRequirement;
 use edgion_resources::EdgionErrorCode;
+use std::io::Write as _;
 use std::sync::LazyLock;
 use tokio::sync::Semaphore;
 
@@ -53,6 +54,22 @@ pub(crate) fn reject(session: &mut dyn PluginSession, status: u16) -> PluginRunn
     PluginRunningResult::ErrResponse {
         status,
         body: Some(error_body(status)),
+    }
+}
+
+/// Record only a completed estimate, before any separate Redis debit outcome.
+pub(crate) fn record_cost(session: &mut dyn PluginSession, log: &mut PluginLog, cost: u32, show: bool) {
+    let mut buffer = [0u8; 32];
+    let mut output = buffer.as_mut_slice();
+    if write!(output, "cost={cost}").is_err() {
+        return;
+    }
+    let len = 32 - output.len();
+    if let Ok(entry) = std::str::from_utf8(&buffer[..len]) {
+        log.push(entry);
+        if show {
+            let _ = session.set_response_header("X-Graphql-Query-Cost", &entry[5..]);
+        }
     }
 }
 

@@ -49,6 +49,14 @@ static PHASES: &[PhaseSuite] = &[
         name: "recovered-v2",
         factory: valid_v2,
     },
+    PhaseSuite {
+        name: "invalid-metadata",
+        factory: invalid,
+    },
+    PhaseSuite {
+        name: "metadata-recovered",
+        factory: valid_v2,
+    },
 ];
 fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
     Box::pin(async move {
@@ -65,6 +73,12 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
             .await?;
         ctx.apply_dir("updates/to_valid_v2").await?;
         ctx.wait_phase(SCENARIO, "recovered-v2", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_invalid_metadata").await?;
+        ctx.wait_phase(SCENARIO, "invalid-metadata", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_valid_v2").await?;
+        ctx.wait_phase(SCENARIO, "metadata-recovered", Duration::from_secs(15))
             .await?;
         Ok(())
     })

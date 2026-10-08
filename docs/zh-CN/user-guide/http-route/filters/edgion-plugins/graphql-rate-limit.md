@@ -87,7 +87,7 @@ body，且只能执行 query。文档有多个操作时必须提供 `operationNa
 
 大小限制分别作用于 POST body、编码后的 GET query 和解码后的 GET 参数。
 还有固定的解析边界：4096 个 token（包括空白）、每个非空白 token 最长 256
-字节、32768 次评估步骤。较长的业务字符串放入 variables。SDL 扩展、指令和
+字节、32768 次评估步骤。较长的业务字符串放入 variables。SDL 扩展、任意自定义指令和
 接口继承暂不支持。完整 GraphQL 验证与执行仍由后端负责。subscription、WebSocket
 消息、批量数组、上传、压缩 body 和仅带 persisted query hash 的请求暂不支持。
 
@@ -117,3 +117,23 @@ route/backend filter、DSL、ExtProc 不得再修改 query、body、方法或表
 可能在访问日志中包含 GET 查询。
 
 插件自身的 HTTP 拒绝响应采用 [GraphQL JSON 错误合约](graphql-errors.md)。
+
+## 估算成本可见性
+
+完整估算在现有插件访问日志中记录为 `cost=<数值>`，不记录查询、操作名称或变量值。
+可选 `showQueryCost: true` 添加 `X-Graphql-Query-Cost`，默认关闭。该数值与传给加权限流器
+的数值一致，但容量拒绝可能没有扣费，Redis 随后也可能失败，因此它不是扣费回执或实际数据库开销。
+计算未完成时不报告成本，原有配额和 Retry-After 头保持不变。GraphqlRateLimit 始终执行限流；
+业务阈值校准使用独立的 [GraphqlGuard 观察模式](graphql-guard.md)。
+
+### 标准 SDL 元数据
+
+共享成本编译器支持字段、参数、输入字段和枚举值上的 `@deprecated`。
+`reason` 可省略，显式设置时必须是常量字符串；没有默认值的非空必填参数或
+输入字段不能弃用。自定义 scalar 支持 `@specifiedBy(url: "https://example.com/scalar")`，
+必须恰好提供一个常量字符串 URL；网关不会访问该 URL。
+
+两者不可重复。null、非字符串、重复或未知参数、错误位置会导致配置无效。
+元数据不改变权重、权限或估算成本，弃用字段仍正常计费。自定义指令、指令定义、
+SDL 扩展、联邦注解、`@cost`、`@listSize`、`@oneOf` 仍不支持；元数据字符串
+仍受现有 token、源文本和模型预算约束。

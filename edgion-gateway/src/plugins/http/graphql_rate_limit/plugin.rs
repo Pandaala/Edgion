@@ -20,6 +20,7 @@ pub struct GraphqlRateLimit {
     limiter: RateLimitRedis,
     envelope_limit: usize,
     policy_capacity: u64,
+    show_query_cost: bool,
 }
 
 impl GraphqlRateLimit {
@@ -38,6 +39,7 @@ impl GraphqlRateLimit {
                 .with_json_rejection_body(graphql_request::error_body(429)),
             envelope_limit,
             policy_capacity,
+            show_query_cost: config.show_query_cost,
         }))
     }
 }
@@ -61,6 +63,7 @@ impl RequestFilter for GraphqlRateLimit {
             Ok(cost) => cost,
             Err(reply) => return reply,
         };
+        graphql_request::record_cost(session, log, cost, self.show_query_cost);
         if u64::from(cost) > self.policy_capacity {
             log.push("deny policy capacity");
             return graphql_request::reject(session, 429);

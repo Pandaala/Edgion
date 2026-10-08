@@ -99,7 +99,7 @@ The effective envelope cap applies separately to POST body bytes, encoded GET
 query bytes and decoded GET parameter bytes. SDL and query text also have fixed
 token/recursion/work limits:4096 tokens including trivia,256 bytes per nontrivia
 token, and32768 evaluation steps. Put longer application strings in variables.
-SDL extensions, directives and interface inheritance are unsupported. The plugin
+SDL extensions, arbitrary directives and interface inheritance are unsupported. The plugin
 validates its cost model; the backend still owns full GraphQL validation/execution.
 Subscriptions, WebSocket messages, batch arrays, uploads, compressed bodies and
 persisted-only queries are unsupported.
@@ -133,3 +133,31 @@ including after hot reload. A valid update restores the new immutable cost model
 Disabled entries remain inert. The plugin introduces no response aggregation or
 execution engine. Its logs omit request text and variables; existing optional
 `access_log_options.includeRawUri=true` can expose a GET query in access logs.
+
+## Estimated cost visibility
+
+Every completed estimate is recorded as cost=<units> in the existing plugin access
+log before capacity or Redis decisions, without query/operation/variable reflection.
+Set showQueryCost: true to also queue X-Graphql-Query-Cost (default false). The same
+estimate is passed to the weighted limiter; it may be visible even if capacity
+rejects without debit or Redis later fails. It is not a receipt or measured backend
+CPU/database work. Incomplete evaluation emits no cost. Canonical quota and
+Retry-After headers remain unchanged. GraphqlRateLimit always enforces; use a
+separate [GraphqlGuard measurement](graphql-guard.md#calibration-and-cost-visibility)
+for numeric threshold calibration.
+
+### Standard SDL metadata
+
+The shared cost compiler accepts `@deprecated` on field definitions, argument
+definitions, input-field definitions and enum values. Its optional `reason` must
+be a constant String; omitting it uses the standard default. Required non-null
+arguments/input fields without defaults cannot be deprecated. A custom scalar
+may use `@specifiedBy(url: "https://example.com/scalar")` with exactly one constant
+String URL. The URL is metadata only and is never fetched.
+
+Both directives are nonrepeatable. Null, non-String, duplicate/unknown arguments
+and invalid locations reject the configuration. Metadata does not affect weights,
+field access or estimated cost; deprecated fields are still chargeable. Unknown
+directives, directive definitions, SDL extensions, federation annotations,
+`@cost`, `@listSize` and `@oneOf` remain unsupported. Existing token/source/model
+bounds apply to metadata strings too. See the [GraphQL directive definitions](https://spec.graphql.org/September2025/#sec--deprecated).

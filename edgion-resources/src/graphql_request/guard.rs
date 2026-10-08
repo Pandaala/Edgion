@@ -25,6 +25,15 @@ pub struct GraphqlShapeLimits {
     pub allow_introspection: bool,
 }
 
+/// Complete occurrence counts for one selected operation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GraphqlShapeReport {
+    pub depth: usize,
+    pub aliases: u32,
+    pub root_fields: u32,
+    pub fields: u32,
+}
+
 impl ParsedGraphqlRequest {
     pub fn validate_shape(&mut self, limits: &GraphqlShapeLimits) -> Result<(), GraphqlError> {
         self.validate_shape_with_root_policy(limits, None)
@@ -35,27 +44,36 @@ impl ParsedGraphqlRequest {
         limits: &GraphqlShapeLimits,
         root_policy: Option<&GraphqlRootFieldPolicy>,
     ) -> Result<(), GraphqlError> {
+        self.inspect_shape_with_root_policy(limits, root_policy, false)
+            .map(|_| ())
+    }
+
+    pub(crate) fn inspect_shape_with_root_policy(
+        &mut self,
+        limits: &GraphqlShapeLimits,
+        root_policy: Option<&GraphqlRootFieldPolicy>,
+        measure: bool,
+    ) -> Result<GraphqlShapeReport, GraphqlError> {
         let mut traversal = Traversal {
             limits,
             root_policy,
+            measure,
             fragments: &self.fragments,
             work: &mut self.work,
-            aliases: 0,
-            roots: 0,
-            fields: 0,
+            report: GraphqlShapeReport::default(),
         };
-        traversal.visit(self.operation.selection_set().ok_or(GraphqlError::Invalid)?, 1, 0)
+        traversal.visit(self.operation.selection_set().ok_or(GraphqlError::Invalid)?, 1, 0)?;
+        Ok(traversal.report)
     }
 }
 
 struct Traversal<'a> {
     limits: &'a GraphqlShapeLimits,
     root_policy: Option<&'a GraphqlRootFieldPolicy>,
+    measure: bool,
     fragments: &'a HashMap<String, cst::FragmentDefinition>,
     work: &'a mut Work,
-    aliases: u32,
-    roots: u32,
-    fields: u32,
+    report: GraphqlShapeReport,
 }
 
 fn increment(count: &mut u32, limit: Option<u32>) -> Result<(), GraphqlError> {
@@ -75,22 +93,32 @@ impl Traversal<'_> {
             self.work.step()?;
             match selection {
                 cst::Selection::Field(field) => {
-                    if self.limits.max_depth.is_some_and(|limit| depth > limit) {
+                    if !self.measure && self.limits.max_depth.is_some_and(|limit| depth > limit) {
                         return Err(GraphqlError::Invalid);
                     }
                     let name = field.name().ok_or(GraphqlError::Invalid)?.text();
                     if !self.limits.allow_introspection && matches!(name.as_ref(), "__schema" | "__type") {
                         return Err(GraphqlError::Invalid);
                     }
-                    increment(&mut self.fields, self.limits.max_fields)?;
+                    self.report.depth = self.report.depth.max(depth);
+                    increment(
+                        &mut self.report.fields,
+                        self.limits.max_fields.filter(|_| !self.measure),
+                    )?;
                     if field.alias().is_some() {
-                        increment(&mut self.aliases, self.limits.max_aliases)?;
+                        increment(
+                            &mut self.report.aliases,
+                            self.limits.max_aliases.filter(|_| !self.measure),
+                        )?;
                     }
                     if depth == 1 {
                         if self.root_policy.is_some_and(|policy| policy.denies(name.as_ref())) {
                             return Err(GraphqlError::Forbidden);
                         }
-                        increment(&mut self.roots, self.limits.max_root_fields)?;
+                        increment(
+                            &mut self.report.root_fields,
+                            self.limits.max_root_fields.filter(|_| !self.measure),
+                        )?;
                     }
                     if let Some(children) = field.selection_set() {
                         self.visit(children, depth + 1, recursion + 1)?;

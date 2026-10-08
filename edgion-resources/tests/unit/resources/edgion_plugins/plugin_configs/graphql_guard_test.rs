@@ -173,3 +173,118 @@ fn root_policy_configuration_is_strict_bounded_and_unique() {
         serde_json::from_value(json!({"rootFields":{"query":{"allow":names,"deny":["_private"]}}})).unwrap();
     assert!(config.compile().is_ok());
 }
+
+#[test]
+fn measurement_reports_all_business_violations_without_relaxing_default_mode() {
+    let value = json!({"mode":"measure","maxDepth":1,"maxAliases":0,"maxRootFields":0,"maxFields":0,
+        "maxCost":1,"schema":"type Query { user:User ping:Int } type User { id:ID }"});
+    let measured = config(value.clone()).compile().unwrap();
+    let report = measured.inspect(request("{ a:user { id } ping }")).unwrap();
+    assert_eq!(report.shape.depth, 2);
+    assert_eq!(report.shape.aliases, 1);
+    assert_eq!(report.shape.root_fields, 2);
+    assert_eq!(report.shape.fields, 3);
+    assert_eq!(report.cost, Some(4));
+    assert_eq!(report.exceeded, 31);
+    assert!(measured.check(request("{ a:user { id } ping }")).is_ok());
+    let mut enforced = value;
+    enforced.as_object_mut().unwrap().remove("mode");
+    assert_eq!(config(enforced).mode, GraphqlGuardMode::Enforce);
+    assert!(config(json!({"maxDepth":1}))
+        .compile()
+        .unwrap()
+        .check(request("{ user { id } }"))
+        .is_err());
+    assert!(serde_json::from_value::<GraphqlGuardConfig>(json!({"mode":"warn"})).is_err());
+    assert!(serde_json::from_value::<GraphqlGuardConfig>(json!({"mode":null})).is_err());
+}
+
+#[test]
+fn measurement_selection_fragments_directives_zero_and_null_remain_conservative() {
+    let measured = config(json!({"mode":"measure","maxAliases":0,"maxFields":null,"maxRootFields":1,"maxDepth":null}))
+        .compile()
+        .unwrap();
+    let query =
+        "query Safe { ...F ...F } query Other { a:ping b:ping c:ping } fragment F on Query { x:ping @skip(if:true) }";
+    let selected = ParsedGraphqlRequest::parse_post(
+        &serde_json::to_vec(&json!({"query":query,"operationName":"Safe"})).unwrap(),
+        MAX_ENVELOPE_BYTES,
+    )
+    .unwrap();
+    let report = measured.inspect(selected).unwrap();
+    assert_eq!(
+        report.shape,
+        GraphqlShapeReport {
+            depth: 1,
+            aliases: 2,
+            root_fields: 2,
+            fields: 2
+        }
+    );
+    assert_eq!(report.exceeded, 6);
+    assert_eq!(report.cost, None);
+    assert_eq!(measured.inspect(request("{ ping }")).unwrap().exceeded, 0);
+}
+
+#[test]
+fn measurement_keeps_introspection_and_root_authorization_hard() {
+    let measured = config(json!({"mode":"measure","maxFields":0,"rootFields":{"query":{"deny":["blocked"]}}}))
+        .compile()
+        .unwrap();
+    assert_eq!(measured.inspect(request("{ a:blocked }")), Err(GraphqlError::Forbidden));
+    assert_eq!(
+        measured.inspect(request("{ a:__schema { queryType { name } } }")),
+        Err(GraphqlError::Invalid)
+    );
+}
+
+#[test]
+fn measurement_validates_original_limits_and_independent_cost_bounds() {
+    for value in [
+        json!({"mode":"measure","maxCost":0,"schema":"type Query { ping:Int }"}),
+        json!({"mode":"measure","maxCost":1_000_001,"schema":"type Query { ping:Int }"}),
+        json!({"mode":"measure","maxDepth":33}),
+        json!({"showQueryCost":true}),
+    ] {
+        assert!(config(value).validation_error().is_some());
+    }
+    let measured = config(json!({"mode":"measure","maxDepth":1,"maxCost":1,
+        "schema":"type Query { child:Query id:ID }"}))
+    .compile()
+    .unwrap();
+    let deep = format!("{{ {}id{} }}", "child { ".repeat(31), "}".repeat(31));
+    let report = measured.inspect(request(&deep)).unwrap();
+    assert_eq!(report.shape.depth, 32);
+    assert_eq!(report.cost, Some(33));
+    assert_eq!(report.exceeded, 17);
+    let beyond = format!("{{ {}id{} }}", "child { ".repeat(32), "}".repeat(32));
+    assert!(measured.inspect(request(&beyond)).is_err());
+    let maximum = config(json!({"mode":"measure","maxCost":1,"schema":"type Query { ping:Int }",
+        "costRules":[{"field":"Query.ping","weight":999_999}]}))
+    .compile()
+    .unwrap();
+    assert_eq!(maximum.inspect(request("{ ping }")).unwrap().cost, Some(1_000_000));
+    assert!(maximum.inspect(request("{ ping ping }")).is_err());
+}
+
+#[test]
+fn guard_and_limiter_share_strict_sdl_metadata_validation() {
+    use crate::resources::edgion_plugins::plugin_configs::GraphqlRateLimitConfig;
+    for (schema, valid) in [
+        (
+            "type Query { ping:Int @deprecated } scalar Date @specifiedBy(url:\"https://example.com/date\")",
+            true,
+        ),
+        ("type Query { ping:Int @deprecated(reason:null) }", false),
+        ("type Query { ping:Int @specifiedBy(url:\"x\") }", false),
+    ] {
+        let guard = config(json!({"schema":schema,"maxCost":100}));
+        let limiter: GraphqlRateLimitConfig = serde_json::from_value(
+            json!({"schema":schema,"redisRef":"default/redis","policies":[{"rate":100,"interval":"1s"}]}),
+        )
+        .unwrap();
+        assert_eq!(guard.compile().is_ok(), valid);
+        assert_eq!(limiter.compile().is_ok(), valid);
+        assert_eq!(limiter.validation_error().is_none(), valid);
+    }
+}

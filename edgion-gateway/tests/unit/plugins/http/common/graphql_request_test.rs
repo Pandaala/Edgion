@@ -90,3 +90,22 @@ fn graphql_http_errors_are_fixed_json_and_queue_only_canonical_content_type() {
         );
     }
 }
+
+#[test]
+fn cost_logging_and_header_are_bounded_numeric_and_opt_in() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    for show in [false, true] {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_response_header()
+            .times(usize::from(show))
+            .returning(|name, value| {
+                assert_eq!((name, value), ("X-Graphql-Query-Cost", "4294967295"));
+                Ok(())
+            });
+        let mut log = PluginLog::new("GraphqlRateLimit");
+        record_cost(&mut session, &mut log, u32::MAX, show);
+        assert!(log.contains("cost=4294967295"));
+        assert!(log.ulog.is_none());
+    }
+}

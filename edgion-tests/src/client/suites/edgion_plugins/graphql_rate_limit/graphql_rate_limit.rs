@@ -1,5 +1,6 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites::status::helpers;
+use edgion_gateway::plugins::http::common::graphql_log_consts as log_tokens;
 use reqwest::Method;
 use std::time::Instant;
 
@@ -14,6 +15,7 @@ struct Reply {
     remaining: Option<u64>,
     retry_after: Option<String>,
     body: String,
+    cost: Option<u32>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -27,11 +29,14 @@ async fn request(
     media: &str,
     encoding: Option<&str>,
 ) -> Result<Reply, String> {
+    let marker = format!("graphql-cost-{}", uuid::Uuid::new_v4());
     let mut builder = ctx
         .http_client
         .request(method, format!("{}{target}", ctx.http_url()))
         .header("host", host)
         .header("content-type", media)
+        .header("access_log", "test_store")
+        .header("traceparent", crate::access_log_client::traceparent_for_marker(&marker))
         .body(body.to_owned());
     if let Some(key) = key {
         builder = builder.header("X-Graphql-Key", key);
@@ -54,15 +59,41 @@ async fn request(
         .get("retry-after")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
+    let cost = response
+        .headers()
+        .get(log_tokens::COST_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok());
     let body = response
         .text()
         .await
         .map_err(|error| format!("Read response failed: {error}"))?;
+    if let Some(cost) = cost {
+        let log = ctx
+            .access_log_client()
+            .get_access_log_with_retry(&marker, 15, 200)
+            .await
+            .map_err(|error| error.to_string())?;
+        let expected = format!("{}{cost}", log_tokens::COST);
+        let recorded = log.data["stage_logs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|stage| stage["edgion_plugins"].as_array().into_iter().flatten())
+            .flat_map(|group| group["logs"].as_array().into_iter().flatten())
+            .filter(|plugin| plugin["name"].as_str() == Some("GraphqlRateLimit"))
+            .flat_map(|plugin| plugin["log"].as_array().into_iter().flatten())
+            .any(|entry| entry.as_str() == Some(expected.as_str()));
+        if !recorded || log.status_code() != Some(u64::from(status)) {
+            return Err("Cost header differs from canonical rate-limit log or final status".into());
+        }
+    }
     Ok(Reply {
         status,
         remaining,
         retry_after,
         body,
+        cost,
     })
 }
 
@@ -155,12 +186,18 @@ impl TestSuite for GraphqlRateLimitTestSuite {
                             for remaining in [12, 0] {
                                 let reply = post(&ctx, HOST, body, &key).await?;
                                 require(&reply, 200, Some(remaining))?;
+                                if reply.cost != Some(12) {
+                                    return Err("Query cost header differs from weighted debit".into());
+                                }
                                 if reply.body.split_once("Echo: ").map(|(_, body)| body) != Some(body) {
                                     return Err(format!("POST body changed: {:?}", reply.body));
                                 }
                             }
                             let denied = post(&ctx, HOST, body, &key).await?;
                             require(&denied, 429, Some(0))?;
+                            if denied.cost != Some(12) {
+                                return Err("Quota rejection lost completed query cost".into());
+                            }
                             if denied.retry_after.is_none() {
                                 return Err("Budget exhaustion did not include Retry-After".to_owned());
                             }

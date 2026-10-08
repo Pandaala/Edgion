@@ -147,3 +147,23 @@ async fn bounded_admission_and_early_replies_do_not_materialize_rejected_input()
     let mut get_cap = session("GET", 0, false, Some("query=%7Busers%7Bname%7D%7D"));
     assert_eq!(status(lowered.run_request(&mut get_cap, &mut log).await), 413);
 }
+
+#[tokio::test]
+async fn completed_estimate_is_visible_before_capacity_or_dependency_outcome() {
+    let _lock = EVALUATION_TEST_LOCK.lock().await;
+    for capacity in [5, 100] {
+        let mut config = config();
+        config.show_query_cost = true;
+        config.policies[0].rate = capacity;
+        let filter = GraphqlRateLimit::create(&config, "unit/visible", None).unwrap();
+        let mut session = session("GET", 0, false, Some("query=%7Busers(first%3A10)%7Bname%7D%7D"));
+        let mut log = PluginLog::new("GraphqlRateLimit");
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert!(log.contains("cost=12"));
+        if capacity == 5 {
+            assert_eq!(status(result), 429);
+        } else {
+            assert_eq!(result, PluginRunningResult::GoodNext);
+        }
+    }
+}

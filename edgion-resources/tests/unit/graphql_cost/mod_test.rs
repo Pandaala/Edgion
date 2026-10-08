@@ -315,3 +315,110 @@ fn parser_caps_and_malformed_grammar_ledger_guard() {
         }
     }
 }
+
+#[test]
+fn standard_sdl_metadata_preserves_cost_and_deprecated_selections() {
+    let plain = "type Query { users(first:Int=10, required:Int!=1, input:Filter):[User] } interface I { name:String } type User implements I { name:String } input Filter { old:Int defaulted:Int!=1 } enum E { OLD NEW } scalar Date";
+    let annotated = r#"type Query { users(first:Int=10 @deprecated, required:Int!=1 @deprecated(reason:""), input:Filter):[User] @deprecated(reason:"Use people") }
+        interface I { name:String @deprecated }
+        type User implements I { name:String @deprecated(reason:"""Use displayName""") }
+        input Filter { old:Int @deprecated defaulted:Int!=1 @deprecated }
+        enum E { OLD @deprecated(reason:"Use NEW") NEW }
+        scalar Date @specifiedBy(url:"https://example.com/date")"#;
+    let rules = [("Query.users", 1, &["first"][..], 100)];
+    let before = model(plain, &rules);
+    let after = model(annotated, &rules);
+    for query in [
+        "{users{name}}",
+        "{a:users(first:2){...F}} fragment F on User{name}",
+        "{users(first:0){name}}",
+    ] {
+        assert_eq!(estimate(&after, query), estimate(&before, query));
+    }
+    assert_eq!(estimate(&after, "{users{name}}"), Ok(12));
+    assert_eq!(
+        estimate(&after, "{users{name @deprecated}}"),
+        Err(GraphqlError::Invalid)
+    );
+    assert!(CompiledGraphqlCost::compile(
+        r#"type Query { date:Date } scalar Date @specifiedBy(url:"""https://example.com/date""")"#,
+        &[],
+        100,
+        20
+    )
+    .is_ok());
+}
+
+#[test]
+fn sdl_metadata_rejects_invalid_arguments_locations_and_redefinitions() {
+    for suffix in [
+        "@deprecated(reason:null)",
+        "@deprecated(reason:1)",
+        "@deprecated(reason:true)",
+        "@deprecated(reason:OLD)",
+        "@deprecated(reason:[\"old\"])",
+        "@deprecated(reason:{x:1})",
+        "@deprecated(reason:$x)",
+        "@deprecated(other:\"old\")",
+        "@deprecated(reason:\"one\",reason:\"two\")",
+        "@deprecated @deprecated",
+        "@deprecated @unknown",
+        "@unknown",
+        "@specifiedBy(url:\"https://example.com\")",
+    ] {
+        for schema in [
+            format!("type Query {{ f:Int {suffix} }}"),
+            format!("type Query {{ f(n:Int {suffix}):Int }}"),
+            format!("type Query {{ f:Int }} input I {{ n:Int {suffix} }}"),
+            format!("type Query {{ f:E }} enum E {{ OLD {suffix} }}"),
+        ] {
+            assert!(CompiledGraphqlCost::compile(&schema, &[], 100, 20).is_err(), "{schema}");
+        }
+    }
+    for suffix in [
+        "@specifiedBy",
+        "@specifiedBy(url:null)",
+        "@specifiedBy(url:1)",
+        "@specifiedBy(url:URL)",
+        "@specifiedBy(other:\"x\")",
+        "@specifiedBy(url:\"x\",url:\"y\")",
+        "@specifiedBy(url:\"x\") @specifiedBy(url:\"y\")",
+        "@deprecated",
+        "@unknown",
+    ] {
+        let schema = format!("type Query {{ f:Date }} scalar Date {suffix}");
+        assert!(CompiledGraphqlCost::compile(&schema, &[], 100, 20).is_err(), "{schema}");
+    }
+    for schema in [
+        "type Query @deprecated { f:Int }",
+        "type Query { f:Int } interface I @deprecated { f:Int }",
+        "type Query { f:Int } union U @deprecated = Query",
+        "type Query { f:Int } input I @deprecated { f:Int }",
+        "type Query { f:Int } enum E @deprecated { OLD }",
+        "schema @deprecated { query:Query } type Query { f:Int }",
+        "type Query { f(n:Int! @deprecated):Int }",
+        "type Query { f:Int } input I { n:Int! @deprecated }",
+        "type Query { f(n:Int!=null @deprecated):Int }",
+        "type Query { f:Int } scalar Int @specifiedBy(url:\"x\")",
+        "directive @deprecated(reason:String!) on FIELD_DEFINITION type Query { f:Int }",
+        "type Query { f:Int } extend type Query { g:Int @deprecated }",
+        "type Query { f:Int @cost(weight:2) }",
+        "type Query { f:Int } input I @oneOf { f:Int }",
+    ] {
+        assert!(CompiledGraphqlCost::compile(schema, &[], 100, 20).is_err(), "{schema}");
+    }
+}
+
+#[test]
+fn sdl_metadata_retains_token_source_and_model_bounds() {
+    let reason = "x".repeat(257);
+    assert!(CompiledGraphqlCost::compile(
+        &format!("type Query {{ f:Int @deprecated(reason:\"{reason}\") }}"),
+        &[],
+        100,
+        20
+    )
+    .is_err());
+    let values = (0..257).map(|n| format!("V{n} @deprecated ")).collect::<String>();
+    assert!(CompiledGraphqlCost::compile(&format!("type Query {{ f:E }} enum E {{{values}}}"), &[], 100, 20).is_err());
+}

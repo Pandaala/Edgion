@@ -27,6 +27,8 @@ pub struct GraphqlCostRule {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GraphqlRateLimitConfig {
+    #[serde(default)]
+    pub show_query_cost: bool,
     pub schema: String,
     #[serde(default)]
     pub cost_rules: Vec<GraphqlCostRule>,

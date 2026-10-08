@@ -12,7 +12,8 @@ spec:
         schema: |
           type Query { users(first: Int = 10): [User!]! }
           type Mutation { users(first: Int = 10): [User!]! }
-          type User { name: String! }
+          type User { name: String! @deprecated }
+          scalar Date @specifiedBy(url:"https://example.com/date")
         costRules:
           - field: Query.users
             weight: 5

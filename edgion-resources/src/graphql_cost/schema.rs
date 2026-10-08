@@ -121,10 +121,53 @@ fn no_directives(d: Option<cst::Directives>) -> Result<(), GraphqlError> {
         Ok(())
     }
 }
+
+#[derive(Clone, Copy)]
+enum Metadata {
+    Deprecated { required: bool },
+    SpecifiedBy,
+}
+
+// Validate cold SDL metadata, then discard it. It never affects runtime cost.
+fn metadata(d: Option<cst::Directives>, location: Metadata) -> Result<(), GraphqlError> {
+    let Some(d) = d else { return Ok(()) };
+    let mut directives = d.directives();
+    let directive = directives.next().ok_or(GraphqlError::Invalid)?;
+    if directives.next().is_some() {
+        return Err(GraphqlError::Invalid);
+    }
+    let (expected, argument, mandatory) = match location {
+        Metadata::Deprecated { required: false } => ("deprecated", "reason", false),
+        Metadata::Deprecated { required: true } => return Err(GraphqlError::Invalid),
+        Metadata::SpecifiedBy => ("specifiedBy", "url", true),
+    };
+    if name(directive.name())? != expected {
+        return Err(GraphqlError::Invalid);
+    }
+    let mut arguments = directive.arguments().into_iter().flat_map(|a| a.arguments());
+    match arguments.next() {
+        Some(value) => {
+            if name(value.name())? != argument
+                || !matches!(value.value(), Some(cst::Value::StringValue(_)))
+                || arguments.next().is_some()
+            {
+                return Err(GraphqlError::Invalid);
+            }
+        }
+        None if mandatory => return Err(GraphqlError::Invalid),
+        None => {}
+    }
+    Ok(())
+}
 fn argument(input: cst::InputValueDefinition) -> Result<(String, Argument), GraphqlError> {
-    no_directives(input.directives())?;
     let ty = TypeRef::parse(input.ty().ok_or(GraphqlError::Invalid)?)?;
     let default = DefaultValue::parse(input.default_value())?;
+    metadata(
+        input.directives(),
+        Metadata::Deprecated {
+            required: ty.required() && default.absent(),
+        },
+    )?;
     if ty.required() && matches!(default, DefaultValue::Null) {
         return Err(GraphqlError::Invalid);
     }
@@ -141,7 +184,7 @@ fn fields(
     let mut fields = HashMap::new();
     if let Some(source) = source {
         for field in source.field_definitions() {
-            no_directives(field.directives())?;
+            metadata(field.directives(), Metadata::Deprecated { required: false })?;
             if *total >= 2048 {
                 return Err(GraphqlError::Invalid);
             }
@@ -257,7 +300,7 @@ impl Schema {
                     (name(d.name())?, t)
                 }
                 cst::Definition::ScalarTypeDefinition(d) => {
-                    no_directives(d.directives())?;
+                    metadata(d.directives(), Metadata::SpecifiedBy)?;
                     (name(d.name())?, TypeDef::new(Kind::Scalar))
                 }
                 cst::Definition::EnumTypeDefinition(d) => {
@@ -265,7 +308,7 @@ impl Schema {
                     let mut values = HashSet::new();
                     if let Some(defs) = d.enum_values_definition() {
                         for value in defs.enum_value_definitions() {
-                            no_directives(value.directives())?;
+                            metadata(value.directives(), Metadata::Deprecated { required: false })?;
                             if values.len() >= 256 || !values.insert(name(value.enum_value().and_then(|e| e.name()))?) {
                                 return Err(GraphqlError::Invalid);
                             }

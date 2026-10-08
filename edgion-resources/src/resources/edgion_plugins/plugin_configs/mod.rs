@@ -201,7 +201,8 @@ pub use graphql_operation_router::{
 
 pub mod graphql_guard;
 pub use graphql_guard::{
-    CompiledGraphqlGuard, GraphqlGuardConfig, GraphqlRootFieldRuleConfig, GraphqlRootFieldsConfig,
+    CompiledGraphqlGuard, GraphqlGuardConfig, GraphqlGuardMode, GraphqlGuardReport, GraphqlRootFieldRuleConfig,
+    GraphqlRootFieldsConfig,
 };
 
 mod graphql_safelist;

@@ -9,10 +9,12 @@ spec:
       alias: cost-budget
       type: GraphqlRateLimit
       config:
+        showQueryCost: true
         schema: |
           type Query { users(first: Int = 10): [User!]! }
           type Mutation { users(first: Int = 10): [User!]! }
-          type User { name: String! }
+          type User { name: String! @deprecated(reason:"Use displayName") }
+          scalar Date @specifiedBy(url:"https://example.com/date")
         costRules:
           - field: Query.users
             weight: 1
@@ -43,7 +45,8 @@ spec:
         schema: |
           type Query { users(first: Int = 10): [User!]! }
           type Mutation { users(first: Int = 10): [User!]! }
-          type User { name: String! }
+          type User { name: String! @deprecated(reason:"Use displayName") }
+          scalar Date @specifiedBy(url:"https://example.com/date")
         costRules:
           - field: Query.users
             weight: 1
@@ -76,7 +79,8 @@ spec:
         schema: |
           type Query { users(first: Int = 10): [User!]! }
           type Mutation { users(first: Int = 10): [User!]! }
-          type User { name: String! }
+          type User { name: String! @deprecated(reason:"Use displayName") }
+          scalar Date @specifiedBy(url:"https://example.com/date")
         costRules:
           - field: Query.users
             weight: 1
@@ -107,7 +111,8 @@ spec:
         schema: |
           type Query { users(first: Int = 10): [User!]! }
           type Mutation { users(first: Int = 10): [User!]! }
-          type User { name: String! }
+          type User { name: String! @deprecated(reason:"Use displayName") }
+          scalar Date @specifiedBy(url:"https://example.com/date")
         costRules:
           - field: Query.users
             weight: 1
@@ -138,7 +143,8 @@ spec:
         schema: |
           type Query { users(first: Int = 10): [User!]! }
           type Mutation { users(first: Int = 10): [User!]! }
-          type User { name: String! }
+          type User { name: String! @deprecated(reason:"Use displayName") }
+          scalar Date @specifiedBy(url:"https://example.com/date")
         costRules:
           - field: Query.users
             weight: 1
@@ -220,7 +226,8 @@ spec:
         schema: |
           type Query { users(first: Int = 10): [User!]! }
           type Mutation { users(first: Int = 10): [User!]! }
-          type User { name: String! }
+          type User { name: String! @deprecated(reason:"Use displayName") }
+          scalar Date @specifiedBy(url:"https://example.com/date")
         costRules:
           - field: Query.users
             weight: 1
@@ -253,7 +260,8 @@ spec:
         schema: |
           type Query { users(first: Int = 10): [User!]! }
           type Mutation { users(first: Int = 10): [User!]! }
-          type User { name: String! }
+          type User { name: String! @deprecated(reason:"Use displayName") }
+          scalar Date @specifiedBy(url:"https://example.com/date")
         costRules:
           - field: Query.users
             weight: 1

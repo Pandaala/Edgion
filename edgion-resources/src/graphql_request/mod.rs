@@ -5,7 +5,7 @@ mod guard;
 mod safelist;
 mod selection;
 pub(crate) use guard::GraphqlRootFieldPolicy;
-pub use guard::GraphqlShapeLimits;
+pub use guard::{GraphqlShapeLimits, GraphqlShapeReport};
 pub(crate) use selection::directives;
 
 use apollo_parser::{cst, Lexer, Parser, TokenKind};

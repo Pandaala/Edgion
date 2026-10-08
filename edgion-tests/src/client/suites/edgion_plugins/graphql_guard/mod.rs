@@ -1,4 +1,5 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use edgion_gateway::plugins::http::common::graphql_log_consts as log_tokens;
 use reqwest::Method;
 use serde_json::json;
 use std::time::Instant;
@@ -10,6 +11,18 @@ async fn probe(
     target: &str,
     body: &str,
     expected: u16,
+) -> Result<(), String> {
+    probe_details(ctx, host, method, target, body, expected, None).await
+}
+
+async fn probe_details(
+    ctx: &TestContext,
+    host: &str,
+    method: Method,
+    target: &str,
+    body: &str,
+    expected: u16,
+    observation: Option<(&str, Option<u32>)>,
 ) -> Result<(), String> {
     let marker = format!("graphql-guard-{}", uuid::Uuid::new_v4());
     let response = ctx
@@ -27,6 +40,11 @@ async fn probe(
     let content_type = response
         .headers()
         .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let cost = response
+        .headers()
+        .get(log_tokens::COST_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     let reply = response.text().await.map_err(|e| e.to_string())?;
@@ -52,14 +70,50 @@ async fn probe(
             return Err(format!("Unexpected GraphQL local error: {reply}"));
         }
     }
-    if expected != 200 {
+    if expected != 200 || observation.is_some() {
         let log = ctx
             .access_log_client()
             .get_access_log_with_retry(&marker, 15, 200)
             .await
             .map_err(|e| e.to_string())?;
-        if log.upstream_count() != 0 || log.status_code() != Some(u64::from(expected)) {
+        if (expected != 200 && log.upstream_count() != 0) || log.status_code() != Some(u64::from(expected)) {
             return Err("Local GraphQL rejection reached origin or recorded the wrong final status".into());
+        }
+        if let Some((entry, expected_cost)) = observation {
+            if cost != expected_cost.map(|n| n.to_string()) {
+                return Err("Unexpected or incomplete query cost header".into());
+            }
+            let entries: Vec<&str> = log
+                .data
+                .get("stage_logs")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .flat_map(|stage| {
+                    stage
+                        .get("edgion_plugins")
+                        .and_then(|v| v.as_array())
+                        .into_iter()
+                        .flatten()
+                })
+                .flat_map(|group| group.get("logs").and_then(|v| v.as_array()).into_iter().flatten())
+                .filter(|plugin| plugin.get("name").and_then(|v| v.as_str()) == Some("GraphqlGuard"))
+                .flat_map(|plugin| plugin.get("log").and_then(|v| v.as_array()).into_iter().flatten())
+                .filter_map(|v| v.as_str())
+                .collect();
+            if !entry.is_empty() && !entries.contains(&entry) {
+                return Err(format!("Missing GraphQL observation {entry}: {entries:?}"));
+            }
+            if expected == 200 && log.upstream_count() != 1 {
+                return Err("Measured request did not reach the declared origin exactly once".into());
+            }
+            if let Some(cost) = expected_cost {
+                if !entries.contains(&format!("{}{cost}", log_tokens::COST).as_str()) {
+                    return Err("Completed cost missing from canonical plugin log".into());
+                }
+            } else if expected != 200 && entries.iter().any(|entry| entry.starts_with(log_tokens::COST)) {
+                return Err("Incomplete evaluation claimed an exact cost".into());
+            }
         }
     }
     Ok(())
@@ -166,6 +220,86 @@ impl TestSuite for GraphqlGuardTestSuite {
                 },
             ));
         }
+        for (name, mode, query, status, entry, cost) in [
+            (
+                "measure_all",
+                "measure",
+                "{ a:user { id } ping }",
+                200,
+                "measure exceeded=31",
+                Some(4),
+            ),
+            ("enforce_all", "enforce", "{ a:user { id } ping }", 400, "", None),
+            (
+                "measure_introspection",
+                "measure",
+                "{ __schema { queryType { name } } }",
+                400,
+                "",
+                None,
+            ),
+            ("measure_root_permission", "measure", "{ a:blocked }", 403, "", None),
+            ("measure_invalid_field", "measure", "{ missing }", 400, "", None),
+            ("measure_malformed", "measure", "invalid @@", 400, "", None),
+            (
+                "measure_selected",
+                "measure",
+                "query Safe { ping } query Large { a:ping b:ping }",
+                200,
+                "measure exceeded=0",
+                Some(2),
+            ),
+        ] {
+            cases.push(TestCase::new(
+                format!("graphql_guard_{name}"),
+                "Calibration preserves hard admission and exact cost reporting",
+                move |ctx| {
+                    Box::pin(async move {
+                        let start = Instant::now();
+                        let host = format!("graphql-guard-{mode}.example.com");
+                        let mut envelope = json!({"query":query});
+                        if name == "measure_selected" {
+                            envelope["operationName"] = json!("Safe");
+                        }
+                        result(
+                            start,
+                            probe_details(
+                                &ctx,
+                                &host,
+                                Method::POST,
+                                "/echo",
+                                &envelope.to_string(),
+                                status,
+                                Some((entry, cost)),
+                            )
+                            .await,
+                        )
+                    })
+                },
+            ));
+        }
+        cases.push(TestCase::new(
+            "graphql_guard_measure_get",
+            "GET measurements share canonical transport",
+            |ctx| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    result(
+                        start,
+                        probe_details(
+                            &ctx,
+                            "graphql-guard-measure.example.com",
+                            Method::GET,
+                            "/echo?query=%7Ba%3Aping%7D",
+                            "",
+                            200,
+                            Some(("measure exceeded=2", Some(2))),
+                        )
+                        .await,
+                    )
+                })
+            },
+        ));
         cases
     }
 }
@@ -173,6 +307,8 @@ pub struct GraphqlGuardDynamicSuite {
     pub invalid: bool,
     pub strict: bool,
     pub root_policy: bool,
+    pub calibration: bool,
+    pub measure: bool,
 }
 impl TestSuite for GraphqlGuardDynamicSuite {
     fn name(&self) -> &str {
@@ -182,6 +318,8 @@ impl TestSuite for GraphqlGuardDynamicSuite {
         let invalid = self.invalid;
         let strict = self.strict;
         let root_policy = self.root_policy;
+        let calibration = self.calibration;
+        let measure = self.measure;
         vec![TestCase::new(
             "graphql_guard_generation",
             "Current guard and controller acceptance converge",
@@ -189,6 +327,38 @@ impl TestSuite for GraphqlGuardDynamicSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let outcome = async {
+                        if calibration {
+                            let above = json!({"query":"{ a:user { id } ping }"}).to_string();
+                            probe_details(
+                                &ctx,
+                                "graphql-guard-dynamic.example.com",
+                                Method::POST,
+                                "/echo",
+                                &above,
+                                if invalid {
+                                    500
+                                } else if measure {
+                                    200
+                                } else {
+                                    400
+                                },
+                                Some((
+                                    if measure && !invalid { "measure exceeded=31" } else { "" },
+                                    if measure && !invalid { Some(4) } else { None },
+                                )),
+                            )
+                            .await?;
+                            let denied = json!({"query":"{ blocked }"}).to_string();
+                            probe(
+                                &ctx,
+                                "graphql-guard-dynamic.example.com",
+                                Method::POST,
+                                "/echo",
+                                &denied,
+                                if invalid { 500 } else { 403 },
+                            )
+                            .await?;
+                        }
                         let body = json!({"query":"{ a:ping }"}).to_string();
                         probe(
                             &ctx,
@@ -200,7 +370,7 @@ impl TestSuite for GraphqlGuardDynamicSuite {
                                 500
                             } else if root_policy {
                                 403
-                            } else if strict {
+                            } else if strict || (calibration && !measure) {
                                 400
                             } else {
                                 200

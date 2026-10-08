@@ -129,3 +129,22 @@ query ambiguity. This design evidence does not claim implementation test success
   reviews; corrected in the existing shared compiler without changing the cost
   formula. Correction verification is summarized in the historical results above;
   historical feature checks do not establish that this boundary was covered.
+
+## Completed estimates and debit outcomes
+
+GraphqlRateLimit logs completed cost through its existing PluginLog and optionally
+queues X-Graphql-Query-Cost with showQueryCost. That is the same scalar passed into
+the shared weighted limiter; capacity/dependency rejection may occur without a debit.
+Never treat this header/log as a receipt or emit a partial/saturated estimate after
+failed evaluation. Guard-only measurement does not relax Redis quota enforcement.
+
+## Standard SDL metadata boundary
+
+The shared cold compiler validates and discards only nonrepeatable @deprecated
+on field/argument/input-field/enum-value definitions and @specifiedBy on custom
+scalar definitions. It enforces standard constant String arguments and required
+input deprecation restrictions; built-in scalar redefinitions remain invalid.
+Metadata has no retained model/runtime state, cost effect or outbound URL fetch.
+Other directive locations, unknown directives, definitions and extensions remain
+rejected. Review additions against the metadata location/type/repetition tests
+and unchanged cost comparisons, preserving the parser/token/model budgets.

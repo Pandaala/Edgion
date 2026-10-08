@@ -116,3 +116,23 @@ fn shape_work_is_carried_into_optional_costing() {
     p.work = Work(MAX_WORK - 1);
     assert!(c.compile().unwrap().check(p).is_err());
 }
+
+#[test]
+fn measurement_retains_hard_work_and_carries_it_into_costing() {
+    use crate::plugin_configs::GraphqlGuardConfig;
+    let config: GraphqlGuardConfig = serde_json::from_value(json!({"mode":"measure","maxFields":0})).unwrap();
+    let measured = config.compile().unwrap();
+    let mut p = parsed("{ ping }", None);
+    p.work = Work(MAX_WORK);
+    assert!(measured.inspect(p).is_err());
+    let mut query = "{ ...F14 } fragment F0 on Query { ping } ".to_owned();
+    for i in 1..=14 {
+        query.push_str(&format!("fragment F{i} on Query {{ ...F{} ...F{} }} ", i - 1, i - 1));
+    }
+    assert!(measured.inspect(parsed(&query, None)).is_err());
+    let config: GraphqlGuardConfig =
+        serde_json::from_value(json!({"mode":"measure","maxCost":1,"schema":"type Query { ping:Int }"})).unwrap();
+    let mut p = parsed("{ ping }", None);
+    p.work = Work(MAX_WORK - 1);
+    assert!(config.compile().unwrap().inspect(p).is_err());
+}
