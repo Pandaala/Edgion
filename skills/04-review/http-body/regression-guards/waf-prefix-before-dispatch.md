@@ -105,8 +105,8 @@ Completed execution plans were removed during task cleanup. Current structured
 inspection contracts live in the [JSON guard](../../waf/regression-guards/fused-json-inspection.md)
 and [XML guard](../../waf/regression-guards/native-xml-inspection.md).
 Remaining validation is tracked separately in the
-[Gateway performance task](../../../../tasks/todo/waf-production-performance-baseline.md)
-and [Kubernetes admission task](../../../../tasks/todo/waf-kubernetes-admission-validation.md).
+[Gateway performance task](../../../../tasks/todo/waf-validation/waf-production-performance-baseline.md)
+and [Kubernetes admission task](../../../../tasks/todo/waf-validation/waf-kubernetes-admission-validation.md).
 Historical prefix evidence below does not prove current JSON timing or wire gates.
 
 Prefix rules execute lazily in the canonical phase schedule. An enforced deny

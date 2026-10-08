@@ -2353,3 +2353,83 @@ fn responses_guard_capability_rejection_has_shared_validation_and_policy_parity(
         assert!(bypassed.is_activatable);
     }
 }
+
+#[tokio::test]
+async fn waf_selection_only_update_keeps_sources_and_in_flight_filter_behavior() {
+    use crate::ctx::WafPhaseClaim;
+    use crate::EdgionHttpContext;
+    let mut before = waf_resource(concat!(
+        "SecRule REQUEST_URI \"@contains /probe\" \"id:100,phase:1,deny,status:403,tag:company/a\"\n",
+        "SecRule REQUEST_URI \"@contains /probe\" \"id:101,phase:1,deny,status:409,tag:company/b\"\n",
+    ));
+    let set_selection = |resource: &mut EdgionPlugins, tag: &str| {
+        resource
+            .spec
+            .waf
+            .as_mut()
+            .unwrap()
+            .resolved_policy
+            .as_mut()
+            .unwrap()
+            .profiles
+            .get_mut("default")
+            .unwrap()
+            .rule_selection = serde_json::from_value(serde_json::json!({"include": {"tag": tag}})).unwrap();
+    };
+    set_selection(&mut before, "company/a");
+    let mut after = before.clone();
+    set_selection(&mut after, "company/b");
+    let before_bundle = &before.spec.waf.as_ref().unwrap().resolved_bundles.as_ref().unwrap()[0];
+    let after_bundle = &after.spec.waf.as_ref().unwrap().resolved_bundles.as_ref().unwrap()[0];
+    assert_eq!(before_bundle.digest, after_bundle.digest);
+    assert_eq!(before_bundle.data.rules[0].content, after_bundle.data.rules[0].content);
+    let key = "default/native-waf".to_string();
+    let first = compile_source(&before);
+    let second = compile_source(&after);
+    assert!(first.is_activatable, "{:?}", first.preparse_errors);
+    assert!(second.is_activatable, "{:?}", second.preparse_errors);
+    let store = PluginStore::new();
+    store.replace_all(HashMap::from([(key.clone(), first)]));
+    let old = store.get_plugin_runtime(&key).unwrap();
+    store.apply_delta(HashMap::new(), HashMap::from([(key.clone(), second)]), &HashSet::new());
+    let new = store.get_plugin_runtime(&key).unwrap();
+    assert!(!Arc::ptr_eq(first_filter(&old), first_filter(&new)));
+    // Both filters run after replacement, making immutable old-generation behavior observable.
+    for (runtime, expected) in [(&old, 403), (&new, 409)] {
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().times(1).return_const(EdgionHttpContext::default());
+        session
+            .expect_claim_waf_phase()
+            .returning(|_, _| WafPhaseClaim::Execute);
+        session.expect_record_waf_phase_outcome().returning(|_, _, _, _| ());
+        session.expect_record_waf_terminal_error().returning(|_, _, _, _| ());
+        session.expect_request_header_map().return_const(http::HeaderMap::new());
+        session.expect_get_method().times(1).return_const("POST".to_string());
+        session.expect_get_uri().return_const("/probe".to_string());
+        session.expect_get_request_uri().return_const("/probe".to_string());
+        session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());
+        session.expect_remote_ip().return_const("192.0.2.1".to_string());
+        session.expect_get_request_id().return_const("request-1".to_string());
+        let result = first_filter(runtime)
+            .run_request(&mut session, &mut PluginLog::new("Waf"))
+            .await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: expected,
+                body: None
+            }
+        );
+    }
+    let mut invalid = after.clone();
+    invalid.spec.waf.as_mut().unwrap().resolved_bundles = None;
+    store.apply_delta(
+        HashMap::new(),
+        HashMap::from([(key.clone(), compile_source(&invalid))]),
+        &HashSet::new(),
+    );
+    assert!(Arc::ptr_eq(
+        first_filter(&new),
+        first_filter(&store.get_plugin_runtime(&key).unwrap())
+    ));
+}

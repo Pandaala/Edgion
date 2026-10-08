@@ -27,6 +27,8 @@ pub mod request_access_url_allow_list;
 pub mod selector;
 pub mod waf_policy;
 pub mod waf_rule_bundle;
+pub mod waf_tags;
+pub use waf_tags::{inspect_local_waf_tags, WafTagQuery, WafTagReport, MAX_WAF_TAG_REPORT_BYTES};
 
 pub use ip_group::IpGroup;
 pub use ip_list::IpListData;
@@ -35,7 +37,10 @@ pub use overlay::{apply_override, OverlaySignal};
 pub use region_route::{merge_region_route_override, validate_regions, RegionRouteOverride, RegionTableValidation};
 pub use request_access_url_allow_list::RequestAccessUrlAllowListData;
 pub use selector::Selector;
-pub use waf_policy::{WafBundleRef, WafPolicyData, WafProfile};
+pub use waf_policy::{
+    PreparedWafPolicySelections, WafBundleRef, WafPolicyData, WafProfile, WafRuleIdRange, WafRuleSelection,
+    WafRuleSelectionExpr, WafSelectionSummary,
+};
 pub use waf_rule_bundle::{WafBundleMember, WafRuleBundleData};
 
 use crate::resources::common::Condition;

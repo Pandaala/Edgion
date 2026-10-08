@@ -160,9 +160,9 @@ pub use waf::{
     WafDynamicInjectionTestSuite, WafDynamicJsonDetectionTestSuite, WafDynamicJsonV1TestSuite,
     WafDynamicJsonV2TestSuite, WafDynamicJsonZeroSourceTestSuite, WafDynamicOriginalDetectionTestSuite,
     WafDynamicOriginalOnTestSuite, WafDynamicRecoveredTestSuite, WafDynamicSelectorHighTestSuite,
-    WafDynamicSupportedDetectionTestSuite, WafDynamicSupportedOnTestSuite, WafDynamicSupportedRetainedTestSuite,
-    WafDynamicSupportedStandardTestSuite, WafDynamicUpdatedTestSuite, WafDynamicXmlDetectionTestSuite,
-    WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite,
+    WafDynamicStaticSelectionTestSuite, WafDynamicSupportedDetectionTestSuite, WafDynamicSupportedOnTestSuite,
+    WafDynamicSupportedRetainedTestSuite, WafDynamicSupportedStandardTestSuite, WafDynamicUpdatedTestSuite,
+    WafDynamicXmlDetectionTestSuite, WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite,
 };
 pub use wasm::WasmPluginTestSuite;
 pub use webhook_key_get::WebhookKeyGetTestSuite;

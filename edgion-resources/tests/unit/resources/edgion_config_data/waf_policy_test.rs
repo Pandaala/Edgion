@@ -7,6 +7,7 @@ fn policy() -> WafPolicyData {
         profiles: BTreeMap::from([(
             "low".into(),
             WafProfile {
+                rule_selection: Default::default(),
                 bundle_refs: vec![WafBundleRef {
                     target: EdgionConfigDataRef {
                         name: "base".into(),
@@ -78,4 +79,43 @@ fn policy_resource_requires_enabled_unambiguous_envelope() {
     resource.spec.active = None;
     resource.spec.unknown_fields.push("data.config.defaultProfiles".into());
     assert!(!resource.validate_pre_parse().is_empty());
+}
+
+#[test]
+fn selection_transport_defaults_and_exact_prepared_binding() {
+    let mut value = policy();
+    let encoded = serde_json::to_value(&value).unwrap();
+    assert!(encoded["profiles"]["low"].get("ruleSelection").is_none());
+    for invalid in [serde_json::Value::Null, serde_json::json!({"excludeTags": ["php"]})] {
+        let mut invalid_wire = encoded.clone();
+        invalid_wire["profiles"]["low"]["ruleSelection"] = invalid;
+        assert!(serde_json::from_value::<WafPolicyData>(invalid_wire).is_err());
+    }
+    value.profiles.get_mut("low").unwrap().rule_selection = serde_yaml::from_str("include: {tag: php}").unwrap();
+    let prepared = value.prepare_selections().unwrap();
+    assert!(prepared.live_bytes() > 0);
+    assert!(prepared.selection("low", &value.profiles["low"]).unwrap().is_some());
+    let decoded: WafPolicyData = serde_json::from_value(serde_json::to_value(&value).unwrap()).unwrap();
+    assert_eq!(
+        decoded.profiles["low"].rule_selection,
+        value.profiles["low"].rule_selection
+    );
+    value.profiles.get_mut("low").unwrap().rule_selection = serde_yaml::from_str("include: {tag: java}").unwrap();
+    assert!(prepared.selection("low", &value.profiles["low"]).is_err());
+    let schema = serde_json::to_value(schemars::schema_for!(WafProfile)).unwrap();
+    assert!(schema["properties"].get("ruleSelection").is_some());
+}
+
+#[test]
+fn mixed_policy_empty_profile_is_one_pass_and_stale_sibling_binding_is_rejected() {
+    let mut value = policy();
+    let mut sibling = value.profiles["low"].clone();
+    sibling.rule_selection = serde_yaml::from_str("include: {tag: php}").unwrap();
+    value.profiles.insert("other".into(), sibling);
+    let owner = value.prepare_selections().unwrap();
+    assert!(owner.validate_binding(&value).is_ok());
+    assert!(owner.selection("low", &value.profiles["low"]).unwrap().is_none());
+    value.profiles.get_mut("other").unwrap().rule_selection =
+        serde_yaml::from_str("include: {anyOf: [{tag: php}, {tag: java}]}").unwrap();
+    assert!(owner.validate_binding(&value).is_err());
 }

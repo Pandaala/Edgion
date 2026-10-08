@@ -160,9 +160,10 @@ pub use tiny_ufo_ttl_cache_config::{
 };
 pub use upstream_fallback::UpstreamFallback;
 pub use waf::{
-    ResolvedWafBundle, WafBundleRef, WafBundleResolutionError, WafBundleResolutionKind, WafConfig, WafJsonConfig,
-    WafJsonLexicalLimits, WafJsonResultLimits, WafJsonStructureLimits, WafMode, WafProfile, WafRequestBodyConfig,
-    WafRequestBodyInspection, WafSupportFailure, WafSupportFinding, WafSupportReport,
+    ResolvedWafBundle, WafBundleRef, WafBundleResolutionError, WafBundleResolutionKind, WafCompilation, WafConfig,
+    WafJsonConfig, WafJsonLexicalLimits, WafJsonResultLimits, WafJsonStructureLimits, WafMode, WafProfile,
+    WafRequestBodyConfig, WafRequestBodyInspection, WafResolvedBundleRef, WafSupportFailure, WafSupportFinding,
+    WafSupportReport,
 };
 pub use wasm::{
     normalize_callout_origin, normalize_callout_origin_quiet, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry,

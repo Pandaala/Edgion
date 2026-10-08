@@ -9,6 +9,16 @@ knowledge_type: superseded
 
 # Unified Condition Layer — DESIGN-TRADEOFF
 
+> **Domain clarification (2026-10-08):** the authoritative one-`Condition` rule
+> applies to request predicates. Static WAF rule-metadata selection cannot consume
+> `KeyGet`/JWT/secret/time variants or the Gateway request evaluator, and importing
+> resources into the external-only WAF leaf would create a dependency cycle.
+> Its bounded schema/decoder/validator/evaluator therefore has one canonical
+> configuration-only owner in `edgion-waf`, reused by every configuration consumer.
+> It has no request bindings or request-time evaluation. This structural
+> re-evaluation leaves every request consumer's `Condition`/`ConditionSet` mandate
+> intact; it permits no second request engine or importing-crate WAF selector.
+
 > **Superseded grouping shape (2026-08-24):** the one-`Condition` rule remains
 > authoritative, but the flat `skip`/`run`, RequestRestriction `anyOf`, and RAP
 > `allOf` containers described below were replaced by the shared bounded

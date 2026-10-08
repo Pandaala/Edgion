@@ -1518,6 +1518,7 @@ async fn waf_bundle_refs_register_requeue_and_resolve_only_complete_pinned_sourc
             (
                 "default".into(),
                 WafProfile {
+                    rule_selection: Default::default(),
                     bundle_refs: vec![
                         WafBundleRef {
                             target: EdgionConfigDataRef {
@@ -1541,6 +1542,7 @@ async fn waf_bundle_refs_register_requeue_and_resolve_only_complete_pinned_sourc
             (
                 "high".into(),
                 WafProfile {
+                    rule_selection: Default::default(),
                     bundle_refs: vec![WafBundleRef {
                         target: EdgionConfigDataRef {
                             name: "rules-v1".into(),
@@ -1793,12 +1795,14 @@ async fn waf_selector_cross_namespace_without_grant_uses_default_profile() {
                     (
                         "default".into(),
                         WafProfile {
+                            rule_selection: Default::default(),
                             bundle_refs: vec![reference.clone()],
                         },
                     ),
                     (
                         "high".into(),
                         WafProfile {
+                            rule_selection: Default::default(),
                             bundle_refs: vec![reference],
                         },
                     ),
@@ -1948,6 +1952,7 @@ async fn waf_policy_grant_does_not_authorize_its_cross_namespace_bundle() {
                 profiles: std::collections::BTreeMap::from([(
                     "default".into(),
                     WafProfile {
+                        rule_selection: Default::default(),
                         bundle_refs: vec![WafBundleRef {
                             target: EdgionConfigDataRef {
                                 name: "private-rules".into(),
@@ -2026,6 +2031,7 @@ async fn waf_bundle_reference_limit_stops_subscription_and_source_capture() {
         profiles: std::collections::BTreeMap::from([(
             "default".into(),
             WafProfile {
+                rule_selection: Default::default(),
                 bundle_refs: vec![
                     WafBundleRef {
                         target: EdgionConfigDataRef {
@@ -2074,11 +2080,11 @@ async fn waf_bundle_reference_limit_stops_subscription_and_source_capture() {
             ),
         ),
     ]));
-    let (captured_policy, captured_children) = runtime
+    let snapshot = runtime
         .edgion_config_data_store
         .get_waf_policy_snapshot("default/waf-policy", None);
-    assert!(captured_policy.is_some());
-    assert!(captured_children.is_empty());
+    assert!(snapshot.policy.is_some());
+    assert!(snapshot.children.is_empty());
     let mut resource = EdgionPlugins::new("waf-owner", EdgionPluginsSpec::default());
     resource.metadata.namespace = Some("default".into());
     resource.spec.waf = Some(WafConfig {
@@ -6422,4 +6428,203 @@ async fn grpc_descriptor_replacement_and_deletion_clear_prior_generation() {
         .secret_ref_manager
         .get_refs(&format_configmap_ref_key(Some("tenant".into()).as_ref(), "grpc-schema"))
         .is_empty());
+}
+
+#[tokio::test]
+async fn waf_static_selection_reuses_optional_trials_and_refreshes_policy_only_updates() {
+    use edgion_resources::resources::edgion_config_data::{WafBundleMember, WafPolicyData, WafRuleBundleData};
+    use edgion_resources::resources::edgion_plugins::{WafBundleRef, WafConfig, WafProfile};
+    let make_bundle = |source: &str| {
+        let mut data = WafRuleBundleData {
+            version: "1".into(),
+            profile: "test".into(),
+            provenance: "test/revision".into(),
+            digest: None,
+            roots: vec!["main.conf".into()],
+            rules: vec![WafBundleMember {
+                name: "main.conf".into(),
+                content: source.into(),
+            }],
+            phrase_assets: vec![],
+        };
+        data.digest = Some(data.compute_digest());
+        data
+    };
+    let base = make_bundle("SecAction \"id:10,phase:1,pass,tag:company/base\"\n");
+    let optional = make_bundle("SecAction \"id:11,phase:1,pass,tag:company/optional\"\n");
+    let target = |name: &str, data: ConfigEntry| {
+        build_edgion_config_data(
+            "default",
+            name,
+            EdgionConfigDataSpec {
+                current_status: None,
+                unknown_fields: vec![],
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                data,
+            },
+        )
+    };
+    let policy = |expression: &str, optional: &WafRuleBundleData| WafPolicyData {
+        default_profile: "default".into(),
+        profiles: std::collections::BTreeMap::from([(
+            "default".into(),
+            WafProfile {
+                rule_selection: serde_yaml::from_str(expression).unwrap(),
+                bundle_refs: vec![
+                    WafBundleRef {
+                        target: EdgionConfigDataRef {
+                            name: "base".into(),
+                            ..Default::default()
+                        },
+                        expected_digest: base.digest.clone(),
+                        optional: false,
+                    },
+                    WafBundleRef {
+                        target: EdgionConfigDataRef {
+                            name: "optional".into(),
+                            ..Default::default()
+                        },
+                        expected_digest: optional.digest.clone(),
+                        optional: true,
+                    },
+                ],
+            },
+        )]),
+    };
+    let mut resource = EdgionPlugins::new("selection-owner", EdgionPluginsSpec::default());
+    resource.metadata.namespace = Some("default".into());
+    resource.spec.waf = Some(WafConfig {
+        policy_ref: EdgionConfigDataRef {
+            name: "policy".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let handler = EdgionPluginsHandler::new();
+    for (expression, present_ids, missing_ids) in [
+        ("include: {tag: company/optional}", vec![11], vec![]),
+        ("exclude: {not: {tag: company/optional}}", vec![11], vec![]),
+        ("include: {not: {tag: company/optional}}", vec![10], vec![10]),
+    ] {
+        for present in [true, false] {
+            let mut data = HashMap::from([
+                (
+                    "default/base".into(),
+                    target("base", ConfigEntry::WafRuleBundle(base.clone())),
+                ),
+                (
+                    "default/policy".into(),
+                    target("policy", ConfigEntry::WafPolicy(policy(expression, &optional))),
+                ),
+            ]);
+            if present {
+                data.insert(
+                    "default/optional".into(),
+                    target("optional", ConfigEntry::WafRuleBundle(optional.clone())),
+                );
+            }
+            runtime.edgion_config_data_store.replace_all(data);
+            let ProcessResult::Continue(mut parsed) = handler.parse(resource.clone(), &ctx).await else {
+                panic!("selection parse skipped")
+            };
+            let waf = parsed.spec.waf.as_ref().unwrap();
+            let ids = waf
+                .compile_generation()
+                .unwrap()
+                .rule_units()
+                .map(|u| u.id())
+                .collect::<Vec<_>>();
+            assert_eq!(ids, if present { &present_ids } else { &missing_ids }.clone());
+            assert_eq!(waf.resolved_ref_indices, if present { vec![0, 1] } else { vec![0] });
+            assert!(waf.resolution_errors.is_empty());
+            assert_eq!(
+                waf.controller_selection_summary.unwrap().unmatched_atoms,
+                usize::from(!present)
+            );
+            assert!(!waf
+                .resolution_warnings
+                .iter()
+                .any(|warning| warning.contains("unmatched")));
+            handler.update_status(&mut parsed, &ctx, &[]);
+            let accepted = parsed
+                .status
+                .as_ref()
+                .unwrap()
+                .as_local()
+                .unwrap()
+                .conditions
+                .iter()
+                .find(|condition| condition.type_ == "Accepted")
+                .unwrap();
+            assert_eq!(accepted.status, "True");
+            assert!(accepted.message.contains("selectedUnits="));
+        }
+    }
+    let invalid_optional = make_bundle("SecRule REQUEST_URI \"@rx (\" \"id:11,phase:1,pass,tag:company/optional\"\n");
+    runtime.edgion_config_data_store.replace_all(HashMap::from([
+        (
+            "default/base".into(),
+            target("base", ConfigEntry::WafRuleBundle(base.clone())),
+        ),
+        (
+            "default/optional".into(),
+            target("optional", ConfigEntry::WafRuleBundle(invalid_optional.clone())),
+        ),
+        (
+            "default/policy".into(),
+            target(
+                "policy",
+                ConfigEntry::WafPolicy(policy("exclude: {tag: company/optional}", &invalid_optional)),
+            ),
+        ),
+    ]));
+    let ProcessResult::Continue(before) = handler.parse(resource.clone(), &ctx).await else {
+        panic!("selection parse skipped")
+    };
+    let waf = before.spec.waf.as_ref().unwrap();
+    assert_eq!(waf.resolved_ref_indices, [0]);
+    assert_eq!(waf.controller_selection_summary.unwrap().unmatched_atoms, 1);
+    assert!(waf
+        .resolution_warnings
+        .iter()
+        .any(|warning| warning.contains("compile failed")));
+    let publish = |expression: &str| {
+        runtime.edgion_config_data_store.replace_all(HashMap::from([
+            (
+                "default/base".into(),
+                target("base", ConfigEntry::WafRuleBundle(base.clone())),
+            ),
+            (
+                "default/optional".into(),
+                target("optional", ConfigEntry::WafRuleBundle(optional.clone())),
+            ),
+            (
+                "default/policy".into(),
+                target("policy", ConfigEntry::WafPolicy(policy(expression, &optional))),
+            ),
+        ]))
+    };
+    publish("include: {tag: company/base}");
+    let ProcessResult::Continue(before) = handler.parse(resource, &ctx).await else {
+        panic!("selection parse skipped")
+    };
+    publish("include: {tag: company/optional}");
+    let ProcessResult::Continue(after) = handler.parse(before.clone(), &ctx).await else {
+        panic!("selection refresh skipped")
+    };
+    for (parsed, expected) in [(&before, 10), (&after, 11)] {
+        let waf = parsed.spec.waf.as_ref().unwrap();
+        assert_eq!(
+            waf.compile_generation()
+                .unwrap()
+                .rule_units()
+                .map(|u| u.id())
+                .collect::<Vec<_>>(),
+            [expected]
+        );
+        assert_eq!(waf.resolved_bundles.as_ref().unwrap()[0].digest, base.compute_digest());
+    }
 }

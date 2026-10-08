@@ -60,6 +60,7 @@ fn config() -> WafConfig {
             profiles: BTreeMap::from([(
                 "original".into(),
                 WafProfile {
+                    rule_selection: Default::default(),
                     bundle_refs: vec![bundle_ref],
                 },
             )]),

@@ -13,12 +13,17 @@ mod operator;
 mod semantic;
 mod source;
 mod syntax;
+mod tag_selection;
 mod target;
 mod tokenizer;
 mod transform;
 mod xml_stream;
 
 pub(crate) use semantic::validate_executable_profile;
+pub use tag_selection::{
+    rule_unit_tags, PreparedWafRuleSelection, WafRuleIdRange, WafRuleSelection, WafRuleSelectionExpr,
+    WafSelectionAtomRef, WafSelectionError, WafSelectionStats, WafSelectionSummary, MAX_POLICY_SELECTION_BYTES,
+};
 pub use xml_stream::{
     XmlSemanticSummary, XmlStream, XmlStreamError, XmlStreamInput, XmlStreamLimit, XmlStreamLimits, XmlStreamSink,
     XmlStreamSinkError, XmlStreamUsage,
@@ -76,13 +81,15 @@ pub use compiler::{
     DEFAULT_REQUEST_BODY_PREFIX_BYTES, MAX_REQUEST_BODY_PREFIX_BYTES,
 };
 pub use include::{
-    compile_executable_profile_with_includes, compile_rule_bundles, compile_with_includes, inspect_compatibility,
-    CompatibilityError, CompatibilityFinding, CompatibilityLimits, CompatibilityReport, CompatibilityRuleSummary,
-    CompiledBundle, FrontendError, FrontendLimits, IncludeError, IncludeFailure, IncludeKind, IncludeLimits,
-    IncludeMetrics, IncludeRequest, IncludeSink, IncludeSinkError, IncludeSource, RuleBundleError, RuleBundleMember,
-    RuleBundleSource, DEFAULT_MAX_COMPATIBILITY_FINDINGS, DEFAULT_MAX_COMPATIBILITY_RULE_SUMMARIES,
-    DEFAULT_MAX_EXPANDED_SOURCE_BYTES, DEFAULT_MAX_INCLUDE_DEPTH, DEFAULT_MAX_INCLUDE_IDENTITY_BYTES,
-    DEFAULT_MAX_INCLUDE_IDENTITY_COMPARISON_BYTES, DEFAULT_MAX_INCLUDE_SOURCES, DEFAULT_MAX_INCLUDE_SOURCE_BYTES,
+    compile_executable_profile_with_includes, compile_rule_bundles, compile_rule_bundles_with_external_budget,
+    compile_rule_bundles_with_selection, compile_with_includes, inspect_compatibility, CompatibilityError,
+    CompatibilityFinding, CompatibilityLimits, CompatibilityReport, CompatibilityRuleSummary, CompiledBundle,
+    FrontendError, FrontendLimits, IncludeError, IncludeFailure, IncludeKind, IncludeLimits, IncludeMetrics,
+    IncludeRequest, IncludeSink, IncludeSinkError, IncludeSource, RuleBundleError, RuleBundleMember, RuleBundleSource,
+    WafRuleMetadataBudget, WafRuleSelectionObserver, WafRuleSelectionPreview, WafSelectionCompileError,
+    DEFAULT_MAX_COMPATIBILITY_FINDINGS, DEFAULT_MAX_COMPATIBILITY_RULE_SUMMARIES, DEFAULT_MAX_EXPANDED_SOURCE_BYTES,
+    DEFAULT_MAX_INCLUDE_DEPTH, DEFAULT_MAX_INCLUDE_IDENTITY_BYTES, DEFAULT_MAX_INCLUDE_IDENTITY_COMPARISON_BYTES,
+    DEFAULT_MAX_INCLUDE_SOURCES, DEFAULT_MAX_INCLUDE_SOURCE_BYTES,
 };
 pub use operator::{
     DecodedBytes, DecodedChunks, DecodedTextView, OperatorNameView, OperatorSpelling, OperatorSyntaxError,

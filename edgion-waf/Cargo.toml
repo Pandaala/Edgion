@@ -20,6 +20,8 @@ zmij = "=1.0.23"
 sha1.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+schemars.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -287,6 +287,10 @@ fn selector_high() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicSelectorHighTestSuite)
 }
 
+fn static_selection() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicStaticSelectionTestSuite)
+}
+
 async fn plugin_resource(ctx: &ScenarioCtx, gateway: bool) -> Result<Value> {
     let (base, prefix) = if gateway {
         (&ctx.gateway_url, "configclient")
@@ -584,6 +588,10 @@ static PHASES: &[PhaseSuite] = &[
         factory: selector_high,
     },
     PhaseSuite {
+        name: "static-selection",
+        factory: static_selection,
+    },
+    PhaseSuite {
         name: "selector-unknown-default",
         factory: bundle_v1,
     },
@@ -709,6 +717,32 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             .await?;
         ctx.apply_dir("updates/to_selector_high").await?;
         ctx.wait_phase(scenario, "selector-high", Duration::from_secs(15))
+            .await?;
+        // Only WafPolicy changes: source identities and digest pins stay fixed.
+        let before = plugin_resource(&ctx, true).await?;
+        let pins = before["spec"]["waf"]["resolvedPolicy"]["profiles"]["high"]["bundleRefs"].clone();
+        let bundles = before["spec"]["waf"]["resolvedBundles"].clone();
+        ctx.apply_dir("updates/to_static_selection").await?;
+        ctx.wait_phase(scenario, "static-selection", Duration::from_secs(20))
+            .await?;
+        for gateway in [false, true] {
+            let selected = plugin_resource(&ctx, gateway).await?;
+            ensure!(
+                selected["spec"]["waf"]["resolvedPolicy"]["profiles"]["high"]["bundleRefs"] == pins,
+                "selection changed original digest pins"
+            );
+            ensure!(
+                selected["spec"]["waf"]["resolvedBundles"] == bundles,
+                "selection changed original resolved bundles"
+            );
+            ensure!(
+                selected["spec"]["waf"]["resolvedPolicy"]["profiles"]["high"]["ruleSelection"]["exclude"].is_object(),
+                "selection tree not transported"
+            );
+        }
+        ctx.apply_dir("updates/to_selector_initial").await?;
+        ctx.apply_dir("updates/to_selector_high").await?;
+        ctx.wait_phase(scenario, "selector-high", Duration::from_secs(20))
             .await?;
         ctx.delete_resources("delete/resources.txt").await?;
         ctx.wait_phase(scenario, "deleted", Duration::from_secs(15)).await?;

@@ -33,6 +33,7 @@ pub(crate) fn config_in_namespace(rules: &str, namespace: &str) -> WafConfig {
             profiles: BTreeMap::from([(
                 "default".into(),
                 WafProfile {
+                    rule_selection: Default::default(),
                     bundle_refs: vec![WafBundleRef {
                         target: EdgionConfigDataRef {
                             name: "test-bundle".into(),

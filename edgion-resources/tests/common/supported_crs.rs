@@ -224,6 +224,7 @@ pub fn policy(package: &Package) -> Result<WafPolicyData> {
             Ok((
                 p.into(),
                 WafProfile {
+                    rule_selection: Default::default(),
                     bundle_refs: vec![
                         reference(&format!("crs-supported-{p}"), &tuning(p)?),
                         reference(CORE, &package.core),

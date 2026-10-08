@@ -548,6 +548,7 @@ struct RequirementState {
 
 #[derive(Debug)]
 struct AssetTemplateState<'source> {
+    compilation_input_bytes: usize,
     validated: ValidatedSemanticDocument<'source>,
     bytes: Vec<u8>,
     asset_phrase_bytes: Vec<u8>,
@@ -1248,6 +1249,10 @@ impl CompiledGeneration {
         self.peak_bytes
     }
 
+    pub(crate) fn include_compilation_peak(&mut self, bytes: usize) {
+        self.peak_bytes = self.peak_bytes.max(bytes);
+    }
+
     fn inspection_plan(&self, domain: InspectionDomain) -> &json_inspection_plan::CompiledJsonPlan {
         match domain {
             InspectionDomain::Json => &self.json_inspection,
@@ -1720,8 +1725,8 @@ impl<'source> RegexProgramInterner<'source> {
 const FNV1A_OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
 const FNV1A_PRIME: u64 = 1_099_511_628_211;
 
-#[derive(Debug, Default)]
-struct CanonicalWork {
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct CanonicalWork {
     probes: usize,
     record_comparisons: usize,
     comparison_bytes: usize,
@@ -1739,7 +1744,7 @@ impl CanonicalWork {
         Ok(())
     }
 
-    fn charge_records(&mut self, count: usize, limits: CompilerLimits) -> Result<(), CompilerError> {
+    pub(crate) fn charge_records(&mut self, count: usize, limits: CompilerLimits) -> Result<(), CompilerError> {
         self.record_comparisons = checked_add(self.record_comparisons, count)?;
         if self.record_comparisons > limits.max_group_key_record_comparisons {
             return Err(CompilerError::GroupKeyRecordComparisonLimit {
@@ -1749,7 +1754,11 @@ impl CanonicalWork {
         Ok(())
     }
 
-    fn charge_comparison_bytes(&mut self, count: usize, limits: CompilerLimits) -> Result<(), CompilerError> {
+    pub(crate) fn charge_comparison_bytes(
+        &mut self,
+        count: usize,
+        limits: CompilerLimits,
+    ) -> Result<(), CompilerError> {
         self.comparison_bytes = checked_add(self.comparison_bytes, count)?;
         if self.comparison_bytes > limits.max_group_key_comparison_bytes {
             return Err(CompilerError::GroupKeyComparisonByteLimit {
@@ -2517,6 +2526,7 @@ fn compile_phrase_operand_program(
 }
 
 struct CompilerBuilder<'source, 'assets> {
+    external_live_bytes: usize,
     validated: ValidatedSemanticDocument<'source>,
     assets: Option<&'assets mut dyn PhraseAssetSource>,
     limits: CompilerLimits,
@@ -2529,6 +2539,7 @@ impl<'source, 'assets> CompilerBuilder<'source, 'assets> {
         limits: CompilerLimits,
     ) -> Self {
         Self {
+            external_live_bytes: 0,
             validated,
             assets,
             limits,
@@ -2536,6 +2547,7 @@ impl<'source, 'assets> CompilerBuilder<'source, 'assets> {
     }
 
     fn prepare(self) -> Result<AssetTemplateState<'source>, CompilerError> {
+        let compilation_input_bytes = checked_add(self.validated.retained_charged_bytes(), self.external_live_bytes)?;
         let unit_count = self.validated.rule_units().len();
         let node_count = self.validated.rule_nodes().len();
         if unit_count > self.limits.max_units {
@@ -2563,7 +2575,7 @@ impl<'source, 'assets> CompilerBuilder<'source, 'assets> {
             }
         }
         preflight.validate_peak(
-            self.validated.retained_charged_bytes(),
+            compilation_input_bytes,
             self.validated.requirements().len(),
             self.limits,
         )?;
@@ -2581,12 +2593,7 @@ impl<'source, 'assets> CompilerBuilder<'source, 'assets> {
             });
         }
         requirements.sort_unstable_by_key(|requirement| requirement_key(requirement.kind, requirement.location));
-        let mut work = CompileWork::new(
-            self.validated.retained_charged_bytes(),
-            self.limits,
-            requirements,
-            preflight,
-        )?;
+        let mut work = CompileWork::new(compilation_input_bytes, self.limits, requirements, preflight)?;
         let mut assets = self.assets;
         for unit in self.validated.rule_units() {
             if unit.is_compatibility_excluded() {
@@ -2610,6 +2617,7 @@ impl<'source, 'assets> CompilerBuilder<'source, 'assets> {
         }
         work.verify_a_requirements()?;
         Ok(AssetTemplateState {
+            compilation_input_bytes,
             validated: self.validated,
             bytes: work.bytes,
             asset_phrase_bytes: work.asset_phrase_bytes,
@@ -2631,7 +2639,11 @@ impl<'source, 'assets> CompilerBuilder<'source, 'assets> {
 }
 
 impl<'source> MatcherState<'source> {
-    fn compile(mut state: AssetTemplateState<'source>, limits: CompilerLimits) -> Result<Self, CompilerError> {
+    fn compile_with_work(
+        mut state: AssetTemplateState<'source>,
+        limits: CompilerLimits,
+        mut canonical_work: CanonicalWork,
+    ) -> Result<Self, CompilerError> {
         let target_regex_count = state
             .requirements
             .iter()
@@ -2692,7 +2704,7 @@ impl<'source> MatcherState<'source> {
 
         let mut work = MatcherCompileWork {
             limits,
-            validated_bytes: state.validated.retained_charged_bytes(),
+            validated_bytes: state.compilation_input_bytes,
             working_bytes: state.compiler_working_bytes,
             compiler_owned_bytes: state.compiler_owned_bytes,
             matcher_charged_bytes: 0,
@@ -2767,7 +2779,6 @@ impl<'source> MatcherState<'source> {
         debug_assert_eq!(regex_candidates.len(), candidate_count);
         target_ids.fill(usize::MAX);
 
-        let mut canonical_work = CanonicalWork::default();
         let mut selector_interner = RegexProgramInterner::new(target_regex_count, &mut work)?;
         for unit in state.validated.active_rule_units() {
             for member in unit.members() {
@@ -2899,7 +2910,7 @@ impl<'source> GroupedMatcherState<'source> {
         let group_table_slots = canonical_table_slots(pattern_preflight.matcher_members)?;
         let mut compile_work = MatcherCompileWork {
             limits,
-            validated_bytes: state.asset_templates.validated.retained_charged_bytes(),
+            validated_bytes: state.asset_templates.compilation_input_bytes,
             working_bytes: state.asset_templates.compiler_working_bytes,
             compiler_owned_bytes: state.compiler_owned_bytes,
             matcher_charged_bytes: state.matcher_charged_bytes,
@@ -3531,7 +3542,10 @@ impl<'source> GroupedMatcherState<'source> {
 }
 
 impl CompiledGeneration {
-    fn publish(mut state: GroupedMatcherState<'_>, limits: CompilerLimits) -> Result<Self, CompilerError> {
+    fn publish_with_work(
+        mut state: GroupedMatcherState<'_>,
+        limits: CompilerLimits,
+    ) -> Result<(Self, CanonicalWork), CompilerError> {
         let active_units = state.matchers.asset_templates.validated.active_rule_units().len();
         let marker_count = state.matchers.asset_templates.validated.markers().len();
         let mut phase_units = [0_usize; 5];
@@ -3565,7 +3579,7 @@ impl CompiledGeneration {
 
         let mut work = MatcherCompileWork {
             limits,
-            validated_bytes: state.matchers.asset_templates.validated.retained_charged_bytes(),
+            validated_bytes: state.matchers.asset_templates.compilation_input_bytes,
             working_bytes: state.matchers.asset_templates.compiler_working_bytes,
             compiler_owned_bytes: state.compiler_owned_bytes,
             matcher_charged_bytes: state.matcher_charged_bytes,
@@ -3727,6 +3741,7 @@ impl CompiledGeneration {
             ..
         } = matchers;
         let AssetTemplateState {
+            compilation_input_bytes: _,
             validated,
             bytes,
             templates,
@@ -3952,7 +3967,7 @@ impl CompiledGeneration {
         generation.peak_bytes = work.peak_bytes;
         generation.prefix_validation = generation.check_request_body_prefix();
         generation.requires_complete_request_body = generation.has_complete_request_body_dependency();
-        Ok(generation)
+        Ok((generation, state.canonical_work))
     }
 }
 
@@ -3962,10 +3977,25 @@ pub fn compile_validated(
     assets: Option<&mut dyn PhraseAssetSource>,
     limits: CompilerLimits,
 ) -> Result<CompiledGeneration, CompilerError> {
-    let prepared = CompilerBuilder::new(validated, assets, limits).prepare()?;
-    let matched = MatcherState::compile(prepared, limits)?;
+    compile_validated_with_budget(validated, assets, limits, 0, &mut CanonicalWork::default())
+}
+
+/// Share canonical work across sequential compile passes and charge externally live input.
+pub(crate) fn compile_validated_with_budget(
+    validated: ValidatedSemanticDocument<'_>,
+    assets: Option<&mut dyn PhraseAssetSource>,
+    limits: CompilerLimits,
+    external_live_bytes: usize,
+    work: &mut CanonicalWork,
+) -> Result<CompiledGeneration, CompilerError> {
+    let mut builder = CompilerBuilder::new(validated, assets, limits);
+    builder.external_live_bytes = external_live_bytes;
+    let prepared = builder.prepare()?;
+    let matched = MatcherState::compile_with_work(prepared, limits, *work)?;
     let grouped = GroupedMatcherState::compile(matched, limits)?;
-    CompiledGeneration::publish(grouped, limits)
+    let (generation, used) = CompiledGeneration::publish_with_work(grouped, limits)?;
+    *work = used;
+    Ok(generation)
 }
 
 #[derive(Clone, Copy)]

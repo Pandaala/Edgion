@@ -10,6 +10,13 @@ use std::collections::{HashMap, HashSet};
 
 use edgion_resources::prelude_resources::EdgionConfigData;
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
+use edgion_resources::resources::edgion_config_data::PreparedWafPolicySelections;
+
+pub struct WafPolicySnapshot {
+    pub policy: Option<EdgionConfigData>,
+    pub children: HashMap<String, Option<EdgionConfigData>>,
+    pub selections: Result<Option<PreparedWafPolicySelections>, String>,
+}
 
 /// Store for EdgionConfigData resources (controller-side, low-frequency access).
 ///
@@ -34,18 +41,20 @@ impl EdgionConfigDataStore {
 
     /// Capture a WAF policy, its bundles, and the consumer's optional Selector
     /// under one read guard. Compilation runs after the guard drops.
-    pub fn get_waf_policy_snapshot(
-        &self,
-        policy_key: &str,
-        selector_key: Option<&str>,
-    ) -> (Option<EdgionConfigData>, HashMap<String, Option<EdgionConfigData>>) {
+    pub fn get_waf_policy_snapshot(&self, policy_key: &str, selector_key: Option<&str>) -> WafPolicySnapshot {
         let map = self.data.read();
         let policy_source = map.get(policy_key);
         let mut children = HashMap::new();
+        let mut selections = Ok(None);
         if let Some(ed) = policy_source {
             if let ConfigEntry::WafPolicy(data) = &ed.spec.data {
-                if data.validate_shape().is_err() {
-                    return (policy_source.cloned(), children);
+                selections = data.prepare_selections().map(Some);
+                if selections.is_err() {
+                    return WafPolicySnapshot {
+                        policy: policy_source.cloned(),
+                        children,
+                        selections,
+                    };
                 }
                 let namespace = ed.metadata.namespace.as_deref().unwrap_or("default");
                 let references = data
@@ -62,7 +71,11 @@ impl EdgionConfigDataStore {
         if let Some(key) = selector_key {
             children.entry(key.to_string()).or_insert_with(|| map.get(key).cloned());
         }
-        (policy_source.cloned(), children)
+        WafPolicySnapshot {
+            policy: policy_source.cloned(),
+            children,
+            selections,
+        }
     }
 
     /// Replace all entries (used during reset).

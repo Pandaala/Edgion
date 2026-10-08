@@ -2272,3 +2272,66 @@ fn capture_batch_peak_splitting_keeps_compact_ids_and_earlier_alias_ownership() 
         assert!(g.compilation_peak_bytes() <= CompilerLimits::default().max_compilation_peak_bytes);
     }
 }
+
+#[test]
+fn static_selection_prunes_exclusive_plans_but_preserves_shared_target_regex() {
+    use crate::seclang::WafRuleSelection;
+    let source = concat!(
+        "SecRule ARGS:/^drop$/ \"@rx (drop)\" \"id:1,phase:2,pass,capture,tag:drop\"\n",
+        "SecRule ARGS:/^shared$/ \"@rx same\" \"id:2,phase:2,pass,tag:keep\"\n",
+        "SecRule ARGS:/^shared$/ \"@rx same\" \"id:3,phase:2,pass,tag:drop\"\n",
+        "SecRule XML:/* \"@contains value\" \"id:4,phase:2,pass,tag:drop\"\n",
+        "SecRule REQUEST_URI \"@contains /probe\" \"id:5,phase:1,pass,tag:keep\"\n",
+    );
+    let baseline = with_validated(source, |validated| {
+        compile_validated(validated, None, CompilerLimits::default()).unwrap()
+    });
+    let program = serde_yaml::from_str::<WafRuleSelection>("exclude: {tag: drop}")
+        .unwrap()
+        .prepare()
+        .unwrap();
+    let selected = with_validated(source, |mut validated| {
+        let mut work = CanonicalWork::default();
+        let decision = program
+            .select(&validated, &mut work, CompilerLimits::default())
+            .unwrap();
+        validated
+            .apply_selection_mask(&decision.mask, &mut work, CompilerLimits::default())
+            .unwrap();
+        compile_validated(validated, None, CompilerLimits::default()).unwrap()
+    });
+    assert_eq!(selected.rule_units().map(|unit| unit.id()).collect::<Vec<_>>(), [2, 5]);
+    assert!(baseline.capture_regexes.len() > selected.capture_regexes.len());
+    assert!(selected.capture_regexes.is_empty());
+    assert!(baseline.json_inspection.groups.len() > selected.json_inspection.groups.len());
+    assert!(baseline.xml_inspection.xml_text.len() > selected.xml_inspection.xml_text.len());
+    assert!(selected.xml_inspection.xml_text.is_empty());
+    assert!(baseline.inspection_activation.steps.len() > selected.inspection_activation.steps.len());
+    assert!(selected.capture_hits.matchers.is_empty());
+    assert!(baseline.matcher_charged_bytes() > selected.matcher_charged_bytes());
+    // One shared selector is still usable by the selected rule, while the drop-only selector disappears.
+    let records: Vec<_> = selected
+        .rule_units()
+        .flat_map(|unit| unit.members())
+        .flat_map(|member| member.target_plan().into_iter().flat_map(|plan| plan.records()))
+        .collect();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.selector_regex_program_id().is_some())
+            .count(),
+        1
+    );
+}
+
+impl<'source> MatcherState<'source> {
+    fn compile(state: AssetTemplateState<'source>, limits: CompilerLimits) -> Result<Self, CompilerError> {
+        Self::compile_with_work(state, limits, CanonicalWork::default())
+    }
+}
+
+impl CompiledGeneration {
+    fn publish(state: GroupedMatcherState<'_>, limits: CompilerLimits) -> Result<Self, CompilerError> {
+        Self::publish_with_work(state, limits).map(|result| result.0)
+    }
+}

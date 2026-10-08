@@ -439,7 +439,7 @@ Do not add another cache implementation or broaden TinyUFO usage without documen
     not an address field. HTTP access-log fields use the canonical names
     `direct_peer_ip` and `remote_ip`; protocol-specific logs follow the same
     vocabulary.
-13. Condition predicates reuse the shared `Condition` enum; a container field name must state how its elements combine. Do not add a plugin-local predicate enum, Include/Exclude, RestrictionSource, or wildcard values.
+13. Request condition predicates reuse the shared `Condition`/`ConditionSet`; a container field name must state how its elements combine. Do not add a plugin-local request predicate enum, Include/Exclude, RestrictionSource, or wildcard values. Configuration-only WAF rule-metadata selection has one canonical implementation in the external-only `edgion-waf` leaf; it has no request bindings or request-time evaluation. Importing crates must not implement another static WAF selector.
 
 ## Git constraints
 

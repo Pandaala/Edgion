@@ -587,6 +587,27 @@ phase_suite!(
     ]
 );
 
+phase_suite!(
+    WafDynamicStaticSelectionTestSuite,
+    "Native WAF Dynamic - Static Selection",
+    [
+        (
+            "waf_selection_v2_allowed",
+            "policy-only selection excludes V2 header rule",
+            "v2",
+            None,
+            200
+        ),
+        (
+            "waf_selection_body_retained",
+            "selection retains the second bundle body rule",
+            "v1",
+            Some("blocked"),
+            406
+        ),
+    ]
+);
+
 pub struct WafDynamicXmlV1TestSuite;
 pub struct WafDynamicXmlV2TestSuite;
 pub struct WafDynamicXmlDetectionTestSuite;

@@ -357,7 +357,7 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   Rationale and worked cases:
   [fail-closed-error-body-no-internal-detail.md](../../04-review/security/mandatory-design/fail-closed-error-body-no-internal-detail.md).
 
-### 15. Condition predicate layer — Unified
+### 15. Request condition predicate layer — Unified
 
 - **Canon**: schema in
   `edgion-resources/src/resources/edgion_plugins/conditions.rs`
@@ -376,10 +376,18 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   zero/one-leaf scope relies on its action/result signal; `cond_skip`, final
   policy decisions, group attribution, and errors are never suppressed. Count
   leaves at compile time, not on the request path.
-- **Rule**: new predicates MUST reuse `Condition`. Do not add a
-  plugin-local predicate enum, `Include`/`Exclude`, `RestrictionSource`,
+- **Rule**: new request predicates MUST reuse `Condition`. Do not add a
+  plugin-local request predicate enum, `Include`/`Exclude`, `RestrictionSource`,
   or wildcard `values`. See
   [plugin-metadata/unified-condition-layer.md](../../04-review/plugin-metadata/superseded/unified-condition-layer.md).
+- **Distinct compiler domain**: configuration-only WAF rule-metadata selection
+  operates on semantic rule units, not request `KeyGet`/JWT/secret/time inputs.
+  Its schema, bounded decoding, validation and evaluation are canonical in the
+  external-only `edgion-waf` leaf. Resources, Controller, Gateway configuration
+  compilation and CLI reuse it; no importing crate adds another static selector.
+  It has no request bindings, request evaluation, or runtime condition descriptors.
+  This does not relax the shared `Condition` requirement for any request consumer.
+  Keep this scope synchronized with root `AGENTS.md` rule 13.
 
 ---
 

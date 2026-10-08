@@ -1,0 +1,14 @@
+# Standalone selection document. Embed under a named WafPolicy profile's ruleSelection.
+# Requires an operator-attested absence of PHP execution throughout the serving stack.
+exclude:
+  allOf:
+    - tag: language-php
+    - tag: attack-injection-php
+    - ruleIdRange: {start: 933100, end: 933299}
+    - not: {tag: language-java}
+    - not:
+        anyOf:
+          - ruleId: 933110
+          - ruleId: 933111
+          - ruleId: 933200
+          - ruleId: 933220

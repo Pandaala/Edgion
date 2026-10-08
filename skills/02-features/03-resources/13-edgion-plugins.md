@@ -304,3 +304,14 @@ Outcome slots are Gateway-owned and invocation-local, not serialized operator
 fields or writable ctx variables. Existing local scope/CMS accounting and Redis
 failure policy remain unchanged. See the user-facing overflow recipe in
 docs/en/user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md.
+
+### Static WAF rule selection
+
+Each `WafPolicy.profiles.<name>.ruleSelection` is an optional canonical typed
+include/exclude tree owned by `edgion-waf`. It selects whole validated rule units
+before executable plans are built, with exact literal tags and root IDs/phases.
+The original baseline still compiles and passes the actual body-mode admission.
+Controller and Gateway independently use the same leaf compiler; no request-time
+condition evaluator or rewritten source is introduced. See the
+[operator guide](../../../docs/en/user-guide/http-route/filters/edgion-plugins/waf.md#static-rule-selection)
+and [implementation specification](../../../tasks/pending/waf-tag-selection/01-spec.md).
