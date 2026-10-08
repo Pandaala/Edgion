@@ -343,3 +343,16 @@ EdgionPlugins ExtensionLocal, globalPluginsRef and Gateway plugin annotation
 targets use the EdgionPlugins-specific missing/unique/ambiguous source contract
 in 01-spec. Raw namespace omission remains authored; explicit empty namespace
 is not an alias. This does not extend default aliases to other target kinds.
+
+### GatewayClass parameters owning adapter
+
+`refs::gateway_class_fields::GatewayClassParametersRef` borrows the actual class
+and validates its optional parameters field before Controller, Gateway startup,
+or scoped publication reads a target. An absent reference retains built-in
+defaults. A present reference requires exact `edgion.io/EdgionGatewayConfig`, a
+valid name and an unset namespace (explicit empty is invalid). The target is
+cluster-scoped; no ReferenceGrant or material capability is introduced. Invalid
+references report Controller `InvalidParameters`, skip Gateway startup admission,
+and publish an unavailable runtime scope. Only valid references retain the
+Controller's unwatched-EGC unknown/Skip behavior. Existing EGC/class requeues and
+snapshot recovery remain unchanged; this does not reconstruct live listeners.

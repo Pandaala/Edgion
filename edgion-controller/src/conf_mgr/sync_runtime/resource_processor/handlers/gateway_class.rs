@@ -13,7 +13,9 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::{EdgionGatewayConfig, Gateway, GatewayClass};
 use edgion_resources::resources::gateway_class::{GatewayClassStatus, SupportedFeature, SUPPORTED_FEATURES};
+use edgion_resources::resources::refs::gateway_class_fields::GatewayClassParametersRef;
 use edgion_resources::resources::refs::plugin_target::PluginTarget;
+use edgion_resources::resources::refs::ReferenceError;
 #[cfg(test)]
 use edgion_resources::EdgionPlugins;
 
@@ -35,26 +37,32 @@ enum ParamsRefState {
 /// reads the RawStore, which the watch/file layer populates upstream of the processor
 /// pipeline, so a GatewayClass requeued by an EGC change always observes the current state.
 fn resolve_params_ref(gc: &GatewayClass, ctx: &HandlerContext) -> ParamsRefState {
-    let Some(params_ref) = gc.spec.parameters_ref.as_ref() else {
-        return ParamsRefState::Skip;
+    let reference = match GatewayClassParametersRef::from_class(gc) {
+        Ok(None) => return ParamsRefState::Skip,
+        Ok(Some(reference)) => reference,
+        Err(ReferenceError::UnsupportedTarget) => {
+            let Some(field) = gc.spec.parameters_ref.as_ref() else {
+                return ParamsRefState::Invalid("parametersRef: unsupported reference target".into());
+            };
+            return ParamsRefState::Invalid(format!(
+                "parametersRef must reference edgion.io/EdgionGatewayConfig, got \"{}/{}\"",
+                field.group, field.kind
+            ));
+        }
+        Err(error) => return ParamsRefState::Invalid(format!("parametersRef: {error}")),
     };
-    if params_ref.group != "edgion.io" || params_ref.kind != "EdgionGatewayConfig" {
-        return ParamsRefState::Invalid(format!(
-            "parametersRef must reference edgion.io/EdgionGatewayConfig, got \"{}/{}\"",
-            params_ref.group, params_ref.kind
-        ));
-    }
+    let target = reference.target();
     match ctx.runtime().processor_registry.get("EdgionGatewayConfig") {
         // EGC kind not watched (no_watch_kinds opt-out): existence unknown, do not assert.
         None => ParamsRefState::Skip,
         Some(processor) => {
             let Some(egc) = processor
-                .get_raw_any(&params_ref.name)
+                .get_raw_any(target.name())
                 .and_then(|raw| raw.downcast::<EdgionGatewayConfig>().ok())
             else {
                 return ParamsRefState::Invalid(format!(
                     "referenced EdgionGatewayConfig \"{}\" not found",
-                    params_ref.name
+                    target.name()
                 ));
             };
             // Unlike the shared cluster-scoped EGC, this class is owned by one

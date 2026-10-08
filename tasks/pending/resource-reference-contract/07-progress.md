@@ -1402,3 +1402,40 @@ contains no candidate material; unchanged raw source/prepared snapshots are not 
 process-wide zero-copy claim. Stage only reviewed technical changes plus this
 ledger, excluding review-results; local commit only. Evidence: r4d-verification,
 r4d-root-verification and r4d-final directories under ignored task artifacts.
+
+R4d committed b872bc8c95299115e4855548c4a87c27e575c950 locally, parentfc4abfee.
+Commit contains29 changed technical files plus this ledger; one allowed existing
+EP test file needed no edit. Root verified all30 candidate hashes in HEAD, clean
+tracked/index state, unrelated review-results untouched, no push.
+
+R5a begins PLAN ONLY: actual GatewayClass.parametersRef validation must be shared
+across Controller resolution, Gateway listener startup and publisher scope selection.
+The existing publisher already rejects wrong G/K and any namespace; other consumers
+must not read the same-named EGC first. Revalidate original authority and freeze a
+bounded independently reviewed plan before edits. Candidate R5b policy target
+identity/atomicity remains read-only inventory until R5a commits.
+
+R5a independent Astra plan review passes the exact14-path batch. A borrowed actual
+GatewayClass parameters adapter validates exact G/K, strictly absent namespace,
+and lexical cluster target name before every target read. Preserve absent built-in
+defaults, invalid Controller InvalidParameters/startup skip/publisher unavailable,
+valid-unwatched Controller Skip and existing missing-target recovery. No new owner
+metadata strictness, Grant/schema/source-version/listener-reconstruction or process
+configuration change. Baseline capture precedes implementation; old tests stay
+verbatim. Separate stale selected-class/SupportedVersion documentation claims are
+recorded under r5a-plan-20261008 for final F1 reconciliation, not silently rewritten.
+
+R5a implementation and both independent actual reviews pass. Adapter1 + owner-loan
+compile-fail1, Controller11, startup2 and publication23 tests pass warning-free;
+compiled identities1933->1934 /1769->1771 /5164->5166 retain all originals and
+old test files remain verbatim prefixes. One initial Gateway fixture compile
+failure is retained; only new fixture Arc serialization/delta arguments changed.
+All14 root gates pass, check46.211s/Clippy81.077s, no warnings/errors and stable
+14-path hashes. Root reproduced raw logs, list/binary hashes and old tests.
+Graded MUST scan confirms one owning parameters classifier, validation before
+lookup, unchanged Grant/source/schema/secret/queue/handler IO/hot-path semantics.
+Existing startup warning is still cold-path; no new observability mechanism.
+Coverage is config-name selection, actual Controller queues and immutable scopes,
+not live listener reconstruction or conformance. Stage reviewed changes plus this
+ledger; local commit only. Evidence under r5a-verification, r5a-root-verification
+and r5a-final ignored artifacts. Remaining R5b/R5c/R5d/R6-R8/F1/F2 stay open.

@@ -68,15 +68,17 @@ No special handling; passes through directly.
 - The following validation applies independently to every matching class.
   Semantic comparison includes supportedFeatures so features-only changes persist
   and WATCH echoes converge. Foreign conditions remain intact.
-- `parametersRef` must use group `edgion.io` and kind `EdgionGatewayConfig`.
-  Invalid group/kind or missing EGC produces `ResolvedRefs=False` and
+- The actual class field uses `GatewayClassParametersRef` in Controller, Gateway startup,
+  and scoped publication. `parametersRef` requires group `edgion.io`, kind
+  `EdgionGatewayConfig`, a valid resource name and namespace unset (even explicit
+  empty namespace is invalid). Invalid identity or missing EGC produces `ResolvedRefs=False` and
   `Accepted=False`, both with reason `InvalidParameters`.
 - When the EGC exists, `ResolvedRefs=True`. Its visible `globalPluginsRef`
   resources use the shared early RequestId validator against current raw plugin
   generations. Invalid early sources/conditions produce
   `Accepted=False/InvalidParameters` on this owned class, never on shared EGC.
   A missing/unwatched plugin retains the existing unknown/not-rejected behavior.
-- With no parametersRef or unwatched EGC kind, remove stale ResolvedRefs and do
+- With no parametersRef or a valid reference to an unwatched EGC kind, remove stale ResolvedRefs and do
   not reject solely for the unknown reference. Other validation errors use
   `Accepted=False/Invalid`; otherwise `Accepted=True/Accepted`.
 - `SupportedVersion`: always True, indicating support for the current Gateway API version

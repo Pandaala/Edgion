@@ -38,6 +38,11 @@ spec:
 
 ### parametersRef Schema
 
+EdgionGatewayConfig is cluster-scoped: `namespace` MUST be unset, including no
+explicit empty namespace. Group/kind must match exactly and name must be a valid
+resource name. An absent parametersRef retains built-in defaults; an invalid
+reference never selects a same-name configuration.
+
 ```yaml
 parametersRef:
   group: String      # "edgion.io"

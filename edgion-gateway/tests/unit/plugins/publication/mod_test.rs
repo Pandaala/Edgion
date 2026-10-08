@@ -1237,3 +1237,54 @@ fn delegated_rule_and_backend_collision_use_effective_owner_and_pinned_scope() {
             .unwrap()
     ));
 }
+
+#[test]
+fn class_parameters_contract_is_shared_across_full_and_delta_repair() {
+    for full in [false, true] {
+        let publisher = publisher();
+        let original = scope(&publisher, "apps/a");
+        assert!(original.available);
+        for (field, value) in [
+            ("group", "wrong.io"),
+            ("kind", "Secret"),
+            ("name", "bad/name"),
+            ("name", ""),
+            ("namespace", ""),
+            ("namespace", "default"),
+        ] {
+            let mut raw = serde_json::to_value(&*class("a", Some("policy-a"))).unwrap();
+            raw["spec"]["parametersRef"][field] = json!(value);
+            let invalid = Arc::new(serde_json::from_value(raw).unwrap());
+            let classes = HashMap::from([("a".into(), invalid)]);
+            if full {
+                publisher.replace_gateway_classes(classes);
+            } else {
+                publisher.update_gateway_classes(classes, &HashSet::new());
+            }
+            assert!(!scope(&publisher, "apps/a").available, "{field}={value}");
+            assert!(original.available, "captured scope remains immutable");
+            let repaired = HashMap::from([("a".into(), class("a", Some("policy-a")))]);
+            if full {
+                publisher.replace_gateway_classes(repaired);
+            } else {
+                publisher.update_gateway_classes(repaired, &HashSet::new());
+            }
+            assert!(scope(&publisher, "apps/a").available);
+        }
+        if full {
+            publisher.replace_gateway_configs(HashMap::new());
+        } else {
+            publisher.update_gateway_configs(HashMap::new(), &HashSet::from(["policy-a".into()]));
+        }
+        assert!(!scope(&publisher, "apps/a").available);
+        let configs = HashMap::from([("policy-a".into(), config("policy-a", json!({})))]);
+        if full {
+            publisher.replace_gateway_configs(configs);
+        } else {
+            publisher.update_gateway_configs(configs, &HashSet::new());
+        }
+        assert!(scope(&publisher, "apps/a").available);
+        publisher.replace_gateway_classes(HashMap::from([("a".into(), class("a", None))]));
+        assert!(scope(&publisher, "apps/a").available);
+    }
+}

@@ -300,3 +300,39 @@ async fn bare_plugin_event_requeues_global_owner_and_class_reports_collision() {
         assert_eq!(status.contains("ambiguous"), namespace.is_some());
     }
 }
+
+#[tokio::test]
+async fn parameters_recover_after_target_removal_and_recreation() {
+    let deployment = Deployment::new("parameters-recovery", None).await;
+    let (source, _) = deployment.process_egc(config()).await;
+    deployment.drain_class().await;
+    deployment.assert_class(true);
+    deployment.egc_raw.remove("shared");
+    deployment.egc.on_event_key("shared".into()).await;
+    let item = tokio::time::timeout(Duration::from_secs(5), deployment.egc.workqueue().dequeue())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.key, "shared");
+    deployment
+        .egc
+        .process_work_item(&item.key, None, None, item.trigger_chain)
+        .await;
+    deployment.egc.workqueue().done(&item.key);
+    deployment.drain_class().await;
+    let class = deployment.gc.get(&deployment.class).unwrap();
+    for kind in ["Accepted", "ResolvedRefs"] {
+        let condition = class
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|c| c.type_ == kind)
+            .unwrap();
+        assert_eq!((&*condition.status, &*condition.reason), ("False", "InvalidParameters"));
+    }
+    deployment.process_egc(source).await;
+    deployment.drain_class().await;
+    deployment.assert_class(true);
+}

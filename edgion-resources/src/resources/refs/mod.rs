@@ -7,6 +7,7 @@
 pub mod condition_fields;
 pub mod egc_tls_fields;
 pub mod extension_ref;
+pub mod gateway_class_fields;
 pub(super) mod grants;
 mod identity;
 pub mod link_sys_fields;

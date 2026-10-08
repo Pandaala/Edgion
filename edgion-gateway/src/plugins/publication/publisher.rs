@@ -1,5 +1,6 @@
 //! Serialized cold-path inputs and atomic policy/executable publication.
 
+use edgion_resources::resources::refs::gateway_class_fields::GatewayClassParametersRef;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
@@ -326,18 +327,14 @@ impl Inputs {
                 available = false;
                 None
             }
-            Some(class) => match class.spec.parameters_ref.as_ref() {
-                None => None,
-                Some(reference)
-                    if reference.group == "edgion.io"
-                        && reference.kind == "EdgionGatewayConfig"
-                        && reference.namespace.is_none() =>
-                {
-                    let config = self.gateway_configs.get(&reference.name).cloned();
+            Some(class) => match GatewayClassParametersRef::from_class(class) {
+                Ok(None) => None,
+                Ok(Some(reference)) => {
+                    let config = self.gateway_configs.get(reference.target().name()).cloned();
                     available = config.is_some();
                     config
                 }
-                Some(_) => {
+                Err(_) => {
                     available = false;
                     None
                 }

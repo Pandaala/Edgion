@@ -1102,3 +1102,16 @@ keeps its existing policy/material exclusions. No equal-UID retention gate is
 introduced. Exact raw inventory, deletion, credential ownership and entry/rate
 scopes remain unchanged; retained execution never crosses raw owners. Existing
 in-flight captured scopes and independent-kind publication boundaries remain.
+
+### GatewayClass parameters owning adapter
+
+`refs::gateway_class_fields::GatewayClassParametersRef` borrows the actual class
+and validates its optional parameters field before Controller, Gateway startup,
+or scoped publication reads a target. An absent reference retains built-in
+defaults. A present reference requires exact `edgion.io/EdgionGatewayConfig`, a
+valid name and an unset namespace (explicit empty is invalid). The target is
+cluster-scoped; no ReferenceGrant or material capability is introduced. Invalid
+references report Controller `InvalidParameters`, skip Gateway startup admission,
+and publish an unavailable runtime scope. Only valid references retain the
+Controller's unwatched-EGC unknown/Skip behavior. Existing EGC/class requeues and
+snapshot recovery remain unchanged; this does not reconstruct live listeners.

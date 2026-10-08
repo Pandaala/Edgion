@@ -186,3 +186,37 @@ fn removing_params_ref_prunes_stale_resolved_refs() {
         Some(("True".to_string(), "Accepted".to_string()))
     );
 }
+
+#[test]
+fn invalid_parameters_do_not_resolve_decoys_or_skip_unwatched_validation() {
+    let handler = GatewayClassHandler::default();
+    for watched in [false, true] {
+        let ctx = make_ctx(watched.then_some(&["config", "bad/name", ""][..]));
+        for (name, namespace) in [
+            ("config", Some("")),
+            ("config", Some("default")),
+            ("bad/name", None),
+            ("", None),
+        ] {
+            let mut reference = egc_ref(name);
+            reference.namespace = namespace.map(str::to_owned);
+            let mut class = make_gateway_class(Some(reference));
+            handler.update_status(&mut class, &ctx, &[]);
+            assert_eq!(
+                cond(&class, "ResolvedRefs"),
+                Some(("False".into(), "InvalidParameters".into()))
+            );
+            assert_eq!(
+                cond(&class, "Accepted"),
+                Some(("False".into(), "InvalidParameters".into()))
+            );
+            class.spec.parameters_ref = Some(egc_ref("config"));
+            handler.update_status(&mut class, &ctx, &[]);
+            assert_eq!(cond(&class, "Accepted"), Some(("True".into(), "Accepted".into())));
+            assert_eq!(
+                cond(&class, "ResolvedRefs"),
+                watched.then(|| ("True".into(), "ResolvedRefs".into()))
+            );
+        }
+    }
+}

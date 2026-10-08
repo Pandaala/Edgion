@@ -10,7 +10,8 @@ use crate::runtime::store::listener_gateway_info::is_listener_conflicted;
 use anyhow::{Context, Result};
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::resources::proxy_protocol::ResolvedInboundProxyProtocol;
-use edgion_resources::{Gateway, ResourceMeta};
+use edgion_resources::resources::refs::gateway_class_fields::GatewayClassParametersRef;
+use edgion_resources::{Gateway, GatewayClass, ResourceMeta};
 use kube::ResourceExt;
 use pingora_core::server::Server;
 use std::collections::HashMap;
@@ -33,6 +34,18 @@ fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
         .and_then(|annotations| annotations.get(edgion_resources::constants::annotations::edgion::ENABLE_HTTP2))
         .map(|value| !matches!(value.to_lowercase().as_str(), "false" | "0" | "no" | "off"))
         .unwrap_or(true) // Default to true if annotation is not present
+}
+
+/// Resolve the class-owned target before querying startup configuration.
+fn resolve_gateway_config_name(class: &GatewayClass, mut exists: impl FnMut(&str) -> bool) -> Result<Option<String>> {
+    let Some(reference) = GatewayClassParametersRef::from_class(class)? else {
+        return Ok(None);
+    };
+    let name = reference.target().name();
+    if !exists(name) {
+        anyhow::bail!("referenced EdgionGatewayConfig not found");
+    }
+    Ok(Some(name.to_owned()))
 }
 
 impl GatewayBase {
@@ -115,25 +128,26 @@ impl GatewayBase {
             };
 
             // Get EdgionGatewayConfig for this Gateway
-            let edgion_gateway_config_name = match gateway_class.spec.parameters_ref.as_ref() {
-                Some(params_ref) => match self.config_client.get_edgion_gateway_config(&params_ref.name) {
-                    Some(_) => Some(params_ref.name.clone()),
-                    None => {
-                        tracing::warn!(
-                            gateway = %gateway.key_name(),
-                            edgion_gateway_config = %params_ref.name,
-                            "EdgionGatewayConfig not found, skipping Gateway"
-                        );
-                        continue;
-                    }
-                },
-                None => {
+            let edgion_gateway_config_name = match resolve_gateway_config_name(&gateway_class, |name| {
+                self.config_client.get_edgion_gateway_config(name).is_some()
+            }) {
+                Ok(Some(name)) => Some(name),
+                Ok(None) => {
                     tracing::info!(
                         gateway = %gateway.key_name(),
                         gateway_class = %gateway_class_name,
                         "GatewayClass has no parametersRef, using built-in defaults"
                     );
                     None
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        gateway = %gateway.key_name(),
+                        gateway_class = %gateway_class_name,
+                        error = %error,
+                        "GatewayClass parametersRef unusable, skipping Gateway"
+                    );
+                    continue;
                 }
             };
 
