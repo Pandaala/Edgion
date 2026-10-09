@@ -142,6 +142,7 @@ pub struct LegacyRawProjection {
 }
 
 pub struct AvailableServiceProjection {
+    pub(crate) dns_resolver_candidate: Option<edgion_common::dns::resolver_select::ResolverCandidate>,
     content_fingerprint: [u8; 32],
     pub membership_identity: u64,
     pub runtime_cell: Arc<ServiceRuntimeCell>,
@@ -1371,6 +1372,9 @@ fn build_service_projection(
         ));
     };
     Some(ServicePublishedState::Available(Arc::new(AvailableServiceProjection {
+        dns_resolver_candidate: edgion_common::dns::resolver_select::candidate_from_dns_owner(
+            edgion_resources::resources::refs::dns_fields::DnsResolverOwner::Service(&service_record.resource),
+        ),
         content_fingerprint,
         membership_identity,
         runtime_cell: runtime_cell.expect("identified service projection has a runtime cell"),

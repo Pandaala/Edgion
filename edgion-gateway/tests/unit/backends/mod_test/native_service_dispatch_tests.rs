@@ -331,7 +331,7 @@ async fn actual_dns_stage_keeps_old_service_geometry_across_await_and_next_captu
     let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
     let captured = capture(&coordinator, &chosen);
     let spec = compute_external_name_resolver_with(
-        captured.source().metadata.annotations.as_ref(),
+        captured.dns_resolver_candidate(),
         &context("default/backend"),
         None,
         |_| None,
@@ -395,12 +395,10 @@ async fn actual_dns_stage_keeps_old_service_geometry_across_await_and_next_captu
     let new = capture(&coordinator, &current);
     assert_eq!(external_name(&new).unwrap(), "new.example.test");
     assert_eq!(new.source().metadata.uid.as_deref(), Some("source-b"));
-    let current_spec = compute_external_name_resolver_with(
-        new.source().metadata.annotations.as_ref(),
-        &context("default/backend"),
-        None,
-        |_| None,
-    );
+    let current_spec =
+        compute_external_name_resolver_with(new.dns_resolver_candidate(), &context("default/backend"), None, |_| {
+            None
+        });
     assert_ne!(current_spec.fingerprint(), spec.fingerprint());
     assert_eq!(new.section().identity.protocol.as_ref(), "UDP");
     assert_eq!(
@@ -600,7 +598,8 @@ fn resolver_precedence_uses_captured_service_then_gateway_then_egc_and_system() 
         .fingerprint()
     };
     assert_eq!(
-        compute_external_name_resolver_with(Some(&annotations), &ctx, Some(&egc), absent).fingerprint(),
+        compute_external_name_resolver_with(dns_candidate(&annotations).as_ref(), &ctx, Some(&egc), absent)
+            .fingerprint(),
         expected("192.0.2.1")
     );
     assert_eq!(
@@ -621,7 +620,7 @@ fn resolver_precedence_uses_captured_service_then_gateway_then_egc_and_system() 
         edgion_annotations::DNS_RESOLVER_REF.to_owned(),
         "dns/missing".to_owned(),
     )]);
-    let spec = compute_external_name_resolver_with(Some(&dangling), &ctx, Some(&egc), |key| {
+    let spec = compute_external_name_resolver_with(dns_candidate(&dangling).as_ref(), &ctx, Some(&egc), |key| {
         assert_eq!(key.namespace, "dns");
         assert_eq!(key.name, "missing");
         lookups.set(lookups.get() + 1);
@@ -653,7 +652,7 @@ async fn prepared_httpdns_failure_and_missing_hostname_do_not_issue_network_quer
         "dns/resolver".to_owned(),
     )]);
     let mut ctx = context("default/backend");
-    let spec = compute_external_name_resolver_with(Some(&annotations), &ctx, None, |key| {
+    let spec = compute_external_name_resolver_with(dns_candidate(&annotations).as_ref(), &ctx, None, |key| {
         assert_eq!(key.name, "resolver");
         Some(Arc::clone(&prepared))
     });
@@ -820,4 +819,120 @@ fn mismatched_runtime_membership_fails_capture_and_next_attempt_recovers() {
     ));
     available.runtime_cell.active.store(old);
     assert_eq!(external_name(&capture(&coordinator, &chosen)).unwrap(), "192.0.2.10");
+}
+
+fn dns_candidate(annotations: &BTreeMap<String, String>) -> Option<ResolverCandidate> {
+    let mut source = (*service(Some("ExternalName"), Some("example.test"), Some("per-request"), 80)).clone();
+    source.metadata.annotations = Some(annotations.clone());
+    edgion_common::dns::resolver_select::candidate_from_dns_owner(
+        edgion_resources::resources::refs::dns_fields::DnsResolverOwner::Service(&source),
+    )
+}
+
+#[test]
+fn cold_captured_reference_selection_does_not_parse_or_clone_unselected_layers() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    let mut source = (*service(Some("ExternalName"), Some("example.test"), Some("per-request"), 80)).clone();
+    source
+        .metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert(edgion_annotations::DNS_RESOLVER_REF.into(), " dns / resolver ".into());
+    publish(&coordinator, Arc::new(source), None);
+    let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
+    let captured = capture(&coordinator, &chosen);
+    let mut ctx = context("default/backend");
+    ctx.gateway_info = Some(Arc::new(GatewayInfo::new(
+        None,
+        "gateway".into(),
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        Some(ResolverCandidate::Servers(vec!["192.0.2.2".into()])),
+    )));
+    let egc = ResolverCandidate::Servers(vec!["192.0.2.3".into()]);
+    let iterations = Cell::new(0usize);
+    let lookup = |_: &LinkSysKey| {
+        iterations.set(iterations.get() + 1);
+        None
+    };
+    assert!(matches!(
+        compute_external_name_resolver_with(captured.dns_resolver_candidate(), &ctx, Some(&egc), lookup),
+        ResolverSpec::System
+    ));
+    iterations.set(0);
+    let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        for _ in 0..32 {
+            std::hint::black_box(compute_external_name_resolver_with(
+                captured.dns_resolver_candidate(),
+                &ctx,
+                Some(&egc),
+                lookup,
+            ));
+        }
+    });
+    assert_eq!(iterations.get(), 32);
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+}
+
+#[tokio::test]
+async fn cold_service_candidate_observes_live_httpdns_replacement_and_removal() {
+    use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
+    let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
+    let store = crate::link_sys::runtime::store::get_global_link_sys_store();
+    let key = "r6b-dns/resolver".to_owned();
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    let mut source = (*service(Some("ExternalName"), Some("example.test"), Some("per-request"), 80)).clone();
+    source
+        .metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert(edgion_annotations::DNS_RESOLVER_REF.into(), key.clone());
+    publish(&coordinator, Arc::new(source), None);
+    let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
+    let captured = capture(&coordinator, &chosen);
+    let ctx = context("default/backend");
+    store.update(HashMap::new(), &std::collections::HashSet::from([key.clone()]));
+    assert!(matches!(
+        compute_external_name_resolver(captured.dns_resolver_candidate(), &ctx, None),
+        ResolverSpec::System
+    ));
+    let mut previous = None;
+    for timeout in [100, 0, 100] {
+        let config=serde_json::from_value(json!({"urlTemplate":"http://unused.invalid/d?host={domain}","response":{"kind":"json","ipPath":"ips"},"fallback":{"type":"none"},"connection":{"timeoutMs":timeout}})).unwrap();
+        let mut owner = edgion_resources::LinkSys::new(
+            "resolver",
+            LinkSysSpec {
+                config: SystemConfig::HttpDns(config),
+                current_status: None,
+                unknown_fields: vec![],
+            },
+        );
+        owner.metadata.namespace = Some("r6b-dns".into());
+        store.update(HashMap::from([(key.clone(), owner)]), &std::collections::HashSet::new());
+        let ResolverSpec::HttpDns(prepared) =
+            compute_external_name_resolver(captured.dns_resolver_candidate(), &ctx, None)
+        else {
+            panic!("live provider")
+        };
+        assert_eq!(prepared.is_ready(), timeout != 0);
+        if let Some(old) = previous {
+            assert!(!Arc::ptr_eq(&old, &prepared));
+        }
+        previous = Some(prepared);
+    }
+    store.update(HashMap::new(), &std::collections::HashSet::from([key]));
+    assert!(matches!(
+        compute_external_name_resolver(captured.dns_resolver_candidate(), &ctx, None),
+        ResolverSpec::System
+    ));
+    assert!(
+        previous.unwrap().is_ready(),
+        "already borrowed generation completes normally"
+    );
 }

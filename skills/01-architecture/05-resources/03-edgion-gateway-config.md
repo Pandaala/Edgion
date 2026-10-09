@@ -128,3 +128,14 @@ EGC lookup falls back to defaults. See
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
 | EdgionGatewayConfig → GatewayClass → Gateway | GatewayClass parametersRef | scoped publication | Plugin execution policy affects only bound classes and their Gateways |
+
+### Global DNS candidate ownership
+
+The DNS publisher selects the minimum raw store key with a DNS field before
+validating that winning actual EGC reference. Its explicit LinkSys object target
+requires valid namespace/name and a true cluster-scoped owner. Invalid references
+retain the winning snapshot with no candidate (System), rather than selecting a
+later EGC or same-field inline servers. Inline-only servers and independently
+parsed TTL preserve their existing behavior, including zero TTL and invalid-TTL
+defaulting. Loaded DNS Arcs retain candidate and TTL across update/removal; live
+HTTPDNS provider lookup remains separate and follows the current typed store.

@@ -41,3 +41,48 @@ fn dns_grammar_and_actual_owner_sources_remain_distinct() {
         Err(ReferenceError::InvalidName)
     );
 }
+
+#[test]
+fn egc_dns_reference_checks_actual_cluster_owner_and_typed_explicit_target() {
+    let mut owner = EdgionGatewayConfig::new("source", Default::default());
+    owner.spec.dns_resolver =
+        Some(serde_json::from_value(serde_json::json!({"linkSysRef":{"namespace":"dns","name":"resolver"}})).unwrap());
+    assert_eq!(
+        EgcDnsResolverField::new(&owner).target().unwrap().unwrap().name(),
+        "resolver"
+    );
+    for (namespace, name) in [
+        ("", "resolver"),
+        (" dns ", "resolver"),
+        ("dns", "Name_With_Underscore"),
+        ("dns", "a/b"),
+        ("dns", ""),
+    ] {
+        let field = owner.spec.dns_resolver.as_mut().unwrap().link_sys_ref.as_mut().unwrap();
+        field.namespace = namespace.into();
+        field.name = name.into();
+        assert!(EgcDnsResolverField::new(&owner).target().is_err());
+    }
+    let field = owner.spec.dns_resolver.as_mut().unwrap().link_sys_ref.as_mut().unwrap();
+    field.namespace = "dns".into();
+    field.name = "resolver".into();
+    for namespace in ["", "default"] {
+        owner.metadata.namespace = Some(namespace.into());
+        assert_eq!(
+            EgcDnsResolverField::new(&owner).target(),
+            Err(ReferenceError::InvalidNamespace)
+        );
+    }
+    owner.metadata.namespace = None;
+    owner.metadata.name = None;
+    assert_eq!(
+        EgcDnsResolverField::new(&owner).target(),
+        Err(ReferenceError::InvalidName)
+    );
+    owner.spec.dns_resolver.as_mut().unwrap().link_sys_ref = None;
+    assert_eq!(
+        EgcDnsResolverField::new(&owner).target(),
+        Ok(None),
+        "absent ref does not validate whole owner"
+    );
+}

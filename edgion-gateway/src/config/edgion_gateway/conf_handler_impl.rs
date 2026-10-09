@@ -9,9 +9,7 @@ use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_common::dns::resolver_select::{candidate_from_egc_default, ResolverCandidate};
 use edgion_resources::duration::parse_duration;
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
-use edgion_resources::resources::edgion_gateway_config::{
-    resolve_tcp_connect_timeout, resolve_tcp_idle_timeout, DnsResolverConfig,
-};
+use edgion_resources::resources::edgion_gateway_config::{resolve_tcp_connect_timeout, resolve_tcp_idle_timeout};
 use kube::ResourceExt;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
@@ -205,9 +203,14 @@ pub struct ResolvedDnsResolverDefault {
 }
 
 impl ResolvedDnsResolverDefault {
-    fn resolve(config: &DnsResolverConfig) -> Self {
+    fn resolve(owner: &EdgionGatewayConfig) -> Self {
+        let config = owner
+            .spec
+            .dns_resolver
+            .as_ref()
+            .expect("selected DNS owner has a DNS field");
         Self {
-            candidate: candidate_from_egc_default(config),
+            candidate: candidate_from_egc_default(owner),
             cache_ttl: parse_duration(&config.cache_ttl).unwrap_or(crate::backends::DEFAULT_DNS_CACHE_TTL),
         }
     }
@@ -233,8 +236,7 @@ impl EdgionGatewayConfigSnapshot {
             .iter()
             .filter(|(_, config)| config.spec.dns_resolver.is_some())
             .min_by(|a, b| a.0.cmp(b.0))
-            .and_then(|(_, config)| config.spec.dns_resolver.as_ref())
-            .map(ResolvedDnsResolverDefault::resolve)
+            .map(|(_, owner)| ResolvedDnsResolverDefault::resolve(owner))
             .map(Arc::new);
         let runtime_configs = configs
             .values()

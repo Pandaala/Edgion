@@ -154,3 +154,21 @@ may select the same key as a denied tenant, so zero-GET claims apply only when
 no administrative default selects that key. Existing failed HTTPDNS generations
 retain authored fallback and preparation reuse. This boundary permits normally
 completing already-admitted operations; it adds no async revocation fence.
+
+## Gateway DNS candidate boundaries
+
+Service discovery publishes an actual-owner DNS candidate with each changed
+Service projection; GatewayInfo and the global EGC DNS snapshot publish their
+respective actual-owner candidates at their existing cold boundaries. Precedence
+borrows candidates, without request-side annotation parsing or unselected-layer
+cloning. This is not an allocation-free DNS claim: selected inline servers and
+the existing live LinkSys lookup keep their necessary owned representations.
+Candidates identify a target but do not retain a prepared provider. Missing or
+wrong-provider targets yield System; an existing failed generation retains its
+authored fallback. New provider generations and deletion are visible through
+the same candidate, while already borrowed prepared Arcs may complete normally.
+
+EGC typed object references do not inherit the annotation string grammar. Its
+minimum raw-key winner remains authoritative even if its owner/reference is
+invalid; no later EGC or same-config inline fallback replaces that configured
+reference. Independent inline-only values and TTL remain outside reference checks.

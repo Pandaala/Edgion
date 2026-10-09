@@ -21,12 +21,13 @@ use super::super::gateway_info::GatewayInfo;
 use crate::observe::metrics::TestType;
 use crate::runtime::matching::route::hostname_matches_listener;
 use arc_swap::ArcSwap;
-use edgion_common::dns::resolver_select::candidate_from_annotations;
+use edgion_common::dns::resolver_select::candidate_from_dns_owner;
 use edgion_resources::constants::annotations::edgion as annotations;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::gateway::{gateway_attachment_proof, gateway_listener_is_explicitly_ineligible};
+use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
 use edgion_resources::Gateway;
 use kube::ResourceExt;
 use std::collections::HashMap;
@@ -294,7 +295,7 @@ impl ListenerGatewayInfoStore {
             // Precompute the gateway-layer DNS resolver candidate from the two
             // `edgion.io/dns-resolver{,-ref}` annotations, so the hot ExternalName
             // self-resolution path reads it off GatewayInfo without re-parsing.
-            let dns_resolver_candidate = gateway_annotations.and_then(candidate_from_annotations);
+            let dns_resolver_candidate = candidate_from_dns_owner(DnsResolverOwner::Gateway(gateway));
 
             for listener in listeners {
                 if gateway_listener_is_explicitly_ineligible(gateway, &listener.name) {

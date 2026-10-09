@@ -404,3 +404,13 @@ precedes dependency registration, current permission checking and target acquisi
 The DNS GeneratedOutput row checks every required family and current Service UID
 before skipping an unchanged successful publication. Gateway cold DNS migration,
 other fixed consumers, async freshness and obsolete-family deletion remain open.
+
+R6b closes Gateway cold consumption for Service/Gateway DNS annotations and
+EGC.spec.dnsResolver.linkSysRef. The Service projection, GatewayInfo and existing
+EGC DNS snapshot own cold candidates derived from actual resources. EGC typed
+fields require explicit checked object namespace/name; they do not use the finite
+annotation string exception. Administrative EGC selection adds no Grant source.
+The raw-key winner is selected before validation and retains independent TTL; an
+invalid configured ref yields System without selecting another EGC or inline
+servers. Inline-only configuration is not an object-reference authorization.
+Live provider lookup and all remaining reference-family work are unchanged.

@@ -263,6 +263,10 @@ impl CapturedServiceSelection {
         })
     }
 
+    pub(crate) fn dns_resolver_candidate(&self) -> Option<&edgion_common::dns::resolver_select::ResolverCandidate> {
+        self.available.dns_resolver_candidate.as_ref()
+    }
+
     pub(crate) fn source(&self) -> &Service {
         &self.available.raw.service
     }

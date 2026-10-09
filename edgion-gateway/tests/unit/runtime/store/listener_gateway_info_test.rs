@@ -409,3 +409,31 @@ fn retained_gateway_identity_survives_store_replacement() {
     assert_eq!(new.gateway_key(), "new-namespace/new-gateway");
     assert!(!Arc::ptr_eq(&old, new));
 }
+
+#[test]
+fn dns_gateway_owner_and_inline_are_independent_and_old_info_stays_pinned() {
+    let store = ListenerGatewayInfoStore::new();
+    let mut gateway = make_gateway("https", vec![]);
+    gateway.metadata.namespace = None;
+    gateway.metadata.annotations = Some(BTreeMap::from([
+        (annotations::DNS_RESOLVER_REF.into(), "dns/resolver".into()),
+        (annotations::DNS_RESOLVER.into(), "192.0.2.53".into()),
+    ]));
+    let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+    store.rebuild(&[gateway.clone()]);
+    let old = store.get(&key);
+    assert!(matches!(
+        old[0].dns_resolver_candidate,
+        Some(ResolverCandidate::HttpDnsRef(_))
+    ));
+    gateway.metadata.namespace = Some("".into());
+    store.rebuild(&[gateway]);
+    assert_eq!(
+        store.get(&key)[0].dns_resolver_candidate,
+        Some(ResolverCandidate::Servers(vec!["192.0.2.53".into()]))
+    );
+    assert!(matches!(
+        old[0].dns_resolver_candidate,
+        Some(ResolverCandidate::HttpDnsRef(_))
+    ));
+}

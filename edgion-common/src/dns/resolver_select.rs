@@ -10,12 +10,8 @@
 //! LinkSys reference to its config; [`resolve_effective_spec`] returns the
 //! winning [`ResolverSpec`].
 
-use std::collections::BTreeMap;
-
 use super::PreparedHttpDns;
-use edgion_resources::constants::annotations::edgion::{DNS_RESOLVER, DNS_RESOLVER_REF};
-use edgion_resources::resources::edgion_gateway_config::DnsResolverConfig as EgcDnsResolver;
-use edgion_resources::resources::refs::dns_fields::DnsLinkSysKey;
+use edgion_resources::resources::refs::dns_fields::{DnsLinkSysKey, DnsResolverOwner, EgcDnsResolverField};
 use std::sync::Arc;
 
 use super::ResolverSpec;
@@ -76,37 +72,35 @@ pub fn parse_dns_server_list(value: &str) -> Vec<String> {
 /// The two keys are mutually exclusive at ingest, but if both are somehow
 /// present the ref wins (an explicit LinkSys reference is the more deliberate
 /// choice). Returns `None` when neither key yields a usable value.
-pub fn candidate_from_annotations(annotations: &BTreeMap<String, String>) -> Option<ResolverCandidate> {
-    if let Some(reference) = annotations.get(DNS_RESOLVER_REF) {
-        if let Some(key) = LinkSysKey::parse(reference) {
-            return Some(ResolverCandidate::HttpDnsRef(key));
-        }
-    }
-    if let Some(servers) = annotations.get(DNS_RESOLVER) {
-        let list = parse_dns_server_list(servers);
-        if !list.is_empty() {
-            return Some(ResolverCandidate::Servers(list));
-        }
-    }
-    None
-}
-
-/// Extract a resolver candidate from the EdgionGatewayConfig data-plane default.
-/// `linkSysRef` wins over `servers` if both are set (they are mutually exclusive
-/// at ingest).
-pub fn candidate_from_egc_default(egc: &EgcDnsResolver) -> Option<ResolverCandidate> {
-    if let Some(reference) = &egc.link_sys_ref {
+pub fn candidate_from_dns_owner(owner: DnsResolverOwner<'_>) -> Option<ResolverCandidate> {
+    if let Ok(Some(query)) = owner.query() {
         return Some(ResolverCandidate::HttpDnsRef(LinkSysKey {
-            namespace: reference.namespace.clone(),
-            name: reference.name.clone(),
+            namespace: query.target().scope().namespace()?.to_owned(),
+            name: query.target().name().to_owned(),
         }));
     }
-    if let Some(servers) = &egc.servers {
-        if !servers.is_empty() {
-            return Some(ResolverCandidate::Servers(servers.clone()));
-        }
+    let servers = parse_dns_server_list(owner.inline_servers()?);
+    (!servers.is_empty()).then_some(ResolverCandidate::Servers(servers))
+}
+
+/// The selected actual EGC owns this administrative reference. An invalid
+/// present reference remains unavailable rather than selecting inline servers.
+pub fn candidate_from_egc_default(owner: &edgion_resources::EdgionGatewayConfig) -> Option<ResolverCandidate> {
+    let field = EgcDnsResolverField::new(owner);
+    let config = field.config()?;
+    if config.link_sys_ref.is_some() {
+        let target = field.target().ok()??;
+        return Some(ResolverCandidate::HttpDnsRef(LinkSysKey {
+            namespace: target.scope().namespace()?.to_owned(),
+            name: target.name().to_owned(),
+        }));
     }
-    None
+    config
+        .servers
+        .as_ref()
+        .filter(|servers| !servers.is_empty())
+        .cloned()
+        .map(ResolverCandidate::Servers)
 }
 
 /// Resolve the effective [`ResolverSpec`] from ordered candidate layers
@@ -119,7 +113,7 @@ pub fn candidate_from_egc_default(egc: &EgcDnsResolver) -> Option<ResolverCandid
 ///   httpdns LinkSys) fails safe to [`ResolverSpec::System`] rather than
 ///   silently dropping to a lower-precedence layer.
 /// - No candidate in any layer → [`ResolverSpec::System`].
-pub fn resolve_effective_spec<F>(layers: &[Option<ResolverCandidate>], lookup: F) -> ResolverSpec
+pub fn resolve_effective_spec<F>(layers: &[Option<&ResolverCandidate>], lookup: F) -> ResolverSpec
 where
     F: Fn(&LinkSysKey) -> Option<Arc<PreparedHttpDns>>,
 {

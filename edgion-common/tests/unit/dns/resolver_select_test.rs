@@ -222,3 +222,64 @@ fn dns_key_preserves_finite_annotation_grammar_without_dns_label_tightening() {
         assert!(LinkSysKey::parse(value).is_none());
     }
 }
+
+// Historical selection fixtures now enter through actual owning resources.
+use edgion_resources::constants::annotations::edgion::{DNS_RESOLVER, DNS_RESOLVER_REF};
+use edgion_resources::resources::edgion_gateway_config::DnsResolverConfig as EgcDnsResolver;
+use std::collections::BTreeMap;
+fn candidate_from_annotations(annotations: &BTreeMap<String, String>) -> Option<ResolverCandidate> {
+    let owner = k8s_openapi::api::core::v1::Service {
+        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            name: Some("source".into()),
+            annotations: Some(annotations.clone()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    candidate_from_dns_owner(DnsResolverOwner::Service(&owner))
+}
+fn candidate_from_egc_default(config: &EgcDnsResolver) -> Option<ResolverCandidate> {
+    let mut owner = edgion_resources::EdgionGatewayConfig::new("source", Default::default());
+    owner.spec.dns_resolver = Some(config.clone());
+    super::candidate_from_egc_default(&owner)
+}
+fn resolve_effective_spec<F>(layers: &[Option<ResolverCandidate>], lookup: F) -> ResolverSpec
+where
+    F: Fn(&LinkSysKey) -> Option<Arc<PreparedHttpDns>>,
+{
+    super::resolve_effective_spec(&layers.iter().map(Option::as_ref).collect::<Vec<_>>(), lookup)
+}
+
+#[test]
+fn owning_candidate_reference_failures_preserve_only_independent_inline_settings() {
+    let mut service = k8s_openapi::api::core::v1::Service::default();
+    service.metadata.annotations = Some(ann(&[(DNS_RESOLVER_REF, "dns/resolver"), (DNS_RESOLVER, "192.0.2.53")]));
+    assert_eq!(
+        candidate_from_dns_owner(DnsResolverOwner::Service(&service)),
+        Some(ResolverCandidate::Servers(vec!["192.0.2.53".into()]))
+    );
+    service.metadata.name = Some("source".into());
+    assert!(matches!(
+        candidate_from_dns_owner(DnsResolverOwner::Service(&service)),
+        Some(ResolverCandidate::HttpDnsRef(_))
+    ));
+    let mut egc = edgion_resources::EdgionGatewayConfig::new("source", Default::default());
+    egc.spec.dns_resolver = Some(EgcDnsResolver {
+        link_sys_ref: Some(LinkSysRef {
+            namespace: "dns".into(),
+            name: "resolver".into(),
+        }),
+        servers: Some(vec!["192.0.2.53".into()]),
+        cache_ttl: "5s".into(),
+    });
+    egc.metadata.namespace = Some("".into());
+    assert!(
+        super::candidate_from_egc_default(&egc).is_none(),
+        "invalid ref owner cannot use same-layer inline"
+    );
+    egc.spec.dns_resolver.as_mut().unwrap().link_sys_ref = None;
+    assert_eq!(
+        super::candidate_from_egc_default(&egc),
+        Some(ResolverCandidate::Servers(vec!["192.0.2.53".into()]))
+    );
+}

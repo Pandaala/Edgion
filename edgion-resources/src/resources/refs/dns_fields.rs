@@ -1,7 +1,7 @@
 //! Finite DNS annotation grammar and actual Service/Gateway field ownership.
 use super::{GrantQuery, ObjectIdentity, ReferenceError, ReferenceSource, ResourceScope};
-use crate::constants::annotations::edgion::DNS_RESOLVER_REF;
-use crate::Gateway;
+use crate::constants::annotations::edgion::{DNS_RESOLVER, DNS_RESOLVER_REF};
+use crate::{EdgionGatewayConfig, Gateway};
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
@@ -57,6 +57,15 @@ impl<'a> DnsResolverOwner<'a> {
         self.metadata().name.as_deref()
     }
 
+    /// Inline server configuration is independent of external-reference identity.
+    pub fn inline_servers(self) -> Option<&'a str> {
+        self.metadata()
+            .annotations
+            .as_ref()?
+            .get(DNS_RESOLVER)
+            .map(String::as_str)
+    }
+
     /// Identity precedes exemptions, permission, dependencies and target lookup.
     /// Malformed annotations retain their established unavailable/fallback behavior.
     pub fn query(self) -> Result<Option<GrantQuery<'a>>, ReferenceError> {
@@ -77,6 +86,50 @@ impl<'a> DnsResolverOwner<'a> {
         let source = ReferenceSource::checked(group, kind, scope)?;
         Ok(DnsLinkSysKey::parse(value)
             .map(|key| GrantQuery::new(source, ObjectIdentity::parsed_dns_linksys(key.namespace, key.name))))
+    }
+}
+
+/// The exact administrative DNS field of an actual cluster-scoped EGC.
+/// Reference checks do not validate unrelated inline servers or TTL.
+/// ```compile_fail
+/// use edgion_resources::resources::refs::dns_fields::EgcDnsResolverField;
+/// let field = {
+///     let owner = edgion_resources::EdgionGatewayConfig::new("config", Default::default());
+///     EgcDnsResolverField::new(&owner)
+/// };
+/// field.target();
+/// ```
+#[derive(Clone, Copy)]
+pub struct EgcDnsResolverField<'a>(&'a EdgionGatewayConfig);
+impl<'a> EgcDnsResolverField<'a> {
+    pub fn new(owner: &'a EdgionGatewayConfig) -> Self {
+        Self(owner)
+    }
+
+    pub fn config(self) -> Option<&'a crate::resources::edgion_gateway_config::DnsResolverConfig> {
+        self.0.spec.dns_resolver.as_ref()
+    }
+
+    pub fn target(self) -> Result<Option<ObjectIdentity<'a>>, ReferenceError> {
+        let Some(reference) = self.config().and_then(|config| config.link_sys_ref.as_ref()) else {
+            return Ok(None);
+        };
+        if self.0.metadata.namespace.is_some() {
+            return Err(ReferenceError::InvalidNamespace);
+        }
+        ObjectIdentity::checked(
+            "edgion.io",
+            "EdgionGatewayConfig",
+            ResourceScope::Cluster,
+            self.0.metadata.name.as_deref().unwrap_or_default(),
+        )?;
+        ObjectIdentity::checked(
+            "edgion.io",
+            "LinkSys",
+            ResourceScope::Namespaced(&reference.namespace),
+            &reference.name,
+        )
+        .map(Some)
     }
 }
 

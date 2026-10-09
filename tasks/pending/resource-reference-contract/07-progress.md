@@ -1831,3 +1831,63 @@ HTTPDNS lookup, precedence, failure outcomes and EGC raw-key winner selection.
 Revalidate after the R6a commit before planning or editing. Plugin attachment,
 ProxyProtocol, other fixed LinkSys consumers and the remaining R6-R8/F1/F2 work
 remain separate; this candidate does not activate another mutation lane.
+
+R6a committed `39f7870848f931b150ff75722c49d8987792467c` locally after both final
+reviewers confirmed all gate logs and frozen hashes. The 20 committed paths match
+the final candidate exactly; tracked/index state was clean after commit. No push.
+R6b now enters PLAN ONLY at that HEAD for Gateway's three-layer DNS cold binding.
+It requires current-code revalidation, an exact allowlist and independent plan
+approval before implementation; no other residual family is activated.
+
+R6b's current-HEAD 19-path plan received independent Astra SCOPED PLAN PASS;
+EXECUTE is authorized. The exact plan and failure matrix are preserved under
+`tmp/resource-reference-contract/r6b-plan-39f7870-20261009/`. Service candidates
+publish in existing discovery generations; GatewayInfo and EGC retain their cold
+snapshots. Common keeps one borrowed-layer selector, with only two supporting
+Controller call adaptations. Reference-local identity validation leaves independent
+inline/TTL behavior explicit, while an invalid EGC winner cannot promote another
+config. Actual implementation, test preservation, performance evidence and final
+reviews/gates remain open.
+
+R6b production implementation is in place within the approved paths; both
+independent incremental reviews found no semantic blocker. Tests and knowledge
+are under final review. The fresh baseline lists Resources/Common/Controller/
+Gateway as 2031/378/1806/5304 identities. The serial targeted runner and original
+failure evidence are under `tmp/resource-reference-contract/r6b-verification-20261009/`.
+New coverage uses the captured-Service production selection seam for a bounded
+allocation check and the actual typed HTTPDNS store for replacement/deletion.
+No whole-DNS zero-allocation, live Kubernetes or conformance claim follows.
+
+Read-only post-DNS candidates, to revalidate after R6b commit: (C1) actual-field
+binding for EGC globalPluginsRef and Gateway HTTP plugin annotations across
+Controller dependency/status and Gateway publication, retaining the existing EP
+Missing/Unique/Ambiguous classifier; (C2) Gateway/L4 stream annotation owners,
+preserving Gateway slash rejection, L4 slash-containing grammar and fail-closed
+attachment signals; (C3) Gateway ProxyProtocol resourceRef owning gate before
+lookup/dependencies, retaining the existing bounded parser, visibility/Grant
+ordering and resolved policy. A bounded diagnostic identity is not proof that
+lookup was gated. No candidate is approved for implementation yet.
+
+R6b targeted verification passes 315 unit executions covering 256 distinct test
+IDs and two compile-fail doctests, with no failed or zero-test filters. Four crate
+inventories preserve all 9519 old identities: 2031 to 2032, 378 to 379, 1806
+unchanged and 5304 to 5309; ignored lists are unchanged. Six original test files
+retain their bodies after the reviewed five native-call and one import adaptations
+and formatting normalization. Both reviewers found no code/test/knowledge blocker.
+The 19 technical paths are frozen; root workspace gates and final evidence review
+remain pending. `results-summary.json` and `preservation.json` in the R6b
+verification directory retain execution, deduplication and source provenance.
+
+R6b final root verification passes all 14 gates with unchanged source. Workspace
+check (87.342 seconds) and Clippy (94.589 seconds) report zero warnings/errors;
+format, documentation, reference/transform contracts and the remaining guards
+pass. Evidence is under `tmp/resource-reference-contract/r6b-root-verification-20261009/`.
+Both independent reviewers verified the focused execution and preservation
+evidence; final gate confirmation precedes local commit. No live Kubernetes or
+Gateway API conformance acceptance is claimed. The next serial batch is C1
+actual-field binding for EGC globalPluginsRef and Gateway HTTP annotations,
+subject to current-HEAD revalidation and independent plan approval.
+
+Both independent final reviewers, including Astra, confirmed all R6b gates and
+frozen technical hashes: SCOPED PASS with no blocker. The approved 19 technical
+paths plus this progress record are ready for the local-only commit.

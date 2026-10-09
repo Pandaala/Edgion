@@ -436,3 +436,21 @@ edgion-gateway/src/backends/
 │   └── backend_traffic/      # EdgionBackendTrafficPolicy (HC/CB/panic/LB arbitration)
 └── validation.rs             # endpoint validation (SSRF prevention)
 ```
+
+### Cold DNS candidate publication
+
+The discovery projection derives its DNS candidate from the actual Service only
+when publishing a changed generation, after the unchanged-fingerprint fast path.
+CapturedServiceSelection borrows that candidate from the same projection as its
+hostname and section. GatewayInfo derives its candidate from the actual Gateway
+at listener publication; the global EGC DNS snapshot derives its candidate from
+the actual minimum-raw-key winning EGC. Request-side precedence borrows these
+three candidates without parsing annotations or cloning unselected layers. The
+selected inline server list still becomes an owned ResolverSpec, and an HTTPDNS
+reference still resolves the live typed provider; candidates do not freeze clients.
+
+Invalid annotation references retain same-owner inline/next-layer fallback. EGC
+uses its strict typed explicit namespace/name object contract and cluster owner;
+an invalid configured reference yields System without trying its inline list or
+another EGC. Inline-only settings and TTL do not acquire object-reference authority
+requirements. Controller remains responsible for tenant ReferenceGrant stripping.

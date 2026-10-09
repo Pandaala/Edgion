@@ -1,7 +1,8 @@
 use super::*;
 use crate::routes::http::proxy_http::preflight_handler::ResolvedPreflightMode;
 use edgion_resources::resources::edgion_gateway_config::{
-    EdgionGatewayConfigSpec, PreflightMode, PreflightPolicy, TcpTimeout, DEFAULT_TCP_CONNECT, DEFAULT_TCP_IDLE,
+    DnsResolverConfig, EdgionGatewayConfigSpec, PreflightMode, PreflightPolicy, TcpTimeout, DEFAULT_TCP_CONNECT,
+    DEFAULT_TCP_IDLE,
 };
 use std::collections::HashMap;
 
@@ -1474,4 +1475,67 @@ fn aggregate_conflicts_fallback_to_system() {
     set_outbound_global_default(edgion_common::link_sys_core::outbound_tls::test_util::snapshot(
         OutboundTlsConfig::default(),
     ));
+}
+
+#[test]
+fn dns_invalid_winner_does_not_select_inline_or_another_egc() {
+    use edgion_common::dns::{resolver_select::resolve_effective_spec, ResolverSpec};
+    for case in [
+        "owner-namespace",
+        "owner-empty-namespace",
+        "owner-name",
+        "target-namespace",
+        "target-name",
+    ] {
+        let mut first = make_config("z-metadata");
+        first.spec.dns_resolver=Some(serde_json::from_value(serde_json::json!({"linkSysRef":{"namespace":"dns","name":"resolver"},"servers":["192.0.2.1"],"cacheTtl":"17s"})).unwrap());
+        match case {
+            "owner-namespace" => first.metadata.namespace = Some("app".into()),
+            "owner-empty-namespace" => first.metadata.namespace = Some("".into()),
+            "owner-name" => first.metadata.name = None,
+            "target-namespace" => {
+                first
+                    .spec
+                    .dns_resolver
+                    .as_mut()
+                    .unwrap()
+                    .link_sys_ref
+                    .as_mut()
+                    .unwrap()
+                    .namespace = " dns ".into()
+            }
+            _ => {
+                first
+                    .spec
+                    .dns_resolver
+                    .as_mut()
+                    .unwrap()
+                    .link_sys_ref
+                    .as_mut()
+                    .unwrap()
+                    .name = "".into()
+            }
+        }
+        let mut other = make_config("a-metadata");
+        other.spec.dns_resolver =
+            Some(serde_json::from_value(serde_json::json!({"servers":["192.0.2.2"],"cacheTtl":"30s"})).unwrap());
+        let snapshot = EdgionGatewayConfigSnapshot::new(HashMap::from([
+            ("a".into(), Arc::new(first.clone())),
+            ("b".into(), Arc::new(other)),
+        ]));
+        let selected = snapshot.dns_resolver_default.unwrap();
+        assert!(selected.candidate().is_none(), "{case}");
+        assert_eq!(selected.cache_ttl(), Duration::from_secs(17));
+        assert!(matches!(
+            resolve_effective_spec(&[selected.candidate()], |_| panic!("invalid reference lookup")),
+            ResolverSpec::System
+        ));
+        first.spec.dns_resolver.as_mut().unwrap().link_sys_ref = None;
+        let inline = ResolvedDnsResolverDefault::resolve(&first);
+        assert_eq!(
+            inline.candidate(),
+            Some(&ResolverCandidate::Servers(vec!["192.0.2.1".into()]))
+        );
+        assert_eq!(inline.cache_ttl(), Duration::from_secs(17));
+    }
 }

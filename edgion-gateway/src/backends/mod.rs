@@ -45,9 +45,7 @@ use crate::runtime::{GatewayInfo, ServerHeaderOpts};
 use crate::EdgionHttpContext;
 use crate::{end_response_500, end_response_503};
 use discovery::DnsCache;
-use edgion_common::dns::resolver_select::{
-    candidate_from_annotations, resolve_effective_spec, LinkSysKey, ResolverCandidate,
-};
+use edgion_common::dns::resolver_select::{resolve_effective_spec, LinkSysKey, ResolverCandidate};
 use edgion_common::dns::{resolve, DnsError, ResolverSpec};
 use edgion_resources::constants::annotations::edgion as edgion_annotations;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
@@ -216,7 +214,7 @@ where
                 .map(|resolved| resolved.cache_ttl())
                 .unwrap_or(DEFAULT_DNS_CACHE_TTL);
             let spec = compute_external_name_resolver(
-                captured.source().metadata.annotations.as_ref(),
+                captured.dns_resolver_candidate(),
                 ctx,
                 egc_default.as_ref().and_then(|resolved| resolved.candidate()),
             );
@@ -330,15 +328,15 @@ where
 /// `egc_candidate` is the precomputed EGC data-plane default, read once by the
 /// caller so this stays free of the store access and config parsing.
 fn compute_external_name_resolver(
-    svc_annotations: Option<&std::collections::BTreeMap<String, String>>,
+    service_layer: Option<&ResolverCandidate>,
     ctx: &EdgionHttpContext,
     egc_candidate: Option<&ResolverCandidate>,
 ) -> ResolverSpec {
-    compute_external_name_resolver_with(svc_annotations, ctx, egc_candidate, httpdns_config_for_ref)
+    compute_external_name_resolver_with(service_layer, ctx, egc_candidate, httpdns_config_for_ref)
 }
 
 fn compute_external_name_resolver_with<F>(
-    svc_annotations: Option<&std::collections::BTreeMap<String, String>>,
+    service_layer: Option<&ResolverCandidate>,
     ctx: &EdgionHttpContext,
     egc_candidate: Option<&ResolverCandidate>,
     lookup: F,
@@ -346,12 +344,11 @@ fn compute_external_name_resolver_with<F>(
 where
     F: Fn(&LinkSysKey) -> Option<Arc<edgion_common::dns::PreparedHttpDns>>,
 {
-    let service_layer = svc_annotations.and_then(candidate_from_annotations);
     let gateway_layer = ctx
         .gateway_info
         .as_deref()
-        .and_then(|info| info.dns_resolver_candidate.clone());
-    let egc_layer = egc_candidate.cloned();
+        .and_then(|info| info.dns_resolver_candidate.as_ref());
+    let egc_layer = egc_candidate;
 
     resolve_effective_spec(&[service_layer, gateway_layer, egc_layer], lookup)
 }
@@ -362,9 +359,9 @@ pub(crate) fn compute_routed_external_resolver(ctx: &EdgionHttpContext) -> Resol
     let gateway_layer = ctx
         .gateway_info
         .as_deref()
-        .and_then(|info| info.dns_resolver_candidate.clone());
+        .and_then(|info| info.dns_resolver_candidate.as_ref());
     let egc_default = crate::config::get_egc_dns_resolver_default();
-    let egc_layer = egc_default.as_ref().and_then(|resolved| resolved.candidate()).cloned();
+    let egc_layer = egc_default.as_ref().and_then(|resolved| resolved.candidate());
     resolve_effective_spec(&[gateway_layer, egc_layer], |key: &LinkSysKey| {
         httpdns_config_for_ref(key)
     })

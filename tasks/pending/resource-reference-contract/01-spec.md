@@ -1198,3 +1198,15 @@ Required generated EndpointSlice families must match the current Service UID,
 name, namespace, family and service label before a matching successful content
 fingerprint may skip forced SSA. This does not add an async publication fence
 or delete obsolete families for a still-desired Service.
+
+### R6b Gateway DNS cold consumers
+
+Service/Gateway DNS annotations now enter cold candidate construction through
+actual owner loans; changed Service projections publish candidates with geometry,
+and captured attempts borrow that same generation. EGC DNS selects its raw-key
+winner before validating its actual cluster owner and explicit typed LinkSys
+object. Invalid configured EGC references select System, without runner-up or
+inline fallback; inline-only settings and TTL remain independent. Common has one
+borrowed-layer precedence implementation. Provider availability remains live.
+This closes only these DNS consumer rows, not other R6 references, generated-output
+authority, R7/R8, documentation cleanup or real Gateway API conformance.

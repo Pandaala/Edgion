@@ -1251,3 +1251,70 @@ fn outlier_policy_clear_waits_for_inflight_completion_then_resets_eligibility() 
     assert!(!state.entries[identity.as_ref()].outlier_ejected());
     assert!(!store.has_runtime_identity(&identity));
 }
+
+#[test]
+fn dns_candidate_is_cold_and_published_with_its_actual_service_generation() {
+    use edgion_common::dns::resolver_select::{LinkSysKey, ResolverCandidate};
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    let mut source = (*service(Some("uid-a"), IntOrString::Int(80))).clone();
+    source.metadata.annotations = Some(BTreeMap::from([(DNS_RESOLVER_REF.into(), " dns / first ".into())]));
+    let source = Arc::new(source);
+    coordinator.replace_services(&HashMap::from([("default/backend".into(), source.clone())]));
+    let old = coordinator
+        .load_generation()
+        .available("default/backend")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        old.dns_resolver_candidate,
+        Some(ResolverCandidate::HttpDnsRef(LinkSysKey {
+            namespace: "dns".into(),
+            name: "first".into()
+        }))
+    );
+    coordinator.replace_services(&HashMap::from([("default/backend".into(), source.clone())]));
+    assert!(Arc::ptr_eq(
+        &old,
+        coordinator.load_generation().available("default/backend").unwrap()
+    ));
+    let mut updated = (*source).clone();
+    updated
+        .metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert(DNS_RESOLVER_REF.into(), "dns/second".into());
+    coordinator.replace_services(&HashMap::from([("default/backend".into(), Arc::new(updated.clone()))]));
+    let new = coordinator
+        .load_generation()
+        .available("default/backend")
+        .unwrap()
+        .clone();
+    assert!(!Arc::ptr_eq(&old, &new));
+    assert_eq!(
+        new.dns_resolver_candidate,
+        Some(ResolverCandidate::HttpDnsRef(LinkSysKey {
+            namespace: "dns".into(),
+            name: "second".into()
+        }))
+    );
+    assert_eq!(
+        old.dns_resolver_candidate,
+        Some(ResolverCandidate::HttpDnsRef(LinkSysKey {
+            namespace: "dns".into(),
+            name: "first".into()
+        }))
+    );
+    coordinator.replace_services(&HashMap::new());
+    assert!(coordinator.load_generation().available("default/backend").is_none());
+    updated.metadata.uid = Some("uid-b".into());
+    coordinator.replace_services(&HashMap::from([("default/backend".into(), Arc::new(updated))]));
+    assert_eq!(
+        coordinator
+            .load_generation()
+            .available("default/backend")
+            .unwrap()
+            .dns_resolver_candidate,
+        new.dns_resolver_candidate
+    );
+}

@@ -516,7 +516,7 @@ async fn effective_spec(
     default_candidate: &Option<ResolverCandidate>,
     state: &mut ServiceDnsState,
 ) -> ResolverSpec {
-    let layers = [service_candidate, default_candidate.clone()];
+    let layers = [service_candidate.as_ref(), default_candidate.as_ref()];
     let prepared = match layers.iter().flatten().next() {
         Some(ResolverCandidate::HttpDnsRef(key)) => match fetch_httpdns_owner(client, key).await {
             Some(owner) => state.prepare(key, owner),
@@ -549,7 +549,7 @@ pub(crate) async fn controller_default_resolver(client: &Client) -> ResolverSpec
 pub(crate) fn controller_default_resolver_without_kube() -> ResolverSpec {
     let config = dns_resolver_config();
     let default_candidate = controller_default_candidate(&config);
-    resolve_effective_spec(&[default_candidate], |_| None)
+    resolve_effective_spec(&[default_candidate.as_ref()], |_| None)
 }
 
 /// Fetch an actual httpdns LinkSys owner from the apiserver. Returns `None`
