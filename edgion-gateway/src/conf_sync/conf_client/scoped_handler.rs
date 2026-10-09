@@ -1,5 +1,6 @@
 //! Projects Gateway-attached resources into one dedicated data-plane process.
 
+use edgion_resources::resources::refs::gateway_process_locator::GatewayProcessLocator;
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Weak};
@@ -217,13 +218,13 @@ impl<T: ScopedResource> ConfHandler<T> for ScopedHandler<T> {
 }
 
 fn parent_matches(parent: &ParentReference, route_namespace: &str, scope: &str) -> bool {
-    let Some((scope_namespace, scope_name)) = scope.split_once('/') else {
+    let Ok(Some(locator)) = GatewayProcessLocator::from_process(Some(scope), None) else {
         return false;
     };
     parent.group.as_deref().unwrap_or("gateway.networking.k8s.io") == "gateway.networking.k8s.io"
         && parent.kind.as_deref().unwrap_or("Gateway") == "Gateway"
-        && parent.namespace.as_deref().unwrap_or(route_namespace) == scope_namespace
-        && parent.name == scope_name
+        && parent.namespace.as_deref().unwrap_or(route_namespace) == locator.namespace()
+        && parent.name == locator.name()
 }
 
 fn retain_parent_refs(parent_refs: &mut Option<Vec<ParentReference>>, route_namespace: &str, scope: &str) -> bool {

@@ -471,3 +471,17 @@ grammar, limits pairing, live provider lookup and existing pool/UID/captured-vie
 semantics stay unchanged. This completes only the fixed LinkSys field; separate
 Backend Secret material ownership is not implied and remains an independent
 verification candidate.
+
+
+### R6j process locator reconciliation
+
+Gateway startup and parent-based Route/EdgionTls cold projection share the finite
+GatewayProcessLocator grammar. Exact scope/UID bytes, UID-first startup errors,
+shared mode and same-name replacement protection remain; malformed direct parent
+projection is rejected. EdgionAcme raw attachment-key equality is unchanged.
+Controller process DNS already reaches canonical DnsLinkSysKey through LinkSysKey;
+its Kubernetes typed HTTPDNS acquisition and kube-less System fallback remain
+process authority, without a fabricated Kubernetes source or Grant. Dedicated
+Service exact reference-plus-UID checks and cross-language UID-derived naming are
+separate existing ownership guards. Generated output authority and Backend Secret
+actual-source verification remain separate work, not covered by this completion.

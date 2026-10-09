@@ -8,6 +8,7 @@ use edgion_common::conf_sync::payload::MAX_MESSAGE_BYTES;
 use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use edgion_common::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
 use edgion_resources::rate_limit_local_config::set_gateway_instance_count;
+use edgion_resources::resources::refs::gateway_process_locator::{GatewayProcessLocator, GatewayProcessLocatorError};
 use edgion_resources::ResourceKind;
 use std::sync::Arc;
 use std::time::Duration;
@@ -177,21 +178,16 @@ impl ConfigSyncClient {
         let client_id = Uuid::new_v4().to_string();
         let gateway_scope = std::env::var("EDGION_GATEWAY_SCOPE").ok();
         let gateway_uid = std::env::var("EDGION_GATEWAY_UID").ok();
-        anyhow::ensure!(
-            gateway_uid
-                .as_ref()
-                .is_none_or(|uid| !uid.is_empty() && gateway_scope.is_some()),
-            "EDGION_GATEWAY_UID requires EDGION_GATEWAY_SCOPE"
-        );
-        if let Some(scope) = gateway_scope.as_deref() {
-            let Some((namespace, name)) = scope.split_once('/') else {
-                anyhow::bail!("EDGION_GATEWAY_SCOPE must have namespace/name format");
-            };
-            anyhow::ensure!(
-                !namespace.is_empty() && !name.is_empty() && !name.contains('/'),
-                "EDGION_GATEWAY_SCOPE must have namespace/name format"
-            );
-        }
+        GatewayProcessLocator::from_process(gateway_scope.as_deref(), gateway_uid.as_deref()).map_err(|error| {
+            match error {
+                GatewayProcessLocatorError::UidRequiresScope => {
+                    anyhow::anyhow!("EDGION_GATEWAY_UID requires EDGION_GATEWAY_SCOPE")
+                }
+                GatewayProcessLocatorError::InvalidScope => {
+                    anyhow::anyhow!("EDGION_GATEWAY_SCOPE must have namespace/name format")
+                }
+            }
+        })?;
         let config_client = Arc::new(ConfigClient::new_scoped(
             client_id.clone(),
             client_name.clone(),

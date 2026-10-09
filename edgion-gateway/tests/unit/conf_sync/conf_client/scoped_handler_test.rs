@@ -150,3 +150,67 @@ fn tls_route_projection_trims_other_gateway_listener() {
     let listener = &scoped.spec.resolved_listeners.unwrap()[0];
     assert_eq!(listener.gateway_name, "edge-b");
 }
+
+#[test]
+fn process_locator_controls_real_http_and_l4_parent_projection() {
+    for (namespace, name, accepted) in [
+        ("infra", "edge", true),
+        ("Infra_Name", "Edge-1", true),
+        (" infra ", " edge ", true),
+        ("café", "π", true),
+        ("", "edge", false),
+        ("infra", "", false),
+        ("infra", "edge/extra", false),
+    ] {
+        let scope = format!("{namespace}/{name}");
+        let input = serde_json::json!({
+            "metadata": {"name":"route", "namespace":"routes"},
+            "spec": {
+                "parentRefs": [{"name":name, "namespace":namespace}],
+                "resolvedListeners": ["0.0.0.0:80/TCP"],
+                "resolvedListenerAttachments": [{"gatewayNamespace":namespace,"gatewayName":name,"listenerName":"tcp","listenerKey":"0.0.0.0:80/TCP"}]
+            }
+        });
+        let http: HTTPRoute = serde_json::from_value(input.clone()).unwrap();
+        let tcp: TCPRoute = serde_json::from_value(input).unwrap();
+        assert_eq!(http.project_for_gateway(&scope).is_some(), accepted, "HTTP {scope}");
+        assert_eq!(tcp.project_for_gateway(&scope).is_some(), accepted, "TCP {scope}");
+        if accepted {
+            assert!(http.project_for_gateway(&format!("{namespace}/other")).is_none());
+            assert!(tcp.project_for_gateway(&format!("{namespace}/other")).is_none());
+        }
+    }
+}
+
+#[test]
+fn process_locator_controls_edgion_tls_parent_projection_without_changing_parent_defaults() {
+    for (namespace, name, accepted) in [
+        ("infra", "edge", true),
+        ("", "edge", false),
+        ("infra", "", false),
+        ("infra", "edge/extra", false),
+    ] {
+        let tls: EdgionTls = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"certificate", "namespace":namespace},
+            "spec":{
+                "hosts":["example.com"], "secretRef":{"name":"certificate"},
+                "parentRefs":[{"name":name}],
+                "resolvedListenerAttachments":[{
+                    "gatewayNamespace":namespace,"gatewayName":name,"listenerName":"https","listenerKey":"0.0.0.0:443/HTTPS",
+                    "gatewayProof":{"instance":"gateway-uid","generation":1,"epoch":"epoch","attachmentDigest":"digest"}
+                }]
+            }
+        })).unwrap();
+        let scope = format!("{namespace}/{name}");
+        assert_eq!(tls.project_for_gateway(&scope).is_some(), accepted);
+        if accepted {
+            for (group, kind) in [(Some("core"), None), (None, Some("Service"))] {
+                let mut wrong = tls.clone();
+                let parent = &mut wrong.spec.parent_refs.as_mut().unwrap()[0];
+                parent.group = group.map(str::to_owned);
+                parent.kind = kind.map(str::to_owned);
+                assert!(wrong.project_for_gateway(&scope).is_none());
+            }
+        }
+    }
+}

@@ -11,6 +11,7 @@ pub mod dns_fields;
 pub mod egc_tls_fields;
 pub mod extension_ref;
 pub mod gateway_class_fields;
+pub mod gateway_process_locator;
 pub(super) mod grants;
 mod identity;
 pub mod ip_list_fields;

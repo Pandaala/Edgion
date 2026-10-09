@@ -262,6 +262,12 @@ behavior and are configured per Gateway process; there is no
 and projects attached Routes and EdgionTls to that instance. Set
 `EDGION_GATEWAY_UID=<Gateway UID>` for a Kubernetes dedicated instance so a
 same-named replacement Gateway cannot reuse the old process.
+The process locator preserves exact bytes: scope requires two nonempty slash-separated
+components, without trimming, namespace defaults, or DNS-name normalization. UID must
+be nonempty and requires scope; UID errors take precedence over malformed scope.
+Startup and parent-based Route/EdgionTls cold projection share this finite parser.
+Malformed direct parent projection cannot match an equally malformed parent; EdgionAcme
+attachment-key equality remains separate. This selection is not ReferenceGrant authority.
 Use it with a dedicated Deployment and Service for each Gateway that needs
 independent traffic on a shared external port. The Service must carry
 `edgion.io/gateway-service-ref: namespace/name` and

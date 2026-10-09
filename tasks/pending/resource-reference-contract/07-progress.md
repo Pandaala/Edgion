@@ -2203,3 +2203,36 @@ follows; Secret ownership and other R6-R8/F1/F2 boundaries remain pending.
 
 Both independent reviewers, including Astra, confirmed R6i SCOPED COMMIT PASS.
 The seven technical paths plus this record form the exact local commit scope.
+
+R6i committed locally as 7989ee09d46ea4e96112a0cb7251f5c015edd0ca; all eight
+committed blobs match the reviewed snapshot. Nothing was pushed. Reconcile R6
+remaining process DNS and Gateway locator consumers at this HEAD before choosing
+the next implementation. Backend Secret-source review and output write authority
+remain separate coverage items; R7/R8/F1/F2 are not closed.
+
+Two independent current-HEAD inventories confirm Controller process DNS already
+uses LinkSysKey::parse -> canonical DnsLinkSysKey; its typed HTTPDNS preparation
+and kube-less system fallback need no new wrapper. Dedicated Service lookup
+already requires exact Gateway reference plus UID, and Rust/Python naming agrees.
+The remaining finite process-locator candidate is Gateway startup scope/UID
+parsing. Preserve two nonempty slash components without trimming or DNS tightening,
+UID/nonempty/scope requirements, and existing ownership/authorization boundaries.
+
+R6j eight-path plan received Astra SCOPED PLAN PASS; execution authorized.
+One borrowed process locator replaces startup and parent_matches parsing with
+UID-first errors and exact existing lexical behavior. Explicitly approved:
+malformed direct parent-based Route/EdgionTls projection scopes no longer match
+empty/extra-slash decoys. EdgionAcme raw attachment equality remains unchanged;
+this is not a claim about every projection or an authorization mechanism.
+
+R6j received both independent SCOPED STATIC and EXECUTION PASS verdicts. All
+42 distinct focused unit tests pass; all 9578 old IDs and ignored flags survive
+(9582 current), and old test bodies remain unchanged. Eight technical paths match
+the reviewed frozen hashes. All 14 root gates pass with unchanged source and zero
+warnings/errors; workspace check took 77.467 seconds and Clippy 86.519 seconds.
+Evidence lives in the R6j verification/root-verification directories. Final
+independent commit review follows; Backend Secret actual-source verification,
+R7/R8 and whole-task F1/F2 remain open.
+
+Both independent reviewers, including Astra, confirmed R6j SCOPED COMMIT PASS.
+The eight technical paths plus this record form the exact local commit scope.
