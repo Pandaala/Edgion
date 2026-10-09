@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use super::PreparedHttpDns;
 use edgion_resources::constants::annotations::edgion::{DNS_RESOLVER, DNS_RESOLVER_REF};
 use edgion_resources::resources::edgion_gateway_config::DnsResolverConfig as EgcDnsResolver;
+use edgion_resources::resources::refs::dns_fields::DnsLinkSysKey;
 use std::sync::Arc;
 
 use super::ResolverSpec;
@@ -31,14 +32,10 @@ impl LinkSysKey {
     /// (bare names are rejected — cross-namespace refs must be unambiguous), and
     /// both halves must be non-empty. Returns `None` for anything malformed.
     pub fn parse(reference: &str) -> Option<Self> {
-        let (ns, name) = reference.trim().split_once('/')?;
-        let (ns, name) = (ns.trim(), name.trim());
-        if ns.is_empty() || name.is_empty() || name.contains('/') {
-            return None;
-        }
+        let key = DnsLinkSysKey::parse(reference)?;
         Some(Self {
-            namespace: ns.to_string(),
-            name: name.to_string(),
+            namespace: key.namespace().to_string(),
+            name: key.name().to_string(),
         })
     }
 }

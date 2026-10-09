@@ -1184,3 +1184,17 @@ Existing current policy, LKG, scoped source-copy and in-flight pinning rules rem
 RAP URL document, RAP/Canary/GCIR Selector and RegionRoute override references use actual owning-entry loans with fixed edgion.io/EdgionConfigData roles. Owner failure is distinct from target unavailability. Invalid identities produce no external lookup, Grant query or dependency edge; valid missing/denied references retain recovery edges. Target namespace omission uses the owner's effective default namespace independently of raw owner keys.
 
 RAP configured Selector failure remains a denying RAP filter under existing condition/policy placement. Canary/GCIR Selector failures and Region override failures retain validated base fallback. URL imports skip invalid/denied/unavailable units, preserve inline and permitted siblings, retain the 64-warning bound and authorize copied conditions as the EP. Readonly URL status consumes parse-time warnings; Selector/Region status recomputes current reference permission. Actual owning guards precede cold cache hits. Runtime immutable snapshot and pin contracts remain unchanged. R6-R8 and live traffic verification remain open.
+
+### R6a Controller DNS ownership boundary
+
+Service and Gateway DNS annotation decisions borrow the actual owner and share
+the finite explicit namespace/name grammar with process DNS configuration.
+Controller handlers register valid cross-namespace raw-owner recovery edges
+before checking the current typed Grant query. The raw Kubernetes DNS producer
+uses that same permission decision before acquiring LinkSys. A denied annotation
+falls through to same-layer inline servers and then the administrative default;
+the default retains its independent authority even for the same target key.
+Required generated EndpointSlice families must match the current Service UID,
+name, namespace, family and service label before a matching successful content
+fingerprint may skip forced SSA. This does not add an async publication fence
+or delete obsolete families for a still-desired Service.

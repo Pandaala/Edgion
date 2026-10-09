@@ -117,6 +117,18 @@ pub struct ObjectIdentity<'a> {
 }
 
 impl<'a> ObjectIdentity<'a> {
+    /// Fixed DNS annotation grammar; only its private owning adapter selects it.
+    pub(super) fn parsed_dns_linksys(namespace: &'a str, name: &'a str) -> Self {
+        Self {
+            group_kind: GroupKind {
+                group: "edgion.io",
+                kind: "LinkSys",
+            },
+            scope: ResourceScope::Namespaced(namespace),
+            name,
+        }
+    }
+
     /// Fixed template read grammar, selected only by private owning adapters.
     /// Explicit nonempty components retain the canonical parser's lexical contract.
     pub(super) fn parsed_template_secret(namespace: &'a str, name: &'a str) -> Result<Self, ReferenceError> {

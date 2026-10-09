@@ -62,3 +62,21 @@ are derived from that publication. See the [backend architecture](../02-gateway/
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/endpoint_slice.rs`
 - `edgion-gateway/src/backends/discovery/services/conf_handler_impl.rs`
 - `edgion-gateway/src/backends/discovery/endpoint_slice/conf_handler_impl.rs`
+
+## Controller DNS references and generated slices
+
+DNS annotation references borrow the actual Service or Gateway. Omitted source
+namespace uses default for permission, while dependency owners keep raw metadata.
+The explicit namespace/name string grammar trims each half and rejects missing
+or additional slashes without imposing a new DNS-label restriction. Valid denied
+references retain cross-namespace recovery edges; invalid identities create none.
+The independent raw Kubernetes Service DNS loop checks the same current Grant
+permission before LinkSys GET. Denial drops only the tenant reference candidate:
+inline servers and administrative defaults retain their existing precedence.
+
+An unchanged successful content fingerprint skips SSA only if every required
+IPv4/IPv6 slice has the expected name, namespace, addressType, Service label and
+current v1/Service owner UID. Missing families and same-name Service replacement
+therefore repair normally. Forced SSA, resolution-error last-good output and
+full-success-only fingerprint updates remain. No new mid-await revocation fence
+or obsolete-family deletion is supplied by this check.

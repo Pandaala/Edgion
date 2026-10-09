@@ -1378,7 +1378,11 @@ impl KubernetesCenter {
             leader_handle.clone(),
         );
         crate::services::conf_sync_ca::rotation::start_conf_sync_rotation(client.clone());
-        crate::services::dns_resolver::start_dns_resolver_service(client.clone(), watch_namespaces.to_vec());
+        crate::services::dns_resolver::start_dns_resolver_service(
+            client.clone(),
+            watch_namespaces.to_vec(),
+            runtime.clone(),
+        );
         crate::services::credential_manager::start_credential_manager_service(
             client.clone(),
             watch_namespaces.to_vec(),

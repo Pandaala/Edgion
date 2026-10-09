@@ -31,6 +31,7 @@ use edgion_resources::resources::proxy_protocol::{
     BoundedProxyProtocolReferenceIdentity, InboundProxyProtocolAnnotation, ProxyProtocolConfigErrorCode,
     ProxyProtocolPolicySourceKind, ResolvedInboundProxyProtocol,
 };
+use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
 use edgion_resources::resources::refs::plugin_target::PluginTarget;
 use edgion_resources::{ResourceKind, ResourceMeta};
 use k8s_openapi::api::core::v1::Service;
@@ -693,16 +694,10 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // LinkSys) so a ReferenceGrant add/remove requeues this Gateway. The grant
         // check + annotation strip happen in `update_status` (which reports the
         // denial via ResolvedRefs before stripping).
-        if let Some(v) = g
-            .metadata
-            .annotations
-            .as_ref()
-            .and_then(|a| a.get(annotations::edgion::DNS_RESOLVER_REF))
-        {
-            if let Some(key) = edgion_common::dns::resolver_select::LinkSysKey::parse(v) {
-                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("default");
-                if key.namespace != gateway_ns {
-                    cross_ns_manager.add_ref(key.namespace, cross_ns_ref.clone());
+        if let Ok(Some(query)) = DnsResolverOwner::Gateway(&g).query() {
+            if query.source().scope() != query.target().scope() {
+                if let Some(namespace) = query.target().scope().namespace() {
+                    cross_ns_manager.add_ref(namespace.to_string(), resource_ref.clone());
                 }
             }
         }
@@ -2838,21 +2833,11 @@ fn validate_gateway_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -
 /// ReferenceGrant. `None` when the annotation is absent, same-namespace, or
 /// permitted. Same-namespace refs and trusted config are never gated.
 fn validate_gateway_dns_resolver_ref(gateway: &Gateway, runtime: &ControllerRuntime) -> Option<String> {
-    use super::dns_resolver_guard::check_dns_resolver_ref_grant;
-    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
-    let owner = ResourceRef::new(
-        ResourceKind::Gateway,
-        gateway.metadata.namespace.clone(),
-        gateway.metadata.name.clone().unwrap_or_default(),
-    );
-    let denial = check_dns_resolver_ref_grant(
-        gateway_ns,
-        "gateway.networking.k8s.io",
-        "Gateway",
-        gateway.metadata.annotations.as_ref(),
-        &owner,
-        runtime,
-    )?;
+    use super::dns_resolver_guard::check_dns_resolver_owner;
+    let denial = match check_dns_resolver_owner(DnsResolverOwner::Gateway(gateway), runtime) {
+        Ok(denial) => denial?,
+        Err(error) => return Some(format!("dns-resolver-ref has invalid owning identity: {error}")),
+    };
     Some(format!(
         "dns-resolver-ref LinkSys '{}/{}' cross-namespace reference not permitted (no ReferenceGrant)",
         denial.ref_namespace, denial.name

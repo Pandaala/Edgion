@@ -24,18 +24,23 @@ use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::Client;
 use parking_lot::Mutex;
 
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::dns_resolver_guard::dns_query_allowed;
+use crate::conf_mgr::ControllerRuntime;
 use edgion_common::dns::resolver_select::{
-    candidate_from_annotations, resolve_effective_spec, LinkSysKey, ResolverCandidate,
+    parse_dns_server_list, resolve_effective_spec, LinkSysKey, ResolverCandidate,
 };
 use edgion_common::dns::{resolve, HttpDnsCandidate, PreparedHttpDns, ResolverSpec};
 use edgion_common::time::now_rfc3339;
-use edgion_resources::constants::annotations::edgion::DNS_RESOLUTION_MODE;
+use edgion_resources::constants::annotations::edgion::{DNS_RESOLUTION_MODE, DNS_RESOLVER as DNS_RESOLVER_ANNOTATION};
 use edgion_resources::constants::labels::k8s::SERVICE_NAME;
 use edgion_resources::resources::link_sys::LinkSys;
+use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
 
 use crate::config::{dns_resolver_config, DnsResolverConfig};
 
-use super::slice_builder::{build_endpoint_slices, decide_action, managed_by_selector, SliceAction, FIELD_MANAGER};
+use super::slice_builder::{
+    build_endpoint_slices, decide_action, managed_by_selector, slice_name, SliceAction, FIELD_MANAGER,
+};
 
 /// Fallback tick interval when the configured `refresh_interval` is unparseable.
 const DEFAULT_REFRESH: Duration = Duration::from_secs(15);
@@ -61,7 +66,7 @@ static DNS_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 
 /// Start the control-plane DNS resolver loop. Idempotent: a warning + no-op if
 /// already running (call [`stop_dns_resolver_service`] first on re-election).
-pub fn start_dns_resolver_service(client: Client, watch_namespaces: Vec<String>) {
+pub fn start_dns_resolver_service(client: Client, watch_namespaces: Vec<String>, runtime: Arc<ControllerRuntime>) {
     use std::sync::atomic::Ordering;
 
     let mut guard = DNS_RESOLVER.lock();
@@ -73,7 +78,7 @@ pub fn start_dns_resolver_service(client: Client, watch_namespaces: Vec<String>)
         return;
     }
     let generation = DNS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    let handle = tokio::spawn(async move { run(client, watch_namespaces).await });
+    let handle = tokio::spawn(async move { run(client, watch_namespaces, runtime).await });
     *guard = Some(DnsResolverHandle {
         abort: handle.abort_handle(),
         generation,
@@ -129,7 +134,7 @@ impl ServiceDnsState {
 }
 
 /// The loop body. Ticks on `refresh_interval` and reconciles every tick.
-async fn run(client: Client, watch_namespaces: Vec<String>) {
+async fn run(client: Client, watch_namespaces: Vec<String>, runtime: Arc<ControllerRuntime>) {
     let config = dns_resolver_config();
     let period = parse_refresh_interval(&config.refresh_interval);
     tracing::info!(
@@ -153,7 +158,7 @@ async fn run(client: Client, watch_namespaces: Vec<String>) {
         // Re-read config each tick so a hot reload of `enabled` / default resolver
         // takes effect without restarting the service.
         let config = dns_resolver_config();
-        if let Err(e) = reconcile_once(&client, &watch_namespaces, &config, &mut last_applied).await {
+        if let Err(e) = reconcile_with_runtime(&client, &watch_namespaces, &config, &mut last_applied, &runtime).await {
             tracing::warn!(
                 component = "dns_resolver_service",
                 error = %format!("{e:#}"),
@@ -177,14 +182,23 @@ async fn run(client: Client, watch_namespaces: Vec<String>) {
 /// (`resolve_and_apply`): without the existence check, a slice deleted
 /// out-of-band while the resolved IPs are unchanged would never be recreated
 /// (the input fingerprint would still match). Listing first heals it in-tick.
-async fn reconcile_once(
+async fn reconcile_with_runtime(
     client: &Client,
     watch_namespaces: &[String],
     config: &DnsResolverConfig,
     last_applied: &mut HashMap<String, ServiceDnsState>,
+    runtime: &ControllerRuntime,
 ) -> Result<()> {
     let owned = list_owned_slices(client, watch_namespaces).await?;
-    let observed: HashSet<String> = owned.iter().filter_map(owned_slice_service_key).collect();
+    let observed: HashMap<(&str, &str), &EndpointSlice> = owned
+        .iter()
+        .filter_map(|slice| {
+            Some((
+                (slice.metadata.namespace.as_deref()?, slice.metadata.name.as_deref()?),
+                slice,
+            ))
+        })
+        .collect();
     let services = list_services(client, watch_namespaces).await?;
 
     let default_candidate = controller_default_candidate(config);
@@ -225,6 +239,7 @@ async fn reconcile_once(
                 &default_candidate,
                 last_applied,
                 &observed,
+                runtime,
             )
             .await;
         }
@@ -284,7 +299,8 @@ async fn resolve_and_apply(
     external_name: &str,
     default_candidate: &Option<ResolverCandidate>,
     last_applied: &mut HashMap<String, ServiceDnsState>,
-    observed: &HashSet<String>,
+    observed: &HashMap<(&str, &str), &EndpointSlice>,
+    runtime: &ControllerRuntime,
 ) {
     let service_key = format!("{namespace}/{name}");
 
@@ -300,18 +316,18 @@ async fn resolve_and_apply(
         return;
     }
 
-    let Some(owner) = service_owner_ref(svc) else {
+    if svc.metadata.uid.is_none() {
         tracing::debug!(
             component = "dns_resolver_service",
             service = %service_key,
             "Service missing uid; skipping (cannot set ownerReference)"
         );
         return;
-    };
+    }
 
-    let annotations = svc.metadata.annotations.clone().unwrap_or_default();
     let state = last_applied.entry(service_key.clone()).or_default();
-    let spec = effective_spec(client, &annotations, default_candidate, state).await;
+    let candidate = service_resolver_candidate(svc, runtime);
+    let spec = effective_spec(client, candidate, default_candidate, state).await;
 
     let mut ips = match resolve(&spec, external_name).await {
         Ok(ips) => ips,
@@ -326,6 +342,26 @@ async fn resolve_and_apply(
             return;
         }
     };
+    apply_resolved_slices(client, svc, &ports, &mut ips, last_applied, observed).await;
+}
+
+/// Publish one resolved generation, retaining the prior fingerprint on partial failure.
+async fn apply_resolved_slices(
+    client: &Client,
+    svc: &Service,
+    ports: &[ServicePort],
+    ips: &mut Vec<IpAddr>,
+    last_applied: &mut HashMap<String, ServiceDnsState>,
+    observed: &HashMap<(&str, &str), &EndpointSlice>,
+) {
+    let Some(name) = svc.metadata.name.as_deref() else {
+        return;
+    };
+    let namespace = svc.metadata.namespace.as_deref().unwrap_or("default");
+    let Some(owner) = service_owner_ref(svc) else {
+        return;
+    };
+    let service_key = format!("{namespace}/{name}");
     // Deterministic order + de-dup: an unchanged resolution then yields an
     // identical fingerprint (no spurious re-apply) and a stable published slice.
     ips.sort();
@@ -334,19 +370,15 @@ async fn resolve_and_apply(
         return;
     }
 
-    // Skip the write only when the slice is BOTH still present (`observed`) AND
-    // its content fingerprint (sorted IPs + ports) is unchanged. Gating on the
-    // fingerprint alone would wrongly skip forever if the slice were deleted
-    // out-of-band while the resolved IPs stayed the same; the existence check
-    // heals that in the same tick. Otherwise the SSA `force` write would bump the
-    // resourceVersion every tick and re-fire the whole conf_sync → data-plane path.
-    let fingerprint = slice_fingerprint(&ips, &ports);
-    if can_skip_apply(observed, last_applied, &service_key, &fingerprint) {
+    // Unchanged content may skip only when all desired families still belong
+    // to the current Service UID; otherwise normal forced SSA repairs ownership.
+    let fingerprint = slice_fingerprint(ips, ports);
+    if can_skip_owned_slices(observed, last_applied, &service_key, &fingerprint, svc, ips) {
         return;
     }
 
     let resolved_at = now_rfc3339();
-    let slices = build_endpoint_slices(name, namespace, owner, &ports, &ips, &resolved_at);
+    let slices = build_endpoint_slices(name, namespace, owner, ports, ips, &resolved_at);
     if slices.is_empty() {
         return;
     }
@@ -382,23 +414,67 @@ async fn resolve_and_apply(
     }
 }
 
-/// Whether a tick may skip re-applying a Service's slice.
-///
-/// Requires BOTH that the slice is still observed to exist AND that its content
-/// fingerprint is unchanged. The existence guard is what makes an out-of-band
-/// deletion self-heal: an unchanged fingerprint alone would skip the write
-/// forever and leave the backend with zero endpoints.
-fn can_skip_apply(
-    observed: &HashSet<String>,
+/// Every required family must belong to this current Service generation.
+fn can_skip_owned_slices(
+    observed: &HashMap<(&str, &str), &EndpointSlice>,
     last_applied: &HashMap<String, ServiceDnsState>,
     service_key: &str,
     fingerprint: &str,
+    service: &Service,
+    ips: &[IpAddr],
 ) -> bool {
-    observed.contains(service_key)
-        && last_applied
-            .get(service_key)
-            .and_then(|state| state.applied_fingerprint.as_deref())
-            == Some(fingerprint)
+    if last_applied
+        .get(service_key)
+        .and_then(|state| state.applied_fingerprint.as_deref())
+        != Some(fingerprint)
+    {
+        return false;
+    }
+    let (Some(name), Some(uid)) = (service.metadata.name.as_deref(), service.metadata.uid.as_deref()) else {
+        return false;
+    };
+    let namespace = service.metadata.namespace.as_deref().unwrap_or("default");
+    [false, true]
+        .into_iter()
+        .filter(|v6| ips.iter().any(|ip| ip.is_ipv6() == *v6))
+        .all(|v6| {
+            let expected = slice_name(name, v6);
+            observed.get(&(namespace, expected.as_str())).is_some_and(|slice| {
+                slice.address_type == if v6 { "IPv6" } else { "IPv4" }
+                    && slice.metadata.namespace.as_deref() == Some(namespace)
+                    && slice.metadata.name.as_deref() == Some(expected.as_str())
+                    && slice
+                        .metadata
+                        .labels
+                        .as_ref()
+                        .and_then(|labels| labels.get(SERVICE_NAME))
+                        .map(String::as_str)
+                        == Some(name)
+                    && slice.metadata.owner_references.as_ref().is_some_and(|owners| {
+                        owners.iter().any(|owner| {
+                            owner.api_version == "v1"
+                                && owner.kind == "Service"
+                                && owner.name == name
+                                && owner.uid == uid
+                        })
+                    })
+            })
+        })
+}
+
+/// Tenant annotation permission is distinct from administrative default provenance.
+fn service_resolver_candidate(service: &Service, runtime: &ControllerRuntime) -> Option<ResolverCandidate> {
+    if let Ok(Some(query)) = DnsResolverOwner::Service(service).query() {
+        if dns_query_allowed(query, runtime) {
+            return Some(ResolverCandidate::HttpDnsRef(LinkSysKey {
+                namespace: query.target().scope().namespace()?.to_string(),
+                name: query.target().name().to_string(),
+            }));
+        }
+    }
+    let servers = service.metadata.annotations.as_ref()?.get(DNS_RESOLVER_ANNOTATION)?;
+    let servers = parse_dns_server_list(servers);
+    (!servers.is_empty()).then_some(ResolverCandidate::Servers(servers))
 }
 
 /// Content fingerprint (sorted IPs + sorted Service port numbers) used to detect
@@ -436,11 +512,10 @@ fn owned_slice_service_key(slice: &EndpointSlice) -> Option<String> {
 /// degrades to the config's `fallback` (see `edgion_common::dns::resolve`).
 async fn effective_spec(
     client: &Client,
-    svc_annotations: &std::collections::BTreeMap<String, String>,
+    service_candidate: Option<ResolverCandidate>,
     default_candidate: &Option<ResolverCandidate>,
     state: &mut ServiceDnsState,
 ) -> ResolverSpec {
-    let service_candidate = candidate_from_annotations(svc_annotations);
     let layers = [service_candidate, default_candidate.clone()];
     let prepared = match layers.iter().flatten().next() {
         Some(ResolverCandidate::HttpDnsRef(key)) => match fetch_httpdns_owner(client, key).await {
@@ -463,13 +538,7 @@ async fn effective_spec(
 pub(crate) async fn controller_default_resolver(client: &Client) -> ResolverSpec {
     let config = dns_resolver_config();
     let default_candidate = controller_default_candidate(&config);
-    effective_spec(
-        client,
-        &std::collections::BTreeMap::new(),
-        &default_candidate,
-        &mut ServiceDnsState::default(),
-    )
-    .await
+    effective_spec(client, None, &default_candidate, &mut ServiceDnsState::default()).await
 }
 
 /// Kube-less fallback for persist-off acquisition on FS/etcd.

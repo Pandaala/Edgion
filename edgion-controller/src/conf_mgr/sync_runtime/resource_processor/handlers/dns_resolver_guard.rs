@@ -10,8 +10,10 @@
 
 use std::collections::BTreeMap;
 
-use edgion_common::dns::resolver_select::LinkSysKey;
 use edgion_resources::constants::annotations::edgion::DNS_RESOLVER_REF;
+use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
+use edgion_resources::resources::refs::{GrantQuery, ReferenceError};
+use edgion_resources::ResourceKind;
 
 use super::super::ref_grant::read_after_registering_cross_ns_dependency;
 use super::super::ResourceRef;
@@ -24,52 +26,45 @@ pub struct DnsResolverRefDenial {
     pub name: String,
 }
 
-/// API group of a `dns-resolver-ref` target (an httpdns LinkSys).
-const LINK_SYS_GROUP: &str = "edgion.io";
-/// Kind of a `dns-resolver-ref` target.
-const LINK_SYS_KIND: &str = "LinkSys";
+/// Current permission for an already validated actual-owner query.
+/// The producer calls this without registering another dependency/worker.
+pub(crate) fn dns_query_allowed(query: GrantQuery<'_>, runtime: &ControllerRuntime) -> bool {
+    query.source().scope() == query.target().scope()
+        || !is_reference_grant_validation_enabled()
+        || runtime.ref_grant_store.check_query(query)
+}
 
-/// Check a resource's `dns-resolver-ref` annotation for a cross-namespace
-/// httpdns LinkSys reference that lacks a ReferenceGrant.
-///
-/// Returns `None` for a same-namespace ref, an absent / malformed annotation, or
-/// when grant validation is disabled. A valid cross-namespace ref is registered
-/// before the validation-mode or authorization read. `from_group`/`from_kind`
-/// identify the referrer (`"gateway.networking.k8s.io"`/`"Gateway"` or
-/// `""`/`"Service"`).
-pub fn check_dns_resolver_ref_grant(
-    from_ns: &str,
-    from_group: &str,
-    from_kind: &str,
-    annotations: Option<&BTreeMap<String, String>>,
-    owner: &ResourceRef,
+/// Register the actual raw owner before checking current cross-namespace permission.
+pub(crate) fn check_dns_resolver_owner(
+    field: DnsResolverOwner<'_>,
     runtime: &ControllerRuntime,
-) -> Option<DnsResolverRefDenial> {
-    let value = annotations?.get(DNS_RESOLVER_REF)?;
-    let key = LinkSysKey::parse(value)?;
-    if key.namespace == from_ns {
-        return None;
+) -> Result<Option<DnsResolverRefDenial>, ReferenceError> {
+    let Some(query) = field.query()? else {
+        return Ok(None);
+    };
+    if query.source().scope() == query.target().scope() {
+        return Ok(None);
     }
-    let allowed = read_after_registering_cross_ns_dependency(runtime, &key.namespace, owner, || {
-        !is_reference_grant_validation_enabled()
-            || runtime.ref_grant_store.check_reference_allowed(
-                from_ns,
-                from_group,
-                from_kind,
-                &key.namespace,
-                LINK_SYS_GROUP,
-                LINK_SYS_KIND,
-                Some(&key.name),
-            )
-    });
-    if allowed {
-        None
-    } else {
-        Some(DnsResolverRefDenial {
-            ref_namespace: key.namespace,
-            name: key.name,
-        })
-    }
+    let namespace = query
+        .target()
+        .scope()
+        .namespace()
+        .ok_or(ReferenceError::MissingNamespace)?;
+    let kind = match field {
+        DnsResolverOwner::Service(_) => ResourceKind::Service,
+        DnsResolverOwner::Gateway(_) => ResourceKind::Gateway,
+    };
+    let owner = ResourceRef::new(
+        kind,
+        field.raw_namespace().map(str::to_string),
+        field.name().unwrap_or_default().to_string(),
+    );
+    let allowed =
+        read_after_registering_cross_ns_dependency(runtime, namespace, &owner, || dns_query_allowed(query, runtime));
+    Ok((!allowed).then(|| DnsResolverRefDenial {
+        ref_namespace: namespace.to_string(),
+        name: query.target().name().to_string(),
+    }))
 }
 
 /// Remove the `dns-resolver-ref` annotation in place. Called after a denial so

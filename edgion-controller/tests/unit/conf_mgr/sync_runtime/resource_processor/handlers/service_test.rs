@@ -134,3 +134,74 @@ async fn mirror_dependents_requeue_only_after_service_visibility_changes() {
     .expect("plugin workqueue should remain open");
     assert_eq!(unpublished.key, "default/mirrors");
 }
+
+#[tokio::test]
+async fn dns_raw_owner_default_namespace_retargets_and_cleans_denied_dependencies() {
+    use edgion_resources::constants::annotations::edgion::DNS_RESOLVER_REF;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let handler = ServiceHandler::new();
+    let mut source = Service {
+        metadata: ObjectMeta {
+            name: Some("bare-owner".into()),
+            annotations: Some(std::collections::BTreeMap::from([(
+                DNS_RESOLVER_REF.into(),
+                "dns/resolver".into(),
+            )])),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let owner = ResourceRef::new(ResourceKind::Service, None, "bare-owner".into());
+    for target in ["dns/resolver", "other/resolver"] {
+        source
+            .metadata
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(DNS_RESOLVER_REF.into(), target.into());
+        let ProcessResult::Continue(parsed) = handler.parse(source.clone(), &ctx).await else {
+            panic!("parse")
+        };
+        assert!(!parsed
+            .metadata
+            .annotations
+            .as_ref()
+            .unwrap()
+            .contains_key(DNS_RESOLVER_REF));
+        let ns = target.split_once('/').unwrap().0;
+        assert_eq!(runtime.cross_ns_ref_mgr.get_refs(ns), vec![owner.clone()]);
+        if ns == "other" {
+            assert!(runtime.cross_ns_ref_mgr.get_refs("dns").is_empty());
+        }
+    }
+    handler.on_delete(&source, &ctx).await;
+    assert!(runtime.cross_ns_ref_mgr.get_refs("other").is_empty());
+    for target in ["/resolver", "dns/a/b", "bare"] {
+        source
+            .metadata
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(DNS_RESOLVER_REF.into(), target.into());
+        let _ = handler.parse(source.clone(), &ctx).await;
+        assert!(runtime.cross_ns_ref_mgr.get_refs("dns").is_empty());
+    }
+    source.metadata.namespace = Some("".into());
+    source
+        .metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert(DNS_RESOLVER_REF.into(), "dns/resolver".into());
+    let ProcessResult::Continue(parsed) = handler.parse(source, &ctx).await else {
+        panic!("parse")
+    };
+    assert!(!parsed
+        .metadata
+        .annotations
+        .as_ref()
+        .unwrap()
+        .contains_key(DNS_RESOLVER_REF));
+    assert!(runtime.cross_ns_ref_mgr.get_refs("dns").is_empty());
+}

@@ -212,3 +212,13 @@ fn unsupported_linksys_does_not_reuse_httpdns_and_falls_back_to_system() {
         ResolverSpec::System
     ));
 }
+
+#[test]
+fn dns_key_preserves_finite_annotation_grammar_without_dns_label_tightening() {
+    let key = LinkSysKey::parse(" namespace / Name_With_Underscore ").unwrap();
+    assert_eq!(key.namespace, "namespace");
+    assert_eq!(key.name, "Name_With_Underscore");
+    for value in ["bare", " /name", "ns/", "ns/a/b"] {
+        assert!(LinkSysKey::parse(value).is_none());
+    }
+}

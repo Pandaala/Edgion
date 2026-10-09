@@ -949,6 +949,7 @@ fn validate_stream_plugin_ref_fallback_to_gateway_ns() {
 
 fn make_gateway_with_dns_resolver_ref(ns: &str, reference: &str) -> Gateway {
     let mut gw = make_test_gateway(ns);
+    gw.metadata.name = Some("dns-gateway".into());
     let mut annotations = BTreeMap::new();
     annotations.insert("edgion.io/dns-resolver-ref".to_string(), reference.to_string());
     gw.metadata.annotations = Some(annotations);
@@ -2260,4 +2261,44 @@ async fn gateway_plugin_reference_resolves_bare_source_but_reports_collision() {
     );
     raw.remove("plugins");
     assert!(validate_gateway_plugin_ref(&gateway, &runtime).is_none());
+}
+
+#[tokio::test]
+async fn dns_gateway_actual_source_grant_transitions_and_invalid_owner_register_no_edges() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+    let handler = GatewayHandler::new(None, None);
+    let mut source = make_gateway_with_dns_resolver_ref("default", "dns/resolver");
+    source.metadata.name = Some("dns-gateway".into());
+    source.metadata.namespace = None;
+    for kind in [None, Some("Service"), Some("Gateway"), None] {
+        runtime.ref_grant_store.remove("dns/allow");
+        if let Some(kind) = kind {
+            let group = if kind == "Service" {
+                ""
+            } else {
+                "gateway.networking.k8s.io"
+            };
+            runtime.ref_grant_store.upsert("dns/allow".into(),Arc::new(serde_json::from_value(serde_json::json!({"metadata":{"namespace":"dns","name":"allow"},"spec":{"from":[{"group":group,"kind":kind,"namespace":"default"}],"to":[{"group":"edgion.io","kind":"LinkSys","name":"resolver"}]}})).unwrap()));
+        }
+        let ProcessResult::Continue(parsed) = handler.parse(source.clone(), &ctx).await else {
+            panic!("parse")
+        };
+        assert_eq!(
+            validate_gateway_dns_resolver_ref(&parsed, &runtime).is_none(),
+            kind == Some("Gateway")
+        );
+        assert_eq!(
+            runtime.cross_ns_ref_mgr.get_refs("dns"),
+            vec![ResourceRef::new(ResourceKind::Gateway, None, "dns-gateway".into())]
+        );
+    }
+    handler.on_delete(&source, &ctx).await;
+    assert!(runtime.cross_ns_ref_mgr.get_refs("dns").is_empty());
+    source.metadata.namespace = Some("".into());
+    let ProcessResult::Continue(parsed) = handler.parse(source, &ctx).await else {
+        panic!("parse")
+    };
+    assert!(validate_gateway_dns_resolver_ref(&parsed, &runtime).is_some());
+    assert!(runtime.cross_ns_ref_mgr.get_refs("dns").is_empty());
 }

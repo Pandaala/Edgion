@@ -397,3 +397,10 @@ At the R5c2 boundary, non-IpList roles remained follow-up work. WAF and the fini
 | ESP.plugins[*].GlobalConnectionIpRestriction.activeProfileRef | Selector; effective ESP namespace | Actual ESP | Validated base fallback; current readonly ResolvedRefs; disabled entries retain existing diagnostics/dependencies |
 
 All five fields reject invalid owner/target identity before lookup, Grant query or edge creation. Only target namespace omission defaults; raw target store keys are not aliased. Raw source queue/delete identity remains independent.
+
+R6a closes the Controller subset of the Service/Gateway DNS annotation rows:
+actual borrowed sources and canonical finite grammar: identity/query construction
+precedes dependency registration, current permission checking and target acquisition. Process defaults retain separate authority.
+The DNS GeneratedOutput row checks every required family and current Service UID
+before skipping an unchanged successful publication. Gateway cold DNS migration,
+other fixed consumers, async freshness and obsolete-family deletion remain open.

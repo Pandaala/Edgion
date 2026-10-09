@@ -4,6 +4,7 @@
 //! When a Service is created/updated/deleted, routes that reference it as
 //! a backend are requeued so their ResolvedRefs status is re-evaluated.
 
+use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
 use k8s_openapi::api::core::v1::Service;
 
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::dns_resolver_guard;
@@ -82,14 +83,11 @@ impl ProcessorHandler<Service> for ServiceHandler {
         // data plane never honors an unpermitted reference (falls back to the
         // next resolver layer / system).
         let svc_ns = svc.metadata.namespace.as_deref().unwrap_or("default").to_string();
-        if let Some(denial) = dns_resolver_guard::check_dns_resolver_ref_grant(
-            &svc_ns,
-            "",
-            "Service",
-            svc.metadata.annotations.as_ref(),
-            &owner,
-            ctx.runtime(),
-        ) {
+        let decision = dns_resolver_guard::check_dns_resolver_owner(DnsResolverOwner::Service(&svc), ctx.runtime());
+        if decision.is_err() {
+            dns_resolver_guard::strip_dns_resolver_ref(&mut svc.metadata.annotations);
+        }
+        if let Ok(Some(denial)) = decision {
             tracing::warn!(
                 service_ns = %svc_ns,
                 service = svc.metadata.name.as_deref().unwrap_or(""),

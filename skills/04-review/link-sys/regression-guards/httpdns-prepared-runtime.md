@@ -142,3 +142,15 @@ identity, cap admission, fallback, bootstrap, or Controller state ownership chan
 - prepare-httpdns-runtime-and-config-audit (Common quality batch B0083):
   confirmed performance/observability defect; user authorized prepared clients
   and connection configuration, with independent Astra plan/code review.
+
+## Controller DNS annotation admission
+
+The raw Service producer independently checks the actual Service DNS annotation
+through the same typed Grant decision as the handler before LinkSys acquisition.
+It does not rely on processed-cache stripping or copy annotations to simulate it.
+Denied tenant candidates withdraw prepared selection on the next tick; inline
+servers and process defaults remain independent fallback layers. An administrator
+may select the same key as a denied tenant, so zero-GET claims apply only when
+no administrative default selects that key. Existing failed HTTPDNS generations
+retain authored fallback and preparation reuse. This boundary permits normally
+completing already-admitted operations; it adds no async revocation fence.

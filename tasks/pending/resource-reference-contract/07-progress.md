@@ -1768,3 +1768,66 @@ annotation, LinkSys, global-plugin, template, log-output and instance inventory.
 The first implementation sub-batch requires an exact allowlist and independent
 plan approval. Historical async-boundary observations alone do not authorize
 generic writer fences or broader ownership changes.
+
+## Post-merge resumption (2026-10-09)
+
+The user completed merge commit `d9289ba29` and integration-repair commit
+`1764dd6d2`, then explicitly resumed the reference task. The merge-only pause
+in checkpoint08 is complete. Resume serial IMPL and local commits per accepted
+batch; never push. Unrelated untracked files remain outside this task.
+
+Fresh integration evidence at `1764dd6d2`: the default fast main report has
+269 PASS, 12 existing SKIP, zero failures and timeouts (281 report entries,
+not individual test cases). Workspace checks and independent reviews passed.
+This is a baseline, not acceptance for subsequent reference changes or live
+Kubernetes/Gateway API conformance.
+
+R6a remains plan-only pending review of its current-HEAD plan. Independent
+revalidation confirms the raw Service DNS producer still bypasses the handler's
+Grant gate, and generated-slice skip eligibility still omits current Service UID
+and required-family identity. Prefer actual-owner borrows and existing Grant
+queries; retain the explicit DNS string grammar, process-default authority,
+resolver failure policies, forced SSA and last-good output behavior. R6 residuals,
+R7/R8, final coverage/simplification reviews, documentation cleanup and F2 remain
+open as recorded in checkpoint08.
+
+The refreshed R6a plan at `tmp/resource-reference-contract/r6a-plan-1764dd6-20261009/`
+received independent Astra SCOPED PLAN PASS for its exact 19 technical paths.
+EXECUTE is authorized after baseline capture. The implementer owns the sole
+production/Cargo lane; the coordinator owns this ledger. Final reviews, affected
+tests, workspace gates and a local commit remain pending. Async write fencing
+and obsolete-family deletion are outside this batch's approval.
+
+R6a implementation resumed after an agent-server restart without discarding the
+existing diff or completed Resources test. Two fresh independent result reviewers,
+including Astra, approved the production paths and knowledge after corrections.
+The reviewed narrow amendment extracts the private resolved-slice publication
+step for real dual-family partial-SSA tests, still deriving ownership from the
+actual Service. Both failure orders retain the previous fingerprint, retry all
+desired slices and then skip a complete matching generation. The sole original
+fixture amendment adds the missing Gateway name; original IDs/assertions remain.
+
+Focused evidence so far: Resources DNS 1, Common DNS 65, Controller DNS 25 and
+Controller handlers 714 pass. Fresh compiled identities are 2030 to 2031,
+377 to 378 and 1798 to 1806 respectively, with no removals. An initial Controller
+compile failure from an import/static-name collision was corrected; its log is
+retained. Doctests, Gateway regression checks and final root gates remain pending.
+Evidence is under `tmp/resource-reference-contract/r6a-verification-20261009/`.
+Existing GC may delete a just-repaired mislabeled slice using its earlier list;
+this remains in the separate output-authority/GC residual, not a claim of durable
+single-tick repair. R6a does not close the later DNS, R6-R8 or F1/F2 work.
+
+R6a final verification passes 848 distinct focused unit tests and one actual-owner
+compile-fail doctest, including 43 unchanged Gateway DNS regressions. Both
+independent reviewers confirmed the frozen 19-path source and original-test
+preservation. All 14 root gates pass with unchanged source and zero warnings or
+errors, including workspace check and Clippy. Gate evidence is under
+`tmp/resource-reference-contract/r6a-root-verification-20261009/`. Final review
+confirmation and local commit follow; no live Kubernetes/conformance claim is made.
+
+The next read-only candidate is Gateway Service/Gateway/EGC DNS cold binding:
+reuse existing discovery, GatewayInfo and EGC snapshots, preserve live typed
+HTTPDNS lookup, precedence, failure outcomes and EGC raw-key winner selection.
+Revalidate after the R6a commit before planning or editing. Plugin attachment,
+ProxyProtocol, other fixed LinkSys consumers and the remaining R6-R8/F1/F2 work
+remain separate; this candidate does not activate another mutation lane.
