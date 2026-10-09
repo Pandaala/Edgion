@@ -302,3 +302,40 @@ async fn gcir_selector_fresh_retarget_generation_and_pinned_view_keep_live_snaps
         StreamPluginResult::Allow
     ));
 }
+
+#[tokio::test]
+async fn active_redis_generation_checks_new_owner_without_revoking_captured_view() {
+    let owner: EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"redis-generation","namespace":"r6h"},"spec":{"plugins":[{
+            "type":"ConnectionRateLimit","config":{"redisRef":"r6h/unregistered","perSourceIp":{"rate":100,"interval":"1s","onRedisFailure":"Allow"}}
+        }]}
+    })).unwrap();
+    let mut first = StreamPluginGeneration::new(Arc::new(owner.clone()));
+    let policy = CompiledPluginPolicy::default();
+    let captured = first.compile(&policy, CONNECTION);
+    let repeated = first.compile(&policy, CONNECTION);
+    assert_eq!(first.cached_entry_count(), 1);
+    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 21983, StreamLayer::Stage1);
+    assert!(matches!(
+        captured.stream_plugin_runtime.run(&context).await,
+        StreamPluginResult::Allow
+    ));
+    assert!(matches!(
+        repeated.stream_plugin_runtime.run(&context).await,
+        StreamPluginResult::Allow
+    ));
+    let mut invalid = owner;
+    invalid.metadata.name = None;
+    let mut next = StreamPluginGeneration::new(Arc::new(invalid));
+    let closed = next.compile(&policy, CONNECTION);
+    assert_eq!(next.cached_entry_count(), 0);
+    assert!(
+        matches!(closed.stream_plugin_runtime.run(&context).await,StreamPluginResult::Deny(reason) if reason == "invalid owning LinkSys reference")
+    );
+    first.release_unneeded_entries(&StreamEntryDemand::default());
+    assert_eq!(first.cached_entry_count(), 0);
+    assert!(matches!(
+        captured.stream_plugin_runtime.run(&context).await,
+        StreamPluginResult::Allow
+    ));
+}

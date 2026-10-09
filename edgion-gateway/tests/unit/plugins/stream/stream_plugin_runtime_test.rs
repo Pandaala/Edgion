@@ -394,3 +394,128 @@ impl StreamPluginRuntime {
         Self::from_owner_cached(&binding, resource_key, policy, cache)
     }
 }
+
+fn active_redis_owner(per_source: bool) -> edgion_resources::EdgionStreamPlugins {
+    let dimension = if per_source { "perSourceIp" } else { "perListener" };
+    let mut limit = serde_json::json!({"rate":1000,"interval":"1s","onRedisFailure":"Allow"});
+    if !per_source {
+        limit["redisDistributed"] = serde_json::json!(true);
+    }
+    serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"redis-owner","namespace":"r6h"},"spec":{"plugins":[{
+            "type":"ConnectionRateLimit","config":{"redisRef":"r6h/unregistered",dimension:limit}
+        }]}
+    }))
+    .unwrap()
+}
+
+fn actual_redis_runtime(
+    owner: &edgion_resources::EdgionStreamPlugins,
+    policy: Option<&CompiledPluginPolicy>,
+    cache: &mut [Option<StreamEntryOutcome>],
+) -> StreamPluginRuntime {
+    let prepared = PreparedIpListReferences::from_stream_plugins(owner);
+    let binding = prepared.bind_stream_plugins(owner).unwrap();
+    StreamPluginRuntime::from_owner_cached(&binding, "r6h/valid-looking-key", policy, cache)
+}
+
+struct CountedPassingStreamPlugin(Arc<std::sync::atomic::AtomicUsize>);
+#[async_trait::async_trait]
+impl StreamPlugin for CountedPassingStreamPlugin {
+    fn name(&self) -> &str {
+        "CountedPassingStreamPlugin"
+    }
+    async fn on_connection(&self, _ctx: &StreamContext) -> StreamPluginResult {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        StreamPluginResult::Allow
+    }
+}
+
+#[tokio::test]
+async fn active_redis_owner_gate_precedes_allow_failure_policy_and_cached_execution() {
+    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 21981, StreamLayer::Stage1);
+    for per_source in [false, true] {
+        let valid = active_redis_owner(per_source);
+        let mut cache = vec![None];
+        let runtime = actual_redis_runtime(&valid, None, &mut cache);
+        assert!(cache[0].is_some());
+        assert!(matches!(runtime.run(&context).await, StreamPluginResult::Allow));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let decoy: Arc<dyn StreamPlugin> = Arc::new(CountedPassingStreamPlugin(calls.clone()));
+        cache[0] = Some(Ok(decoy.clone()));
+        assert!(matches!(
+            actual_redis_runtime(&valid, None, &mut cache).run(&context).await,
+            StreamPluginResult::Allow
+        ));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        for bad_namespace in [None, Some(""), Some("bad/ns")] {
+            let mut invalid = valid.clone();
+            if let Some(namespace) = bad_namespace {
+                invalid.metadata.namespace = Some(namespace.into());
+            } else {
+                invalid.metadata.name = None;
+            }
+            let mut empty = vec![None];
+            let runtime = actual_redis_runtime(&invalid, None, &mut empty);
+            assert!(empty[0].is_none());
+            assert!(
+                matches!(runtime.run(&context).await,StreamPluginResult::Deny(reason) if reason == "invalid owning LinkSys reference")
+            );
+            let runtime = actual_redis_runtime(&invalid, None, &mut cache);
+            assert!(
+                matches!(runtime.run(&context).await,StreamPluginResult::Deny(reason) if reason == "invalid owning LinkSys reference")
+            );
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "invalid owner must not execute cached passing entry"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn stream_redis_owner_gate_respects_local_activity_and_policy_precedence() {
+    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 21982, StreamLayer::Stage1);
+    let mut owner = active_redis_owner(false);
+    owner.metadata.name = None;
+    let EdgionStreamPlugin::ConnectionRateLimit(config) = &mut owner.spec.plugins.as_mut().unwrap()[0].plugin else {
+        unreachable!()
+    };
+    config.per_listener.as_mut().unwrap().redis_distributed = false;
+    config.redis_ref = Some("inactive/bad/key".into());
+    assert!(matches!(
+        actual_redis_runtime(&owner, None, &mut [None]).run(&context).await,
+        StreamPluginResult::Allow
+    ));
+    let mut owner = active_redis_owner(true);
+    owner.metadata.name = None;
+    for action in ["bypass", "block"] {
+        let policy: PluginPolicyConfig =
+            serde_json::from_value(serde_json::json!({"deny":[{"name":"stream/ConnectionRateLimit","action":action}]}))
+                .unwrap();
+        let policy = policy.compile().unwrap();
+        let mut cache = vec![None];
+        let runtime = actual_redis_runtime(&owner, Some(&policy), &mut cache);
+        assert!(cache[0].is_none());
+        if action == "bypass" {
+            assert!(runtime.is_empty());
+        } else {
+            assert!(
+                matches!(runtime.run(&context).await,StreamPluginResult::Deny(reason) if reason == "plugin disabled by policy: stream/ConnectionRateLimit")
+            );
+        }
+    }
+    owner.spec.plugins.as_mut().unwrap()[0].enable = false;
+    let mut cache = vec![None];
+    assert!(actual_redis_runtime(&owner, None, &mut cache).is_empty());
+    assert!(cache[0].is_none());
+    let mut owner = active_redis_owner(true);
+    let EdgionStreamPlugin::ConnectionRateLimit(config) = &mut owner.spec.plugins.as_mut().unwrap()[0].plugin else {
+        unreachable!()
+    };
+    config.redis_ref = Some("bad/target/key".into());
+    assert!(
+        matches!(actual_redis_runtime(&owner,None,&mut [None]).run(&context).await,StreamPluginResult::Deny(reason) if reason == "invalid stream/ConnectionRateLimit configuration")
+    );
+}

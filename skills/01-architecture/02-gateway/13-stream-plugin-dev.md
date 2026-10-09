@@ -515,3 +515,14 @@ For registration and CLI usage, see the
 - [11-conf-handler-guidelines.md](11-conf-handler-guidelines.md)
 - [12-edgion-plugin-dev.md](12-edgion-plugin-dev.md)
 - [01-integration-testing.md](../../05-testing/01-integration-testing.md)
+
+### Active ConnectionRateLimit Redis ownership
+
+The immutable Stream generation lends its actual ConnectionRateLimit config
+through `refs::stream_plugin_fields` before entry-cache reuse. Source identity
+is checked only when `needs_redis()` is true, after disabled/Block/Bypass policy
+handling. An invalid active source denies even with onRedisFailure Allow;
+local-only unused redisRef values retain their existing behavior. The canonical
+config validator owns the Unicode-alphanumeric/-/_ target grammar. No Grant or
+second IP/LinkSys prepared catalogue is introduced, and runtime Redis lookups
+remain live. Standalone low-level config constructors are not owner-bound APIs.

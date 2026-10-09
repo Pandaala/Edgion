@@ -113,3 +113,12 @@ deduplication is not justified without an operator incident. See
 - `gw-plugin-acl-rl-04-stream` — 2026-08-03.
 - `D0100` — preserves this identity rule while correcting local admission
   transitions; current verification is recorded in the linked admission guard.
+
+## Active Redis source identity
+
+The resource factory checks the actual owner's identity before reusing a cached
+ConnectionRateLimit entry when `needs_redis()` is active. This guard does not
+change raw entry-scope counter keys, local-only behavior, provider failure
+policy, captured-view lifetimes, or cumulative attachment layers. Configuration
+is borrowed from the actual owner; a valid-looking raw resource key is not an
+owner credential.

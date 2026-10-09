@@ -451,3 +451,13 @@ typed provider lookup remain authoritative. Graphql delegation retains its
 original config source. No ReferenceGrant is invented for these fields.
 Stream ConnectionRateLimit.redisRef and EdgionBackend credentialPool.redisRef
 remain separate pending actual-owner consumers.
+
+### Stream fixed LinkSys owner binding (R6h)
+
+ConnectionRateLimit.redisRef consumes an actual EdgionStreamPlugins ordinal/config
+loan before cache reuse only when perSourceIp or distributed perListener makes
+Redis active. Disabled/policy-masked entries and local-only unused refs retain
+their existing behavior. Target grammar remains exactly two nonempty components
+using Unicode alphanumeric/-/_. EdgionBackend credentialPool.redisRef remains a
+separate pending boundary: its existing grammar is ASCII alphanumeric/-/_ with
+two nonempty components, and its UID/pool-equivalence lifecycle is not changed.

@@ -2127,3 +2127,39 @@ follows. Stream/Backend LinkSys owners and other R6-R8/F1/F2 remain open.
 
 Both independent reviewers, including Astra, confirmed R6g SCOPED COMMIT PASS.
 The exact eleven technical paths plus this record form the local commit scope.
+
+R6g committed locally as 98e585b0252984d8da090ea138a9208dfc4b2ee6; all twelve
+committed blobs match the reviewed snapshot. Nothing was pushed. R6h enters
+PLAN ONLY at this HEAD for remaining Stream ConnectionRateLimit and EdgionBackend
+credentialPool LinkSys owner boundaries, split if their mechanisms warrant it.
+No later consumer, process-locator, R7/R8 or F1/F2 acceptance is implied.
+
+R6h read-only scope is narrowed to Stream ConnectionRateLimit. Existing actual
+StreamIpListBindings owner access supports a finite owner/index loan without
+extending IP topology or adding a catalogue. Preserve needs_redis activation:
+unused redis_ref in local-only configuration introduces no new source gate.
+Backend credentials are a separate next batch because UID/raw-key state identity,
+limiter equivalence reuse and captured snapshots need independent review.
+Current code also corrects historical inventory: Backend valid_redis_ref enforces
+two ASCII alphanumeric/hyphen/underscore components, not merely slash shape.
+
+R6h exact nine-path plan received Astra SCOPED PLAN PASS; execution is authorized.
+A finite actual owner/ordinal loan uses immutable generation ownership without
+adding IP topology or another snapshot. Check needs_redis source identity after
+disabled/policy handling and before cache reuse, then consume the actual config.
+Local-only unused references, failure policies, raw counter identity and live
+provider lookup remain unchanged. Backend remains the separate R6i residual.
+
+R6h received both independent SCOPED STATIC and focused EXECUTION PASS verdicts.
+Final evidence covers 202 distinct unit tests and two doctests; all 9567 old IDs
+and ignored flags survive (9572 current), and both old test bodies remain exact
+prefixes. Valid loan compilation and E0505/E0506 witnesses establish ownership.
+Initial root Clippy required an equivalent match-to-let-else rewrite; its warning
+record remains. Only the runtime file changed, Gateway 188 tests passed again,
+and final preservation matches nine frozen technical paths. All 14 r2 root gates
+pass unchanged source with zero warnings/errors (check 14.808s, Clippy 21.019s).
+Evidence lives in the R6h verification/root-verification directories. Final commit
+review follows; Backend R6i and later R6-R8/F1/F2 remain open.
+
+Both independent reviewers, including Astra, confirmed R6h SCOPED COMMIT PASS.
+The nine technical paths plus this record form the exact local commit scope.

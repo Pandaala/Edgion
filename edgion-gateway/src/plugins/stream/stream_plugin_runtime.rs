@@ -5,8 +5,11 @@ use crate::plugins::stream::{
     ConnectionRateLimitPlugin, GeoIpLocationStreamPlugin, GlobalConnectionIpRestrictionPlugin, StreamIpRestriction,
 };
 use edgion_resources::refs::ip_list_fields::StreamIpListBindings;
+use edgion_resources::refs::stream_plugin_fields::StreamConnectionRateLimitField;
 use edgion_resources::resources::edgion_plugins::PluginValidation;
-use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugin, StreamPluginEntry};
+use edgion_resources::resources::edgion_stream_plugins::{
+    ConnectionRateLimitConfig, EdgionStreamPlugin, StreamPluginEntry,
+};
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily};
 use std::sync::Arc;
 
@@ -90,6 +93,14 @@ impl StreamPluginRuntime {
                 None => {}
             }
 
+            let Ok(rate_limit_config) = StreamConnectionRateLimitField::from_plugins(binding.owner(), index)
+                .map(|field| field.configuration())
+                .transpose()
+            else {
+                invalid_config_reason.get_or_insert_with(|| "invalid owning LinkSys reference".to_string());
+                continue;
+            };
+
             if let Some(field) = binding.global_entry(index).and_then(|entry| entry.selector()) {
                 if field.validate_owner().is_err() {
                     invalid_config_reason.get_or_insert_with(|| "invalid owning ConfigData reference".to_string());
@@ -101,7 +112,7 @@ impl StreamPluginRuntime {
                 }
             }
             let outcome = cache[index].get_or_insert_with(|| {
-                let outcome = Self::build_entry(entry, binding, resource_key, index);
+                let outcome = Self::build_entry(entry, binding, resource_key, index, rate_limit_config);
                 if outcome.is_err() {
                     tracing::error!(
                         component = "stream_plugin_runtime",
@@ -133,6 +144,7 @@ impl StreamPluginRuntime {
         binding: &StreamIpListBindings<'_>,
         resource_key: &str,
         index: usize,
+        rate_limit_config: Option<&ConnectionRateLimitConfig>,
     ) -> StreamEntryOutcome {
         match &entry.plugin {
             EdgionStreamPlugin::Unsupported => Err("unsupported stream plugin type"),
@@ -149,7 +161,8 @@ impl StreamPluginRuntime {
             )
             .map(|plugin| Arc::new(plugin) as Arc<dyn StreamPlugin>)
             .map_err(|_| "invalid stream/GlobalConnectionIpRestriction configuration"),
-            EdgionStreamPlugin::ConnectionRateLimit(config) => {
+            EdgionStreamPlugin::ConnectionRateLimit(_) => {
+                let config = rate_limit_config.ok_or("invalid owning LinkSys reference")?;
                 if config.validation_error().is_some() {
                     return Err("invalid stream/ConnectionRateLimit configuration");
                 }
