@@ -17,6 +17,7 @@ use edgion_resources::resources::edgion_backend::{
 };
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::OnRedisFailure;
+use edgion_resources::resources::refs::backend_fields::BackendCredentialPoolField;
 use url::{Host, Url};
 
 type RuntimeMap = HashMap<String, Arc<RuntimeAiBackend>>;
@@ -520,6 +521,9 @@ fn runtime_uid(key: &str, resource: &EdgionBackend) -> Result<String, &'static s
 }
 
 fn try_compile_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeAiBackend, &'static str> {
+    let redis_reference = BackendCredentialPoolField::from_backend(resource)
+        .redis_reference()
+        .map_err(|_| "invalid owning LinkSys reference")?;
     let ai = &resource.spec.ai;
 
     let uid = runtime_uid(key, resource)?;
@@ -551,7 +555,7 @@ fn try_compile_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeAiB
         return Err("no usable credentials");
     }
     let credential_pool = RuntimeAiCredentialPool {
-        redis_ref: ai.credential_pool.redis_ref.clone(),
+        redis_ref: redis_reference.map(str::to_owned),
         on_redis_failure: ai.credential_pool.on_redis_failure.clone(),
         credentials,
         limiter_core: Arc::new(crate::plugins::common::redis_rate_limiter::RedisRateLimiter::new()),

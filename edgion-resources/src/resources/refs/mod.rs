@@ -4,6 +4,7 @@
 //! exact comparison are shared; authorization and resource stores belong to
 //! their consuming runtimes.
 
+pub mod backend_fields;
 pub mod condition_fields;
 pub mod config_data_fields;
 pub mod dns_fields;

@@ -2163,3 +2163,43 @@ review follows; Backend R6i and later R6-R8/F1/F2 remain open.
 
 Both independent reviewers, including Astra, confirmed R6h SCOPED COMMIT PASS.
 The nine technical paths plus this record form the exact local commit scope.
+
+R6h committed locally as 54c0d30aaf21ce2f66f68d8b96262e093c111e8e; all ten
+committed blobs match the reviewed snapshot. Nothing was pushed. R6i begins
+PLAN ONLY at this HEAD for EdgionBackend credentialPool Redis provenance,
+preserving current UID/raw-key state identity, limiter equivalence and snapshots.
+
+R6i read-only revalidation confirms spec validation must precede source binding:
+limits require redisRef, and unlimited pools forbid it. Preserve ASCII target
+grammar, selected-credential reservation, partial-good credentials, UID/raw-key
+state identity, whole-backend equivalence and pool limiter Arc reuse. Independent
+inventory also flags the Controller Backend credential Secret generic resolver
+as a separate actual-source review candidate: verify its complete source gate
+before dependency registration during later coverage reconciliation. This does
+not expand the Redis batch or establish that Secret ownership is already covered.
+
+R6i exact seven-path plan received Astra SCOPED PLAN PASS; execution authorized.
+Canonical spec validation remains first, then a finite actual Backend field loan
+checks a configured Redis source before UID/credential work or equivalent reuse.
+No-reference pools keep their prior behavior. Target grammar, partial-good pools,
+state identity and captured snapshots stay unchanged. Secret ownership remains
+separate coverage, not an accepted guarantee from this Redis-specific migration.
+
+R6i complete code/test/knowledge checkpoint received both independent SCOPED
+STATIC PASS verdicts. Tests cover schema-first errors, source/UID/raw-key cases,
+None scope, actual full/partial withdrawal and recovery, captured generations,
+equivalent backend/limiter reuse and configured limits in a partial-good pool.
+Existing tests are unchanged. Focused serial verification is authorized; final
+execution evidence, repository gates and commit review remain open.
+
+R6i focused verification passes 143 distinct unit tests and two doctests on the
+first run. All 9572 old IDs and ignored inventories remain (9578 current), and
+old test bodies are unchanged. Valid loan compilation and E0505/E0506 witnesses
+pass. Both reviewers verified seven frozen paths and raw execution evidence.
+All 14 root gates pass with unchanged source and zero warnings/errors; workspace
+check took 23.083 seconds and Clippy 32.901 seconds. Evidence lives under the
+R6i verification/root-verification directories. Final independent commit review
+follows; Secret ownership and other R6-R8/F1/F2 boundaries remain pending.
+
+Both independent reviewers, including Astra, confirmed R6i SCOPED COMMIT PASS.
+The seven technical paths plus this record form the exact local commit scope.

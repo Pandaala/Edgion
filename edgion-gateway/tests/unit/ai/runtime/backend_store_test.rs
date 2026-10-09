@@ -645,3 +645,153 @@ fn unresolved_binding_changes_backend_generation_without_replacing_usable_limite
         1
     );
 }
+
+fn limited_owner() -> EdgionBackend {
+    let mut owner = (*resource("provider", "https://provider.example.com", Some(b"usable-key"))).clone();
+    owner.spec.ai.credential_pool.redis_ref = Some("r6i/unregistered".into());
+    owner.spec.ai.credential_pool.on_redis_failure = OnRedisFailure::Allow;
+    owner.spec.ai.credential_pool.credentials[0].limits = Some(AiCredentialLimits {
+        requests_per_minute: Some(100),
+        tokens_per_minute: None,
+    });
+    owner
+}
+
+#[test]
+fn backend_redis_actual_owner_gate_precedes_uid_and_preserves_schema_error_order() {
+    let mut owner = limited_owner();
+    for uid in [None, Some("present-uid")] {
+        owner.metadata.uid = uid.map(str::to_owned);
+        let valid = try_compile_edgion_backend("default/provider", &owner).unwrap();
+        assert_eq!(valid.credential_pool.redis_ref.as_deref(), Some("r6i/unregistered"));
+        assert_eq!(valid.credential_pool.on_redis_failure, OnRedisFailure::Allow);
+        let mut native = owner.clone();
+        native.metadata.namespace = None;
+        assert!(try_compile_edgion_backend("default/provider", &native).is_ok());
+        for (namespace, name) in [
+            (Some(""), Some("provider")),
+            (Some("bad/ns"), Some("provider")),
+            (Some("default"), None),
+            (Some("default"), Some("bad/name")),
+        ] {
+            let mut invalid = owner.clone();
+            invalid.metadata.namespace = namespace.map(str::to_owned);
+            invalid.metadata.name = name.map(str::to_owned);
+            assert_eq!(
+                try_compile_edgion_backend("default/provider", &invalid).unwrap_err(),
+                "invalid owning LinkSys reference"
+            );
+            invalid.spec.ai.credential_pool.redis_ref = Some("invalid/reference/shape".into());
+            assert_eq!(
+                try_compile_edgion_backend("default/provider", &invalid).unwrap_err(),
+                "invalid configuration"
+            );
+        }
+    }
+    owner.metadata.name = None;
+    owner.metadata.namespace = Some(String::new());
+    owner.spec.ai.credential_pool.redis_ref = None;
+    owner.spec.ai.credential_pool.credentials[0].limits = None;
+    assert!(
+        try_compile_edgion_backend("default/provider", &owner).is_ok(),
+        "no Redis adds no new owner gate"
+    );
+}
+
+#[test]
+fn backend_redis_invalid_owner_withdraws_real_store_without_revoking_captured_snapshot() {
+    for full in [false, true] {
+        let store = AiBackendStore::new();
+        let mut owner = limited_owner();
+        owner.metadata.uid = Some("same-uid".into());
+        let key = "default/provider".to_string();
+        store.full_set(&HashMap::from([(key.clone(), Arc::new(owner.clone()))]));
+        let captured = store.snapshot();
+        let old = captured.get_by_key(&key).unwrap();
+        owner.metadata.namespace = Some(String::new());
+        if full {
+            store.full_set(&HashMap::from([(key.clone(), Arc::new(owner.clone()))]));
+        } else {
+            store.partial_update(
+                HashMap::new(),
+                HashMap::from([(key.clone(), Arc::new(owner.clone()))]),
+                HashSet::new(),
+            );
+        }
+        assert!(
+            store.get_by_key(&key).is_none(),
+            "invalid metadata cannot reuse the same UID/pool"
+        );
+        assert!(Arc::ptr_eq(&old, &captured.get_by_key(&key).unwrap()));
+        assert_eq!(old.credential_pool.credentials[0].credential, "usable-key");
+        owner.metadata.namespace = Some("default".into());
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::new(owner))]),
+            HashSet::new(),
+        );
+        assert!(store.get_by_key(&key).is_some());
+        store.partial_update(HashMap::new(), HashMap::new(), HashSet::from([key.clone()]));
+        assert!(store.get_by_key(&key).is_none());
+        assert!(captured.get_by_key(&key).is_some());
+    }
+}
+
+#[test]
+fn backend_redis_valid_pool_keeps_equivalent_arcs_partial_good_and_limiter_state() {
+    let store = AiBackendStore::new();
+    let key = "default/provider".to_string();
+    let mut owner = limited_owner();
+    let mut unresolved = owner.spec.ai.credential_pool.credentials[0].clone();
+    unresolved.name = "unresolved".into();
+    unresolved.credential.secret = None;
+    owner.spec.ai.credential_pool.credentials.push(unresolved);
+    store.full_set(&HashMap::from([(key.clone(), Arc::new(owner.clone()))]));
+    let first = store.get_by_key(&key).unwrap();
+    assert_eq!(first.credential_pool.credentials.len(), 1);
+    for full in [false, true] {
+        if full {
+            store.full_set(&HashMap::from([(key.clone(), Arc::new(owner.clone()))]));
+        } else {
+            store.partial_update(
+                HashMap::new(),
+                HashMap::from([(key.clone(), Arc::new(owner.clone()))]),
+                HashSet::new(),
+            );
+        }
+        assert!(Arc::ptr_eq(&first, &store.get_by_key(&key).unwrap()));
+    }
+    owner.spec.ai.endpoint = Some("https://updated.example.com".into());
+    store.partial_update(
+        HashMap::new(),
+        HashMap::from([(key.clone(), Arc::new(owner))]),
+        HashSet::new(),
+    );
+    let updated = store.get_by_key(&key).unwrap();
+    assert!(!Arc::ptr_eq(&first, &updated));
+    assert!(Arc::ptr_eq(
+        &first.credential_pool.limiter_core,
+        &updated.credential_pool.limiter_core
+    ));
+    assert_eq!(first.uid, updated.uid);
+    assert_eq!(updated.credential_pool.redis_ref.as_deref(), Some("r6i/unregistered"));
+}
+
+#[test]
+fn backend_redis_source_tracks_configured_limits_before_partial_pool_filtering() {
+    let mut owner = limited_owner();
+    let mut missing = owner.spec.ai.credential_pool.credentials[0].clone();
+    missing.name = "missing-limited".into();
+    missing.credential.secret = None;
+    owner.spec.ai.credential_pool.credentials[0].limits = None;
+    owner.spec.ai.credential_pool.credentials.push(missing);
+    let compiled = try_compile_edgion_backend("default/provider", &owner).unwrap();
+    assert_eq!(compiled.credential_pool.credentials.len(), 1);
+    assert!(compiled.credential_pool.credentials[0].limits.is_none());
+    assert_eq!(compiled.credential_pool.redis_ref.as_deref(), Some("r6i/unregistered"));
+    owner.metadata.name = None;
+    assert_eq!(
+        try_compile_edgion_backend("default/provider", &owner).unwrap_err(),
+        "invalid owning LinkSys reference"
+    );
+}

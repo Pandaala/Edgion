@@ -461,3 +461,13 @@ their existing behavior. Target grammar remains exactly two nonempty components
 using Unicode alphanumeric/-/_. EdgionBackend credentialPool.redisRef remains a
 separate pending boundary: its existing grammar is ASCII alphanumeric/-/_ with
 two nonempty components, and its UID/pool-equivalence lifecycle is not changed.
+
+### Backend fixed Redis source binding (R6i)
+
+EdgionBackend credentialPool.redisRef now borrows its actual owning field after
+canonical schema validation and before UID/credential/runtime-pool construction.
+Some requires intrinsic source identity; None remains inactive. Target ASCII
+grammar, limits pairing, live provider lookup and existing pool/UID/captured-view
+semantics stay unchanged. This completes only the fixed LinkSys field; separate
+Backend Secret material ownership is not implied and remains an independent
+verification candidate.

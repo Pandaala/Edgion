@@ -46,3 +46,18 @@ endpoint.
 BackendTLS and EdgionBackendTrafficPolicy attach to the direct EdgionBackend identity. AI provider
 selection remains owned by AiProxy, so Service load balancing, health checks, and upstream authority
 rewrites are not applied to the provider catalog.
+
+## Credential-pool Redis source identity
+
+After canonical spec validation, the cold compiler borrows the actual
+credentialPool.redisRef through `refs::backend_fields`. An authored Redis field
+requires a valid actual EdgionBackend name/namespace before UID derivation,
+credential parsing or runtime reuse; neither a UID nor a valid-looking raw key
+substitutes for that source. No Redis field adds no new source gate. Schema
+validation still owns ref/limits pairing and the existing ASCII alphanumeric/-/_
+target grammar. The runtime keeps the same key and live typed Redis lookup.
+
+Equivalent backend/pool Arc reuse, counter identity, partial-good credentials and
+captured snapshot lifetimes remain unchanged. This is a Redis-field boundary;
+it adds no Grant and does not claim to validate the separate resolved Secret
+material channel.
