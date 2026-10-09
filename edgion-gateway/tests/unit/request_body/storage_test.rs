@@ -652,6 +652,128 @@ async fn digest_completed_for_old_snapshot_cannot_populate_new_generation() {
 }
 
 #[tokio::test]
+async fn contiguous_snapshot_borrows_checked_range_and_keeps_owner_alive() {
+    for inline in [false, true] {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let source = Bytes::from_owner(SnapshotMemoryOwner {
+            bytes: vec![b'x'; SCAN_CHUNK_SIZE + 31].into_boxed_slice(),
+            dropped: Arc::clone(&dropped),
+        });
+        let expected_ptr = source[7..].as_ptr();
+        let len = source.len() - 14;
+        let segment = if inline {
+            Segment::Inline(source.slice(7..7 + len))
+        } else {
+            Segment::SourceRange {
+                source: Arc::new(BodySource::Memory(source.clone())),
+                offset: 7,
+                len: len as u64,
+            }
+        };
+        drop(source);
+        let snapshot = BodySnapshot::from_segments(vec![segment]).unwrap();
+        let mut reader = BodySnapshotReader::new(Arc::new(snapshot), DEFAULT_STORAGE_OPERATION_TIMEOUT);
+        assert_eq!(reader.try_take_contiguous_memory(len - 1), Ok(None));
+        assert_eq!((reader.segment_index, reader.segment_offset), (0, 0));
+        let borrowed = reader.try_take_contiguous_memory(len).unwrap().unwrap();
+        assert_eq!(borrowed.as_ptr(), expected_ptr);
+        assert_eq!(borrowed.len(), len);
+        assert_eq!(reader.try_take_contiguous_memory(len), Ok(None));
+        assert!(reader.next_chunk().await.unwrap().is_none());
+        drop(reader);
+        assert!(!dropped.load(Ordering::Acquire));
+        assert!(borrowed.iter().all(|byte| *byte == b'x'));
+        drop(borrowed);
+        assert!(dropped.load(Ordering::Acquire));
+    }
+}
+
+#[tokio::test]
+async fn contiguous_snapshot_fallback_preserves_empty_disk_multisegment_and_started_reads() {
+    for memory_limit in [1, SCAN_CHUNK_SIZE * 3] {
+        let body = vec![b'x'; SCAN_CHUNK_SIZE + 17];
+        let (mut storage, view) = BodyStorage::with_memory_limit(memory_limit);
+        capture(&mut storage, &[&body]).await;
+        let mut reader = view.snapshot_reader().unwrap();
+        if memory_limit == 1 {
+            assert_eq!(reader.try_take_contiguous_memory(body.len()), Ok(None));
+        }
+        assert_eq!(reader.next_chunk().await.unwrap().unwrap().len(), SCAN_CHUNK_SIZE);
+        assert_eq!(reader.try_take_contiguous_memory(body.len()), Ok(None));
+        assert_eq!(read_snapshot(reader).await.1.as_ref(), &body[SCAN_CHUNK_SIZE..]);
+
+        view.prepend(Bytes::from_static(b"prefix")).unwrap();
+        let mut reader = view.snapshot_reader().unwrap();
+        assert_eq!(reader.try_take_contiguous_memory(usize::MAX), Ok(None));
+        let mut expected = b"prefix".to_vec();
+        expected.extend_from_slice(&body);
+        assert_eq!(read_snapshot(reader).await.1.as_ref(), expected);
+        assert!(!view.is_materialized());
+    }
+    let mut reader = BodySnapshotReader::new(Arc::new(BodySnapshot::empty()), DEFAULT_STORAGE_OPERATION_TIMEOUT);
+    assert_eq!(reader.try_take_contiguous_memory(128 * 1024), Ok(None));
+    assert!(reader.next_chunk().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn contiguous_snapshot_preserves_mutation_version_and_isolated_owner() {
+    let (mut storage, view) = BodyStorage::with_memory_limit(1024);
+    capture(&mut storage, &[b"original"]).await;
+    let mut old = view.snapshot_reader().unwrap();
+    view.overwrite_body(Bytes::from_static(b"replacement")).unwrap();
+    assert_eq!(old.try_take_contiguous_memory(32).unwrap().unwrap(), "original");
+    assert_eq!(
+        view.snapshot_reader()
+            .unwrap()
+            .try_take_contiguous_memory(32)
+            .unwrap()
+            .unwrap(),
+        "replacement"
+    );
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let source = Bytes::from_owner(SnapshotMemoryOwner {
+        bytes: vec![b'a'; 1024 * 1024].into_boxed_slice(),
+        dropped: Arc::clone(&dropped),
+    });
+    let snapshot = BodySnapshot::from_inline(source.slice(7..11)).unwrap();
+    drop(source);
+    let mut reader = BodySnapshotReader::new(Arc::new(snapshot), DEFAULT_STORAGE_OPERATION_TIMEOUT);
+    reader.isolate_memory().unwrap();
+    assert!(dropped.load(Ordering::Acquire));
+    let isolated_ptr = BodySnapshotReader::memory_segment(&reader.snapshot.segments[0])
+        .unwrap()
+        .unwrap()
+        .as_ptr();
+    let borrowed = reader.try_take_contiguous_memory(4).unwrap().unwrap();
+    assert_eq!(borrowed.as_ptr(), isolated_ptr);
+    assert_eq!(reader.isolate_memory(), Err(BodyReadError::Incomplete));
+    drop(reader);
+    assert_eq!(borrowed, "aaaa");
+}
+
+#[test]
+fn contiguous_snapshot_rejects_invalid_ranges_without_advancing() {
+    for (offset, len, snapshot_len) in [(u64::MAX, 2, 2), (1, 4, 4), (0, 3, 2)] {
+        let snapshot = BodySnapshot {
+            segments: vec![Segment::SourceRange {
+                source: Arc::new(BodySource::Memory(Bytes::from_static(b"abc"))),
+                offset,
+                len,
+            }],
+            len: snapshot_len,
+            sha256: OnceCell::new(),
+        };
+        let mut reader = BodySnapshotReader::new(Arc::new(snapshot), DEFAULT_STORAGE_OPERATION_TIMEOUT);
+        assert_eq!(
+            reader.try_take_contiguous_memory(128 * 1024),
+            Err(BodyReadError::Incomplete)
+        );
+        assert_eq!((reader.segment_index, reader.segment_offset), (0, 0));
+    }
+}
+
+#[tokio::test]
 async fn snapshot_reader_streams_memory_in_bounded_chunks() {
     let body = vec![b'm'; SCAN_CHUNK_SIZE * 2 + 17];
     let (mut storage, view) = BodyStorage::with_memory_limit(body.len() + 1);

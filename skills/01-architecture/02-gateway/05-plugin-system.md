@@ -48,13 +48,18 @@ Execution flow notes:
   omission selects bounded engine defaults. Both inline and resolved Full
   configurations reject JSON dependencies requiring a complete field-value map.
   After phase-one controls, processor preflight precedes capture at the EGC cap.
-  Gateway proves complete availability and checks physical, WAF and applicable
-  JSON source caps before one canonical body read, then verifies its length.
-  The native checker scans the stable Bytes source once, borrowing plain values
-  and retaining only required metadata, match results and named deferred values.
-  Resident bodies share their existing allocation; spilled or edited bodies may
-  need canonical BodyStorage materialization. There is no DOM fallback or second
-  body cache. Limits and dispatch plans are resolved before request processing.
+  Gateway feeds real capture chunks into one persistent inspection session;
+  cached input uses an immutable snapshot reader with pre-read size admission.
+  JSON alone opts into a shared contiguous resident slice for a complete,
+  single-segment snapshot of at most 128 KiB. Larger, spilled and multi-segment
+  snapshots retain bounded reads. The native checker borrows complete plain
+  tokens and uses bounded carry storage across chunk or escape boundaries,
+  retaining only required metadata, match results and named deferred values.
+  Actual EOF, byte-count parity and physical/WAF/JSON limits precede publication.
+  JSON-only inspection never materializes the complete source; explicit raw
+  visibility or DetectionOnly syntax fallback may require a canonical body read.
+  There is no DOM fallback or second body cache. Limits and dispatch plans are
+  resolved before request processing.
   See [fused JSON inspection](../../04-review/waf/regression-guards/fused-json-inspection.md).
 - Within each phase, plugins run in registration order.
 - If any plugin returns `ErrTerminateRequest` or `ErrResponse`, the phase terminates immediately and subsequent plugins are skipped.

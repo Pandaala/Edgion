@@ -113,6 +113,59 @@ scheduler edges or consumers.
 
 ## Alternatives and limits
 
+### Contiguous cached input
+
+`waf-cached-json-input-borrowing` removes artificial token carry copies for
+eligible cached JSON. The user authorized implementation based on deterministic
+copy avoidance without making a throughput benchmark an adoption prerequisite.
+The Gateway JSON consumer opts into a 128 KiB maximum contiguous input; XML and
+other consumers default to the ordinary chunk contract. This is an internal feed
+bound, not an increased body limit or an executor-fairness guarantee.
+
+`BodySnapshotReader::try_take_contiguous_memory` succeeds only before reading a
+nonempty single resident segment. It validates the source range and snapshot
+length, shares the existing Bytes owner and advances only its own cursor. Edited
+Inline snapshots and Memory SourceRanges qualify; disk, multiple segments,
+already-started readers and oversized sources fall back without cursor changes.
+Isolation continues to use the isolated owner, never the original allocation.
+No joining, payload copying, disk materialization or second cache is permitted.
+
+`consume_request_body_snapshot` admits the declared length before trying the
+capability, validates its returned length before consumption, and still reads
+through actual EOF with exact byte parity. A terminal read error or extra bytes
+cannot be hidden by a successful contiguous take. Live capture continues feeding
+real chunks into the same stateful inspection session. Failed or abandoned
+inspection cannot publish provisional results.
+
+Logical grammar, duplicate replacement and ordered rule semantics are unchanged.
+Physical work and retention charge actual operations, so removing carry copies
+can turn an old physical-budget failure into success without increasing limits.
+Escaped strings, selected captures and deferred values can still allocate; this
+is not whole-pipeline zero-copy. An immediately ready reader does not guarantee a
+yield between chunks, and no new scheduling mechanism is introduced here.
+
+Regression coverage lives in Gateway storage, session-adapter and JSON-capture
+unit tests and the WAF JsonStream tests. It checks original backing addresses,
+owner lifetime and isolation, edited/disk/multi-segment fallback, exact input
+ceilings, invalid ranges, EOF/errors, long plain/escaped strings, duplicate keys
+and malformed/truncated documents. A scoped token-copy counter distinguishes
+contiguous borrowing from 64 KiB carry without claiming Gateway throughput or
+RSS savings. Re-evaluate when reader capabilities, source ownership, synchronous
+feed bounds, physical accounting or publication rules change.
+
+Fresh targeted verification for this change passed 56 Gateway storage tests,
+43 session-adapter tests, 12 JSON/XML capture tests and 32 WAF JsonStream tests.
+The 96 KiB plain-string witness recorded zero token-copy bytes and zero token
+heap retention for contiguous input; 64 KiB partitioning copied at least the
+96 KiB token and retained at least that much token heap capacity. Matching
+semantic events were checked independently of physical work/capacity counters.
+These are deterministic mechanism tests, not throughput or allocator benchmarks.
+Workspace all-target check/clippy, formatting, agent-doc consistency, SSA force,
+metrics inventory, Pingora source policy, Gateway API transform contract and
+unit-test layout checks also passed. Full workspace tests were not run.
+
+### Other retention and source boundaries
+
 Only demanded values are retained, but memory is not constant or limited to two
 buffers: key identity, candidate order, profile state, matches and captures have
 independent bounded storage. Dynamic broad value operands requiring every value
@@ -121,7 +174,7 @@ have separate execution paths. Raw whole-source operators may scan the original
 bytes later without another JSON grammar pass.
 
 Gateway inspection now consumes real capture chunks before transport EOF. Cached
-bodies use bounded immutable snapshot chunks with pre-IO size admission and actual
+bodies use bounded immutable snapshot input with pre-IO size admission and actual
 reader EOF/parity. JSON-only spill requires no complete materialization; forced raw
 visibility and DetectionOnly syntax fallback may require one. BodyStorage remains
 the sole forwarding/retry cache; no cache-free forwarding is claimed. Future header

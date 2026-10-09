@@ -19,12 +19,17 @@ Check the current compiler, transaction, and detector code before applying a pas
 - [Selected WAF control actions are request scoped](regression-guards/request-scoped-control-actions.md)
 - [Named WAF profiles publish one validated generation](regression-guards/named-profile-selection-and-bundle-publication.md)
 
+## Intentional design
+
+- [Retain bounded geometric growth for JSON token scratch](intentional-design/json-token-geometric-growth.md)
+
 ## Reviewed optimization design
 
-The historical specification and serial plan under
-`tasks/pending/waf-optimization-design/` are absent from the current tree. The
-regression guards above record current implementation boundaries. Historical
-design approval does not establish implementation or measured adoption.
+The [optimization specification](../../../tasks/pending/waf-optimization-design/01-spec.md)
+and its serial plan describe candidate work. The regression guards above record
+current implementation boundaries; design approval alone does not establish
+implementation or measured adoption. The fused JSON guard records the narrower
+contiguous-input implementation and its verification limits.
 
 ## Remaining standalone tasks
 
@@ -33,10 +38,7 @@ design approval does not establish implementation or measured adoption.
   verification require fresh evidence via the
   [testing guide](../../05-testing/01-integration-testing.md). Their historical
   task records are absent; removal does not establish completed validation.
-- [Contiguous cached JSON borrowing](../../../tasks/todo/waf-cached-json-input-borrowing.md)
-- [JSON token growth hint](../../../tasks/todo/waf-json-token-growth-hint.md)
 - [Shared request-body inspection](../../../tasks/todo/waf-shared-request-body-inspection.md)
-- [Hyperscan/VectorScan evaluation](../../../tasks/todo/waf-hyperscan-vectorscan-evaluation.md)
 - [Native SIMD phrase search](../../../tasks/todo/waf-native-simd-search.md)
 - [Native DFA state layout](../../../tasks/todo/waf-dfa-state-layout.md)
 

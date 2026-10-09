@@ -83,6 +83,166 @@ async fn captured_snapshot_consumer_requires_real_eof_exact_parity_and_admission
 }
 
 #[tokio::test]
+async fn contiguous_consumer_preserves_admission_parity_and_real_eof() {
+    struct FastSnapshot {
+        inner: ConsumerSnapshot,
+        fast: Option<Result<Option<Bytes>, BodyReadError>>,
+        attempts: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    #[async_trait]
+    impl RequestBodySnapshotReader for FastSnapshot {
+        fn len(&self) -> u64 {
+            self.inner.len
+        }
+        fn try_take_contiguous_memory(&mut self, _: usize) -> Result<Option<Bytes>, BodyReadError> {
+            self.attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.fast.take().unwrap()
+        }
+        async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+            self.inner.next_chunk().await
+        }
+    }
+    struct Consumer {
+        limit: Option<usize>,
+        bytes: Vec<u8>,
+    }
+    impl RequestBodyChunkConsumer for Consumer {
+        fn cached_contiguous_limit(&self) -> Option<usize> {
+            self.limit
+        }
+        fn consume(&mut self, bytes: &[u8]) {
+            self.bytes.extend_from_slice(bytes);
+        }
+    }
+    let abc = Bytes::from_static(b"abc");
+    for (cap, limit, fast, chunks, expected, delivered, attempts, reads) in [
+        (
+            3,
+            Some(3),
+            Ok(Some(abc.clone())),
+            vec![],
+            Ok(3),
+            b"abc".as_slice(),
+            1,
+            1,
+        ),
+        (
+            2,
+            Some(3),
+            Ok(Some(abc.clone())),
+            vec![],
+            Err(BodyReadError::BufferLimitExceeded { limit: 2 }),
+            b"".as_slice(),
+            0,
+            0,
+        ),
+        (
+            3,
+            None,
+            Ok(Some(abc.clone())),
+            vec![Ok(abc.clone())],
+            Ok(3),
+            b"abc".as_slice(),
+            0,
+            2,
+        ),
+        (
+            3,
+            Some(2),
+            Ok(Some(abc.clone())),
+            vec![Ok(abc.clone())],
+            Ok(3),
+            b"abc".as_slice(),
+            0,
+            2,
+        ),
+        (
+            3,
+            Some(3),
+            Ok(None),
+            vec![Ok(abc.clone())],
+            Ok(3),
+            b"abc".as_slice(),
+            1,
+            2,
+        ),
+        (
+            3,
+            Some(3),
+            Ok(Some(Bytes::from_static(b"ab"))),
+            vec![],
+            Err(BodyReadError::Incomplete),
+            b"".as_slice(),
+            1,
+            0,
+        ),
+        (
+            4,
+            Some(3),
+            Ok(Some(Bytes::from_static(b"abcd"))),
+            vec![],
+            Err(BodyReadError::Incomplete),
+            b"".as_slice(),
+            1,
+            0,
+        ),
+        (
+            3,
+            Some(3),
+            Err(BodyReadError::Incomplete),
+            vec![],
+            Err(BodyReadError::Incomplete),
+            b"".as_slice(),
+            1,
+            0,
+        ),
+        (
+            4,
+            Some(3),
+            Ok(Some(abc.clone())),
+            vec![Ok(Bytes::from_static(b"d"))],
+            Err(BodyReadError::Incomplete),
+            b"abc".as_slice(),
+            1,
+            1,
+        ),
+        (
+            3,
+            Some(3),
+            Ok(Some(abc.clone())),
+            vec![Err(BodyReadError::Timeout)],
+            Err(BodyReadError::Timeout),
+            b"abc".as_slice(),
+            1,
+            1,
+        ),
+    ] {
+        let read_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempt_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reader = FastSnapshot {
+            inner: ConsumerSnapshot {
+                len: 3,
+                chunks: chunks.into(),
+                reads: Arc::clone(&read_count),
+            },
+            fast: Some(fast),
+            attempts: Arc::clone(&attempt_count),
+        };
+        let mut consumer = Consumer {
+            limit,
+            bytes: Vec::new(),
+        };
+        assert_eq!(
+            consume_request_body_snapshot(Box::new(reader), cap, &mut consumer).await,
+            expected
+        );
+        assert_eq!(consumer.bytes, delivered);
+        assert_eq!(attempt_count.load(std::sync::atomic::Ordering::Relaxed), attempts);
+        assert_eq!(read_count.load(std::sync::atomic::Ordering::Relaxed), reads);
+    }
+}
+
+#[tokio::test]
 async fn stripping_query_credential_preserves_absolute_request_target() {
     use tokio::io::AsyncWriteExt;
 

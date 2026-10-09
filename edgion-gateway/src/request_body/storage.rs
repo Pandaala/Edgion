@@ -1118,6 +1118,28 @@ impl RequestBodySnapshotReader for BodySnapshotReader {
         self.snapshot.len
     }
 
+    fn try_take_contiguous_memory(&mut self, max_bytes: usize) -> Result<Option<Bytes>, BodyReadError> {
+        if self.segment_index != 0 || self.segment_offset != 0 || self.snapshot.len == 0 {
+            return Ok(None);
+        }
+        let [segment] = self.snapshot.segments.as_slice() else {
+            return Ok(None);
+        };
+        let Some(memory) = Self::memory_segment(segment)? else {
+            return Ok(None);
+        };
+        if u64::try_from(memory.len()).map_err(|_| BodyReadError::Incomplete)? != self.snapshot.len {
+            return Err(BodyReadError::Incomplete);
+        }
+        if memory.len() > max_bytes {
+            return Ok(None);
+        }
+        // The checked range above makes this a shared slice of the same owner.
+        let bytes = read_segment_chunk(segment, 0, memory.len()).map_err(operation_to_body_error)?;
+        self.segment_index = 1;
+        Ok(Some(bytes))
+    }
+
     fn memory_bytes_to_isolate(&self) -> Option<usize> {
         if self.segment_index != 0 || self.segment_offset != 0 {
             return None;

@@ -160,8 +160,28 @@ async fn consume_request_body_snapshot(
     if expected > cap {
         return Err(BodyReadError::BufferLimitExceeded { limit: cap });
     }
+    let mut contiguous = match consumer.cached_contiguous_limit() {
+        Some(limit) if expected != 0 && u64::try_from(limit).is_ok_and(|limit| expected <= limit) => {
+            let bytes = reader.try_take_contiguous_memory(limit)?;
+            if bytes
+                .as_ref()
+                .is_some_and(|bytes| u64::try_from(bytes.len()) != Ok(expected))
+            {
+                return Err(BodyReadError::Incomplete);
+            }
+            bytes
+        }
+        _ => None,
+    };
     let mut total = 0_u64;
-    while let Some(chunk) = reader.next_chunk().await? {
+    loop {
+        let chunk = match contiguous.take() {
+            Some(chunk) => chunk,
+            None => match reader.next_chunk().await? {
+                Some(chunk) => chunk,
+                None => break,
+            },
+        };
         total = total
             .checked_add(u64::try_from(chunk.len()).map_err(|_| BodyReadError::Incomplete)?)
             .ok_or(BodyReadError::Incomplete)?;

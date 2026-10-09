@@ -746,6 +746,36 @@ fn contiguous_unescaped_strings_and_keys_borrow_the_original_chunk() {
 }
 
 #[test]
+fn long_contiguous_string_avoids_chunk_carry_copy_and_heap() {
+    use crate::seclang::measurements::{self, Event};
+    let source = format!("\"{}\"", "a".repeat(96 * 1024));
+    let scope = measurements::start();
+    let whole = tokenize(&[source.as_bytes()], JsonStreamLimits::default());
+    assert_eq!(whole.0, Ok(()));
+    assert_eq!(scope.counts().get(Event::TokenCopyBytes), 0);
+    assert_eq!(whole.2.peak_retained_bytes, 0);
+    drop(scope);
+    let scope = measurements::start();
+    let chunks: Vec<_> = source.as_bytes().chunks(64 * 1024).collect();
+    let chunked = tokenize(&chunks, JsonStreamLimits::default());
+    assert_same_semantics(&whole, &chunked);
+    assert!(scope.counts().get(Event::TokenCopyBytes) >= 96 * 1024);
+    assert!(chunked.2.peak_retained_bytes >= 96 * 1024);
+    assert!(whole.2.work < chunked.2.work);
+
+    // Physical budgets charge actual copies/capacities, not hypothetical carry.
+    let limits = JsonStreamLimits {
+        max_retained_bytes: 0,
+        ..JsonStreamLimits::default()
+    };
+    assert_eq!(tokenize(&[source.as_bytes()], limits).0, Ok(()));
+    assert_eq!(
+        tokenize(&chunks, limits).0,
+        Err(limit_error(JsonStreamLimit::RetainedBytes, 0))
+    );
+}
+
+#[test]
 fn borrowed_prefix_falls_back_once_for_escape_and_partial_utf8() {
     for source in [br#""prefix\u20ac-suffix""#.as_slice(), "\"prefix-é-suffix\"".as_bytes()] {
         let baseline = tokenize(&[source], JsonStreamLimits::default());

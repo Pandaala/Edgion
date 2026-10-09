@@ -99,6 +99,12 @@ pub type BodyReadResult = Result<Bytes, BodyReadError>;
 /// Inspection failures are latched by the consumer; capture still proves EOF and
 /// preserves transport/storage error priority. Chunks cannot escape this call.
 pub trait RequestBodyChunkConsumer: Send {
+    /// Opt in to one bounded, already-resident contiguous snapshot chunk.
+    /// Live capture remains chunked. This is an input bound, not a yield guarantee.
+    fn cached_contiguous_limit(&self) -> Option<usize> {
+        None
+    }
+
     fn consume(&mut self, chunk: &[u8]);
 }
 
@@ -114,6 +120,16 @@ pub trait RequestBodySnapshotReader: Send {
 
     fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Take the complete unread snapshot as a shared owning memory slice, only
+    /// when already contiguous, nonempty and at most `max_bytes`. Never copy,
+    /// concatenate or read disk to satisfy this capability. Success advances
+    /// this reader to its end; callers must still verify EOF with `next_chunk`.
+    /// Unavailable sources return `None` without advancing. Invalid ranges return
+    /// an error without advancing. An isolated reader must keep its isolated owner.
+    fn try_take_contiguous_memory(&mut self, _max_bytes: usize) -> Result<Option<Bytes>, BodyReadError> {
+        Ok(None)
     }
 
     /// Bytes that must be copied to isolate this reader's in-memory segments.

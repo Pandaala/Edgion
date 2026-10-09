@@ -232,6 +232,116 @@ async fn fresh_spilled(xml: bool) {
 }
 
 #[tokio::test]
+async fn cached_contiguous_json_preserves_long_value_and_completion_semantics() {
+    let prefix = "x".repeat(70 * 1024);
+    for (input, expected_status, malformed) in [
+        (format!(r#"{{"a":"{prefix}blocked"}}"#), Some(403), false),
+        (format!(r#"{{"a":"{prefix}\u0062locked"}}"#), Some(403), false),
+        (format!(r#"{{"a":"{prefix}blocked","a":"safe"}}"#), None, false),
+        (format!(r#"{{"a":"{prefix}blocked"}} trailing"#), None, true),
+        (format!(r#"{{"a":"{prefix}blocked"#), None, true),
+    ] {
+        // Original resident, edited resident, multiple segments, and disk.
+        for source in 0..4 {
+            let input = Bytes::from(input.clone());
+            let (mut storage, view) = BodyStorage::new(if source == 3 { 1 } else { 1 << 20 }, 1 << 20);
+            storage.write(&input).await.unwrap();
+            storage.finish().await.unwrap();
+            if source == 1 {
+                view.overwrite_body(input).unwrap();
+            } else if source == 2 {
+                view.prepend(Bytes::from_static(b" ")).unwrap();
+            }
+            let len = view.len().unwrap();
+            let mut ctx = context();
+            ctx.request_body.install(Arc::clone(&view));
+            let (_, server) = tokio::io::duplex(4096);
+            let mut downstream = pingora_proxy::Session::new_h1(Box::new(server));
+            let mut tx = transaction(
+                "SecRule ARGS \"@contains blocked\" \"id:1,phase:2,deny\"",
+                RuleEngineMode::On,
+            );
+            let mut adapter = PingoraSessionAdapter::new(&mut downstream, &mut ctx);
+            let limits = JsonInspectionLimits {
+                lexical: edgion_waf::seclang::JsonStreamLimits {
+                    max_source_bytes: len as usize,
+                    ..JsonInspectionLimits::default().lexical
+                },
+                ..JsonInspectionLimits::default()
+            };
+            let result = inspect(&mut adapter, &mut tx, limits, RuntimeLimits::default(), len, true).await;
+            if malformed {
+                assert!(matches!(
+                    result,
+                    Err(JsonCaptureError::Runtime(RuntimeError::Body { .. }))
+                ));
+                assert!(tx.execute_request_body().is_err());
+            } else {
+                assert!(result.is_ok(), "source {source}");
+                assert_eq!(
+                    tx.execute_request_body()
+                        .unwrap()
+                        .intervention()
+                        .map(|value| value.status()),
+                    expected_status
+                );
+            }
+            assert!(!view.is_materialized());
+        }
+    }
+}
+
+#[tokio::test]
+async fn cached_json_contiguous_ceiling_preserves_bounded_fallback() {
+    for len in [CACHED_JSON_CONTIGUOUS_LIMIT, CACHED_JSON_CONTIGUOUS_LIMIT + 1] {
+        let input = Bytes::from(format!("\"{}blocked\"", "x".repeat(len - 9)));
+        assert_eq!(input.len(), len);
+        let (mut storage, view) = BodyStorage::new(len, len as u64);
+        storage.write(&input).await.unwrap();
+        storage.finish().await.unwrap();
+        let mut ctx = context();
+        ctx.request_body.install(view);
+        let (_, server) = tokio::io::duplex(4096);
+        let mut downstream = pingora_proxy::Session::new_h1(Box::new(server));
+        let mut tx = transaction(
+            "SecRule ARGS \"@contains blocked\" \"id:1,phase:2,deny\"",
+            RuleEngineMode::On,
+        );
+        let mut adapter = PingoraSessionAdapter::new(&mut downstream, &mut ctx);
+        let limits = JsonInspectionLimits {
+            lexical: edgion_waf::seclang::JsonStreamLimits {
+                max_retained_bytes: 0,
+                ..JsonInspectionLimits::default().lexical
+            },
+            ..JsonInspectionLimits::default()
+        };
+        let result = inspect(
+            &mut adapter,
+            &mut tx,
+            limits,
+            RuntimeLimits::default(),
+            len as u64,
+            true,
+        )
+        .await;
+        if len == CACHED_JSON_CONTIGUOUS_LIMIT {
+            assert!(result.is_ok());
+            assert_eq!(tx.execute_request_body().unwrap().intervention().unwrap().status(), 403);
+        } else {
+            assert!(matches!(
+                result,
+                Err(JsonCaptureError::Runtime(RuntimeError::JsonChecker {
+                    kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
+                        kind: edgion_waf::seclang::JsonStreamLimit::RetainedBytes,
+                        ..
+                    })
+                }))
+            ));
+        }
+    }
+}
+
+#[tokio::test]
 async fn cached_spilled_json_reads_bounded_snapshot_and_rejects_oversize_before_io() {
     cached_spilled(false).await;
 }

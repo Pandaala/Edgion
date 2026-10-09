@@ -6,6 +6,9 @@ use edgion_waf::seclang::{
     JsonInspectionSession, XmlInspectionLimits, XmlInspectionSession, XmlStreamError, XmlStreamLimit,
 };
 
+// Bound synchronous cached input; larger snapshots keep the ordinary reader path.
+const CACHED_JSON_CONTIGUOUS_LIMIT: usize = 128 * 1024;
+
 #[derive(Clone, Copy)]
 enum InspectionLimits {
     Json(JsonInspectionLimits),
@@ -130,6 +133,13 @@ impl JsonCapture<'_, '_> {
     }
 }
 impl RequestBodyChunkConsumer for JsonCapture<'_, '_> {
+    fn cached_contiguous_limit(&self) -> Option<usize> {
+        match self.inspection {
+            InspectionSession::Json(_) => Some(CACHED_JSON_CONTIGUOUS_LIMIT),
+            InspectionSession::Xml(_) => None,
+        }
+    }
+
     fn consume(&mut self, chunk: &[u8]) {
         if self.failure.is_none() {
             if let Err(error) = self.inspection.feed(chunk) {
