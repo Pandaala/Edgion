@@ -493,8 +493,8 @@ See [Request identity lifecycle](../../04-review/observability/intentional-desig
 
 Enabled request-stage ForwardAuth, Guardrail and AiGuard evaluators borrow their
 actual EdgionPlugins entry through `refs::plugin_fields`. The shared managed
-client proves owner/Service identity and local TLS material before entry-cache
-reuse or client preparation. Omitted Service namespace inherits the plugin owner;
+client proves owner/Service identity, exact request-template Secret map presence
+and local TLS material before entry-cache reuse or client preparation. Omitted Service namespace inherits the plugin owner;
 explicit empty namespace is invalid. These finite custom fields accept omitted,
 empty or `core` group, and preserve Service/ServiceEndpointSlice/ServiceClusterIp
 transport modes while the resource identity remains core Service. Native Gateway
@@ -502,9 +502,15 @@ API backend references do not inherit this convenience.
 
 The Service target has no added ReferenceGrant or dependency policy. Template and
 TLS material references retain their separate Controller authorization. Invalid
-owner/target/TLS input replaces prior success with a closed runtime; malformed URL
+owner/target/template/TLS input replaces prior success with a closed runtime; malformed URL
 syntax is also a configuration rejection, not evidence of a permission decision.
 Disabled/policy-masked entries and AiGuard without an evaluator remain inert.
+The managed and internal Route adapters share one private cold presence check,
+using the canonical template collector and exact `namespace/name:key` map keys.
+Missing maps or keys fail before TLS/client/health preparation; present empty
+values remain valid. This check neither authorizes Secret acquisition nor proves
+freshness. Intrinsic syntax validation and the renderer's existing missing-value
+policy remain separate; literal Value fields are not template references.
 
 Service transport uses HTTPS only for enabled local TLS; absent/disabled local
 TLS uses HTTP. An explicit HTTPS URL stays HTTPS with disabled local material,

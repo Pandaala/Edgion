@@ -1176,7 +1176,7 @@ impl PluginRuntime {
                                 let name = Self::get_plugin_name(&entry.plugin);
                                 self.invalid_plugins.record_non_retainable(name);
                                 errors.push(format!(
-                                    "requestPlugins[{index}] ({name}): invalid owning HTTP TLS material"
+                                    "requestPlugins[{index}] ({name}): invalid owning HTTP configuration"
                                 ));
                                 continue;
                             }

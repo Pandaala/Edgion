@@ -157,6 +157,15 @@ enum ClientTls<'a, 'owner> {
     Owned(&'a ValidatedLocalTlsSelection<'owner>, &'a GlobalOutboundTlsSnapshot),
 }
 
+// Cold readiness only: actual owning adapters supply both fields. Presence is
+// independent of Secret authorization and accepts a resolved empty value.
+fn has_unresolved_template_secrets(request: &OutboundRequestSpec, resolved: Option<&ResolvedSecrets>) -> bool {
+    request
+        .collect_secret_ref_names()
+        .iter()
+        .any(|key| !resolved.is_some_and(|values| values.0.contains_key(key)))
+}
+
 /// Cold owning input shared by the cache gate and final client construction.
 /// Neither configuration nor TLS proof can be replaced by a detached caller.
 pub(crate) struct PreparedManagedHttp<'a> {
@@ -170,6 +179,9 @@ impl<'a> PreparedManagedHttp<'a> {
         field: &'a edgion_resources::resources::refs::plugin_fields::BoundManagedHttpConfig<'a>,
         defaults: &'a GlobalOutboundTlsSnapshot,
     ) -> Result<Self, String> {
+        if has_unresolved_template_secrets(field.request(), field.resolved_secrets()) {
+            return Err("managed HTTP template references are unresolved".into());
+        }
         let selection = field.outbound_tls_selection().map_err(|error| error.to_string())?;
         let proof = validate_local_tls_selection(selection).map_err(|error| error.to_string())?;
         validate_active_tls_inheritance(&proof, defaults).map_err(|error| error.to_string())?;
@@ -224,12 +236,7 @@ impl<'a> PreparedRouteAuth<'a> {
             return Err(error.to_string());
         }
         let config = field.config();
-        if config.request.collect_secret_ref_names().iter().any(|key| {
-            !config
-                .resolved_secrets
-                .as_ref()
-                .is_some_and(|resolved| resolved.0.contains_key(key))
-        }) {
+        if has_unresolved_template_secrets(&config.request, config.resolved_secrets.as_ref()) {
             return Err("HTTPRoute authentication template references are unresolved".into());
         }
         let selection = field.outbound_tls_selection().map_err(|error| error.to_string())?;

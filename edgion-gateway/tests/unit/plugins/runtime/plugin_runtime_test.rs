@@ -2540,3 +2540,174 @@ async fn internal_route_auth_rule_and_backend_generations_seal_failures_and_reco
         assert_eq!(captured.request_plugins_iter().next().unwrap().name(), "ForwardAuth");
     }
 }
+
+fn managed_template_owner(kind: &str, material: serde_json::Value) -> edgion_resources::EdgionPlugins {
+    let mut wire = serde_json::to_value(managed_runtime_owner(kind)).unwrap();
+    let config = &mut wire["spec"]["requestPlugins"][0]["config"];
+    let config = if kind == "AiGuard" {
+        &mut config["evaluator"]
+    } else {
+        config
+    };
+    config["request"] = serde_json::json!({"path":{"template":"/decision/${secretRef:tenant/token:key}/${secretRef:tenant/second:key}"}});
+    config["resolvedSecrets"] = material;
+    serde_json::from_value(wire).unwrap()
+}
+
+#[test]
+fn managed_template_missing_material_cannot_replay_cached_success_or_companions() {
+    use serde_json::json;
+    for kind in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        let valid = managed_template_owner(
+            kind,
+            json!({"tenant/token:key":"first-value","tenant/second:key":"second-value"}),
+        );
+        let mut cache = EntryCache::default();
+        let mut first = PluginRuntime::new();
+        assert!(first.add_resource_filters_with_cache(&valid, &mut cache).is_empty());
+        let mut reused = PluginRuntime::new();
+        assert!(reused.add_resource_filters_with_cache(&valid, &mut cache).is_empty());
+        assert!(Arc::ptr_eq(
+            first.request_plugins_iter().next().unwrap(),
+            reused.request_plugins_iter().next().unwrap()
+        ));
+        assert_eq!(
+            first.upstream_response_async_plugins_count(),
+            usize::from(kind == "Guardrail")
+        );
+        assert_eq!(
+            reused.upstream_response_async_plugins_count(),
+            first.upstream_response_async_plugins_count()
+        );
+        if kind == "Guardrail" {
+            assert!(Arc::ptr_eq(
+                first.upstream_response_async_plugins_iter().next().unwrap(),
+                reused.upstream_response_async_plugins_iter().next().unwrap()
+            ));
+        }
+        for material in [
+            serde_json::Value::Null,
+            json!({}),
+            json!({"tenant/token:key":"first-value"}),
+            json!({"other/token:key":"distinct-secret-value","tenant/second:key":"second-value"}),
+        ] {
+            let mut invalid = managed_template_owner(kind, material);
+            let mut next = PluginRuntime::new();
+            let errors = next.add_resource_filters_with_cache(&invalid, &mut cache);
+            assert!(errors
+                .iter()
+                .any(|error| error == &format!("requestPlugins[0] ({kind}): invalid owning HTTP configuration")));
+            assert!(errors
+                .iter()
+                .all(|error| !error.contains("tenant/token:key") && !error.contains("distinct-secret-value")));
+            assert_eq!(
+                next.invalid_update_policy(),
+                Some(InvalidUpdatePolicy::ReplaceFailClosed)
+            );
+            assert_eq!(next.request_plugins_count(), 0);
+            assert_eq!(next.upstream_response_plugins_count(), 0);
+            assert_eq!(next.upstream_response_async_plugins_count(), 0);
+            assert_sealed_invalid(&mut next);
+            for action in ["bypass", "block"] {
+                let entry = invalid.spec.request_plugins.as_ref().unwrap()[0].clone();
+                let masked = compile_scoped_request_entries(
+                    vec![entry],
+                    json!([{"name":format!("http/{kind}"),"action":action}]),
+                );
+                assert!(masked.is_activatable);
+                assert!(masked
+                    .plugin_runtime
+                    .request_plugins_iter()
+                    .all(|filter| filter.name() != kind));
+            }
+            invalid.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+            let mut inert = PluginRuntime::new();
+            assert!(inert.add_resource_filters_with_cache(&invalid, &mut cache).is_empty());
+            assert_eq!(inert.request_plugins_count(), 0);
+            assert_eq!(inert.upstream_response_async_plugins_count(), 0);
+        }
+    }
+    let inline: RequestFilterEntry = serde_json::from_value(json!({"type":"AiGuard","config":{"rules":[{"name":"tripwire","match":{"type":"regex","pattern":"never-present"},"action":"reject"}]}})).unwrap();
+    let compiled = compile_scoped_request_entries(vec![inline], json!([]));
+    assert!(compiled.is_activatable);
+    assert_eq!(
+        compiled.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+        "AiGuard"
+    );
+}
+
+#[tokio::test]
+async fn managed_template_publication_replaces_missing_material_repairs_and_preserves_captured_arcs() {
+    use crate::plugins::http::{compile_plugins, PluginStore};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use serde_json::json;
+    use std::collections::{HashMap, HashSet};
+    for kind in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        let valid = managed_template_owner(
+            kind,
+            json!({"tenant/token:key":"first-value","tenant/second:key":"second-value"}),
+        );
+        let key = "tenant/managed".to_string();
+        let store = PluginStore::new();
+        let initial = compile_plugins(&valid);
+        assert!(initial.is_activatable);
+        store.apply_delta(HashMap::from([(key.clone(), initial)]), HashMap::new(), &HashSet::new());
+        let captured = store.get_plugin_runtime(&key).unwrap();
+        let captured_filter = captured.request_plugins_iter().next().unwrap().clone();
+        for material in [
+            serde_json::Value::Null,
+            json!({}),
+            json!({"tenant/token:key":"first-value"}),
+            json!({"tenant/token:other":"decoy","tenant/second:key":"second-value"}),
+        ] {
+            let invalid = compile_plugins(&managed_template_owner(kind, material));
+            assert!(!invalid.is_activatable);
+            assert!(!invalid.retain_previous_on_invalid_update);
+            store.apply_delta(HashMap::new(), HashMap::from([(key.clone(), invalid)]), &HashSet::new());
+            let current = store.scope().http(&key).unwrap();
+            assert!(!current.is_activatable);
+            let reject = current
+                .plugin_runtime
+                .request_plugins_iter()
+                .find(|filter| filter.name() == "RejectInvalidConfig")
+                .unwrap();
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new(reject.name());
+            assert!(matches!(
+                reject.run_request(&mut session, &mut log).await,
+                PluginRunningResult::ErrResponse { status: 500, .. }
+            ));
+            assert!(Arc::ptr_eq(
+                &captured_filter,
+                captured.request_plugins_iter().next().unwrap()
+            ));
+            assert_eq!(captured_filter.name(), kind);
+            for value in ["repaired-value", ""] {
+                let repaired =
+                    managed_template_owner(kind, json!({"tenant/token:key":value,"tenant/second:key":value}));
+                store.apply_delta(
+                    HashMap::new(),
+                    HashMap::from([(key.clone(), compile_plugins(&repaired))]),
+                    &HashSet::new(),
+                );
+                let current = store.scope().http(&key).unwrap();
+                assert!(current.is_activatable);
+                assert_eq!(
+                    current.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+                    kind
+                );
+                assert_eq!(
+                    current.plugin_runtime.upstream_response_async_plugins_count(),
+                    usize::from(kind == "Guardrail")
+                );
+            }
+        }
+        store.apply_delta(HashMap::new(), HashMap::new(), &HashSet::from([key.clone()]));
+        assert!(store.get_plugin_runtime(&key).is_none());
+        assert!(Arc::ptr_eq(
+            &captured_filter,
+            captured.request_plugins_iter().next().unwrap()
+        ));
+        assert_eq!(captured_filter.name(), kind);
+    }
+}

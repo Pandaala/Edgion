@@ -69,6 +69,34 @@ string_data fallback and non-UTF-8/missing-key errors. This implementation is on
 slice of the open resource-reference contract task; complete transport/global
 TLS preparation and final task verification remain separate work.
 
+## Owning managed-template readiness
+
+Enabled request ForwardAuth, Guardrail and AiGuard evaluator entries and internal
+HTTPRoute Edgion-auth use the same private cold map-presence predicate in
+`plugins/http/common/outbound/client.rs`. Each preparation adapter supplies the
+actual owning request and its resolved map. The canonical
+`OutboundRequestSpec::collect_secret_ref_names` supplies exact keys; no new parser,
+Secret lookup, ReferenceGrant proof or runtime segment walker is introduced.
+Missing maps/keys reject preparation before TLS/client/health work. Present empty
+values are valid. Intrinsic syntax validation remains separate from the collector's
+best-effort discovery, and literal Value/origin fields are not scanned.
+
+The managed gate runs before entry-cache reuse and records non-retainable
+invalidity, so a new unresolved generation cannot keep old authentication or
+evaluation success. Existing disabled/Block/Bypass masks and inline-only AiGuard
+stay inert. Guardrail companion ownership, evaluator POST, body/retry/deadline
+contracts and captured prior Arcs remain unchanged. Route preparation retains its
+existing fixed error; managed runtime diagnostics do not mislabel a missing
+request key as TLS material failure. Diagnostics expose neither map keys nor values.
+
+The shared renderer still applies its existing missing-as-empty policy. Readiness
+prevents these active owning consumers from reaching it with absent required
+Secret keys; map presence itself proves neither authorization nor freshness.
+Other outbound consumers do not acquire this gate through the shared raw client.
+The appended owning-client and populated-cache/PluginStore tests cover this scope;
+fresh command results belong to the current batch evidence, not the historical
+verification counts below. No live watch delivery or conformance claim follows.
+
 ## Deep-review corrections
 
 A second independent review found two regressions in the uncommitted migration:

@@ -12,8 +12,8 @@
 - R7a three-plugin managed HTTP migration has passed focused execution and all
   fourteen root gates on exactly twenty technical paths. Both independent
   Astra commit reviews passed. R7b internal Route Edgion-auth now has two
-  independent execution approvals on thirty-one technical paths. All fourteen
-  root gates pass without warnings; final commit review is pending.
+  independent execution and commit approvals on thirty-one technical paths. All
+  fourteen root gates pass without warnings; committed as 78d0f168c.
 - R7/R8, full consumer audit and simplification, knowledge/user-document cleanup,
   fresh real-environment admission/dynamic/conformance verification, and original
   issue closure remain open. Historical scoped passes are not whole-task passes.
@@ -2502,3 +2502,51 @@ workspace check 21.291 seconds, Clippy 31.533 seconds. The final scope is thirty
 technical files plus this ledger; protected unrelated untracked paths remain
 excluded. Final commit review is next. R7a template-presence follow-up, R7c, R8,
 F1/F2 and original issue closure remain open; no agent push.
+
+R7b committed locally as 78d0f168cf039e060a93a23455ffe08d1549c404 after both Astra
+SCOPED COMMIT PASS verdicts. All thirty-two committed blobs match the reviewed
+manifest exactly; no agent push. Next batch is plan-only for the adjacent managed
+HTTP missing-template-material gap and shared private presence check, preserving
+actual owner, cache failure policy and legitimate empty Secret values. Baseline
+is 9621 test identities. R7c/R8 and complete F1/F2 closure remain pending.
+
+Read-only R8 revalidation identifies concrete Gateway TLS invalid-target edge
+ordering gaps: backend clientCertificateRef, listener certificateRefs and frontend
+CA registration can precede group/kind validation. Preserve ordered serving-cert
+partial-good outcomes and frontend StrictReject in an actual-field migration.
+Separate BTP/EBTP material bindings must preserve already migrated policy targets,
+BTP local-CA rules and custom health same-namespace/inactive-protocol behavior.
+EdgionTls already gates group/kind; audit actual source/name before its raw Secret
+lookup rather than redo policy. ACME already has strict targets and UID/generation,
+LeaderFence and target UID/resourceVersion checks; generated-output binding must
+reuse them without new policy. ACME knowledge's stale alias-issue-absent claim is
+another F1 documentation correction. These are candidate boundaries, not accepted
+implementation plans or completed coverage.
+
+The R7a-template follow-up at 78d0f168c received two independent Astra PLAN PASS
+verdicts for seven technical paths: two production, two tests and three existing
+documents. Extract one private canonical map-presence predicate for actual Route
+and managed loans; preserve empty values, inactive entries and existing cache/
+publication semantics. The fixed diagnostic broadens TLS material to HTTP
+configuration because missing template keys are not TLS errors. Correct focused
+filters to ai::guards::semantic and ai::guards::request (the public HTTP names
+are re-export facades), require nonzero tests, and exercise templated method only
+through ForwardAuth while retaining fixed POST for Guardrail/AiGuard. Execution
+is authorized; no technical completion or fresh test result is claimed yet.
+
+R7a-template full-static snapshot r1 received two independent Astra PASS verdicts.
+Seven hashes match, both existing test files retain exact HEAD bodies, and four
+new tests cover actual three-owner preparation, all canonical template surfaces,
+no-Tokio health ordering, cache companions, real publication replacement/repair/
+delete, captured Arcs and inactive/inline behavior. Serial focused verification
+and identity preservation are authorized; final workspace gates remain pending.
+
+R7a-template focused execution passes 638 distinct Gateway unit tests across
+seven nonempty suites, with no failed run. All 9621 old IDs survive (9625 current),
+ignored sets and old test bodies are unchanged. Both Astra execution reviews
+independently verified source/log/binary hashes and assertions. All fourteen root
+gates pass with unchanged source and zero warnings/errors; workspace check took
+15.555 seconds and Clippy 22.781 seconds. Evidence lives under the r7a-template
+verification/root-verification directories. Final commit scope is seven technical
+files plus this ledger. OAuth2 R7c, R8, F1/F2 and original issue closure remain
+pending; no agent push.

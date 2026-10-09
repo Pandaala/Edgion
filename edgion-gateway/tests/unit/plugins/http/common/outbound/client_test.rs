@@ -1081,3 +1081,101 @@ fn internal_route_auth_requires_exact_template_keys_before_health_preparation() 
         assert_eq!(client.resolved_secrets.as_ref().unwrap().0["child/token:key"], value);
     }
 }
+
+#[test]
+fn managed_template_material_gate_precedes_tls_and_health_for_every_owner() {
+    use serde_json::json;
+    for kind in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        for disabled_tls in [false, true] {
+            let mut wire = json!({"target":{"name":"auth","port":8080},
+                "request":{"path":{"template":"/check/${secretRef:tenant/token:key}"}}});
+            if disabled_tls {
+                wire["tls"] = json!({"enabled":false,"clientCertificateRef":{"name":"unused"}});
+            }
+            for material in [
+                serde_json::Value::Null,
+                json!({}),
+                json!({"other/token:key":"decoy"}),
+                json!({"tenant/token:other":"decoy"}),
+            ] {
+                let mut missing = wire.clone();
+                missing["resolvedSecrets"] = material;
+                missing["healthCheck"] = json!({"active":{"path":"/health","intervalSec":30}});
+                // No Tokio runtime: exact rejection must precede health task creation.
+                assert_eq!(
+                    owned_managed_client(kind, missing, Some("tenant")).unwrap_err(),
+                    "managed HTTP template references are unresolved",
+                    "{kind}/{disabled_tls}"
+                );
+            }
+            for value in ["present-value", ""] {
+                let mut complete = wire.clone();
+                complete["resolvedSecrets"] = json!({"tenant/token:key":value});
+                let client = owned_managed_client(kind, complete, Some("tenant")).unwrap();
+                assert_eq!(client.resolved_secrets.as_ref().unwrap().0["tenant/token:key"], value);
+                assert!(client.health_task.is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn managed_template_gate_covers_canonical_surfaces_without_scanning_literal_fields() {
+    use serde_json::json;
+    let template = "${secretRef:tenant/token:key}";
+    let surfaces = [
+        ("path", json!({"path":{"template":format!("/{template}")}})),
+        (
+            "method",
+            json!({"path":{"template":"/decision"},"method":{"template":template}}),
+        ),
+        (
+            "args",
+            json!({"path":{"template":"/decision"},"args":{"custom":[{"name":"token","template":template}]}}),
+        ),
+        (
+            "headers",
+            json!({"path":{"template":"/decision"},"headers":{"custom":[{"name":"x-token","template":template}]}}),
+        ),
+        (
+            "cookies",
+            json!({"path":{"template":"/decision"},"cookies":{"custom":[{"name":"token","template":template}]}}),
+        ),
+        (
+            "json",
+            json!({"path":{"template":"/decision"},"body":{"type":"json","template":format!("{{\"token\":\"{template}\"}}")}}),
+        ),
+        (
+            "raw",
+            json!({"path":{"template":"/decision"},"body":{"type":"raw","template":template}}),
+        ),
+        (
+            "form",
+            json!({"path":{"template":"/decision"},"body":{"type":"form","fields":[{"name":"token","template":template}]}}),
+        ),
+    ];
+    for kind in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        for (surface, request) in &surfaces {
+            if *surface == "method" && kind != "ForwardAuth" {
+                continue;
+            }
+            let mut wire = json!({"target":{"name":"auth","port":8080},"request":request});
+            assert_eq!(
+                owned_managed_client(kind, wire.clone(), Some("tenant")).unwrap_err(),
+                "managed HTTP template references are unresolved",
+                "{kind}/{surface}"
+            );
+            wire["resolvedSecrets"] = json!({"tenant/token:key":"GET"});
+            let client = owned_managed_client(kind, wire, Some("tenant")).unwrap();
+            assert_eq!(
+                client.compiled_request.method.is_some(),
+                kind != "ForwardAuth" || *surface == "method"
+            );
+        }
+        let literal = json!({"target":{"name":"auth","port":8080},"request":{
+            "path":{"template":"/${ctx:optional}"},"headers":{"custom":[{"name":"x-literal","value":template}]}
+        }});
+        let client = owned_managed_client(kind, literal, Some("tenant")).unwrap();
+        assert!(client.resolved_secrets.is_none());
+    }
+}

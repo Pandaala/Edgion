@@ -517,6 +517,19 @@ CredentialSource transport capture and generated-output operation authority. The
 latter two remain open. R7a focused handler/store tests did not establish live
 queue delivery or conformance.
 
+### R7a managed-template readiness follow-up
+
+The three managed plugin preparations now share the internal Route adapter's
+private exact-key presence predicate. Actual request templates require their
+controller-carried `namespace/name:key` entries before TLS/client/health work,
+cache replay and publication; an existing empty value is accepted. Missing material
+uses the existing non-retainable failure path instead of the renderer's empty
+substitution. Disabled/policy-masked entries and inline-only AiGuard retain their
+activity semantics. This adds no Grant, freshness, schema or Service dependency
+claim, and does not migrate Webhook, OAuth2 or CredentialSource. Focused evidence
+covers owning construction, cache challenge, replacement/repair/deletion and
+captured prior Arcs; live verification remains separately tracked.
+
 ### R7b internal HTTPRoute Edgion-auth boundary
 
 Internal FS/etcd auth filters now have actual authored rule/backend/filter loans
