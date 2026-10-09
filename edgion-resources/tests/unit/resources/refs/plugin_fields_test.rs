@@ -491,3 +491,153 @@ fn descriptor_generation_and_ordinal_are_bound_without_material_provenance_claim
     assert!(entries[0].references().unwrap().grpc_descriptor().is_none());
     assert!(entries[1].references().unwrap().grpc_descriptor().unwrap().is_ok());
 }
+
+fn fixed_link_sys_entries() -> Vec<serde_json::Value> {
+    vec![
+        json!({"type":"Dsl","config":{"name":"program","source":"return next()","linkSysRefs":[{"namespace":"raw/ns","name":"redis_alias"}]}}),
+        json!({"type":"RateLimitRedis","config":{"redisRef":"apps/cache","quotas":[]}}),
+        json!({"type":"GraphqlRateLimit","config":{"schema":"type Query { name: String }","redisRef":"apps/cache","policies":[{"rate":100,"interval":"1s"}]}}),
+        json!({"type":"WebhookKeyGet","config":{"vars":[{"name":"result","webhookRef":"apps/hook","extract":{"source":"bodyText"}}]}}),
+        json!({"type":"AiProxy","config":{"api":"openaiChat","usageObservation":"provider","tokenQuota":{"redisRef":"apps/cache","key":[],"limits":[{"tokens":100,"window":"1h"}]}}}),
+    ]
+}
+
+#[test]
+fn fixed_link_sys_configs_bind_actual_owner_and_original_variant() {
+    for value in fixed_link_sys_entries() {
+        let mut owner: EdgionPlugins =
+            serde_json::from_value(json!({"metadata":{"name":"plugins"},"spec":{"requestPlugins":[value]}})).unwrap();
+        let prepared = PreparedPluginReferences::from_plugins(&owner);
+        let binding = prepared.bind(&owner).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        assert!(entry.link_sys_config().unwrap().is_some());
+        assert_eq!(owner.metadata.namespace, None);
+        if let EdgionPlugin::GraphqlRateLimit(original) = &owner.spec.request_plugins.as_ref().unwrap()[0].plugin {
+            let Some(HttpLinkSysConfig::GraphqlRateLimit(bound)) = entry.link_sys_config().unwrap() else {
+                panic!("original Graphql variant required")
+            };
+            assert!(std::ptr::eq(original, bound));
+        }
+        for namespace in ["", "bad/ns"] {
+            owner.metadata.namespace = Some(namespace.into());
+            assert!(prepared.bind(&owner).is_err());
+            let current = PreparedPluginReferences::from_plugins(&owner);
+            let bound = current.bind(&owner).unwrap();
+            assert!(bound.request_entries().next().unwrap().link_sys_config().is_err());
+        }
+        owner.metadata.namespace = None;
+        owner.metadata.name = None;
+        let current = PreparedPluginReferences::from_plugins(&owner);
+        assert!(current
+            .bind(&owner)
+            .unwrap()
+            .request_entries()
+            .next()
+            .unwrap()
+            .link_sys_config()
+            .is_err());
+        owner.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+        let current = PreparedPluginReferences::from_plugins(&owner);
+        assert!(current
+            .bind(&owner)
+            .unwrap()
+            .request_entries()
+            .next()
+            .unwrap()
+            .link_sys_config()
+            .unwrap()
+            .is_none());
+    }
+}
+
+#[test]
+fn fixed_link_sys_topology_rejects_mutated_keys_presence_order_and_enable() {
+    for value in fixed_link_sys_entries() {
+        let owner: EdgionPlugins =
+            serde_json::from_value(json!({"metadata":{"name":"plugins"},"spec":{"requestPlugins":[value]}})).unwrap();
+        let prepared = PreparedPluginReferences::from_plugins(&owner);
+        let mut changed = owner.clone();
+        match &mut changed.spec.request_plugins.as_mut().unwrap()[0].plugin {
+            EdgionPlugin::Dsl(config) => config.linksys_refs[0].namespace.push_str("-changed"),
+            EdgionPlugin::RateLimitRedis(config) => config.redis_ref.push_str("-changed"),
+            EdgionPlugin::GraphqlRateLimit(config) => config.redis_ref.push_str("-changed"),
+            EdgionPlugin::WebhookKeyGet(config) => config.vars[0].webhook_ref.push_str("-changed"),
+            EdgionPlugin::AiProxy(config) => config.token_quota.as_mut().unwrap().redis_ref.push_str("-changed"),
+            _ => unreachable!(),
+        }
+        assert!(prepared.bind(&changed).is_err());
+        assert!(prepared.bind_mut(&mut changed).is_err());
+        let mut changed = owner.clone();
+        changed.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+        assert!(prepared.bind(&changed).is_err());
+        let mut changed = owner.clone();
+        changed.spec.request_plugins.as_mut().unwrap().clear();
+        assert!(prepared.bind(&changed).is_err());
+    }
+    let mut values = fixed_link_sys_entries();
+    let mut owner: EdgionPlugins =
+        serde_json::from_value(json!({"metadata":{"name":"plugins"},"spec":{"requestPlugins":values}})).unwrap();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    owner.spec.request_plugins.as_mut().unwrap().swap(0, 1);
+    assert!(prepared.bind(&owner).is_err());
+    values[0]["config"]["linkSysRefs"] = json!([]);
+    values[4]["config"].as_object_mut().unwrap().remove("tokenQuota");
+    let owner: EdgionPlugins =
+        serde_json::from_value(json!({"metadata":{},"spec":{"requestPlugins":[values[0].clone(),values[4].clone()]}}))
+            .unwrap();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    assert!(prepared
+        .bind(&owner)
+        .unwrap()
+        .request_entries()
+        .all(|entry| entry.link_sys_config().unwrap().is_none()));
+}
+
+#[test]
+fn fixed_link_sys_collection_and_optional_topology_changes_reject_both_bindings() {
+    let entries = fixed_link_sys_entries();
+    for kind in ["Dsl", "WebhookKeyGet", "AiProxy"] {
+        let value = entries.iter().find(|value| value["type"] == kind).unwrap();
+        let mut owner: EdgionPlugins =
+            serde_json::from_value(json!({"metadata":{"name":"plugins"},"spec":{"requestPlugins":[value]}})).unwrap();
+        match &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin {
+            EdgionPlugin::Dsl(config) => {
+                let mut second = config.linksys_refs[0].clone();
+                second.name = "second".into();
+                config.linksys_refs.push(second);
+            }
+            EdgionPlugin::WebhookKeyGet(config) => {
+                let mut second = config.vars[0].clone();
+                second.webhook_ref = "apps/second".into();
+                config.vars.push(second);
+            }
+            _ => {}
+        }
+        let prepared = PreparedPluginReferences::from_plugins(&owner);
+        for mutation in 0..4 {
+            let mut changed = owner.clone();
+            match &mut changed.spec.request_plugins.as_mut().unwrap()[0].plugin {
+                EdgionPlugin::Dsl(config) => match mutation {
+                    0 => config.linksys_refs[0].name = "changed".into(),
+                    1 => config.linksys_refs.swap(0, 1),
+                    2 => {
+                        config.linksys_refs.pop();
+                    }
+                    _ => config.linksys_refs.push(config.linksys_refs[0].clone()),
+                },
+                EdgionPlugin::WebhookKeyGet(config) => match mutation {
+                    0 => config.vars[0].webhook_ref = "apps/changed".into(),
+                    1 => config.vars.swap(0, 1),
+                    2 => {
+                        config.vars.pop();
+                    }
+                    _ => config.vars.push(config.vars[0].clone()),
+                },
+                EdgionPlugin::AiProxy(config) => config.token_quota = None,
+                _ => unreachable!(),
+            }
+            assert!(prepared.bind(&changed).is_err(), "{kind}/{mutation}");
+            assert!(prepared.bind_mut(&mut changed).is_err(), "{kind}/{mutation}");
+        }
+    }
+}

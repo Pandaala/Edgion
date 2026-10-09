@@ -359,12 +359,7 @@ pub(crate) fn compile_plugins_with_cache(
         });
     }
 
-    if spec.spec.request_plugins.is_some() {
-        errors.extend(runtime.add_from_request_filters_with_cache(&spec, cache));
-    }
-    if let Some(filter_plugins) = &spec.spec.upstream_response_filter_plugins {
-        errors.extend(runtime.add_from_upstream_response_filters_with_cache(filter_plugins, &namespace, cache));
-    }
+    errors.extend(runtime.add_resource_filters_with_cache(&spec, cache));
     if let Some(body_filter_plugins) = &spec.spec.upstream_response_body_filter_plugins {
         errors.extend(runtime.add_from_upstream_response_body_filters_with_cache(
             body_filter_plugins,

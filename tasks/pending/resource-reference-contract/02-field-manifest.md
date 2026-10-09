@@ -440,3 +440,14 @@ Remaining fixed resource-owned coverage explicitly includes
 into RateLimitRedis::new. A later actual-field adapter must retain that original
 Graphql source, not only match the RateLimitRedis plugin variant. This batch does
 not claim those resource-owned consumers migrated.
+
+### HTTP fixed LinkSys owner binding (R6g)
+
+DSL linkSysRefs (request and response-filter), RateLimitRedis.redisRef,
+GraphqlRateLimit.redisRef, WebhookKeyGet vars[].webhookRef, and AiProxy
+tokenQuota.redisRef now participate in the actual EdgionPlugins prepared
+topology and cold configuration loan. Original lexical validators and per-use
+typed provider lookup remain authoritative. Graphql delegation retains its
+original config source. No ReferenceGrant is invented for these fields.
+Stream ConnectionRateLimit.redisRef and EdgionBackend credentialPool.redisRef
+remain separate pending actual-owner consumers.

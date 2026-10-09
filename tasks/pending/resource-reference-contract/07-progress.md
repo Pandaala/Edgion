@@ -2084,3 +2084,46 @@ LinkSys consumers, process locators, R7/R8 and F1/F2 remain open.
 
 Both independent reviewers, including Astra, confirmed R6f SCOPED COMMIT PASS.
 The exact 17 technical paths plus this record are the local commit scope.
+
+R6f committed locally as b9c18686534699fc6cfa21a7d2ba1caedca69443; all 18
+committed blobs match the reviewed snapshot. Nothing was pushed. R6g begins
+PLAN ONLY at this HEAD for actual HTTP plugin LinkSys references, including DSL,
+RateLimitRedis, GraphqlRateLimit delegation, WebhookKeyGet and AiProxy quota.
+Stream/Backend ownership, process locators and later R7/R8/F1/F2 remain open.
+
+R6g received independent Astra and second-reviewer SCOPED PLAN PASS for eleven
+technical paths at b9c1868; execution is authorized. Reuse existing PreparedEntry
+finite LinkSys atoms and actual borrowed configurations for request five variants
+and response DSL. This is provenance, not a new DNS target/Grant contract. Binding
+and source rejection precede cache/LKG; invalid sources are non-retainable while
+ordinary valid-owner DSL errors retain their existing policy. The Graphql parity
+test may use its existing actual owner without changing assertions. Reuse one
+prepared binding across stages; preserve masks, disabled and inline-only paths.
+
+R6g complete static review initially requested stronger planned evidence:
+internal DSL/Webhook field mutations and actual two-stage LKG publication, not
+only whole-entry changes or retainability flags. These are now covered, including
+quota removal, immutable/mutable stale binding rejection, nonempty cache controls,
+Block precedence and sealed request execution. Both independent reviewers give
+SCOPED STATIC PASS. They also approved a test-local extra None parameter and
+moving the previous owner-aware request wrapper into tests; no core logic or
+original assertion was duplicated/changed. Focused verification is authorized.
+
+R6g final focused evidence passes 763 distinct unit tests plus eight doctests,
+with all 9559 old IDs and ignored inventories preserved (9567 current). Compiler
+witnesses confirm a valid loan plus E0505/E0597 lifetime failures. Original r1
+missing lifetime, r2 incomplete new fixtures, and r3 test failures remain recorded.
+Independent review approved exactly two old parity fixture names; namespace,
+cases and assertions remain intact. The new LKG test now observes shared filter
+Arcs, because retention recomposes the outer runtime wrapper, and executes the
+invalid-source sealed 500. Resources r3 and Gateway r4 cover unchanged final
+production; r3-to-r4 changed only the reviewed compile test file.
+
+Both reviewers verified execution and preservation. All 14 R6g root gates pass
+with unchanged source, zero warnings/errors, workspace check 83.395 seconds and
+Clippy 91.682 seconds. Evidence is under the R6g verification/root-verification
+directories in tmp/resource-reference-contract. Final independent commit review
+follows. Stream/Backend LinkSys owners and other R6-R8/F1/F2 remain open.
+
+Both independent reviewers, including Astra, confirmed R6g SCOPED COMMIT PASS.
+The exact eleven technical paths plus this record form the local commit scope.

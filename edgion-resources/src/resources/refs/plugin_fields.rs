@@ -52,6 +52,10 @@ impl Role {
 }
 
 enum Atom<'a> {
+    LinkSys {
+        namespace: Option<&'a str>,
+        name: &'a str,
+    },
     Descriptor {
         name: &'a str,
         key: &'a str,
@@ -76,6 +80,10 @@ enum Atom<'a> {
 
 #[derive(PartialEq, Eq, Serialize)]
 enum PreparedAtom {
+    LinkSys {
+        namespace: Option<String>,
+        name: String,
+    },
     Template(PreparedTemplateAtom),
     Presence(Role, bool),
     Group {
@@ -93,6 +101,13 @@ enum PreparedAtom {
 impl PreparedAtom {
     fn matches(&self, stage: PluginStage, index: usize, atom: &Atom<'_>) -> bool {
         match (self, atom) {
+            (
+                Self::LinkSys { namespace, name },
+                Atom::LinkSys {
+                    namespace: current_namespace,
+                    name: current_name,
+                },
+            ) => namespace.as_deref() == *current_namespace && name == current_name,
             (
                 Self::Reference {
                     role: Role::Descriptor,
@@ -176,6 +191,10 @@ impl PreparedEntry {
         let mut atoms = Vec::new();
         visit_fields(plugin, &mut |atom| {
             atoms.push(match atom {
+                Atom::LinkSys { namespace, name } => PreparedAtom::LinkSys {
+                    namespace: namespace.map(str::to_owned),
+                    name: name.to_owned(),
+                },
                 Atom::Descriptor { name, key } => PreparedAtom::Reference {
                     role: Role::Descriptor,
                     group: None,
@@ -344,6 +363,38 @@ fn visit_fields<'a>(plugin: &'a EdgionPlugin, visitor: &mut impl FnMut(Atom<'a>)
         }};
     }
     match plugin {
+        EdgionPlugin::Dsl(config) => {
+            for reference in &config.linksys_refs {
+                visitor(Atom::LinkSys {
+                    namespace: Some(&reference.namespace),
+                    name: &reference.name,
+                });
+            }
+        }
+        EdgionPlugin::RateLimitRedis(config) => visitor(Atom::LinkSys {
+            namespace: None,
+            name: &config.redis_ref,
+        }),
+        EdgionPlugin::GraphqlRateLimit(config) => visitor(Atom::LinkSys {
+            namespace: None,
+            name: &config.redis_ref,
+        }),
+        EdgionPlugin::WebhookKeyGet(config) => {
+            for var in &config.vars {
+                visitor(Atom::LinkSys {
+                    namespace: None,
+                    name: &var.webhook_ref,
+                });
+            }
+        }
+        EdgionPlugin::AiProxy(config) => {
+            if let Some(quota) = &config.token_quota {
+                visitor(Atom::LinkSys {
+                    namespace: None,
+                    name: &quota.redis_ref,
+                });
+            }
+        }
         EdgionPlugin::GrpcJsonTranscoder(config) => {
             if let crate::grpc_transcoding::GrpcDescriptorSource::ConfigMapRef { name, key } = &config.descriptor {
                 visitor(Atom::Descriptor { name, key });
@@ -583,6 +634,35 @@ impl PluginBindingsMut<'_> {
     mutable_stage!(response_entries, upstream_response_plugins, 3);
 }
 
+/// A borrowed configuration variant view, not an independently unforgeable proof.
+/// Source provenance comes from `BoundPluginEntry::link_sys_config` and its caller;
+/// target grammar and other configuration validation remain owned by each schema.
+pub enum HttpLinkSysConfig<'a> {
+    Dsl(&'a crate::resources::edgion_plugins::DslConfig),
+    RateLimitRedis(&'a crate::resources::edgion_plugins::RateLimitRedisConfig),
+    GraphqlRateLimit(&'a crate::resources::edgion_plugins::GraphqlRateLimitConfig),
+    WebhookKeyGet(&'a crate::resources::edgion_plugins::WebhookKeyGetConfig),
+    AiProxy(&'a crate::resources::edgion_plugins::AiProxyConfig),
+}
+
+impl<'a> HttpLinkSysConfig<'a> {
+    fn from_plugin(plugin: &'a EdgionPlugin) -> Option<Self> {
+        match plugin {
+            EdgionPlugin::Dsl(config) if !config.linksys_refs.is_empty() => Some(Self::Dsl(config)),
+            EdgionPlugin::RateLimitRedis(config) => Some(Self::RateLimitRedis(config)),
+            EdgionPlugin::GraphqlRateLimit(config) => Some(Self::GraphqlRateLimit(config)),
+            EdgionPlugin::WebhookKeyGet(config) if !config.vars.is_empty() => Some(Self::WebhookKeyGet(config)),
+            EdgionPlugin::AiProxy(config) if config.token_quota.is_some() => Some(Self::AiProxy(config)),
+            _ => None,
+        }
+    }
+
+    /// Classifies presence only; this does not establish an owning loan.
+    pub fn is_reference_bearing(plugin: &'a EdgionPlugin) -> bool {
+        Self::from_plugin(plugin).is_some()
+    }
+}
+
 pub struct BoundPluginEntry<'a> {
     plugin: &'a EdgionPlugin,
     enabled: bool,
@@ -677,6 +757,34 @@ macro_rules! entry_access {
     () => {
         pub fn config(&self) -> &EdgionPlugin {
             self.plugin
+        }
+        /// Lend actual fixed LinkSys configuration after current topology/source checks.
+        ///
+        /// ```compile_fail
+        /// use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+        /// use edgion_resources::EdgionPlugins;
+        /// let owner: EdgionPlugins = serde_json::from_value(serde_json::json!({
+        ///     "metadata":{"name":"plugins"}, "spec":{"requestPlugins":[{
+        ///         "type":"RateLimitRedis", "config":{"redisRef":"apps/cache", "quotas":[]}
+        ///     }]}
+        /// })).unwrap();
+        /// let prepared = PreparedPluginReferences::from_plugins(&owner);
+        /// let bindings = prepared.bind(&owner).unwrap();
+        /// let entry = bindings.request_entries().next().unwrap();
+        /// let config = entry.link_sys_config().unwrap();
+        /// drop(owner);
+        /// drop(config);
+        /// ```
+        pub fn link_sys_config(&self) -> Result<Option<HttpLinkSysConfig<'_>>, ReferenceError> {
+            let references = self.references()?;
+            if !self.prepared.supported || !self.enabled {
+                return Ok(None);
+            }
+            let config = HttpLinkSysConfig::from_plugin(self.plugin);
+            if config.is_some() {
+                references.validate_source()?;
+            }
+            Ok(config)
         }
         pub fn is_enabled(&self) -> bool {
             self.enabled

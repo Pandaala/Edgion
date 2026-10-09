@@ -697,3 +697,17 @@ length, stream length removal, compression, GrpcWeb and upgrade handshakes.
 Do not route those legitimate framing changes through generic plugin setters.
 The [producer/operation/protocol matrix](../../04-review/plugin-runtime/regression-guards/response-header-mutation-policy.md)
 records enforcement boundaries and regression evidence.
+
+### Fixed LinkSys fields at HTTP resource compilation
+
+DSL (request and response-filter), RateLimitRedis, GraphqlRateLimit,
+WebhookKeyGet, and AiProxy token quota borrow their actual configurations through
+PreparedPluginReferences. Exact LinkSys fields join the existing stage/entry
+topology; one cold binding serves both stages. Check actual source identity
+before entry-cache reuse and constructor selection. Graphql retains its original
+configuration provenance before delegating to RateLimitRedis. Existing field
+validators keep their distinct lexical grammars; this adds no Grant or DNS-label
+restriction on legacy LinkSys target strings. Low-level config constructors are
+not independently actual-owner APIs. Disabled/policy-masked entries remain inert;
+no-reference DSL/AiProxy remain inline. Runtime lookups still use current typed
+providers, with no new request-path parsing or client snapshots.

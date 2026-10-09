@@ -1951,7 +1951,10 @@ fn validate_plugins_matches_compile_plugins_error_set() {
     }
     fn mk(request: Option<Vec<RequestFilterEntry>>, urf: Option<Vec<UpstreamResponseFilterEntry>>) -> EdgionPlugins {
         EdgionPlugins {
-            metadata: Default::default(),
+            metadata: kube::api::ObjectMeta {
+                name: Some("validation-owner".into()),
+                ..Default::default()
+            },
             spec: EdgionPluginsSpec {
                 current_status: None,
                 request_plugins: request,
@@ -2314,7 +2317,10 @@ fn request_local_reply_status_validation_matches_controller_and_gateway() {
             }))
             .unwrap();
             let resource = EdgionPlugins {
-                metadata: Default::default(),
+                metadata: kube::api::ObjectMeta {
+                    name: Some("validation-owner".into()),
+                    ..Default::default()
+                },
                 spec: EdgionPluginsSpec {
                     current_status: None,
                     request_plugins: Some(vec![RequestFilterEntry::new(plugin)]),
@@ -2703,4 +2709,188 @@ async fn waf_selection_only_update_keeps_sources_and_in_flight_filter_behavior()
         first_filter(&new),
         first_filter(&store.get_plugin_runtime(&key).unwrap())
     ));
+}
+
+fn fixed_link_sys_resource(kind: &str, response: bool) -> EdgionPlugins {
+    let config = match kind {
+        "Dsl" => {
+            serde_json::json!({"name":"program","source":"return next()","linkSysRefs":[{"namespace":"raw/ns","name":"redis_alias"}]})
+        }
+        "RateLimitRedis" => {
+            serde_json::json!({"redisRef":"apps/cache","quotas":[{"name":"default","key":[],"policies":[{"rate":100,"interval":"1s"}]}]})
+        }
+        "GraphqlRateLimit" => {
+            serde_json::json!({"schema":"type Query { name: String }","redisRef":"apps/cache","policies":[{"rate":100,"interval":"1s"}]})
+        }
+        "WebhookKeyGet" => {
+            serde_json::json!({"vars":[{"name":"result","webhookRef":"apps/hook","extract":{"source":"bodyText"}}]})
+        }
+        "AiProxy" => {
+            serde_json::json!({"api":"openaiChat","usageObservation":"provider","tokenQuota":{"redisRef":"apps/cache","key":[],"limits":[{"tokens":100,"window":"1h"}]}})
+        }
+        _ => unreachable!(),
+    };
+    let stage = if response {
+        "upstreamResponseFilterPlugins"
+    } else {
+        "requestPlugins"
+    };
+    serde_json::from_value(serde_json::json!({"metadata":{"namespace":"apps","name":"fixed-links"},"spec":{stage:[{"type":kind,"config":config}]}})).unwrap()
+}
+
+#[tokio::test]
+async fn fixed_link_sys_actual_sources_gate_all_factories_but_preserve_masks() {
+    for (kind, response) in [
+        ("Dsl", false),
+        ("Dsl", true),
+        ("RateLimitRedis", false),
+        ("GraphqlRateLimit", false),
+        ("WebhookKeyGet", false),
+        ("AiProxy", false),
+    ] {
+        let owner = fixed_link_sys_resource(kind, response);
+        let valid = compile_plugins(&owner);
+        assert!(valid.is_activatable, "{kind}/{response}: {:?}", valid.preparse_errors);
+        let mut native = owner.clone();
+        native.metadata.namespace = None;
+        assert!(
+            compile_plugins(&native).is_activatable,
+            "omitted native namespace: {kind}"
+        );
+        for namespace in ["", "bad/ns"] {
+            let mut invalid = owner.clone();
+            invalid.metadata.namespace = Some(namespace.into());
+            let compiled = compile_plugins(&invalid);
+            assert!(!compiled.is_activatable, "{kind}/{response}");
+            assert!(!compiled.retain_previous_on_invalid_update);
+            assert!(compiled
+                .preparse_errors
+                .iter()
+                .any(|error| error.contains("invalid owning LinkSys reference")));
+            let reject = compiled.plugin_runtime.request_plugins_iter().next().unwrap();
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new(reject.name());
+            assert!(matches!(
+                reject.run_request(&mut session, &mut log).await,
+                PluginRunningResult::ErrResponse { status: 500, .. }
+            ));
+            let blocked = compile_with_policy(&invalid, kind, Some(PluginPolicyAction::Block { status: 451 }));
+            assert_eq!(
+                blocked.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+                "PluginPolicyBlock"
+            );
+            let bypass = compile_with_policy(&invalid, kind, Some(PluginPolicyAction::Bypass));
+            assert!(
+                bypass.is_activatable,
+                "masked {kind}/{response}: {:?}",
+                bypass.preparse_errors
+            );
+            if response {
+                invalid.spec.upstream_response_filter_plugins.as_mut().unwrap()[0].enable = false;
+            } else {
+                invalid.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+            }
+            assert!(compile_plugins(&invalid).is_activatable);
+        }
+        let mut invalid = owner;
+        invalid.metadata.name = None;
+        assert!(!compile_plugins(&invalid).is_activatable);
+    }
+}
+
+#[tokio::test]
+async fn fixed_link_sys_target_grammars_remain_consumer_specific() {
+    for kind in ["RateLimitRedis", "GraphqlRateLimit", "WebhookKeyGet", "AiProxy"] {
+        let mut owner = fixed_link_sys_resource(kind, false);
+        let entry = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin;
+        let key = match entry {
+            EdgionPlugin::RateLimitRedis(config) => &mut config.redis_ref,
+            EdgionPlugin::GraphqlRateLimit(config) => &mut config.redis_ref,
+            EdgionPlugin::WebhookKeyGet(config) => &mut config.vars[0].webhook_ref,
+            EdgionPlugin::AiProxy(config) => &mut config.token_quota.as_mut().unwrap().redis_ref,
+            _ => unreachable!(),
+        };
+        *key = "ns_name/cache_key".into();
+        assert!(compile_plugins(&owner).is_activatable, "underscore {kind}");
+        let mut value = serde_json::to_value(&owner).unwrap();
+        let config = &mut value["spec"]["requestPlugins"][0]["config"];
+        if kind == "WebhookKeyGet" {
+            config["vars"][0]["webhookRef"] = serde_json::json!("café/cache");
+        } else if kind == "AiProxy" {
+            config["tokenQuota"]["redisRef"] = serde_json::json!("café/cache");
+        } else {
+            config["redisRef"] = serde_json::json!("café/cache");
+        }
+        let unicode: EdgionPlugins = serde_json::from_value(value).unwrap();
+        assert_eq!(compile_plugins(&unicode).is_activatable, kind != "AiProxy", "{kind}");
+    }
+    for response in [false, true] {
+        assert!(
+            compile_plugins(&fixed_link_sys_resource("Dsl", response)).is_activatable,
+            "DSL namespace grammar stays unrestricted"
+        );
+    }
+}
+
+#[tokio::test]
+async fn fixed_link_sys_dsl_invalid_owner_prevents_retention_without_changing_script_policy() {
+    for response in [false, true] {
+        let owner = fixed_link_sys_resource("Dsl", response);
+        let valid = compile_source(&owner);
+        let mut bad_script = owner.clone();
+        let plugin = if response {
+            &mut bad_script.spec.upstream_response_filter_plugins.as_mut().unwrap()[0].plugin
+        } else {
+            &mut bad_script.spec.request_plugins.as_mut().unwrap()[0].plugin
+        };
+        let EdgionPlugin::Dsl(config) = plugin else {
+            unreachable!()
+        };
+        config.source = Some("invalid @@@".into());
+        let invalid_script = compile_source(&bad_script);
+        assert!(invalid_script.retain_previous_on_invalid_update);
+        assert!(invalid_script.can_retain_previous(&valid));
+        bad_script.metadata.namespace = Some(String::new());
+        let invalid_source = compile_source(&bad_script);
+        assert!(!invalid_source.retain_previous_on_invalid_update);
+        assert!(!invalid_source.can_retain_previous(&valid));
+        let store = PluginStore::new();
+        let key = "apps/fixed-links".to_string();
+        store.apply_delta(HashMap::from([(key.clone(), valid)]), HashMap::new(), &HashSet::new());
+        let old = store.get_plugin_runtime(&key).unwrap();
+        store.apply_delta(
+            HashMap::new(),
+            HashMap::from([(key.clone(), invalid_script)]),
+            &HashSet::new(),
+        );
+        let retained = store.get_plugin_runtime(&key).unwrap();
+        assert!(store.scope().http(&key).unwrap().is_activatable);
+        if response {
+            assert!(Arc::ptr_eq(
+                old.upstream_response_plugins_iter().next().unwrap(),
+                retained.upstream_response_plugins_iter().next().unwrap()
+            ));
+        } else {
+            assert!(Arc::ptr_eq(
+                old.request_plugins_iter().next().unwrap(),
+                retained.request_plugins_iter().next().unwrap()
+            ));
+        }
+        store.apply_delta(
+            HashMap::new(),
+            HashMap::from([(key.clone(), invalid_source)]),
+            &HashSet::new(),
+        );
+        let latest = store.scope();
+        assert!(!latest.http(&key).unwrap().is_activatable);
+        assert!(!Arc::ptr_eq(&old, &store.get_plugin_runtime(&key).unwrap()));
+        let closed = store.get_plugin_runtime(&key).unwrap();
+        let reject = closed.request_plugins_iter().next().unwrap();
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new(reject.name());
+        assert!(matches!(
+            reject.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse { status: 500, .. }
+        ));
+    }
 }

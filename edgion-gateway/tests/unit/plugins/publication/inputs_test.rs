@@ -292,3 +292,63 @@ fn configured_stream_gateway_owner_errors_remain_present_and_blank_remains_absen
         .insert(annotations::EDGION_STREAM_PLUGINS.into(), " \t ".into());
     assert_eq!(GatewayInput::from_gateway(&owner).connection_key, None);
 }
+
+#[test]
+fn fixed_link_sys_source_updates_publish_new_views_and_keep_captured_generations() {
+    use crate::plugins::publication::PluginPublisher;
+    let publisher = PluginPublisher::new();
+    let class: edgion_resources::GatewayClass = serde_json::from_value(json!({
+        "metadata":{"name":"public"},"spec":{"controllerName":"edgion.io/gateway-controller"}
+    }))
+    .unwrap();
+    publisher.replace_gateway_classes(std::collections::HashMap::from([("public".into(), Arc::new(class))]));
+    let mut gateway = gateway();
+    gateway.metadata.annotations = Some(std::collections::BTreeMap::from([(
+        "edgion.io/edgion-plugins".into(),
+        "fixed-links".into(),
+    )]));
+    publisher.replace_gateways(std::collections::HashMap::from([(
+        "apps/gateway".into(),
+        GatewayInput::from_gateway(&gateway),
+    )]));
+    let mut owner: edgion_resources::EdgionPlugins = serde_json::from_value(json!({
+        "metadata":{"name":"fixed-links","namespace":"apps"},"spec":{"upstreamResponseFilterPlugins":[{
+            "type":"Dsl","config":{"name":"program","source":"let x = 1","linkSysRefs":[{"namespace":"apps","name":"first"}]}
+        }]}
+    })).unwrap();
+    publisher.replace_http_plugins(std::collections::HashMap::from([(
+        "apps/fixed-links".into(),
+        Arc::new(owner.clone()),
+    )]));
+    let captured = publisher.snapshot().gateway("apps/gateway").unwrap().scope.clone();
+    let first = captured.http("apps/fixed-links").unwrap();
+    assert!(first.is_activatable, "{:?}", first.preparse_errors);
+    let edgion_resources::resources::edgion_plugins::EdgionPlugin::Dsl(config) =
+        &mut owner.spec.upstream_response_filter_plugins.as_mut().unwrap()[0].plugin
+    else {
+        unreachable!()
+    };
+    config.linksys_refs[0].name = "second".into();
+    publisher.replace_http_plugins(std::collections::HashMap::from([(
+        "apps/fixed-links".into(),
+        Arc::new(owner),
+    )]));
+    let next = publisher
+        .snapshot()
+        .gateway("apps/gateway")
+        .unwrap()
+        .scope
+        .http("apps/fixed-links")
+        .unwrap();
+    assert!(next.is_activatable);
+    assert!(!Arc::ptr_eq(&first.plugin_runtime, &next.plugin_runtime));
+    publisher.replace_http_plugins(std::collections::HashMap::new());
+    assert!(publisher
+        .snapshot()
+        .gateway("apps/gateway")
+        .unwrap()
+        .scope
+        .http("apps/fixed-links")
+        .is_none());
+    assert!(Arc::ptr_eq(&first, &captured.http("apps/fixed-links").unwrap()));
+}

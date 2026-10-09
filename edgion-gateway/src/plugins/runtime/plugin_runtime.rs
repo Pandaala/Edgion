@@ -4,7 +4,9 @@ use edgion_resources::refs::config_data_fields::{request_access_has_external_dat
 use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
 use edgion_resources::refs::waf_fields::WafPluginReferences;
 use edgion_resources::resource::meta::ResourceMeta;
-use edgion_resources::resources::refs::plugin_fields::{PluginMirrorRefs, PreparedPluginReferences};
+use edgion_resources::resources::refs::plugin_fields::{
+    HttpLinkSysConfig, PluginBindings, PluginMirrorRefs, PreparedPluginReferences,
+};
 use edgion_resources::resources::refs::route_fields::{EffectiveMirrorField, HttpRouteMirrorRefs};
 use edgion_resources::EdgionPlugins;
 use std::sync::Arc;
@@ -924,18 +926,35 @@ impl PluginRuntime {
     ///
     /// # Returns
     /// A vector of validation error messages (empty if all plugins are valid)
-    pub(crate) fn add_from_request_filters_with_cache(
+    pub(crate) fn add_resource_filters_with_cache(
         &mut self,
         owner: &edgion_resources::EdgionPlugins,
         cache: &mut EntryCache,
     ) -> Vec<String> {
-        self.add_request_entries(
+        let prepared = PreparedPluginReferences::from_plugins(owner);
+        let bindings = prepared.bind(owner).ok();
+        let namespace = owner.metadata.namespace.as_deref().unwrap_or("default");
+        let mut errors = self.add_request_entries(
             owner.spec.request_plugins.as_deref().unwrap_or_default(),
-            owner.metadata.namespace.as_deref().unwrap_or("default"),
+            namespace,
             &owner.key_name(),
             cache,
             Some(owner),
-        )
+            bindings.as_ref(),
+        );
+        errors.extend(
+            self.add_response_filter_entries(
+                owner
+                    .spec
+                    .upstream_response_filter_plugins
+                    .as_deref()
+                    .unwrap_or_default(),
+                namespace,
+                cache,
+                bindings.as_ref(),
+            ),
+        );
+        errors
     }
 
     fn add_request_entries(
@@ -945,6 +964,7 @@ impl PluginRuntime {
         resource_key: &str,
         cache: &mut EntryCache,
         owner: Option<&edgion_resources::EdgionPlugins>,
+        bindings: Option<&PluginBindings<'_>>,
     ) -> Vec<String> {
         let mut errors = Vec::new();
         // Bind once to the actual equal-length policy view. Never synthesize an owner
@@ -954,13 +974,7 @@ impl PluginRuntime {
             .as_ref()
             .zip(owner)
             .and_then(|(prepared, owner)| prepared.bind_plugins(owner).ok());
-        let prepared = owner.map(PreparedPluginReferences::from_plugins);
-        let bindings = prepared
-            .as_ref()
-            .zip(owner)
-            .and_then(|(prepared, owner)| prepared.bind(owner).ok());
         let descriptor_entries: Vec<_> = bindings
-            .as_ref()
             .into_iter()
             .flat_map(|bindings| bindings.request_entries())
             .collect();
@@ -1090,6 +1104,25 @@ impl PluginRuntime {
         let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                let link_sys_config = if HttpLinkSysConfig::is_reference_bearing(&entry.plugin) {
+                    match descriptor_entries
+                        .get(index)
+                        .and_then(|entry| entry.link_sys_config().ok())
+                        .flatten()
+                    {
+                        Some(config) => Some(config),
+                        None => {
+                            let name = Self::get_plugin_name(&entry.plugin);
+                            self.invalid_plugins.record_non_retainable(name);
+                            errors.push(format!(
+                                "requestPlugins[{index}] ({name}): invalid owning LinkSys reference"
+                            ));
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
                 if invalid_bounded_structured_entries[index] {
                     continue;
                 }
@@ -1415,6 +1448,12 @@ impl PluginRuntime {
                                     .and_then(|alias| outcome_aliases.get(alias).copied()),
                             )))
                         }
+                        _ if link_sys_config.is_some() => Self::create_link_sys_request_filter(
+                            link_sys_config.expect("owning config checked above"),
+                            namespace,
+                            body_req.clone(),
+                            &entry_scope,
+                        ),
                         _ => Self::create_request_filter_from_edgion(
                             &entry.plugin,
                             namespace,
@@ -1490,21 +1529,45 @@ impl PluginRuntime {
         entries: &[UpstreamResponseFilterEntry],
         namespace: &str,
     ) -> Vec<String> {
-        self.add_from_upstream_response_filters_with_cache(entries, namespace, &mut EntryCache::default())
+        self.add_response_filter_entries(entries, namespace, &mut EntryCache::default(), None)
     }
 
-    pub(crate) fn add_from_upstream_response_filters_with_cache(
+    fn add_response_filter_entries(
         &mut self,
         entries: &[UpstreamResponseFilterEntry],
         namespace: &str,
         cache: &mut EntryCache,
+        bindings: Option<&PluginBindings<'_>>,
     ) -> Vec<String> {
         let mut errors = Vec::new();
+        let bound_entries: Vec<_> = bindings
+            .into_iter()
+            .flat_map(|binding| binding.response_filter_entries())
+            .collect();
 
         // Per-stage-array alias accumulator; see `duplicate_alias_error`.
         let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                let link_sys_config = if matches!(&entry.plugin, EdgionPlugin::Dsl(config) if !config.linksys_refs.is_empty())
+                {
+                    match bound_entries
+                        .get(index)
+                        .and_then(|entry| entry.link_sys_config().ok())
+                        .flatten()
+                    {
+                        Some(HttpLinkSysConfig::Dsl(config)) => Some(config),
+                        _ => {
+                            self.invalid_plugins.record_non_retainable("Dsl");
+                            errors.push(format!(
+                                "upstreamResponseFilterPlugins[{index}] (Dsl): invalid owning LinkSys reference"
+                            ));
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
                 let slot = EntrySlot {
                     stage: EntryStage::ResponseFilter,
                     index,
@@ -1592,7 +1655,11 @@ impl PluginRuntime {
                         None
                     };
 
-                    match Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
+                    let created = match link_sys_config {
+                        Some(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
+                        None => Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace),
+                    };
+                    match created {
                         CreateResult::Ok(Some(filter)) => {
                             // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
                             let conditional_filter = ConditionalUpstreamResponseFilter::with_alias_and_dye(
@@ -2053,12 +2120,34 @@ impl PluginRuntime {
     /// * `entry_scope` - `<namespace>/<name>/<alias or #index>` identity of this
     ///   entry, used by plugins that must namespace state kept outside the
     ///   process (RateLimitRedis Redis keys)
+    fn create_link_sys_request_filter(
+        config: HttpLinkSysConfig<'_>,
+        namespace: &str,
+        body: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
+        entry_scope: &str,
+    ) -> CreateResult<Box<dyn RequestFilter>> {
+        match config {
+            HttpLinkSysConfig::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
+            HttpLinkSysConfig::RateLimitRedis(config) => {
+                CreateResult::Ok(Some(RateLimitRedis::create(config, entry_scope)))
+            }
+            HttpLinkSysConfig::GraphqlRateLimit(config) => {
+                CreateResult::Ok(GraphqlRateLimit::create(config, entry_scope, body))
+            }
+            HttpLinkSysConfig::WebhookKeyGet(config) => CreateResult::Ok(Some(WebhookKeyGet::create(config))),
+            HttpLinkSysConfig::AiProxy(config) => CreateResult::Ok(AiProxy::create(config, namespace, entry_scope)),
+        }
+    }
+
     fn create_request_filter_from_edgion(
         plugin: &EdgionPlugin,
         namespace: &str,
         body_requirement: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
         entry_scope: &str,
     ) -> CreateResult<Box<dyn RequestFilter>> {
+        if HttpLinkSysConfig::is_reference_bearing(plugin) {
+            return CreateResult::WrongStage;
+        }
         match plugin {
             EdgionPlugin::Unsupported => CreateResult::WrongStage,
             EdgionPlugin::RequestHeaderModifier(config) => CreateResult::Ok(
@@ -2103,9 +2192,7 @@ impl PluginRuntime {
             EdgionPlugin::GraphqlSafelist(config) => {
                 CreateResult::Ok(GraphqlSafelist::create(config, body_requirement))
             }
-            EdgionPlugin::GraphqlRateLimit(config) => {
-                CreateResult::Ok(GraphqlRateLimit::create(config, entry_scope, body_requirement))
-            }
+            EdgionPlugin::GraphqlRateLimit(_) => CreateResult::WrongStage,
             EdgionPlugin::GrpcJsonTranscoder(config) => CreateResult::Ok(GrpcJsonTranscoder::create_inline(
                 config,
                 body_requirement.unwrap_or_else(BodyRequirement::fail_close),
@@ -2129,7 +2216,7 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(RequestRestriction::create_with_body(config, body_requirement)))
             }
             EdgionPlugin::RateLimitLocal(config) => CreateResult::Ok(Some(RateLimitLocal::create(config))),
-            EdgionPlugin::RateLimitRedis(config) => CreateResult::Ok(Some(RateLimitRedis::create(config, entry_scope))),
+            EdgionPlugin::RateLimitRedis(_) => CreateResult::WrongStage,
             EdgionPlugin::CtxSet(config) => CreateResult::Ok(Some(CtxSet::create(config))),
             EdgionPlugin::WebhookKeyGet(config) => CreateResult::Ok(Some(WebhookKeyGet::create(config))),
             EdgionPlugin::DirectEndpoint(config) => CreateResult::Ok(Some(Box::new(DirectEndpoint::new(config)))),
@@ -2168,6 +2255,9 @@ impl PluginRuntime {
         plugin: &EdgionPlugin,
         _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponseFilter>> {
+        if HttpLinkSysConfig::is_reference_bearing(plugin) {
+            return CreateResult::WrongStage;
+        }
         match plugin {
             EdgionPlugin::Unsupported => CreateResult::WrongStage,
             EdgionPlugin::ResponseHeaderModifier(config) => CreateResult::Ok(

@@ -685,7 +685,7 @@ fn graphql_body_validation_is_identical_on_controller_and_gateway() {
         .unwrap();
         let expected = resource.validate_plugins();
         let mut runtime = PluginRuntime::new();
-        let actual = runtime.add_from_request_filters(&[entry], "default", "test-plugins");
+        let actual = runtime.add_from_request_filters_with_cache(&resource, &mut EntryCache::default());
         assert!(!expected.is_empty());
         assert_eq!(actual, expected);
         assert_sealed_invalid(&mut runtime);
@@ -2063,7 +2063,7 @@ impl PluginRuntime {
         namespace: &str,
         resource_key: &str,
     ) -> Vec<String> {
-        self.add_request_entries(entries, namespace, resource_key, &mut EntryCache::default(), None)
+        self.add_request_entries(entries, namespace, resource_key, &mut EntryCache::default(), None, None)
     }
 }
 
@@ -2210,4 +2210,73 @@ fn graphql_strict_backend_admission_checks_selected_direct_and_pinned_effective_
     selected.pinned_backend_ext_ref("apps/backend", || Some(Arc::clone(&bypassed.plugin_runtime)));
     selected.pinned_backend_ext_ref("apps/unselected", || Some(Arc::clone(&active.plugin_runtime)));
     assert!(backend.backend_compatible(&mut selected));
+}
+
+impl PluginRuntime {
+    pub(crate) fn add_from_request_filters_with_cache(
+        &mut self,
+        owner: &edgion_resources::EdgionPlugins,
+        cache: &mut EntryCache,
+    ) -> Vec<String> {
+        let prepared = PreparedPluginReferences::from_plugins(owner);
+        let bindings = prepared.bind(owner).ok();
+        self.add_request_entries(
+            owner.spec.request_plugins.as_deref().unwrap_or_default(),
+            owner.metadata.namespace.as_deref().unwrap_or("default"),
+            &owner.key_name(),
+            cache,
+            Some(owner),
+            bindings.as_ref(),
+        )
+    }
+}
+
+#[test]
+fn actual_dsl_link_sys_source_gate_precedes_shared_entry_cache_in_both_stages() {
+    for stage in ["requestPlugins", "upstreamResponseFilterPlugins"] {
+        let mut owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"cache-owner","namespace":"apps"},"spec":{stage:[{"type":"Dsl","config":{
+                "name":"program","source":"return next()","linkSysRefs":[{"namespace":"apps","name":"cache"}]
+            }}]}
+        }))
+        .unwrap();
+        let mut detached = PluginRuntime::new();
+        let errors = if stage == "requestPlugins" {
+            detached.add_from_request_filters(
+                owner.spec.request_plugins.as_deref().unwrap(),
+                "apps",
+                "apps/cache-owner",
+            )
+        } else {
+            detached.add_from_upstream_response_filters(
+                owner.spec.upstream_response_filter_plugins.as_deref().unwrap(),
+                "apps",
+            )
+        };
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("invalid owning LinkSys reference")));
+        assert_sealed_invalid(&mut detached);
+        let mut cache = EntryCache::default();
+        let mut first = PluginRuntime::new();
+        assert!(first.add_resource_filters_with_cache(&owner, &mut cache).is_empty());
+        assert_eq!(first.request_plugins_count(), usize::from(stage == "requestPlugins"));
+        assert_eq!(
+            first.upstream_response_plugins_count(),
+            usize::from(stage == "upstreamResponseFilterPlugins")
+        );
+        owner.metadata.name = None;
+        let mut next = PluginRuntime::new();
+        let errors = next.add_resource_filters_with_cache(&owner, &mut cache);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("invalid owning LinkSys reference")));
+        assert_eq!(
+            next.invalid_update_policy(),
+            Some(InvalidUpdatePolicy::ReplaceFailClosed)
+        );
+        assert_eq!(next.request_plugins_count(), 0);
+        assert_eq!(next.upstream_response_plugins_count(), 0);
+        assert_sealed_invalid(&mut next);
+    }
 }

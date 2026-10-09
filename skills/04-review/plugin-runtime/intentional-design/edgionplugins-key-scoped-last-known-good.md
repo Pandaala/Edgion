@@ -159,3 +159,12 @@ keeps its existing policy/material exclusions. No equal-UID retention gate is
 introduced. Exact raw inventory, deletion, credential ownership and entry/rate
 scopes remain unchanged; retained execution never crosses raw owners. Existing
 in-flight captured scopes and independent-kind publication boundaries remain.
+
+## Fixed LinkSys source identity boundary
+
+An enabled HTTP fixed-LinkSys entry with intrinsically invalid or missing actual
+source identity cannot reuse an entry bundle or retain a previous DSL runtime.
+The check covers request DSL and response-filter DSL before cache lookup.
+Valid-owner program errors retain the established key-scoped policy; disabled
+and policy-masked entries remain inert. This is an owner-boundary guard, not an
+immediate revocation rule for captured in-flight views or provider failures.
