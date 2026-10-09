@@ -2,8 +2,8 @@
 
 ## Current resume snapshot (2026-10-09)
 
-- Latest accepted local batches: R6j process locator ddd8ad659, R6k Backend
-  credential Secret acquisition d50005e55, and R7a managed HTTP plugins 418e353dd.
+- Latest accepted local batches include R7a managed HTTP plugins 418e353dd,
+  R7b internal HTTPRoute auth 78d0f168c and shared template readiness e954a9881.
   All passed focused verification, workspace gates and independent final reviews.
   No agent push; the user separately pushed during R7a verification.
 - R6k committed all ten reviewed blobs exactly. Its final evidence is under
@@ -2550,3 +2550,50 @@ gates pass with unchanged source and zero warnings/errors; workspace check took
 verification/root-verification directories. Final commit scope is seven technical
 files plus this ledger. OAuth2 R7c, R8, F1/F2 and original issue closure remain
 pending; no agent push.
+
+R7a-template committed locally as e954a9881288896c88643b08007efe3c687d1de1 after
+both independent Astra SCOPED COMMIT PASS verdicts. All eight committed blobs
+match the reviewed manifest. The known adjacent three-plugin missing-map gap is
+closed through the shared actual-owner cold predicate. No agent push. R7c OAuth2
+actual resolved LinkSys capture enters plan-only at baseline 9625; existing async
+Grant/source/Secret/Lease/CAS fencing must remain intact. R8/F1/F2 remain open.
+
+R7c eleven-path plan at e954a9881 received two independent Astra PLAN PASS
+verdicts. Controller captures a real scrubbed LinkSys before moving this reconcile's
+resolved TLS into a private Arc owner; returned wire stays scrubbed. Existing
+PreparedLinkSysTls captures owner/defaults before DNS await and the OAuth2 factory
+consumes the same proof/config through Common. Preserve all source/Grant/Secret,
+issuer/fallback/publication, Lease/CAS and error-classification fences. Only two
+old fixture construction helpers may adapt. No-Serialize/Debug negative compile
+proofs require accessible positive controls. Baseline is 9625 identities; production
+checkpoint review precedes an authorized compiler preflight and full verification.
+
+R7c four-production checkpoint received two independent PASS verdicts; Controller
+lib compiler preflight then passed without warnings or source changes. Complete
+r3 static review passes after adding the planned actual System-root OAuth client
+positive control and one mechanical test import for CredentialSourceProvider.
+The two old construction helpers and that explicit import are the only approved
+old-test adaptations; all assertions/IDs remain. Five appended tests cover actual
+private owner/material and wire separation, Grant/missing/repair/disabled states,
+exact TLS pairing and default/owner capture across await. Serial focused suites
+and accessible-positive Debug/Serialize negative compilation are authorized.
+
+R7c focused execution passes 102 distinct Controller tests (LinkSys 34, credential
+manager 54, CredentialInjector 14); 9625 prior IDs are preserved with five new IDs.
+A new-test error-conversion compile failure was corrected mechanically and kept
+in the evidence. Root's fourteen gates pass with unchanged source, zero warnings
+and errors (check 19.521 seconds, Clippy 24.457 seconds). Independent review blocked
+only the Serialize negative proof: selected serde metadata used a different
+artifact identity, so String alone was an insufficient positive control. Replace
+that proof with a same-dependency known-Serialize positive control through the
+actual wrapper Deref target, then require the wrapper itself to fail E0277 without
+artifact mismatch or visibility errors. Preserve the original invalid proof logs;
+no production change or rerun of the 102 passing tests is needed.
+
+R7c corrected trait proof r2 received two independent Astra EXECUTION PASS
+verdicts. The actual Snapshot Deref target is Serialize with the exact same
+Controller/serde artifact pair; Snapshot Debug and Serialize each fail E0277
+without visibility or dependency-version errors. Invalid earlier attempts remain
+recorded and excluded. Eleven technical source hashes remain at r4. All 102 tests,
+identity preservation and fourteen root gates stand. Final commit scope is those
+eleven files plus this ledger; R8/F1/F2 and original issue closure remain open.

@@ -1,13 +1,15 @@
 //! In-memory desired state for Controller-managed credential sources.
 //!
 //! Handlers rebuild this registry synchronously from cached resources. It is
-//! intentionally free of credential bytes: the asynchronous credential
-//! manager re-reads authorized Secrets from the current stores before use.
+//! free of bootstrap credential bytes: the asynchronous credential manager
+//! re-reads those Secrets before use. Private actual-owner snapshots retain
+//! resolved TLS material separately from the scrubbed conf_sync resource.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
+use std::sync::Arc;
 
-use edgion_resources::resources::link_sys::{CredentialSourceConfig, CredentialSourceState};
+use edgion_resources::resources::link_sys::{CredentialSourceConfig, CredentialSourceState, LinkSys, SystemConfig};
 use edgion_resources::resources::refs::FrozenFieldReference;
 use parking_lot::RwLock;
 use serde::Serialize;
@@ -34,7 +36,7 @@ pub struct CredentialSecretInput {
     pub authorization_revision: String,
 }
 
-/// Non-secret desired snapshot produced by a `LinkSys` reconcile.
+/// Desired snapshot with private resolved TLS ownership from a `LinkSys` reconcile.
 #[derive(Clone)]
 pub struct DesiredCredentialSource {
     pub resource: ResourceRef,
@@ -49,11 +51,15 @@ pub struct DesiredCredentialSource {
 /// neither serialization nor ordinary Debug so resolved TLS material cannot
 /// accidentally enter conf_sync or diagnostics.
 #[derive(Clone)]
-pub struct ControllerCredentialSourceConfig(CredentialSourceConfig);
+pub struct ControllerCredentialSourceConfig(Arc<LinkSys>);
 
 impl ControllerCredentialSourceConfig {
-    pub fn new(config: CredentialSourceConfig) -> Self {
-        Self(config)
+    pub fn new(owner: LinkSys) -> Option<Self> {
+        matches!(owner.spec.config, SystemConfig::CredentialSource(_)).then(|| Self(Arc::new(owner)))
+    }
+
+    pub(crate) fn owner(&self) -> Arc<LinkSys> {
+        Arc::clone(&self.0)
     }
 }
 
@@ -61,7 +67,10 @@ impl Deref for ControllerCredentialSourceConfig {
     type Target = CredentialSourceConfig;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        let SystemConfig::CredentialSource(config) = &self.0.spec.config else {
+            unreachable!("credential source owner variant is validated at construction");
+        };
+        config
     }
 }
 

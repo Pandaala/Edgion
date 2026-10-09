@@ -18,8 +18,9 @@ Re-enabling the block restores the existing validation and reference checks.
 transport fields. Clear them before the disabled early return. LinkSys parsing
 already clears the owner's previous Secret dependencies before rebuilding them,
 so a disable update removes obsolete TLS dependency edges. Independent auth
-references remain required. Credential-source providers also omit disabled TLS
-from their manager config and credential-input revision list.
+references remain required. Credential-source providers retain disabled TLS in the private actual-owner
+snapshot but omit its material and credential-input revisions. The block remains
+inert through the canonical owning selection.
 
 ## Rationale and evidence
 
@@ -82,6 +83,25 @@ consumer: fixing only the front-end gates left it consuming inactive policy.
 Historical filtering at LinkSys preparation fixed that defect. The current owning
 selection preserves that gate and proves actual source/material before replay;
 other shared plugin-client migrations remain in progress in the reference task.
+
+### Controller OAuth2 owning transport
+
+CredentialSource resolution clones the scrubbed actual LinkSys once, then moves
+this generation's authorized TLS material into that private owner. Its Arc wrapper
+has neither Serialize nor Debug; the returned conf_sync resource has no resolved
+CredentialSource TLS payload. Registry clones share the Arc instead of cloning
+resolved Secrets. Bootstrap bytes continue to be reread under existing fences.
+
+Before awaiting DNS preparation, the manager captures PreparedLinkSysTls from
+that actual owner and validates active inheritance. OAuth2Provider derives its
+endpoint, scopes and egress policy from the same owner and builds through
+build_outbound_client_with_tls_selection using the captured defaults. It keeps
+only the Client and existing request metadata after construction. Absent/disabled
+local TLS retains secure HTTPS with native trust and consumes no global policy.
+Raw-owner UID/generation, frozen references, Grant revision, Secret UID/RV,
+issuer/fallback checks, LeaderFence and publication/CAS remain independent and
+unchanged: a stable captured owner is not authority to use stale credentials.
+Unit construction tests do not establish a live issuer TLS handshake.
 
 ## Alternatives and limits
 

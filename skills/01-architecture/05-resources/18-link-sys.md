@@ -165,6 +165,17 @@ publication. The separately started CredentialManager worker owns issuer calls,
 rotation timers, bounded concurrency, memory publication, and Kubernetes Secret
 IO.
 
+The CredentialSource manager snapshot retains an Arc of the actual LinkSys.
+The handler clones its scrubbed owner before moving authorized TLS material into
+that private snapshot; the returned conf_sync resource stays scrubbed. Snapshot
+clones share the Arc and expose neither Serialize nor Debug. Disabled TLS policy
+remains present but inert, with no material or TLS dependency/input revisions.
+The async manager captures the owner and global defaults through PreparedLinkSysTls
+before DNS preparation, and OAuth2 builds with the canonical proved HTTP factory.
+Endpoint, scopes and egress derive from that same owner. Existing live source,
+Secret, Grant, issuer and leadership checks still control each acquisition and
+publication; snapshot capture grants no freshness or authorization bypass.
+
 Publication and teardown invariants:
 
 - `true` to `false` publishes or reacquires a live memory entry before deleting

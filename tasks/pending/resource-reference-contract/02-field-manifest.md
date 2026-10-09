@@ -513,8 +513,8 @@ new outbound reference. Service TLS follows enabled rather than block presence;
 explicit HTTPS URL transport remains secure when custom local TLS is disabled.
 No Service Grant, dependency or forwarding-policy relationship is introduced.
 R7a excluded internal HTTPRoute Edgion-auth (covered by the R7b boundary below),
-CredentialSource transport capture and generated-output operation authority. The
-latter two remain open. R7a focused handler/store tests did not establish live
+CredentialSource transport capture (covered by R7c below) and generated-output
+operation authority. Generated-output authority remains open. R7a focused handler/store tests did not establish live
 queue delivery or conformance.
 
 ### R7a managed-template readiness follow-up
@@ -548,3 +548,16 @@ admission, add Service grants/dependencies, migrate OAuth2, or complete R8 and
 live/conformance verification. Tests include root event-queue recovery and
 multi-level/backend locality; final pass evidence remains in the active batch
 verification record rather than inferred from this inventory.
+
+### R7c Controller OAuth2 owning transport
+
+CredentialSource now retains one private actual LinkSys owner, with authorized
+TLS material moved after the scrubbed owner's cold clone. Public conf_sync stays
+free of that payload. Registry clones share the owner Arc. The async manager
+captures PreparedLinkSysTls before DNS await; OAuth2 derives its configuration
+from the same owner and consumes the existing canonical proved HTTP factory.
+Active local/global pairing precedes client construction. Disabled local policy
+remains inert while explicit HTTPS stays secure. Existing raw-owner/frozen-input,
+Grant/Secret revision, issuer/fallback, leadership and publication fences are
+unchanged. This completes OAuth2 transport capture, not generated-secret operation
+authority, a live issuer handshake, or Gateway API conformance validation.

@@ -1894,3 +1894,125 @@ async fn unsupported_extension_clears_credential_source_state_and_recovers() {
     assert_eq!(find_cond(&recovered, "Accepted").unwrap().status, "True");
     assert_eq!(find_cond(&recovered, "Accepted").unwrap().observed_generation, Some(3));
 }
+
+#[tokio::test]
+async fn credential_source_retains_one_actual_private_tls_owner_and_scrubs_wire_on_repair_and_disable() {
+    use serde_json::json;
+    let (bootstrap_key, bootstrap) = make_secret(
+        "ops",
+        "bootstrap",
+        &[("clientId", b"client"), ("clientSecret", b"secret")],
+    );
+    let (ctx, runtime) = make_ctx(HashMap::from([(bootstrap_key.clone(), bootstrap.clone())]));
+    let handler = LinkSysHandler::new();
+    let mut resource = make_credential_source("ops", "provider", "bootstrap");
+    let SystemConfig::CredentialSource(source) = &mut resource.spec.config else {
+        unreachable!()
+    };
+    let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &mut source.provider;
+    provider.tls = Some(serde_json::from_value(json!({"enabled":true,"verify":false,
+        "validation":{"caCertificateRefs":[{"kind":"Secret","name":"first","namespace":"shared"},{"kind":"Secret","name":"second","namespace":"shared"}]},
+        "clientCertificateRef":{"name":"client","namespace":"shared"},
+        "resolvedCaCertificates":[{"metadata":{"name":"forged"}}],"resolvedClientCertificate":{"metadata":{"name":"forged"}}
+    })).unwrap());
+    let ProcessResult::Continue(parsed) = handler.parse(resource, &ctx).await else {
+        panic!("must continue")
+    };
+    assert!(runtime.credential_source_registry.source("ops/provider").is_none());
+    assert_eq!(
+        find_cond(&parsed, condition_types::RESOLVED_REFS).unwrap().reason,
+        condition_reasons::REF_NOT_PERMITTED
+    );
+    for name in ["first", "second", "client"] {
+        assert!(!ctx.secret_ref_manager().get_refs(&format!("shared/{name}")).is_empty());
+    }
+    let grant = serde_json::from_value(json!({"metadata":{"namespace":"shared","name":"credential"},"spec":{"from":[{"group":"edgion.io","kind":"LinkSys","namespace":"ops"}],"to":[{"group":"","kind":"Secret"}]}})).unwrap();
+    runtime
+        .ref_grant_store
+        .upsert("shared/credential".into(), Arc::new(grant));
+    let ProcessResult::Continue(parsed) = handler.parse(parsed, &ctx).await else {
+        panic!("must continue")
+    };
+    assert!(runtime.credential_source_registry.source("ops/provider").is_none());
+    assert_eq!(
+        find_cond(&parsed, condition_types::RESOLVED_REFS).unwrap().status,
+        "False"
+    );
+    let mut secrets = HashMap::from([(bootstrap_key, bootstrap)]);
+    for name in ["first", "second", "client"] {
+        let (key, mut secret) = make_secret("shared", name, &[("tls.crt", b"certificate"), ("tls.key", b"key")]);
+        secret.metadata.uid = Some(format!("{name}-uid"));
+        secret.metadata.resource_version = Some("19".into());
+        secrets.insert(key, secret);
+    }
+    runtime.secret_store.replace_all(secrets);
+    let ProcessResult::Continue(mut parsed) = handler.parse(parsed, &ctx).await else {
+        panic!("must continue")
+    };
+    let desired = runtime.credential_source_registry.source("ops/provider").unwrap();
+    assert_eq!(desired.secret_inputs.len(), 4);
+    let actual = desired.config.owner();
+    assert_eq!(actual.metadata.uid.as_deref(), Some("source-uid"));
+    assert_eq!(actual.metadata.namespace.as_deref(), Some("ops"));
+    assert_eq!(actual.metadata.generation, Some(4));
+    assert!(Arc::ptr_eq(&actual, &desired.clone().config.owner()));
+    let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &desired.config.provider;
+    let tls = provider.tls.as_ref().unwrap();
+    assert_eq!(
+        tls.resolved_ca_certificates
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|s| s.metadata.name.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
+    assert_eq!(
+        tls.resolved_client_certificate
+            .as_ref()
+            .unwrap()
+            .metadata
+            .uid
+            .as_deref(),
+        Some("client-uid")
+    );
+    for input in desired
+        .secret_inputs
+        .iter()
+        .filter(|input| input.role != "active-bootstrap")
+    {
+        assert_eq!(input.namespace, "shared");
+        assert_eq!(input.resource_version.as_deref(), Some("19"));
+        assert_ne!(input.authorization_revision, "same-namespace");
+        assert!(input.reference.matches_link_sys(&actual));
+    }
+    let wire = serde_json::to_value(&parsed).unwrap();
+    let wire_tls = wire.pointer("/spec/config/provider/tls").unwrap();
+    assert!(wire_tls.get("resolvedCaCertificates").is_none());
+    assert!(wire_tls.get("resolvedClientCertificate").is_none());
+    assert!(!wire.to_string().contains("certificate"));
+    let SystemConfig::CredentialSource(source) = &mut parsed.spec.config else {
+        unreachable!()
+    };
+    let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &mut source.provider;
+    provider.tls.as_mut().unwrap().enabled = false;
+    let ProcessResult::Continue(_) = handler.parse(parsed, &ctx).await else {
+        panic!("must continue")
+    };
+    let disabled = runtime.credential_source_registry.source("ops/provider").unwrap();
+    let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &disabled.config.provider;
+    let tls = provider.tls.as_ref().unwrap();
+    assert!(!tls.enabled);
+    assert!(tls.resolved_ca_certificates.is_none());
+    assert!(tls.resolved_client_certificate.is_none());
+    assert_eq!(disabled.secret_inputs.len(), 1);
+    assert_eq!(disabled.secret_inputs[0].role, "active-bootstrap");
+    assert!(!Arc::ptr_eq(&actual, &disabled.config.owner()));
+    for name in ["first", "second", "client"] {
+        assert!(ctx.secret_ref_manager().get_refs(&format!("shared/{name}")).is_empty());
+    }
+    assert!(runtime.cross_ns_ref_mgr.get_refs("shared").is_empty());
+    assert!(!ctx.secret_ref_manager().get_refs("ops/bootstrap").is_empty());
+    let CredentialSourceProvider::OAuth2ClientCredentials(retained) = &desired.config.provider;
+    assert!(retained.tls.as_ref().unwrap().resolved_client_certificate.is_some());
+}

@@ -12,14 +12,16 @@ use std::time::{Duration, SystemTime};
 use base64::Engine;
 use edgion_common::dns::ResolverSpec;
 use edgion_common::egress::{EgressPolicy, EgressResolver};
-use edgion_common::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig};
+use edgion_common::link_sys_core::http_client::{build_outbound_client_with_tls_selection, OutboundClientConfig};
+use edgion_common::link_sys_core::outbound_tls::PreparedLinkSysTls;
 use edgion_resources::credentials::{BearerResolver, SecretMaterialResolver};
 use edgion_resources::resources::edgion_plugins::{
     CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN, CREDENTIAL_INJECTOR_VALUE_PREFIX_MAX_LEN,
 };
 use edgion_resources::resources::link_sys::credential_source::{
-    OAuth2ClientAuthenticationMethod, OAuth2ClientCredentialsConfig, OAUTH2_TOKEN_ENDPOINT_MAX_LEN,
+    OAuth2ClientAuthenticationMethod, OAUTH2_TOKEN_ENDPOINT_MAX_LEN,
 };
+use edgion_resources::resources::link_sys::{CredentialSourceProvider, SystemConfig};
 use futures::StreamExt;
 use k8s_openapi::ByteString;
 use reqwest::header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER};
@@ -163,28 +165,43 @@ pub struct OAuth2Provider {
 
 impl OAuth2Provider {
     pub fn new(
-        config: &OAuth2ClientCredentialsConfig,
+        prepared: &PreparedLinkSysTls,
         request_timeout: Duration,
         retry_after_cap: Duration,
         resolver: ResolverSpec,
-        block_private: bool,
     ) -> Result<Self, OAuth2ProviderError> {
+        let SystemConfig::CredentialSource(source) = &prepared.owner().spec.config else {
+            return Err(OAuth2ProviderError::permanent());
+        };
+        let CredentialSourceProvider::OAuth2ClientCredentials(config) = &source.provider;
         match config.client_authentication.method {
             OAuth2ClientAuthenticationMethod::ClientSecretBasic => {}
         }
         let token_endpoint = validate_endpoint(&config.token_endpoint)?;
         let authorization_form = build_request_form(&config.scopes)?;
-        let egress_resolver = EgressResolver::new(resolver, EgressPolicy { block_private }, EGRESS_CACHE_TTL);
-        let client = build_outbound_client(OutboundClientConfig {
-            connect_timeout: Some(request_timeout),
-            total_timeout: Some(request_timeout),
-            disable_proxy: true,
-            tls: config.tls.clone().filter(|tls| tls.enabled),
-            tls_context: Some("OAuth2CredentialProvider"),
-            dns_resolver: Some(Arc::new(egress_resolver)),
-            ..Default::default()
-        })
-        .map_err(|_| OAuth2ProviderError::permanent())?;
+        let egress_resolver = EgressResolver::new(
+            resolver,
+            EgressPolicy {
+                block_private: source.egress.block_private,
+            },
+            EGRESS_CACHE_TTL,
+        );
+        let client = prepared
+            .with_tls_selection(|proof, defaults| {
+                build_outbound_client_with_tls_selection(
+                    OutboundClientConfig {
+                        connect_timeout: Some(request_timeout),
+                        total_timeout: Some(request_timeout),
+                        disable_proxy: true,
+                        tls_context: Some("OAuth2CredentialProvider"),
+                        dns_resolver: Some(Arc::new(egress_resolver)),
+                        ..Default::default()
+                    },
+                    proof,
+                    defaults,
+                )
+            })
+            .map_err(|_| OAuth2ProviderError::permanent())?;
 
         Ok(Self {
             client,

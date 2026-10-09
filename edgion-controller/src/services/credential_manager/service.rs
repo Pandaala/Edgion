@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Utc};
+use edgion_common::link_sys_core::outbound_tls::PreparedLinkSysTls;
 use edgion_common::time::format_rfc3339;
 use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -32,7 +33,6 @@ use super::secret_io::{
 };
 use edgion_resources::credentials::{BearerResolver, SecretMaterialResolver};
 use edgion_resources::duration::parse_duration;
-use edgion_resources::resources::link_sys::credential_source::CredentialSourceProvider;
 use edgion_resources::resources::link_sys::CredentialSourceState;
 use zeroize::Zeroizing;
 
@@ -632,23 +632,21 @@ async fn acquire_and_publish(
     } else {
         let active = bootstrap_for_role(runtime, source, "active-bootstrap")?;
         let previous = bootstrap_for_role(runtime, source, "previous-bootstrap").ok();
-        let CredentialSourceProvider::OAuth2ClientCredentials(config) = &source.config.provider;
         let request_timeout =
             parse_duration(&source.config.rotation.request_timeout).map_err(|_| ReconcileFailure::rotation())?;
         let retry_cap =
             parse_duration(&source.config.rotation.retry_max_backoff).map_err(|_| ReconcileFailure::rotation())?;
+        let prepared =
+            PreparedLinkSysTls::from_link_sys(source.config.owner()).map_err(|_| ReconcileFailure::rotation())?;
+        prepared
+            .validate_active_inheritance()
+            .map_err(|_| ReconcileFailure::rotation())?;
         let resolver = match kube_client {
             Some(client) => crate::services::dns_resolver::service::controller_default_resolver(client).await,
             None => crate::services::dns_resolver::service::controller_default_resolver_without_kube(),
         };
-        let provider = OAuth2Provider::new(
-            config,
-            request_timeout,
-            retry_cap,
-            resolver,
-            source.config.egress.block_private,
-        )
-        .map_err(|_| ReconcileFailure::rotation())?;
+        let provider = OAuth2Provider::new(&prepared, request_timeout, retry_cap, resolver)
+            .map_err(|_| ReconcileFailure::rotation())?;
 
         // The exact Lease tuple is re-read immediately before issuer I/O.
         if !generation_and_fence_hold(generation, kube_leader, fence.as_ref()).await

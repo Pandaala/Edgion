@@ -220,11 +220,23 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
         let SpecResolution {
             errors,
             credential_inputs,
-            manager_config,
+            manager_tls,
         } = resolution;
-        if errors.is_empty() {
-            if let (Some(config), Some(uid)) = (manager_config, ls.metadata.uid.clone()) {
-                if credential_source_admitted {
+        if errors.is_empty() && credential_source_admitted {
+            if let Some(uid) = ls.metadata.uid.clone() {
+                if matches!(ls.spec.config, SystemConfig::CredentialSource(_)) {
+                    // Clone the scrubbed actual owner before moving in this generation's
+                    // authorized material. The returned wire resource stays scrubbed.
+                    let mut manager_owner = ls.clone();
+                    if let Some(resolved) = manager_tls {
+                        let SystemConfig::CredentialSource(config) = &mut manager_owner.spec.config else {
+                            unreachable!("credential source variant checked above");
+                        };
+                        let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &mut config.provider;
+                        resolved.apply(provider.tls.as_mut().expect("an enabled TLS loan has an owning block"));
+                    }
+                    let config = ControllerCredentialSourceConfig::new(manager_owner)
+                        .expect("credential source variant checked above");
                     ctx.runtime()
                         .credential_source_registry
                         .replace_source(DesiredCredentialSource {
@@ -232,7 +244,7 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
                             uid,
                             generation: ls.metadata.generation.unwrap_or_default(),
                             persist: config.publication.persist,
-                            config: ControllerCredentialSourceConfig::new(config),
+                            config,
                             secret_inputs: credential_inputs,
                         });
                 }
@@ -416,7 +428,7 @@ mod unknown_fields_tests;
 struct SpecResolution {
     errors: Vec<ResolvedRefsError>,
     credential_inputs: Vec<CredentialSecretInput>,
-    manager_config: Option<CredentialSourceConfig>,
+    manager_tls: Option<ResolvedTls>,
 }
 
 #[derive(Default)]
@@ -590,7 +602,6 @@ fn apply_materials(config: &mut SystemConfig, mut result: ProviderResolution) ->
 fn resolve_credential_source(
     ctx: &HandlerContext,
     owner: &ResourceRef,
-    config: &CredentialSourceConfig,
     references: &LinkSysReferences<'_>,
 ) -> ProviderResolution {
     let mut result = ProviderResolution::default();
@@ -615,19 +626,12 @@ fn resolve_credential_source(
         }
     }
     resolve_provider_tls(ctx, owner, references, &mut result);
-    let mut manager_config = config.clone();
-    let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &mut manager_config.provider;
-    provider.tls = match result.tls.take() {
-        Some(mut resolved) if resolved.error.is_none() => {
+    if let Some(mut resolved) = result.tls.take() {
+        if resolved.error.is_none() {
             result.spec.credential_inputs.append(&mut resolved.inputs);
-            // The owning block is already cleared; only this private clone gets material.
-            let mut tls = provider.tls.take().expect("an enabled TLS loan has an owning block");
-            resolved.apply(&mut tls);
-            Some(tls)
+            result.spec.manager_tls = Some(resolved);
         }
-        _ => None,
-    };
-    result.spec.manager_config = Some(manager_config);
+    }
     result
 }
 
@@ -666,7 +670,7 @@ async fn resolve_for_spec(
                 resolve_provider_tls(ctx, owner, &references, &mut result);
                 result
             }
-            SystemConfig::CredentialSource(config) => resolve_credential_source(ctx, owner, config, &references),
+            SystemConfig::CredentialSource(_) => resolve_credential_source(ctx, owner, &references),
             SystemConfig::Unsupported => ProviderResolution::default(),
         }
     };

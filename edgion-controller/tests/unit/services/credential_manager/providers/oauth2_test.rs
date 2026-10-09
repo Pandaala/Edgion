@@ -127,3 +127,136 @@ fn retry_after_is_limited_to_429_and_503_and_capped() {
         None
     );
 }
+
+fn oauth_actual_owner(tls: serde_json::Value) -> edgion_resources::resources::link_sys::LinkSys {
+    serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"issuer","namespace":"apps","uid":"issuer-uid","generation":7},
+        "spec":{"type":"credentialSource","config":{"provider":{
+            "type":"oauth2ClientCredentials","tokenEndpoint":"https://issuer.example/token",
+            "clientAuthentication":{"activeSecretRef":{"name":"bootstrap"}},"tls":tls
+        }}}
+    }))
+    .unwrap()
+}
+
+fn oauth_defaults(
+    config: serde_json::Value,
+) -> Arc<edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot> {
+    Arc::new(
+        edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot::from_configs([Arc::new(
+            serde_json::from_value::<edgion_resources::EdgionGatewayConfig>(config).unwrap(),
+        )]),
+    )
+}
+
+fn oauth_build(prepared: &PreparedLinkSysTls) -> Result<OAuth2Provider, OAuth2ProviderError> {
+    OAuth2Provider::new(
+        prepared,
+        Duration::from_secs(3),
+        Duration::from_secs(8),
+        ResolverSpec::System,
+    )
+}
+
+#[test]
+fn owning_oauth_rejects_invalid_source_and_whole_material_mismatch() {
+    use edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot;
+    use serde_json::json;
+    let empty = || Arc::new(GlobalOutboundTlsSnapshot::from_configs([]));
+    let system = PreparedLinkSysTls::with_snapshot(
+        Arc::new(oauth_actual_owner(json!({"enabled":true,"verify":true,
+            "validation":{"wellKnownCACertificates":"System"}
+        }))),
+        empty(),
+    )
+    .unwrap();
+    let system_client = oauth_build(&system).unwrap();
+    assert_eq!(system_client.token_endpoint.scheme(), "https");
+    let mut invalid_owner = oauth_actual_owner(serde_json::Value::Null);
+    invalid_owner.metadata.namespace = Some("Invalid".into());
+    assert!(PreparedLinkSysTls::with_snapshot(Arc::new(invalid_owner), empty()).is_err());
+    let other = serde_json::from_value(json!({"metadata":{"name":"other","namespace":"apps"},"spec":{"type":"elasticsearch","config":{"endpoints":["https://example.com"]}}})).unwrap();
+    let other = PreparedLinkSysTls::with_snapshot(Arc::new(other), empty()).unwrap();
+    assert_eq!(oauth_build(&other).err().unwrap().kind, OAuth2FailureKind::Permanent);
+    let paired = json!({"enabled":true,"verify":false,
+        "validation":{"caCertificateRefs":[{"kind":"Secret","name":"first"},{"kind":"Secret","name":"second"}]},
+        "resolvedCaCertificates":[{"metadata":{"name":"first","namespace":"apps"}},{"metadata":{"name":"second","namespace":"apps"}}],
+        "clientCertificateRef":{"name":"client"},"resolvedClientCertificate":{"metadata":{"name":"client","namespace":"apps"}}
+    });
+    assert!(PreparedLinkSysTls::with_snapshot(Arc::new(oauth_actual_owner(paired.clone())), empty()).is_ok());
+    for mutation in ["missing", "wrong-name", "wrong-namespace", "ca-order"] {
+        let mut tls = paired.clone();
+        match mutation {
+            "missing" => tls["resolvedClientCertificate"] = serde_json::Value::Null,
+            "wrong-name" => tls["resolvedClientCertificate"]["metadata"]["name"] = "decoy".into(),
+            "wrong-namespace" => tls["resolvedClientCertificate"]["metadata"]["namespace"] = "decoy".into(),
+            _ => tls["resolvedCaCertificates"].as_array_mut().unwrap().swap(0, 1),
+        }
+        let error = PreparedLinkSysTls::with_snapshot(Arc::new(oauth_actual_owner(tls)), empty())
+            .err()
+            .unwrap();
+        if mutation != "missing" {
+            assert_eq!(error.to_string(), "outbound TLS reference/material identity mismatch");
+        }
+    }
+}
+
+#[tokio::test]
+async fn owning_oauth_captures_actual_owner_and_global_generation_across_await() {
+    use edgion_common::link_sys_core::outbound_tls::resolve_validated_outbound_tls;
+    use serde_json::json;
+    let owner = Arc::new(oauth_actual_owner(json!({"enabled":true})));
+    let defaults = oauth_defaults(json!({"metadata":{"name":"global"},"spec":{"outboundTls":{"verify":false}}}));
+    let prepared = PreparedLinkSysTls::with_snapshot(Arc::clone(&owner), Arc::clone(&defaults)).unwrap();
+    assert!(std::ptr::eq(prepared.owner(), owner.as_ref()));
+    let weak = Arc::downgrade(&owner);
+    drop(owner);
+    tokio::task::yield_now().await;
+    assert!(weak.upgrade().is_some());
+    assert_eq!(prepared.owner().metadata.uid.as_deref(), Some("issuer-uid"));
+    assert_eq!(prepared.owner().metadata.namespace.as_deref(), Some("apps"));
+    assert_eq!(prepared.owner().metadata.generation, Some(7));
+    prepared
+        .with_tls_selection(|proof, captured| {
+            assert!(std::ptr::eq(captured, defaults.as_ref()));
+            assert!(!resolve_validated_outbound_tls(proof, true, captured).unwrap().verify);
+            Ok(())
+        })
+        .unwrap();
+    let next = oauth_defaults(
+        json!({"metadata":{"name":"next"},"spec":{"outboundTls":{"clientCertificateRef":{"name":"missing","namespace":"apps"}}}}),
+    );
+    let new_generation =
+        PreparedLinkSysTls::with_snapshot(Arc::new(oauth_actual_owner(json!({"enabled":true}))), next).unwrap();
+    assert!(new_generation.validate_active_inheritance().is_err());
+    assert_eq!(
+        oauth_build(&new_generation).err().unwrap().kind,
+        OAuth2FailureKind::Permanent
+    );
+    let client = oauth_build(&prepared).unwrap();
+    assert_eq!(client.token_endpoint.scheme(), "https");
+    assert_eq!(client.retry_after_cap, Duration::from_secs(8));
+    drop(prepared);
+    assert!(
+        weak.upgrade().is_none(),
+        "built client does not retain the owner payload"
+    );
+}
+
+#[test]
+fn owning_oauth_inactive_tls_keeps_https_without_consuming_invalid_globals() {
+    use serde_json::json;
+    let invalid = oauth_defaults(
+        json!({"metadata":{"name":"global"},"spec":{"outboundTls":{"clientCertificateRef":{"name":"missing","namespace":"apps"}}}}),
+    );
+    for tls in [
+        serde_json::Value::Null,
+        json!({"enabled":false,"clientCertificateRef":{"name":"Missing Invalid"},"resolvedClientCertificate":{"metadata":{"name":"decoy","namespace":"wrong"}}}),
+    ] {
+        let prepared =
+            PreparedLinkSysTls::with_snapshot(Arc::new(oauth_actual_owner(tls)), Arc::clone(&invalid)).unwrap();
+        prepared.validate_active_inheritance().unwrap();
+        let client = oauth_build(&prepared).unwrap();
+        assert_eq!(client.token_endpoint.scheme(), "https");
+    }
+}

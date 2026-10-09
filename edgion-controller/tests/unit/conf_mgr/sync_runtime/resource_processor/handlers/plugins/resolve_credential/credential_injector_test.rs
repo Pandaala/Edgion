@@ -331,20 +331,29 @@ provider:
 }
 
 fn link_sys_desired_source(persist: bool) -> DesiredCredentialSource {
+    use edgion_resources::resources::link_sys::{LinkSys, LinkSysSpec, SystemConfig};
+    let mut config = credential_source_config();
+    config.publication.persist = persist;
+    let mut owner = LinkSys::new(
+        "source",
+        LinkSysSpec {
+            config: SystemConfig::CredentialSource(config),
+            current_status: None,
+            unknown_fields: Vec::new(),
+        },
+    );
+    owner.metadata.namespace = Some("default".to_string());
+    owner.metadata.uid = Some("source-uid".to_string());
+    owner.metadata.generation = Some(7);
     DesiredCredentialSource {
-            resource: ResourceRef::new(
-                ResourceKind::LinkSys,
-                Some("default".to_string()),
-                "source".to_string(),
-            ),
-            uid: "source-uid".to_string(),
-            generation: 7,
-            persist,
-            config: crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::ControllerCredentialSourceConfig::new(
-                credential_source_config(),
-            ),
-            secret_inputs: Vec::new(),
-        }
+        resource: ResourceRef::new(ResourceKind::LinkSys, Some("default".to_string()), "source".to_string()),
+        uid: "source-uid".to_string(),
+        generation: 7,
+        persist,
+        config: crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::ControllerCredentialSourceConfig::new(owner)
+            .expect("credential source owner"),
+        secret_inputs: Vec::new(),
+    }
 }
 
 fn link_sys_plugin() -> EdgionPlugins {

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant, SystemTime};
 
 use edgion_resources::credentials::resolvers::bearer::BEARER_TOKEN_KEY;
-use edgion_resources::resources::link_sys::CredentialSourceConfig;
+use edgion_resources::resources::link_sys::{CredentialSourceConfig, CredentialSourceProvider};
 use edgion_resources::ResourceKind;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
@@ -68,15 +68,12 @@ fn persist_source(persist: bool) -> DesiredCredentialSource {
     let bound = prepared.bind(&owner).unwrap();
     let references = bound.references().unwrap();
     let reference = references.active_bootstrap_secret().unwrap().freeze().unwrap();
-    let edgion_resources::resources::link_sys::SystemConfig::CredentialSource(config) = &owner.spec.config else {
-        unreachable!()
-    };
     DesiredCredentialSource {
         resource: ResourceRef::new(ResourceKind::LinkSys, Some("ops".to_string()), "source".to_string()),
         uid: "source-uid".to_string(),
         generation: 2,
         persist,
-        config: ControllerCredentialSourceConfig::new(config.clone()),
+        config: ControllerCredentialSourceConfig::new(owner).expect("credential source owner"),
         secret_inputs: vec![
             crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::CredentialSecretInput {
                 reference,
@@ -924,4 +921,17 @@ fn reconciled_continue_on_identity_mismatch_clears_job_identity() {
         runtime.credential_memory.active(&source.identity_key()).is_none(),
         "identity mismatch continue path must clear the in-flight identity slot"
     );
+}
+
+#[test]
+fn private_credential_snapshot_shares_actual_owner_and_rejects_other_variants() {
+    let source = persist_source(false);
+    let owner = source.config.owner();
+    assert!(Arc::ptr_eq(&owner, &source.clone().config.owner()));
+    assert_eq!(owner.metadata.uid.as_deref(), Some(source.uid.as_str()));
+    assert_eq!(owner.metadata.generation, Some(source.generation));
+    assert_eq!(owner.metadata.namespace.as_deref(), Some("ops"));
+    let mut other = source_owner(false);
+    other.spec.config = edgion_resources::resources::link_sys::SystemConfig::Unsupported;
+    assert!(ControllerCredentialSourceConfig::new(other).is_none());
 }
