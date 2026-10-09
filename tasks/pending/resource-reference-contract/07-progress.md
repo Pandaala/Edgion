@@ -2236,3 +2236,48 @@ R7/R8 and whole-task F1/F2 remain open.
 
 Both independent reviewers, including Astra, confirmed R6j SCOPED COMMIT PASS.
 The eight technical paths plus this record form the exact local commit scope.
+
+R6j committed locally as ddd8ad65944baa5b42333c47e0364e6fb178a21b; all nine
+committed blobs match the reviewed snapshot. Nothing was pushed. The next
+read-only investigation reconciles remaining R6 coverage and the Backend
+credential Secret source chain through processing, dependencies, grants and
+lookup before approving any implementation. R7/R8/F1/F2 remain open.
+
+R6k exact nine-path plan received independent Astra SCOPED PLAN PASS at ddd8ad6.
+Execution is authorized for actual Backend ordinal Secret fields through the
+existing bound acquisition pipeline. InvalidReference is a distinct internal
+class, not Secret DecodeError; preserve structural status precedence, partial-good
+pools and valid Missing/Denied recovery edges. Source/target-invalid references
+must add no edges and perform no authorization or material reads. Existing
+custom Secret aliases and native Gateway API profiles remain unchanged.
+
+R6k production and complete test/document checkpoints received both independent
+SCOPED STATIC PASS verdicts. Actual handler tests cover populated Secret decoys,
+zero acquisition/dependency effects for invalid references, real successful reads,
+Grant revoke/recovery, Secret delete/repair, old material removal and partial-good
+status precedence. Both old test files remain unchanged prefixes. The nine
+technical paths are frozen for focused execution, lifetime and schema checks;
+execution evidence and commit gates remain pending.
+
+R6k recovery retained r1 exhaustive-match and r2 new-test type-inference failures,
+then r3 was interrupted by macOS dynamic-loader shutdown, not a completed test
+result. The approved fixes remain within the nine paths; r4 resumes unchanged
+r3 source. Two new independent Astra reviewers re-read the complete current diff
+and returned SCOPED STATIC PASS. Handler lifecycle tests manually change stores
+and reparse; they do not establish fresh event-to-workqueue end-to-end delivery.
+F1 knowledge reconciliation also needs to verify pre-existing descriptions in
+partially-invalid-not-route-exclusive.md (status emission phase) and
+ai-backend-partial-pool-keeps-resolvedrefs-false.md (reason priority versus first
+error selection); neither discrepancy is introduced by this batch.
+
+R6k final focused evidence passes: 56 distinct units, 36 schema/contract integration
+target tests and four doctests. Valid lifetime compilation and E0505/E0506 negative
+proofs pass. All 9582 prior test IDs and ignored flags remain (9587 current), and
+both old test bodies remain unchanged. Both fresh Astra reviewers verified all
+35 evidence hashes, nine current technical hashes and raw results, returning
+SCOPED EXECUTION PASS. All 14 root gates pass unchanged source with zero warnings
+or errors; check took 43.051 seconds, Clippy 44.880 seconds. Evidence is under the
+R6k verification/root-verification directories. Final commit review follows.
+
+Both fresh independent Astra reviewers confirmed R6k SCOPED COMMIT PASS. The
+nine technical paths plus this record form the exact local commit scope.

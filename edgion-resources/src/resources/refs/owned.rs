@@ -3,7 +3,8 @@ use super::link_sys_fields::LinkSysSnapshot;
 use super::plugin_fields::PluginSnapshot;
 use super::plugin_fields::{PluginStage, Role};
 use super::{GrantQuery, ObjectIdentity, ReferenceError, ReferenceSource, ResourceScope};
-use crate::resources::common::{CustomCACertificateRef, SecretObjectReference};
+use crate::resources::common::{is_core_api_group, CustomCACertificateRef, SecretObjectReference};
+use crate::EdgionBackend;
 use kube::api::ObjectMeta;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -331,6 +332,9 @@ impl OwnedTarget {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) enum FieldSlot {
+    BackendCredential {
+        index: usize,
+    },
     EgcTls {
         ca: Option<usize>,
     },
@@ -398,7 +402,8 @@ impl FieldSlot {
                     && *current_group == group
                     && *current_reference == reference
             }
-            Self::LinkSys { .. }
+            Self::BackendCredential { .. }
+            | Self::LinkSys { .. }
             | Self::IpList { .. }
             | Self::ConditionIp { .. }
             | Self::Condition { .. }
@@ -528,6 +533,47 @@ pub struct BoundFieldReference<'a> {
 }
 
 impl<'a> BoundFieldReference<'a> {
+    pub(super) fn backend_secret(backend: &'a EdgionBackend, position: &'a FieldSlot) -> Result<Self, ReferenceError> {
+        let FieldSlot::BackendCredential { index } = position else {
+            return Err(ReferenceError::StaleBinding);
+        };
+        let namespace = backend.metadata.namespace.as_deref().unwrap_or("default");
+        let scope = ResourceScope::Namespaced(namespace);
+        let owner = ObjectIdentity::checked(
+            "edgion.io",
+            "EdgionBackend",
+            scope,
+            backend.metadata.name.as_deref().unwrap_or_default(),
+        )?;
+        let source = ReferenceSource::checked("edgion.io", "EdgionBackend", scope)?;
+        let wire = &backend
+            .spec
+            .ai
+            .credential_pool
+            .credentials
+            .get(*index)
+            .ok_or(ReferenceError::StaleBinding)?
+            .credential
+            .secret_ref;
+        if !is_core_api_group(wire.group.as_deref().unwrap_or_default())
+            || wire.kind.as_deref().unwrap_or("Secret") != "Secret"
+        {
+            return Err(ReferenceError::UnsupportedTarget);
+        }
+        let target = ObjectIdentity::checked(
+            "",
+            "Secret",
+            ResourceScope::Namespaced(wire.namespace.as_deref().unwrap_or(namespace)),
+            &wire.name,
+        )?;
+        Ok(Self {
+            source,
+            owner,
+            target,
+            _position: position,
+        })
+    }
+
     pub fn source(self) -> ReferenceSource<'a> {
         self.source
     }

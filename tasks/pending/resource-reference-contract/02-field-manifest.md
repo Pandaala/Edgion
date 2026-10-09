@@ -485,3 +485,14 @@ process authority, without a fabricated Kubernetes source or Grant. Dedicated
 Service exact reference-plus-UID checks and cross-language UID-derived naming are
 separate existing ownership guards. Generated output authority and Backend Secret
 actual-source verification remain separate work, not covered by this completion.
+
+### R6k Backend credential Secret fields
+
+Controller credentialPool.credentials[*].secretRef now uses an actual Backend
+ordinal loan into the shared bound Secret pipeline. Invalid source/target identity
+precedes all new dependencies, authorization and Secret reads; valid missing/denied
+references retain recovery wiring and partial-good siblings. The existing custom
+core/Secret profile, native namespace omission, raw dependency owner keys and
+material redaction remain. Controller-only InvalidReference status classification
+does not add schema fields. This is not closure of generic credential consumers,
+Gateway arbitrary resolved-material trust, generated output authority or R7/R8.

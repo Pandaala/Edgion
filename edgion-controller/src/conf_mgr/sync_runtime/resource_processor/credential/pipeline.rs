@@ -20,8 +20,10 @@
 
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 
+use edgion_resources::credentials::AiApiKeyResolver;
 use edgion_resources::credentials::{ResolveError, SecretMaterialResolver};
 use edgion_resources::resources::common::SecretObjectReference;
+use edgion_resources::resources::refs::backend_fields::BackendSecretField;
 use edgion_resources::resources::refs::{BoundFieldReference, ReferenceError, ReferenceToken};
 
 use super::super::ref_grant::read_after_registering_cross_ns_dependency;
@@ -198,6 +200,20 @@ pub fn resolve_bound_secret<R: SecretMaterialResolver>(
     resolver: &R,
 ) -> Result<AuthorizedSecret, super::super::ResolvedRefsError> {
     resolve_bound_outcome(fetch_bound_secret(ctx, owner, token), owner, resolver)
+}
+
+/// Resolve an actual Backend credential field through the shared identity,
+/// dependency, authorization and material-validation pipeline.
+pub(crate) fn resolve_backend_secret(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    field: &BackendSecretField<'_>,
+) -> Result<AuthorizedSecret, super::super::ResolvedRefsError> {
+    let outcome = match field.validated() {
+        Ok(reference) => fetch_bound_reference(ctx, owner, reference, true),
+        Err(error) => BoundFetchOutcome::Invalid(error),
+    };
+    resolve_bound_outcome(outcome, owner, &AiApiKeyResolver)
 }
 
 pub(crate) fn resolve_bound_secret_readonly<R: SecretMaterialResolver>(

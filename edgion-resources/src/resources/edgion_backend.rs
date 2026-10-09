@@ -91,6 +91,7 @@ pub struct AiCredentialResolutionError {
 /// Static resolution class. It deliberately carries no Secret, URL, or raw error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AiCredentialResolutionClass {
+    InvalidReference,
     RefNotPermitted,
     SecretNotFound,
     MissingKeys,
@@ -101,6 +102,7 @@ pub enum AiCredentialResolutionClass {
 impl AiCredentialResolutionClass {
     pub const fn reason(self) -> &'static str {
         match self {
+            Self::InvalidReference => "InvalidReference",
             Self::RefNotPermitted => "RefNotPermitted",
             Self::SecretNotFound => "SecretNotFound",
             Self::MissingKeys => "MissingKeys",

@@ -61,3 +61,22 @@ Equivalent backend/pool Arc reuse, counter identity, partial-good credentials an
 captured snapshot lifetimes remain unchanged. This is a Redis-field boundary;
 it adds no Grant and does not claim to validate the separate resolved Secret
 material channel.
+
+## Controller credential Secret field ownership
+
+Each credential Secret resolution borrows its actual Backend and ordinal through
+`refs::backend_fields`. Identity validation precedes dependency registration,
+authorization and Secret acquisition; UID and raw workqueue keys cannot supply
+missing source identity. Native omitted namespace still defaults to `default`,
+while explicit empty source/target namespace is invalid. The custom Secret field
+accepts omitted/empty/`core` group and omitted/`Secret` kind, with existing name rules.
+
+The handler clears prior material and dependencies before rebuilding valid slots.
+Valid missing or denied references retain recovery edges before authorization;
+invalid source/target slots have neither new edges nor reads. Shared bound Secret
+acquisition preserves ordinary material sanitization, AiApiKeyResolver validation,
+partial-good credentials and structural status precedence. Invalid reference
+outcomes use the bounded `InvalidReference` class, independently of Secret decoding
+errors. This class is Controller-only status input; Secret transport/redaction is
+unchanged. Other generic credential consumers and Gateway trust of arbitrary
+pre-resolved material are separate review boundaries.

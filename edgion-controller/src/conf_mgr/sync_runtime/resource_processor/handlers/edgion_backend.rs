@@ -1,13 +1,11 @@
 //! Controller handler for `EdgionBackend`.
 
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{
-    resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome,
-};
+use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::resolve_backend_secret;
+use crate::conf_mgr::sync_runtime::resource_processor::credential::AuthorizedSecret;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, HandlerContext, ProcessResult,
-    ProcessorHandler, ResourceRef,
+    ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
-use edgion_resources::credentials::AiApiKeyResolver;
 use edgion_resources::prelude_resources::EdgionBackend;
 use edgion_resources::resources::common::Condition;
 use edgion_resources::resources::edgion_backend::{
@@ -15,6 +13,7 @@ use edgion_resources::resources::edgion_backend::{
     EdgionBackendStatus, AI_CREDENTIAL_ALIAS_MAX_BYTES,
 };
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+use edgion_resources::resources::refs::backend_fields::BackendCredentialPoolField;
 use edgion_resources::ResourceKind;
 
 const STATUS_MESSAGE_MAX_BYTES: usize = 1024;
@@ -35,28 +34,18 @@ impl Default for EdgionBackendHandler {
 }
 
 fn outcome_to_class(
-    outcome: ResolveOutcome<k8s_openapi::api::core::v1::Secret>,
+    outcome: Result<AuthorizedSecret, ResolvedRefsError>,
 ) -> Result<k8s_openapi::api::core::v1::Secret, AiCredentialResolutionClass> {
     match outcome {
-        ResolveOutcome::Ok(secret) => Ok(secret),
-        ResolveOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
-            Err(AiCredentialResolutionClass::SecretNotFound)
-        }
-        ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing { .. }) => {
-            Err(AiCredentialResolutionClass::RefNotPermitted)
-        }
-        ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(_)) => {
-            Err(AiCredentialResolutionClass::MissingKeys)
-        }
-        ResolveOutcome::Invalid(InvalidCredentialError::DecodeError { .. }) => {
-            Err(AiCredentialResolutionClass::DecodeError)
-        }
-        ResolveOutcome::Invalid(InvalidCredentialError::InvalidValue { .. }) => {
-            Err(AiCredentialResolutionClass::DecodeError)
-        }
-        ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { .. }) => {
-            Err(AiCredentialResolutionClass::InvalidSecretType)
-        }
+        Ok(authorized) => Ok(authorized.secret),
+        Err(ResolvedRefsError::SecretNotFound { .. }) => Err(AiCredentialResolutionClass::SecretNotFound),
+        Err(ResolvedRefsError::RefNotPermitted { .. }) => Err(AiCredentialResolutionClass::RefNotPermitted),
+        Err(ResolvedRefsError::MissingKeys { .. }) => Err(AiCredentialResolutionClass::MissingKeys),
+        Err(ResolvedRefsError::DecodeError { .. }) => Err(AiCredentialResolutionClass::DecodeError),
+        Err(ResolvedRefsError::InvalidSecretType { .. }) => Err(AiCredentialResolutionClass::InvalidSecretType),
+        // The finite Secret pipeline otherwise returns InvalidReference. Keep
+        // any future unsupported outcome closed without exposing its details.
+        Err(_) => Err(AiCredentialResolutionClass::InvalidReference),
     }
 }
 
@@ -144,33 +133,19 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
         backend.spec.reconcile_outcome = None;
         ctx.secret_ref_manager().clear_value_refs(&owner);
         ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&owner);
-        let ai = &mut backend.spec.ai;
 
-        for credential in &mut ai.credential_pool.credentials {
+        for credential in &mut backend.spec.ai.credential_pool.credentials {
             credential.credential.secret = None;
         }
 
-        let total_count = ai.credential_pool.credentials.len();
+        let total_count = backend.spec.ai.credential_pool.credentials.len();
         let mut resolved_count = 0usize;
         let mut invalid_count = 0usize;
         let mut errors = Vec::new();
-        let owner_ns = owner.namespace.as_deref().unwrap_or("default");
-        for (index, credential) in ai.credential_pool.credentials.iter_mut().enumerate() {
-            let secret_ns = credential.credential.secret_ref.effective_namespace(owner_ns);
-            if secret_ns != owner_ns {
-                ctx.runtime()
-                    .cross_ns_ref_mgr
-                    .add_ref(secret_ns.to_string(), owner.clone());
-            }
-            let outcome = resolve_secret(
-                ctx,
-                &owner,
-                "edgion.io",
-                ResourceKind::EdgionBackend.as_str(),
-                &credential.credential.secret_ref,
-                &AiApiKeyResolver,
-            )
-            .await;
+        for index in 0..total_count {
+            let field = BackendCredentialPoolField::from_backend(&backend).secret_reference(index);
+            let outcome = resolve_backend_secret(ctx, &owner, &field);
+            let credential = &mut backend.spec.ai.credential_pool.credentials[index];
             match outcome_to_class(outcome) {
                 Ok(secret) => {
                     credential.credential.secret = Some(secret);

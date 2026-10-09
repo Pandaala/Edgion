@@ -472,3 +472,228 @@ fn bounded_status_messages_are_utf8_safe() {
     assert!(message.is_char_boundary(message.len()));
     assert!(message.ends_with(STATUS_TRUNCATION_SUFFIX));
 }
+
+fn observed_parse(backend: EdgionBackend, ctx: &HandlerContext) -> (EdgionBackend, Vec<&'static str>) {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::observe_bound_reads;
+    use futures::FutureExt;
+    observe_bound_reads(|| {
+        parse(&EdgionBackendHandler::new(), backend, ctx)
+            .now_or_never()
+            .expect("Backend Secret resolution must remain synchronous")
+    })
+}
+
+#[test]
+fn actual_backend_secret_identity_precedes_reads_and_dependency_registration() {
+    for (namespace, name) in [
+        (Some(""), Some("provider")),
+        (Some("bad/ns"), Some("provider")),
+        (Some("tenant-a"), None),
+        (Some("tenant-a"), Some("")),
+        (Some("tenant-a"), Some("bad/name")),
+    ] {
+        let mut input = backend("provider-key", None);
+        input.metadata.namespace = namespace.map(str::to_owned);
+        input.metadata.name = name.map(str::to_owned);
+        input.metadata.uid = Some("valid-uid".into());
+        let (key, material) = secret(
+            namespace.unwrap_or("default"),
+            "provider-key",
+            Some("Opaque"),
+            Some(b"private-value"),
+        );
+        input.spec.ai.credential_pool.credentials[0].credential.secret = Some(material.clone());
+        let (ctx, runtime) = context(HashMap::from([(key.clone(), material)]));
+        let (parsed, reads) = observed_parse(input, &ctx);
+        assert!(reads.is_empty());
+        assert!(ctx.secret_ref_manager().get_refs(&key).is_empty());
+        assert!(runtime
+            .cross_ns_ref_mgr
+            .get_refs(namespace.unwrap_or("default"))
+            .is_empty());
+        assert!(parsed.spec.ai.credential_pool.credentials[0]
+            .credential
+            .secret
+            .is_none());
+        assert_eq!(
+            condition(&parsed, condition_types::RESOLVED_REFS).reason,
+            "InvalidReference"
+        );
+        assert!(!condition(&parsed, condition_types::RESOLVED_REFS)
+            .message
+            .contains("private-value"));
+    }
+    for (group, kind, namespace, name) in [
+        (Some("other.io"), None, None, "provider-key"),
+        (None, Some("ConfigMap"), None, "provider-key"),
+        (None, None, Some(""), "provider-key"),
+        (None, None, None, ""),
+        (None, None, None, "bad/name"),
+    ] {
+        let mut input = backend(name, namespace);
+        let wire = &mut input.spec.ai.credential_pool.credentials[0].credential.secret_ref;
+        wire.group = group.map(str::to_owned);
+        wire.kind = kind.map(str::to_owned);
+        let (key, material) = secret(
+            namespace.unwrap_or("tenant-a"),
+            name,
+            Some("Opaque"),
+            Some(b"private-value"),
+        );
+        let (ctx, runtime) = context(HashMap::from([(key.clone(), material)]));
+        let (parsed, reads) = observed_parse(input, &ctx);
+        assert!(reads.is_empty());
+        assert!(ctx.secret_ref_manager().get_refs(&key).is_empty());
+        assert!(runtime
+            .cross_ns_ref_mgr
+            .get_refs(namespace.unwrap_or("tenant-a"))
+            .is_empty());
+        assert!(parsed.spec.ai.credential_pool.credentials[0]
+            .credential
+            .secret
+            .is_none());
+        assert_eq!(
+            condition(&parsed, condition_types::RESOLVED_REFS).reason,
+            "InvalidReference"
+        );
+    }
+    for namespace in [None, Some("tenant-a")] {
+        let mut input = backend("provider-key", None);
+        input.metadata.namespace = namespace.map(str::to_owned);
+        input.spec.ai.credential_pool.credentials[0].credential.secret_ref.group = Some("core".into());
+        let (key, material) = secret(
+            namespace.unwrap_or("default"),
+            "provider-key",
+            Some("Opaque"),
+            Some(b"private-value"),
+        );
+        let (ctx, _) = context(HashMap::from([(key.clone(), material)]));
+        let (parsed, reads) = observed_parse(input, &ctx);
+        assert_eq!(reads, ["authorization", "secret"]);
+        assert_eq!(
+            parsed.spec.ai.credential_pool.credentials[0]
+                .credential
+                .secret
+                .as_ref()
+                .unwrap()
+                .data
+                .as_ref()
+                .unwrap()[API_KEY]
+                .0,
+            b"private-value"
+        );
+        assert_eq!(
+            ctx.secret_ref_manager().get_refs(&key),
+            vec![ResourceRef::new(
+                ResourceKind::EdgionBackend,
+                namespace.map(str::to_owned),
+                "provider".into()
+            )]
+        );
+    }
+    assert!(!requires_secret_edit(&AiCredentialResolutionClass::InvalidReference));
+}
+
+#[test]
+fn actual_backend_secret_update_clears_old_material_and_edges_and_recovers() {
+    use edgion_resources::ReferenceGrant;
+    let (key, material) = secret("shared", "provider-key", Some("Opaque"), Some(b"private-value"));
+    let (ctx, runtime) = context(HashMap::from([(key.clone(), material.clone())]));
+    let grant: Arc<ReferenceGrant> = Arc::new(
+        serde_json::from_value(serde_json::json!({
+            "metadata":{"namespace":"shared","name":"allow"},
+            "spec":{"from":[{"group":"edgion.io","kind":"EdgionBackend","namespace":"tenant-a"}],
+                    "to":[{"group":"","kind":"Secret","name":"provider-key"}]}
+        }))
+        .unwrap(),
+    );
+    let input = backend("provider-key", Some("shared"));
+    let (denied, reads) = observed_parse(input, &ctx);
+    assert_eq!(reads, ["authorization"]);
+    assert_eq!(
+        condition(&denied, condition_types::RESOLVED_REFS).reason,
+        "RefNotPermitted"
+    );
+    assert_eq!(ctx.secret_ref_manager().get_refs(&key).len(), 1);
+    assert_eq!(runtime.cross_ns_ref_mgr.get_refs("shared").len(), 1);
+    runtime.ref_grant_store.upsert("shared/allow".into(), grant.clone());
+    let (allowed, reads) = observed_parse(denied, &ctx);
+    assert_eq!(reads, ["authorization", "secret"]);
+    assert!(allowed.spec.ai.credential_pool.credentials[0]
+        .credential
+        .secret
+        .is_some());
+    let mut invalid = allowed.clone();
+    invalid.spec.ai.credential_pool.credentials[0]
+        .credential
+        .secret_ref
+        .kind = Some("ConfigMap".into());
+    let (invalid, reads) = observed_parse(invalid, &ctx);
+    assert_eq!(invalid.metadata, allowed.metadata, "same raw owner identity is updated");
+    assert!(reads.is_empty());
+    assert!(ctx.secret_ref_manager().get_refs(&key).is_empty());
+    assert!(runtime.cross_ns_ref_mgr.get_refs("shared").is_empty());
+    assert!(invalid.spec.ai.credential_pool.credentials[0]
+        .credential
+        .secret
+        .is_none());
+    let mut recovered = invalid;
+    recovered.spec.ai.credential_pool.credentials[0]
+        .credential
+        .secret_ref
+        .kind = None;
+    let (recovered, reads) = observed_parse(recovered, &ctx);
+    assert_eq!(reads, ["authorization", "secret"]);
+    runtime.ref_grant_store.remove("shared/allow");
+    let (denied, reads) = observed_parse(recovered, &ctx);
+    assert_eq!(reads, ["authorization"]);
+    assert!(denied.spec.ai.credential_pool.credentials[0]
+        .credential
+        .secret
+        .is_none());
+    runtime.ref_grant_store.upsert("shared/allow".into(), grant);
+    runtime.secret_store.replace_all(HashMap::new());
+    let (missing, reads) = observed_parse(denied, &ctx);
+    assert_eq!(reads, ["authorization", "secret"]);
+    assert_eq!(
+        condition(&missing, condition_types::RESOLVED_REFS).reason,
+        "SecretNotFound"
+    );
+    assert_eq!(ctx.secret_ref_manager().get_refs(&key).len(), 1);
+    assert_eq!(runtime.cross_ns_ref_mgr.get_refs("shared").len(), 1);
+    runtime.secret_store.replace_all(HashMap::from([(key, material)]));
+    let (repaired, reads) = observed_parse(missing, &ctx);
+    assert_eq!(reads, ["authorization", "secret"]);
+    assert_eq!(condition(&repaired, condition_types::RESOLVED_REFS).status, "True");
+}
+
+#[test]
+fn actual_backend_secret_invalid_sibling_retains_partial_good_and_structural_status() {
+    let (key, material) = secret("tenant-a", "provider-key", Some("Opaque"), Some(b"private-value"));
+    let (ctx, _) = context(HashMap::from([(key, material)]));
+    let mut input = service_with_credentials(vec![
+        credential("invalid", "provider-key", None),
+        credential("valid", "provider-key", None),
+    ]);
+    input.spec.ai.credential_pool.credentials[0].credential.secret_ref.kind = Some("ConfigMap".into());
+    let errors = EdgionBackendHandler::new().preparse(&mut input, &ctx);
+    assert!(!errors.is_empty());
+    let (mut parsed, reads) = observed_parse(input, &ctx);
+    assert_eq!(reads, ["authorization", "secret"]);
+    assert!(parsed.spec.ai.credential_pool.credentials[0]
+        .credential
+        .secret
+        .is_none());
+    assert!(parsed.spec.ai.credential_pool.credentials[1]
+        .credential
+        .secret
+        .is_some());
+    assert_eq!(
+        condition(&parsed, condition_types::RESOLVED_REFS).reason,
+        "InvalidReference"
+    );
+    assert_eq!(condition(&parsed, condition_types::PARTIALLY_INVALID).status, "True");
+    EdgionBackendHandler::new().update_status(&mut parsed, &ctx, &errors);
+    assert_eq!(condition(&parsed, condition_types::ACCEPTED).status, "False");
+    assert_eq!(condition(&parsed, condition_types::RESOLVED_REFS).reason, "Invalid");
+}
