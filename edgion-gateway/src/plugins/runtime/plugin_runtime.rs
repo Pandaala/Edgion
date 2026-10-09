@@ -5,7 +5,7 @@ use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
 use edgion_resources::refs::waf_fields::WafPluginReferences;
 use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::refs::plugin_fields::{
-    HttpLinkSysConfig, PluginBindings, PluginMirrorRefs, PreparedPluginReferences,
+    BoundManagedHttpConfig, HttpLinkSysConfig, PluginBindings, PluginMirrorRefs, PreparedPluginReferences,
 };
 use edgion_resources::resources::refs::route_fields::{EffectiveMirrorField, HttpRouteMirrorRefs};
 use edgion_resources::EdgionPlugins;
@@ -1123,6 +1123,45 @@ impl PluginRuntime {
                 } else {
                     None
                 };
+                let managed_field = if BoundManagedHttpConfig::is_reference_bearing(&entry.plugin) {
+                    match descriptor_entries
+                        .get(index)
+                        .and_then(|entry| entry.managed_http_config().ok())
+                        .flatten()
+                    {
+                        Some(field) => Some(field),
+                        None => {
+                            let name = Self::get_plugin_name(&entry.plugin);
+                            self.invalid_plugins.record_non_retainable(name);
+                            errors.push(format!(
+                                "requestPlugins[{index}] ({name}): invalid owning HTTP reference"
+                            ));
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+                let managed_defaults = managed_field
+                    .as_ref()
+                    .map(|_| edgion_common::link_sys_core::outbound_tls::outbound_global_default());
+                let managed_input = match managed_field.as_ref().zip(managed_defaults.as_deref()) {
+                    Some((field, defaults)) => {
+                        match crate::plugins::http::common::outbound::client::PreparedManagedHttp::new(field, defaults)
+                        {
+                            Ok(input) => Some(input),
+                            Err(_) => {
+                                let name = Self::get_plugin_name(&entry.plugin);
+                                self.invalid_plugins.record_non_retainable(name);
+                                errors.push(format!(
+                                    "requestPlugins[{index}] ({name}): invalid owning HTTP TLS material"
+                                ));
+                                continue;
+                            }
+                        }
+                    }
+                    None => None,
+                };
                 if invalid_bounded_structured_entries[index] {
                     continue;
                 }
@@ -1364,14 +1403,17 @@ impl PluginRuntime {
                         break 'build_entry;
                     }
 
-                    if let EdgionPlugin::Guardrail(config) = &entry.plugin {
+                    if matches!(entry.plugin, EdgionPlugin::Guardrail(_)) {
                         let identity = format!(
                             "{resource_key}/requestPlugins/{}",
                             entry_alias
                                 .as_deref()
                                 .map_or_else(|| format!("#{index}"), str::to_string)
                         );
-                        match Guardrail::create_attached(config, identity) {
+                        match managed_input
+                            .as_ref()
+                            .and_then(|input| Guardrail::create_attached(input, identity))
+                        {
                             Some((request, response)) => {
                                 entry_runtime.add_request_filter(Box::new(
                                     ConditionalRequestFilter::with_alias_and_dye(
@@ -1402,6 +1444,17 @@ impl PluginRuntime {
                     }
 
                     let created = match &entry.plugin {
+                        EdgionPlugin::ForwardAuth(_) => CreateResult::Ok(
+                            managed_input
+                                .as_ref()
+                                .and_then(|input| ForwardAuth::from_owned(input).ok())
+                                .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
+                        ),
+                        EdgionPlugin::AiGuard(config) if config.evaluator.is_some() => CreateResult::Ok(
+                            managed_input
+                                .as_ref()
+                                .and_then(|input| AiGuard::create_owned(input, &entry_scope)),
+                        ),
                         EdgionPlugin::IpRestriction(_) => {
                             let bound = ip_binding.as_ref().and_then(|binding| binding.http_entry(index));
                             CreateResult::Ok(bound.and_then(IpRestriction::create_bound))
@@ -2230,10 +2283,7 @@ impl PluginRuntime {
             EdgionPlugin::RequestId(config) => CreateResult::Ok(RequestId::create(config)),
             EdgionPlugin::ExtProc(_) => CreateResult::WrongStage,
             EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
-            EdgionPlugin::ForwardAuth(config) => match ForwardAuth::new(config) {
-                Ok(fa) => CreateResult::Ok(Some(Box::new(fa))),
-                Err(_) => CreateResult::Ok(None),
-            },
+            EdgionPlugin::ForwardAuth(_) => CreateResult::WrongStage,
             EdgionPlugin::AllEndpointStatus(config) => CreateResult::Ok(Some(Box::new(AllEndpointStatus::new(config)))),
             EdgionPlugin::OpenidConnect(config) => match OpenidConnect::try_new(config, namespace.to_string()) {
                 Ok(plugin) => CreateResult::Ok(Some(Box::new(plugin))),

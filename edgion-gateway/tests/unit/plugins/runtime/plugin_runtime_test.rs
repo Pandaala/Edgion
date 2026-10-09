@@ -2280,3 +2280,157 @@ fn actual_dsl_link_sys_source_gate_precedes_shared_entry_cache_in_both_stages() 
         assert_sealed_invalid(&mut next);
     }
 }
+
+fn managed_runtime_owner(kind: &str) -> edgion_resources::EdgionPlugins {
+    let mut connection =
+        serde_json::json!({"target":{"name":"auth","port":8080},"request":{"path":{"template":"/decision"}}});
+    if kind == "ForwardAuth" {
+        connection["decision"] = serde_json::json!({});
+    }
+    let config = if kind == "AiGuard" {
+        serde_json::json!({"evaluator":connection})
+    } else {
+        connection
+    };
+    serde_json::from_value(serde_json::json!({"metadata":{"name":"managed","namespace":"tenant"},"spec":{"requestPlugins":[{"type":kind,"config":config}]}})).unwrap()
+}
+
+fn managed_runtime_connection(
+    owner: &mut edgion_resources::EdgionPlugins,
+) -> &mut edgion_resources::resources::common::ExternalHttpConnection {
+    match &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin {
+        EdgionPlugin::ForwardAuth(config) => &mut config.conn,
+        EdgionPlugin::Guardrail(config) => &mut config.conn,
+        EdgionPlugin::AiGuard(config) => &mut config.evaluator.as_mut().unwrap().conn,
+        _ => panic!(),
+    }
+}
+
+#[test]
+fn managed_http_identity_and_tls_gate_precede_cached_success_and_preserve_inert_masks() {
+    for kind in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        let owner = managed_runtime_owner(kind);
+        let mut cache = EntryCache::default();
+        let mut first = PluginRuntime::new();
+        assert!(
+            first.add_resource_filters_with_cache(&owner, &mut cache).is_empty(),
+            "{kind}"
+        );
+        assert_eq!(first.request_plugins_count(), 1);
+        assert_eq!(
+            first.upstream_response_async_plugins_count(),
+            usize::from(kind == "Guardrail")
+        );
+        let mut reused = PluginRuntime::new();
+        assert!(reused.add_resource_filters_with_cache(&owner, &mut cache).is_empty());
+        assert!(Arc::ptr_eq(
+            first.request_plugins_iter().next().unwrap(),
+            reused.request_plugins_iter().next().unwrap()
+        ));
+        for case in ["owner", "target", "tls", "tls_wrong", "url"] {
+            let mut invalid = owner.clone();
+            match case {
+                "owner" => invalid.metadata.name = None,
+                "target" => managed_runtime_connection(&mut invalid).target.service.group = Some("other.io".into()),
+                "tls" => managed_runtime_connection(&mut invalid).tls = Some(serde_json::from_value(serde_json::json!({"enabled":true,"clientCertificateRef":{"name":"identity"}})).unwrap()),
+                "tls_wrong" => managed_runtime_connection(&mut invalid).tls = Some(serde_json::from_value(serde_json::json!({"enabled":true,"clientCertificateRef":{"name":"identity"},"resolvedClientCertificate":{"metadata":{"name":"decoy","namespace":"tenant"},"type":"kubernetes.io/tls","data":{"tls.crt":"ZGVjb3k=","tls.key":"ZGVjb3k="}}})).unwrap()),
+                "url" => managed_runtime_connection(&mut invalid).target = serde_json::from_value(serde_json::json!({"url":"https://example.com/path"})).unwrap(),
+                _ => panic!(),
+            }
+            let mut next = PluginRuntime::new();
+            assert!(
+                !next.add_resource_filters_with_cache(&invalid, &mut cache).is_empty(),
+                "{kind}/{case}"
+            );
+            assert_eq!(
+                next.invalid_update_policy(),
+                Some(InvalidUpdatePolicy::ReplaceFailClosed)
+            );
+            assert_eq!(next.request_plugins_count(), 0);
+            assert_eq!(next.upstream_response_plugins_count(), 0);
+            assert_eq!(next.upstream_response_async_plugins_count(), 0);
+            assert_sealed_invalid(&mut next);
+            invalid.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+            let mut inert = PluginRuntime::new();
+            assert!(inert
+                .add_resource_filters_with_cache(&invalid, &mut EntryCache::default())
+                .is_empty());
+            assert_eq!(inert.request_plugins_count(), 0);
+        }
+        let mut invalid = owner.clone();
+        managed_runtime_connection(&mut invalid).target.service.group = Some("other.io".into());
+        let entry = invalid.spec.request_plugins.unwrap().remove(0);
+        for action in ["bypass", "block"] {
+            let scoped = compile_scoped_request_entries(
+                vec![entry.clone()],
+                serde_json::json!([{"name":format!("http/{kind}"),"action":action}]),
+            );
+            assert!(scoped.is_activatable, "masked {kind}/{action}");
+            assert!(scoped
+                .plugin_runtime
+                .request_plugins_iter()
+                .all(|filter| filter.name() != kind));
+        }
+    }
+}
+
+#[tokio::test]
+async fn managed_http_publication_replaces_invalid_authority_recovers_and_keeps_captured_generation() {
+    use crate::plugins::http::{compile_plugins, PluginStore};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use std::collections::{HashMap, HashSet};
+    for kind in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        let owner = managed_runtime_owner(kind);
+        let key = "tenant/managed".to_string();
+        let store = PluginStore::new();
+        store.apply_delta(
+            HashMap::from([(key.clone(), compile_plugins(&owner))]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
+        let captured = store.get_plugin_runtime(&key).unwrap();
+        assert_eq!(captured.request_plugins_iter().next().unwrap().name(), kind);
+        for case in ["group", "url", "tls", "tls_wrong"] {
+            let mut invalid = owner.clone();
+            let conn = managed_runtime_connection(&mut invalid);
+            match case {
+                "group" => conn.target.service.group = Some("other.io".into()),
+                "url" => conn.target = serde_json::from_value(serde_json::json!({"url":"https://example.com/path"})).unwrap(),
+                "tls" => conn.tls = Some(serde_json::from_value(serde_json::json!({"enabled":true,"clientCertificateRef":{"name":"identity"}})).unwrap()),
+                "tls_wrong" => conn.tls = Some(serde_json::from_value(serde_json::json!({"enabled":true,"clientCertificateRef":{"name":"identity"},"resolvedClientCertificate":{"metadata":{"name":"decoy","namespace":"tenant"},"type":"kubernetes.io/tls","data":{"tls.crt":"ZGVjb3k=","tls.key":"ZGVjb3k="}}})).unwrap()),
+                _ => panic!(),
+            }
+            let compiled = compile_plugins(&invalid);
+            assert!(!compiled.is_activatable);
+            assert!(!compiled.retain_previous_on_invalid_update);
+            store.apply_delta(
+                HashMap::new(),
+                HashMap::from([(key.clone(), compiled)]),
+                &HashSet::new(),
+            );
+            let latest = store.scope().http(&key).unwrap();
+            assert!(!latest.is_activatable);
+            let reject = latest
+                .plugin_runtime
+                .request_plugins_iter()
+                .find(|filter| filter.name() == "RejectInvalidConfig")
+                .unwrap();
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new(reject.name());
+            assert!(matches!(
+                reject.run_request(&mut session, &mut log).await,
+                PluginRunningResult::ErrResponse { status: 500, .. }
+            ));
+            assert_eq!(captured.request_plugins_iter().next().unwrap().name(), kind);
+            store.apply_delta(
+                HashMap::new(),
+                HashMap::from([(key.clone(), compile_plugins(&owner))]),
+                &HashSet::new(),
+            );
+            assert!(store.scope().http(&key).unwrap().is_activatable);
+        }
+        store.apply_delta(HashMap::new(), HashMap::new(), &HashSet::from([key.clone()]));
+        assert!(store.get_plugin_runtime(&key).is_none());
+        assert_eq!(captured.request_plugins_iter().next().unwrap().name(), kind);
+    }
+}

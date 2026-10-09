@@ -18,6 +18,7 @@ use super::evaluator::CompiledEvaluator;
 use super::rules::{CompiledRules, GuardDecision, RuleSpan};
 use super::spans::{select_spans, GuardSpan, GuardSpanKey, SpanError, SpanLimits};
 use crate::ai::protocols::openai::error::{content_filter_response, openai_error_response, AiProxyError};
+use crate::plugins::http::common::outbound::client::PreparedManagedHttp;
 use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
@@ -46,17 +47,17 @@ enum Outcome {
 }
 
 impl AiGuard {
-    fn build(config: &AiGuardConfig, identity: String) -> Result<Self, String> {
+    fn build(
+        config: &AiGuardConfig,
+        identity: String,
+        evaluator: Option<Arc<CompiledEvaluator>>,
+    ) -> Result<Self, String> {
         if let Some(error) = config.validation_error() {
             return Err(error);
         }
-        let evaluator = match config.evaluator.as_ref() {
-            Some(evaluator) => Some(Arc::new(CompiledEvaluator::build(
-                evaluator,
-                config.max_replacement_bytes,
-            )?)),
-            None => None,
-        };
+        if config.evaluator.is_some() != evaluator.is_some() {
+            return Err("owning AiGuard evaluator required".into());
+        }
         Ok(Self {
             identity,
             rules: Arc::new(CompiledRules::compile(&config.rules)?),
@@ -71,7 +72,21 @@ impl AiGuard {
     }
 
     pub fn create(config: &AiGuardConfig, entry_scope: &str) -> Option<Box<dyn RequestFilter>> {
-        Self::build(config, entry_scope.to_string())
+        Self::build(config, entry_scope.to_string(), None)
+            .ok()
+            .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>)
+    }
+
+    pub(crate) fn create_owned(input: &PreparedManagedHttp<'_>, entry_scope: &str) -> Option<Box<dyn RequestFilter>> {
+        let edgion_resources::resources::edgion_plugins::EdgionPlugin::AiGuard(config) = input.plugin() else {
+            return None;
+        };
+        // Validate before preparing the client or starting a health task.
+        if config.validation_error().is_some() {
+            return None;
+        }
+        let evaluator = Arc::new(CompiledEvaluator::build(input).ok()?);
+        Self::build(config, entry_scope.to_string(), Some(evaluator))
             .ok()
             .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>)
     }

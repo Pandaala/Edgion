@@ -71,3 +71,57 @@ fn wildcard_delegation_is_a_selector_and_never_a_grant_object() {
     assert_eq!(selector.kind(), "HTTPRoute");
     assert!(reference.validated_target("").is_err());
 }
+
+#[test]
+fn managed_http_service_identity_keeps_custom_modes_out_of_native_profiles() {
+    use crate::resources::common::external_http::WebhookServiceRef;
+    for group in [None, Some(""), Some("core")] {
+        for kind in [
+            None,
+            Some(""),
+            Some("Service"),
+            Some("ServiceClusterIp"),
+            Some("ServiceEndpointSlice"),
+        ] {
+            let mut wire = WebhookServiceRef {
+                group: group.map(str::to_owned),
+                kind: kind.map(str::to_owned),
+                name: Some("auth".into()),
+                port: Some(8080),
+                ..Default::default()
+            };
+            let target = managed_http_service_target(&wire, "tenant").unwrap();
+            assert_eq!(target.group_kind().group(), "");
+            assert_eq!(target.group_kind().kind(), "Service");
+            assert_eq!(target.scope().namespace(), Some("tenant"));
+            wire.namespace = Some("shared".into());
+            assert_eq!(
+                managed_http_service_target(&wire, "tenant")
+                    .unwrap()
+                    .scope()
+                    .namespace(),
+                Some("shared")
+            );
+        }
+    }
+    for (group, kind, namespace, name, port) in [
+        ("other.io", "Service", "tenant", "auth", 80),
+        ("CORE", "Service", "tenant", "auth", 80),
+        ("", "ServiceImport", "tenant", "auth", 80),
+        ("", "ServiceExternalName", "tenant", "auth", 80),
+        ("", "Service", "", "auth", 80),
+        ("", "Service", "tenant", "bad/name", 80),
+        ("", "Service", "tenant", "auth", 0),
+    ] {
+        let wire = WebhookServiceRef {
+            group: Some(group.into()),
+            kind: Some(kind.into()),
+            namespace: Some(namespace.into()),
+            name: Some(name.into()),
+            port: Some(port),
+        };
+        assert!(managed_http_service_target(&wire, "tenant").is_err());
+    }
+    assert!(!is_standard_service(Some("core"), None));
+    assert!(!is_standard_service(None, Some("ServiceClusterIp")));
+}

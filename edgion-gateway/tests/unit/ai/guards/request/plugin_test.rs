@@ -20,7 +20,7 @@ fn mask_rule() -> &'static str {
 }
 
 fn guard(rules: &str, extra: &str) -> AiGuard {
-    AiGuard::build(&config(rules, extra), "test/requestPlugins/#0".to_string()).expect("builds")
+    AiGuard::build(&config(rules, extra), "test/requestPlugins/#0".to_string(), None).expect("builds")
 }
 
 /// A context with a body view installed, so `generation()` is observable.
@@ -387,4 +387,12 @@ fn evaluator_projection_borrows_ordered_span_and_replacement_text() {
     };
     assert_eq!(projected[1].1, "replacement");
     assert_eq!(projected[1].1.as_ptr(), replacements[0].1.as_ptr());
+}
+
+#[test]
+fn detached_ai_guard_cannot_construct_an_external_evaluator() {
+    let external: AiGuardConfig =
+        serde_json::from_value(serde_json::json!({"evaluator":{"target":{"name":"decision","port":8080},"request":{"path":{"template":"/decision"}}}})).unwrap();
+    assert!(AiGuard::create(&external, "tenant/guard/#0").is_none());
+    assert!(AiGuard::create(&config(reject_rule(), ""), "tenant/guard/#0").is_some());
 }

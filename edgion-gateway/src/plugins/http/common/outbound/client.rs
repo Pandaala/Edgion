@@ -157,6 +157,58 @@ enum ClientTls<'a, 'owner> {
     Owned(&'a ValidatedLocalTlsSelection<'owner>, &'a GlobalOutboundTlsSnapshot),
 }
 
+/// Cold owning input shared by the cache gate and final client construction.
+/// Neither configuration nor TLS proof can be replaced by a detached caller.
+pub(crate) struct PreparedManagedHttp<'a> {
+    field: &'a edgion_resources::resources::refs::plugin_fields::BoundManagedHttpConfig<'a>,
+    proof: ValidatedLocalTlsSelection<'a>,
+    defaults: &'a GlobalOutboundTlsSnapshot,
+}
+
+impl<'a> PreparedManagedHttp<'a> {
+    pub(crate) fn new(
+        field: &'a edgion_resources::resources::refs::plugin_fields::BoundManagedHttpConfig<'a>,
+        defaults: &'a GlobalOutboundTlsSnapshot,
+    ) -> Result<Self, String> {
+        let selection = field.outbound_tls_selection().map_err(|error| error.to_string())?;
+        let proof = validate_local_tls_selection(selection).map_err(|error| error.to_string())?;
+        validate_active_tls_inheritance(&proof, defaults).map_err(|error| error.to_string())?;
+        Ok(Self { field, proof, defaults })
+    }
+
+    pub(crate) fn plugin(&self) -> &edgion_resources::resources::edgion_plugins::EdgionPlugin {
+        self.field.plugin()
+    }
+
+    pub(crate) fn build_client(&self) -> Result<ManagedOutboundClient, String> {
+        use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+        let (label, retry_timeout, force_post) = match self.plugin() {
+            EdgionPlugin::ForwardAuth(_) => ("ForwardAuth", true, false),
+            EdgionPlugin::Guardrail(_) => ("Guardrail decision service", false, true),
+            EdgionPlugin::AiGuard(_) => ("AiGuard decision service", false, true),
+            _ => return Err("invalid managed HTTP plugin variant".into()),
+        };
+        let request = if force_post {
+            let mut request = self.field.request().clone();
+            request.method = Some(edgion_resources::resources::common::MethodSpec {
+                template: "POST".into(),
+            });
+            std::borrow::Cow::Owned(request)
+        } else {
+            std::borrow::Cow::Borrowed(self.field.request())
+        };
+        ManagedOutboundClient::build(
+            self.field.connection(),
+            &request,
+            self.field.resolved_secrets(),
+            label,
+            retry_timeout,
+            Some(self.field.owner_namespace()),
+            ClientTls::Owned(&self.proof, self.defaults),
+        )
+    }
+}
+
 impl std::fmt::Debug for ManagedOutboundClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManagedOutboundClient")

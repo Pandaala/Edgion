@@ -16,15 +16,14 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use edgion_resources::resources::common::MethodSpec;
-use edgion_resources::resources::edgion_plugins::AiGuardEvaluator;
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
 use super::rules::GuardDecision;
 use super::spans::{GuardPart, GuardSpanKey};
 use crate::plugins::http::common::outbound::call::outbound_call_with_body;
-use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
+use crate::plugins::http::common::outbound::client::{ManagedOutboundClient, PreparedManagedHttp};
 use crate::plugins::http::common::CappedWriter;
 use crate::plugins::runtime::PluginSession;
 
@@ -111,20 +110,17 @@ pub struct CompiledEvaluator {
 }
 
 impl CompiledEvaluator {
-    pub fn build(config: &AiGuardEvaluator, max_replacement_bytes: usize) -> Result<Self, String> {
-        let mut request = config.request.clone();
-        // The operator cannot choose the method: the compiled call is always
-        // the non-idempotent decision POST.
-        request.method = Some(MethodSpec {
-            template: "POST".to_string(),
-        });
-        let client = ManagedOutboundClient::from_parts(
-            &config.conn,
-            &request,
-            config.resolved_secrets.as_ref(),
-            "AiGuard decision service",
-            false,
-        )?;
+    pub(crate) fn build(input: &PreparedManagedHttp<'_>) -> Result<Self, String> {
+        let EdgionPlugin::AiGuard(guard) = input.plugin() else {
+            return Err("owning AiGuard configuration required".into());
+        };
+        if let Some(error) = guard.validation_error() {
+            return Err(error);
+        }
+        let Some(config) = guard.evaluator.as_ref() else {
+            return Err("owning AiGuard evaluator required".into());
+        };
+        let client = input.build_client()?;
         Ok(Self {
             client: Arc::new(client),
             permits: Arc::new(Semaphore::new(config.max_concurrent)),
@@ -132,7 +128,7 @@ impl CompiledEvaluator {
             // The operator's aggregate replacement bound, not the request
             // encode cap: conflating them let an evaluator return orders of
             // magnitude more replacement text than the operator allowed.
-            max_replacement_bytes,
+            max_replacement_bytes: guard.max_replacement_bytes,
         })
     }
 

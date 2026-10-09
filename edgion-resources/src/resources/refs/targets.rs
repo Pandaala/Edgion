@@ -56,6 +56,34 @@ impl<'a> BackendTarget<'a> {
     }
 }
 
+/// Identity for the finite custom managed-HTTP Service target shape.
+/// Transport modes remain distinct from the core Service object identity.
+pub(crate) fn managed_http_service_target<'a>(
+    wire: &'a crate::resources::common::external_http::WebhookServiceRef,
+    owner_namespace: &'a str,
+) -> Result<ObjectIdentity<'a>, ReferenceError> {
+    use crate::resources::common::{is_core_api_group, ServiceBackendKind};
+    if !is_core_api_group(wire.group.as_deref().unwrap_or_default())
+        || !matches!(
+            ServiceBackendKind::from_kind(wire.kind.as_ref()),
+            ServiceBackendKind::Service
+                | ServiceBackendKind::ServiceClusterIp
+                | ServiceBackendKind::ServiceEndpointSlice
+        )
+    {
+        return Err(ReferenceError::UnsupportedTarget);
+    }
+    if !wire.port.is_some_and(|port| (1..=65535).contains(&port)) {
+        return Err(ReferenceError::InvalidPort);
+    }
+    ObjectIdentity::checked(
+        "",
+        "Service",
+        ResourceScope::Namespaced(wire.namespace.as_deref().unwrap_or(owner_namespace)),
+        wire.name.as_deref().unwrap_or_default(),
+    )
+}
+
 fn service_target<'a>(
     group: Option<&'a str>,
     kind: Option<&'a str>,

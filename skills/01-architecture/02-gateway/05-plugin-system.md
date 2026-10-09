@@ -488,3 +488,30 @@ W3C propagation is initialized by the core earliest parsed-header callback, inde
 The early projection preserves enabled/condition semantics and rejects unavailable sources, body and dye wrappers using resource-layer validation. The normal global/Gateway pass skips entries already assigned to the early phase; route occurrences of the same resource still execute normally. Resolve every tier from the captured class scope, including missing results and delayed backend references. A later route owned by a different Gateway fails closed before borrowing another scope. W3C state cannot be disabled or rewritten by custom rules.
 
 See [Request identity lifecycle](../../04-review/observability/intentional-design/request-trace-id-lifecycle.md) and the [RequestId user schema](../../../docs/en/user-guide/http-route/filters/edgion-plugins/request-id.md).
+
+### Actual managed HTTP plugin inputs
+
+Enabled request-stage ForwardAuth, Guardrail and AiGuard evaluators borrow their
+actual EdgionPlugins entry through `refs::plugin_fields`. The shared managed
+client proves owner/Service identity and local TLS material before entry-cache
+reuse or client preparation. Omitted Service namespace inherits the plugin owner;
+explicit empty namespace is invalid. These finite custom fields accept omitted,
+empty or `core` group, and preserve Service/ServiceEndpointSlice/ServiceClusterIp
+transport modes while the resource identity remains core Service. Native Gateway
+API backend references do not inherit this convenience.
+
+The Service target has no added ReferenceGrant or dependency policy. Template and
+TLS material references retain their separate Controller authorization. Invalid
+owner/target/TLS input replaces prior success with a closed runtime; malformed URL
+syntax is also a configuration rejection, not evidence of a permission decision.
+Disabled/policy-masked entries and AiGuard without an evaluator remain inert.
+
+Service transport uses HTTPS only for enabled local TLS; absent/disabled local
+TLS uses HTTP. An explicit HTTPS URL stays HTTPS with disabled local material,
+and an HTTP URL with enabled TLS remains invalid. Client construction reuses the
+existing egress, timeout, retry, bounded-response and health-task implementation.
+Guard request POST construction and request/response companion ownership remain
+unchanged. The internal HTTPRoute Edgion-auth constructor and OAuth2 credential
+acquisition are separate migration boundaries; native ExternalAuth is unsupported.
+No new global-default cache invalidation or immediate in-flight revocation fence
+is implied by this cold owning-input validation.

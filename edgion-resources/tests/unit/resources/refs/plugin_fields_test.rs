@@ -641,3 +641,131 @@ fn fixed_link_sys_collection_and_optional_topology_changes_reject_both_bindings(
         }
     }
 }
+
+fn managed_plugins(kind: &str) -> EdgionPlugins {
+    let mut connection = json!({"target":{"name":"auth","port":8080}, "request":{"path":{"template":"/decision"}}});
+    if kind == "ForwardAuth" {
+        connection["decision"] = json!({});
+    }
+    let config = if kind == "AiGuard" {
+        json!({"evaluator":connection})
+    } else {
+        connection
+    };
+    serde_json::from_value(json!({"metadata":{"name":"actual","namespace":"tenant"},"spec":{"requestPlugins":[{"type":kind,"config":config}]}})).unwrap()
+}
+
+#[test]
+fn managed_http_fields_borrow_actual_configs_and_default_only_absent_namespaces() {
+    for kind in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        for namespace in [None, Some("tenant")] {
+            let mut owner = managed_plugins(kind);
+            owner.metadata.namespace = namespace.map(str::to_owned);
+            let prepared = PreparedPluginReferences::from_plugins(&owner);
+            let binding = prepared.bind(&owner).unwrap();
+            let entry = binding.request_entries().next().unwrap();
+            let field = entry.managed_http_config().unwrap().unwrap();
+            assert!(std::ptr::eq(
+                field.plugin(),
+                &owner.spec.request_plugins.as_ref().unwrap()[0].plugin
+            ));
+            assert_eq!(field.owner_namespace(), namespace.unwrap_or("default"));
+            assert!(field.connection().target.service.namespace.is_none());
+            assert!(field.outbound_tls_selection().is_ok());
+        }
+        for (namespace, name) in [
+            (Some(""), Some("actual")),
+            (Some("tenant"), None),
+            (Some("tenant"), Some("bad/name")),
+        ] {
+            let mut owner = managed_plugins(kind);
+            owner.metadata.namespace = namespace.map(str::to_owned);
+            owner.metadata.name = name.map(str::to_owned);
+            owner.metadata.uid = Some("valid-uid".into());
+            let prepared = PreparedPluginReferences::from_plugins(&owner);
+            let binding = prepared.bind(&owner).unwrap();
+            assert!(binding.request_entries().next().unwrap().managed_http_config().is_err());
+        }
+    }
+}
+
+#[test]
+fn managed_http_reference_topology_rejects_drift_without_snapshotting_url_or_body() {
+    let owner = managed_plugins("AiGuard");
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    for case in ["namespace", "name", "group", "mode", "port", "url", "evaluator", "add"] {
+        let mut changed = owner.clone();
+        let entries = changed.spec.request_plugins.as_mut().unwrap();
+        if case == "add" {
+            entries.push(entries[0].clone());
+        } else {
+            let EdgionPlugin::AiGuard(config) = &mut entries[0].plugin else {
+                panic!()
+            };
+            if case == "evaluator" {
+                config.evaluator = None;
+            } else {
+                let target = &mut config.evaluator.as_mut().unwrap().conn.target;
+                match case {
+                    "namespace" => target.service.namespace = Some("shared".into()),
+                    "name" => target.service.name = Some("other".into()),
+                    "group" => target.service.group = Some("core".into()),
+                    "mode" => target.service.kind = Some("ServiceClusterIp".into()),
+                    "port" => target.service.port = Some(9090),
+                    "url" => target.url = Some("https://example.com".into()),
+                    _ => panic!(),
+                }
+            }
+        }
+        assert!(prepared.bind(&changed).is_err(), "{case}");
+        assert!(prepared.bind_mut(&mut changed).is_err(), "{case}");
+    }
+    let mut changed = owner.clone();
+    let EdgionPlugin::AiGuard(config) = &mut changed.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        panic!()
+    };
+    config
+        .evaluator
+        .as_mut()
+        .unwrap()
+        .request
+        .path
+        .as_mut()
+        .unwrap()
+        .template = "/changed".into();
+    assert!(
+        prepared.bind(&changed).is_ok(),
+        "literal request configuration is not reference topology"
+    );
+}
+
+#[test]
+fn managed_http_disabled_and_inline_guard_do_not_acquire_an_outbound_loan() {
+    let mut owner = managed_plugins("Guardrail");
+    owner.metadata.name = None;
+    owner.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    assert!(binding
+        .request_entries()
+        .next()
+        .unwrap()
+        .managed_http_config()
+        .unwrap()
+        .is_none());
+    let mut owner = managed_plugins("AiGuard");
+    owner.metadata.name = None;
+    let EdgionPlugin::AiGuard(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        panic!()
+    };
+    config.evaluator = None;
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    assert!(binding
+        .request_entries()
+        .next()
+        .unwrap()
+        .managed_http_config()
+        .unwrap()
+        .is_none());
+}

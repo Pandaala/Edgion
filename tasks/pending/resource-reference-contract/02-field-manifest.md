@@ -496,3 +496,22 @@ core/Secret profile, native namespace omission, raw dependency owner keys and
 material redaction remain. Controller-only InvalidReference status classification
 does not add schema fields. This is not closure of generic credential consumers,
 Gateway arbitrary resolved-material trust, generated output authority or R7/R8.
+
+### Managed plugin Service and local TLS ownership
+
+The R7a scope migrates enabled request ForwardAuth.target, Guardrail.target and
+AiGuard.evaluator.target to actual EdgionPlugins entry loans, together with their
+existing local TLS selection. Omitted Service namespace now inherits that owner;
+explicit empty namespace is invalid. Shared validation also checks the same
+finite custom Service shape consumed by LinkSys Webhook and internal Edgion auth:
+omitted/empty/core group denotes core Service; custom transport modes remain
+separate from resource kind. This changes no native Gateway API field profile.
+
+Owner/target/active TLS validation precedes cached executable reuse and client
+construction. Disabled/policy-masked entries and inline-only AiGuard acquire no
+new outbound reference. Service TLS follows enabled rather than block presence;
+explicit HTTPS URL transport remains secure when custom local TLS is disabled.
+No Service Grant, dependency or forwarding-policy relationship is introduced.
+The separate internal HTTPRoute Edgion-auth actual-owner migration, CredentialSource
+transport capture and generated-output operation authority remain open. Focused
+handler/store tests do not establish live queue delivery or conformance.

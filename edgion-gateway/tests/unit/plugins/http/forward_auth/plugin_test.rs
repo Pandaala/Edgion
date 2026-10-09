@@ -441,3 +441,28 @@ async fn auth_deny_does_not_record_outcome() {
         "auth deny upstream_status=403 client_status=403 reason=status_rejected"
     );
 }
+
+#[test]
+fn owned_forward_auth_constructor_keeps_owner_namespace_and_decision_contract() {
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"auth","namespace":"tenant"},"spec":{"requestPlugins":[{"type":"ForwardAuth","config":{
+            "target":{"name":"auth-service","port":8080},"forwardBody":true,"statusOnError":502,"decision":{},
+            "retry":{"maxRetries":1},"request":{"path":{"template":"/auth"}}
+        }}]}
+    }))
+    .unwrap();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let field = entry.managed_http_config().unwrap().unwrap();
+    let defaults = edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot::from_configs([]);
+    let input = PreparedManagedHttp::new(&field, &defaults).unwrap();
+    let plugin = ForwardAuth::from_owned(&input).unwrap();
+    assert_eq!(plugin.status_on_error, 502);
+    assert!(plugin.forward_body);
+    assert_eq!(plugin.client.retry.as_ref().unwrap().retry_on_timeout, Some(true));
+    assert!(
+        matches!(&plugin.client.resolved_target, crate::plugins::http::common::outbound::target::ResolvedTarget::Service { service_key, scheme:"http", .. } if service_key == "tenant/auth-service")
+    );
+}

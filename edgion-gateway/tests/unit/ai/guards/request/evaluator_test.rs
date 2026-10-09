@@ -69,3 +69,28 @@ fn request_payload_carries_only_span_text_and_keys() {
     assert!(!text.contains("model"));
     assert!(!text.contains("authorization"));
 }
+
+#[test]
+fn actual_evaluator_constructor_keeps_its_own_limits_and_service_namespace() {
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"guard","namespace":"tenant"},"spec":{"requestPlugins":[{"type":"AiGuard","config":{
+            "maxReplacementBytes":1024,"evaluator":{"target":{"name":"decision","port":8080},"maxRequestBytes":2048,"maxConcurrent":3,"request":{"path":{"template":"/decision"}}}
+        }}]}
+    })).unwrap();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let field = entry.managed_http_config().unwrap().unwrap();
+    let defaults = edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot::from_configs([]);
+    let input = PreparedManagedHttp::new(&field, &defaults).unwrap();
+    let evaluator = CompiledEvaluator::build(&input).unwrap();
+    assert_eq!(evaluator.max_replacement_bytes, 1024);
+    assert_eq!(evaluator.max_request_bytes, 2048);
+    assert_eq!(evaluator.permits.available_permits(), 3);
+    assert!(evaluator.client.retry.is_none());
+    assert!(evaluator.client.compiled_request.method.is_some());
+    assert!(
+        matches!(&evaluator.client.resolved_target, crate::plugins::http::common::outbound::target::ResolvedTarget::Service {service_key, ..} if service_key == "tenant/decision")
+    );
+}

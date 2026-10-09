@@ -66,7 +66,7 @@ use std::sync::Arc;
 use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::plugins::http::common::connection_listed_hop_by_hop;
 use crate::plugins::http::common::outbound::call::{outbound_call_with_body, OutboundResponse};
-use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
+use crate::plugins::http::common::outbound::client::{ManagedOutboundClient, PreparedManagedHttp};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
@@ -115,12 +115,26 @@ impl ForwardAuth {
             // request by default.
             true,
         )?;
-        Ok(ForwardAuth {
+        Ok(Self::from_client(config, client))
+    }
+
+    pub(crate) fn from_owned(input: &PreparedManagedHttp<'_>) -> Result<Self, String> {
+        let edgion_resources::resources::edgion_plugins::EdgionPlugin::ForwardAuth(config) = input.plugin() else {
+            return Err("owning ForwardAuth configuration required".into());
+        };
+        if let Some(error) = config.validation_error() {
+            return Err(error);
+        }
+        Ok(Self::from_client(config, input.build_client()?))
+    }
+
+    fn from_client(config: &ForwardAuthConfig, client: ManagedOutboundClient) -> Self {
+        ForwardAuth {
             client: Arc::new(client),
             status_on_error: config.conn.status_on_error,
             decision: config.decision.clone(),
             forward_body: config.forward_body,
-        })
+        }
     }
 
     /// Write an error response directly to the client and return `ErrTerminateRequest`.

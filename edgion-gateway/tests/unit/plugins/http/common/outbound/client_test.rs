@@ -808,3 +808,125 @@ async fn test_client_with_active_health() -> ManagedOutboundClient {
     ManagedOutboundClient::from_parts(&conn, &request, None, "test/client", false)
         .expect("from_parts must succeed for valid config")
 }
+
+fn owned_managed_client(
+    kind: &str,
+    mut connection: serde_json::Value,
+    namespace: Option<&str>,
+) -> Result<ManagedOutboundClient, String> {
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+    if connection.get("request").is_none() {
+        connection["request"] = serde_json::json!({"path":{"template":"/decision"}});
+    }
+    if kind == "ForwardAuth" {
+        connection["decision"] = serde_json::json!({});
+    }
+    let config = if kind == "AiGuard" {
+        serde_json::json!({"evaluator":connection})
+    } else {
+        connection
+    };
+    let mut owner: edgion_resources::EdgionPlugins = serde_json::from_value(
+        serde_json::json!({"metadata":{"name":"actual"},"spec":{"requestPlugins":[{"type":kind,"config":config}]}}),
+    )
+    .unwrap();
+    owner.metadata.namespace = namespace.map(str::to_owned);
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).map_err(|e| e.to_string())?;
+    let entry = binding.request_entries().next().unwrap();
+    let field = entry.managed_http_config().map_err(|e| e.to_string())?.unwrap();
+    let defaults = GlobalOutboundTlsSnapshot::from_configs([]);
+    PreparedManagedHttp::new(&field, &defaults)?.build_client()
+}
+
+#[test]
+fn owning_managed_targets_use_actual_namespace_modes_and_enabled_tls() {
+    for kind in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        for owner_namespace in [None, Some("tenant")] {
+            for target_namespace in [None, Some("shared")] {
+                for enabled in [None, Some(false), Some(true)] {
+                    for mode in [None, Some("ServiceEndpointSlice"), Some("ServiceClusterIp")] {
+                        let mut input = serde_json::json!({"target":{"group":"core","name":"auth","port":8080}});
+                        if let Some(namespace) = target_namespace {
+                            input["target"]["namespace"] = namespace.into();
+                        }
+                        if let Some(mode) = mode {
+                            input["target"]["kind"] = mode.into();
+                        }
+                        if let Some(enabled) = enabled {
+                            input["tls"] = serde_json::json!({"enabled":enabled});
+                        }
+                        let client = owned_managed_client(kind, input, owner_namespace).unwrap();
+                        let namespace = target_namespace.or(owner_namespace).unwrap_or("default");
+                        let scheme = if enabled == Some(true) { "https" } else { "http" };
+                        match &client.resolved_target {
+                            ResolvedTarget::Service {
+                                service_key,
+                                scheme: actual,
+                                ..
+                            } => {
+                                assert_eq!(service_key, &format!("{namespace}/auth"));
+                                assert_eq!(*actual, scheme);
+                            }
+                            ResolvedTarget::Static(url) => {
+                                assert_eq!(url, &format!("{scheme}://auth.{namespace}.svc.cluster.local:8080"))
+                            }
+                        }
+                        assert!(client.health_task.is_none());
+                        assert!(client.egress_policy.is_none());
+                        assert_eq!(client.compiled_request.method.is_some(), kind != "ForwardAuth");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn owning_managed_url_tls_and_invalid_targets_fail_before_health_tasks() {
+    for kind in ["ForwardAuth", "Guardrail", "AiGuard"] {
+        for enabled in [false, true] {
+            let client = owned_managed_client(
+                kind,
+                serde_json::json!({"target":{"url":"https://example.com"},"tls":{"enabled":enabled}}),
+                Some("tenant"),
+            )
+            .unwrap();
+            assert!(matches!(&client.resolved_target, ResolvedTarget::Static(url) if url == "https://example.com"));
+            assert!(client.egress_policy.is_some());
+        }
+        for target in [
+            serde_json::json!({"name":"auth","port":8080,"namespace":""}),
+            serde_json::json!({"name":"auth","port":8080,"group":"other.io"}),
+            serde_json::json!({"url":"https://example.com/path"}),
+        ] {
+            assert!(owned_managed_client(
+                kind,
+                serde_json::json!({"target":target,"healthCheck":{"active":{}}}),
+                Some("tenant")
+            )
+            .is_err());
+        }
+        assert!(owned_managed_client(
+            kind,
+            serde_json::json!({"target":{"name":"auth","port":8080}}),
+            Some("")
+        )
+        .is_err());
+        let enabled = serde_json::json!({"target":{"name":"auth","port":8080},"tls":{"enabled":true,"clientCertificateRef":{"name":"identity"}},"healthCheck":{"active":{}}});
+        // This synchronous test has no Tokio runtime: invalid proof must return
+        // before a configured health task could be spawned.
+        assert!(owned_managed_client(kind, enabled, Some("tenant")).is_err());
+        let wrong = serde_json::json!({"target":{"name":"auth","port":8080},"tls":{"enabled":true,"clientCertificateRef":{"name":"identity"},"resolvedClientCertificate":{"metadata":{"name":"decoy","namespace":"tenant"},"type":"kubernetes.io/tls","data":{"tls.crt":"ZGVjb3k=","tls.key":"ZGVjb3k="}}},"healthCheck":{"active":{}}});
+        assert_eq!(
+            owned_managed_client(kind, wrong, Some("tenant")).unwrap_err(),
+            "outbound TLS reference/material identity mismatch"
+        );
+        let disabled = serde_json::json!({"target":{"name":"auth","port":8080},"tls":{"enabled":false,"clientCertificateRef":{"name":"identity"}}});
+        let client = owned_managed_client(kind, disabled, Some("tenant")).unwrap();
+        assert!(matches!(
+            client.resolved_target,
+            ResolvedTarget::Service { scheme: "http", .. }
+        ));
+    }
+}

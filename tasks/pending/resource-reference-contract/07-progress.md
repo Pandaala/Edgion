@@ -1,5 +1,26 @@
 # Execution and closure ledger
 
+## Current resume snapshot (2026-10-09)
+
+- Latest accepted local batches: R6j process locator ddd8ad659 and R6k Backend
+  credential Secret acquisition d50005e55. Both passed focused verification,
+  workspace gates and independent final reviews. No push.
+- R6k committed all ten reviewed blobs exactly. Its final evidence is under
+  tmp/resource-reference-contract/r6k-verification-20261009 and
+  tmp/resource-reference-contract/r6k-root-verification-20261009.
+- R7a three-plugin managed HTTP migration has passed focused execution and all
+  fourteen root gates on exactly twenty technical paths. Both independent
+  Astra commit reviews passed; next is R7b internal Route Edgion-auth planning.
+- R7/R8, full consumer audit and simplification, knowledge/user-document cleanup,
+  fresh real-environment admission/dynamic/conformance verification, and original
+  issue closure remain open. Historical scoped passes are not whole-task passes.
+- Protected unrelated untracked paths: review-results/ and
+  tasks/todo/resource-reference-abstraction-simplification.md. Exclude them from
+  batch commits unless separately assigned.
+
+The entries below retain historical checkpoints; older pending labels describe
+those checkpoints and are superseded by later accepted batch records.
+
 ## Authority and reporting
 
 The user now requires root coordination, delegated IMPL implementation and a local
@@ -2281,3 +2302,45 @@ R6k verification/root-verification directories. Final commit review follows.
 
 Both fresh independent Astra reviewers confirmed R6k SCOPED COMMIT PASS. The
 nine technical paths plus this record form the exact local commit scope.
+
+R7a exact twenty-path plan at d50005e55 received two independent Astra SCOPED
+PLAN PASS verdicts; execution authorized. Actual ForwardAuth/Guardrail/AiGuard
+fields must control custom Service namespace/identity and local TLS before cache
+reuse and client/task creation. Reuse existing Evaluator role presence and one
+captured defaults snapshot; no detached config/client pairing. Explicitly fix
+Service transport to follow enabled TLS (disabled is HTTP); explicit HTTPS URLs
+remain HTTPS with native trust. Shared schema tests include Webhook and internal
+Edgion-auth consumers and preserve native/mixed ExternalAuth rejection. Invalid
+authority must block both EntryCache and publication LKG. Internal Route R7b,
+OAuth R7c and generated output R8 remain separate. Historical ExternalAuth
+knowledge wording confusing internal Edgion with native support needs R7b/F1
+reconciliation, not a new native support claim.
+
+R7a complete static review initially blocked on absent wrong-object supplied TLS
+coverage. The correction adds all-three-plugin no-Tokio preparation, populated
+EntryCache and real PluginStore mismatch cases, with the exact identity-mismatch
+error asserted before PEM parsing can mask a missing identity gate. Both Astra
+reviewers now return FULL SCOPED STATIC PASS. Approved verification clarification:
+cold Service preparation does not read Service/EndpointSlice stores; prove actual
+namespace/key/mode, unchanged pinned resolver behavior and source ordering, not a
+fabricated read counter. No-Tokio proves no health task spawn, not a direct client
+construction count. The planned 9587-ID preservation and focused execution follow.
+
+During R7a verification the user explicitly reported pushing the existing branch.
+This was a user operation; agent authority remains local batch commits only,
+with no agent push or automatic pull. Local implementation baseline is unchanged.
+
+R7a focused execution passes 832 distinct units, 28 CRD tests and 12 doctests.
+Valid lifetime compilation and E0505/E0506 negative proofs pass. All 9587 prior
+test IDs and ignored flags survive (9600 current); original test bodies retain
+only the three approved constructor adaptations. Both Astra reviewers verified
+61 evidence hashes, all twenty technical hashes and raw logs, returning SCOPED
+EXECUTION PASS. Retained failures cover the shared-accessor immutable reborrow
+and new-fixture imports, required fields and correct async companion observation;
+production stayed unchanged after the reborrow correction. All 14 root gates pass
+with unchanged source and zero warnings/errors; check took 76.057 seconds and
+Clippy 84.558 seconds. Evidence is under the R7a verification/root-verification
+directories. Final commit review follows; R7b/R7c/R8/F1/F2 remain open.
+
+Both independent Astra reviewers confirmed R7a SCOPED COMMIT PASS. The twenty
+technical paths plus this record form the exact local commit scope.

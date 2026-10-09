@@ -61,7 +61,7 @@ pub struct WebhookServiceRef {
     /// Name of the referent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Namespace of the backend. `None` = the LinkSys resource's namespace.
+    /// Namespace of the backend. `None` = the actual owning resource namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
     /// Destination port. Required for a service target.
@@ -259,8 +259,11 @@ fn validate_service_ref(svc: &WebhookServiceRef) -> Result<(), String> {
         ServiceBackendKind::Unsupported(k) => Err(format!("unsupported service kind: {k}")),
         ServiceBackendKind::ServiceImport => Err("ServiceImport is not yet supported for webhook".to_string()),
         ServiceBackendKind::ServiceExternalName => Err("ServiceExternalName is not supported for webhook".to_string()),
-        // Service, ServiceClusterIp, ServiceEndpointSlice
-        _ => Ok(()),
+        // Schema validation has no owner. Validate the explicit target fields
+        // here; actual owning adapters supply the omitted namespace later.
+        _ => crate::resources::refs::targets::managed_http_service_target(svc, "default")
+            .map(|_| ())
+            .map_err(|error| format!("target: invalid Service reference: {error}")),
     }
 }
 
@@ -775,3 +778,7 @@ mod timeout_ms_bound_tests;
 #[cfg(test)]
 #[path = "../../../tests/unit/resources/common/external_http_test/retry_schema_tests.rs"]
 mod retry_schema_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/resources/common/external_http_test/managed_service_target_tests.rs"]
+mod managed_service_target_tests;

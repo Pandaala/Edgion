@@ -52,6 +52,7 @@ impl Role {
 }
 
 enum Atom<'a> {
+    ManagedTarget(&'a crate::resources::common::external_http::WebhookTarget),
     LinkSys {
         namespace: Option<&'a str>,
         name: &'a str,
@@ -80,6 +81,14 @@ enum Atom<'a> {
 
 #[derive(PartialEq, Eq, Serialize)]
 enum PreparedAtom {
+    ManagedTarget {
+        url: bool,
+        group: Option<String>,
+        kind: Option<String>,
+        namespace: Option<String>,
+        name: Option<String>,
+        port: Option<i32>,
+    },
     LinkSys {
         namespace: Option<String>,
         name: String,
@@ -101,6 +110,24 @@ enum PreparedAtom {
 impl PreparedAtom {
     fn matches(&self, stage: PluginStage, index: usize, atom: &Atom<'_>) -> bool {
         match (self, atom) {
+            (
+                Self::ManagedTarget {
+                    url,
+                    group,
+                    kind,
+                    namespace,
+                    name,
+                    port,
+                },
+                Atom::ManagedTarget(current),
+            ) => {
+                *url == current.url.is_some()
+                    && *group == current.service.group
+                    && *kind == current.service.kind
+                    && *namespace == current.service.namespace
+                    && *name == current.service.name
+                    && *port == current.service.port
+            }
             (
                 Self::LinkSys { namespace, name },
                 Atom::LinkSys {
@@ -191,6 +218,14 @@ impl PreparedEntry {
         let mut atoms = Vec::new();
         visit_fields(plugin, &mut |atom| {
             atoms.push(match atom {
+                Atom::ManagedTarget(target) => PreparedAtom::ManagedTarget {
+                    url: target.url.is_some(),
+                    group: target.service.group.clone(),
+                    kind: target.service.kind.clone(),
+                    namespace: target.service.namespace.clone(),
+                    name: target.service.name.clone(),
+                    port: target.service.port,
+                },
                 Atom::LinkSys { namespace, name } => PreparedAtom::LinkSys {
                     namespace: namespace.map(str::to_owned),
                     name: name.to_owned(),
@@ -444,16 +479,19 @@ fn visit_fields<'a>(plugin: &'a EdgionPlugin, visitor: &mut impl FnMut(Atom<'a>)
         }
         EdgionPlugin::CredentialInjector(config) => single(Role::Credential, Some(&config.credential_ref), visitor),
         EdgionPlugin::ForwardAuth(config) => {
+            visitor(Atom::ManagedTarget(&config.conn.target));
             switched_tls(config.conn.tls.as_ref(), visitor);
             super::template_fields::visit(&config.request, |atom| visitor(Atom::Template(atom)));
         }
         EdgionPlugin::Guardrail(config) => {
+            visitor(Atom::ManagedTarget(&config.conn.target));
             switched_tls(config.conn.tls.as_ref(), visitor);
             super::template_fields::visit(&config.request, |atom| visitor(Atom::Template(atom)));
         }
         EdgionPlugin::AiGuard(config) => {
             visitor(Atom::Presence(Role::Evaluator, config.evaluator.is_some()));
             if let Some(evaluator) = &config.evaluator {
+                visitor(Atom::ManagedTarget(&evaluator.conn.target));
                 switched_tls(evaluator.conn.tls.as_ref(), visitor);
                 super::template_fields::visit(&evaluator.request, |atom| visitor(Atom::Template(atom)));
             }
@@ -663,6 +701,76 @@ impl<'a> HttpLinkSysConfig<'a> {
     }
 }
 
+/// An actual managed HTTP plugin configuration. Private fields bind the config,
+/// Service target and TLS selection to one owner and entry borrow.
+///
+/// ```compile_fail
+/// use edgion_resources::{EdgionPlugins, resources::refs::plugin_fields::PreparedPluginReferences};
+/// fn owner_cannot_move(owner: EdgionPlugins) {
+///     let prepared = PreparedPluginReferences::from_plugins(&owner);
+///     let binding = prepared.bind(&owner).unwrap();
+///     let entry = binding.request_entries().next().unwrap();
+///     let field = entry.managed_http_config().unwrap().unwrap();
+///     drop(owner);
+///     field.connection();
+/// }
+/// ```
+/// ```compile_fail
+/// use edgion_resources::{EdgionPlugins, resources::refs::plugin_fields::PreparedPluginReferences};
+/// fn owner_cannot_change(mut owner: EdgionPlugins) {
+///     let prepared = PreparedPluginReferences::from_plugins(&owner);
+///     let binding = prepared.bind(&owner).unwrap();
+///     let entry = binding.request_entries().next().unwrap();
+///     let field = entry.managed_http_config().unwrap().unwrap();
+///     owner.metadata.namespace = None;
+///     field.connection();
+/// }
+/// ```
+pub struct BoundManagedHttpConfig<'a> {
+    plugin: &'a EdgionPlugin,
+    references: EntryReferences<'a>,
+    connection: &'a crate::resources::common::ExternalHttpConnection,
+    request: &'a crate::resources::common::OutboundRequestSpec,
+    secrets: Option<&'a crate::resources::common::ResolvedSecrets>,
+    namespace: &'a str,
+}
+
+impl BoundManagedHttpConfig<'_> {
+    /// Presence only, never an authority proof.
+    pub fn is_reference_bearing(plugin: &EdgionPlugin) -> bool {
+        matches!(plugin, EdgionPlugin::ForwardAuth(_) | EdgionPlugin::Guardrail(_))
+            || matches!(plugin, EdgionPlugin::AiGuard(config) if config.evaluator.is_some())
+    }
+    pub fn plugin(&self) -> &EdgionPlugin {
+        self.plugin
+    }
+    pub fn connection(&self) -> &crate::resources::common::ExternalHttpConnection {
+        self.connection
+    }
+    pub fn request(&self) -> &crate::resources::common::OutboundRequestSpec {
+        self.request
+    }
+    pub fn resolved_secrets(&self) -> Option<&crate::resources::common::ResolvedSecrets> {
+        self.secrets
+    }
+    pub fn owner_namespace(&self) -> &str {
+        self.namespace
+    }
+    pub fn outbound_tls_selection(&self) -> Result<super::outbound_tls::BoundLocalTlsSelection<'_>, ReferenceError> {
+        let references = EntryReferences {
+            prepared: self.references.prepared,
+            topology: self.references.topology,
+        };
+        if references.tls().is_some() {
+            Ok(super::outbound_tls::BoundLocalTlsSelection::from_active(
+                plugin_tls_field(references, self.plugin)?,
+            ))
+        } else {
+            Ok(super::outbound_tls::BoundLocalTlsSelection::from_plugin(references))
+        }
+    }
+}
+
 pub struct BoundPluginEntry<'a> {
     plugin: &'a EdgionPlugin,
     enabled: bool,
@@ -785,6 +893,55 @@ macro_rules! entry_access {
                 references.validate_source()?;
             }
             Ok(config)
+        }
+        pub fn managed_http_config(&self) -> Result<Option<BoundManagedHttpConfig<'_>>, ReferenceError> {
+            let references = self.references()?;
+            if !self.prepared.supported
+                || !self.enabled
+                || self.prepared.stage != PluginStage::Request
+                || !BoundManagedHttpConfig::is_reference_bearing(self.plugin)
+            {
+                return Ok(None);
+            }
+            references.validate_source()?;
+            let (connection, request, secrets) = match &*self.plugin {
+                EdgionPlugin::ForwardAuth(config) => (&config.conn, &config.request, config.resolved_secrets.as_ref()),
+                EdgionPlugin::Guardrail(config) => (&config.conn, &config.request, config.resolved_secrets.as_ref()),
+                EdgionPlugin::AiGuard(config) => {
+                    let Some(evaluator) = &config.evaluator else {
+                        return Ok(None);
+                    };
+                    (
+                        &evaluator.conn,
+                        &evaluator.request,
+                        evaluator.resolved_secrets.as_ref(),
+                    )
+                }
+                _ => return Ok(None),
+            };
+            let namespace = references
+                .topology
+                .owner
+                .namespace()
+                .ok_or(ReferenceError::InvalidNamespace)?;
+            let field = BoundManagedHttpConfig {
+                plugin: self.plugin,
+                references,
+                connection,
+                request,
+                secrets,
+                namespace,
+            };
+            // URL exclusion and mode validation share the schema's implementation.
+            let target = field
+                .connection()
+                .target
+                .kind()
+                .map_err(|_| ReferenceError::UnsupportedTarget)?;
+            if let crate::resources::common::external_http::TargetKind::Service(wire) = target {
+                super::targets::managed_http_service_target(wire, field.owner_namespace())?;
+            }
+            Ok(Some(field))
         }
         pub fn is_enabled(&self) -> bool {
             self.enabled

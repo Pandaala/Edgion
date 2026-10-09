@@ -7,12 +7,11 @@ use tokio::sync::Semaphore;
 
 use super::attached::{AttachedGuardrail, GuardrailSummary};
 use super::response::{response_head_hold_limits, GuardrailResponseProcessor};
-use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
+use crate::plugins::http::common::outbound::client::{ManagedOutboundClient, PreparedManagedHttp};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter, UpstreamResponse};
 use crate::routes::http::proxy_http::content_type::{is_sse_content_type, response_is_identity_encoded};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::common::MethodSpec;
-use edgion_resources::resources::edgion_plugins::GuardrailConfig;
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
 const PLUGIN_NAME: &str = "Guardrail";
 
@@ -30,23 +29,14 @@ pub struct Guardrail {
 }
 
 impl Guardrail {
-    fn build(config: &GuardrailConfig, identity: String) -> Result<Self, String> {
+    fn build(input: &PreparedManagedHttp<'_>, identity: String) -> Result<Self, String> {
+        let EdgionPlugin::Guardrail(config) = input.plugin() else {
+            return Err("owning Guardrail configuration required".into());
+        };
         if let Some(error) = config.validation_error() {
             return Err(error);
         }
-        let mut request = config.request.clone();
-        // The operator cannot configure the method; the compiled internal
-        // request is always the non-idempotent decision POST.
-        request.method = Some(MethodSpec {
-            template: "POST".to_string(),
-        });
-        let client = ManagedOutboundClient::from_parts(
-            &config.conn,
-            &request,
-            config.resolved_secrets.as_ref(),
-            "Guardrail decision service",
-            false,
-        )?;
+        let client = input.build_client()?;
         let head_limits = config
             .hold_first_window
             .then(|| response_head_hold_limits(std::time::Duration::from_millis(config.head_hold_timeout_ms)));
@@ -63,11 +53,11 @@ impl Guardrail {
         })
     }
 
-    pub fn create_attached(
-        config: &GuardrailConfig,
+    pub(crate) fn create_attached(
+        input: &PreparedManagedHttp<'_>,
         identity: String,
     ) -> Option<(Box<dyn RequestFilter>, Box<dyn UpstreamResponse>)> {
-        Self::build(config, identity).ok().map(|plugin| {
+        Self::build(input, identity).ok().map(|plugin| {
             let companion = plugin.clone();
             (
                 Box::new(plugin) as Box<dyn RequestFilter>,
