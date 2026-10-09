@@ -81,3 +81,56 @@ fn egc_actual_fields_are_cluster_owned_preserve_duplicates_and_explicit_namespac
     owner.spec.global_plugins_ref = Some(vec![]);
     assert!(HttpPluginAttachments::EgcGlobals(&owner).entries().is_empty());
 }
+
+#[test]
+fn stream_actual_owners_preserve_finite_lexical_grammars_and_absence() {
+    use super::{StreamAttachmentError, StreamPluginAttachment};
+    for kind in ["Gateway", "TCPRoute", "TLSRoute", "UDPRoute"] {
+        for (namespace, name) in [
+            (None, Some("owner")),
+            (Some("apps"), Some("owner")),
+            (Some(""), Some("owner")),
+            (Some("UPPER"), Some("owner")),
+            (None, None),
+            (None, Some("bad/name")),
+        ] {
+            for value in [
+                None,
+                Some(" \t "),
+                Some(" plugin "),
+                Some(" shared/plugin "),
+                Some("a/b/c"),
+                Some("/"),
+                Some("UPPER name"),
+            ] {
+                let mut raw = serde_json::json!({"metadata":{"name":name,"namespace":namespace},"spec":{"gatewayClassName":"public"}});
+                if let Some(value) = value {
+                    raw["metadata"]["annotations"] = serde_json::json!({"edgion.io/edgion-stream-plugins":value});
+                }
+                let result = match kind {
+                    "Gateway" => StreamPluginAttachment::Gateway(&serde_json::from_value(raw).unwrap()).key(),
+                    "TCPRoute" => StreamPluginAttachment::Tcp(&serde_json::from_value(raw).unwrap()).key(),
+                    "TLSRoute" => StreamPluginAttachment::Tls(&serde_json::from_value(raw).unwrap()).key(),
+                    _ => StreamPluginAttachment::Udp(&serde_json::from_value(raw).unwrap()).key(),
+                };
+                let value = value.unwrap_or("").trim();
+                if value.is_empty() {
+                    assert_eq!(result, Ok(None));
+                } else if namespace == Some("") || namespace == Some("UPPER") || name != Some("owner") {
+                    assert!(matches!(result, Err(StreamAttachmentError::InvalidOwner(_))));
+                } else if kind == "Gateway" && value.contains('/') {
+                    assert_eq!(result, Err(StreamAttachmentError::QualifiedGatewayName));
+                } else {
+                    assert_eq!(
+                        result,
+                        Ok(Some(if value.contains('/') {
+                            value.into()
+                        } else {
+                            format!("{}/{}", namespace.unwrap_or("default"), value)
+                        }))
+                    );
+                }
+            }
+        }
+    }
+}

@@ -364,7 +364,7 @@ impl Inputs {
         let mut stream: HashMap<String, StreamStages> = HashMap::new();
         for (_, gateway) in gateways {
             http.extend(gateway.http_keys.iter().cloned());
-            if let Some(key) = &gateway.connection_key {
+            if let Some(key) = gateway.connection_key.as_ref().filter(|key| !key.is_empty()) {
                 stream.entry(key.clone()).or_default().connection = true;
             }
         }
@@ -374,7 +374,7 @@ impl Inputs {
                 continue;
             }
             http.extend(route.http_keys.iter().cloned());
-            if let Some(key) = &route.stream_key {
+            if let Some(key) = route.stream_key.as_ref().filter(|key| !key.is_empty()) {
                 stream.entry(key.clone()).or_default().extend(route.stages);
             }
             if let Some(route) = &route.http_route {
@@ -723,6 +723,9 @@ impl Inputs {
             }
             let mut current = Vec::new();
             if let Some(resource_key) = &gateway.connection_key {
+                if resource_key.is_empty() {
+                    return ConnectionView::Unavailable;
+                }
                 let Some(source) = self.stream_sources.get(resource_key) else {
                     return ConnectionView::Unavailable;
                 };

@@ -192,3 +192,29 @@ async fn pass_through_when_store_key_none() {
         "rule with no store_key must pass through"
     );
 }
+
+#[tokio::test]
+async fn invalid_actual_stream_owner_stays_configured_and_denies_at_admission() {
+    use crate::routes::common::resolve_stream_plugin_store_key;
+    use edgion_resources::resources::refs::plugin_attachment_fields::StreamPluginAttachment;
+    let mut route = (**route_unit("owner").route()).clone();
+    route.metadata.annotations = Some(std::collections::BTreeMap::from([(
+        "edgion.io/edgion-stream-plugins".into(),
+        "stream".into(),
+    )]));
+    route.metadata.name = None;
+    assert!(TcpRouteUnit::from_route(Arc::new(route.clone())).is_err());
+    let key = resolve_stream_plugin_store_key(StreamPluginAttachment::Tcp(&route));
+    assert_eq!(key.as_deref(), Some(""));
+    assert!(matches!(
+        check_stream_plugins(key.as_deref(), None, "127.0.0.1", 9000).await,
+        StreamPluginCheck::Deny(_)
+    ));
+    route.metadata.annotations = None;
+    let key = resolve_stream_plugin_store_key(StreamPluginAttachment::Tcp(&route));
+    assert!(matches!(
+        check_stream_plugins(key.as_deref(), None, "127.0.0.1", 9000).await,
+        StreamPluginCheck::Allow
+    ));
+    assert!(TcpRouteUnit::from_route(Arc::new(route)).is_err());
+}

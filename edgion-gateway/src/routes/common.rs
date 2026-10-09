@@ -1,12 +1,13 @@
 use crate::backends::{L4BackendRejection, SelectedL4Backend};
 use crate::runtime::matching::route::ResolvedParentRef;
 use crate::runtime::store::listener_gateway_info::format_gateway_key;
-use edgion_resources::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
 use edgion_resources::constants::annotations::edgion::{
     TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_PROBES, TCP_KEEPALIVE_TIME,
 };
 use edgion_resources::resources::common::{ParentReference, TcpKeepaliveConfig};
 use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::resources::refs::plugin_attachment_fields::StreamPluginAttachment;
+#[cfg(test)]
 use kube::api::ObjectMeta;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -227,47 +228,11 @@ pub(crate) fn effective_hostnames(resolved: Option<&[String]>, spec: Option<&[St
     vec!["*".to_string()]
 }
 
-/// Resolve the stream plugin store key from a route's metadata annotations.
-///
-/// Reads the `EDGION_STREAM_PLUGINS` annotation, trims it, and returns:
-/// - `None` if the annotation is absent or whitespace-only.
-/// - The trimmed value as-is when it already contains `/` (treated as a
-///   fully-qualified `namespace/name` reference).
-/// - `<route-namespace>/<trimmed>` otherwise, falling back to `default` when
-///   the route has no namespace.
-///
-/// Single source of truth for the L4 stream-plugin annotation contract; shared
-/// by TCP, TLS, and UDP route handlers so future edits to the normalization
-/// rule do not have to be repeated per route type.
-pub(crate) fn resolve_stream_plugin_store_key(metadata: &ObjectMeta) -> Option<String> {
-    let annotations = metadata.annotations.as_ref()?;
-    let annotation_value = annotations.get(EDGION_STREAM_PLUGINS)?;
-    let trimmed = annotation_value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let store_key = if trimmed.contains('/') {
-        trimmed.to_string()
-    } else {
-        let namespace = metadata.namespace.as_deref().unwrap_or("default");
-        format!("{}/{}", namespace, trimmed)
-    };
-
-    Some(store_key)
-}
-
-/// Gateway stream attachments are same-namespace references. Route attachments
-/// use the separate resolver above and may be explicitly namespace-qualified.
-pub(crate) fn resolve_gateway_stream_plugin_store_key(value: &str, gateway_ns: &str) -> Result<Option<String>, ()> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        Ok(None)
-    } else if trimmed.contains('/') {
-        Err(())
-    } else {
-        Ok(Some(format!("{}/{}", gateway_ns, trimmed)))
-    }
+/// Cold stream projection shared by publication inputs and route units.
+/// An invalid configured field retains the existing empty-key fail-close signal;
+/// publication must exclude that sentinel before source lookup or executable demand.
+pub(crate) fn resolve_stream_plugin_store_key(field: StreamPluginAttachment<'_>) -> Option<String> {
+    field.key().unwrap_or_else(|_| Some(String::new()))
 }
 
 /// Inclusive bounds for the keepalive annotation values. Out-of-range inputs

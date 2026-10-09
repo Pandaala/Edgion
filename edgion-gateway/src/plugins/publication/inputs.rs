@@ -1,11 +1,12 @@
 //! Pure attachment facts for policy publication. No runtime store reads occur
 //! while extracting or comparing these owned inputs.
 
-use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
+use edgion_resources::resources::refs::plugin_attachment_fields::{HttpPluginAttachments, StreamPluginAttachment};
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::plugins::runtime::gateway_api_filters::extension_ref::extension_ref_key;
+#[cfg(test)]
 use edgion_resources::constants::annotations::edgion as annotations;
 use edgion_resources::listener_key::resolve_listener_addr;
 use edgion_resources::resources::common::ParentReference;
@@ -17,10 +18,7 @@ use edgion_resources::{GRPCRoute, Gateway, HTTPRoute, HTTPRouteRule, ListenerKey
 use kube::api::ObjectMeta;
 
 use crate::plugins::stream::plugin_generation::StreamStages;
-use crate::routes::common::{
-    filter_accepted_parent_refs, resolve_gateway_stream_plugin_store_key, resolve_parent_refs,
-    resolve_stream_plugin_store_key,
-};
+use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs, resolve_stream_plugin_store_key};
 use crate::runtime::matching::route::{check_allowed_routes, ResolvedParentRef};
 use crate::runtime::store::listener_gateway_info::{is_listener_conflicted, is_listener_not_programmed};
 
@@ -43,21 +41,13 @@ pub(crate) struct GatewayInput {
 
 impl GatewayInput {
     pub(crate) fn from_gateway(gateway: &Gateway) -> Self {
-        let namespace = gateway.metadata.namespace.as_deref().unwrap_or("default");
-        let annotations = gateway.metadata.annotations.as_ref();
         let http_keys = HttpPluginAttachments::Gateway(gateway)
             .entries()
             .into_iter()
             .flatten()
             .map(|reference| reference.into_key())
             .collect();
-        let connection_key = annotations
-            .and_then(|map| map.get(annotations::EDGION_STREAM_PLUGINS))
-            .and_then(|value| {
-                // A qualified Gateway attachment is invalid. An impossible
-                // store key retains the existing connection fail-close signal.
-                resolve_gateway_stream_plugin_store_key(value, namespace).unwrap_or_else(|()| Some(String::new()))
-            });
+        let connection_key = resolve_stream_plugin_store_key(StreamPluginAttachment::Gateway(gateway));
         let listeners = gateway
             .spec
             .listeners
@@ -209,7 +199,7 @@ impl RouteInput {
             route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
-        input.stream_key = resolve_stream_plugin_store_key(&route.metadata);
+        input.stream_key = resolve_stream_plugin_store_key(StreamPluginAttachment::Tcp(route));
         input.stages.connection = true;
         input
     }
@@ -227,7 +217,7 @@ impl RouteInput {
             route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
-        input.stream_key = resolve_stream_plugin_store_key(&route.metadata);
+        input.stream_key = resolve_stream_plugin_store_key(StreamPluginAttachment::Udp(route));
         input.stages.connection = true;
         input
     }
@@ -253,7 +243,7 @@ impl RouteInput {
             route.spec.resolved_status_controller.as_deref(),
             Some(&listeners),
         );
-        input.stream_key = resolve_stream_plugin_store_key(&route.metadata);
+        input.stream_key = resolve_stream_plugin_store_key(StreamPluginAttachment::Tls(route));
         input.stages.tls_route = true;
         input
     }

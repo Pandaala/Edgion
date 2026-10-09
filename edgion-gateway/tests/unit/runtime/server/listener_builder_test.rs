@@ -1,5 +1,4 @@
 use super::TlsOffloadBudget;
-use crate::routes::common::resolve_gateway_stream_plugin_store_key;
 use pingora_core::server::configuration::ServerConf;
 
 #[test]
@@ -33,4 +32,19 @@ fn gateway_stream_plugin_store_key_uses_gateway_namespace() {
 #[test]
 fn gateway_stream_plugin_store_key_rejects_qualified_name() {
     assert!(resolve_gateway_stream_plugin_store_key("shared/policy", "app").is_err());
+}
+
+fn resolve_gateway_stream_plugin_store_key(value: &str, namespace: &str) -> Result<Option<String>, String> {
+    let mut gateway = edgion_resources::Gateway::new(
+        "stream-gateway",
+        serde_json::from_value(serde_json::json!({"gatewayClassName":"public"})).unwrap(),
+    );
+    gateway.metadata.namespace = Some(namespace.into());
+    gateway.metadata.annotations = Some(std::collections::BTreeMap::from([(
+        edgion_resources::constants::annotations::edgion::EDGION_STREAM_PLUGINS.into(),
+        value.into(),
+    )]));
+    edgion_resources::resources::refs::plugin_attachment_fields::StreamPluginAttachment::Gateway(&gateway)
+        .key()
+        .map_err(|error| error.to_string())
 }

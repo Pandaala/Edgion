@@ -1,5 +1,6 @@
 use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs};
 use crate::runtime::matching::route::ResolvedParentRef;
+use edgion_resources::resources::refs::plugin_attachment_fields::StreamPluginAttachment;
 use std::sync::Arc;
 
 use crate::backends::{CompiledL4Backends, SelectedL4Backend};
@@ -60,7 +61,7 @@ impl TcpRouteUnit {
         let resolved_parent_refs = resolve_parent_refs(&accepted, namespace);
 
         let route_key = route.key_name();
-        let stream_plugin_store_key = resolve_stream_plugin_store_key(&route.metadata);
+        let stream_plugin_store_key = resolve_stream_plugin_store_key(StreamPluginAttachment::Tcp(&route));
         let tcp_keepalive = resolve_tcp_keepalive(route.metadata.annotations.as_ref(), &route_key);
         Ok(TcpRouteUnit {
             route,

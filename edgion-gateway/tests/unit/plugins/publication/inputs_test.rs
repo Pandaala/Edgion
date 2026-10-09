@@ -269,3 +269,26 @@ fn actual_gateway_attachment_projection_rejects_invalid_slots_and_owner() {
         assert!(GatewayInput::from_gateway(&owner).http_keys.is_empty());
     }
 }
+
+#[test]
+fn configured_stream_gateway_owner_errors_remain_present_and_blank_remains_absent() {
+    let mut owner = gateway();
+    owner.metadata.annotations = Some(std::collections::BTreeMap::from([(
+        annotations::EDGION_STREAM_PLUGINS.into(),
+        "stream".into(),
+    )]));
+    owner.metadata.namespace = None;
+    assert_eq!(
+        GatewayInput::from_gateway(&owner).connection_key.as_deref(),
+        Some("default/stream")
+    );
+    owner.metadata.name = None;
+    assert_eq!(GatewayInput::from_gateway(&owner).connection_key.as_deref(), Some(""));
+    owner
+        .metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert(annotations::EDGION_STREAM_PLUGINS.into(), " \t ".into());
+    assert_eq!(GatewayInput::from_gateway(&owner).connection_key, None);
+}

@@ -418,3 +418,7 @@ Live provider lookup and all remaining reference-family work are unchanged.
 ### Actual HTTP attachment field binding (C1)
 
 EGC globalPluginsRef and Gateway HTTP annotation consumers now use `refs::plugin_attachment_fields::HttpPluginAttachments` before registration/classification and cold publication. EGC targets default to `default`; Gateway bare tokens default to the effective owner namespace. Raw owner namespace omission is preserved in dependency identity. Invalid slots have no usable key or external lookup; valid missing/ambiguous slots retain recovery edges. Publisher, GatewayInput, and listener metadata share the adapter and retain existing Missing/drop versus Ambiguous/denial behavior. No ReferenceGrant policy is introduced for these attachment fields.
+
+## Actual stream attachment owner boundary (C2)
+
+C2 coverage: Controller Gateway registration/status, GatewayInput, TCP/TLS/UDP RouteInput and all three route-unit constructors use StreamPluginAttachment. The thin Gateway projection preserves invalid as configured; publisher guards sentinel demand/reads. Raw dependency owner namespace omission remains intact; route units still independently reject invalid backend owners. See the [canonical stream attachment contract](../../../skills/04-review/plugin-runtime/intentional-design/stream-plugin-store-key-normalization.md).

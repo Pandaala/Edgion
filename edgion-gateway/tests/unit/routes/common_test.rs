@@ -1,4 +1,5 @@
 use super::*;
+use edgion_resources::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
 use edgion_resources::resources::common::Condition;
 use edgion_resources::resources::common::RefDenied;
 use edgion_resources::resources::http_route::GATEWAY_API_GROUP;
@@ -658,4 +659,13 @@ fn classify_fixture(denied: Option<&RefDenied>, group: Option<&str>, kind: Optio
 
 fn post_select_fixture(denied: Option<&RefDenied>, group: Option<&str>, kind: Option<&str>) -> L4PostSelect {
     with_selected_fixture(denied, group, kind, super::l4_post_select)
+}
+
+// The old lexical regression fixtures acquire a real owner at the test boundary.
+fn resolve_stream_plugin_store_key(metadata: &ObjectMeta) -> Option<String> {
+    let mut route =
+        edgion_resources::TCPRoute::new("stream-route", serde_json::from_value(serde_json::json!({})).unwrap());
+    route.metadata = metadata.clone();
+    route.metadata.name = Some("stream-route".into());
+    super::resolve_stream_plugin_store_key(StreamPluginAttachment::Tcp(&route))
 }

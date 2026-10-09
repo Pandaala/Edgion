@@ -1,5 +1,6 @@
 use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs};
 use crate::runtime::matching::route::ResolvedParentRef;
+use edgion_resources::resources::refs::plugin_attachment_fields::StreamPluginAttachment;
 use std::sync::Arc;
 
 use crate::backends::{CompiledL4Backends, SelectedL4Backend};
@@ -56,7 +57,7 @@ impl UdpRouteUnit {
         .unwrap_or_default();
         let resolved_parent_refs = resolve_parent_refs(&accepted, namespace);
 
-        let stream_plugin_store_key = resolve_stream_plugin_store_key(&route.metadata);
+        let stream_plugin_store_key = resolve_stream_plugin_store_key(StreamPluginAttachment::Udp(&route));
         Ok(UdpRouteUnit {
             route,
             resolved_parent_refs,

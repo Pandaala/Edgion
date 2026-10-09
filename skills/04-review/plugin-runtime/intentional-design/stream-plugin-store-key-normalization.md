@@ -46,3 +46,24 @@ ownership of plugin composition and failure behavior from shared ownership of po
 F-004 (2026-05-26) fixed bare-name expansion at the Gateway listener. The later
 `gateway-stream-plugins-same-namespace-reference` finding retained that expansion but removed the
 unrestricted qualified-name branch.
+
+## Actual stream attachment owner boundary (C2)
+
+The finite `StreamPluginAttachment` facade validates a configured actual owner before
+projecting its key. Omitted owner namespace defaults to `default`; explicit empty or
+invalid namespace and missing/invalid owner name cannot yield a key. Absent/blank
+annotations remain absent even on malformed owners. Preserve raw dependency owner
+metadata and existing Gateway clear-before-add/recovery behavior.
+
+Target syntax remains the existing lexical contract: Gateway rejects any slash;
+L4 preserves slash-containing trimmed values verbatim and prefixes bare values with
+the effective route namespace. These projected keys are not typed target ObjectIdentity
+values; this migration does not add target DNS-label restrictions or L4 Grant policy.
+
+Configured invalid fields retain the existing empty-key runtime sentinel, distinct
+from absence. Publisher cold demand excludes it before source/ID reads, and Gateway
+connection publication returns Unavailable before raw lookup. Even an executable
+empty-key raw inventory entry cannot satisfy it. Existing TCP/UDP and TLS missing-view
+denial, stage selection, policy handling and captured-view lifetimes remain unchanged.
+
+RouteInput retains the configured-invalid sentinel, but all three route-unit constructors already reject malformed owners through their backend-reference identity gate before stream projection. An absent annotation does not bypass that independent gate.

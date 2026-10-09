@@ -2,6 +2,7 @@ use crate::routes::common::filter_accepted_parent_refs;
 use crate::runtime::matching::route::ResolvedParentRef;
 use crate::runtime::store::listener_gateway_info::format_gateway_key;
 use edgion_algo::matcher::radix_hostname::RadixHostnamePatternRef;
+use edgion_resources::resources::refs::plugin_attachment_fields::StreamPluginAttachment;
 use std::sync::Arc;
 
 use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
@@ -133,7 +134,7 @@ impl TlsRouteUnit {
                 _ => None,
             });
 
-        let stream_plugin_store_key = resolve_stream_plugin_store_key(&route.metadata);
+        let stream_plugin_store_key = resolve_stream_plugin_store_key(StreamPluginAttachment::Tls(&route));
 
         let configured_max_connect_retries = annotations
             .and_then(|a| a.get(edgion_resources::constants::annotations::edgion::MAX_CONNECT_RETRIES))

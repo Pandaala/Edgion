@@ -1214,3 +1214,7 @@ authority, R7/R8, documentation cleanup or real Gateway API conformance.
 ### Actual HTTP attachment field binding (C1)
 
 C1 binds EGC globalPluginsRef and Gateway HTTP annotations to actual authoring fields through one finite borrowed adapter. Invalid source/target identities perform zero external reads and register zero edges. Empty fields remain empty even on malformed metadata. This identity contract does not redefine consumer failure policy: valid Missing and invalid attachment slots retain runtime drop; ambiguity retains sealed denial. Controller intrinsic validation, Gateway-level diagnostics, and listener eligibility remain separate. Stream annotation grammar and ProxyProtocol are outside C1.
+
+## Actual stream attachment owner boundary (C2)
+
+C2 consumes actual Gateway/TCPRoute/TLSRoute/UDPRoute stream annotation fields. Preserve the finite target lexical contract, configured-invalid failure signal, current stages and dependency/permission policy. Publisher excludes invalid sentinels before source demand/lookup. This does not add L4 grants or relax the earlier route-unit backend identity gate. See the [canonical stream attachment contract](../../../skills/04-review/plugin-runtime/intentional-design/stream-plugin-store-key-normalization.md).

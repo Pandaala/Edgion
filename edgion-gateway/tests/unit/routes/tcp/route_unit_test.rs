@@ -173,3 +173,27 @@ impl TcpRouteUnit {
         &self.backend_finder
     }
 }
+
+#[test]
+fn actual_stream_owner_projection_matches_publication_without_erasing_invalid_configuration() {
+    let annotations = std::collections::BTreeMap::from([("edgion.io/edgion-stream-plugins".into(), " local ".into())]);
+    let mut route = (*make_route(Some(annotations))).clone();
+    route.metadata.namespace = None;
+    let input = crate::plugins::publication::inputs::RouteInput::from_tcp(&route);
+    let unit = TcpRouteUnit::from_route(Arc::new(route.clone())).unwrap();
+    assert_eq!(unit.stream_plugin_store_key(), input.stream_key.as_deref());
+    assert_eq!(unit.stream_plugin_store_key(), Some("default/local"));
+    route.metadata.name = None;
+    assert_eq!(
+        crate::plugins::publication::inputs::RouteInput::from_tcp(&route)
+            .stream_key
+            .as_deref(),
+        Some("")
+    );
+    assert!(TcpRouteUnit::from_route(Arc::new(route.clone())).is_err());
+    route.metadata.annotations = None;
+    assert!(crate::plugins::publication::inputs::RouteInput::from_tcp(&route)
+        .stream_key
+        .is_none());
+    assert!(TcpRouteUnit::from_route(Arc::new(route)).is_err());
+}

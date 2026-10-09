@@ -162,3 +162,7 @@ Adaptive delta notifications use semantic target keys; inventories remain raw.
 ### Actual HTTP attachment field binding (C1)
 
 HTTP attachment cold consumers now share actual EGC/Gateway field validation. Invalid slots are removed before canonical PluginTarget classification, and invalid owners cannot borrow a same-name live plugin. Valid sibling order and existing captured scope ownership remain. Missing (including previously invalid-target drop) still contributes no executable runtime; this is not universal request denial. Valid default/bare ambiguity remains a distinct sealed denial, independent of Bypass and without LKG resurrection. A broader fail-closed attachment policy is separate work, not part of this identity migration.
+
+## Actual stream attachment owner boundary (C2)
+
+Stream publication inputs bind actual Gateway/TCPRoute/TLSRoute/UDPRoute owners. Empty configured-invalid sentinels never enter stream demand/ID/source selection; connection publication returns Unavailable before lookup. Preserve valid stage selection, shared-listener equivalence, Bypass behavior and old captured views. Route units retain their earlier backend owner gate. See the [canonical stream attachment contract](../intentional-design/stream-plugin-store-key-normalization.md).

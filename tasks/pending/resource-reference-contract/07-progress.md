@@ -1939,3 +1939,57 @@ signals must remain intact.
 Both independent final reviewers, including Astra, confirmed R6c commit readiness
 with SCOPED PASS and no blocker. The approved technical paths and this record
 are the complete local commit scope. No push is authorized.
+
+R6c committed locally as `cb46155191d18f76e3e682fd2c2cfedcbf78315b`; all 21
+committed blobs match the reviewed final snapshot, and tracked/index state was
+clean after commit. No push. R6d C2 enters PLAN ONLY at this HEAD for actual
+Gateway/TCPRoute/TLSRoute/UDPRoute stream annotation fields. Preserve distinct
+Gateway slash rejection and L4 slash-retaining grammar, configured fail-closed
+signals and existing permission/dependency policy. ProxyProtocol remains separate.
+
+R6d C2's exact 24-path plan received independent Astra SCOPED PLAN PASS at
+`cb4615519`; execution is authorized. The plan is preserved under
+`tmp/resource-reference-contract/r6d-plan-cb46155-20261009/`. Four actual stream
+attachment owners share a finite facade while retaining existing target lexical
+grammars. Empty configured-invalid keys must be excluded before cold demand and
+raw lookup, preserving existing unavailable/deny behavior. Review explicitly
+approved the stream-specific Gateway fixture name amendment and test-local
+actual-owner adapters for old detached-helper tests. Implementation, execution
+and final reviews remain open.
+
+R6d's complete code/test/knowledge checkpoint passed independent Astra static
+review and enters frozen focused verification. A narrow reviewed test-plan
+correction preserves the earlier backend owner gate: invalid L4 owners cannot
+construct route units, so tests prove input sentinel plus unit rejection and
+separately drive actual projection into existing stream admission. Shared-listener
+valid/invalid attachments are tested in both key orders and under Bypass, with
+valid recovery controls; Stream's own borrowed-owner doctest is included. The
+full lexical/sentinel decision remains in the owning normalization knowledge page
+with targeted links elsewhere. No production authority or scope was expanded.
+
+R6d focused verification passes 850 distinct unit tests and two compile-fail
+doctests. All 9537 old test identities and ignored inventories survive (9546
+current); ten old test files retain their assertions under the exact approved
+fixture/import/test-local adapter changes. The initial Controller test compile
+failed because its new StreamPlugins fixture used an unsupported Default; only
+that new fixture was corrected, and the failure log remains. Resources r1 and
+Controller/Gateway r2 cover unchanged final Rust source.
+
+Independent review approved one extra owning UDP knowledge page, bringing the
+technical allowlist to 25 paths. Its original was captured before editing; final
+freeze proof shows the original 24 paths unchanged. The page now describes
+captured PluginScope lookup and the checker consuming the selected view, while
+preserving session lifetime/revocation and Gateway UDP exclusion boundaries.
+Both independent reviewers verified execution, preservation and final document
+evidence under `tmp/resource-reference-contract/r6d-verification-20261009/`.
+
+All 14 R6d root gates pass with unchanged source and zero warnings/errors;
+workspace check took 89.337 seconds and Clippy 95.949 seconds. Evidence is under
+`tmp/resource-reference-contract/r6d-root-verification-20261009/`. Final independent
+gate confirmation precedes local commit. Next is C3 Gateway ProxyProtocol
+actual-reference ownership, revalidated after commit. Other R6-R8/F1/F2 work,
+including real Kubernetes/Gateway API conformance, remains open.
+
+Both independent final reviewers, including Astra, confirmed R6d SCOPED COMMIT
+PASS with no blocker after checking all gates and current frozen technical hashes.
+The approved 25 technical paths plus this progress record form the commit scope.

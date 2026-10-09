@@ -32,7 +32,7 @@ use edgion_resources::resources::proxy_protocol::{
     ProxyProtocolPolicySourceKind, ResolvedInboundProxyProtocol,
 };
 use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
-use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
+use edgion_resources::resources::refs::plugin_attachment_fields::{HttpPluginAttachments, StreamPluginAttachment};
 use edgion_resources::resources::refs::plugin_target::PluginTarget;
 use edgion_resources::{ResourceKind, ResourceMeta};
 use k8s_openapi::api::core::v1::Service;
@@ -645,19 +645,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         // Clear and re-register stream plugin annotation ref (for update/remove annotation scenario)
         ctx.runtime().stream_plugin_ref_mgr.clear_value_refs(&resource_ref);
-        if let Some(v) = g
-            .metadata
-            .annotations
-            .as_ref()
-            .and_then(|a| a.get(annotations::edgion::EDGION_STREAM_PLUGINS))
-        {
-            let raw = v.trim();
-            if !raw.is_empty() {
-                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("default");
-                if let Ok(key) = resolve_gateway_stream_plugin_ref(raw, gateway_ns) {
-                    ctx.runtime().stream_plugin_ref_mgr.add_ref(key, resource_ref.clone());
-                }
-            }
+        if let Ok(Some(key)) = StreamPluginAttachment::Gateway(&g).key() {
+            ctx.runtime().stream_plugin_ref_mgr.add_ref(key, resource_ref.clone());
         }
 
         // Clear and re-register HTTP plugin annotation refs (edgion.io/edgion-plugins).
@@ -2748,36 +2737,14 @@ fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
         .collect()
 }
 
-/// Resolve a Gateway-level StreamPlugins annotation to its store key.
-///
-/// Gateway attachments are same-namespace only. Route-level StreamPlugins
-/// references have a separate contract and continue to support qualified keys.
-fn resolve_gateway_stream_plugin_ref(value: &str, gateway_ns: &str) -> Result<String, String> {
-    if value.contains('/') {
-        Err("Gateway edgion-stream-plugins reference must be an unqualified resource name".to_string())
-    } else {
-        Ok(format!("{}/{}", gateway_ns, value))
-    }
-}
-
-/// Returns `Some(error_message)` when the Gateway has the
-/// `edgion.io/edgion-stream-plugins` annotation but the referenced
-/// `EdgionStreamPlugins` resource does not exist in the processor registry.
-/// Returns `None` when: annotation absent, annotation empty, or resource found.
+/// Validate the actual Gateway stream attachment before reading the plugin store.
+/// Invalid configured owners and qualified Gateway targets return an intrinsic
+/// error. Absent/blank fields are absent; valid missing targets retain diagnostics.
 fn validate_gateway_stream_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -> Option<String> {
-    let annotation_value = gateway
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|a| a.get(annotations::edgion::EDGION_STREAM_PLUGINS))?;
-    let annotation_value = annotation_value.trim();
-    if annotation_value.is_empty() {
-        return None;
-    }
-    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
-    let key = match resolve_gateway_stream_plugin_ref(annotation_value, gateway_ns) {
-        Ok(key) => key,
-        Err(error) => return Some(error),
+    let key = match StreamPluginAttachment::Gateway(gateway).key() {
+        Ok(Some(key)) => key,
+        Ok(None) => return None,
+        Err(error) => return Some(error.to_string()),
     };
     let exists = runtime
         .processor_registry

@@ -1,9 +1,9 @@
 use super::{
     assigned_service_addresses, build_gateway_attachment_proof, classify_dedicated_addresses, compute_supported_kinds,
     dedicated_gateway_service_name, derive_gateway_addresses, gateway_service_lookup_candidates,
-    has_all_ca_refs_invalid, requested_addresses_match_assigned, resolve_gateway_stream_plugin_ref,
-    resolve_inbound_proxy_protocol, validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref,
-    validate_gateway_stream_plugin_ref, validate_listener_resolved_refs, DedicatedAddressState, GatewayHandler,
+    has_all_ca_refs_invalid, requested_addresses_match_assigned, resolve_inbound_proxy_protocol,
+    validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref,
+    validate_listener_resolved_refs, DedicatedAddressState, GatewayHandler,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     frontend_ca_ref::{FrontendCaSourceKey, FrontendCaSourceKind},
@@ -906,6 +906,7 @@ async fn proxy_protocol_conflict_precedes_mixed_tls_and_port_conflict() {
 
 fn make_gateway_with_annotation(ns: &str, annotation_value: &str) -> Gateway {
     let mut gw = make_test_gateway(ns);
+    gw.metadata.name = Some("stream-gateway".into());
     let mut annotations = BTreeMap::new();
     annotations.insert(
         "edgion.io/edgion-stream-plugins".to_string(),
@@ -2399,4 +2400,97 @@ async fn actual_invalid_gateway_owner_is_rejected_before_watched_plugin_selectio
         .unwrap()
         .contains("ambiguous"));
     assert_eq!(raw.reads.load(Ordering::SeqCst), 2);
+}
+
+// Keep the original lexical regression cases attached to a real Gateway fixture.
+fn resolve_gateway_stream_plugin_ref(value: &str, namespace: &str) -> Result<String, String> {
+    edgion_resources::resources::refs::plugin_attachment_fields::StreamPluginAttachment::Gateway(
+        &make_gateway_with_annotation(namespace, value),
+    )
+    .key()
+    .map(|key| key.unwrap())
+    .map_err(|error| error.to_string())
+}
+
+#[tokio::test]
+async fn stream_actual_owner_checks_precede_watched_reads_and_dependency_registration() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, RawStore};
+    use edgion_resources::{EdgionStreamPlugins, ResourceKind};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Default)]
+    struct Counting {
+        reads: AtomicUsize,
+        raw: LocalRawStore<EdgionStreamPlugins>,
+    }
+    impl RawStore<EdgionStreamPlugins> for Counting {
+        fn get(&self, key: &str) -> Option<Arc<EdgionStreamPlugins>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            self.raw.get(key)
+        }
+        fn snapshot(&self) -> Vec<Arc<EdgionStreamPlugins>> {
+            self.raw.snapshot()
+        }
+    }
+    struct Noop;
+    impl ProcessorHandler<EdgionStreamPlugins> for Noop {}
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::new(
+        "EdgionStreamPlugins",
+        16,
+        Arc::new(Noop),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(Counting::default());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor);
+    raw.raw.upsert(
+        "default/stream".into(),
+        Arc::new(EdgionStreamPlugins::new(
+            "stream",
+            serde_json::from_value(serde_json::json!({})).unwrap(),
+        )),
+    );
+    let mut gateway = make_gateway_with_annotation("default", "stream");
+    gateway.metadata.namespace = None;
+    assert!(validate_gateway_stream_plugin_ref(&gateway, &runtime).is_none());
+    assert_eq!(raw.reads.swap(0, Ordering::SeqCst), 1);
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+    let handler = GatewayHandler::new(None, None);
+    let owner = ResourceRef::new(ResourceKind::Gateway, None, "stream-gateway".into());
+    let _ = handler.parse(gateway.clone(), &ctx).await;
+    assert_eq!(
+        runtime.stream_plugin_ref_mgr.get_refs("default/stream"),
+        vec![owner.clone()]
+    );
+    gateway
+        .metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert("edgion.io/edgion-stream-plugins".into(), "missing".into());
+    let _ = handler.parse(gateway.clone(), &ctx).await;
+    assert!(runtime.stream_plugin_ref_mgr.get_refs("default/stream").is_empty());
+    assert_eq!(runtime.stream_plugin_ref_mgr.get_refs("default/missing"), vec![owner]);
+    handler.on_delete(&gateway, &ctx).await;
+    assert!(runtime.stream_plugin_ref_mgr.get_refs("default/missing").is_empty());
+    for (namespace, name, value) in [
+        (None, None, "stream"),
+        (Some(""), Some("stream-gateway"), "stream"),
+        (None, Some("stream-gateway"), "default/stream"),
+    ] {
+        gateway.metadata.namespace = namespace.map(str::to_owned);
+        gateway.metadata.name = name.map(str::to_owned);
+        gateway
+            .metadata
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert("edgion.io/edgion-stream-plugins".into(), value.into());
+        raw.reads.store(0, Ordering::SeqCst);
+        assert!(validate_gateway_stream_plugin_ref(&gateway, &runtime).is_some());
+        let _ = handler.parse(gateway.clone(), &ctx).await;
+        assert_eq!(raw.reads.load(Ordering::SeqCst), 0);
+        assert!(runtime.stream_plugin_ref_mgr.get_refs("default/stream").is_empty());
+        assert!(runtime.stream_plugin_ref_mgr.get_refs("default/missing").is_empty());
+    }
 }

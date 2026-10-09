@@ -1555,3 +1555,126 @@ fn actual_gateway_owner_cannot_borrow_same_name_plugin_from_live_inventory() {
     assert!(pinned.http("apps/plugins").unwrap().is_activatable);
     assert_eq!(publisher.snapshot().http_sources().len(), 1);
 }
+
+#[test]
+fn configured_invalid_stream_gateway_never_activates_executable_empty_key_decoy() {
+    let publisher = publisher();
+    let listener = ListenerKey::new("0.0.0.0:18080".parse().unwrap(), "HTTP");
+    let executable = stream_source();
+    publisher.replace_stream_plugins(HashMap::from([
+        ("".into(), executable.clone()),
+        ("apps/stream".into(), executable),
+    ]));
+    publisher.replace_gateways(HashMap::from([(
+        "apps/a".into(),
+        gateway("a", "a", 18080, Some("stream")),
+    )]));
+    let pinned = publisher.snapshot();
+    assert!(matches!(pinned.connection(&listener), ConnectionView::Ready(_)));
+    assert!(scope(&publisher, "apps/a").stream("apps/stream").is_some());
+    for policy in [
+        json!({}),
+        json!({"deny":[{"name":"stream/ConnectionRateLimit","action":"bypass"}]}),
+    ] {
+        publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), config("policy-a", policy))]));
+        for invalid_owner in [false, true] {
+            let mut owner:Gateway=crate::test_current_status::from_value(json!({
+                "metadata":{"name":"a","namespace":"apps","annotations":{"edgion.io/edgion-stream-plugins":if invalid_owner {"stream"} else {"apps/stream"}}},
+                "spec":{"gatewayClassName":"a","listeners":[{"name":"web","port":18080,"protocol":"HTTP"}]}
+            })).unwrap();
+            if invalid_owner {
+                owner.metadata.name = None;
+            }
+            publisher.replace_gateways(HashMap::from([("apps/a".into(), GatewayInput::from_gateway(&owner))]));
+            assert!(matches!(
+                publisher.snapshot().connection(&listener),
+                ConnectionView::Unavailable
+            ));
+            assert!(scope(&publisher, "apps/a").stream("").is_none());
+            assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+            for invalid_first in [false, true] {
+                let (invalid_key, valid_key) = if invalid_first {
+                    ("apps/a", "apps/z")
+                } else {
+                    ("apps/z", "apps/a")
+                };
+                publisher.replace_gateways(HashMap::from([
+                    (invalid_key.into(), GatewayInput::from_gateway(&owner)),
+                    (valid_key.into(), gateway("valid", "a", 18080, Some("stream"))),
+                ]));
+                assert!(matches!(
+                    publisher.snapshot().connection(&listener),
+                    ConnectionView::Unavailable
+                ));
+                assert!(scope(&publisher, invalid_key).stream("").is_none());
+            }
+
+            assert!(matches!(pinned.connection(&listener), ConnectionView::Ready(_)));
+        }
+    }
+    publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), config("policy-a", json!({})))]));
+    publisher.replace_gateways(HashMap::from([(
+        "apps/a".into(),
+        gateway("a", "a", 18080, Some("stream")),
+    )]));
+    assert!(matches!(
+        publisher.snapshot().connection(&listener),
+        ConnectionView::Ready(_)
+    ));
+    publisher.replace_gateways(HashMap::from([
+        ("apps/a".into(), gateway("a", "a", 18080, Some("stream"))),
+        ("apps/z".into(), gateway("z", "a", 18080, Some("stream"))),
+    ]));
+    assert!(matches!(
+        publisher.snapshot().connection(&listener),
+        ConnectionView::Ready(_)
+    ));
+}
+
+#[test]
+fn invalid_l4_owner_has_no_executable_decoy_demand_and_valid_lexical_key_recovers() {
+    for kind in ["TCPRoute", "UDPRoute", "TLSRoute"] {
+        let publisher = publisher();
+        let mut executable = (*stream_source()).clone();
+        executable.spec.tls_route_plugins=Some(serde_json::from_value(json!([{"type":"IpRestriction","config":{"ipSource":"DirectPeerIp","deny":[{"name":"blocked","cidrs":["192.0.2.0/24"]}]}}])).unwrap());
+        let executable = Arc::new(executable);
+        publisher.replace_stream_plugins(HashMap::from([
+            ("".into(), executable.clone()),
+            ("apps/stream".into(), executable),
+        ]));
+        let make_input = |invalid| {
+            let mut raw = json!({"metadata":{"name":"r","namespace":"apps","annotations":{"edgion.io/edgion-stream-plugins":"apps/stream"}},
+                "spec":{"resolvedStatusController":"edgion.io/gateway-controller","parentRefs":[{"name":"a","sectionName":"web"}],"resolvedListeners":["0.0.0.0:18080/HTTP"],"rules":[{}]}});
+            if invalid {
+                raw["metadata"]["name"] = serde_json::Value::Null;
+            }
+            match kind {
+                "TCPRoute" => RouteInput::from_tcp(&crate::test_current_status::from_value(raw).unwrap()),
+                "UDPRoute" => RouteInput::from_udp(&crate::test_current_status::from_value(raw).unwrap()),
+                _ => {
+                    raw["spec"]["hostnames"] = json!(["example.com"]);
+                    raw["spec"]["resolvedListeners"] = json!([{"listenerKey":"0.0.0.0:18080/HTTP","gatewayNamespace":"apps","gatewayName":"a","listenerName":"web","hostnames":["example.com"]}]);
+                    RouteInput::from_tls(&crate::test_current_status::from_value(raw).unwrap())
+                }
+            }
+        };
+        let valid = make_input(false);
+        let route_kind = valid.kind;
+        publisher.replace_routes(route_kind, HashMap::from([("apps/r".into(), valid)]));
+        let pinned = scope(&publisher, "apps/a");
+        let active = pinned.stream("apps/stream").unwrap();
+        if kind == "TLSRoute" {
+            assert!(!active.tls_route_plugin_runtime.is_empty());
+        } else {
+            assert!(!active.stream_plugin_runtime.is_empty());
+        }
+        let invalid = make_input(true);
+        assert_eq!(invalid.stream_key.as_deref(), Some(""));
+        publisher.replace_routes(route_kind, HashMap::from([("apps/r".into(), invalid)]));
+        assert!(scope(&publisher, "apps/a").stream("").is_none());
+        assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+        assert!(pinned.stream("apps/stream").is_some());
+        publisher.replace_routes(route_kind, HashMap::from([("apps/r".into(), make_input(false))]));
+        assert!(scope(&publisher, "apps/a").stream("apps/stream").is_some());
+    }
+}

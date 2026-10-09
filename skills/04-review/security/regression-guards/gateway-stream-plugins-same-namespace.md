@@ -36,3 +36,7 @@ and a Gateway-side fail-close check that cannot be bypassed by supplying `namesp
 ## Resolution references
 
 - `gateway-stream-plugins-same-namespace-reference` — 2026-08-03.
+
+## Actual stream attachment owner boundary (C2)
+
+Controller Gateway registration/status now bind the actual owner before any EdgionStreamPlugins read. Invalid owner/slash references register no edge. Gateway publication preserves configured-invalid denial and excludes the empty sentinel before source lookup, including executable empty-key decoys and shared listeners. No Grant policy changes. See the [canonical stream attachment contract](../../plugin-runtime/intentional-design/stream-plugin-store-key-normalization.md).
