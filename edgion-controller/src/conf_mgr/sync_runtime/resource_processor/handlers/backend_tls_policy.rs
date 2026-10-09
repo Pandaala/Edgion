@@ -2,6 +2,8 @@
 //!
 //! Handles BackendTLSPolicy resources with Gateway API standard status management.
 
+use super::super::credential::pipeline::{fetch_bound_configmap, fetch_bound_secret, BoundFetchOutcome};
+use edgion_resources::resources::refs::backend_tls_fields::{BackendTlsRefs, MAX_BACKEND_TLS_CA_REFERENCES};
 use edgion_resources::resources::refs::policy_fields::BackendTlsPolicyTargets;
 use std::collections::BTreeSet;
 
@@ -12,11 +14,11 @@ use crate::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::m
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::backend_capability::classify_raw_backend;
 use crate::conf_mgr::sync_runtime::resource_processor::status_pipeline::filter_current_native_attachment_status;
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    condition_false, condition_reasons, condition_true, condition_types, format_secret_key, update_condition,
-    HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    condition_false, condition_reasons, condition_true, condition_types, update_condition, HandlerContext,
+    ProcessResult, ProcessorHandler, ResourceRef,
 };
 use chrono::{DateTime, Utc};
-use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
+use edgion_resources::constants::secret_keys::tls::CA_CERT;
 use edgion_resources::prelude_resources::BackendTLSPolicy;
 #[cfg(test)]
 use edgion_resources::prelude_resources::EdgionBackend;
@@ -163,6 +165,15 @@ impl BackendTlsPolicyHandler {
             errors.push(error);
         }
 
+        if validation
+            .ca_certificate_refs
+            .as_ref()
+            .is_some_and(|refs| refs.len() > MAX_BACKEND_TLS_CA_REFERENCES)
+        {
+            errors.push("caCertificateRefs must contain at most 8 references".to_string());
+            return errors;
+        }
+
         if let Some(refs) = &validation.ca_certificate_refs {
             let mut seen_refs = BTreeSet::new();
             for ca_ref in refs {
@@ -233,24 +244,8 @@ impl BackendTlsPolicyHandler {
         evaluation
     }
 
-    fn all_runtime_refs_resolved(spec: &BackendTLSPolicySpec) -> bool {
-        let ca_resolved = spec.use_system_ca
-            || spec.validation.ca_certificate_refs.as_ref().is_some_and(|refs| {
-                !refs.is_empty()
-                    && refs.iter().all(|ca_ref| {
-                        (Self::is_secret_ref(ca_ref) || Self::is_configmap_ref(ca_ref))
-                            && Self::is_ca_resolved(spec, &ca_ref.name)
-                    })
-            });
-        let client_resolved = match parse_client_certificate_option(spec.options.as_ref()) {
-            Ok(Some(_)) => spec
-                .resolved_client_certificate
-                .as_ref()
-                .is_some_and(Self::secret_has_client_cert_pair),
-            Ok(None) => true,
-            Err(_) => false,
-        };
-        ca_resolved && client_resolved
+    fn all_runtime_refs_resolved(policy: &BackendTLSPolicy) -> bool {
+        BackendTlsRefs::from_policy(policy).all_materials_resolved()
     }
 
     async fn parse_policy(&self, mut btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
@@ -316,91 +311,56 @@ impl BackendTlsPolicyHandler {
             Some(edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::System)
         );
 
-        let policy_ns = btp.metadata.namespace.as_ref();
-        let mut resolved_ca_secrets = Vec::new();
-
-        if let Some(refs) = &btp.spec.validation.ca_certificate_refs {
-            for ca_ref in refs {
-                if Self::is_secret_ref(ca_ref) {
-                    let secret_key = format_secret_key(policy_ns, &ca_ref.name);
-                    ctx.secret_ref_manager()
-                        .add_ref(secret_key.clone(), resource_ref.clone());
-
-                    if let Some(secret) = ctx
-                        .runtime()
-                        .secret_store
-                        .get(policy_ns.map(|s| s.as_str()), &ca_ref.name)
-                    {
-                        resolved_ca_secrets.push(super::super::credential::ca_refs::ordinary_secret_material(secret));
-                    } else {
-                        tracing::info!(
-                            policy = %resource_ref.key(),
-                            secret_key = %secret_key,
-                            "CA Secret not found yet, BackendTLSPolicy will be reprocessed when Secret arrives"
-                        );
-                    }
-                } else if Self::is_configmap_ref(ca_ref) {
-                    let cm_key = super::super::format_configmap_ref_key(policy_ns, &ca_ref.name);
-                    ctx.secret_ref_manager().add_ref(cm_key.clone(), resource_ref.clone());
-
-                    if let Some(cm) = ctx
-                        .runtime()
-                        .configmap_store
-                        .get(policy_ns.map(|s| s.as_str()), &ca_ref.name)
-                    {
-                        if let Some(material) = super::super::credential::ca_refs::configmap_ca_material(&cm) {
-                            resolved_ca_secrets.push(material);
+        // Borrow the actual owner while acquiring; write material only after all loans end.
+        let (resolved_ca_secrets, resolved_client) = {
+            let fields = BackendTlsRefs::from_policy(&btp);
+            let mut ca = Vec::new();
+            let mut client = None;
+            if fields.bounded_materials() {
+                for ordinal in 0..fields.ca_count() {
+                    let Some(field) = fields.ca(ordinal) else {
+                        continue;
+                    };
+                    let token = field.token();
+                    let Ok(reference) = token.validated() else {
+                        continue;
+                    };
+                    match reference.target().group_kind().kind() {
+                        "Secret" => {
+                            if let BoundFetchOutcome::Ok(authorized) = fetch_bound_secret(ctx, &resource_ref, token) {
+                                ca.push(super::super::credential::ca_refs::ordinary_secret_material(
+                                    authorized.secret,
+                                ));
+                            }
                         }
-                    } else {
-                        tracing::info!(
-                            policy = %resource_ref.key(),
-                            configmap_key = %cm_key,
-                            "CA ConfigMap not found yet, BackendTLSPolicy will be reprocessed when ConfigMap arrives"
-                        );
+                        "ConfigMap" => {
+                            if let BoundFetchOutcome::Ok(configmap) = fetch_bound_configmap(ctx, &resource_ref, token) {
+                                if let Some(material) =
+                                    super::super::credential::ca_refs::configmap_ca_material(&configmap)
+                                {
+                                    ca.push(material);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Ok(Some(field)) = fields.client() {
+                    if let BoundFetchOutcome::Ok(authorized) = fetch_bound_secret(ctx, &resource_ref, field.token()) {
+                        client = Some(super::super::credential::ca_refs::ordinary_secret_material(
+                            authorized.secret,
+                        ));
                     }
                 }
             }
-        }
-
-        if !resolved_ca_secrets.is_empty() {
-            btp.spec.resolved_ca_certificates = Some(resolved_ca_secrets);
-        }
-
-        match btp.client_certificate_secret_ref() {
-            Ok(Some(client_ref)) => {
-                let client_ns = client_ref.namespace.as_ref().or(policy_ns);
-                let secret_key = format_secret_key(client_ns, &client_ref.name);
-                ctx.secret_ref_manager()
-                    .add_ref(secret_key.clone(), resource_ref.clone());
-
-                if let Some(secret) = ctx
-                    .runtime()
-                    .secret_store
-                    .get(client_ns.map(|s| s.as_str()), &client_ref.name)
-                {
-                    btp.spec.resolved_client_certificate =
-                        Some(super::super::credential::ca_refs::ordinary_secret_material(secret));
-                } else {
-                    tracing::info!(
-                        policy = %resource_ref.key(),
-                        secret_key = %secret_key,
-                        "Client certificate Secret not found yet, BackendTLSPolicy will be reprocessed when Secret arrives"
-                    );
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                tracing::warn!(
-                    policy = %resource_ref.key(),
-                    err = %err,
-                    "Invalid BackendTLSPolicy client certificate option"
-                );
-            }
-        }
+            (ca, client)
+        };
+        btp.spec.resolved_ca_certificates = (!resolved_ca_secrets.is_empty()).then_some(resolved_ca_secrets);
+        btp.spec.resolved_client_certificate = resolved_client;
 
         let evaluation = self.evaluate_target(&btp, ctx);
         let mut new_target_keys = Vec::new();
-        if evaluation.target_class.is_some() && Self::all_runtime_refs_resolved(&btp.spec) {
+        if evaluation.target_class.is_some() && Self::all_runtime_refs_resolved(&btp) {
             if let Some(target) = &evaluation.target {
                 let section = btp.spec.target_refs[0].section_name.as_deref();
                 let conflict_key = make_target_conflict_key(target, section);
@@ -511,11 +471,15 @@ impl BackendTlsPolicyHandler {
         let mut ref_errors = Vec::new(); // → reason: InvalidCACertificateRef
         let mut client_cert_errors = Vec::new();
 
-        if !spec.use_system_ca {
+        let material_fields = BackendTlsRefs::from_policy(policy);
+        let bounded_materials = material_fields.bounded_materials();
+        if !bounded_materials {
+            ref_errors.push("CA reference/material cardinality is invalid".to_string());
+        } else if !spec.use_system_ca {
             if let Some(refs) = &spec.validation.ca_certificate_refs {
-                for ca_ref in refs {
+                for (ordinal, ca_ref) in refs.iter().enumerate() {
                     if Self::is_secret_ref(ca_ref) || Self::is_configmap_ref(ca_ref) {
-                        if !Self::is_ca_resolved(spec, &ca_ref.name) {
+                        if !material_fields.ca(ordinal).is_some_and(|field| field.resolved()) {
                             ref_errors.push(format!(
                                 "{} '{}' not found or missing '{}' key",
                                 ca_ref.kind, ca_ref.name, CA_CERT
@@ -531,20 +495,14 @@ impl BackendTlsPolicyHandler {
             }
         }
 
-        match parse_client_certificate_option(spec.options.as_ref()) {
-            Ok(Some(client_ref)) => match spec.resolved_client_certificate.as_ref() {
-                None => client_cert_errors.push(format!("Client certificate Secret '{}' not found", client_ref.name)),
-                Some(secret) => {
-                    if !Self::secret_has_client_cert_pair(secret) {
-                        client_cert_errors.push(format!(
-                            "Client certificate Secret '{}' must contain '{}' and '{}'",
-                            client_ref.name, CERT, KEY
-                        ));
-                    }
-                }
-            },
-            Ok(None) => {}
-            Err(err) => client_cert_errors.push(err),
+        match material_fields.client() {
+            Ok(Some(field)) if !field.resolved() => client_cert_errors
+                .push("Client certificate reference is unresolved or has invalid material".to_string()),
+            Ok(None) if spec.resolved_client_certificate.is_some() => {
+                client_cert_errors.push("Client certificate material has no declared reference".to_string())
+            }
+            Err(_) => client_cert_errors.push("Invalid client certificate reference or material bounds".to_string()),
+            _ => {}
         }
 
         // --- Check if ALL CA certificate refs are invalid (Gateway API v1.5 spec:
@@ -556,13 +514,13 @@ impl BackendTlsPolicyHandler {
                 .ca_certificate_refs
                 .as_ref()
                 .map_or(0, |refs| refs.len());
-            total_ca_refs > 0 && (kind_errors.len() + ref_errors.len()) >= total_ca_refs
+            total_ca_refs > 0 && (!bounded_materials || (kind_errors.len() + ref_errors.len()) >= total_ca_refs)
         } else {
             false
         };
 
         // --- Conflict detection ---
-        let is_conflicted = if target_errors.is_empty() && Self::all_runtime_refs_resolved(spec) {
+        let is_conflicted = if target_errors.is_empty() && Self::all_runtime_refs_resolved(policy) {
             let policy_key = ResourceRef::new(
                 ResourceKind::BackendTLSPolicy,
                 meta.namespace.clone(),
@@ -781,28 +739,6 @@ impl BackendTlsPolicyHandler {
     #[inline]
     fn is_configmap_ref(ca_ref: &BackendTLSPolicyCACertificateRef) -> bool {
         ca_ref.group.is_empty() && ca_ref.kind == "ConfigMap"
-    }
-
-    #[inline]
-    fn is_ca_resolved(spec: &BackendTLSPolicySpec, name: &str) -> bool {
-        spec.resolved_ca_certificates.as_deref().is_some_and(|secrets| {
-            secrets.iter().any(|secret| {
-                secret.metadata.name.as_deref() == Some(name)
-                    && secret
-                        .data
-                        .as_ref()
-                        .and_then(|data| data.get(CA_CERT))
-                        .is_some_and(|value| !value.0.is_empty())
-            })
-        })
-    }
-
-    #[inline]
-    fn secret_has_client_cert_pair(secret: &k8s_openapi::api::core::v1::Secret) -> bool {
-        secret.data.as_ref().is_some_and(|data| {
-            data.get(CERT).is_some_and(|value| !value.0.is_empty())
-                && data.get(KEY).is_some_and(|value| !value.0.is_empty())
-        })
     }
 }
 

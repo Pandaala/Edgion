@@ -24,13 +24,13 @@ fn create_test_policy(namespace: &str, name: &str, target_name: &str) -> Backend
             validation: BackendTLSPolicyValidation {
                 ca_certificate_refs: None,
                 hostname: format!("{}.example.com", target_name),
-                well_known_ca_certificates: None,
+                well_known_ca_certificates: Some(WellKnownCACertificates::System),
                 subject_alt_names: None,
             },
             options: None,
             resolved_ca_certificates: None,
             resolved_client_certificate: None,
-            use_system_ca: false,
+            use_system_ca: true,
         },
         status: None,
     }

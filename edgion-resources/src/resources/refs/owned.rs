@@ -38,6 +38,7 @@ pub(super) enum TopologyLoan<'a> {
     Egc(&'a super::egc_tls_fields::EgcTlsSnapshot),
     RouteAuth(&'a super::route_auth_fields::RouteAuthSnapshot),
     GatewayTls(&'a OwnerSnapshot),
+    BackendTls(&'a OwnerSnapshot),
 }
 impl<'a> TopologyLoan<'a> {
     fn owner(self) -> &'a OwnerSnapshot {
@@ -48,7 +49,7 @@ impl<'a> TopologyLoan<'a> {
             Self::IpList(snapshot) => &snapshot.owner,
             Self::Egc(snapshot) => &snapshot.owner,
             Self::RouteAuth(snapshot) => &snapshot.owner,
-            Self::GatewayTls(owner) => owner,
+            Self::GatewayTls(owner) | Self::BackendTls(owner) => owner,
         }
     }
     fn freeze(self) -> Result<FrozenTopology, ReferenceError> {
@@ -57,9 +58,12 @@ impl<'a> TopologyLoan<'a> {
             Self::LinkSys(snapshot) => Ok(FrozenTopology::LinkSys(Arc::clone(snapshot))),
             // Effective ConfigData-expanded conditions are synchronous loans.
             // They cannot be revalidated against an unexpanded raw-owner store.
-            Self::Conditions(_) | Self::IpList(_) | Self::Egc(_) | Self::RouteAuth(_) | Self::GatewayTls(_) => {
-                Err(ReferenceError::UnsupportedTarget)
-            }
+            Self::Conditions(_)
+            | Self::IpList(_)
+            | Self::Egc(_)
+            | Self::RouteAuth(_)
+            | Self::GatewayTls(_)
+            | Self::BackendTls(_) => Err(ReferenceError::UnsupportedTarget),
         }
     }
 }
@@ -224,6 +228,7 @@ pub(super) enum FieldWire {
     Secret(SecretObjectReference),
     Ca(CustomCACertificateRef),
     NativeCa(crate::resources::gateway::FrontendCACertificateRef),
+    BackendCa(crate::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef),
     Template(super::template_fields::TemplateWire),
     Descriptor { name: String, key: String },
     ConfigData { name: String, namespace: Option<String> },
@@ -305,6 +310,12 @@ impl OwnedTarget {
                 reference.group.as_str(),
                 reference.kind.as_str(),
                 reference.namespace.as_deref(),
+                reference.name.as_str(),
+            ),
+            FieldWire::BackendCa(reference) => (
+                reference.group.as_str(),
+                reference.kind.as_str(),
+                None,
                 reference.name.as_str(),
             ),
             FieldWire::Template(_) | FieldWire::Descriptor { .. } => return Err(ReferenceError::UnsupportedTarget),
@@ -402,6 +413,10 @@ impl PreparedTlsTarget {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) enum FieldSlot {
+    BackendTlsCa {
+        reference: usize,
+    },
+    BackendTlsClient,
     GatewayBackendTls,
     GatewayServing {
         listener: usize,
@@ -494,7 +509,9 @@ impl FieldSlot {
                     && *current_group == group
                     && *current_reference == reference
             }
-            Self::GatewayBackendTls
+            Self::BackendTlsCa { .. }
+            | Self::BackendTlsClient
+            | Self::GatewayBackendTls
             | Self::GatewayServing { .. }
             | Self::GatewayFrontendCa { .. }
             | Self::RouteAuthTls { .. }
@@ -614,6 +631,7 @@ impl ReferenceToken<'_> {
             FieldWire::Secret(reference) => &reference.name,
             FieldWire::Ca(reference) => &reference.name,
             FieldWire::NativeCa(reference) => &reference.name,
+            FieldWire::BackendCa(reference) => &reference.name,
             FieldWire::Template(reference) => reference.target().map_or("", |(_, name)| name),
             FieldWire::Descriptor { name, .. } | FieldWire::ConfigData { name, .. } => name,
         }
@@ -677,6 +695,13 @@ impl<'a> BoundFieldReference<'a> {
         matches!(
             self._position,
             FieldSlot::GatewayBackendTls | FieldSlot::GatewayServing { .. } | FieldSlot::GatewayFrontendCa { .. }
+        )
+    }
+    /// Actual BackendTLSPolicy material fields, never an arbitrary caller profile.
+    pub fn is_backend_tls_material(self) -> bool {
+        matches!(
+            self._position,
+            FieldSlot::BackendTlsCa { .. } | FieldSlot::BackendTlsClient
         )
     }
     pub fn is_gateway_frontend_ca(self) -> bool {

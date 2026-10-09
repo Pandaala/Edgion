@@ -37,7 +37,9 @@ fn policy(
                 ca_certificate_refs: None,
                 hostname: "backend.example.com".to_string(),
                 subject_alt_names: None,
-                well_known_ca_certificates: None,
+                well_known_ca_certificates: Some(
+                    edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::System,
+                ),
             },
             options: None,
             resolved_ca_certificates: None,
@@ -347,6 +349,7 @@ fn incomplete_custom_ca_is_invalid() {
         Some(ResolvedPolicyTargetClass::Service),
     );
     Arc::make_mut(&mut custom).spec.use_system_ca = false;
+    Arc::make_mut(&mut custom).spec.validation.well_known_ca_certificates = None;
     Arc::make_mut(&mut custom).spec.validation.ca_certificate_refs = Some(vec![BackendTLSPolicyCACertificateRef {
         group: String::new(),
         kind: "ConfigMap".to_string(),
@@ -370,7 +373,18 @@ fn profile_fingerprint_changes_with_ca_bytes_and_sans() {
         Some(ResolvedPolicyTargetClass::Service),
     );
     Arc::make_mut(&mut first).spec.use_system_ca = false;
+    Arc::make_mut(&mut first).spec.validation.well_known_ca_certificates = None;
+    Arc::make_mut(&mut first).spec.validation.ca_certificate_refs = Some(vec![BackendTLSPolicyCACertificateRef {
+        group: String::new(),
+        kind: "Secret".into(),
+        name: "ca".into(),
+    }]);
     Arc::make_mut(&mut first).spec.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        metadata: ObjectMeta {
+            name: Some("ca".into()),
+            namespace: Some("tenant".into()),
+            ..Default::default()
+        },
         data: Some(std::collections::BTreeMap::from([(
             CA_CERT.to_string(),
             ByteString(b"ca-a".to_vec()),
@@ -394,7 +408,18 @@ fn profile_fingerprint_changes_with_ca_bytes_and_sans() {
         Some(ResolvedPolicyTargetClass::Service),
     );
     Arc::make_mut(&mut second).spec.use_system_ca = false;
+    Arc::make_mut(&mut second).spec.validation.well_known_ca_certificates = None;
+    Arc::make_mut(&mut second).spec.validation.ca_certificate_refs = Some(vec![BackendTLSPolicyCACertificateRef {
+        group: String::new(),
+        kind: "Secret".into(),
+        name: "ca".into(),
+    }]);
     Arc::make_mut(&mut second).spec.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        metadata: ObjectMeta {
+            name: Some("ca".into()),
+            namespace: Some("tenant".into()),
+            ..Default::default()
+        },
         data: Some(std::collections::BTreeMap::from([(
             CA_CERT.to_string(),
             ByteString(b"ca-b".to_vec()),
@@ -419,7 +444,18 @@ fn profile_fingerprint_changes_with_ca_bytes_and_sans() {
         Some(ResolvedPolicyTargetClass::Service),
     );
     Arc::make_mut(&mut with_san).spec.use_system_ca = false;
+    Arc::make_mut(&mut with_san).spec.validation.well_known_ca_certificates = None;
+    Arc::make_mut(&mut with_san).spec.validation.ca_certificate_refs = Some(vec![BackendTLSPolicyCACertificateRef {
+        group: String::new(),
+        kind: "Secret".into(),
+        name: "ca".into(),
+    }]);
     Arc::make_mut(&mut with_san).spec.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        metadata: ObjectMeta {
+            name: Some("ca".into()),
+            namespace: Some("tenant".into()),
+            ..Default::default()
+        },
         data: Some(std::collections::BTreeMap::from([(
             CA_CERT.to_string(),
             ByteString(b"ca-b".to_vec()),
@@ -1032,4 +1068,350 @@ fn bare_owner_targets_default_without_losing_invalid_section_occupancy_or_raw_de
             BackendTlsPolicyLookup::Effective(_)
         ));
     }
+}
+
+fn paired_material_policy() -> Arc<BackendTLSPolicy> {
+    use edgion_resources::constants::annotations::edgion::{CONTROLLER_CA_SOURCE, CONTROLLER_CA_SOURCE_CONFIG_MAP};
+    let mut owner = policy(
+        "paired",
+        PolicyTargetKind::Service,
+        "shared",
+        None,
+        Some(ResolvedPolicyTargetClass::Service),
+    );
+    let spec = &mut Arc::make_mut(&mut owner).spec;
+    spec.use_system_ca = false;
+    spec.validation.well_known_ca_certificates = None;
+    spec.validation.ca_certificate_refs = Some(
+        ["Secret", "ConfigMap"]
+            .map(|kind| BackendTLSPolicyCACertificateRef {
+                group: String::new(),
+                kind: kind.into(),
+                name: "shared-ca".into(),
+            })
+            .into(),
+    );
+    spec.resolved_ca_certificates = Some(
+        [false, true]
+            .map(|configmap| k8s_openapi::api::core::v1::Secret {
+                metadata: ObjectMeta {
+                    name: Some("shared-ca".into()),
+                    namespace: Some("tenant".into()),
+                    annotations: configmap
+                        .then(|| [(CONTROLLER_CA_SOURCE.into(), CONTROLLER_CA_SOURCE_CONFIG_MAP.into())].into()),
+                    ..Default::default()
+                },
+                data: Some([(CA_CERT.into(), ByteString(b"ca-a".to_vec()))].into()),
+                ..Default::default()
+            })
+            .into(),
+    );
+    spec.options = Some([("edgion.io/client-certificate-ref".into(), "client".into())].into());
+    spec.resolved_client_certificate = Some(k8s_openapi::api::core::v1::Secret {
+        metadata: ObjectMeta {
+            name: Some("client".into()),
+            namespace: Some("tenant".into()),
+            ..Default::default()
+        },
+        data: Some(
+            [
+                ("tls.crt".into(), ByteString(b"crt".to_vec())),
+                ("tls.key".into(), ByteString(b"key".to_vec())),
+            ]
+            .into(),
+        ),
+        ..Default::default()
+    });
+    owner
+}
+
+#[test]
+fn cold_backend_tls_publication_rejects_typed_decoys_and_missing_client_identity() {
+    let base = paired_material_policy();
+    for case in [
+        "valid",
+        "missing-cm",
+        "kind-decoy",
+        "ca-name",
+        "ca-namespace",
+        "client-name",
+        "client-namespace",
+        "client-missing",
+        "client-undeclared",
+        "surplus",
+        "nine",
+        "owner",
+        "system-spoof",
+    ] {
+        let store = BackendTLSPolicyStore::new();
+        let mut owner = base.clone();
+        let candidate = Arc::make_mut(&mut owner);
+        match case {
+            "valid" => {}
+            "missing-cm" => {
+                candidate.spec.resolved_ca_certificates.as_mut().unwrap().pop();
+            }
+            "kind-decoy" => {
+                let decoy = candidate.spec.resolved_ca_certificates.as_ref().unwrap()[0].clone();
+                candidate.spec.resolved_ca_certificates.as_mut().unwrap()[1] = decoy;
+            }
+            "ca-name" => {
+                candidate.spec.resolved_ca_certificates.as_mut().unwrap()[0]
+                    .metadata
+                    .name = Some("decoy".into())
+            }
+            "ca-namespace" => {
+                candidate.spec.resolved_ca_certificates.as_mut().unwrap()[0]
+                    .metadata
+                    .namespace = None
+            }
+            "client-name" => {
+                candidate
+                    .spec
+                    .resolved_client_certificate
+                    .as_mut()
+                    .unwrap()
+                    .metadata
+                    .name = Some("decoy".into())
+            }
+            "client-namespace" => {
+                candidate
+                    .spec
+                    .resolved_client_certificate
+                    .as_mut()
+                    .unwrap()
+                    .metadata
+                    .namespace = Some("elsewhere".into())
+            }
+            "client-missing" => candidate.spec.resolved_client_certificate = None,
+            "client-undeclared" => candidate.spec.options = None,
+            "surplus" => candidate.spec.resolved_ca_certificates = Some(vec![Default::default(); 4096]),
+            "nine" => {
+                candidate.spec.validation.ca_certificate_refs = Some(vec![
+                    BackendTLSPolicyCACertificateRef {
+                        group: String::new(),
+                        kind: "Secret".into(),
+                        name: "ca".into()
+                    };
+                    9
+                ])
+            }
+            "owner" => candidate.metadata.name = Some("bad/name".into()),
+            "system-spoof" => candidate.spec.use_system_ca = true,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            BackendTLSPolicyStore::is_valid_candidate(candidate),
+            case == "valid",
+            "{case}"
+        );
+        store.replace_all(HashMap::from([("tenant/paired".into(), owner)]));
+        assert_eq!(
+            store
+                .snapshot()
+                .lookup(&target(PolicyTargetKind::Service), None)
+                .effective()
+                .is_some(),
+            case == "valid",
+            "{case}"
+        );
+    }
+    let mut system = policy(
+        "system",
+        PolicyTargetKind::Service,
+        "shared",
+        None,
+        Some(ResolvedPolicyTargetClass::Service),
+    );
+    let candidate = Arc::make_mut(&mut system);
+    candidate.spec.options = base.spec.options.clone();
+    candidate.spec.resolved_client_certificate = base.spec.resolved_client_certificate.clone();
+    assert!(BackendTLSPolicyStore::is_valid_candidate(candidate));
+    candidate
+        .spec
+        .resolved_client_certificate
+        .as_mut()
+        .unwrap()
+        .metadata
+        .name = Some("decoy".into());
+    assert!(!BackendTLSPolicyStore::is_valid_candidate(candidate));
+}
+
+#[test]
+fn cold_backend_tls_invalid_update_repair_and_rotation_keep_captured_generation() {
+    let store = BackendTLSPolicyStore::new();
+    fn valid_pair(ca: bool) -> (Vec<u8>, Vec<u8>) {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::new(vec!["backend.example.com".into()]).unwrap();
+        if ca {
+            params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        } else {
+            params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+        }
+        let certificate = params.self_signed(&key).unwrap().pem().into_bytes();
+        let private_key = key.serialize_pem().into_bytes();
+        let parsed = pingora_core::tls::x509::X509::from_pem(&certificate).unwrap();
+        let parsed_key = pingora_core::tls::pkey::PKey::private_key_from_pem(&private_key).unwrap();
+        assert!(parsed.public_key().unwrap().public_eq(&parsed_key));
+        (certificate, private_key)
+    }
+    let (ca_a, _) = valid_pair(true);
+    let (ca_b, _) = valid_pair(true);
+    let (client_a, key_a) = valid_pair(false);
+    let (client_b, key_b) = valid_pair(false);
+    let mut base = paired_material_policy();
+    let spec = &mut Arc::make_mut(&mut base).spec;
+    for material in spec.resolved_ca_certificates.as_mut().unwrap() {
+        material
+            .data
+            .as_mut()
+            .unwrap()
+            .insert(CA_CERT.into(), ByteString(ca_a.clone()));
+    }
+    spec.resolved_client_certificate.as_mut().unwrap().data = Some(
+        [
+            ("tls.crt".into(), ByteString(client_a)),
+            ("tls.key".into(), ByteString(key_a)),
+        ]
+        .into(),
+    );
+    store.replace_all(HashMap::from([("tenant/paired".into(), base.clone())]));
+    let old_snapshot = store.snapshot();
+    let lookup = old_snapshot.lookup(&target(PolicyTargetKind::Service), None);
+    let old = lookup.effective().unwrap().clone();
+    let generation = old_snapshot.generation();
+    let old_fp = old.profile.fingerprint;
+    store.replace_all(HashMap::from([("tenant/paired".into(), base.clone())]));
+    assert_eq!(store.snapshot().generation(), generation);
+    let mut invalid = base.clone();
+    Arc::make_mut(&mut invalid)
+        .spec
+        .resolved_ca_certificates
+        .as_mut()
+        .unwrap()
+        .pop();
+    store.update(
+        HashMap::new(),
+        HashMap::from([("tenant/paired".into(), invalid)]),
+        &HashSet::new(),
+    );
+    assert!(store
+        .snapshot()
+        .lookup(&target(PolicyTargetKind::Service), None)
+        .is_invalid());
+    assert_eq!(old.profile.fingerprint, old_fp);
+    assert_eq!(old.policy.spec.resolved_ca_certificates.as_ref().unwrap().len(), 2);
+    let mut repaired = base.clone();
+    Arc::make_mut(&mut repaired)
+        .spec
+        .resolved_ca_certificates
+        .as_mut()
+        .unwrap()[0]
+        .data
+        .as_mut()
+        .unwrap()
+        .insert(CA_CERT.into(), ByteString(ca_b));
+    store.update(
+        HashMap::new(),
+        HashMap::from([("tenant/paired".into(), repaired.clone())]),
+        &HashSet::new(),
+    );
+    let ca_lookup = store.snapshot().lookup(&target(PolicyTargetKind::Service), None);
+    let ca_fp = ca_lookup.effective().unwrap().profile.fingerprint;
+    assert_ne!(ca_fp, old_fp);
+    Arc::make_mut(&mut repaired)
+        .spec
+        .resolved_client_certificate
+        .as_mut()
+        .unwrap()
+        .data = Some(
+        [
+            ("tls.crt".into(), ByteString(client_b)),
+            ("tls.key".into(), ByteString(key_b)),
+        ]
+        .into(),
+    );
+    store.update(
+        HashMap::new(),
+        HashMap::from([("tenant/paired".into(), repaired)]),
+        &HashSet::new(),
+    );
+    let current = store.snapshot().lookup(&target(PolicyTargetKind::Service), None);
+    assert_ne!(current.effective().unwrap().profile.fingerprint, ca_fp);
+    assert!(std::sync::Arc::ptr_eq(
+        &old.policy,
+        &old_snapshot
+            .lookup(&target(PolicyTargetKind::Service), None)
+            .effective()
+            .unwrap()
+            .policy
+    ));
+}
+
+#[test]
+fn cold_backend_tls_eight_reference_boundary_and_default_material_are_exact() {
+    for count in [8, 9] {
+        let mut candidate = paired_material_policy();
+        let spec = &mut Arc::make_mut(&mut candidate).spec;
+        let declaration = spec.validation.ca_certificate_refs.as_ref().unwrap()[0].clone();
+        let material = spec.resolved_ca_certificates.as_ref().unwrap()[0].clone();
+        spec.validation.ca_certificate_refs = Some(
+            (0..count)
+                .map(|i| {
+                    let mut r = declaration.clone();
+                    r.name = format!("ca-{i}");
+                    r
+                })
+                .collect(),
+        );
+        spec.resolved_ca_certificates = Some(
+            (0..count)
+                .map(|i| {
+                    let mut s = material.clone();
+                    s.metadata.name = Some(format!("ca-{i}"));
+                    s
+                })
+                .collect(),
+        );
+        let store = BackendTLSPolicyStore::new();
+        store.replace_all(HashMap::from([("tenant/paired".into(), candidate)]));
+        assert_eq!(
+            store
+                .snapshot()
+                .lookup(&target(PolicyTargetKind::Service), None)
+                .effective()
+                .is_some(),
+            count == 8
+        );
+    }
+    let mut candidate = paired_material_policy();
+    let owner = Arc::make_mut(&mut candidate);
+    owner.metadata.namespace = None;
+    for ca in owner.spec.resolved_ca_certificates.as_mut().unwrap() {
+        ca.metadata.namespace = None;
+    }
+    owner
+        .spec
+        .resolved_client_certificate
+        .as_mut()
+        .unwrap()
+        .metadata
+        .namespace = None;
+    let target = PolicyTargetKey {
+        target_kind: PolicyTargetKind::Service,
+        namespace: "default".into(),
+        name: "shared".into(),
+    };
+    let store = BackendTLSPolicyStore::new();
+    store.replace_all(HashMap::from([("paired".into(), candidate.clone())]));
+    assert!(store.snapshot().lookup(&target, None).effective().is_some());
+    Arc::make_mut(&mut candidate)
+        .spec
+        .resolved_ca_certificates
+        .as_mut()
+        .unwrap()[0]
+        .metadata
+        .namespace = Some(String::new());
+    store.replace_all(HashMap::from([("paired".into(), candidate)]));
+    assert!(store.snapshot().lookup(&target, None).is_invalid());
 }

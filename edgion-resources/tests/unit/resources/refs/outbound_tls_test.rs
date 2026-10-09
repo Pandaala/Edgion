@@ -373,3 +373,31 @@ fn actual_field_pairs_reference_and_material_without_copying() {
     );
     assert!(std::ptr::eq(pair.material().unwrap(), field.client_material().unwrap()));
 }
+
+#[test]
+fn backend_policy_material_projection_preserves_identity_before_provenance_errors() {
+    use crate::resources::refs::backend_tls_fields::BackendTlsRefs;
+    let mut owner:crate::BackendTLSPolicy=serde_json::from_value(serde_json::json!({"metadata":{"name":"policy","namespace":"default"},"spec":{
+        "targetRefs":[{"group":"","kind":"Service","name":"backend"}],"validation":{"hostname":"backend.example","wellKnownCACertificates":"System"},"useSystemCa":true,
+        "options":{"edgion.io/client-certificate-ref":"client"},"resolvedClientCertificate":{"metadata":{"name":"decoy","annotations":{"edgion.io/controller-ca-source":"ConfigMap"}},"data":{"tls.crt":"YQ==","tls.key":"Yg=="}}}})).unwrap();
+    let refs = BackendTlsRefs::from_policy(&owner);
+    let field = refs.client().unwrap().unwrap();
+    assert!(matches!(field.material(), Err(TlsMaterialIdentityError::Identity)));
+    owner.spec.resolved_client_certificate.as_mut().unwrap().metadata.name = Some("client".into());
+    owner
+        .spec
+        .resolved_client_certificate
+        .as_mut()
+        .unwrap()
+        .metadata
+        .annotations = Some(
+        [(
+            crate::constants::annotations::edgion::CONTROLLER_CA_SOURCE.into(),
+            "ConfigMap".into(),
+        )]
+        .into(),
+    );
+    let refs = BackendTlsRefs::from_policy(&owner);
+    let field = refs.client().unwrap().unwrap();
+    assert!(matches!(field.material(), Err(TlsMaterialIdentityError::Provenance)));
+}

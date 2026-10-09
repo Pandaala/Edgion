@@ -5,6 +5,7 @@
 //! their consuming runtimes.
 
 pub mod backend_fields;
+pub mod backend_tls_fields;
 pub mod condition_fields;
 pub mod config_data_fields;
 pub mod dns_fields;

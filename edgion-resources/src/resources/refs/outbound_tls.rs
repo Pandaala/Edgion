@@ -163,6 +163,60 @@ impl BoundTlsMaterial<'_> {
     }
 }
 
+/// Material-free identity failures shared by all actual TLS field consumers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TlsMaterialIdentityError {
+    Reference(ReferenceError),
+    Identity,
+    Provenance,
+}
+impl<'a> BoundTlsMaterial<'a> {
+    pub(super) fn from_backend_policy(
+        field: &'a super::backend_tls_fields::BackendTlsField<'_>,
+        material: Option<&'a Secret>,
+    ) -> Self {
+        Self {
+            reference: TlsReferenceIdentity::authored(field.token()),
+            material,
+        }
+    }
+    /// Check the actual declared target and material provenance without reading stores.
+    pub fn validate_identity(&self) -> Result<(), TlsMaterialIdentityError> {
+        use crate::constants::annotations::edgion::{CONTROLLER_CA_SOURCE, CONTROLLER_CA_SOURCE_CONFIG_MAP};
+        let target = self.target().map_err(TlsMaterialIdentityError::Reference)?;
+        let material = self.material.ok_or(TlsMaterialIdentityError::Identity)?;
+        let local_default = match &self.reference.origin {
+            TlsIdentityOrigin::Authored(token) => token
+                .validated()
+                .map_err(TlsMaterialIdentityError::Reference)?
+                .is_backend_tls_material(),
+            TlsIdentityOrigin::Effective(_) => false,
+        };
+        let namespace = if local_default {
+            Some(material.metadata.namespace.as_deref().unwrap_or("default"))
+        } else {
+            material.metadata.namespace.as_deref()
+        };
+        if material.metadata.name.as_deref() != Some(target.name()) || namespace != target.scope().namespace() {
+            return Err(TlsMaterialIdentityError::Identity);
+        }
+        let marker = material
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(CONTROLLER_CA_SOURCE));
+        let matches = match target.group_kind().kind() {
+            "Secret" => marker.is_none(),
+            "ConfigMap" => marker.is_some_and(|v| v == CONTROLLER_CA_SOURCE_CONFIG_MAP),
+            _ => false,
+        };
+        if !matches {
+            return Err(TlsMaterialIdentityError::Provenance);
+        }
+        Ok(())
+    }
+}
+
 /// The actual cluster EGC policy and its paired material; no local-policy copy.
 /// ```compile_fail
 /// use edgion_resources::resources::refs::outbound_tls::BoundGlobalOutboundTls;

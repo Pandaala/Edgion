@@ -28,12 +28,18 @@ impl ConfigMapHandler {
         if let Some(name) = source.metadata.name.as_deref() {
             let namespace = source.metadata.namespace.as_deref().unwrap_or("default");
             if source.metadata.namespace.is_none() {
-                // Preserve all raw-key consumers; the new semantic alias is Gateway-only.
+                // Preserve all raw-key consumers; the semantic alias is limited to actual Gateway/BTP material consumers.
                 refs.extend(
                     ctx.secret_ref_manager()
                         .get_refs(&format!("{CONFIG_MAP_REF_KEY_PREFIX}default/{name}"))
                         .into_iter()
-                        .filter(|resource| resource.kind == edgion_resources::ResourceKind::Gateway),
+                        .filter(|resource| {
+                            matches!(
+                                resource.kind,
+                                edgion_resources::ResourceKind::Gateway
+                                    | edgion_resources::ResourceKind::BackendTLSPolicy
+                            )
+                        }),
                 );
             }
             refs.extend(

@@ -853,3 +853,64 @@ fn native_gateway_material_candidates_preserve_metadata_and_reject_ambiguity() {
         }
     }
 }
+
+#[test]
+fn backend_tls_material_selector_is_local_ambiguous_and_has_no_gateway_authority() {
+    use edgion_resources::resources::refs::backend_tls_fields::BackendTlsRefs;
+    use std::collections::HashSet;
+    for (namespace, qualified, bare, expected) in [
+        (None, false, true, true),
+        (Some("default"), true, false, true),
+        (None, true, true, false),
+        (Some("apps"), false, true, false),
+        (Some("apps"), true, false, true),
+    ] {
+        let ns = namespace.unwrap_or("default");
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let make = |namespace: Option<&str>| Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some("ca".into()),
+                namespace: namespace.map(str::to_owned),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut values = HashMap::new();
+        if qualified {
+            values.insert(format!("{ns}/ca"), make(Some(ns)));
+        }
+        if bare {
+            values.insert("ca".into(), make(None));
+        }
+        runtime.secret_store.update(values, &HashSet::new());
+        let policy:edgion_resources::BackendTLSPolicy=serde_json::from_value(serde_json::json!({"metadata":{"name":"policy","namespace":namespace},"spec":{
+            "targetRefs":[{"group":"","kind":"Service","name":"backend"}],"validation":{"hostname":"backend.example","caCertificateRefs":[{"group":"","kind":"Secret","name":"ca"}]}}})).unwrap();
+        let refs = BackendTlsRefs::from_policy(&policy);
+        let field = refs.ca(0).unwrap();
+        let token = field.token();
+        assert!(!token.validated().unwrap().is_gateway_tls());
+        assert!(token.freeze().is_err());
+        let owner = ResourceRef::new(
+            ResourceKind::BackendTLSPolicy,
+            namespace.map(str::to_owned),
+            "policy".into(),
+        );
+        let (outcome, reads) = observe_bound_reads(|| fetch_bound_secret(&ctx, &owner, token));
+        assert_eq!(matches!(outcome, BoundFetchOutcome::Ok(_)), expected);
+        assert!(reads.contains(&"authorization"));
+        assert_eq!(
+            runtime.secret_ref_manager.get_dependencies(&owner.key()),
+            [format!("{ns}/ca")]
+        );
+        assert!(runtime
+            .frontend_ca_ref_manager
+            .get_dependencies(&owner.key())
+            .is_empty());
+        if let BoundFetchOutcome::Ok(material) = outcome {
+            assert_eq!(
+                material.secret.metadata.namespace.as_deref(),
+                if qualified { Some(ns) } else { None }
+            );
+        }
+    }
+}

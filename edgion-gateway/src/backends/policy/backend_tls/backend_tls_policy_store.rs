@@ -252,30 +252,8 @@ impl BackendTLSPolicyStore {
         if !backend_tls_identity_validation_errors(&policy.spec.validation).is_empty() {
             return false;
         }
-        if !policy.spec.use_system_ca
-            && policy
-                .spec
-                .validation
-                .ca_certificate_refs
-                .as_ref()
-                .is_some_and(|refs| !refs.is_empty())
-            && !Self::has_resolved_ca_payload(policy)
-        {
-            return false;
-        }
-        true
-    }
-
-    fn has_resolved_ca_payload(policy: &BackendTLSPolicy) -> bool {
-        policy.spec.resolved_ca_certificates.as_ref().is_some_and(|secrets| {
-            secrets.iter().any(|secret| {
-                secret
-                    .data
-                    .as_ref()
-                    .and_then(|data| data.get(CA_CERT))
-                    .is_some_and(|value| !value.0.is_empty())
-            })
-        })
+        edgion_resources::resources::refs::backend_tls_fields::BackendTlsRefs::from_policy(policy)
+            .all_materials_resolved()
     }
 
     fn valid_target_key(policy: &BackendTLSPolicy) -> Option<PolicyTargetKey> {

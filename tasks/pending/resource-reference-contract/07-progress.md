@@ -1,6 +1,6 @@
 # Execution and closure ledger
 
-## Current resume snapshot (2026-10-09)
+## Current resume snapshot (2026-10-10)
 
 - Latest accepted local batches: R7a managed HTTP plugins 418e353dd,
   R7b internal HTTPRoute auth 78d0f168c, shared template readiness e954a9881,
@@ -12,7 +12,14 @@
   workspace gates. Its final scope is twenty technical/documentation paths plus
   this ledger. Verification passed 300 unit tests and 55 doctests, retaining ten
   existing ignored doctests and all 9637 baseline identities (9656 after nineteen
-  additions). The local commit gate remains the final recording step.
+  additions). Committed locally as 67ae8580baafde977bc518773b05a7bb39e85893;
+  all twenty-one committed blobs were verified. No push occurred.
+- R8b BackendTLSPolicy actual-field/material pairing passed final execution
+  review and fourteen checks (six refreshed after a one-expression test lint fix,
+  eight reused with unchanged scope). There are 280 unit and 58 doc passes,
+  ten existing ignored doctests, and 9671 identities with all 9656 baseline IDs
+  preserved. Twenty-three technical/documentation paths plus this ledger are
+  ready for the final local commit gate; no live/conformance claim is made.
 - Native Gateway material selection preserves omitted raw namespaces without
   relaxing native group/kind or Grant semantics. Default's candidate reads are not
   atomic; registered dependencies and subsequent source events reconcile changes.
@@ -2693,3 +2700,74 @@ No live TLS handshake or Gateway API conformance is claimed. R8b BTP material
 pairing, later R8 consumers, F1 whole-task audit/cleanup and F2 fresh live validation
 remain open. Only the frozen twenty paths and this ledger may enter this batch's
 local commit. Protected unrelated untracked paths remain excluded. Never push.
+
+## R8b planning resumed after R8a commit
+
+R8a committed as 67ae8580baafde977bc518773b05a7bb39e85893. Its final committed
+blob proof is stored in the R8a root verification directory. Post-commit status
+contained only the two protected unrelated untracked paths.
+
+R8b is plan-only: revalidate actual BackendTLSPolicy CA/client-option ownership
+and typed material pairing from this HEAD. Existing canonical targetRefs, native
+group and same-namespace contracts, custom option trim/DNS grammar, Gateway policy
+winner capture and pool rotation must remain intact. Omitted-namespace FS/etcd
+material and source-event recovery require explicit coverage. EBTP remains a
+separate later batch. No R8b implementation or conformance acceptance is recorded.
+
+R8b plan r2 received two Astra approvals. The exact twenty-two-path plan and
+source baseline are under `tmp/resource-reference-contract/r8b-plan-67ae8580-20261009/`.
+It requires the native eight-CA-reference bound before preparation, validation,
+acquisition or material matching; partial status and complete publication check
+material cardinality before scanning. Existing duplicate-reference rejection is
+an Edgion rule, not a demonstrated CRD uniqueness requirement; F1 must retain that
+distinction. Production implementation is authorized, with a frozen production
+checkpoint and independent review required before compiler preflight.
+
+## R8b final execution and commit gate (2026-10-10)
+
+BackendTLSPolicy CA ordinals and the custom client option now borrow their actual
+policy owner. Shared material identity/provenance checks prevent same-name Secret
+and ConfigMap substitution. Common retains its original strict namespace and
+error-priority behavior. The native eight-reference bound and partial/full
+material cardinality checks precede preparation and matching. Controller status
+and Gateway cold publication share the actual pairing contract; peer construction,
+policy precedence, immutable captured generations and pool identity remain intact.
+
+The finite default candidate selector and source-event notification scope extend
+to BTP without extending Gateway-only disabled-Grant behavior or frozen authority.
+Raw material metadata and raw dependency observers are retained; ambiguous default
+candidates fail closed. The two cached reads are not atomic: registered dependencies
+and subsequent events provide reconciliation.
+
+Two Astra reviewers approved plan, production, complete tests and execution. After
+turn interruption, two fresh Astra reviewers independently rechecked the actual
+diff and final correction evidence. Accepted focused evidence contains 280 distinct
+unit and 58 doc passes, ten existing ignored docs, 9656 preserved baseline IDs and
+fifteen additions. Actual binaries and lifetime artifacts are hashed; accessible
+lifetime positive and E0505/E0506/E0502 controls pass. Only the reviewed eight store
+fixture substitutions and two conf-handler fixture fields alter old test bodies;
+all old assertions and IDs remain. Raw failed runs are retained (new unordered
+dependency assertion, old trustless fixture, and one new-test Clippy warning).
+
+The final Clippy correction changes only a new-test string conversion; its eleven
+Secret-handler tests passed again without warning and Controller identity/ignored
+lists stayed identical. Source-input scoped reuse is explicit across revisions.
+Evidence: `tmp/resource-reference-contract/r8b-verification-20261010/verification-final.json`
+and `clippy-correction-r6.json` in that directory; final technical snapshot is
+`tmp/resource-reference-contract/r8b-plan-67ae8580-20261009/full-static-snapshot-r6.json`.
+
+All fourteen root checks pass without warnings. Following the single test-only
+correction, six affected checks were refreshed and eight unchanged-scope checks
+were reused with recorded rationale. Final workspace check took 9.686 seconds and
+Clippy 11.777 seconds. Evidence and final commit manifest are under
+`tmp/resource-reference-contract/r8b-root-verification-20261010/`.
+
+Remaining work: EBTP encrypted-health TLS, EdgionTls actual references/material,
+ACME/generated identities, F1 full consumer/simplification/knowledge cleanup, and
+F2 fresh admission, dynamic integration and split-profile Gateway API conformance.
+The existing duplicate BTP CA declaration rejection is an Edgion behavior, not a
+vendor-CRD uniqueness requirement; retain that distinction in F1. The now-unused
+BTP client_certificate_secret_ref wrapper is an F1 inventory candidate, not
+authorized for opportunistic deletion here. Original issue closure remains open.
+Only the frozen twenty-three paths plus this ledger enter the local commit.
+Protected unrelated untracked paths remain excluded; never push.

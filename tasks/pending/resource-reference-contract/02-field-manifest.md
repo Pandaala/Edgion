@@ -597,3 +597,15 @@ snapshot; dependencies are registered first and subsequent events reconcile
 creation, deletion, revocation and ambiguity changes. Matcher identity comparison
 interprets only an omitted actual Secret namespace as default, without rewriting
 material metadata or accepting an explicit empty namespace.
+
+### R8b BackendTLSPolicy material fields
+
+CA ordinals and the custom client-certificate option now use actual policy
+loans, canonical typed acquisition, and shared identity/provenance pairing.
+Native group/kind remain required and literal `core` is rejected; the custom
+option keeps trim/DNS-name semantics. The eight-reference bound and partial/full
+material cardinality gates precede scans. Default owner namespace projection
+uses the finite qualified/bare selector and ordinary Gateway/BTP semantic event
+notification; it does not extend Grant bypass or frozen credential authority.
+TargetRefs, EBTP, peer hot paths, winner selection and pool behavior are outside
+this batch. Unit verification and live/conformance evidence remain distinct.

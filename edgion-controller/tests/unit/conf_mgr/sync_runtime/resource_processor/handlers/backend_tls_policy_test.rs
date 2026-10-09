@@ -676,3 +676,293 @@ async fn bare_policy_keeps_raw_winner_identity_and_semantic_target_dependencies(
         .get_dependencies(&owner.key())
         .is_empty());
 }
+
+fn material_policy(kind: &str, count: usize) -> BackendTLSPolicy {
+    let mut policy = make_btp("apps", "material-policy", "backend", "2024-01-01T00:00:00Z");
+    policy.spec.validation.well_known_ca_certificates = None;
+    policy.spec.validation.ca_certificate_refs = Some(
+        (0..count)
+            .map(|i| BackendTLSPolicyCACertificateRef {
+                group: String::new(),
+                kind: kind.into(),
+                name: format!("ca-{i}"),
+            })
+            .collect(),
+    );
+    policy
+}
+
+fn material_parse_observed(policy: BackendTLSPolicy, ctx: &HandlerContext) -> (BackendTLSPolicy, Vec<&'static str>) {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+    super::super::super::credential::pipeline::observe_bound_reads(|| {
+        let handler = BackendTlsPolicyHandler::default();
+        let mut future = std::pin::pin!(handler.parse_policy(policy, ctx));
+        let Poll::Ready(ProcessResult::Continue(parsed)) =
+            future.as_mut().poll(&mut Context::from_waker(Waker::noop()))
+        else {
+            panic!("BTP parse must not suspend");
+        };
+        parsed
+    })
+}
+
+#[test]
+fn backend_tls_actual_ca_kind_pairing_status_and_repair_are_readonly() {
+    use k8s_openapi::api::core::v1::{ConfigMap, Secret};
+    use k8s_openapi::ByteString;
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    let (ctx, runtime) = make_ctx();
+    runtime.service_ref_mgr.add_ref(
+        "apps/backend".into(),
+        ResourceRef::new(ResourceKind::HTTPRoute, Some("apps".into()), "route".into()),
+    );
+    runtime.gateway_route_index.update_route(
+        ResourceKind::HTTPRoute,
+        "apps/route",
+        &[ParentReference {
+            group: Some("gateway.networking.k8s.io".into()),
+            kind: Some("Gateway".into()),
+            namespace: Some("apps".into()),
+            name: "gateway".into(),
+            section_name: None,
+            port: None,
+        }],
+        "apps",
+    );
+    let mut policy = material_policy("Secret", 1);
+    policy
+        .spec
+        .validation
+        .ca_certificate_refs
+        .as_mut()
+        .unwrap()
+        .push(BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: "ConfigMap".into(),
+            name: "ca-0".into(),
+        });
+    let secret = Secret {
+        metadata: ObjectMeta {
+            name: Some("ca-0".into()),
+            namespace: Some("apps".into()),
+            ..Default::default()
+        },
+        data: Some(BTreeMap::from([("ca.crt".into(), ByteString(b"ca".to_vec()))])),
+        ..Default::default()
+    };
+    runtime
+        .secret_store
+        .update(HashMap::from([("apps/ca-0".into(), secret)]), &HashSet::new());
+    let (first, reads) = material_parse_observed(policy.clone(), &ctx);
+    assert!(!reads.is_empty());
+    assert!(!BackendTlsPolicyHandler::all_runtime_refs_resolved(&first));
+    assert!(first.spec.resolved_target_class.is_none());
+    let fields = BackendTlsRefs::from_policy(&first);
+    assert!(fields.ca(0).unwrap().resolved());
+    assert!(!fields.ca(1).unwrap().resolved());
+    let owner = ResourceRef::new(
+        ResourceKind::BackendTLSPolicy,
+        Some("apps".into()),
+        "material-policy".into(),
+    );
+    let dependencies: BTreeSet<_> = runtime
+        .secret_ref_manager
+        .get_dependencies(&owner.key())
+        .into_iter()
+        .collect();
+    assert_eq!(dependencies.len(), 2);
+    let mut status = None;
+    let (_, status_reads) = super::super::super::credential::pipeline::observe_bound_reads(|| {
+        BackendTlsPolicyHandler::default().update_policy_status(&first, &mut status, &ctx, &[]);
+    });
+    assert!(status_reads.is_empty());
+    let ancestors = &status.as_ref().unwrap().ancestors;
+    assert_eq!(ancestors.len(), 1);
+    assert_eq!(ancestors[0].ancestor_ref.name, "gateway");
+    for (kind, value, reason) in [
+        ("ResolvedRefs", "False", "InvalidCACertificateRef"),
+        ("Accepted", "True", "Accepted"),
+    ] {
+        let condition = ancestors[0].conditions.iter().find(|c| c.type_ == kind).unwrap();
+        assert_eq!(condition.status, value);
+        assert_eq!(condition.reason, reason);
+    }
+    assert_eq!(
+        runtime
+            .secret_ref_manager
+            .get_dependencies(&owner.key())
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        dependencies
+    );
+    runtime.configmap_store.update(
+        HashMap::from([(
+            "apps/ca-0".into(),
+            ConfigMap {
+                metadata: ObjectMeta {
+                    name: Some("ca-0".into()),
+                    namespace: Some("apps".into()),
+                    ..Default::default()
+                },
+                data: Some(BTreeMap::from([("ca.crt".into(), "configmap-ca".into())])),
+                ..Default::default()
+            },
+        )]),
+        &HashSet::new(),
+    );
+    let (repaired, _) = material_parse_observed(policy, &ctx);
+    assert!(BackendTlsPolicyHandler::all_runtime_refs_resolved(&repaired));
+    assert!(repaired.spec.resolved_target_class.is_some());
+    assert_eq!(repaired.spec.resolved_ca_certificates.as_ref().unwrap().len(), 2);
+    let (_, status_reads) = super::super::super::credential::pipeline::observe_bound_reads(|| {
+        BackendTlsPolicyHandler::default().update_policy_status(&repaired, &mut status, &ctx, &[]);
+    });
+    assert!(status_reads.is_empty());
+    assert_eq!(
+        runtime
+            .secret_ref_manager
+            .get_dependencies(&owner.key())
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        dependencies
+    );
+    let ancestors = &status.as_ref().unwrap().ancestors;
+    assert_eq!(ancestors.len(), 1);
+    for kind in ["ResolvedRefs", "Accepted"] {
+        let condition = ancestors[0].conditions.iter().find(|c| c.type_ == kind).unwrap();
+        assert_eq!(condition.status, "True");
+        assert_eq!(
+            condition.reason,
+            if kind == "ResolvedRefs" {
+                "ResolvedRefs"
+            } else {
+                "Accepted"
+            }
+        );
+    }
+}
+
+#[test]
+fn backend_tls_bounds_and_invalid_fields_clear_forged_material_before_effects() {
+    use k8s_openapi::api::core::v1::Secret;
+    for case in ["eight", "nine", "core", "name", "owner-name", "owner-ns"] {
+        let (ctx, runtime) = make_ctx();
+        let mut policy = material_policy(
+            "Secret",
+            if case == "nine" {
+                9
+            } else if case == "eight" {
+                8
+            } else {
+                1
+            },
+        );
+        match case {
+            "core" => policy.spec.validation.ca_certificate_refs.as_mut().unwrap()[0].group = "core".into(),
+            "name" => policy.spec.validation.ca_certificate_refs.as_mut().unwrap()[0]
+                .name
+                .clear(),
+            "owner-name" => policy.metadata.name = Some("bad/name".into()),
+            "owner-ns" => policy.metadata.namespace = Some(String::new()),
+            _ => {}
+        }
+        if case == "nine" {
+            policy.spec.options = Some([("edgion.io/client-certificate-ref".into(), "ca-0".into())].into());
+        }
+        let owner = ResourceRef::new(
+            ResourceKind::BackendTLSPolicy,
+            policy.metadata.namespace.clone(),
+            policy.metadata.name.clone().unwrap(),
+        );
+        policy.spec.resolved_ca_certificates = Some(vec![Secret::default(); 4096]);
+        policy.spec.resolved_client_certificate = Some(Secret::default());
+        let handler = BackendTlsPolicyHandler::default();
+        let errors = handler.validate(&policy, &ctx);
+        if case == "nine" {
+            assert!(errors.iter().any(|e| e.contains("at most 8")));
+            assert!(errors.len() < 5);
+        }
+        let (parsed, reads) = material_parse_observed(policy, &ctx);
+        assert!(parsed.spec.resolved_ca_certificates.is_none());
+        assert!(parsed.spec.resolved_client_certificate.is_none());
+        if case == "eight" {
+            assert_eq!(runtime.secret_ref_manager.get_dependencies(&owner.key()).len(), 8);
+            assert!(!reads.is_empty());
+        } else {
+            assert!(reads.is_empty(), "{case}: {reads:?}");
+            assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+        }
+        let mut forged = parsed;
+        forged.spec.resolved_ca_certificates = Some(vec![Secret::default(); 4096]);
+        let (_, reads) = super::super::super::credential::pipeline::observe_bound_reads(|| {
+            handler.update_policy_status(&forged, &mut None, &ctx, &[])
+        });
+        assert!(reads.is_empty());
+        assert!(!BackendTlsRefs::from_policy(&forged).all_materials_resolved());
+    }
+}
+
+#[test]
+fn backend_tls_eight_actual_materials_and_system_client_option_publish_correctly() {
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
+    use std::collections::{HashMap, HashSet};
+    let (ctx, runtime) = make_ctx();
+    runtime.secret_store.update(
+        (0..8)
+            .map(|i| {
+                (
+                    format!("apps/ca-{i}"),
+                    Secret {
+                        metadata: ObjectMeta {
+                            name: Some(format!("ca-{i}")),
+                            namespace: Some("apps".into()),
+                            ..Default::default()
+                        },
+                        data: Some(
+                            [
+                                ("ca.crt".into(), ByteString(b"ca".to_vec())),
+                                ("tls.crt".into(), ByteString(b"crt".to_vec())),
+                                ("tls.key".into(), ByteString(b"key".to_vec())),
+                            ]
+                            .into(),
+                        ),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>(),
+        &HashSet::new(),
+    );
+    let (parsed, reads) = material_parse_observed(material_policy("Secret", 8), &ctx);
+    assert!(!reads.is_empty());
+    assert_eq!(parsed.spec.resolved_ca_certificates.as_ref().unwrap().len(), 8);
+    assert!(BackendTlsPolicyHandler::all_runtime_refs_resolved(&parsed));
+    assert!(parsed.spec.resolved_target_class.is_some());
+    let mut system = make_btp("apps", "material-policy", "backend", "2024-01-01T00:00:00Z");
+    system.spec.options = Some([("edgion.io/client-certificate-ref".into(), "  ca-0  ".into())].into());
+    let (parsed, _) = material_parse_observed(system.clone(), &ctx);
+    assert!(parsed.spec.resolved_ca_certificates.is_none());
+    assert_eq!(
+        parsed
+            .spec
+            .resolved_client_certificate
+            .as_ref()
+            .unwrap()
+            .metadata
+            .name
+            .as_deref(),
+        Some("ca-0")
+    );
+    assert!(BackendTlsPolicyHandler::all_runtime_refs_resolved(&parsed));
+    system.spec.options = None;
+    let (parsed, _) = material_parse_observed(system, &ctx);
+    assert!(parsed.spec.resolved_client_certificate.is_none());
+    let owner = ResourceRef::new(
+        ResourceKind::BackendTLSPolicy,
+        Some("apps".into()),
+        "material-policy".into(),
+    );
+    assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+}

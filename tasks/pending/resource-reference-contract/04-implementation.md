@@ -2316,3 +2316,30 @@ are retained in `tmp/resource-reference-contract/r4b-verification-20261008-r1`.
 This does not close Admin/source collisions, raw-None EP semantic lookup or live
 conformance. Final gates, both independent result reviews and commit status are
 maintained in [07-progress.md](07-progress.md).
+
+### R8b actual BackendTLSPolicy material binding
+
+Implementation uses one actual-owner facade for bounded CA ordinals and the
+existing client option parser, with shared BoundTlsMaterial identity/provenance
+validation. Controller acquisition registers valid pending ordinary dependencies
+before reads, clears previous material first, and derives readonly status from
+typed pairs. Gateway cold publication requires complete matching material; no
+request-path reference validation or policy fallback mechanism is added.
+
+The same finite default namespace selector used by Gateway accepts one qualified
+or bare source and rejects ambiguity; Secret/ConfigMap events additionally wake
+canonical BTP dependencies while preserving raw notifications and excluding
+other semantic-alias consumers. Actual metadata is retained. This is eventual
+event reconciliation, not atomic two-store reads or instantaneous revocation.
+
+Focused verification passed 280 unit tests and 58 doc tests; 10 existing doc
+cases remain ignored. Independent lifetime controls passed an accessible positive
+and owner-drop/mutation/reorder negatives with the intended borrow errors.
+The 9656 prior test identities and ignored cases are preserved; 15 new identities
+bring the current total to 9671. Approved Gateway store and conf-handler fixtures
+now supply authored System/custom trust and actual material identity; all old
+assertions, payload bytes and test identities remain unchanged. Raw failed logs
+are retained for the new unordered-dependency assertion correction and the old
+conf-handler trust fixture correction. Final independent review and repository
+gates remain coordinator-owned, as do real-environment TLS and Gateway API
+conformance. These focused results do not establish live or conformance success.

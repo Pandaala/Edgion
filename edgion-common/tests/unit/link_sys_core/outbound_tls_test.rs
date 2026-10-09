@@ -868,3 +868,38 @@ fn internal_route_tls_projection_keeps_exact_order_source_kind_and_client_identi
         .unwrap() = serde_json::json!("decoy");
     assert_eq!(prove(disabled), Ok(()));
 }
+
+#[test]
+fn canonical_material_comparator_preserves_strict_namespace_and_error_precedence() {
+    use edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE;
+    let mut wire = paired_local_wire();
+    wire["metadata"]["namespace"] = serde_json::json!("default");
+    for material in wire["spec"]["requestPlugins"][0]["config"]["resolvedCaCertificates"]
+        .as_array_mut()
+        .unwrap()
+    {
+        material["metadata"]["namespace"] = serde_json::json!("default");
+    }
+    wire["spec"]["requestPlugins"][0]["config"]["resolvedClientCertificate"]["metadata"]["namespace"] =
+        serde_json::json!("default");
+    assert_eq!(local_proof_result(wire.clone()), Ok(()));
+    let material = &mut wire["spec"]["requestPlugins"][0]["config"]["resolvedCaCertificates"][0];
+    material["metadata"].as_object_mut().unwrap().remove("namespace");
+    material["metadata"]["annotations"] = serde_json::json!({CONTROLLER_CA_SOURCE:"ConfigMap"});
+    assert_eq!(
+        local_proof_result(wire.clone()),
+        Err(TlsMaterialProofError::MaterialIdentity)
+    );
+    wire["spec"]["requestPlugins"][0]["config"]["resolvedCaCertificates"][0]["metadata"]["namespace"] =
+        serde_json::json!("default");
+    assert_eq!(
+        local_proof_result(wire.clone()),
+        Err(TlsMaterialProofError::MaterialProvenance)
+    );
+    wire["spec"]["requestPlugins"][0]["config"]["tls"]["validation"]["caCertificateRefs"][0]["name"] =
+        serde_json::json!("");
+    assert!(matches!(
+        local_proof_result(wire),
+        Err(TlsMaterialProofError::Reference(_))
+    ));
+}

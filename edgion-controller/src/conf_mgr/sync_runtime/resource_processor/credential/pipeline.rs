@@ -416,7 +416,7 @@ fn read_bound_material<T: kube::Resource>(
     mut read: impl FnMut(Option<&str>, &str) -> Option<T>,
 ) -> BoundFetchOutcome<T> {
     let qualified = read(Some(object.namespace), object.name);
-    let selected = if reference.is_gateway_tls() {
+    let selected = if reference.is_gateway_tls() || reference.is_backend_tls_material() {
         let bare = if object.namespace == "default" {
             read(None, object.name)
         } else {

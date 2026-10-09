@@ -30,12 +30,14 @@ BackendTLSPolicy is a Gateway API standard policy resource used to configure ups
    - Store `creationTimestamp` for conflict-priority ordering
    - Requeue old siblings (when targets change, old siblings need to re-evaluate their conflict status)
 2. **Clear stale references**: clear records for this BackendTLSPolicy in SecretRefManager
-3. **Resolve CA certificates**: iterate `spec.validation.caCertificateRefs`; for each kind=Secret or kind=ConfigMap reference:
-   - Register the reference relationship in SecretRefManager
-   - Read data from `runtime.secret_store` / `runtime.configmap_store` and populate `spec.resolved_ca_certificates`
-4. **Resolve client certificate Secret**: obtain the client certificate reference via `client_certificate_secret_ref()`:
-   - Register the reference relationship in SecretRefManager
-   - Read Secret data from `runtime.secret_store` and populate `spec.resolved_client_certificate`
+3. **Resolve CA certificates**: use `BackendTlsRefs` on the actual policy after the shared native eight-reference bound:
+   - Borrow each CA ordinal and validate its native local target before effects
+   - Use `fetch_bound_secret` / `fetch_bound_configmap` to register ordinary typed dependencies before authorization and cached acquisition
+   - Preserve actual source metadata and ConfigMap provenance, then populate `spec.resolved_ca_certificates` after field loans end
+4. **Resolve client certificate Secret**: use the same actual `BackendTlsRefs` owner and its client option field:
+   - Preserve the existing option parser's trim and same-namespace DNS-name grammar
+   - Use the bound Secret pipeline, then populate `spec.resolved_client_certificate` after the owner loan ends
+   - Status and cold Gateway publication share typed reference/material pairing; missing or mismatched material cannot satisfy another field
 
 ### on_change
 
@@ -92,3 +94,25 @@ Service freezes the TLS winner when the logical Service is selected. AI captures
 | BackendTLSPolicy → EdgionBackend | EdgionBackend | targetRef | Direct AI target; no nested-Service policy inheritance |
 | BackendTLSPolicy ↔ BackendTLSPolicy | BackendTLSPolicy | BackendTLSPolicyTargetManager | Same-target conflict detection + sibling requeue |
 | BackendTLSPolicy ← SecretRefManager | Secret | cascading requeue | Secret changes automatically re-process the policy |
+
+## Actual material field binding
+
+`refs::backend_tls_fields::BackendTlsRefs` borrows the actual policy CA ordinal
+and client option. Native CA group/kind remain required; only the empty core
+group is supported. The client option retains its trimmed same-namespace DNS
+name grammar. The shared native eight-reference bound precedes reference
+preparation, acquisition and status traversal. Partial status checks material
+cardinality before matching; complete Gateway publication requires every typed
+reference/material pair, with no surplus material. Same-name Secret and
+ConfigMap references remain distinct through the existing ConfigMap provenance
+marker. Controller status is readonly; the Gateway checks pairing at cold
+publication and keeps peer construction, winner selection and pool identity
+ownership unchanged.
+
+An omitted owner namespace means `default`; target namespace is the policy's
+effective local namespace. Default acquisition accepts one exact qualified or
+bare cached source, rejects both present, and preserves actual source metadata.
+Nondefault acquisition never reads bare keys. These two cache reads are not an
+atomic snapshot: ordinary typed dependencies precede acquisition, and source
+events requeue the policy for reconciliation. Bare-key semantic notifications
+are limited to Gateway and BackendTLSPolicy; raw-key observers remain intact.

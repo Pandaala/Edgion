@@ -74,3 +74,22 @@ BackendTLSPolicy conformance suite.
 ## Resolution references
 
 - `tls-08` — 2026-05-21.
+
+## BackendTLSPolicy reference/material pairing
+
+Before publishing a backend TLS policy, the cold policy store validates actual
+CA ordinals and client-option material through `BackendTlsRefs`. The compressed
+CA material vector is matched by canonical namespace/name and Secret/ConfigMap
+provenance, never name alone. Missing, surplus, ambiguous or wrong-source
+material cannot satisfy a declaration; status may still report genuine partial
+CA success. The native maximum of eight references and material cardinality
+checks precede scans. Existing Common outbound TLS consumers retain strict
+namespace equality and their existing error priority after sharing the material
+identity comparator.
+
+This gate establishes reference/material identity, not PEM validity or live TLS
+handshake success. Existing peer PEM-stack parsing and pool-profile ownership
+remain unchanged. Re-evaluate if the material transport shape, supported source
+kinds, local namespace projection, or cold publication boundary changes. Native
+CRDs do not declare CA-list uniqueness; duplicate declaration rejection remains
+existing Edgion handler behavior and requires separate conformance analysis.

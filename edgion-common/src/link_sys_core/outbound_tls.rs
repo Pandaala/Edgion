@@ -274,28 +274,12 @@ fn validate_client_pair(field: &MaterialField<'_, '_>) -> Result<(), TlsMaterial
 }
 
 fn validate_material_pair(pair: BoundTlsMaterial<'_>) -> Result<(), TlsMaterialProofError> {
-    use edgion_resources::constants::annotations::edgion::{CONTROLLER_CA_SOURCE, CONTROLLER_CA_SOURCE_CONFIG_MAP};
-    let target = pair.target().map_err(TlsMaterialProofError::Reference)?;
-    let material = pair.material().ok_or(TlsMaterialProofError::MaterialIdentity)?;
-    if material.metadata.name.as_deref() != Some(target.name())
-        || material.metadata.namespace.as_deref() != target.scope().namespace()
-    {
-        return Err(TlsMaterialProofError::MaterialIdentity);
-    }
-    let marker = material
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|annotations| annotations.get(CONTROLLER_CA_SOURCE));
-    let matches = match target.group_kind().kind() {
-        "Secret" => marker.is_none(),
-        "ConfigMap" => marker.is_some_and(|value| value == CONTROLLER_CA_SOURCE_CONFIG_MAP),
-        _ => false,
-    };
-    if !matches {
-        return Err(TlsMaterialProofError::MaterialProvenance);
-    }
-    Ok(())
+    use edgion_resources::resources::refs::outbound_tls::TlsMaterialIdentityError;
+    pair.validate_identity().map_err(|error| match error {
+        TlsMaterialIdentityError::Reference(error) => TlsMaterialProofError::Reference(error),
+        TlsMaterialIdentityError::Identity => TlsMaterialProofError::MaterialIdentity,
+        TlsMaterialIdentityError::Provenance => TlsMaterialProofError::MaterialProvenance,
+    })
 }
 
 // ============================================================================
