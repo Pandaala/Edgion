@@ -11,11 +11,11 @@ pub struct KafkaLogSender {
 }
 
 impl KafkaLogSender {
-    pub fn new(link_sys_ref: LinkSysRef, topic: String) -> Self {
-        Self {
-            key: link_sys_ref.key(),
+    pub fn new(link_sys_ref: LinkSysRef, topic: String) -> Result<Self> {
+        Ok(Self {
+            key: link_sys_ref.key().map_err(anyhow::Error::msg)?,
             topic,
-        }
+        })
     }
 }
 

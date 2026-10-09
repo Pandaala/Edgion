@@ -42,16 +42,15 @@ impl<'de> Deserialize<'de> for LinkSysRef {
 impl LinkSysRef {
     /// Validate the bounded identity before it enters logs or metrics.
     pub fn validate(&self) -> Result<(), &'static str> {
-        use crate::resources::common::kubernetes_name::{is_dns_label, is_dns_subdomain};
-        if !is_dns_label(&self.namespace, 63) || !is_dns_subdomain(&self.name, 253) {
-            return Err("invalid LinkSys reference");
-        }
-        Ok(())
+        crate::resources::refs::targets::process_output_link_sys_target(self)
+            .map(|_| ())
+            .map_err(|_| "invalid LinkSys reference")
     }
 
-    /// Returns the "namespace/name" key used by runtime stores.
-    pub fn key(&self) -> String {
-        format!("{}/{}", self.namespace, self.name)
+    /// Returns the validated "namespace/name" key used by runtime stores.
+    pub fn key(&self) -> Result<String, &'static str> {
+        self.validate()?;
+        Ok(format!("{}/{}", self.namespace, self.name))
     }
 }
 

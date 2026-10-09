@@ -626,7 +626,7 @@ fn otlp_reference_uses_production_yaml_deserialization() {
     let edgion_resources::StringOutput::Otlp { link_sys_ref } = cfg.access_log.output else {
         panic!("expected OTLP reference output");
     };
-    assert_eq!(link_sys_ref.key(), "observability/collector");
+    assert_eq!(link_sys_ref.key().unwrap(), "observability/collector");
 }
 
 #[test]

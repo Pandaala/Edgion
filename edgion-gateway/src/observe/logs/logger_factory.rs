@@ -56,12 +56,14 @@ async fn build_sender(output: &StringOutput, log_type: LogType) -> Result<Option
             Ok(Some(Box::new(writer)))
         }
         StringOutput::Es { link_sys_ref } => {
-            tracing::info!(?log_type, %link_sys_ref, "Sender: ES output");
-            Ok(Some(Box::new(EsLogSender::new(link_sys_ref.clone()))))
+            let sender = EsLogSender::new(link_sys_ref.clone())?;
+            tracing::info!(?log_type, link_sys_ref = sender.name(), "Sender: ES output");
+            Ok(Some(Box::new(sender)))
         }
         StringOutput::Kafka { link_sys_ref, topic } => {
-            tracing::info!(?log_type, %link_sys_ref, %topic, "Sender: Kafka output");
-            Ok(Some(Box::new(KafkaLogSender::new(link_sys_ref.clone(), topic.clone()))))
+            let sender = KafkaLogSender::new(link_sys_ref.clone(), topic.clone())?;
+            tracing::info!(?log_type, link_sys_ref = sender.name(), %topic, "Sender: Kafka output");
+            Ok(Some(Box::new(sender)))
         }
         StringOutput::Otlp { link_sys_ref } => {
             let sender = OtlpLogSender::new(link_sys_ref.clone())?;
@@ -123,14 +125,18 @@ pub async fn create_sync_logger(config: &LogConfig) -> Result<Option<SslLogger>>
         }
         StringOutput::Es { link_sys_ref } => {
             tracing::warn!(
-                %link_sys_ref,
+                link_sys_ref = link_sys_ref
+                    .key()
+                    .ok()
+                    .as_deref()
+                    .unwrap_or("invalid LinkSys reference"),
                 "Es output is not supported for SSL logs (sync path); SSL logging disabled"
             );
             Ok(None)
         }
         StringOutput::Kafka { link_sys_ref, topic } => {
             tracing::warn!(
-                %link_sys_ref,
+                link_sys_ref = link_sys_ref.key().ok().as_deref().unwrap_or("invalid LinkSys reference"),
                 %topic,
                 "Kafka output is not supported for SSL logs (sync path); SSL logging disabled"
             );

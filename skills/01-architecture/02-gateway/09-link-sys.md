@@ -201,6 +201,15 @@ pub trait DataSender<T>: Send + Sync where T: Send + 'static {
   LinkSys `failedCache` field and no Redis-backed spill cache. Backfill is
   Elasticsearch-only and at-least-once.
 
+Process-output `LinkSysRef` values require explicit DNS-valid namespace/name and
+use the canonical reference identity check before producing a runtime key.
+ES, Kafka, and OTLP sender constructors reject invalid programmatic references;
+async factories log only the checked identity. This process configuration has no
+Kubernetes source owner, namespace default, or ReferenceGrant. Sender health and
+send operations retain live typed provider lookup, including replacement/deletion.
+Access-log backfill captures no ES key for an invalid programmatic reference;
+valid disabled configurations and fallback path capture retain their lifecycle.
+
 ## ConfHandler
 
 `ConfHandler<LinkSys>` connects the configuration sync system with LinkSysStore:

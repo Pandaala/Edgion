@@ -2039,3 +2039,48 @@ R7/R8 and F1/F2, including live conformance, remain open.
 Both independent reviewers, including Astra, confirmed R6e SCOPED COMMIT PASS
 with no remaining blocker. The nine technical paths and this progress record are
 the complete local commit scope; unrelated untracked files remain excluded.
+
+R6e committed locally as 9ee291490074312a12a5aed64f318172ab316a3e; all ten
+committed blobs match the reviewed snapshot. Tracked/index state was clean,
+protected unrelated untracked paths remain untouched, and nothing was pushed.
+R6f enters PLAN ONLY at this HEAD to revalidate remaining fixed LinkSys consumers
+and process-config provenance before choosing the next coherent implementation.
+
+R6f read-only revalidation confirms GraphqlRateLimit.redisRef is an additional
+fixed-reference source: create delegates through rate_limit_config to
+RateLimitRedis::new. The later plugin-owner batch must retain this origin alongside
+DSL, Redis, Webhook and AI consumers. Existing typed live-provider stores already
+protect provider kind and must not be replaced with captured clients. The next
+candidate is the smaller process log-output boundary: public LinkSysRef values can
+bypass serde, ES/Kafka constructors do not revalidate, and factory tracing formats
+those values before validation. A reviewed plan must preserve logger enablement,
+fallback and synchronous SSL behavior, with no fabricated Kubernetes owner/Grant.
+
+R6f exact 17-path plan received Astra SCOPED PLAN PASS at 9ee2914; execution
+is authorized. The plan lives under tmp/resource-reference-contract/
+r6f-plan-9ee2914-20261009/. It reuses a finite process-output target in refs and
+makes cold key construction fallible, including direct senders and independent ES
+backfill derivation. Existing SSL asymmetric outcomes and live typed provider
+lookups remain unchanged. Seven old-test unwrap adaptations across four files
+are explicitly reviewed. Implementation and final verification remain open.
+
+R6f complete code/test/knowledge checkpoint received independent Astra and
+result-reviewer SCOPED STATIC PASS. Seven approved unwrap adaptations preserve
+old assertions; new tests cover direct senders, serde/key parity, factory branch
+outcomes and pure backfill derivation without global OnceLock mutation. The 9553
+baseline IDs were freshly listed from hash-verified binaries. Focused serial
+verification is authorized; workspace gates and final evidence review remain open.
+
+R6f focused verification passes 243 distinct unit tests across ten nonzero
+filters with no failures. All 9553 old identities and ignored inventories survive
+(9559 current). Four original test files retain all assertions with exactly the
+seven approved unwrap adaptations; all 17 technical paths match the source freeze.
+Both independent reviewers verified raw logs, binaries and preservation evidence.
+All 14 root gates pass with unchanged source and zero warnings/errors; workspace
+check took 22.499 seconds and Clippy 32.636 seconds. Evidence lives under the
+R6f verification and root-verification directories in tmp/resource-reference-contract.
+Final independent commit confirmation remains the last gate. Resource-owned
+LinkSys consumers, process locators, R7/R8 and F1/F2 remain open.
+
+Both independent reviewers, including Astra, confirmed R6f SCOPED COMMIT PASS.
+The exact 17 technical paths plus this record are the local commit scope.

@@ -776,3 +776,10 @@ All LinkSysRef values validate Kubernetes namespace/name syntax and length while
 loading process YAML, including disabled blocks. Invalid values produce fixed
 errors before sender identity construction; valid unresolved references initialize
 unhealthy and participate in first-healthy fallback. SSL sync logs remain file-only.
+
+Programmatically constructed output references are also checked by ES/Kafka/OTLP
+sender constructors. Disabled factory calls and empty LocalFile primaries retain
+their early return; a failing fallback retains the primary. SSL ES/Kafka outputs
+remain unsupported with a bounded warning and no logger, while invalid OTLP
+references retain their constructor error before the unsupported-output decision.
+See [LinkSys DataSender ownership](../../01-architecture/02-gateway/09-link-sys.md#datasender).

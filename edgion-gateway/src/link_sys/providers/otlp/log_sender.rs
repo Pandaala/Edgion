@@ -17,8 +17,9 @@ pub struct OtlpLogSender {
 
 impl OtlpLogSender {
     pub fn new(reference: LinkSysRef) -> Result<Self> {
-        reference.validate().map_err(anyhow::Error::msg)?;
-        Ok(Self { key: reference.key() })
+        Ok(Self {
+            key: reference.key().map_err(anyhow::Error::msg)?,
+        })
     }
 }
 

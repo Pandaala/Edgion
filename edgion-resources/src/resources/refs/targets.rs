@@ -194,6 +194,18 @@ impl PolicyTargetRef {
     }
 }
 
+/// Process-output references have explicit target scope, without Kubernetes ownership or Grant authority.
+pub(crate) fn process_output_link_sys_target(
+    reference: &crate::output::LinkSysRef,
+) -> Result<ObjectIdentity<'_>, ReferenceError> {
+    ObjectIdentity::checked(
+        EDGION_API_GROUP,
+        "LinkSys",
+        ResourceScope::Namespaced(&reference.namespace),
+        &reference.name,
+    )
+}
+
 #[cfg(test)]
 #[path = "../../../tests/unit/resources/refs/targets_test.rs"]
 mod tests;

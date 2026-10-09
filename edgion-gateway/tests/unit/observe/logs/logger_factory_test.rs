@@ -132,3 +132,63 @@ async fn async_logger_skips_disabled_fallback() {
         "disabled fallback is skipped; primary remains"
     );
 }
+
+#[tokio::test]
+async fn programmatic_invalid_output_preserves_factory_failure_policy() {
+    let reference = LinkSysRef {
+        namespace: "bad/ns".into(),
+        name: "sink".into(),
+    };
+    let outputs = [
+        StringOutput::Es {
+            link_sys_ref: reference.clone(),
+        },
+        StringOutput::Kafka {
+            link_sys_ref: reference.clone(),
+            topic: "topic".into(),
+        },
+        StringOutput::Otlp {
+            link_sys_ref: reference,
+        },
+    ];
+    for (index, output) in outputs.into_iter().enumerate() {
+        let mut config = LogConfig {
+            enabled: true,
+            output: output.clone(),
+            fallback: None,
+        };
+        let error = create_async_logger(&config, LogType::Access)
+            .await
+            .err()
+            .expect("invalid primary");
+        assert_eq!(error.to_string(), "invalid LinkSys reference");
+        let sync = create_sync_logger(&config).await;
+        if index == 2 {
+            assert_eq!(
+                sync.err()
+                    .expect("OTLP validates before unsupported policy")
+                    .to_string(),
+                "invalid LinkSys reference"
+            );
+        } else {
+            assert!(sync.unwrap().is_none());
+        }
+        config.enabled = false;
+        assert!(create_async_logger(&config, LogType::Access).await.unwrap().is_none());
+        assert!(create_sync_logger(&config).await.unwrap().is_none());
+        config.enabled = true;
+        config.fallback = Some(output);
+        config.output = StringOutput::LocalFile(LocalFileWriterCfg {
+            path: String::new(),
+            ..Default::default()
+        });
+        assert!(create_async_logger(&config, LogType::Access).await.unwrap().is_none());
+        let temp = tempfile::tempdir().unwrap();
+        config.output = StringOutput::LocalFile(LocalFileWriterCfg {
+            path: temp.path().join("primary.log").to_string_lossy().into_owned(),
+            ..Default::default()
+        });
+        let logger = create_async_logger(&config, LogType::Access).await.unwrap().unwrap();
+        assert_eq!(logger.sender_count(), 1, "invalid fallback must retain valid primary");
+    }
+}

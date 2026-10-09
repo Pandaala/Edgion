@@ -10,10 +10,10 @@ pub struct EsLogSender {
 }
 
 impl EsLogSender {
-    pub fn new(link_sys_ref: LinkSysRef) -> Self {
-        Self {
-            key: link_sys_ref.key(),
-        }
+    pub fn new(link_sys_ref: LinkSysRef) -> Result<Self> {
+        Ok(Self {
+            key: link_sys_ref.key().map_err(anyhow::Error::msg)?,
+        })
     }
 }
 

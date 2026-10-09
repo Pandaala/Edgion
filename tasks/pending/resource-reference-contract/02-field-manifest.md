@@ -426,3 +426,17 @@ C2 coverage: Controller Gateway registration/status, GatewayInput, TCP/TLS/UDP R
 ### Actual inbound PROXY reference field (C3)
 
 Gateway.metadata.annotations[edgion.io/inbound-proxy-protocol].resourceRef is consumed through `GatewayProxyProtocolField`: actual bounded parse once, listener selection/inline first, then checked Gateway-to-EdgionConfigData query, diagnostic identity, dependency registration, target acquisition and canonical visibility/Grant decision. Effective default namespace never rewrites raw dependency owner identity. Invalid source has zero edges/reads; valid missing/denied targets preserve requeue recovery. Gateway continues to consume only the resolved trust snapshot.
+
+### Process output boundary (R6f)
+
+`output::LinkSysRef` in StringOutput ES/Kafka/OTLP has explicit namespace/name,
+canonical checked DNS identity, and a fallible key at cold sender construction.
+It has process provenance, no fabricated Kubernetes owner or Grant. Async sender
+logging and ES backfill capture consume only checked keys; live typed lookup is
+unchanged. See the [LinkSys DataSender contract](../../../skills/01-architecture/02-gateway/09-link-sys.md#datasender).
+
+Remaining fixed resource-owned coverage explicitly includes
+`GraphqlRateLimit.redisRef`: GraphqlRateLimit::create converts rate_limit_config()
+into RateLimitRedis::new. A later actual-field adapter must retain that original
+Graphql source, not only match the RateLimitRedis plugin variant. This batch does
+not claim those resource-owned consumers migrated.

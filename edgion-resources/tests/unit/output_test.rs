@@ -6,7 +6,7 @@ fn test_link_sys_ref_key() {
         namespace: "default".to_string(),
         name: "es-main".to_string(),
     };
-    assert_eq!(r.key(), "default/es-main");
+    assert_eq!(r.key().unwrap(), "default/es-main");
     assert_eq!(format!("{}", r), "default/es-main");
 }
 
@@ -50,7 +50,7 @@ fn test_string_output_kafka_serde_roundtrip() {
     let roundtrip: StringOutput = serde_json::from_str(&json).unwrap();
     match roundtrip {
         StringOutput::Kafka { link_sys_ref, topic } => {
-            assert_eq!(link_sys_ref.key(), "default/kafka-main");
+            assert_eq!(link_sys_ref.key().unwrap(), "default/kafka-main");
             assert_eq!(topic, "edgion-access");
         }
         other => panic!("unexpected variant: {:?}", other),
@@ -117,4 +117,27 @@ fn otlp_reference_closed_shape_and_safe_errors() {
         serde_json::json!({"otlp":{"linkSysRef":{"namespace":"default","name":"collector"},"headers":{}}})
     )
     .is_err());
+}
+
+#[test]
+fn checked_output_keys_match_deserialization_identity_contract() {
+    for (namespace, name) in [
+        (String::new(), "sink".into()),
+        ("ns".into(), String::new()),
+        ("n".repeat(64), "sink".into()),
+        ("ns".into(), "n".repeat(254)),
+        ("ns".into(), "bad/name".into()),
+        ("NS".into(), "sink".into()),
+        ("ns".into(), "bad name".into()),
+    ] {
+        let reference = LinkSysRef { namespace, name };
+        assert_eq!(reference.key(), Err("invalid LinkSys reference"));
+        assert!(serde_json::from_value::<LinkSysRef>(serde_json::to_value(&reference).unwrap()).is_err());
+    }
+    let reference = LinkSysRef {
+        namespace: "n".repeat(63),
+        name: "sink.example".into(),
+    };
+    assert_eq!(reference.key().unwrap(), format!("{}/sink.example", "n".repeat(63)));
+    assert!(serde_json::from_value::<LinkSysRef>(serde_json::to_value(&reference).unwrap()).is_ok());
 }

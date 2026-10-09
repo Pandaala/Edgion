@@ -34,7 +34,7 @@ static BACKFILL_CONFIG: OnceLock<AccessLogBackfillConfig> = OnceLock::new();
 
 fn derive_backfill_config(config: &edgion_resources::LogConfig) -> AccessLogBackfillConfig {
     let es_key = match &config.output {
-        StringOutput::Es { link_sys_ref } => Some(link_sys_ref.key()),
+        StringOutput::Es { link_sys_ref } => link_sys_ref.key().ok(),
         _ => None,
     };
     let fallback_base_path = match &config.fallback {
@@ -99,3 +99,7 @@ pub fn get_access_logger() -> Option<&'static Arc<AccessLogger>> {
 pub fn get_access_logger_unchecked() -> &'static Arc<AccessLogger> {
     ACCESS_LOGGER.get().expect("AccessLogger not initialized")
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/observe/access_log/mod_test.rs"]
+mod tests;
