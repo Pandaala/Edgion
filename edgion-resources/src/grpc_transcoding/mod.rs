@@ -2,6 +2,8 @@
 mod codec;
 mod descriptor;
 mod mapping;
+mod normalize;
+mod serialize;
 mod wire;
 
 use crate::resources::edgion_plugins::PluginValidation;
@@ -265,12 +267,15 @@ impl GrpcJsonTranscoderConfig {
         if bindings.is_empty() {
             return Err("no HTTP mappings for allowed services".into());
         }
-        let mut paths = std::collections::HashSet::new();
-        for b in &bindings {
-            if !paths.insert((b.http_method.clone(), b.regex.as_str().to_owned())) {
-                return Err("ambiguous HTTP mapping".into());
-            }
+        let mut groups = std::collections::BTreeMap::<&str, Vec<&str>>::new();
+        for binding in &bindings {
+            groups
+                .entry(&binding.http_method)
+                .or_default()
+                .push(binding.regex.as_str());
         }
+        edgion_algo::matcher::regex_disjoint::check_disjoint(&groups.into_values().collect::<Vec<_>>())
+            .map_err(|error| format!("HTTP mapping overlap admission failed: {error:?}"))?;
         Ok(CompiledGrpcTranscoder {
             bindings,
             limits,

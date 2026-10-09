@@ -63,6 +63,90 @@ spec:
 
 规则源码不会写入错误响应、日志或指标，网关管理接口将其脱敏。
 
+## 静态规则选择
+
+在每个 profile 的 `ruleSelection` 中写 YAML 条件，按可信配置选择规则。
+Controller 校验后，Gateway 在发布新规则代际时重新编译；请求阶段不再计算这些条件。
+下面的示例仅排除同时满足指定 tag、阶段和 ID 范围的规则，保留 `always-required` 规则：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: application-waf-policy
+  namespace: default
+spec:
+  data:
+    type: WafPolicy
+    config:
+      defaultProfile: application
+      profiles:
+        application:
+          bundleRefs:
+            - name: application-rules-v1
+          ruleSelection:
+            exclude:
+              allOf:
+                - tag: application-specific
+                - phase: 2
+                - ruleIdRange: {start: 100000, end: 100999}
+                - not: {tag: always-required}
+```
+
+`include` 省略时为 `true`，`exclude` 省略时为 `false`。最终选择条件为
+`include && !exclude`；排除优先，源码已移除的规则不会被重新启用。
+省略 `ruleSelection` 或写 `{}` 会保留原来的编译路径；`null` 无效。
+
+条件支持布尔值，或恰好包含一个键的对象：`tag`、正整数 `ruleId`、闭区间
+`ruleIdRange: {start, end}`、`phase: 1..5`、非空 `allOf` / `anyOf` 列表，以及单个 `not` 条件。
+Tag 按字面值精确匹配，区分大小写；不支持通配符、正则、宏或自动去空格。
+规则链整体选择，ID 和阶段取链根，tag 来自合法成员的元数据；结构性 marker 不参与选择。
+当前严格规则语言不允许给链子规则新增 `tag`。
+
+每个 profile 的 include/exclude 合计最多 256 个节点、64 个元数据条件、16 层，
+每个 tag 最多 256 个 UTF-8 字节；紧凑 JSON 最多 16 KiB，整份策略最多 64 KiB。
+未知键、错误类型、空逻辑组和直接解码可见的重复键均被拒绝。
+资源入口先经过通用 JSON 对象转换，原始重复键可能已被折叠；不要依赖重复键的结果。
+
+排除不能掩盖无效规则：原始规则集仍须通过语法、语义、正则、词组资源和请求体策略校验。
+无匹配 tag 和有效的空选择允许发布，Accepted 消息给出固定的数量摘要；
+它们不会单独触发 `PartiallyInvalid`。修改选择条件会热更新规则，进行中的请求保留旧代际。
+
+语言 profile 必须以整个后端栈的可信清单为依据。不要简单排除所有 `language-php` 或
+`language-java`：部分规则还保护通用路径、SSRF 或跨语言攻击。
+仓库 `config/waf/crs-4.25.1-supported-v1/language-selection-examples/` 提供按指定 CRS
+版本审计的 Java/PHP 选择示例及逐项省略记录；使用前确认其后端假设，规则升级后重新审计。
+
+## 检查本地 tag
+
+`waf tags` 接受 1–16 个本地 WafRuleBundle EdgionConfigData YAML 文件。
+`--selection` 文件只包含独立的 include/exclude 对象：
+
+```bash
+edgion-cli waf tags --bundle bundle.yaml --format json
+edgion-cli waf tags --bundle setup.yaml --bundle core.yaml \
+  --selection selection.yaml --selected --offset 0 --format json
+edgion-cli waf tags --bundle core.yaml --tag language-php --format json
+```
+
+```yaml
+include: true
+exclude:
+  allOf:
+    - tag: application-specific
+    - not: {ruleId: 100001}
+```
+
+报告区分语义目录、计划选择和成功编译后的成员。无效规则可能仍有完整 tag 目录，
+但 `baselineCompilationPassed` / `selectedCompilationPassed` 会准确报告失败或未知。
+本地检查不解析集群引用，也不校验具体插件的请求体模式；`bodyAdmissionChecked` 始终为 `false`。
+Tag 查询的成员依据为 `semanticInventory`；选择查询在编译成功后为 `compiledSelection`。
+
+所有输入合计最多 64 MiB，选择文件最多 64 KiB。报告最多 128 个 tag 行和
+128 个根 ID 引用、64 KiB 输出；省略计数独立于实际选择结果。
+单个 tag、`--selected` 或 `--excluded` 查询可用 `--offset` 按根 ID 升序分页。
+规则源码、正则、词组内容和内部 Include 路径不会进入报告。
+
 ## 共享规则包
 
 规则需要 `Include`、`@pmFromFile`，或多个 WAF 配置共用同一组规则时，使用有类型的

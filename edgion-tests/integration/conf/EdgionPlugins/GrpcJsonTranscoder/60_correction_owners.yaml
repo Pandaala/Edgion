@@ -1,0 +1,537 @@
+# Shared-topology owner compatibility regressions.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-body-closed
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: ExtProc
+    config:
+      grpcService:
+        target: 127.0.0.1:30041
+        timeoutMs: 2000
+      processingMode:
+        requestHeaderMode: SKIP
+        requestBodyMode: NONE
+        responseHeaderMode: SKIP
+        responseBodyMode: STREAMED
+      failureModeAllow: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-body-before-closed
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-body-before-closed.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-body-closed
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-body-after-closed
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-body-after-closed.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-body-closed
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-guard-closed
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: Guardrail
+    config:
+      target:
+        name: test-http
+        namespace: edgion-test
+        port: 30001
+      timeoutMs: 2000
+      maxResponseBytes: 4096
+      request:
+        path:
+          template: /guardrail/decision/pass
+      windowBytes: 1
+      overlapBytes: 0
+      failOpen: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-backend-guard-closed
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-backend-guard-closed.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+      filters:
+      - type: ExtensionRef
+        extensionRef:
+          group: edgion.io
+          kind: EdgionPlugins
+          name: grpc-guard-closed
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-body-open
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: ExtProc
+    config:
+      grpcService:
+        target: 127.0.0.1:30041
+        timeoutMs: 2000
+      processingMode:
+        requestHeaderMode: SKIP
+        requestBodyMode: NONE
+        responseHeaderMode: SKIP
+        responseBodyMode: STREAMED
+      failureModeAllow: true
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-body-before-open
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-body-before-open.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-body-open
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-body-after-open
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-body-after-open.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-body-open
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-guard-open
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: Guardrail
+    config:
+      target:
+        name: test-http
+        namespace: edgion-test
+        port: 30001
+      timeoutMs: 2000
+      maxResponseBytes: 4096
+      request:
+        path:
+          template: /guardrail/decision/pass
+      windowBytes: 1
+      overlapBytes: 0
+      failOpen: true
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-backend-guard-open
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-backend-guard-open.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+      filters:
+      - type: ExtensionRef
+        extensionRef:
+          group: edgion.io
+          kind: EdgionPlugins
+          name: grpc-guard-open
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-bandwidth
+  namespace: edgion-default
+spec:
+  upstreamResponseBodyFilterPlugins:
+  - type: BandwidthLimit
+    config:
+      rate: 100kb
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-wasm-body
+  namespace: edgion-default
+spec:
+  upstreamResponseBodyFilterPlugins:
+  - type: Wasm
+    config:
+      source:
+        file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
+      pluginConfig:
+        string: response-body-probe
+      failOpen: false
+      timeoutMs: 500
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-header-only
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+  - type: Dsl
+    config:
+      name: grpc-header-companion
+      source: resp.set_header("x-grpc-companion", "preserved")
+      errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-late-conflict
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+  - type: Dsl
+    config:
+      name: grpc-protected-request-mutation
+      source: req.set_header("content-type", "text/plain")
+      errorPolicy: ignore
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-rule-bandwidth
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-rule-bandwidth.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-bandwidth
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-backend-bandwidth
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-backend-bandwidth.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+      filters:
+      - type: ExtensionRef
+        extensionRef:
+          group: edgion.io
+          kind: EdgionPlugins
+          name: grpc-bandwidth
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-rule-wasm-body
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-rule-wasm-body.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-wasm-body
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-backend-wasm-body
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-backend-wasm-body.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+      filters:
+      - type: ExtensionRef
+        extensionRef:
+          group: edgion.io
+          kind: EdgionPlugins
+          name: grpc-wasm-body
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-backend-header-only
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-backend-header-only.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+      filters:
+      - type: ExtensionRef
+        extensionRef:
+          group: edgion.io
+          kind: EdgionPlugins
+          name: grpc-header-only
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-late-conflict
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-late-conflict.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-late-conflict
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-extproc-headers
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: ExtProc
+    config:
+      grpcService:
+        target: 127.0.0.1:30041
+        timeoutMs: 2000
+      processingMode:
+        requestHeaderMode: SEND
+        requestBodyMode: NONE
+        responseHeaderMode: SEND
+        responseBodyMode: NONE
+      failureModeAllow: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-headers-before
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-headers-before.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-extproc-headers
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-headers-after
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - grpc-headers-after.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-transcoder-inline
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-extproc-headers
+    backendRefs:
+    - name: grpc-transcoder
+      port: 30021

@@ -29,19 +29,21 @@ spec:
                 - "yes"
       config:
         redisRef: "edgion-default/redis-test"
-        policies:
-          - rate: 3
-            interval: "60s"
-            algorithm: FixedWindow
-        key:
-          - type: directPeerIp
-          - type: host
-          - type: header
-            name: "X-Rate-Key"
-        onKeyMiss: Allow
         onRedisFailure: Deny
         rejectStatus: 429
         rejectMessage: "Redis rate limit exceeded"
         showLimitHeaders: true
         keyPrefix: "edgion:it:rlr:main:"
         requestTimeout: "2s"
+        quotas:
+          - name: default
+            policies:
+              - rate: 3
+                interval: "60s"
+                algorithm: FixedWindow
+            key:
+              - type: directPeerIp
+              - type: host
+              - type: header
+                name: "X-Rate-Key"
+            onKeyMiss: Allow

@@ -2,10 +2,15 @@
 
 use crate::ai::protocols::openai::terminal::AiClientStreamDialect;
 use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
-use crate::ctx::{EdgionHttpContext, ResponseHeadHoldClaim};
+use crate::ctx::{DeferredCredentialMutations, EdgionHttpContext, ResponseHeadHoldClaim};
 use crate::plugins::runtime::traits::StreamingResponseProcessor;
 use crate::response::terminal::FinalResponseEligibility;
 use std::sync::Arc;
+
+pub(crate) struct AiRequestBaseline {
+    header: pingora_http::RequestHeader,
+    deferred: Option<DeferredCredentialMutations>,
+}
 
 /// AI-only state allocated on first effective AI plugin action.
 ///
@@ -19,6 +24,8 @@ pub(crate) struct AiHttpState {
     /// Bounded request metadata and shared atomic usage counters. Contains no
     /// prompt or credential.
     pub(crate) request: Option<AiRequestContext>,
+    /// Captured at actual AiProxy entry, before early errors or rejected plans.
+    pub(crate) client_api: Option<edgion_resources::resources::edgion_plugins::AiApi>,
     /// Immutable canonical request and candidate snapshot for forwarding. The
     /// canonical body is never rendered by Debug or access logging.
     pub(crate) attempt_plan: Option<AiAttemptPlan>,
@@ -31,7 +38,7 @@ pub(crate) struct AiHttpState {
     /// Request-captured typed destination policy for the selected AI backend.
     pub(crate) effective_policy: Option<Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>>,
     /// Pristine post-rule request used to rebuild later AI attempts.
-    pub(crate) request_baseline: Option<pingora_http::RequestHeader>,
+    pub(crate) request_baseline: Option<AiRequestBaseline>,
     /// Replaceable provider-aware response processor for the active attempt.
     pub(crate) stream_processor: Option<Box<dyn StreamingResponseProcessor>>,
     /// Client-facing stream dialect selected at canonical AI ingress.
@@ -58,18 +65,48 @@ pub(crate) struct AiHttpState {
 }
 
 impl EdgionHttpContext {
-    pub(crate) fn has_responses_plan(&self) -> bool {
+    pub(crate) fn capture_ai_request_baseline(&mut self, request: &pingora_http::RequestHeader) {
+        if self.ai_state().is_none_or(|state| state.request_baseline.is_none()) {
+            let deferred = self.deferred_credential_mutations().cloned();
+            self.ensure_ai_state().request_baseline = Some(AiRequestBaseline {
+                header: request.clone(),
+                deferred,
+            });
+        }
+    }
+
+    pub(crate) fn restore_ai_request_baseline(&mut self, request: &mut pingora_http::RequestHeader) -> bool {
+        let Some(baseline) = self.ai_state().and_then(|state| state.request_baseline.as_ref()) else {
+            return false;
+        };
+        *request = baseline.header.clone();
+        let deferred = baseline.deferred.clone();
+        self.restore_deferred_credential_mutations(deferred);
+        true
+    }
+
+    pub(crate) fn capture_ai_client_api(&mut self, api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
+        *self.ensure_ai_state().client_api.get_or_insert(api) == api
+    }
+
+    pub(crate) fn has_unsupported_native_guard_plan(&self) -> bool {
         matches!(self.ai_state().and_then(|state| state.attempt_plan.as_ref()),
-            Some(AiAttemptPlan::Ready(plan)) if plan.api == edgion_resources::resources::edgion_plugins::AiApi::OpenaiResponses)
+            Some(AiAttemptPlan::Ready(plan)) if matches!(plan.api, edgion_resources::resources::edgion_plugins::AiApi::OpenaiResponses | edgion_resources::resources::edgion_plugins::AiApi::AnthropicMessages))
     }
 
     pub(crate) fn try_set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
+        if let Some(owner) = &self.grpc_transcoding {
+            owner.reject_mutation();
+            return false;
+        }
         let state = self.ensure_ai_state();
         if state.request.is_some() {
             false
         } else {
             state.request = Some(context);
-            state.client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
+            state.client_stream_dialect = (state.client_api
+                != Some(edgion_resources::resources::edgion_plugins::AiApi::AnthropicMessages))
+            .then_some(AiClientStreamDialect::OpenAiCompatibleSse);
             true
         }
     }
@@ -78,7 +115,9 @@ impl EdgionHttpContext {
     /// request-wide quota handle across AI failover attempts.
     pub(crate) fn replace_ai_attempt_context(&mut self, mut context: AiRequestContext) {
         let state = self.ensure_ai_state();
-        state.client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
+        state.client_stream_dialect = (state.client_api
+            != Some(edgion_resources::resources::edgion_plugins::AiApi::AnthropicMessages))
+        .then_some(AiClientStreamDialect::OpenAiCompatibleSse);
         if let Some(mut previous) = state.request.take() {
             if context.quota.is_none() {
                 context.quota = previous.quota.take();
@@ -91,6 +130,10 @@ impl EdgionHttpContext {
     }
 
     pub(crate) fn try_set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
+        if let Some(owner) = &self.grpc_transcoding {
+            owner.reject_mutation();
+            return false;
+        }
         let unary_possible = matches!(&plan, AiAttemptPlan::Ready(ready) if ready.conversion == Some(edgion_resources::resources::edgion_plugins::AiConversion::ChatToAnthropic) && !ready.requested_streaming && ready.candidates.iter().any(|candidate| candidate.weight > 0 && candidate.model.is_some() && candidate.backend.as_ref().is_some_and(|backend| backend.provider == edgion_resources::resources::edgion_backend::AiProvider::Anthropic)));
         let state = self.ensure_ai_state();
         if state.attempt_plan.is_some() {

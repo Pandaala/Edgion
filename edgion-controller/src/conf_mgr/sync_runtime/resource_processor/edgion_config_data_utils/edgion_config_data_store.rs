@@ -10,7 +10,14 @@ use std::collections::{HashMap, HashSet};
 
 use edgion_resources::prelude_resources::EdgionConfigData;
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
+use edgion_resources::resources::edgion_config_data::PreparedWafPolicySelections;
 use edgion_resources::resources::refs::waf_fields::{WafPluginReferences, WafPolicyReferences};
+
+pub struct WafPolicySnapshot {
+    pub policy: Option<EdgionConfigData>,
+    pub children: HashMap<String, Option<EdgionConfigData>>,
+    pub selections: Result<Option<PreparedWafPolicySelections>, String>,
+}
 
 /// Store for EdgionConfigData resources (controller-side, low-frequency access).
 ///
@@ -35,28 +42,43 @@ impl EdgionConfigDataStore {
 
     /// Capture a WAF policy, its bundles, and the consumer's optional Selector
     /// under one read guard. Compilation runs after the guard drops.
-    pub fn get_waf_policy_snapshot(
-        &self,
-        references: &WafPluginReferences<'_>,
-    ) -> (Option<EdgionConfigData>, HashMap<String, Option<EdgionConfigData>>) {
+    pub fn get_waf_policy_snapshot(&self, references: &WafPluginReferences<'_>) -> WafPolicySnapshot {
         let Ok(policy) = references.policy() else {
-            return (None, HashMap::new());
+            return WafPolicySnapshot {
+                policy: None,
+                children: HashMap::new(),
+                selections: Ok(None),
+            };
         };
         let policy_key = policy.key();
         let selector_key = references.selector().and_then(Result::ok).map(|field| field.key());
         let map = self.data.read();
         let policy_source = map.get(&policy_key);
         let mut children = HashMap::new();
+        let mut selections = Ok(None);
         if let Some(ed) = policy_source {
             if let ConfigEntry::WafPolicy(data) = &ed.spec.data {
-                if data.validate_shape().is_err() {
-                    return (policy_source.cloned(), children);
-                }
                 let Ok(fields) = WafPolicyReferences::from_policy(ed) else {
-                    return (None, children);
+                    return WafPolicySnapshot {
+                        policy: None,
+                        children,
+                        selections,
+                    };
                 };
                 if fields.identity() != policy.target() {
-                    return (None, children);
+                    return WafPolicySnapshot {
+                        policy: None,
+                        children,
+                        selections,
+                    };
+                }
+                selections = data.prepare_selections().map(Some);
+                if selections.is_err() {
+                    return WafPolicySnapshot {
+                        policy: policy_source.cloned(),
+                        children,
+                        selections,
+                    };
                 }
                 for (_, _, _, field) in fields.fields() {
                     let Ok(field) = field else {
@@ -70,7 +92,11 @@ impl EdgionConfigDataStore {
         if let Some(key) = selector_key {
             children.entry(key.clone()).or_insert_with(|| map.get(&key).cloned());
         }
-        (policy_source.cloned(), children)
+        WafPolicySnapshot {
+            policy: policy_source.cloned(),
+            children,
+            selections,
+        }
     }
 
     /// Replace all entries (used during reset).

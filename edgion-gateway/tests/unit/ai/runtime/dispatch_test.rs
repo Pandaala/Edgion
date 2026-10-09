@@ -45,6 +45,7 @@ fn candidate_plan() -> ReadyAiAttemptPlan {
         operation: crate::ai::runtime::attempt_plan::AiOperation::ChatCompletions,
         conversion: None,
         usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
+        observation_unavailable: false,
         body_generation: None,
         body_is_current: false,
         continuation: false,
@@ -1184,6 +1185,172 @@ async fn dispatcher_owned_retry_rewrite_restores_the_original_extension_bytes() 
     assert_eq!(ctx.request_body.read_all().await.unwrap().unwrap(), body);
     assert!(plan.body_is_current);
     assert_eq!(plan.body_generation, ctx.request_body.generation());
+}
+
+#[tokio::test]
+async fn native_deferred_protocol_headers_survive_backend_skip_and_retry() {
+    use crate::ai::runtime::attempt::DispatchOutcome;
+    use crate::ai::runtime::attempt_runtime::{AiAttemptAdmission, AiAttemptAdmissionInput};
+    use crate::ai::runtime::circuit_breaker::LogicalBackendCircuitBreaker;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    for operation in ["set", "add", "remove"] {
+        for transition in ["skip_backend", "skip_credential", "retry"] {
+            let modifier = if operation == "remove" {
+                serde_json::json!({"remove":["anthropic-version", "anthropic-beta"]})
+            } else {
+                let values = serde_json::json!([
+                    {"name":"anthropic-version", "value":"2023-06-01"},
+                    {"name":"anthropic-beta", "value":"candidate-a-beta"}
+                ]);
+                serde_json::json!({(operation): values})
+            };
+            let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({"backendRefs":[
+                {"group":"edgion.io", "kind":"EdgionBackend", "name":"provider-a", "filters":[{"type":"RequestHeaderModifier", "requestHeaderModifier":modifier}]},
+                {"group":"edgion.io", "kind":"EdgionBackend", "name":"provider-b"}
+            ]})).unwrap();
+            let owner: edgion_resources::HTTPRoute = serde_json::from_value(serde_json::json!({"apiVersion":"gateway.networking.k8s.io/v1", "kind":"HTTPRoute", "metadata":{"namespace":"default","name":"test-route"}, "spec":{"rules":[rule]}})).unwrap();
+            let compiled = HttpRouteRuleUnit::compile_http_rule(&owner, 0).unwrap();
+            let mut plan = selectable_plan(vec![RuntimeAiCredential {
+                name: "primary".into(),
+                weight: 1,
+                credential: "managed-test-key".into(),
+                limits: None,
+            }]);
+            Arc::get_mut(plan.candidates[0].backend.as_mut().unwrap())
+                .unwrap()
+                .provider = AiProvider::Anthropic;
+            plan.candidates[0].model.as_mut().unwrap().provider_model = "logical".into();
+            let mut second = plan.candidates[0].clone();
+            second.credential_outliers = selectable_plan(vec![RuntimeAiCredential {
+                name: "primary".into(),
+                weight: 1,
+                credential: "managed-test-key".into(),
+                limits: None,
+            }])
+            .candidates
+            .remove(0)
+            .credential_outliers;
+            plan.candidates[0].logical =
+                crate::backends::LogicalBackendHandle::new(compiled.backends.clone(), 0).unwrap();
+            second.logical = crate::backends::LogicalBackendHandle::new(compiled.backends.clone(), 1).unwrap();
+            second.slot = 1;
+            second.order = 1;
+            second.backend_key = "default/provider-b".into();
+            plan.candidates.push(second);
+            plan.api = AiApi::AnthropicMessages;
+            plan.operation = AiOperation::Messages;
+            plan.canonical_path = "/v1/messages".into();
+            plan.usage_observation = AiUsageObservation::Off;
+            plan.selection = AiBackendSelection::Priority;
+            plan.scheduler = AttemptScheduler::new(
+                &[
+                    BackendCredentials { weights: &[1] },
+                    BackendCredentials { weights: &[1] },
+                ],
+                1,
+            )
+            .unwrap();
+            let body = Bytes::from_static(br#"{"model":"logical","max_tokens":10,"messages":[]}"#);
+            plan.request_body = body.clone();
+            let mut ctx = EdgionHttpContext::new();
+            let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
+            storage.write(&body).await.unwrap();
+            storage.finish().await.unwrap();
+            ctx.request_body.install(view);
+            plan.body_generation = ctx.request_body.generation();
+            plan.body_is_current = true;
+            let deadline = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
+            for (name, value) in [
+                ("anthropic-version", "2099-01-01"),
+                ("anthropic-beta", "original-beta"),
+                ("x-api-key", "caller-test-key"),
+                ("anthropic-workspace-id", "caller-workspace"),
+            ] {
+                let mut value = http::HeaderValue::from_static(value);
+                value.set_sensitive(true);
+                ctx.upsert_deferred_credential_mutation(
+                    http::HeaderName::from_static(name),
+                    Arc::new(value),
+                    Some(deadline),
+                );
+            }
+            let mut session = test_session().await;
+            assert!(ctx.try_set_ai_attempt_plan(AiAttemptPlan::Ready(plan)));
+            let first = prepare_first_attempt(&mut session, &mut ctx, 0, Some(1), 1).unwrap();
+            assert_eq!(first.selected.logical().identity().name, "provider-a");
+            if transition == "retry" {
+                let mut saved = ctx.take_ai_attempt_plan().unwrap();
+                let AiAttemptPlan::Ready(ready) = &mut saved else {
+                    panic!("ready plan");
+                };
+                ready.scheduler.start_dispatch().unwrap();
+                ready
+                    .scheduler
+                    .finish_dispatch(DispatchOutcome::RetryableFailure)
+                    .unwrap();
+                ctx.restore_ai_attempt_plan(saved);
+            } else {
+                let breaker = LogicalBackendCircuitBreaker::new(1);
+                let _occupied = breaker.try_acquire().unwrap();
+                if transition == "skip_credential" {
+                    first
+                        .selected
+                        .credential_outlier
+                        .as_ref()
+                        .unwrap()
+                        .apply_cooldown(Duration::from_secs(60));
+                }
+                let admission = ctx
+                    .ensure_ai_state()
+                    .attempt_runtime
+                    .admit(AiAttemptAdmissionInput {
+                        namespace: "default".into(),
+                        backend_uid: first.selected.backend.uid.clone(),
+                        credential_alias: first.selected.credential_alias.clone(),
+                        backend_name: "default/provider-a".into(),
+                        provider: first.provider,
+                        pricing: first.pricing,
+                        redis_ref: first.redis_ref.clone(),
+                        on_redis_failure: first.on_redis_failure.clone(),
+                        limits: first.credential_limits.clone(),
+                        estimated_input_tokens: first.estimated_input_tokens,
+                        max_output_tokens: first.max_output_tokens,
+                        usage: first.usage.clone(),
+                        eos: first.eos.clone(),
+                        outlier: first.selected.credential_outlier.clone(),
+                        adaptive: None,
+                        circuit_breaker: (transition == "skip_backend").then_some(breaker),
+                        limiter_core: first.limiter_core.clone(),
+                    })
+                    .await;
+                if transition == "skip_backend" {
+                    assert!(matches!(admission, AiAttemptAdmission::SkipBackend));
+                    assert!(handle_ai_predispatch_service_failure(&mut ctx));
+                } else {
+                    assert!(matches!(admission, AiAttemptAdmission::Skip));
+                    assert!(handle_ai_predispatch_failure(&mut ctx, true));
+                }
+            }
+            let second = prepare_first_attempt(&mut session, &mut ctx, 0, Some(1), 1).unwrap();
+            assert_eq!(second.selected.logical().identity().name, "provider-b");
+            let mut upstream = session.req_header().clone();
+            ctx.apply_deferred_credentials(&mut upstream).unwrap();
+            assert_eq!(
+                upstream.headers["anthropic-version"], "2099-01-01",
+                "{operation}/{transition}"
+            );
+            assert_eq!(
+                upstream.headers["anthropic-beta"], "original-beta",
+                "{operation}/{transition}"
+            );
+            assert!(upstream.headers["anthropic-version"].is_sensitive());
+            assert!(upstream.headers["anthropic-beta"].is_sensitive());
+            assert!(ctx.deferred_credentials_all_unexpired(deadline - Duration::from_millis(1)));
+            assert!(!ctx.deferred_credentials_all_unexpired(deadline));
+            assert_eq!(upstream.headers["x-api-key"], "managed-test-key");
+            assert!(!upstream.headers.contains_key("anthropic-workspace-id"));
+        }
+    }
 }
 
 #[test]

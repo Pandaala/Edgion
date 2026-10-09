@@ -533,9 +533,10 @@ impl Inputs {
                         }
                     }
                     for route in &plan.routes {
-                        scope
-                            .rules
-                            .insert(Arc::as_ptr(route) as usize, rule_admission(route, &scope));
+                        scope.rules.insert(
+                            Arc::as_ptr(route) as usize,
+                            rule_admission(route, &scope, &self.http_sources),
+                        );
                     }
                     scope.has_access_log_extern = scope.http.values().any(|view| {
                         view.spec
@@ -760,17 +761,25 @@ impl Inputs {
     }
 }
 
-fn rule_admission(route: &Arc<HTTPRoute>, scope: &PluginScope) -> RuleAdmission {
+fn rule_admission(
+    route: &Arc<HTTPRoute>,
+    scope: &PluginScope,
+    sources: &HashMap<String, Arc<EdgionPlugins>>,
+) -> RuleAdmission {
     let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
     let count = route.effective_rules().map_or(0, |rules| rules.len());
     let mut allowed = vec![false; count];
+    let mut graphql_allowed = vec![false; count];
     let Ok(references) = HttpRouteExtensionRefs::from_route(route) else {
         return RuleAdmission {
             source: Arc::downgrade(route),
             allowed,
+            graphql_allowed,
         };
     };
     for (index, rule) in effective_http_rules(route) {
+        let mut graphql_plugins = Vec::new();
+        let mut graphql_sources = Vec::new();
         let mut active_count = 0;
         let mut configs = Vec::new();
         let mut missing = None;
@@ -782,8 +791,12 @@ fn rule_admission(route: &Arc<HTTPRoute>, scope: &PluginScope) -> RuleAdmission 
             .filter_map(|(filter, _)| references.effective_at(index, None, filter))
             .filter_map(extension_ref_key)
         {
+            if let Ok(PluginTarget::Unique { source, .. }) = classify(&key, |raw| sources.get(raw).cloned()) {
+                graphql_sources.push(source);
+            }
             match scope.http.get(&key) {
                 Some(view) => {
+                    graphql_plugins.push(view.spec.as_ref());
                     for entry in view
                         .spec
                         .spec
@@ -801,6 +814,20 @@ fn rule_admission(route: &Arc<HTTPRoute>, scope: &PluginScope) -> RuleAdmission 
                 None => missing = Some(key),
             }
         }
+        graphql_allowed[index] = edgion_resources::plugin_configs::graphql_router_rule_binding_error(
+            rule,
+            namespace,
+            &graphql_sources.iter().map(|source| source.as_ref()).collect::<Vec<_>>(),
+            route.spec.resolved_rules.is_some(),
+        )
+        .is_none()
+            && edgion_resources::plugin_configs::graphql_router_rule_error(
+                rule,
+                namespace,
+                &graphql_plugins,
+                route.spec.resolved_rules.is_some(),
+            )
+            .is_none();
         allowed[index] = ai_rule_invalid_reason(
             rule,
             namespace,
@@ -816,5 +843,6 @@ fn rule_admission(route: &Arc<HTTPRoute>, scope: &PluginScope) -> RuleAdmission 
     RuleAdmission {
         source: Arc::downgrade(route),
         allowed,
+        graphql_allowed,
     }
 }

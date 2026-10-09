@@ -47,8 +47,8 @@ fn dye_producer_inventory_matches_declared_capability_union() {
         (
             "RateLimitRedis",
             &[
-                r#"{"redisRef":"default/redis","policies":[{"rate":10,"interval":"1s"}],"onRedisFailure":"Allow"}"#,
-                r#"{"redisRef":"default/redis","policies":[{"rate":10,"interval":"1s"}],"onRedisFailure":"Deny"}"#,
+                r#"{"redisRef":"default/redis","quotas":[{"name":"default","policies":[{"rate":10,"interval":"1s"}]}],"onRedisFailure":"Allow"}"#,
+                r#"{"redisRef":"default/redis","quotas":[{"name":"default","policies":[{"rate":10,"interval":"1s"}]}],"onRedisFailure":"Deny"}"#,
             ],
             &[include_str!("../../../../src/plugins/http/rate_limit_redis/plugin.rs")],
         ),

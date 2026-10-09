@@ -368,3 +368,49 @@ async fn none_cannot_expand_and_buffered_or_streamed_can_reduce_to_none() {
         }
     }
 }
+
+#[tokio::test]
+async fn unary_compatibility_uses_effective_body_capability_and_forbids_expansion() {
+    let base = ConfigProcessingMode::default();
+    let expanded = ConfigProcessingMode {
+        response_body_mode: BodySendMode::Streamed,
+        ..base.clone()
+    };
+    let owner = override_owner(base, true, vec![expanded.clone()]);
+    assert!(!owner.consumes_response_body());
+    let wire = wire_mode(
+        processing_mode::HeaderSendMode::Default,
+        processing_mode::BodySendMode::None,
+        processing_mode::BodySendMode::Streamed,
+        processing_mode::HeaderSendMode::Default,
+    );
+    owner
+        .apply_mode_override(OverridePhase::ResponseHeaders, Some(&wire))
+        .unwrap();
+    assert!(!owner.consumes_response_body());
+    let reduced = ConfigProcessingMode::default();
+    let owner = override_owner(expanded, true, vec![reduced]);
+    assert!(owner.consumes_response_body());
+    let wire = wire_mode(
+        processing_mode::HeaderSendMode::Default,
+        processing_mode::BodySendMode::None,
+        processing_mode::BodySendMode::None,
+        processing_mode::HeaderSendMode::Default,
+    );
+    owner
+        .apply_mode_override(OverridePhase::ResponseHeaders, Some(&wire))
+        .unwrap();
+    assert!(!owner.consumes_response_body());
+}
+
+pub(crate) fn test_body_owner(response_body: bool) -> AttachedExtProc {
+    let base = ConfigProcessingMode {
+        response_body_mode: if response_body {
+            BodySendMode::Streamed
+        } else {
+            BodySendMode::None
+        },
+        ..Default::default()
+    };
+    override_owner(base, false, vec![])
+}

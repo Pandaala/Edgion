@@ -43,10 +43,8 @@ pub(crate) fn enforce_observation_encoding(
     });
     let mut adapter =
         crate::plugins::runtime::session_adapter::PingoraSessionAdapter::with_response_header(session, ctx, response);
-    let result = crate::ai::protocols::openai::error::openai_error_response(
-        &mut adapter,
-        crate::ai::AiProxyError::QuotaUnavailable,
-    );
+    let result =
+        crate::ai::protocols::error::ai_error_response(&mut adapter, crate::ai::AiProxyError::QuotaUnavailable);
     if let edgion_resources::filters::PluginRunningResult::ErrResponse { status, body } = result {
         if !adapter.apply_response_local_reply(status, body) {
             adapter.set_response_denied(status);

@@ -16,12 +16,13 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
+use smallvec::SmallVec;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::link_sys::get_redis_client;
 use crate::link_sys::providers::redis::RedisLinkClient;
-use crate::plugins::common::redis_rate_limiter::{RateLimitResult, RedisRateLimiter};
+use crate::plugins::common::redis_rate_limiter::{truncate_limit_key, RateLimitResult, RedisRateLimiter};
 use crate::plugins::http::common::{format_duration, resolve_rate_limit_key, RateLimitKey};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
@@ -49,7 +50,8 @@ pub struct RateLimitRedis {
     config: RateLimitRedisConfig,
     config_valid: bool,
     reject_body: Bytes,
-    /// `config.key_prefix` scoped by the owning entry's identity
+    force_json_rejection: bool,
+    /// `config.key_prefix` scoped by the owning entry's identity and quota name
     /// (`<namespace>/<name>/<alias or #index>`). Resolved once at build time;
     /// the request path never recomputes it.
     ///
@@ -62,7 +64,8 @@ pub struct RateLimitRedis {
     /// mirrors the in-memory `RateLimitLocal`, whose `Rate` is shared exactly by the
     /// routes that reference one resource, and keeps cluster-wide sharing intact
     /// because every Gateway instance derives the same string from conf_sync.
-    scoped_key_prefix: String,
+    quota_prefixes: Vec<String>,
+    response_quota: Option<usize>,
     core: RedisRateLimiter,
 }
 
@@ -70,12 +73,12 @@ impl RateLimitRedis {
     /// Create a new RateLimitRedis plugin from configuration.
     ///
     /// `entry_scope` is the owning EdgionPlugins entry's identity; see
-    /// `scoped_key_prefix`.
+    /// `quota_prefixes`.
     pub fn create(config: &RateLimitRedisConfig, entry_scope: &str) -> Box<dyn RequestFilter> {
         Box::new(Self::new(config, entry_scope))
     }
 
-    fn new(config: &RateLimitRedisConfig, entry_scope: &str) -> RateLimitRedis {
+    pub(crate) fn new(config: &RateLimitRedisConfig, entry_scope: &str) -> RateLimitRedis {
         let mut validated = config.clone();
         let config_valid = validated.validate().is_ok();
         let message = validated
@@ -87,27 +90,108 @@ impl RateLimitRedis {
         // that fails validation still builds a prefix here, but never reaches
         // Redis: run_request returns 500 when `config_valid` is false.
         let scoped_key_prefix = format!("{}{}:", validated.key_prefix, entry_scope);
+        let quota_prefixes = validated
+            .quotas
+            .iter()
+            .map(|quota| format!("{scoped_key_prefix}q:{}:{}:", quota.name.len(), quota.name))
+            .collect();
+        let response_quota = validated
+            .response_quota
+            .as_ref()
+            .and_then(|name| validated.quotas.iter().position(|quota| &quota.name == name));
         RateLimitRedis {
             config: validated,
             config_valid,
             reject_body,
-            scoped_key_prefix,
+            force_json_rejection: false,
+            quota_prefixes,
+            response_quota,
             core: RedisRateLimiter::new(),
         }
     }
 
-    /// Check all policies against Redis. Returns aggregate result.
-    async fn check_rate_limit(&self, client: &RedisLinkClient, limit_key: &str) -> anyhow::Result<RateLimitResult> {
-        self.core
-            .check(
-                client,
-                &self.config.policies,
-                &self.scoped_key_prefix,
-                self.config.cost,
-                self.config.max_key_len,
-                limit_key,
-            )
-            .await
+    /// Select a precomputed caller-specific body at cold construction time.
+    /// Rejection headers and writes remain owned by the canonical limiter.
+    pub(crate) fn with_json_rejection_body(mut self, body: Bytes) -> Self {
+        self.reject_body = body;
+        self.force_json_rejection = true;
+        self
+    }
+
+    /// Prepare every identity before any debit. Oversized backing allocations
+    /// are released here rather than retained through a slow Redis exchange.
+    fn prepare(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        costs: Option<&[u32]>,
+    ) -> Result<SmallVec<[PreparedQuota; 1]>, PreparationError> {
+        if costs.is_some_and(|costs| costs.len() != self.config.quotas.len()) {
+            return Err(PreparationError::InvalidCost);
+        }
+        let mut jobs = SmallVec::new();
+        for (index, quota) in self.config.quotas.iter().enumerate() {
+            let cost = costs.map_or(quota.cost, |costs| costs[index]);
+            // Only computed root slots can be absent. Total must remain nonzero.
+            if costs.is_some() && index > 0 && cost == 0 {
+                continue;
+            }
+            if !(1..=1_000_000).contains(&cost) {
+                return Err(PreparationError::InvalidCost);
+            }
+            let key = match resolve_rate_limit_key(
+                session,
+                &quota.key,
+                quota.default_key.as_deref(),
+                &quota.on_key_miss,
+                log,
+            ) {
+                RateLimitKey::Resolved(key) => key,
+                RateLimitKey::Allow => continue,
+                RateLimitKey::Deny => return Err(PreparationError::KeyMiss),
+            };
+            let original_len = key.len();
+            let key = bound_prepared_key(key, self.config.max_key_len);
+            jobs.push(PreparedQuota {
+                index,
+                key,
+                original_len,
+                cost,
+            });
+        }
+        Ok(jobs)
+    }
+
+    /// Data-only checks; response operations are deliberately outside this future.
+    async fn check_prepared(&self, client: &RedisLinkClient, jobs: &[PreparedQuota]) -> anyhow::Result<QuotaDecision> {
+        let mut selected = None;
+        for job in jobs {
+            let result = self
+                .core
+                .check(
+                    client,
+                    &self.config.quotas[job.index].policies,
+                    &self.quota_prefixes[job.index],
+                    job.cost,
+                    self.config.max_key_len,
+                    &job.key,
+                )
+                .await?;
+            let checked = CheckedQuota {
+                original_len: job.original_len,
+                result,
+            };
+            if !checked.result.allowed {
+                return Ok(QuotaDecision::Limited(checked));
+            }
+            if self
+                .response_quota
+                .map_or(selected.is_none(), |index| index == job.index)
+            {
+                selected = Some(checked);
+            }
+        }
+        Ok(QuotaDecision::Allowed(selected))
     }
 
     /// Add rate limit headers to response.
@@ -192,6 +276,11 @@ impl RateLimitRedis {
             }
         }
 
+        if self.force_json_rejection {
+            // The adapter drains queued operations after this response header.
+            // Append last so earlier plugins cannot mislabel the fixed JSON body.
+            let _ = session.set_response_header("Content-Type", "application/json");
+        }
         if let Err(_e) = session.write_response_header(resp, false).await {
             return PluginRunningResult::ErrTerminateRequest;
         }
@@ -222,91 +311,133 @@ impl RateLimitRedis {
 
 // ========== RequestFilter Implementation ==========
 
+struct PreparedQuota {
+    index: usize,
+    key: String,
+    original_len: usize,
+    cost: u32,
+}
+
+enum PreparationError {
+    KeyMiss,
+    InvalidCost,
+}
+
+struct CheckedQuota {
+    original_len: usize,
+    result: RateLimitResult,
+}
+
+enum QuotaDecision {
+    Allowed(Option<CheckedQuota>),
+    Limited(CheckedQuota),
+}
+
+fn bound_prepared_key(key: String, max_len: usize) -> String {
+    if key.capacity() > max_len {
+        truncate_limit_key(&key, max_len).to_owned()
+    } else {
+        key
+    }
+}
+
+impl RateLimitRedis {
+    /// Computed charges use the same identity preparation and final renderer.
+    pub(crate) async fn run_request_with_costs(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        costs: &[u32],
+    ) -> PluginRunningResult {
+        self.run_quotas(session, log, Some(costs)).await
+    }
+
+    async fn invalid_config(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        log.push_err("cfg load fail");
+        let mut resp = Box::new(ResponseHeader::build(500, None).expect("500 is a valid status code"));
+        resp.insert_header("Content-Type", "application/json").ok();
+        let body = Bytes::from_static(br#"{"message":"Internal rate limiter error"}"#);
+        if session.write_response_header(resp, false).await.is_err() {
+            return PluginRunningResult::ErrTerminateRequest;
+        }
+        let _ = session.write_response_body(Some(body), true).await;
+        PluginRunningResult::ErrTerminateRequest
+    }
+
+    async fn run_quotas(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        costs: Option<&[u32]>,
+    ) -> PluginRunningResult {
+        if !self.config_valid {
+            return self.invalid_config(session, log).await;
+        }
+        let jobs = match self.prepare(session, log, costs) {
+            Ok(jobs) => jobs,
+            Err(PreparationError::KeyMiss) => return self.reject_request(session, Duration::ZERO, None).await,
+            Err(PreparationError::InvalidCost) => return self.invalid_config(session, log).await,
+        };
+        if jobs.is_empty() {
+            return PluginRunningResult::GoodNext;
+        }
+        let client: Arc<RedisLinkClient> = match get_redis_client(&self.config.redis_ref) {
+            Some(client) if client.healthy() => client,
+            _ => {
+                log.push_err("redis unavail");
+                return self.apply_redis_failure_policy(session).await;
+            }
+        };
+        let decision = match self.config.request_timeout_duration {
+            Some(timeout) => match tokio::time::timeout(timeout, self.check_prepared(&client, &jobs)).await {
+                Ok(result) => result,
+                Err(_) => Err(anyhow::anyhow!("request_timeout elapsed")),
+            },
+            None => self.check_prepared(&client, &jobs).await,
+        };
+        // Drop all prepared identity ownership before response awaits.
+        drop(jobs);
+        match decision {
+            Ok(QuotaDecision::Allowed(selected)) => {
+                if let Some(checked) = selected {
+                    self.add_headers(session, checked.result.remaining, checked.result.limit);
+                    log.push_fmt(
+                        "rl:ok,kl={},r={}",
+                        la![
+                            checked.original_len.to_string().as_str(),
+                            checked.result.remaining.to_string().as_str()
+                        ],
+                    );
+                }
+                PluginRunningResult::GoodNext
+            }
+            Ok(QuotaDecision::Limited(checked)) => {
+                let retry_after = Duration::from_millis(checked.result.retry_ms.max(0) as u64);
+                log.push_fmt(
+                    "rl:lim,kl={},rms={}",
+                    la![
+                        checked.original_len.to_string().as_str(),
+                        checked.result.retry_ms.to_string().as_str()
+                    ],
+                );
+                self.reject_request(session, retry_after, Some(&checked.result)).await
+            }
+            Err(_) => {
+                log.push_err("redis rt fail");
+                self.apply_redis_failure_policy(session).await
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl RequestFilter for RateLimitRedis {
     fn name(&self) -> &str {
         "RateLimitRedis"
     }
 
-    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // PluginLog must stay short (≤40B) and must never contain the resolved
-        // limit_key, the redis_ref config value, or raw Redis error text — they
-        // can carry user-identifying values or deployment details. Detailed
-        // diagnostics go to metrics instead.
-
-        // 1. Validate config
-        if !self.config_valid {
-            plugin_log.push_err("cfg load fail");
-            // invariant: 500 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
-            let mut resp = Box::new(ResponseHeader::build(500, None).expect("500 is a valid status code"));
-            resp.insert_header("Content-Type", "application/json").ok();
-            let body = Bytes::from(r#"{"message":"Internal rate limiter error"}"#);
-            if session.write_response_header(resp, false).await.is_err() {
-                return PluginRunningResult::ErrTerminateRequest;
-            }
-            let _ = session.write_response_body(Some(body), true).await;
-            return PluginRunningResult::ErrTerminateRequest;
-        }
-
-        // 2. Extract key (shared with RateLimitLocal via resolve_rate_limit_key)
-        let limit_key = match resolve_rate_limit_key(
-            session,
-            &self.config.key,
-            self.config.default_key.as_deref(),
-            &self.config.on_key_miss,
-            plugin_log,
-        ) {
-            RateLimitKey::Resolved(k) => k,
-            RateLimitKey::Allow => return PluginRunningResult::GoodNext,
-            RateLimitKey::Deny => return self.reject_request(session, Duration::ZERO, None).await,
-        };
-
-        let kl = limit_key.len();
-
-        // 3. Get Redis client (bind once) and fast-eject if unavailable.
-        let client: Arc<RedisLinkClient> = match get_redis_client(&self.config.redis_ref) {
-            Some(c) => c,
-            None => {
-                plugin_log.push_err("redis unavail");
-                return self.apply_redis_failure_policy(session).await;
-            }
-        };
-        if !client.healthy() {
-            plugin_log.push_err("redis unavail");
-            return self.apply_redis_failure_policy(session).await;
-        }
-
-        // 4. Execute rate limit check (optionally bounded by request_timeout).
-        let check_result = match self.config.request_timeout_duration {
-            Some(timeout) => match tokio::time::timeout(timeout, self.check_rate_limit(&client, &limit_key)).await {
-                Ok(r) => r,
-                Err(_elapsed) => Err(anyhow::anyhow!("request_timeout elapsed")),
-            },
-            None => self.check_rate_limit(&client, &limit_key).await,
-        };
-
-        match check_result {
-            Ok(result) if result.allowed => {
-                self.add_headers(session, result.remaining, result.limit);
-                plugin_log.push_fmt(
-                    "rl:ok,kl={},r={}",
-                    la![kl.to_string().as_str(), result.remaining.to_string().as_str()],
-                );
-                PluginRunningResult::GoodNext
-            }
-            Ok(result) => {
-                let retry_after = Duration::from_millis(result.retry_ms.max(0) as u64);
-                plugin_log.push_fmt(
-                    "rl:lim,kl={},rms={}",
-                    la![kl.to_string().as_str(), result.retry_ms.to_string().as_str()],
-                );
-                self.reject_request(session, retry_after, Some(&result)).await
-            }
-            Err(_e) => {
-                plugin_log.push_err("redis rt fail");
-                self.apply_redis_failure_policy(session).await
-            }
-        }
+    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        self.run_quotas(session, log, None).await
     }
 }
 

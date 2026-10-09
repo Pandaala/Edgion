@@ -157,3 +157,13 @@ fn responses_nullable_controls_preserve_native_bytes_and_defaults() {
         assert!(responses_metadata(body).is_err());
     }
 }
+
+#[test]
+fn responses_rejects_invalid_utf8_in_ignored_strings() {
+    for body in [
+        b"{\"model\":\"m\",\"input\":\"\xff\"}".as_slice(),
+        b"{\"model\":\"m\",\"extension\":{\"items\":[\"\xff\"]}}",
+    ] {
+        assert!(matches!(responses_metadata(body), Err(AiProxyError::MalformedBody)));
+    }
+}

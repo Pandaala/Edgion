@@ -1,0 +1,11 @@
+[package]
+name = "edgion-waf-aho-corasick-oracle"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+aho-corasick = { git = "https://github.com/BurntSushi/aho-corasick.git", rev = "5178060ce73d91938f8582d0360e3be031380440" }
+edgion-waf = { path = "../../.." }
+
+[workspace]

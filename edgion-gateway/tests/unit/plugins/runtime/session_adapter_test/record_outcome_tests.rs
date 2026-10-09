@@ -2305,3 +2305,68 @@ async fn response_stage_naked_terminate_arms_the_abort() {
         .contains_error(EdgionErrorCode::PluginResponseDenyAborted));
     assert_eq!(ctx.final_downstream_status(), Some(502));
 }
+
+#[tokio::test]
+async fn streamed_handler_and_complete_capture_are_incompatible_in_both_orders() {
+    for capture_first in [false, true] {
+        let mut session = test_session_with_body(b"abc").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        if capture_first {
+            assert_eq!(adapter.ensure_request_body(None).await.unwrap(), 3);
+            assert!(!adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
+        } else {
+            assert!(adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
+            assert!(matches!(
+                adapter.ensure_request_body(None).await,
+                Err(BodyReadError::NotBuffered)
+            ));
+            assert!(matches!(
+                adapter.capture_request_body(None).await,
+                Err(BodyReadError::NotBuffered)
+            ));
+            struct UnexpectedConsumer;
+            impl RequestBodyChunkConsumer for UnexpectedConsumer {
+                fn consume(&mut self, _chunk: &[u8]) {
+                    panic!("incompatible capture must not read bytes");
+                }
+            }
+            let mut consumer = UnexpectedConsumer;
+            assert!(matches!(
+                adapter.capture_request_body_with_consumer(None, &mut consumer).await,
+                Err(BodyReadError::NotBuffered)
+            ));
+            assert_eq!(session.body_bytes_read(), 0);
+            assert!(!ctx.request_body.has_cached_body());
+        }
+    }
+}
+
+#[tokio::test]
+async fn streamed_handler_prevents_bodyless_mutation_owner_creation() {
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.body_declared = Some(false);
+    ctx.request_info.in_request_body_stage = true;
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert!(adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
+    assert!(matches!(
+        adapter.overwrite_request_body(Bytes::from_static(b"created")).await,
+        Err(BodyReadError::NotBuffered)
+    ));
+    assert!(!ctx.request_body.has_cached_body());
+}
+
+#[tokio::test]
+async fn streamed_handler_refuses_uncached_transport_preread() {
+    let mut session = test_session_with_body(b"abc").await;
+    assert!(session.read_request_body().await.unwrap().is_some());
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.in_request_body_stage = true;
+    assert!(!ctx.request_body.has_cached_body());
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert!(!adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
+    assert!(!ctx.request_body_handlers_selected());
+}

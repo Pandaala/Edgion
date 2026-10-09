@@ -151,11 +151,6 @@ impl ProxyHttp for EdgionHttpProxy {
     // `request_body_filter_action` means the proxy never calls the legacy
     // hook. The action drives streamed body handlers first, then the mirror
     // tee (`pg_request_body_filter`), so the mirror sees post-mutation chunks.
-    //
-    // `request_trailer_filter` also stays default: the proxy never forwards
-    // request trailers (transport drops them), so a trailer-bearing request
-    // loses nothing a streamed inspection policy could have seen — every body
-    // byte still flows through the hook.
     async fn request_body_filter_action(
         &self,
         session: &mut Session,
@@ -167,6 +162,14 @@ impl ProxyHttp for EdgionHttpProxy {
         Self::CTX: Send + Sync,
     {
         pg_request_body_filter_action::request_body_filter_action(self, session, body, event, ctx).await
+    }
+
+    async fn request_trailer_filter(
+        &self,
+        session: &mut Session,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<pingora_proxy::RequestBodyAction> {
+        pg_request_body_filter_action::request_trailer_filter(session, ctx).await
     }
 
     fn request_relay_plan(&self, _session: &Session, ctx: &Self::CTX) -> pingora_proxy::RequestRelayPlan {

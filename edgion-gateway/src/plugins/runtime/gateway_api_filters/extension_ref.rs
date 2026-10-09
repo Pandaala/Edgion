@@ -108,7 +108,7 @@ impl ExtensionRefFilter {
             && (runtime.has_waf()
                 || runtime.has_request_id()
                 || runtime.has_upstream_jump_plugin()
-                || runtime.has_grpc_transcoder())
+                || runtime.requires_http_route_rule_scope())
         {
             return None;
         }
@@ -157,7 +157,7 @@ impl ExtensionRefFilter {
             && (plugin_runtime.has_waf()
                 || plugin_runtime.has_request_id()
                 || plugin_runtime.has_upstream_jump_plugin()
-                || plugin_runtime.has_grpc_transcoder())
+                || plugin_runtime.requires_http_route_rule_scope())
         {
             log.push_err("backend-scoped WAF, RequestId, or upstream jump plugin is not supported");
             return Err(());

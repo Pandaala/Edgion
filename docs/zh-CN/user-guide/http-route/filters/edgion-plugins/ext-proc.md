@@ -163,6 +163,24 @@ allowedOverrideModes:
 
 功能未启用时收到的 override，以及结构合法但不在 allow-list 或扩张能力的 override，会被忽略。启用后，畸形枚举/结构属于 bad verdict。独立 override 与 body/trailer 相位的 override 不受支持。
 
+### 流式请求的边界
+
+网关分别累计原始输入字节和处理链的最终输出字节，并检查当前请求固定的
+`EdgionGatewayConfig.spec.requestBody` 物理上限。输入在处理前检查，输出在所有
+流式处理器完成后、RequestMirror 和上游转发前检查。恰好达到上限允许通过；
+超限或计数溢出固定终止为 HTTP 413，即使 `failureModeAllow: true` 或处理器已
+fail-open 停用。中间块仍受处理器传输消息大小限制。
+
+安装过流式处理器的请求携带真实 request trailers 时，网关返回 HTTP 400，
+不会伪造干净的 EOS verdict。拒绝会取消未完成的处理器和镜像交换；代理已选择
+响应时不会再写第二个响应。上游 HTTP/1.1 使用 chunked framing；HTTP/2 使用
+DATA，不发送 `Content-Length` 或 `Transfer-Encoding`。
+
+多个流式处理器按执行顺序串行等待 verdict，RequestMirror 只接收最终字节。
+完整 body 捕获/修改与流式处理不能混用，两个执行顺序都由跨插件作用域的运行时
+保护拒绝：捕获后安装流式处理器遵循处理器失败策略，安装后捕获或修改则走现有
+body 访问失败策略，不读取或发布字节。普通请求的 trailers 丢弃行为保持不变。
+
 ### 响应 trailer
 
 普通 Edgion 构建已通过固定的 Edgion Pingora revision 提供该能力。

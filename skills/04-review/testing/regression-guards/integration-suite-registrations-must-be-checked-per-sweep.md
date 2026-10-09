@@ -17,6 +17,19 @@ registration.
 
 Fix suggestions that only assert a whole-file occurrence count are **not accepted**.
 
+Dynamic suites may instead be covered by the canonical registry dispatcher. The
+coverage guard accepts an exact `Dyn_<id>` only when the ID exists in
+`dynamic::all()`, the default sweep invokes `run_dynamic_scenarios`, and that
+helper enumerates `--list-dynamic-scenarios` and dispatches every ID as
+`Dyn_${scenario}`. Synthetic regressions reject missing enumeration, loop,
+dispatch, default invocation, and unknown IDs. This does not exempt static
+suites or relax the independent exact-registration guards.
+
+The 2026-10-07 investigation found four dynamic suites already covered by this
+dispatcher and one real omission: `DownstreamTlsOffloadTimeout`. Its default
+registration now retains both existing opt-ins (`--full-test` and
+`EDGION_TEST_DOWNSTREAM_TLS_OFFLOAD=1`), protected by a focused guard.
+
 ## Core Rationale
 
 **1. A whole-file total does not prove placement**
@@ -64,7 +77,7 @@ These guards check static directory coverage, not successful YAML submission or
 runtime behavior; see the
 [configuration failure gate](mandatory-integration-gates-fail-closed.md).
 
-Current verification (2026-09-15): the `test_client` unit-test binary passed all
+Historical verification (2026-09-15): the `test_client` unit-test binary passed all
 22 tests, including resource preload coverage, explicit preload existence, and
 exact/recursive directory matching. A live `-r EdgionPlugins` sweep loaded the
 inventory, and every executed plugin suite passed; the metrics-label,

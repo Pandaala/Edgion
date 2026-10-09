@@ -19,9 +19,8 @@ use crate::ai::routing::candidate::{invalid_weight_gate, CandidateEligibility, C
 use crate::ai::routing::model_router::ModelRouteTable;
 use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials, MAX_AI_ROUTE_RETRIES};
 use crate::ai::{
-    get_adaptive_telemetry_store, global_ai_backend_store, openai_error_response, AdaptiveTelemetryKey,
-    AdaptiveTelemetryStore, AiAttemptPlan, AiBackendStore, AiCandidateModel, AiPlanCandidate, AiPlanError,
-    AiProxyError, ReadyAiAttemptPlan,
+    get_adaptive_telemetry_store, global_ai_backend_store, AdaptiveTelemetryKey, AdaptiveTelemetryStore, AiAttemptPlan,
+    AiBackendStore, AiCandidateModel, AiPlanCandidate, AiPlanError, AiProxyError, ReadyAiAttemptPlan,
 };
 use crate::backends::policy::backend_traffic::get_backend_traffic_policy_store;
 use crate::backends::runtime::CompiledBackendTarget;
@@ -206,7 +205,7 @@ impl AiProxy {
         error: AiProxyError,
     ) -> PluginRunningResult {
         log.push_err(classification);
-        openai_error_response(session, error)
+        crate::ai::protocols::error::ai_error_response(session, error)
     }
 
     fn install_rejected_plan(
@@ -267,6 +266,9 @@ impl AiProxy {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
+        if !session.capture_ai_client_api(self.config.api) {
+            return Self::reject(session, log, "client-api-conflict", AiProxyError::BackendUnavailable);
+        }
         if session.ctx().has_ai_attempt_plan() {
             return Self::reject(session, log, "duplicate-ai-proxy", AiProxyError::BackendUnavailable);
         }
@@ -299,11 +301,9 @@ impl AiProxy {
         let (operation, path) = match self.config.api {
             AiApi::OpenaiChat => (AiOperation::ChatCompletions, "/v1/chat/completions"),
             AiApi::OpenaiResponses => (AiOperation::Responses, "/v1/responses"),
-            AiApi::AnthropicMessages => {
-                return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration)
-            }
+            AiApi::AnthropicMessages => (AiOperation::Messages, "/v1/messages"),
         };
-        if self.config.api == AiApi::OpenaiResponses
+        if matches!(self.config.api, AiApi::OpenaiResponses | AiApi::AnthropicMessages)
             && (session
                 .ctx()
                 .ai_request_guard_invoked
@@ -358,10 +358,10 @@ impl AiProxy {
             }
         }
 
-        let mut canonical = match if self.config.api == AiApi::OpenaiResponses {
-            canonical_responses_request(body)
-        } else {
-            canonical_openai_request(body, self.config.inject_usage_tracking)
+        let mut canonical = match match self.config.api {
+            AiApi::OpenaiResponses => canonical_responses_request(body),
+            AiApi::AnthropicMessages => canonical_messages_request(body),
+            AiApi::OpenaiChat => canonical_openai_request(body, self.config.inject_usage_tracking),
         } {
             Ok(canonical) => canonical,
             Err(error) => return Self::reject(session, log, "request-invalid", error),
@@ -424,6 +424,25 @@ impl AiProxy {
             }
         }
 
+        if canonical.composite
+            && (self.config.token_quota.is_some()
+                || self.config.backend_selection.selection_type == AiBackendSelection::LowestUsage
+                || backends
+                    .iter()
+                    .filter(|b| decision.weights.get(b.slot()).copied().unwrap_or(0) > 0)
+                    .any(|b| {
+                        ai_candidate_spec(b)
+                            .and_then(|(_, _, k)| snapshot.get_by_key(&k))
+                            .is_some_and(|b| b.has_credential_tpm)
+                    }))
+        {
+            return Self::reject(
+                session,
+                log,
+                "composite-accounting-unsupported",
+                AiProxyError::UnsupportedParameter,
+            );
+        }
         let policy_store = get_backend_traffic_policy_store();
         let policy_snapshot = policy_store.snapshot();
         let adaptive_store = get_adaptive_telemetry_store();
@@ -696,6 +715,7 @@ impl AiProxy {
             operation,
             conversion: self.config.conversion,
             usage_observation: self.config.usage_observation,
+            observation_unavailable: canonical.composite,
             body_generation,
             body_is_current: !canonical.mutated,
             request_max_output_tokens: canonical.output_bound,
@@ -748,6 +768,8 @@ struct CanonicalOpenAiRequest {
     logical_model: String,
     requested_streaming: bool,
     continuation: bool,
+    api: AiApi,
+    composite: bool,
     input_chars: u64,
     output_bound: Option<u64>,
     mutated: bool,
@@ -755,7 +777,12 @@ struct CanonicalOpenAiRequest {
 
 impl CanonicalOpenAiRequest {
     fn replace_logical_model(&mut self, logical_model: &str) -> Result<(), AiProxyError> {
-        if let Some(body) = request::rewrite_model(&self.body, logical_model)? {
+        let changed = if self.api == AiApi::AnthropicMessages {
+            crate::ai::protocols::anthropic::request::rewrite_model(&self.body, logical_model)?
+        } else {
+            request::rewrite_model(&self.body, logical_model)?
+        };
+        if let Some(body) = changed {
             self.body = body;
             self.mutated = true;
         }
@@ -880,9 +907,27 @@ fn canonical_openai_request(body: Bytes, inject_usage_tracking: bool) -> Result<
         logical_model: metadata.model,
         requested_streaming: metadata.streaming,
         continuation: false,
+        api: AiApi::OpenaiChat,
+        composite: false,
         input_chars: 0,
         output_bound: metadata.output_bound,
         mutated,
+    })
+}
+
+fn canonical_messages_request(body: Bytes) -> Result<CanonicalOpenAiRequest, AiProxyError> {
+    let metadata = crate::ai::protocols::anthropic::request::metadata(&body)?;
+    Ok(CanonicalOpenAiRequest {
+        body,
+        requested_model: metadata.model.clone(),
+        logical_model: metadata.model,
+        requested_streaming: metadata.streaming,
+        continuation: metadata.binding,
+        api: AiApi::AnthropicMessages,
+        composite: metadata.composite,
+        input_chars: 0,
+        output_bound: Some(metadata.output_bound),
+        mutated: false,
     })
 }
 
@@ -894,6 +939,8 @@ fn canonical_responses_request(body: Bytes) -> Result<CanonicalOpenAiRequest, Ai
         logical_model: metadata.model,
         requested_streaming: metadata.streaming,
         continuation: metadata.continuation,
+        api: AiApi::OpenaiResponses,
+        composite: false,
         input_chars: 0,
         output_bound: metadata.output_bound,
         mutated: false,
@@ -921,7 +968,12 @@ fn validate_continuation(
     }
     let (_, _, key) = ai_candidate_spec(&backends[0]).ok_or(AiProxyError::UnsupportedParameter)?;
     let backend = snapshot.get_by_key(&key).ok_or(AiProxyError::BackendUnavailable)?;
-    if backend.provider != AiProvider::OpenAI
+    let expected_provider = if config.api == AiApi::AnthropicMessages {
+        AiProvider::Anthropic
+    } else {
+        AiProvider::OpenAI
+    };
+    if backend.provider != expected_provider
         || backend.declared_credential_count != 1
         || backend
             .resolve_model(model)

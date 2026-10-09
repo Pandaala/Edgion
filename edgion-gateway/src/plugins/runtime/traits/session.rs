@@ -243,6 +243,11 @@ pub trait PluginSession: Send + Sync {
     /// Get the request query string (without leading '?')
     fn get_query(&self) -> Option<String>;
 
+    /// Borrow the current upstream-bound query so bounded parsers can check its
+    /// size before copying. Unlike get_query_param this observes trusted rewrites.
+    #[allow(clippy::needless_lifetimes)]
+    fn request_query<'a>(&'a self) -> Option<&'a str>;
+
     /// Get the HTTP method as &str (zero-copy)
     fn get_method(&self) -> &str;
 
@@ -573,6 +578,12 @@ pub trait PluginSession: Send + Sync {
     /// ctx fields; only the error list.
     fn record_error(&mut self, status: EdgionErrorCode);
 
+    /// Capture the configured client API before any local AI rejection.
+    /// Alternate adapters without mutable request state fail closed.
+    fn capture_ai_client_api(&mut self, _api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
+        false
+    }
+
     /// Claim the request-wide AI context. The first writer wins; alternate
     /// adapters without a mutable Edgion context fail closed by default.
     fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
@@ -816,6 +827,11 @@ pub trait PluginSession: Send + Sync {
     ///   `Set` -> existing per-plugin status string
     ///   `Rejected` -> `log.push("jump locked, rejected")`
     fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome;
+    /// Publish through the canonical slot with fatal conflict handling.
+    /// Unsupported adapters fail closed rather than weaken the ownership contract.
+    fn set_strict_upstream_jump(&mut self, _target: UpstreamJumpTarget) -> SetJumpOutcome {
+        SetJumpOutcome::Rejected
+    }
 
     /// Install request mirror state used by the request-body-filter tee.
     /// Returns `false` after the request-scoped body policy has frozen.

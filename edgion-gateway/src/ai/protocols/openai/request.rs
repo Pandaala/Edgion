@@ -1,17 +1,11 @@
 //! Selective Chat metadata and byte-preserving, explicitly authorized mutations.
 
-use std::ops::Range;
-
-use bytes::{Bytes, BytesMut};
-use edgion_resources::resources::edgion_backend::AI_MODEL_NAME_MAX_BYTES;
-use serde::{Deserialize, Deserializer};
+use crate::ai::protocols::request::{decode_model, patch, raw_field, span};
+use bytes::Bytes;
+use serde::Deserialize;
 use serde_json::value::RawValue;
 
 use super::error::AiProxyError;
-
-fn raw_field<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<&'de RawValue>, D::Error> {
-    <&RawValue>::deserialize(deserializer).map(Some)
-}
 
 /// Unknown provider fields are validated and skipped, never represented as a conversation.
 #[derive(Deserialize)]
@@ -52,22 +46,6 @@ fn model(fields: &Fields<'_>) -> Result<String, AiProxyError> {
     decode_model(fields.model)
 }
 
-fn decode_model(raw: Option<&RawValue>) -> Result<String, AiProxyError> {
-    let raw = raw.ok_or(AiProxyError::ModelNotFound)?;
-    if !raw.get().starts_with('"') {
-        return Err(AiProxyError::MalformedBody);
-    }
-    // Bound decoding allocation before materializing the one metadata string.
-    if raw.get().len() > AI_MODEL_NAME_MAX_BYTES * 6 + 2 {
-        return Err(AiProxyError::ModelNotFound);
-    }
-    let model: String = serde_json::from_str(raw.get()).map_err(|_| AiProxyError::MalformedBody)?;
-    if model.is_empty() || model.len() > AI_MODEL_NAME_MAX_BYTES {
-        return Err(AiProxyError::ModelNotFound);
-    }
-    Ok(model)
-}
-
 fn output_bound(fields: &Fields<'_>) -> Result<Option<u64>, AiProxyError> {
     let tokens = fields
         .max_tokens
@@ -88,32 +66,6 @@ pub(crate) fn metadata(body: &[u8]) -> Result<ChatMetadata, AiProxyError> {
         streaming: fields.stream.is_some_and(|raw| raw.get() == "true"),
         output_bound: output_bound(&fields)?,
     })
-}
-
-fn span(body: &[u8], raw: &RawValue) -> Result<Range<usize>, AiProxyError> {
-    let start = (raw.get().as_ptr() as usize)
-        .checked_sub(body.as_ptr() as usize)
-        .ok_or(AiProxyError::BackendUnavailable)?;
-    let end = start
-        .checked_add(raw.get().len())
-        .ok_or(AiProxyError::BackendUnavailable)?;
-    if end > body.len() {
-        return Err(AiProxyError::BackendUnavailable);
-    }
-    Ok(start..end)
-}
-
-fn patch(body: &Bytes, range: Range<usize>, replacement: &[u8]) -> Result<Bytes, AiProxyError> {
-    let len = body
-        .len()
-        .checked_sub(range.len())
-        .and_then(|len| len.checked_add(replacement.len()))
-        .ok_or(AiProxyError::RequestTooLarge)?;
-    let mut output = BytesMut::with_capacity(len);
-    output.extend_from_slice(&body[..range.start]);
-    output.extend_from_slice(replacement);
-    output.extend_from_slice(&body[range.end..]);
-    Ok(output.freeze())
 }
 
 /// None means the original Bytes and BodyStorage generation can be retained.
@@ -201,6 +153,7 @@ fn optional_bool(raw: Option<&RawValue>) -> Result<bool, AiProxyError> {
 }
 
 pub(crate) fn responses_metadata(body: &[u8]) -> Result<ResponsesMetadata, AiProxyError> {
+    std::str::from_utf8(body).map_err(|_| AiProxyError::MalformedBody)?;
     if body.iter().find(|byte| !byte.is_ascii_whitespace()) != Some(&b'{') {
         return Err(AiProxyError::MalformedBody);
     }

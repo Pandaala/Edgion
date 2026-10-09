@@ -154,3 +154,38 @@ fn valid_selection_dye_entry(name: &str, outcome: DyeOutcome) -> RequestFilterEn
     assert!(errors.is_empty(), "collision inputs must be valid alone: {errors:?}");
     entry
 }
+
+#[test]
+fn graphql_root_quota_header_is_protected_from_request_dye_stripping() {
+    let config=serde_json::from_value(serde_json::json!({
+        "schema":"type Query {ok:Int}","redisRef":"default/redis",
+        "policies":[{"rate":100,"interval":"1m"}],"onRedisFailure":"Allow",
+        "rootQuotas":[{"name":"root","field":"Query.ok","key":[{"type":"header","name":"X-Root"}],"policies":[{"rate":10,"interval":"1m"}]}]
+    })).unwrap();
+    let mut entry = RequestFilterEntry::new(EdgionPlugin::GraphqlRateLimit(config));
+    let headers = entry.plugin.key_header_names();
+    assert_eq!(headers, vec!["X-Root".to_string()]);
+    // Verify the canonical collision mechanism with its supported request outcome.
+    // GraphQL itself currently supports failure dye only, so request dye is
+    // independently rejected at the earlier capability gate.
+    let mut dye = DyeSuite {
+        request: vec![DyeRule {
+            name: "x-root".into(),
+            on: vec![DyeOutcome::Success],
+            value: None,
+            conditions: None,
+        }],
+        response: vec![],
+    };
+    let refs: Vec<_> = headers.iter().map(String::as_str).collect();
+    assert!(dye
+        .validation_error(true, &[DyeOutcome::Success], &refs)
+        .unwrap()
+        .contains("collid"));
+    dye.request[0].name = "X-Outcome".into();
+    assert!(dye.validation_error(true, &[DyeOutcome::Success], &refs).is_none());
+    entry.dye = Some(dye);
+    assert!(!with_request_plugins(vec![entry.clone()]).validate_plugins().is_empty());
+    entry.dye = Some(dye_response("X-Outcome", &[DyeOutcome::FailOpen]));
+    assert!(with_request_plugins(vec![entry]).validate_plugins().is_empty());
+}

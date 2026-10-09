@@ -25,14 +25,16 @@ spec:
               pluginAlias: missing-local
       config:
         redisRef: edgion-default/overflow-dynamic-missing-redis
-        key:
-          - type: header
-            name: X-Overflow-Key
-        policies:
-          - rate: 100
-            interval: "1s"
-            algorithm: TokenBucket
         onRedisFailure: Deny
         requestTimeout: "100ms"
         rejectStatus: 429
         showLimitHeaders: false
+        quotas:
+          - name: default
+            key:
+              - type: header
+                name: X-Overflow-Key
+            policies:
+              - rate: 100
+                interval: "1s"
+                algorithm: TokenBucket

@@ -519,7 +519,7 @@ impl AiAttemptRuntimeState {
         }
         if eos
             && active.status.is_some_and(|status| (200..300).contains(&status))
-            && active.usage.permits_provider_success()
+            && active.usage.permits_credential_success()
         {
             // The outlier-detection verdict still requires a real upstream EOS:
             // a gateway-initiated cut says nothing about the credential's

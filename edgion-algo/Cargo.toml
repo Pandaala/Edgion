@@ -26,3 +26,4 @@ workspace = true
 parking_lot.workspace = true
 rpds.workspace = true
 smallvec.workspace = true
+regex-automata.workspace = true

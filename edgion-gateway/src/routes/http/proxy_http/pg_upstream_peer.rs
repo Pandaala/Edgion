@@ -1,9 +1,10 @@
 use super::EdgionHttpProxy;
+use crate::ai::protocols::error::render_ai_error;
 use crate::ai::runtime::dispatch::{
     ai_predispatch_deadline, commit_ai_attempt_context, prepare_first_attempt, AiDispatchError,
     AiPeerPredispatchFailure, PreparedAiAttempt,
 };
-use crate::ai::{render_openai_error, AiProxyError};
+use crate::ai::AiProxyError;
 use crate::backends::peer_builder::{
     apply_backend_app_protocol, create_tls_peer, extract_tls_config, parse_backend_app_protocol,
 };
@@ -91,7 +92,7 @@ async fn end_ai_predispatch_error(
     ctx: &mut EdgionHttpContext,
     error: AiProxyError,
 ) -> pingora_core::Result<()> {
-    let (status, body) = render_openai_error(error);
+    let (status, body) = render_ai_error(ctx, error);
     let mut response = ResponseHeader::build(status, None)?;
     edgion_http.server_header_opts.apply_to_response(&mut response);
     response.insert_header("content-type", "application/json")?;
@@ -533,6 +534,12 @@ pub async fn upstream_peer_http(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
+    if ctx.has_strict_jump_conflict() {
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(500),
+            "conflicting upstream selection",
+        ));
+    }
     finalize_request_uri(session, ctx)?;
 
     // AI forwarding owns a typed external peer path and never writes the
@@ -812,15 +819,41 @@ pub async fn select_http_backend(
     let backend_tls_policy = crate::backends::query_backend_tls_policy_for_logical_backend(&backend_ref);
 
     let backend_plugin_runtime = Arc::clone(&backend_ref.compiled().plugin_runtime);
+    if !backend_plugin_runtime.backend_compatible(ctx) {
+        if ctx.grpc_transcoding.is_some() {
+            return Err(crate::plugins::http::grpc_json_transcoder::failure());
+        }
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(500),
+            "incompatible selected backend plugins",
+        ));
+    }
     backend_plugin_runtime.run_backend_request_plugins(session, ctx).await;
     if ctx.plugin_terminated() {
         let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
         return Err(PingoraError::new(ErrorType::InternalError));
     }
 
-    let selected = SelectedServiceBackend::new(backend_ref, backend_tls_policy)
-        .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
-    ctx.selected_backend = Some(SelectedHttpBackend::Service(selected));
+    if ctx.has_strict_jump_conflict() {
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(500),
+            "conflicting upstream selection",
+        ));
+    }
+
+    ctx.selected_backend = Some(match backend_ref.target() {
+        CompiledBackendTarget::Service { .. } => {
+            let selected = SelectedServiceBackend::new(backend_ref, backend_tls_policy)
+                .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
+            SelectedHttpBackend::Service(selected)
+        }
+        CompiledBackendTarget::Invalid { .. } => SelectedHttpBackend::Invalid(backend_ref),
+        CompiledBackendTarget::EdgionBackend { .. } => {
+            ctx.record_error(EdgionErrorCode::UpstreamNotBackendRefs);
+            end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
+            return Err(PingoraError::new(ErrorType::InternalError));
+        }
+    });
     Ok(())
 }
 

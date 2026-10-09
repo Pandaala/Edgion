@@ -26,6 +26,7 @@ DO_CLEANUP=true
 
 # Whether to run full tests including slow tests (default: false for faster iteration)
 FULL_TEST=false
+AI_CONFORMANCE=false
 
 # Required open files limit for integration run.
 REQUIRED_NOFILE=65535
@@ -307,9 +308,12 @@ SLOW_TESTS=(
     "HTTPRoute_Backend_Timeout"
     "HTTPRoute_Backend_PerTryTimeout"
     "HTTPRoute_Backend_HealthCheckTransition"
+    "HTTPRoute_Transport"
     "EdgionPlugins_AllEndpointStatus"
     "EdgionPlugins_LdapAuth"
     "EdgionPlugins_LdapAuthTls"
+    "Dyn_WafDynamic"
+    "Dyn_EncryptedActiveHealthChecks"
 )
 
 is_slow_test() {
@@ -1120,13 +1124,13 @@ is_redis_service_required() {
     fi
 
     if [ "$G_RESOURCE" = "EdgionPlugins" ]; then
-        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "RateLimitRedis" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "GraphqlRateLimit" ]; then
             return 0
         fi
     fi
 
     if [ "$G_RESOURCE" = "EdgionBackend" ]; then
-        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || [ "$G_ITEM" = "Responses" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || { [ "$G_ITEM" = "Responses" ] || [ "$G_ITEM" = "Messages" ]; }; then
             return 0
         fi
     fi
@@ -1144,7 +1148,7 @@ is_redis_service_required() {
     fi
 
     case ",${explicit_suites}," in
-        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,EdgionBackend/SingleProvider,*|*,EdgionBackend/Responses,*|*,EdgionBackend/CredentialExhaustion,*|*,LinkSys/Redis,*|*,LinkSys/RedisTls,*|*,TCPRoute/StreamPlugins,*)
+        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,EdgionPlugins/GraphqlRateLimit,*|*,EdgionBackend/SingleProvider,*|*,EdgionBackend/Responses,*|*,EdgionBackend/Messages,*|*,EdgionBackend/CredentialExhaustion,*|*,LinkSys/Redis,*|*,LinkSys/RedisTls,*|*,TCPRoute/StreamPlugins,*)
             return 0
             ;;
     esac
@@ -1655,6 +1659,7 @@ show_help() {
     echo "  --no-prepare           Skip build step"
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
+    echo "  --ai-conformance       Local native AI matrix (requires Messages target and both SDK interpreters)"
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
     echo "  --jobs <N>             Max parallel isolated scenarios (default: 4)"
     echo "  --isolated-timeout-secs <N>       Per-isolated-scenario deadline (default: 900)"
@@ -1725,6 +1730,7 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "EdgionBackend_SingleProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i SingleProvider" || test_failed=true
                     run_test "EdgionBackend_Responses" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Responses" || test_failed=true
+        run_test "EdgionBackend_Messages" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Messages" || test_failed=true
         run_test "EdgionBackend_AnthropicProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i AnthropicProvider" || test_failed=true
                     run_test "EdgionBackend_Resilience" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Resilience" || test_failed=true
                     run_test "EdgionBackend_CredentialExhaustion" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i CredentialExhaustion" || test_failed=true
@@ -1886,6 +1892,10 @@ run_all_tests() {
                     run_test "EdgionPlugins_ProxyRewrite" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
                     run_test "EdgionPlugins_RateLimitLocal" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitLocal" || test_failed=true
                     run_test "EdgionPlugins_RateLimitRedis" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
+                    run_test "EdgionPlugins_GraphqlRateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlRateLimit" || test_failed=true
+                    run_test "EdgionPlugins_GraphqlGuard" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlGuard" || test_failed=true
+                    run_test "EdgionPlugins_GraphqlSafelist" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlSafelist" || test_failed=true
+                    run_test "EdgionPlugins_GraphqlOperationRouter" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlOperationRouter" || test_failed=true
                     run_token_bucket_partial_refill_redis_test || test_failed=true
                     run_test "EdgionPlugins_RealIp" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RealIp" || test_failed=true
                     run_test "EdgionPlugins_RequestMirror" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RequestMirror" || test_failed=true
@@ -1934,7 +1944,9 @@ run_all_tests() {
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     local test_name="EdgionPlugins_${item_safe}"
-                    if ! should_skip_test "$test_name"; then
+                    if [ "$G_ITEM" = "DslXmlDynamic" ]; then
+                        run_test "Dyn_DslXmlDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario DslXmlDynamic" || test_failed=true
+                    elif ! should_skip_test "$test_name"; then
                         if $FULL_TEST && [ "$G_ITEM" = "ExtProc" ]; then
                             run_test "$test_name" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ${G_ITEM} --full-test" || test_failed=true
                         else
@@ -1945,6 +1957,18 @@ run_all_tests() {
                     fi
                     if [ "$G_ITEM" = "RateLimitRedis" ]; then
                         run_token_bucket_partial_refill_redis_test || test_failed=true
+                    fi
+                    if [ "$G_ITEM" = "GraphqlGuard" ]; then
+                        run_test "Dyn_GraphqlGuardDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario GraphqlGuardDynamic" || test_failed=true
+                    fi
+                    if [ "$G_ITEM" = "GraphqlSafelist" ]; then
+                        run_test "Dyn_GraphqlSafelistDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario GraphqlSafelistDynamic" || test_failed=true
+                    fi
+                    if [ "$G_ITEM" = "GraphqlOperationRouter" ]; then
+                        run_test "Dyn_GraphqlOperationRouterDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario GraphqlOperationRouterDynamic" || test_failed=true
+                    fi
+                    if [ "$G_ITEM" = "GraphqlRateLimit" ]; then
+                        run_test "Dyn_GraphqlRateLimitDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario GraphqlRateLimitDynamic" || test_failed=true
                     fi
                 fi
                 ;;
@@ -2037,6 +2061,7 @@ run_all_tests() {
 
         run_test "EdgionBackend_SingleProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i SingleProvider" || test_failed=true
         run_test "EdgionBackend_Responses" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Responses" || test_failed=true
+        run_test "EdgionBackend_Messages" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Messages" || test_failed=true
         run_test "EdgionBackend_AnthropicProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i AnthropicProvider" || test_failed=true
         run_test "EdgionBackend_Resilience" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Resilience" || test_failed=true
         run_test "EdgionBackend_CredentialExhaustion" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i CredentialExhaustion" || test_failed=true
@@ -2184,6 +2209,10 @@ run_all_tests() {
         run_test "EdgionPlugins_ProxyRewrite" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
         run_test "EdgionPlugins_RateLimitLocal" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitLocal" || test_failed=true
         run_test "EdgionPlugins_RateLimitRedis" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
+        run_test "EdgionPlugins_GraphqlRateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlRateLimit" || test_failed=true
+        run_test "EdgionPlugins_GraphqlGuard" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlGuard" || test_failed=true
+        run_test "EdgionPlugins_GraphqlSafelist" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlSafelist" || test_failed=true
+        run_test "EdgionPlugins_GraphqlOperationRouter" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlOperationRouter" || test_failed=true
         run_token_bucket_partial_refill_redis_test || test_failed=true
         run_test "EdgionPlugins_RealIp" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RealIp" || test_failed=true
         run_test "EdgionPlugins_RequestMirror" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RequestMirror" || test_failed=true
@@ -2244,6 +2273,10 @@ run_all_tests() {
 
         # EdgionTls Tests
         run_test "EdgionTls_https" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i https" || test_failed=true
+        if $FULL_TEST && [ "${EDGION_TEST_DOWNSTREAM_TLS_OFFLOAD:-0}" = "1" ]; then
+            run_test "DownstreamTlsOffloadTimeout" \
+                "python3 ${SCRIPT_DIR}/test_downstream_tls_offload_timeout.py" || test_failed=true
+        fi
         run_test "EdgionTls_grpctls" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i grpctls" || test_failed=true
         run_test "EdgionTls_mTLS" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i mTLS" || test_failed=true
         run_test "EdgionTls_cipher" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i cipher" || test_failed=true
@@ -2278,6 +2311,42 @@ run_all_tests() {
 
         # Dynamic scenarios (always run as part of full test cycle)
         run_dynamic_scenarios || test_failed=true
+    fi
+
+    run_messages_sdk() {
+        "$EDGION_MESSAGES_SDK_PYTHON" "$SCRIPT_DIR/test_messages_sdk.py" \
+            --ports "$PROJECT_ROOT/edgion-tests/integration/conf/ports.json"
+    }
+
+    # Messages checks share the owned topology and finish before residue validation.
+    if [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Messages" ]; then
+        run_test "Dyn_AiMessagesBinding" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario AiMessagesBinding" || test_failed=true
+        for control in Responses SingleProvider AnthropicProvider; do
+            run_test "Messages_Control_${control}" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i ${control}" || test_failed=true
+        done
+        run_test "Messages_Control_Http" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Basic" || test_failed=true
+        run_test "Messages_Control_Sse" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i SseStreaming" || test_failed=true
+    fi
+    if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Messages" ]; }; } || [ -z "$G_RESOURCE" ]; then
+        if [ -n "${EDGION_MESSAGES_SDK_PYTHON:-}" ]; then
+            run_test "Messages_SDK" "run_messages_sdk" || test_failed=true
+        else
+            report_test "Messages_SDK" "SKIP" "0" "set EDGION_MESSAGES_SDK_PYTHON to an interpreter with the official anthropic SDK"
+        fi
+    fi
+
+    run_openai_sdk() {
+        "$EDGION_OPENAI_SDK_PYTHON" "$SCRIPT_DIR/test_openai_sdk.py" \
+            --ports "$PROJECT_ROOT/edgion-tests/integration/conf/ports.json"
+    }
+    if $AI_CONFORMANCE; then
+        for control in Resilience CredentialExhaustion; do
+            run_test "AI_Conformance_${control}" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i ${control}" || test_failed=true
+        done
+        for scenario in AiBackendLifecycle AiBackendSecretRotation AiBackendWeighted AiBackendPolicyIntegration AiGuardOrderingDynamic AiResponsesContinuation; do
+            run_test "Dyn_${scenario}" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario ${scenario}" || test_failed=true
+        done
+        run_test "OpenAI_SDK" "run_openai_sdk" || test_failed=true
     fi
 
     # A resource-wide Gateway sweep loads the dynamic fixtures. An exact
@@ -2334,6 +2403,10 @@ main() {
                 DO_CLEANUP=false
                 shift
                 ;;
+            --ai-conformance)
+                AI_CONFORMANCE=true
+                shift
+                ;;
             --full-test)
                 FULL_TEST=true
                 shift
@@ -2379,6 +2452,17 @@ main() {
                 ;;
         esac
     done
+
+    if $AI_CONFORMANCE; then
+        if [ "$G_RESOURCE" != "EdgionBackend" ] || [ "$G_ITEM" != "Messages" ] || [ -n "$suites" ] || ! $do_start || ! $DO_CLEANUP || $SKIP_RESIDUE_CHECK || [ "${RESIDUE_MODE:-fail}" != "fail" ]; then
+            log_error "--ai-conformance requires the owned Messages topology, default cleanup and strict residue validation"
+            exit 2
+        fi
+        if [ -z "${EDGION_OPENAI_SDK_PYTHON:-}" ] || [ -z "${EDGION_MESSAGES_SDK_PYTHON:-}" ]; then
+            log_error "--ai-conformance requires EDGION_OPENAI_SDK_PYTHON and EDGION_MESSAGES_SDK_PYTHON"
+            exit 2
+        fi
+    fi
 
     case "$INTEGRATION_JOBS" in
         ''|*[!0-9]*)
@@ -2453,7 +2537,7 @@ main() {
                 # must be present or the suite either cannot connect or falls
                 # through to an unrelated GRPCRoute.
                 base_suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis"
-                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/CredentialInjector,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimitLocal,EdgionPlugins/RateLimitRedis,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/GuardrailEncoding,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/GrpcJsonTranscoder,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/RequestId,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
+                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/CredentialInjector,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimitLocal,EdgionPlugins/RateLimitRedis,EdgionPlugins/GraphqlRateLimit,EdgionPlugins/GraphqlOperationRouter,EdgionPlugins/GraphqlGuard,EdgionPlugins/GraphqlSafelist,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/GuardrailEncoding,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/GrpcJsonTranscoder,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/RequestId,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth,EdgionPlugins/LdapAuthTls"
                 fi
@@ -2467,12 +2551,16 @@ main() {
                     suites="${base_suites},EdgionPlugins/Dsl"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/DslGrpcError" ]; then
                     suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis,EdgionPlugins/Dsl"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/DslXmlDynamic" ]; then
+                    suites="${base_suites},EdgionPlugins/DslBody"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Dsl" ]; then
                     suites="${base_suites},LinkSys/Redis,EdgionPlugins/Dsl"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/RateLimitRedis" ]; then
                     # The scenario exercises real Redis counters, so a targeted
                     # run needs both the Redis process and its LinkSys + Secret.
                     suites="${base_suites},LinkSys/Redis,EdgionPlugins/RateLimitRedis"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/GraphqlRateLimit" ]; then
+                    suites="${base_suites},LinkSys/Redis,EdgionPlugins/GraphqlRateLimit"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/AiGuard" ]; then
                     suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/AiGuard"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Guardrail" ]; then
@@ -2514,7 +2602,12 @@ main() {
                 suites="${base_suites},LinkSys/${G_ITEM}"
             fi
         elif [ -n "$G_ITEM" ]; then
-            if [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Responses" ]; then
+            if [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Messages" ]; then
+                suites="${base_suites},LinkSys/Redis,EdgionBackend/Messages,EdgionBackend/Responses,EdgionBackend/SingleProvider,EdgionBackend/AnthropicProvider,HTTPRoute/Basic,HTTPRoute/SseStreaming"
+                if $AI_CONFORMANCE; then
+                    suites="${suites},EdgionBackend/Resilience,EdgionBackend/CredentialExhaustion,EdgionBackend/Lifecycle/DynamicTest,EdgionBackend/Weighted,EdgionBackend/PolicyIntegration,EdgionPlugins/AiGuardOrdering/DynamicTest"
+                fi
+            elif [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Responses" ]; then
                 suites="${base_suites},LinkSys/Redis,EdgionBackend/Responses"
             elif [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; then
                 suites="${base_suites},EdgionPlugins/base,EdgionPlugins/Waf/DynamicTest"
@@ -2565,6 +2658,20 @@ main() {
         unset EDGION_EXT_PROC_EXTERNAL_REQUIRED
         unset EDGION_EXT_PROC_EXTERNAL_ADMIN_URL
         unset EDGION_EXT_PROC_EXTERNAL_TLS_MATERIAL_DIR
+    fi
+
+    # Skip targeted slow suites before preparing their shared topology.
+    local targeted_slow_test=""
+    case "${G_RESOURCE}/${G_ITEM}" in
+        Gateway/WafDynamic) targeted_slow_test="Dyn_WafDynamic" ;;
+        HTTPRoute/Transport) targeted_slow_test="HTTPRoute_Transport" ;;
+    esac
+    if [ -n "$targeted_slow_test" ] && should_skip_test "$targeted_slow_test"; then
+        log_info "${G_RESOURCE}/${G_ITEM} requires --full-test"
+        report_test "$targeted_slow_test" "SKIP" "0" "requires --full-test"
+        finalize_report "PASS"
+        DO_CLEANUP=false
+        exit 0
     fi
 
     # Fast mode guard: LDAP integration test is complex (Docker-required), full-test only.
@@ -2793,11 +2900,11 @@ main() {
 
     # These explicitly selected suites use only 127.0.0.1. Do not require the
     # macOS-only aliases that belong to unrelated LB and GeoIP suites.
-    if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || [ "$G_ITEM" = "Responses" ]; }; } \
+    if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || { [ "$G_ITEM" = "Responses" ] || [ "$G_ITEM" = "Messages" ]; }; }; } \
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
-        || { [ "$G_RESOURCE" = "HTTPRoute" ] && [ "$G_ITEM" = "Backend/InformationalRetry" ]; } \
+        || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ]; }; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
-        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ]; }; }; then
+        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "GraphqlSafelist" ]; }; }; then
         log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"
         report_test "Preflight_LoopbackAliases" "SKIP" "0" "not required by selected suites"
     elif ! ensure_loopback_aliases; then
@@ -2952,7 +3059,7 @@ main() {
     if $do_start; then
         log_section "Step 2: Start all services and load config"
         export EDGION_TEST_CONTROLLER_GRPC_PORT="${CONTROLLER_GRPC_PORT}"
-        if [ -z "$G_RESOURCE" ] || [ "$G_RESOURCE" = "EdgionBackend" ] || [[ ",${suites}," == *",EdgionBackend/SingleProvider,"* ]] || [[ ",${suites}," == *",EdgionBackend/AnthropicProvider,"* ]] || [[ ",${suites}," == *",EdgionBackend/Resilience,"* ]] || [[ ",${suites}," == *",EdgionBackend/Responses,"* ]] || [[ ",${suites}," == *",EdgionBackend/CredentialExhaustion,"* ]]; then
+        if [ -z "$G_RESOURCE" ] || [ "$G_RESOURCE" = "EdgionBackend" ] || [[ ",${suites}," == *",EdgionBackend/SingleProvider,"* ]] || [[ ",${suites}," == *",EdgionBackend/AnthropicProvider,"* ]] || [[ ",${suites}," == *",EdgionBackend/Resilience,"* ]] || [[ ",${suites}," == *",EdgionBackend/Responses,"* ]] || [[ ",${suites}," == *",EdgionBackend/Messages,"* ]] || [[ ",${suites}," == *",EdgionBackend/CredentialExhaustion,"* ]]; then
             export EDGION_TEST_ENABLE_GENAI_METRICS=1
         else
             unset EDGION_TEST_ENABLE_GENAI_METRICS
@@ -3083,6 +3190,11 @@ main() {
     run_test() {
         local name=$1
         local cmd=$2
+        if should_skip_test "$name"; then
+            log_info "Skipping slow test: ${name} (use --full-test to run)"
+            report_test "$name" "SKIP" "0" "requires --full-test"
+            return 0
+        fi
         local log_file="${TEST_LOG_DIR}/${name}.log"
         local start_time=$(date +%s)
         

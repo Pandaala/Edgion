@@ -1,0 +1,32 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "graphql-guard-dynamic",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "GraphqlGuard",
+        "config": {
+          "maxDepth": 1,
+          "maxAliases": 0,
+          "maxRootFields": 1,
+          "maxFields": 1,
+          "maxCost": 0,
+          "showQueryCost": true,
+          "schema": "type Query { ping:Int user:User blocked:Int } type User { id:ID child:User }",
+          "rootFields": {
+            "query": {
+              "deny": [
+                "blocked"
+              ]
+            }
+          },
+          "mode": "measure"
+        }
+      }
+    ]
+  }
+}

@@ -1,9 +1,10 @@
 //! Body gate wrappers for body-aware plugins.
 //!
 //! Most plugins that need the fully buffered request body are wrapped in a body
-//! gate. HMAC is the narrow exception: it owns the same resolved requirement so
-//! cheap authentication can finish before capture, then hashes through the
-//! non-materializing body view. Proxied upstream responses remain
+//! gate. HMAC owns the same resolved requirement so cheap authentication can
+//! finish before capture, then hashes through the non-materializing body view.
+//! GrpcJsonTranscoder owns capture admission to preserve its fixed JSON error
+//! dialect, using the same shared failure classification. Proxied upstream responses remain
 //! streaming-only. The gate, evaluated at the plugin's stage:
 //!
 //! 1. Applies the SECONDARY run/skip filter ([`BodyRequirement::conditions`],

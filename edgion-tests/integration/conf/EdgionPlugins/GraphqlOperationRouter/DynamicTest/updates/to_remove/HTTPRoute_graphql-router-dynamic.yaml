@@ -1,0 +1,79 @@
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "HTTPRoute",
+  "metadata": {
+    "name": "graphql-router-dynamic",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "parentRefs": [
+      {
+        "name": "edgion-plugins-gateway",
+        "namespace": "edgion-test"
+      }
+    ],
+    "hostnames": [
+      "graphql-router-dynamic.example.com"
+    ],
+    "rules": [
+      {
+        "matches": [
+          {
+            "path": {
+              "type": "Exact",
+              "value": "/echo"
+            }
+          },
+          {
+            "path": {
+              "type": "Exact",
+              "value": "/graphql-routing-get"
+            }
+          }
+        ],
+        "filters": [
+          {
+            "type": "ExtensionRef",
+            "extensionRef": {
+              "group": "edgion.io",
+              "kind": "EdgionPlugins",
+              "name": "graphql-router-dynamic"
+            }
+          }
+        ],
+        "backendRefs": [
+          {
+            "name": "graphql-orders",
+            "port": 30002
+          },
+          {
+            "name": "graphql-core",
+            "port": 30003
+          },
+          {
+            "name": "graphql-remote",
+            "namespace": "graphql-other",
+            "port": 30002,
+            "weight": 0
+          }
+        ]
+      },
+      {
+        "matches": [
+          {
+            "path": {
+              "type": "Exact",
+              "value": "/health"
+            }
+          }
+        ],
+        "backendRefs": [
+          {
+            "name": "graphql-core",
+            "port": 30003
+          }
+        ]
+      }
+    ]
+  }
+}

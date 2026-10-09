@@ -64,3 +64,15 @@ fn bounds_duplicates_and_algorithm_parameters_are_enforced() {
     assert!(!valid_request_id_value(&[b'a'; 257]));
     assert!(valid_request_id_value(&[b'a'; 256]));
 }
+
+#[test]
+fn anthropic_principal_and_protocol_headers_cannot_be_trace_destinations() {
+    for name in [
+        "anthropic-workspace-id",
+        "Anthropic-User-Profile-Id",
+        "ANTHROPIC-VERSION",
+        "anthropic-beta",
+    ] {
+        assert!(!valid_request_id_header(name));
+    }
+}

@@ -286,3 +286,29 @@ the default integration sweep passed all 237 executed report entries, including
 check/Clippy, agent-doc, SSA, metrics, and Pingora-policy guards passed.
 Independent review completed two rounds and returned LGTM. The fixture-alignment
 task is closed; no production dye semantics changed.
+
+
+## Static fixture reuse during integration setup
+
+On 2026-10-08, a default full sweep reproduced a transient generic 500 in the
+DIU reject case while setup unnecessarily replaced already-correct resources.
+The legal control used the old route sync version; the immediately following
+assertion used a new version before its scoped plugin publication was available.
+Raw configclient visibility precedes debounced handler publication and cannot
+prove that runtime admission is ready.
+
+The static denial suite now reuses preloaded resources only when every declared
+fixture field matches the processed Controller resource. Missing or different
+fixtures are still applied, and Controller/Gateway projection, backend receipts,
+Dye, typed logs and exact status assertions remain required. This is a static
+behavior test; hot reload remains covered by the dedicated dynamic scenarios.
+The corrected default candidate sweep passed all 12 DIU cases. Every denial
+probe used one route sync version: the DIU and Canary reject cases returned
+403, their fallbacks returned 200, the missing-target fallback returned 200,
+and weighted denied selection returned 500. The complete sweep passed 266
+checks with zero failures and nine existing skips.
+
+The subsequent narrow `EdgionPlugins/DynamicInternalUpstream` run also passed
+12/12 cases and all final guards. Its Controller log confirms that the dedicated
+cross-namespace Service and EndpointSlice were created during setup, exercising
+the missing-prerequisite branch rather than only preloaded fixture reuse.

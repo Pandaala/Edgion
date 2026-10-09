@@ -6,7 +6,7 @@
 |-----|-------|
 | Created | 2026-08-02 |
 | Queue order | 2 |
-| Status | pending |
+| Status | in-progress |
 | Type | feature |
 | Priority | P2 |
 | Issue | N/A |
@@ -36,7 +36,7 @@ streaming-response boundaries.
   behavior.
 - Preserve transactional mutation: invalid or oversized output is never
   partially published.
-- Preserve request replay, retry, mirroring, framing, and stock-Pingora
+- Preserve request replay, retry, mirroring, framing, and the canonical Edgion Pingora transport
   behavior.
 
 ## Scope
@@ -65,19 +65,14 @@ streaming-response boundaries.
 - Construct XML requests for legacy upstream services from JSON input.
 - Normalize namespaces or envelope fields before proxying.
 
-## Design questions
+## Reviewed design
 
-- Which owned XML value representation preserves order and namespace identity
-  without retaining an unbounded parser DOM?
-- Which operations are supported in the first API, and how are missing,
-  repeated, and namespace-qualified values represented?
-- Can incremental parsing reduce peak memory while keeping a script-usable
-  bounded tree or event projection?
-- What are the exact gas, byte, node, depth, and output accounting rules?
-- How are namespace declarations, prefixes, escaping, comments, processing
-  instructions, and mixed content handled deterministically?
-- Which malformed-input and serializer failures map to the existing generic
-  fail-closed behavior?
+The immutable XML model, sixteen APIs, namespace/whitespace semantics, independent
+hard bounds, nonrefundable work ledger and fixed body failure contract are frozen
+in [xml/01-design.md](xml/01-design.md), approved by the independent plan reviewer.
+The implementation uses the existing shared BodyStorage scanner lane and one
+canonical overwrite after successful bounded serialization. No public resource
+limit or response-body API was added.
 
 ## Affected modules
 
@@ -93,13 +88,24 @@ streaming-response boundaries.
 
 | Subtask | Status | Output |
 |------|------|------|
-| Existing DSL and request-body capability inventory | pending | Current extension points and reuse boundaries |
-| XML value model and API assessment | pending | Compared options with safety and compatibility conclusion |
-| Limits, gas, and security design | pending | Hard bounds and disabled XML features |
-| Compiler/bytecode and Gateway runtime design | pending | File-level change plan and data flow |
-| Transactional serialization and publication | pending | Mutation and framing behavior |
-| Unit, integration, security, and build-flavor tests | pending | Malicious-input and regression matrix |
-| Documentation and independent review | pending | EN/ZH contract and review closure |
+| Existing DSL and request-body capability inventory | completed | Current extension points and reuse boundaries |
+| XML value model and API assessment | completed | Compared options with safety and compatibility conclusion |
+| Limits, gas, and security design | completed | Hard bounds and disabled XML features |
+| Compiler/bytecode and Gateway runtime design | completed | File-level change plan and data flow |
+| Transactional serialization and publication | completed | Mutation and framing behavior |
+| Unit, integration, security, and supported-build tests | completed | Malicious-input and regression matrix |
+| Documentation and independent review | completed | EN/ZH contract and review closure |
+
+## Acceptance status
+
+Scoped implementation, EN/ZH documentation, reviewed code corrections and live
+verification are complete. Fresh leaf/Gateway/runner checks pass 158/476/25;
+canonical DSLBody passes 25/25, DslXmlDynamic passes all phases and cleanup, and
+Transport passes 169/169 with required final gates. Full dependency audit/deny
+still fail on pre-existing Wasmtime/Hickory advisories, reproduced against HEAD.
+Overall acceptance remains pending that gate; see [xml/05-issues.md](xml/05-issues.md)
+and [fresh evidence](xml/02-implementation.md). No advisory ignore, unrelated
+upgrade, commit or push is included.
 
 ## Acceptance criteria
 
@@ -109,7 +115,7 @@ streaming-response boundaries.
 - Parsing, traversal, and serialization have bounded VM accounting.
 - Invalid or oversized output cannot be published partially.
 - Memory/spill behavior, body caps, replay, retry, mirroring, framing, and
-  stock-Pingora behavior retain their existing invariants.
+  canonical Edgion Pingora behavior retain their existing invariants.
 - Tests cover namespaces, attributes, child order, text/mixed content,
   repeated elements, malformed input, depth/node/text limits, and output caps.
 
@@ -125,11 +131,11 @@ streaming-response boundaries.
 
 | Document | Status | Notes |
 |------|------|------|
-| `dsl-xml-primitives.md` | pending | This task record contains the initial requirements and design questions |
-| `00-context.md` | — | Create after the existing DSL/runtime inventory is complete |
-| `01-design.md` | — | Create after the solution assessment and design review |
-| `02-implementation.md` | — | Create at implementation start |
-| `03-subtasks.md` | — | Subtasks are recorded in this task file until implementation begins |
+| `dsl-xml-primitives.md` | in-progress | Requirements and acceptance status |
+| `xml/00-context.md` | done | Existing mechanisms and original knowledge |
+| `xml/01-design.md` | done | API, numeric bounds and budget, independent plan PASS |
+| `xml/02-implementation.md` | in-progress | Implementation and fresh verification evidence |
+| `xml/03-subtasks.md` | in-progress | XML-specific status; parent ExtProc evidence is preserved |
 | `06-decisions.md` | — | Create when design decisions need a separate log |
 
 ## Decision log

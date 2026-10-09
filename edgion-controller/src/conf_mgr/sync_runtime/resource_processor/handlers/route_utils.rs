@@ -237,14 +237,14 @@ fn extension_scope_violation_with(
         return None;
     };
     if !backend {
-        return plugins
-            .has_active_grpc_transcoder()
-            .then_some(("GrpcJsonTranscoder", true));
+        return plugins.http_route_only_plugin().map(|plugin| (plugin, true));
     }
     if plugins.spec.waf.is_some() {
         Some(("WAF", true))
     } else if plugins.has_active_grpc_transcoder() {
         Some(("GrpcJsonTranscoder (HTTPRoute rule only)", true))
+    } else if plugins.has_active_graphql_operation_router() {
+        Some(("GraphqlOperationRouter (HTTPRoute rule only)", false))
     } else if plugins.has_active_request_id() {
         Some(("RequestId", true))
     } else if let Some(entry) = plugins
@@ -283,8 +283,8 @@ fn extension_scope_violation(
 
 fn scope_error(field: RouteExtensionField<'_>, plugin: &'static str) -> String {
     match field.slot().backend() {
-        Some(index) if plugin.starts_with("GrpcJsonTranscoder") =>
-            format!("backendRefs[{index}] GrpcJsonTranscoder requires HTTPRoute rule scope"),
+        Some(index) if plugin.starts_with("GrpcJsonTranscoder") || plugin.starts_with("GraphqlOperationRouter") =>
+            format!("backendRefs[{index}] {plugin} requires HTTPRoute rule scope"),
         Some(index) => format!("backendRefs[{index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"),
         None => "GrpcJsonTranscoder requires HTTPRoute rule scope".into(),
     }
@@ -1046,11 +1046,52 @@ fn hostname_intersection<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
 mod tests;
 
 /// Route-kind validation uses the same raw source generation as dependencies.
-pub(super) fn contains_grpc_transcoder(
+pub(super) fn http_route_only_plugin(
     runtime: &ControllerRuntime,
     root: &ResourceRef,
     field: RouteExtensionField<'_>,
-) -> bool {
-    extension_scope_violation(runtime, root, field, true)
-        .is_some_and(|(plugin, _)| plugin.starts_with("GrpcJsonTranscoder"))
+) -> Option<&'static str> {
+    extension_scope_violation(runtime, root, field, true).and_then(|(plugin, _)| match plugin {
+        "GrpcJsonTranscoder" | "GraphqlOperationRouter" => Some(plugin),
+        _ => None,
+    })
+}
+
+/// Inspect only uniquely resolved desired generations using actual rule fields.
+pub(super) fn graphql_router_rule_error(
+    route: &edgion_resources::HTTPRoute,
+    rule_index: usize,
+    effective: bool,
+    runtime: &ControllerRuntime,
+    delegated: bool,
+) -> Option<String> {
+    let references = edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs::from_route(route).ok()?;
+    let rule = if effective {
+        route.effective_rules()?
+    } else {
+        route.spec.rules.as_ref()?
+    }
+    .get(rule_index)?;
+    let plugins: Vec<_> = references
+        .authored()
+        .filter(|_| !effective)
+        .chain(references.effective().filter(|_| effective))
+        .filter(|field| field.slot().rule() == rule_index && field.slot().backend().is_none())
+        .filter_map(|field| {
+            let reference = field.validated().ok()??;
+            let target = reference.target();
+            let key = format!("{}/{}", target.scope().namespace()?, target.name());
+            match plugin_target(runtime, &key) {
+                PluginTarget::Unique { source, .. } => Some(source),
+                PluginTarget::Missing | PluginTarget::Ambiguous => None,
+            }
+        })
+        .collect();
+    let views: Vec<_> = plugins.iter().map(|p| p.as_ref()).collect();
+    edgion_resources::plugin_configs::graphql_router_rule_binding_error(
+        rule,
+        route.metadata.namespace.as_deref().unwrap_or("default"),
+        &views,
+        delegated,
+    )
 }

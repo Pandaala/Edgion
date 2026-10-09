@@ -68,9 +68,67 @@ fn scoped_key_prefix_namespaces_by_entry_identity() {
 
     // The bucket namespace names the limiter, so an identical config in two
     // resources (or twice in one resource) never shares Redis keys.
-    assert_eq!(a.scoped_key_prefix, "edgion:rl:default/limiter-a/#0:");
-    assert_ne!(a.scoped_key_prefix, b.scoped_key_prefix);
-    assert_ne!(a.scoped_key_prefix, a_second_entry.scoped_key_prefix);
+    assert_eq!(a.quota_prefixes, ["edgion:rl:default/limiter-a/#0:q:7:default:"]);
+    assert_ne!(a.quota_prefixes, b.quota_prefixes);
+    assert_ne!(a.quota_prefixes, a_second_entry.quota_prefixes);
+}
+
+#[tokio::test]
+async fn graphql_body_override_preserves_canonical_retry_and_quota_headers() {
+    use crate::plugins::http::common::graphql_request;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let config = unreachable_redis_config("default/graphql-reply-test", OnRedisFailure::Deny);
+    let ordinary = RateLimitRedis::new(&config, "default/reply/#0");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&ordinary.reject_body).unwrap(),
+        serde_json::json!({"message":"Rate limit exceeded"})
+    );
+    let body = graphql_request::error_body(429);
+    let plugin = ordinary.with_json_rejection_body(body.clone());
+    for retry in [Duration::ZERO, Duration::from_millis(500)] {
+        let mut session = MockPluginSession::new();
+        session.expect_set_response_header().times(1).returning(|name, value| {
+            assert_eq!(name, "Content-Type");
+            assert_eq!(value, "application/json");
+            Ok(())
+        });
+        session
+            .expect_write_response_header()
+            .times(1)
+            .returning(move |header, end| {
+                assert!(!end);
+                assert_eq!(header.status.as_u16(), 429);
+                assert_eq!(header.headers["content-type"], "application/json");
+                assert_eq!(header.headers["X-RateLimit-Limit"], "100");
+                assert_eq!(header.headers["X-RateLimit-Remaining"], "0");
+                if retry.is_zero() {
+                    assert!(!header.headers.contains_key("Retry-After"));
+                } else {
+                    assert_eq!(header.headers["Retry-After"], "1");
+                }
+                Ok(())
+            });
+        let expected = body.clone();
+        session
+            .expect_write_response_body()
+            .times(1)
+            .returning(move |actual, end| {
+                assert!(end);
+                assert_eq!(actual.as_ref(), Some(&expected));
+                Ok(())
+            });
+        let result = RateLimitResult {
+            allowed: false,
+            current: 100,
+            remaining: 0,
+            limit: 100,
+            retry_ms: 500,
+        };
+        assert_eq!(
+            plugin.reject_request(&mut session, retry, Some(&result)).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+    }
 }
 
 #[test]
@@ -173,13 +231,16 @@ async fn construction_freezes_config_validity_and_invalid_runs_fail_before_depen
 /// falls through to `apply_redis_failure_policy` deterministically.
 fn unreachable_redis_config(redis_ref: &str, on_redis_failure: OnRedisFailure) -> RateLimitRedisConfig {
     RateLimitRedisConfig {
-        redis_ref: redis_ref.to_string(),
-        policies: vec![RateLimitPolicy {
-            rate: 100,
-            interval: "1s".to_string(),
-            algorithm: RateLimitAlgorithm::default(),
-            interval_duration: None,
+        quotas: vec![edgion_resources::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![RateLimitPolicy {
+                rate: 100,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::default(),
+                interval_duration: None,
+            }],
+            ..Default::default()
         }],
+        redis_ref: redis_ref.to_string(),
         on_redis_failure,
         ..Default::default()
     }
@@ -187,10 +248,10 @@ fn unreachable_redis_config(redis_ref: &str, on_redis_failure: OnRedisFailure) -
 
 fn missing_key_deny_config(redis_ref: &str, reject_message: Option<&str>) -> RateLimitRedisConfig {
     let mut config = unreachable_redis_config(redis_ref, OnRedisFailure::Allow);
-    config.key = vec![KeyGet::Header {
+    config.quotas[0].key = vec![KeyGet::Header {
         name: "x-missing".to_string(),
     }];
-    config.on_key_miss = OnKeyMiss::Deny;
+    config.quotas[0].on_key_miss = OnKeyMiss::Deny;
     config.reject_message = reject_message.map(str::to_string);
     config
 }
@@ -217,7 +278,7 @@ async fn reject_body_matches_previous_json_encoding_without_mutating_caller_conf
 
     assert_eq!(serde_json::to_value(&config).unwrap(), caller_snapshot);
     assert_eq!(config.reject_message.as_deref(), Some(message));
-    assert!(config.policies[0].interval_duration.is_none());
+    assert!(config.quotas[0].policies[0].interval_duration.is_none());
 
     let captured_body = Arc::new(Mutex::new(None));
     let captured_body_for_mock = Arc::clone(&captured_body);
@@ -351,17 +412,20 @@ async fn normal_rate_limit_rejection_does_not_record_outcome() {
     // instead we exercise the `RateLimitKey::Deny` short-circuit, which
     // never reaches Redis and is unambiguously a policy decision.
     let config = RateLimitRedisConfig {
+        quotas: vec![edgion_resources::resources::edgion_plugins::RateLimitQuota {
+            policies: vec![RateLimitPolicy {
+                rate: 100,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::default(),
+                interval_duration: None,
+            }],
+            key: vec![edgion_resources::common::KeyGet::Header {
+                name: "x-missing".to_string(),
+            }],
+            on_key_miss: edgion_resources::resources::edgion_plugins::OnKeyMiss::Deny,
+            ..Default::default()
+        }],
         redis_ref: "default/rlr-deny-key-test".to_string(),
-        policies: vec![RateLimitPolicy {
-            rate: 100,
-            interval: "1s".to_string(),
-            algorithm: RateLimitAlgorithm::default(),
-            interval_duration: None,
-        }],
-        key: vec![edgion_resources::common::KeyGet::Header {
-            name: "x-missing".to_string(),
-        }],
-        on_key_miss: edgion_resources::resources::edgion_plugins::OnKeyMiss::Deny,
         ..Default::default()
     };
     let plugin = RateLimitRedis::create(&config, "default/test-plugins/#0");
@@ -375,4 +439,123 @@ async fn normal_rate_limit_rejection_does_not_record_outcome() {
     let mut plugin_log = PluginLog::new("RateLimitRedis");
     let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+}
+
+#[test]
+fn prepared_keys_release_oversized_backing_storage_on_utf8_boundaries() {
+    let mut key = String::with_capacity(1024 * 1024);
+    key.push_str(&"é".repeat(100));
+    let key = bound_prepared_key(key, 65);
+    assert_eq!(key.len(), 64);
+    assert!(key.capacity() <= 65);
+    assert_eq!(key, "é".repeat(32));
+    let mut short = String::with_capacity(1024 * 1024);
+    short.push_str("identity");
+    let short = bound_prepared_key(short, 64);
+    assert_eq!(short, "identity");
+    assert!(short.capacity() <= 64);
+}
+
+#[test]
+fn multi_quota_preparation_preserves_skips_partial_keys_and_stable_names() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let mut config = unreachable_redis_config("default/quota-preparation", OnRedisFailure::Allow);
+    config.request_timeout = Some("200ms".into());
+    config.quotas[0].name = "tenant".into();
+    config.quotas[0].key = vec![KeyGet::Header {
+        name: "X-Tenant".into(),
+    }];
+    let mut second = config.quotas[0].clone();
+    second.name = "user".into();
+    second.key = vec![
+        KeyGet::Header {
+            name: "X-Tenant".into(),
+        },
+        KeyGet::Header { name: "X-User".into() },
+    ];
+    config.quotas.push(second);
+    let plugin = RateLimitRedis::new(&config, "default/multi/#0");
+    let mut session = MockPluginSession::new();
+    session.expect_key_get().returning(|key| match key {
+        KeyGet::Header { name } if name == "X-User" => Some("user".into()),
+        _ => None,
+    });
+    let mut log = PluginLog::new("RateLimitRedis");
+    let jobs = plugin.prepare(&mut session, &mut log, None).ok().unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].index, 1);
+    assert_eq!(jobs[0].key, "-_4:user");
+    assert!(!jobs.spilled());
+    config.quotas.reverse();
+    let reordered = RateLimitRedis::new(&config, "default/multi/#0");
+    assert_eq!(plugin.quota_prefixes[0], reordered.quota_prefixes[1]);
+    assert_eq!(plugin.quota_prefixes[1], reordered.quota_prefixes[0]);
+    assert_ne!(plugin.quota_prefixes[0], plugin.quota_prefixes[1]);
+}
+
+#[tokio::test]
+async fn all_skipped_quotas_bypass_dependency_and_later_key_denial_writes_once() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let mut config = unreachable_redis_config("default/precheck", OnRedisFailure::Deny);
+    config.request_timeout = Some("200ms".into());
+    config.quotas[0].key = vec![KeyGet::Header {
+        name: "X-Missing".into(),
+    }];
+    let mut second = config.quotas[0].clone();
+    second.name = "second".into();
+    config.quotas.push(second);
+    let mut session = MockPluginSession::new();
+    session.expect_key_get().return_const(None::<String>);
+    let mut log = PluginLog::new("RateLimitRedis");
+    assert_eq!(
+        RateLimitRedis::new(&config, "unit")
+            .run_request(&mut session, &mut log)
+            .await,
+        PluginRunningResult::GoodNext
+    );
+    config.quotas[0].key = vec![];
+    config.quotas[1].on_key_miss = OnKeyMiss::Deny;
+    let mut session = MockPluginSession::new();
+    session.expect_key_get().return_const(None::<String>);
+    session.expect_write_response_header().times(1).returning(|header, _| {
+        assert_eq!(header.status.as_u16(), 429);
+        assert!(!header.headers.contains_key("x-ratelimit-remaining"));
+        Ok(())
+    });
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    assert_eq!(
+        RateLimitRedis::new(&config, "unit")
+            .run_request(&mut session, &mut log)
+            .await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(!log.render_for_test().contains("redis"));
+}
+
+#[test]
+fn maximum_job_preparation_retains_only_bounded_key_allocations() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let mut config = unreachable_redis_config("default/retained-keys", OnRedisFailure::Deny);
+    config.max_key_len = 65;
+    config.request_timeout = Some("200ms".into());
+    let quota = config.quotas[0].clone();
+    config.quotas = (0..16)
+        .map(|i| {
+            let mut q = quota.clone();
+            q.name = format!("q{i}");
+            q
+        })
+        .collect();
+    let limiter = RateLimitRedis::new(&config, "unit");
+    let mut session = MockPluginSession::new();
+    session.expect_key_get().times(16).returning(|_| {
+        let mut key = String::with_capacity(1024 * 1024);
+        key.push_str(&"é".repeat(100));
+        Some(key)
+    });
+    let mut log = PluginLog::new("RateLimitRedis");
+    let jobs = limiter.prepare(&mut session, &mut log, None).ok().unwrap();
+    assert_eq!(jobs.len(), 16);
+    assert!(jobs.iter().map(|job| job.key.capacity()).sum::<usize>() <= 16 * 65);
+    assert!(jobs.iter().all(|job| job.original_len == 200 && job.key.len() == 64));
 }

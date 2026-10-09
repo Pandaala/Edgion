@@ -11,7 +11,7 @@ fn local() -> Value {
 }
 
 fn redis() -> Value {
-    json!({"type":"RateLimitRedis","config":{"redisRef":"default/redis","key":[],"policies":[{"rate":100,"interval":"1s"}]},
+    json!({"type":"RateLimitRedis","config":{"quotas":[{"name":"default","key":[],"policies":[{"rate":100,"interval":"1s"}],}],"redisRef":"default/redis",},
         "conditions":{"run":{"allOf":[{"type":"rateLimitExceeded","pluginAlias":"local"}]}}})
 }
 

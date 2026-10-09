@@ -7,6 +7,19 @@ description: EdgionGatewayConfig CRD schema: GatewayClass-level runtime configur
 
 > API Group: `edgion.io/v1alpha1` | Scope: Cluster | Referenced via GatewayClass.spec.parametersRef
 
+## Optional expensive WAF checks
+
+`spec.waf.expensiveChecks` is a boolean, default false. It gates only the exact
+compiler-classified CRS 4.25.1 retained aggregate checks: HPP (921170/921180)
+and Multipart Content-Type list initialization/writes/checking (922140/922150/922110).
+Ordinary JSON/XML inspection, mandatory duplicate semantics and cheap summaries
+remain enabled. Gateway captures the scalar with its request EGC snapshot; updates
+apply to new requests. Unknown custom dependencies retain the computation.
+The Multipart collector keeps capture/observer updates. OFF omits its list/counter
+writes and checker, and can remove incidental unanchored aggregate selector inputs
+or errors. Restricted-header/RFI checks remain active. See
+`docs/en/ops-guide/configuration/edgion-gateway-config.md` for scope.
+
 ## When to Change This Layer
 
 Change here, instead of the Gateway YAML, when:

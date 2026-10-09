@@ -55,10 +55,10 @@ field. Regression specimens remove and add fixed top-level/nested fields in in-m
 and demonstrate that open-body internal differences are ignored while missing bodies fail.
 The property walker does not validate field types/patterns/defaults.
 
-`edgion-resources/tests/crd_field_contract_parity.rs` separately checks 16 selected
+`edgion-resources/tests/crd_field_contract_parity.rs` separately checks 17 selected
 scalar fields across every served EdgionGatewayConfig and EdgionBackendTrafficPolicy
 CRD version: retry budget, LinkSys limits, request-body policy, outlier detection,
-and active health-check port. It compares types, serde defaults, inherited defaults,
+optional WAF expensive checks, and active health-check port. It compares types, serde defaults, inherited defaults,
 selected numeric bounds, and existing semantic validation, including explicit
 health-check port-zero rejection. Explicit CRD-default specimens are not a
 Kubernetes admission simulator; runtime-only constraints and live ingestion-mode

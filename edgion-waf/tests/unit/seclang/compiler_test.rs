@@ -25,6 +25,192 @@ fn with_validated<T>(text: &str, inspect: impl FnOnce(ValidatedSemanticDocument<
 }
 
 #[test]
+fn original_supported_bundle_keeps_logical_rules_with_shared_physical_regexes() {
+    use crate::seclang::{compile_rule_bundles, FrontendLimits, RuleBundleMember, RuleBundleSource};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let bundles = ["standard", "core"].map(|profile| {
+        let path = root.join(format!(
+            "config/waf/crs-4.25.1-supported-v1/generated/EdgionConfigData_crs-supported-{profile}.yaml"
+        ));
+        let value: serde_yaml::Value = serde_yaml::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        value["spec"]["data"]["config"].clone()
+    });
+    let roots = bundles.each_ref().map(|bundle| {
+        bundle["roots"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|root| root.as_str().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let rules = bundles.each_ref().map(|bundle| {
+        bundle["rules"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|member| RuleBundleMember {
+                path: member["name"].as_str().unwrap(),
+                bytes: member["content"].as_str().unwrap().as_bytes(),
+            })
+            .collect::<Vec<_>>()
+    });
+    let assets = bundles.each_ref().map(|bundle| {
+        bundle["phraseAssets"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|member| RuleBundleMember {
+                path: member["name"].as_str().unwrap(),
+                bytes: member["content"].as_str().unwrap().as_bytes(),
+            })
+            .collect::<Vec<_>>()
+    });
+    let sources = [0, 1].map(|index| RuleBundleSource {
+        identity: bundles[index]["digest"].as_str().unwrap(),
+        entrypoints: &roots[index],
+        rules: &rules[index],
+        phrase_assets: &assets[index],
+    });
+    let (generation, _) = compile_rule_bundles(&sources, "", context(), FrontendLimits::default())
+        .unwrap()
+        .into_parts();
+    assert_eq!(generation.rule_unit_count(), 567);
+    assert_eq!(generation.members.len(), 634);
+    assert_eq!(generation.groups.len(), 36);
+    let counts = generation
+        .groups
+        .iter()
+        .map(|group| group.matcher.test_regex_counts())
+        .fold((0, 0), |(a, b), (logical, physical)| (a + logical, b + physical));
+    assert_eq!(counts, (66, 60));
+    let guards = generation
+        .boolean_regexes
+        .iter()
+        .map(CompiledRegexProgram::test_guard_stats)
+        .chain(generation.all_matchers().map(CompiledMatcher::test_guard_stats))
+        .fold((0, 0), |(a, b), (c, d)| (a + c, b + d));
+    println!("Supported prefix guards: count={} owned={}", guards.0, guards.1);
+    let simple = generation
+        .boolean_regexes
+        .iter()
+        .map(CompiledRegexProgram::test_simple_count)
+        .chain(generation.all_matchers().map(CompiledMatcher::test_simple_count))
+        .sum::<usize>();
+    println!("Supported exact simple programs: count={simple}");
+    assert!(!generation.capture_hits.matchers.is_empty());
+    let optional_scratch_envelope = generation
+        .capture_hits
+        .matchers
+        .iter()
+        .map(|m| {
+            m.required_scratch_bytes() - size_of::<crate::matcher::MatchScratch>()
+                + size_of::<Option<crate::matcher::MatchScratch>>()
+        })
+        .sum::<usize>();
+    let optional_engine_bytes = generation
+        .capture_hits
+        .matchers
+        .iter()
+        .map(|m| m.memory_usage())
+        .sum::<usize>();
+    println!("Supported capture memory: engine_bytes={optional_engine_bytes} additional_scratch_envelope={optional_scratch_envelope} additional_empty_slot_bytes={}", generation.capture_hits.matchers.len() * size_of::<Option<crate::matcher::MatchScratch>>());
+    let capture_patterns = generation
+        .capture_hits
+        .matchers
+        .iter()
+        .map(|m| m.test_regex_counts())
+        .fold((0, 0), |(a, b), (c, d)| (a + c, b + d));
+    println!(
+        "Supported capture witness: engines={} logical={} physical={} json_batches={} xml_batches={}",
+        generation.capture_hits.matchers.len(),
+        capture_patterns.0,
+        capture_patterns.1,
+        generation.json_inspection.capture_hits.batches.len(),
+        generation.xml_inspection.capture_hits.batches.len()
+    );
+    println!(
+        "Supported regex witness: logical={} physical={} retained={} compile_peak={}",
+        counts.0,
+        counts.1,
+        generation.retained_bytes(),
+        generation.compilation_peak_bytes()
+    );
+}
+
+#[test]
+fn final_prefix_guard_attachment_preserves_required_generation_at_tight_global_caps() {
+    let source = concat!(
+        "SecRule REQUEST_URI \"@rx alpha[0-9]\" \"id:701,phase:1,pass\"\n",
+        "SecRule REQUEST_URI \"@rx beta[0-9]\" \"id:702,phase:1,pass\"\n",
+    );
+    let g = with_validated(source, |v| {
+        compile_validated(v, None, CompilerLimits::default()).unwrap()
+    });
+    let (count, owned) = g.groups[0].matcher.test_guard_stats();
+    assert_eq!(count, 1);
+    assert!(owned > 0);
+    let required_matcher = g.matcher_charged_bytes - owned;
+    for limits in [
+        CompilerLimits {
+            max_compiled_matcher_bytes: required_matcher,
+            ..CompilerLimits::default()
+        },
+        CompilerLimits {
+            max_generation_bytes: required_matcher + g.compiler_owned_bytes,
+            ..CompilerLimits::default()
+        },
+    ] {
+        let tight = with_validated(source, |v| compile_validated(v, None, limits).unwrap());
+        assert_eq!(tight.groups[0].matcher.test_guard_stats(), (0, 0));
+        assert_eq!(tight.matcher_charged_bytes, required_matcher);
+        assert_eq!(tight.rule_unit_count(), 2);
+        assert!(tight.compilation_peak_bytes() <= limits.max_compilation_peak_bytes);
+    }
+}
+
+#[test]
+fn final_prefix_guard_attachment_has_exact_standalone_and_group_program_caps() {
+    for (source, units) in [
+        ("SecRule ARGS:/probe[0-9]/ \"@rx beta[0-9]\" \"id:703,phase:2,pass\"\n", 1),
+        (concat!(
+            "SecRule REQUEST_URI \"@contains yes\" \"id:703,phase:1,pass,ctl:ruleRemoveTargetByTag=probe;ARGS:/probe[0-9]/\"\n",
+            "SecRule ARGS \"@rx beta[0-9]\" \"id:704,phase:2,pass,tag:probe\"\n",
+        ), 2),
+    ] {
+    let mut baseline = with_validated(source, |v| {
+        compile_validated(v, None, CompilerLimits::default()).unwrap()
+    });
+    for standalone in [true, false] {
+        let program = if standalone {
+            &mut baseline.boolean_regexes[0]
+        } else {
+            baseline.groups[0].matcher.regex_program_mut().unwrap()
+        };
+        let (_, owned) = program.test_guard_stats();
+        assert!(owned > 0);
+        let cap = program.conservative_program_memory_bound();
+        for (bound, installs) in [(cap, true), (cap - 1, false)] {
+            let mut limits = CompilerLimits::default();
+            if standalone {
+                limits.regex.max_program_bytes = bound;
+            } else {
+                limits.matcher.max_regex_program_bytes = bound;
+            }
+            let mut g = with_validated(source, |v| compile_validated(v, None, limits).unwrap());
+            let actual = if standalone {
+                &mut g.boolean_regexes[0]
+            } else {
+                g.groups[0].matcher.regex_program_mut().unwrap()
+            };
+            assert_eq!(actual.test_guard_stats().0 == 1, installs);
+            assert!(actual.conservative_program_memory_bound() <= bound);
+            assert_eq!(g.rule_unit_count(), units);
+        }
+    }
+    }
+}
+
+#[test]
 fn capture_regex_sharing_preserves_occurrence_gates_and_requirement_discharge() {
     let text = concat!(
         "SecRule ARGS \"@rx (?P<word>a)\" \"id:1,phase:2,pass,capture\"\n",
@@ -176,7 +362,7 @@ fn capture_regex_interner_charges_all_work_and_carries_it_into_grouping() {
         let limits = CompilerLimits::default();
         let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
         let state = MatcherState::compile(prepared, limits).unwrap();
-        assert_eq!(state.canonical_work.hash_bytes, 6);
+        assert_eq!(state.canonical_work.hash_bytes, 6 + 2 * size_of::<u64>());
         assert_eq!(state.canonical_work.comparison_bytes, 3);
         let limits = CompilerLimits {
             max_group_key_hash_bytes: state.canonical_work.hash_bytes,
@@ -223,9 +409,9 @@ fn capture_regex_interner_collision_checks_bytes_and_keeps_actual_capacity_charg
             peak_bytes: 0,
             requirement_cursors: [0; 8],
         };
-        let mut interner = CaptureRegexInterner::new(2, &mut memory).unwrap();
-        let index_bytes =
-            interner.slots.capacity() * size_of::<CanonicalSlot>() + interner.sources.capacity() * size_of::<&str>();
+        let mut interner = RegexProgramInterner::new(2, &mut memory).unwrap();
+        let index_bytes = interner.slots.capacity() * size_of::<CanonicalSlot>()
+            + interner.sources.capacity() * size_of::<RegexProgramSource<'_>>();
         assert_eq!(memory.working_bytes, index_bytes);
         assert!(memory.regex_peak_budget().unwrap().0 >= index_bytes);
         let mut programs = Vec::with_capacity(2);
@@ -238,6 +424,7 @@ fn capture_regex_interner_collision_checks_bytes_and_keeps_actual_capacity_charg
         );
         // Force a full hash collision to exercise the equality barrier independently of FNV.
         let mut hash = FNV1A_OFFSET_BASIS;
+        CanonicalWork::default().hash_u64(&mut hash, 0, memory.limits).unwrap();
         CanonicalWork::default()
             .hash_bytes(&mut hash, b"b", memory.limits)
             .unwrap();
@@ -293,6 +480,59 @@ fn capture_regex_interner_peak_limit_is_exact_with_distinct_programs() {
             }
         });
     }
+}
+
+#[test]
+fn regex_interner_profile_collision_and_failed_build_do_not_share_or_insert() {
+    let mut memory = MatcherCompileWork {
+        limits: CompilerLimits::default(),
+        validated_bytes: 0,
+        working_bytes: 0,
+        compiler_owned_bytes: 0,
+        matcher_charged_bytes: 0,
+        peak_bytes: 0,
+        requirement_cursors: [0; 8],
+    };
+    let mut interner = RegexProgramInterner::new(3, &mut memory).unwrap();
+    let mut programs = Vec::with_capacity(3);
+    let mut work = CanonicalWork::default();
+    assert_eq!(
+        interner
+            .compile_with("a", true, &mut programs, &mut memory, &mut work, |_| Ok(10))
+            .unwrap(),
+        0
+    );
+    let mut hash = FNV1A_OFFSET_BASIS;
+    CanonicalWork::default().hash_u64(&mut hash, 0, memory.limits).unwrap();
+    CanonicalWork::default()
+        .hash_bytes(&mut hash, b"a", memory.limits)
+        .unwrap();
+    interner.slots.fill(CanonicalSlot::EMPTY);
+    let position = hash as usize & (interner.slots.len() - 1);
+    interner.slots[position] = CanonicalSlot { hash, id: 0 };
+    assert_eq!(
+        interner
+            .compile_with("a", false, &mut programs, &mut memory, &mut work, |_| Ok(20))
+            .unwrap(),
+        1
+    );
+    assert_eq!(programs, [10, 20]);
+    assert_eq!(
+        interner.compile_with("b", false, &mut programs, &mut memory, &mut work, |_| Err(
+            CompilerError::PreflightArithmetic
+        )),
+        Err(CompilerError::PreflightArithmetic)
+    );
+    assert_eq!(interner.sources.len(), 2);
+    assert_eq!(programs.len(), 2);
+    assert_eq!(
+        interner
+            .compile_with("b", false, &mut programs, &mut memory, &mut work, |_| Ok(30))
+            .unwrap(),
+        2
+    );
+    interner.release(&mut memory);
+    assert_eq!(memory.working_bytes, 0);
 }
 
 struct AssetProvider {
@@ -1030,6 +1270,121 @@ fn matcher_stage_compiles_active_target_selector_identity_once() {
 }
 
 #[test]
+fn selector_program_sharing_preserves_profiles_occurrences_and_publication() {
+    let text = concat!(
+        "SecRule ARGS:/^NAME$/ \"@rx a\" \"id:1,phase:2,pass\"\n",
+        "SecRule ARGS|!ARGS:/^NAME$/ \"@rx b\" \"id:2,phase:2,pass\"\n",
+        "SecRule &ARGS:/^NAME$/ \"@eq 1\" \"id:3,phase:2,pass\"\n",
+        "SecRule TX:/^NAME$/ \"@streq value\" \"id:4,phase:2,pass\"\n",
+        "SecRule ARGS:/^(?i:NAME)$/ \"@streq value\" \"id:5,phase:2,pass\"\n",
+    );
+    with_validated(text, |validated| {
+        let limits = CompilerLimits::default();
+        let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+        let state = MatcherState::compile(prepared, limits).unwrap();
+        assert_eq!(state.target_regexes.len(), 5);
+        assert_eq!(state.boolean_regexes.len(), 3);
+        assert_eq!(
+            state
+                .target_regexes
+                .iter()
+                .map(|target| target.program)
+                .collect::<Vec<_>>(),
+            [0, 0, 0, 1, 2]
+        );
+        assert!(state
+            .asset_templates
+            .requirements
+            .iter()
+            .all(|requirement| { requirement.kind == CompileRequirement::RegexCompilation || requirement.discharged }));
+        for (id, expected) in [(0, false), (1, true), (2, true)] {
+            let program = &state.boolean_regexes[id];
+            assert_eq!(
+                program.is_match(b"name", &mut program.create_scratch()).unwrap(),
+                expected
+            );
+        }
+        let grouped = GroupedMatcherState::compile(state, limits).unwrap();
+        assert_eq!(grouped.matchers.boolean_regexes.len(), 3);
+        let generation = CompiledGeneration::publish(grouped, limits).unwrap();
+        assert_eq!(generation.rule_unit_count(), 5);
+    });
+    with_validated(text, |validated| {
+        let limits = CompilerLimits {
+            max_regex_programs: 4,
+            ..CompilerLimits::default()
+        };
+        let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+        assert!(matches!(
+            MatcherState::compile(prepared, limits),
+            Err(CompilerError::RegexProgramLimit { actual: 5, limit: 4 })
+        ));
+    });
+}
+
+#[test]
+fn selector_interner_charges_work_and_has_exact_peak_admission() {
+    let text = concat!(
+        "SecRule ARGS:/^name$/ \"@streq value\" \"id:1,phase:2,pass\"\n",
+        "SecRule ARGS:/^name$/ \"@streq value\" \"id:2,phase:2,pass\"\n",
+    );
+    for (limits, expected) in [
+        (
+            CompilerLimits {
+                max_group_key_hash_bytes: 0,
+                ..CompilerLimits::default()
+            },
+            CompilerError::GroupKeyHashByteLimit { limit: 0 },
+        ),
+        (
+            CompilerLimits {
+                max_group_table_probes: 0,
+                ..CompilerLimits::default()
+            },
+            CompilerError::GroupTableProbeLimit { limit: 0 },
+        ),
+        (
+            CompilerLimits {
+                max_group_key_record_comparisons: 0,
+                ..CompilerLimits::default()
+            },
+            CompilerError::GroupKeyRecordComparisonLimit { limit: 0 },
+        ),
+        (
+            CompilerLimits {
+                max_group_key_comparison_bytes: 0,
+                ..CompilerLimits::default()
+            },
+            CompilerError::GroupKeyComparisonByteLimit { limit: 0 },
+        ),
+    ] {
+        with_validated(text, |validated| {
+            let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+            assert_eq!(MatcherState::compile(prepared, limits).unwrap_err(), expected);
+        });
+    }
+    let peak = with_validated(text, |validated| {
+        let limits = CompilerLimits::default();
+        let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+        MatcherState::compile(prepared, limits).unwrap().peak_bytes
+    });
+    for (bound, succeeds) in [(peak, true), (peak - 1, false)] {
+        with_validated(text, |validated| {
+            let limits = CompilerLimits {
+                max_compilation_peak_bytes: bound,
+                ..CompilerLimits::default()
+            };
+            let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+            let result = MatcherState::compile(prepared, limits);
+            assert_eq!(result.is_ok(), succeeds, "{result:?}");
+            if !succeeds {
+                assert!(matches!(result, Err(CompilerError::PeakByteLimit { .. })));
+            }
+        });
+    }
+}
+
+#[test]
 fn matcher_stage_retained_generation_and_peak_limits_are_exact() {
     let text = "SecRule ARGS \"@rx ^(?P<value>a+)$\" \"id:1,phase:2,pass,capture\"\n";
     let (matcher_bytes, generation_bytes, peak_bytes, program_bytes) = with_validated(text, |validated| {
@@ -1693,4 +2048,290 @@ fn chain_child_structured_target_requires_snapshot_for_entire_unit() {
             );
         },
     );
+}
+
+#[test]
+fn optional_capture_batches_fall_back_at_required_generation_budgets() {
+    let source = concat!(
+        "SecRule ARGS \"@rx (evil)\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (attack)\" \"id:2,phase:2,pass,capture\"\n",
+    );
+    let full = with_validated(source, |v| {
+        compile_validated(v, None, CompilerLimits::default()).unwrap()
+    });
+    assert_eq!(full.capture_hits.matchers.len(), 1);
+    let required_limits = CompilerLimits {
+        max_regex_programs: 2,
+        ..CompilerLimits::default()
+    };
+    let required = with_validated(source, |v| compile_validated(v, None, required_limits).unwrap());
+    assert!(required.capture_hits.matchers.is_empty());
+    for limits in [
+        required_limits,
+        CompilerLimits {
+            max_matcher_groups: 0,
+            ..CompilerLimits::default()
+        },
+        CompilerLimits {
+            max_matcher_patterns: 0,
+            ..CompilerLimits::default()
+        },
+        CompilerLimits {
+            max_matcher_source_bytes: 0,
+            ..CompilerLimits::default()
+        },
+        CompilerLimits {
+            max_compiler_owned_non_matcher_bytes: required.compiler_owned_bytes,
+            ..CompilerLimits::default()
+        },
+        CompilerLimits {
+            max_compiled_matcher_bytes: required.matcher_charged_bytes,
+            ..CompilerLimits::default()
+        },
+        CompilerLimits {
+            max_generation_bytes: required.retained_bytes(),
+            ..CompilerLimits::default()
+        },
+        CompilerLimits {
+            max_compilation_peak_bytes: required.compilation_peak_bytes(),
+            max_regex_programs: 2,
+            ..CompilerLimits::default()
+        },
+    ] {
+        let g = with_validated(source, |v| compile_validated(v, None, limits).unwrap());
+        assert!(g.capture_hits.matchers.is_empty());
+        assert!(g.json_inspection.capture_hits.bindings.is_empty());
+        assert_eq!(g.retained_bytes(), required.retained_bytes());
+        assert!(g.compilation_peak_bytes() <= limits.max_compilation_peak_bytes);
+    }
+    assert!(full.retained_bytes() > required.retained_bytes());
+    // A refused metadata projection must not become a reported allocation peak.
+    let no_space = with_validated(source, |v| {
+        compile_validated(
+            v,
+            None,
+            CompilerLimits {
+                max_compiler_owned_non_matcher_bytes: required.compiler_owned_bytes,
+                ..CompilerLimits::default()
+            },
+        )
+        .unwrap()
+    });
+    assert!(no_space.compilation_peak_bytes() <= required.compilation_peak_bytes());
+}
+
+#[test]
+fn capture_batch_projection_refusal_does_not_hide_other_target_groups() {
+    let large = "x".repeat(5000);
+    for large_first in [false, true] {
+        let small = "SecRule ARGS \"@rx (a+)\" \"id:1,phase:2,pass,capture\"\nSecRule ARGS \"@rx (b+)\" \"id:2,phase:2,pass,capture\"\n";
+        let large_rules = format!("SecRule ARGS_NAMES \"@rx ({large}a)\" \"id:3,phase:2,pass,capture\"\nSecRule ARGS_NAMES \"@rx ({large}b)\" \"id:4,phase:2,pass,capture\"\n");
+        let source = if large_first {
+            format!("{large_rules}{small}")
+        } else {
+            format!("{small}{large_rules}")
+        };
+        let baseline = with_validated(&source, |v| {
+            compile_validated(
+                v,
+                None,
+                CompilerLimits {
+                    max_regex_programs: 4,
+                    ..CompilerLimits::default()
+                },
+            )
+            .unwrap()
+        });
+        let g = with_validated(&source, |v| {
+            compile_validated(
+                v,
+                None,
+                CompilerLimits {
+                    max_compilation_peak_bytes: baseline.compilation_peak_bytes() + 32 * 1024 * 1024,
+                    ..CompilerLimits::default()
+                },
+            )
+            .unwrap()
+        });
+        assert_eq!(g.capture_hits.matchers.len(), 1);
+        assert_eq!(g.json_inspection.capture_hits.batches.len(), 1);
+        assert_eq!(g.json_inspection.capture_hits.batches[0].matcher, g.groups.len());
+        for unit in &g.units {
+            let member = unit.member_start;
+            let mode = if unit.id < 3 {
+                g.json_inspection.members[member].value
+            } else {
+                g.json_inspection.members[member].name
+            };
+            let json_inspection_plan::JsonMemberMode::StaticFact(group) = mode else {
+                panic!("static capture predicate expected");
+            };
+            assert_eq!(g.json_inspection.capture_hits.bindings[group].is_some(), unit.id < 3);
+        }
+        assert!(g.compilation_peak_bytes() <= baseline.compilation_peak_bytes() + 32 * 1024 * 1024);
+    }
+}
+
+#[test]
+fn capture_batch_retained_engine_rejection_has_no_phantom_charge_or_binding() {
+    let source = concat!(
+        "SecRule ARGS \"@rx (a+)\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (b+)\" \"id:2,phase:2,pass,capture\"\n",
+        "SecRule ARGS_NAMES \"@rx ([a-z]{200})\" \"id:3,phase:2,pass,capture\"\n",
+        "SecRule ARGS_NAMES \"@rx ([A-Z]{200})\" \"id:4,phase:2,pass,capture\"\n",
+    );
+    let baseline = with_validated(source, |v| {
+        compile_validated(
+            v,
+            None,
+            CompilerLimits {
+                max_regex_programs: 4,
+                ..CompilerLimits::default()
+            },
+        )
+        .unwrap()
+    });
+    let full = with_validated(source, |v| {
+        compile_validated(v, None, CompilerLimits::default()).unwrap()
+    });
+    assert_eq!(full.capture_hits.matchers.len(), 2);
+    let budget = baseline.matcher_charged_bytes + full.capture_hits.matchers[0].memory_usage();
+    let g = with_validated(source, |v| {
+        compile_validated(
+            v,
+            None,
+            CompilerLimits {
+                max_compiled_matcher_bytes: budget,
+                ..CompilerLimits::default()
+            },
+        )
+        .unwrap()
+    });
+    assert_eq!(g.capture_hits.matchers.len(), 1);
+    assert_eq!(g.matcher_charged_bytes, budget);
+    assert_eq!(g.json_inspection.capture_hits.bindings.iter().flatten().count(), 2);
+    assert_eq!(g.json_inspection.capture_hits.batches[0].matcher, g.groups.len());
+    let engine_refusal = with_validated(source, |v| {
+        compile_validated(
+            v,
+            None,
+            CompilerLimits {
+                matcher: MatcherLimits {
+                    max_regex_nfa_bytes: 1,
+                    ..MatcherLimits::default()
+                },
+                ..CompilerLimits::default()
+            },
+        )
+        .unwrap()
+    });
+    assert!(engine_refusal.capture_hits.matchers.is_empty());
+    assert_eq!(engine_refusal.retained_bytes(), baseline.retained_bytes());
+}
+
+#[test]
+fn capture_batch_peak_splitting_keeps_compact_ids_and_earlier_alias_ownership() {
+    let prefix = "x".repeat(700);
+    for duplicate in [false, true] {
+        let suffixes = if duplicate {
+            ['a', 'b', 'a', 'c']
+        } else {
+            ['a', 'b', 'c', 'd']
+        };
+        let source = suffixes
+            .iter()
+            .enumerate()
+            .map(|(id, suffix)| {
+                format!(
+                    "SecRule ARGS \"@rx ({prefix}{suffix})\" \"id:{},phase:2,pass,capture\"\n",
+                    id + 1
+                )
+            })
+            .collect::<String>();
+        let g = with_validated(&source, |v| {
+            compile_validated(v, None, CompilerLimits::default()).unwrap()
+        });
+        assert_eq!(g.capture_hits.matchers.len(), if duplicate { 1 } else { 2 });
+        assert_eq!(
+            g.json_inspection.capture_hits.batches.len(),
+            g.capture_hits.matchers.len()
+        );
+        for (index, batch) in g.json_inspection.capture_hits.batches.iter().enumerate() {
+            assert_eq!(batch.matcher, g.groups.len() + index);
+            assert_eq!(batch.count, 2);
+        }
+        for (member, record) in g.json_inspection.members.iter().enumerate() {
+            let json_inspection_plan::JsonMemberMode::StaticFact(group) = record.value else {
+                panic!("static capture predicate expected");
+            };
+            assert_eq!(
+                g.json_inspection.capture_hits.bindings[group].is_some(),
+                !duplicate || member != 3
+            );
+        }
+        assert!(g.compilation_peak_bytes() <= CompilerLimits::default().max_compilation_peak_bytes);
+    }
+}
+
+#[test]
+fn static_selection_prunes_exclusive_plans_but_preserves_shared_target_regex() {
+    use crate::seclang::WafRuleSelection;
+    let source = concat!(
+        "SecRule ARGS:/^drop$/ \"@rx (drop)\" \"id:1,phase:2,pass,capture,tag:drop\"\n",
+        "SecRule ARGS:/^shared$/ \"@rx same\" \"id:2,phase:2,pass,tag:keep\"\n",
+        "SecRule ARGS:/^shared$/ \"@rx same\" \"id:3,phase:2,pass,tag:drop\"\n",
+        "SecRule XML:/* \"@contains value\" \"id:4,phase:2,pass,tag:drop\"\n",
+        "SecRule REQUEST_URI \"@contains /probe\" \"id:5,phase:1,pass,tag:keep\"\n",
+    );
+    let baseline = with_validated(source, |validated| {
+        compile_validated(validated, None, CompilerLimits::default()).unwrap()
+    });
+    let program = serde_yaml::from_str::<WafRuleSelection>("exclude: {tag: drop}")
+        .unwrap()
+        .prepare()
+        .unwrap();
+    let selected = with_validated(source, |mut validated| {
+        let mut work = CanonicalWork::default();
+        let decision = program
+            .select(&validated, &mut work, CompilerLimits::default())
+            .unwrap();
+        validated
+            .apply_selection_mask(&decision.mask, &mut work, CompilerLimits::default())
+            .unwrap();
+        compile_validated(validated, None, CompilerLimits::default()).unwrap()
+    });
+    assert_eq!(selected.rule_units().map(|unit| unit.id()).collect::<Vec<_>>(), [2, 5]);
+    assert!(baseline.capture_regexes.len() > selected.capture_regexes.len());
+    assert!(selected.capture_regexes.is_empty());
+    assert!(baseline.json_inspection.groups.len() > selected.json_inspection.groups.len());
+    assert!(baseline.xml_inspection.xml_text.len() > selected.xml_inspection.xml_text.len());
+    assert!(selected.xml_inspection.xml_text.is_empty());
+    assert!(baseline.inspection_activation.steps.len() > selected.inspection_activation.steps.len());
+    assert!(selected.capture_hits.matchers.is_empty());
+    assert!(baseline.matcher_charged_bytes() > selected.matcher_charged_bytes());
+    // One shared selector is still usable by the selected rule, while the drop-only selector disappears.
+    let records: Vec<_> = selected
+        .rule_units()
+        .flat_map(|unit| unit.members())
+        .flat_map(|member| member.target_plan().into_iter().flat_map(|plan| plan.records()))
+        .collect();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.selector_regex_program_id().is_some())
+            .count(),
+        1
+    );
+}
+
+impl<'source> MatcherState<'source> {
+    fn compile(state: AssetTemplateState<'source>, limits: CompilerLimits) -> Result<Self, CompilerError> {
+        Self::compile_with_work(state, limits, CanonicalWork::default())
+    }
+}
+
+impl CompiledGeneration {
+    fn publish(state: GroupedMatcherState<'_>, limits: CompilerLimits) -> Result<Self, CompilerError> {
+        Self::publish_with_work(state, limits).map(|result| result.0)
+    }
 }

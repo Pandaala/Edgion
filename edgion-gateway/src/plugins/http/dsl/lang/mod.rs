@@ -9,5 +9,6 @@ pub(crate) mod body_scan_budget;
 pub(crate) mod body_scanners;
 pub mod builtins;
 pub mod vm;
+pub(crate) mod xml_builtins;
 
 pub use edgion_dsl::{bytecode, error, validator, value};

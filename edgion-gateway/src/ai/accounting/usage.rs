@@ -183,7 +183,7 @@ fn terminate_malformed_quota_unenforceable(
 /// Without it, `AiAttemptRuntimeState::finalize` cannot tell a gateway-initiated
 /// cut from an upstream truncation and has to retain the credential's whole
 /// input + max-output reservation for the rest of the rate-limit window.
-fn terminate_ai_stream(
+pub(crate) fn terminate_ai_stream(
     shared: &AiUsageShared,
     sink: &mut ResponseBodySink,
     session: &mut dyn PluginSession,
@@ -378,7 +378,7 @@ pub struct AiUsageShared {
     encoding_unavailable: AtomicBool,
     observation_diagnostic_recorded: AtomicBool,
     observation_off: AtomicBool,
-    responses: bool,
+    reported_only: bool,
     response_outcome: AtomicU8,
     json_started: AtomicBool,
     json_complete: AtomicBool,
@@ -393,9 +393,9 @@ impl AiUsageShared {
         }
     }
 
-    pub(crate) fn with_responses(observation: AiUsageObservation) -> Self {
+    pub(crate) fn with_reported_only(observation: AiUsageObservation) -> Self {
         Self {
-            responses: true,
+            reported_only: true,
             ..Self::with_observation(observation)
         }
     }
@@ -413,13 +413,18 @@ impl AiUsageShared {
         }
     }
     pub(crate) fn permits_provider_success(&self) -> bool {
-        !self.responses || (!self.observation_unavailable() && self.response_outcome() == ResponseOutcome::Completed)
+        !self.reported_only
+            || (!self.observation_unavailable() && self.response_outcome() == ResponseOutcome::Completed)
+    }
+    /// Credential transport recovery does not assert model completion when observation is off.
+    pub(crate) fn permits_credential_success(&self) -> bool {
+        !self.gateway_terminated() && (self.observation_is_off() || self.permits_provider_success())
     }
     pub(crate) fn permits_latency_sample(&self) -> bool {
-        !self.responses || self.observation_is_off() || self.permits_provider_success()
+        !self.reported_only || self.observation_is_off() || self.permits_provider_success()
     }
     pub(crate) fn provider_failure(&self) -> Option<GenAiAttemptFailure> {
-        if !self.responses || self.observation_is_off() {
+        if !self.reported_only || self.observation_is_off() {
             return None;
         }
         match self.response_outcome() {
@@ -473,6 +478,10 @@ impl AiUsageShared {
         self.sse_degraded.load(Ordering::Acquire)
     }
 
+    pub(crate) fn encoding_unavailable(&self) -> bool {
+        self.encoding_unavailable.load(Ordering::Acquire)
+    }
+
     pub(crate) fn observation_unavailable(&self) -> bool {
         self.observation_unavailable.load(Ordering::Acquire)
     }
@@ -511,7 +520,7 @@ impl AiUsageShared {
                 unavailable,
             };
         }
-        if self.responses && self.reported_usage().is_none() {
+        if self.reported_only && self.reported_usage().is_none() {
             return AiUsageSnapshot {
                 source: GenAiAttemptUsageSource::Unknown,
                 usage: None,

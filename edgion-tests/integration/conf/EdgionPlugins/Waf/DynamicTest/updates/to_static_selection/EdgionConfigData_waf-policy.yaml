@@ -1,0 +1,29 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-policy
+  namespace: edgion-default
+spec:
+  data:
+    type: WafPolicy
+    config:
+      profiles:
+        low:
+          bundleRefs:
+            - name: waf-bundle-v1
+              expectedDigest: 053a8eaf0278ac16aac2305df3baea7b3e11bce04222f6ed167ab53d2dac182e
+        high:
+          ruleSelection:
+            exclude:
+              allOf:
+                - ruleId: 2001
+                - not: {tag: language-java}
+          bundleRefs:
+            - name: waf-bundle-v2
+              expectedDigest: df58f8707a440ad234681cbbbd59cd3849b0b29844eff7a3eee52930b1438002
+            - name: waf-rules-detection
+              expectedDigest: eb1b98d2fda4337ad9615aee1c693dd51793c198b46d37e17e53e3c9f1514c53
+            - name: waf-optional-missing
+              expectedDigest: "0000000000000000000000000000000000000000000000000000000000000000"
+              optional: true
+      defaultProfile: low

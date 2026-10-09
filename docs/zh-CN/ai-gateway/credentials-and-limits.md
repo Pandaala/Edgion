@@ -109,3 +109,10 @@ JSON 的用量为 unknown；固定错误响应不会产生输出字符估算。�
 凭据 TPM 要求 provider 观察；只用可靠终态 usage 结算实际用量，也包括 failed/incomplete/cancelled 中已消耗的量。
 usage 缺失或后续上下游中断时保守保留预留。请求字符估计和 defaults.maxOutputTokens 只是暂时容量依据，
 不能完整预测远端历史或 reasoning。续接只能声明一个凭据绑定，未解析的绑定也计入数量。
+
+## 原生 Messages 凭据
+
+Messages 复用既有凭据池和准入。绑定状态的历史要求一个原始 backend slot 和一个
+声明的凭据，禁止改模型和重试。保留版本/beta，清除调用者认证及 workspace selector，
+暂不支持 profile 归属。Key 应固定归属一个 workspace；跨主体轮转不在绑定保证内。
+见[原生 Messages](./providers.md#原生-messages-的边界)。

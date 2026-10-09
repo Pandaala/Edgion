@@ -309,6 +309,7 @@ impl AiProxyConfig {
         match (self.api, self.conversion) {
             (AiApi::OpenaiChat, None) => matches!(provider, AiProvider::OpenAI | AiProvider::OpenAICompatible),
             (AiApi::OpenaiResponses, None) => provider == AiProvider::OpenAI,
+            (AiApi::AnthropicMessages, None) => provider == AiProvider::Anthropic,
             (AiApi::OpenaiChat, Some(AiConversion::ChatToAnthropic)) => provider == AiProvider::Anthropic,
             _ => false,
         }
@@ -317,8 +318,10 @@ impl AiProxyConfig {
 
 impl PluginValidation for AiProxyConfig {
     fn validation_error(&self) -> Option<String> {
-        if self.api == AiApi::AnthropicMessages {
-            return Some("AiProxy native anthropicMessages is not implemented".to_string());
+        if self.api == AiApi::AnthropicMessages && (self.conversion.is_some() || self.inject_usage_tracking) {
+            return Some(
+                "anthropicMessages supports native forwarding only and forbids injectUsageTracking".to_string(),
+            );
         }
         if self.api == AiApi::OpenaiResponses && (self.conversion.is_some() || self.inject_usage_tracking) {
             return Some("openaiResponses supports native forwarding only and forbids injectUsageTracking".to_string());

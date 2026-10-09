@@ -227,15 +227,11 @@ pub async fn request_filter(
     let global = ctx.resolved_global_plugins();
     let gateway = ctx.resolved_gateway_plugins();
     let route = ctx.resolved_route_ext_refs();
-    if global
+    let invalid_http_route_scope = global
         .iter()
         .chain(gateway.iter())
-        .flat_map(|plugins| plugins.iter())
-        .any(|runtime| runtime.has_grpc_transcoder())
-    {
-        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-        return Ok(true);
-    }
+        .flat_map(|p| p.iter())
+        .any(|runtime| runtime.requires_http_route_rule_scope());
     let conversion_owners = route
         .iter()
         .flat_map(|plugins| plugins.iter().flatten())
@@ -247,10 +243,6 @@ pub async fn request_filter(
         .flat_map(|plugins| plugins.iter())
         .chain(route.iter().flat_map(|plugins| plugins.iter().flatten()))
         .any(|runtime| runtime.has_ai_conversion_owner());
-    if conversion_owners > 1 || conversion_owners != 0 && (has_ai_owner || ctx.grpc_route_unit.is_some()) {
-        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-        return Ok(true);
-    }
 
     for runtime in global
         .iter()
@@ -276,12 +268,25 @@ pub async fn request_filter(
             return Ok(true);
         }
     }
+    let has_router = route
+        .iter()
+        .flat_map(|p| p.iter().flatten())
+        .any(|runtime| runtime.has_graphql_operation_router());
+    if conversion_owners > 1 || conversion_owners != 0 && (has_ai_owner || ctx.grpc_route_unit.is_some()) {
+        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
+    }
+    if invalid_http_route_scope
+        || has_router && (has_ai_owner || conversion_owners != 0 || ctx.grpc_route_unit.is_some())
+    {
+        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
+    }
     if let Some(unit) = ctx.route_unit.as_ref() {
-        if !unit
-            .route
-            .as_ref()
-            .is_some_and(|source| owner.scope.ai_rule(source, unit.specificity.rule_index as usize))
-        {
+        if !unit.route.as_ref().is_some_and(|source| {
+            owner.scope.ai_rule(source, unit.specificity.rule_index as usize)
+                && owner.scope.graphql_rule(source, unit.specificity.rule_index as usize)
+        }) {
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
             return Ok(true);
         }
@@ -398,6 +403,10 @@ pub async fn request_filter(
     // first-attempt dispatcher also permits a read-only mirror tee before the
     // body pump starts; it changes neither framing nor replay policy. Capture,
     // mutation and other body capability installation remain closed here.
+    if ctx.has_strict_jump_conflict() {
+        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
+    }
     crate::plugins::http::grpc_json_transcoder::validate_request(session.req_header(), ctx)?;
     ctx.request_info.in_request_body_stage = false;
 

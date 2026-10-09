@@ -832,12 +832,38 @@ async fn redis_health_one(Path(name): Path<String>) -> Json<ApiResponse<serde_js
     }
 }
 
-/// PING a Redis client, returns latency in ms
-async fn redis_ping(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value>> {
+#[derive(Deserialize)]
+struct RedisPingQuery {
+    #[serde(default)]
+    all_members: bool,
+}
+
+/// PING a Redis client, optionally probing every fixed pool member for test readiness.
+async fn redis_ping(
+    Path(name): Path<String>,
+    Query(query): Query<RedisPingQuery>,
+) -> Json<ApiResponse<serde_json::Value>> {
     let client = match get_redis_client_by_name(&name) {
         Ok(c) => c,
         Err(e) => return e,
     };
+    if query.all_members {
+        use fred::interfaces::ClientLike;
+
+        let start = std::time::Instant::now();
+        // Bind each probe to a concrete client: Pool::inner() advances routing
+        // more than once per command, so repeated pool PINGs can miss members.
+        let results =
+            futures::future::join_all(client.pool().clients().iter().map(|member| member.ping::<String>(None))).await;
+        if results.iter().any(Result::is_err) {
+            return Json(ApiResponse::err_body("Redis pool PING failed".to_string()));
+        }
+        return Json(ApiResponse::ok_body(serde_json::json!({
+            "latency_ms": start.elapsed().as_millis() as u64,
+            "healthy": client.healthy(),
+            "checked_members": results.len(),
+        })));
+    }
     match client.ping().await {
         Ok(latency_ms) => Json(ApiResponse::ok_body(serde_json::json!({
             "latency_ms": latency_ms,

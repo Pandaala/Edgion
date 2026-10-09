@@ -78,6 +78,9 @@ impl PluginSession for ResultSession {
     fn get_query(&self) -> Option<String> {
         panic!("unexpected session operation")
     }
+    fn request_query(&self) -> Option<&str> {
+        panic!("unexpected session operation")
+    }
     fn get_method(&self) -> &str {
         panic!("unexpected session operation")
     }

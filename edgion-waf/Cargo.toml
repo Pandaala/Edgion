@@ -20,6 +20,8 @@ zmij = "=1.0.23"
 sha1.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+schemars.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
@@ -27,6 +29,11 @@ sha2.workspace = true
 base64.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
+
+[[bench]]
+name = "aho_corasick_backends"
+path = "tests/benches/aho_corasick_backends.rs"
+harness = false
 
 [[bench]]
 name = "matcher_regression"

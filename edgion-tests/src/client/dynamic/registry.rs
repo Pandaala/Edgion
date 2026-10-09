@@ -5,7 +5,12 @@ use crate::dynamic::scenario::Scenario;
 /// All registered dynamic scenarios.
 pub fn all() -> Vec<&'static Scenario> {
     vec![
+        crate::dynamic::scenarios::ai_messages_binding::SCENARIO,
         crate::dynamic::scenarios::grpc_json_transcoder::SCENARIO,
+        crate::dynamic::scenarios::graphql_rate_limit::SCENARIO,
+        crate::dynamic::scenarios::graphql_operation_router::SCENARIO,
+        crate::dynamic::scenarios::graphql_guard::SCENARIO,
+        crate::dynamic::scenarios::graphql_safelist::SCENARIO,
         crate::dynamic::scenarios::duplicate_host_policy_hot_reload::SCENARIO,
         crate::dynamic::scenarios::preflight_policy_hot_reload::SCENARIO,
         crate::dynamic::scenarios::egc_runtime_hot_reload::SCENARIO,
@@ -33,6 +38,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::ai_guard_ordering::SCENARIO,
         crate::dynamic::scenarios::gateway_dynamic::SCENARIO,
         crate::dynamic::scenarios::dsl_dynamic::SCENARIO,
+        crate::dynamic::scenarios::dsl_xml_dynamic::SCENARIO,
         crate::dynamic::scenarios::dsl_terminate_dynamic::SCENARIO,
         crate::dynamic::scenarios::body_dynamic::SCENARIO,
         crate::dynamic::scenarios::condition_refs_dynamic::SCENARIO,
@@ -63,6 +69,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::edgion_tls_last_known_good::SCENARIO,
         crate::dynamic::scenarios::allowed_san_regex_ignore_case::SCENARIO,
         crate::dynamic::scenarios::waf_dynamic::SCENARIO,
+        crate::dynamic::scenarios::waf_dynamic::EXPENSIVE_SCENARIO,
         crate::dynamic::scenarios::wasm_runtime_ownership::SCENARIO,
         crate::dynamic::scenarios::l4_timeout_hot_reload::SCENARIO,
         crate::dynamic::scenarios::retained_listener_handles::SCENARIO,

@@ -366,7 +366,10 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             .iter()
             .flatten()
             .enumerate()
-            .map(|(index, _)| backend_plugin_scope_invalid_reason(&route, index, true, _ctx.runtime(), false))
+            .map(|(index, _)| {
+                super::route_utils::graphql_router_rule_error(&route, index, true, _ctx.runtime(), true)
+                    .or_else(|| backend_plugin_scope_invalid_reason(&route, index, true, _ctx.runtime(), false))
+            })
             .collect();
         if let Some(rules) = &mut route.spec.resolved_rules {
             let mut reasons = reasons.into_iter().enumerate();
@@ -1121,7 +1124,15 @@ fn find_controller_invalid_rule_details(
         if already_invalid.contains(&index) {
             continue;
         }
-        if let Some(reason) = backend_plugin_scope_invalid_reason(route, index, false, runtime, false) {
+        if let Some(reason) = super::route_utils::graphql_router_rule_error(
+            route,
+            index,
+            false,
+            runtime,
+            route.spec.resolved_rules.is_some(),
+        )
+        .or_else(|| backend_plugin_scope_invalid_reason(route, index, false, runtime, false))
+        {
             details.push((index, reason));
             continue;
         }

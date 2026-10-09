@@ -1821,6 +1821,8 @@ struct RequestBodyPluginState {
     handlers: RequestBodyStreamHandlers,
     observers: Option<Box<crate::request_body::observer::RequestBodyObservers>>,
     active_sources: u8,
+    streamed_input_bytes: u64,
+    streamed_output_bytes: u64,
 }
 
 impl RequestBodyPluginState {
@@ -2135,6 +2137,8 @@ pub struct EdgionHttpContext {
     /// explicit jump plugins activate it; ordinary routing retains one nullable
     /// pointer. First-write-wins and the target survives upstream retries.
     pub jump: Option<Box<UpstreamJumpTarget>>,
+    strict_jump: bool,
+    jump_conflict: bool,
 
     /// True when `req_header.uri` is already in its upstream-forwarded final form;
     /// further writes are forbidden.
@@ -2406,6 +2410,17 @@ impl EdgionHttpContext {
         self.plugin_aux().map(|state| &state.deferred_credential_mutations)
     }
 
+    pub(crate) fn restore_deferred_credential_mutations(&mut self, mutations: Option<DeferredCredentialMutations>) {
+        match mutations {
+            Some(mutations) => self.ensure_plugin_aux().deferred_credential_mutations = mutations,
+            None => {
+                if let Some(state) = self.plugin_aux_mut() {
+                    state.deferred_credential_mutations = DeferredCredentialMutations::default();
+                }
+            }
+        }
+    }
+
     #[inline]
     pub(crate) fn deferred_credentials_all_unexpired(&self, now: std::time::Instant) -> bool {
         self.deferred_credential_mutations()
@@ -2570,6 +2585,16 @@ impl EdgionHttpContext {
             .map(Arc::clone)
     }
 
+    pub(crate) fn resolve_pinned_backend_ext_ref(&mut self, key: &str) -> Option<Arc<PluginRuntime>> {
+        let scope = self.plugin_scope().cloned();
+        self.pinned_backend_ext_ref(key, || {
+            scope?
+                .scope
+                .http(key)
+                .map(|compiled| Arc::clone(&compiled.plugin_runtime))
+        })
+    }
+
     pub(crate) fn pinned_backend_ext_ref(
         &mut self,
         key: &str,
@@ -2613,6 +2638,36 @@ impl EdgionHttpContext {
         self.request_body_plugins
             .as_deref()
             .is_some_and(RequestBodyPluginState::is_non_replayable)
+    }
+
+    /// Handler selection survives fail-open deactivation and cancelled callbacks.
+    #[inline]
+    pub(crate) fn request_body_handlers_selected(&self) -> bool {
+        self.request_body_plugins
+            .as_deref()
+            .is_some_and(|state| state.active_sources & REQUEST_BODY_SOURCE_HANDLER != 0)
+    }
+
+    /// Admit bytes at the shared streaming boundary, independently in each direction.
+    /// Rejected additions leave the account unchanged and never wrap.
+    pub(crate) fn admit_streamed_request_body_bytes(&mut self, bytes: usize, output: bool) -> bool {
+        let cap = self.request_body_config.max_body_size_bytes;
+        let Some(state) = self.request_body_plugins.as_deref_mut() else {
+            return false;
+        };
+        let account = if output {
+            &mut state.streamed_output_bytes
+        } else {
+            &mut state.streamed_input_bytes
+        };
+        let Some(next) = u64::try_from(bytes).ok().and_then(|bytes| account.checked_add(bytes)) else {
+            return false;
+        };
+        if next > cap {
+            return false;
+        }
+        *account = next;
+        true
     }
 
     #[inline]
@@ -2721,6 +2776,12 @@ impl EdgionHttpContext {
 
     #[inline]
     pub(crate) fn push_response_stream_processor(&mut self, processor: Box<dyn StreamingResponseProcessor>) -> bool {
+        if let Some(plan) = &self.grpc_transcoding {
+            if !plan.streaming() {
+                plan.reject_mutation();
+                return false;
+            }
+        }
         if self.response_body_processing_started {
             return false;
         }
@@ -2728,7 +2789,6 @@ impl EdgionHttpContext {
         true
     }
 
-    #[cfg(test)]
     #[inline]
     pub(crate) fn has_response_stream_processors(&self) -> bool {
         self.response_processing().is_some_and(|state| {
@@ -2819,12 +2879,47 @@ impl EdgionHttpContext {
             .is_some_and(|state| state.framing_reservations > 0)
     }
 
+    pub(crate) fn grpc_response_owner_compatible(&self, streaming: bool) -> bool {
+        streaming
+            || !(self.has_response_stream_processors()
+                || self.has_ext_proc_response_body_consumer()
+                || self.unary_body_consumers_incompatible())
+    }
+
+    pub(crate) fn has_ext_proc_response_body_consumer(&self) -> bool {
+        self.response_processing().is_some_and(|state| {
+            state
+                .attached_ext_proc
+                .values()
+                .any(|owner| owner.consumes_response_body())
+        })
+    }
+
+    pub(crate) fn unary_body_consumers_incompatible(&self) -> bool {
+        self.resolved_global_plugins()
+            .iter()
+            .chain(self.resolved_gateway_plugins().iter())
+            .flat_map(|runtimes| runtimes.iter())
+            .any(|runtime| runtime.has_unary_body_consumer())
+            || self
+                .resolved_route_ext_refs()
+                .iter()
+                .flat_map(|runtimes| runtimes.iter().flatten())
+                .any(|runtime| runtime.has_unary_body_consumer())
+    }
+
     pub(crate) fn install_attached_ext_proc(
         &mut self,
         identity: String,
         owner: Arc<crate::plugins::http::ext_proc::AttachedExtProc>,
         reserve_framing: bool,
     ) -> bool {
+        if let Some(plan) = &self.grpc_transcoding {
+            if !plan.streaming() && owner.consumes_response_body() {
+                plan.reject_mutation();
+                return false;
+            }
+        }
         if self
             .response_processing()
             .is_some_and(|state| state.attached_ext_proc.contains_key(&identity))
@@ -3093,6 +3188,8 @@ impl EdgionHttpContext {
             upstream_authority: None,
             parsed_request_caches: ParsedRequestCaches::default(),
             jump: None,
+            strict_jump: false,
+            jump_conflict: false,
             uri_finalized: false,
             grpc_transcoding: None,
             session_persistence: None,
@@ -3696,8 +3793,24 @@ impl EdgionHttpContext {
     /// First-write-wins setter for the unified upstream-jump slot. Returns
     /// `Set` on the first successful write, `Rejected` on every subsequent
     /// call. The target is stored without modifying backend selection state.
+    /// Opt into fatal second publications using the same canonical jump slot.
+    pub(crate) fn try_set_strict_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
+        let outcome = self.try_set_jump(target);
+        if outcome == SetJumpOutcome::Set {
+            self.strict_jump = true;
+        }
+        outcome
+    }
+    pub(crate) fn has_strict_jump(&self) -> bool {
+        self.strict_jump
+    }
+    pub(crate) fn has_strict_jump_conflict(&self) -> bool {
+        self.jump_conflict
+    }
+
     pub fn try_set_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
         if self.jump.is_some() {
+            self.jump_conflict |= self.strict_jump;
             return SetJumpOutcome::Rejected;
         }
         self.jump = Some(Box::new(target));

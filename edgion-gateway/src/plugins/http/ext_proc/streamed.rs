@@ -114,6 +114,7 @@ impl ExtProcStreamedBodyHandler {
             self.pending_outcome = Some((DyeOutcome::FailOpen, cause));
             ChunkVerdict::Continue
         } else {
+            self.done = true;
             if let Some(exchange) = self.exchange.as_mut() {
                 exchange.terminal("fail-close", terminal_reason);
             }
@@ -132,6 +133,14 @@ impl ExtProcStreamedBodyHandler {
 impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
     async fn on_chunk(&mut self, chunk: &mut Option<Bytes>, event: RequestBodyEvent) -> ChunkVerdict {
         if self.done {
+            if event == RequestBodyEvent::Abandoned && !self.terminal_at_request_eos {
+                // Request EOF can precede future response phases on the same
+                // Process stream. Release that unfinished owner before local
+                // reply delivery; close preserves any already-terminal result.
+                if let Some(mut exchange) = self.exchange.take() {
+                    exchange.cancel();
+                }
+            }
             return ChunkVerdict::Continue;
         }
         if event == RequestBodyEvent::Abandoned {
@@ -205,6 +214,7 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
                         Some(body_mutation::Mutation::ClearBody(false)) | None => {}
                     }
                 }
+                self.done = end_of_stream;
                 ChunkVerdict::Continue
             }
             Some(processing_response::Response::ImmediateResponse(imm)) => {

@@ -2,9 +2,9 @@
 //!
 //! Registered alongside the existing DIU suite in local mode only. K8s dispatch
 //! excludes this suite before any local fixture can be applied.
-//! Apply the dedicated RefGrant
-//! fixtures here too, so a narrow DIU run has the same prerequisites as a full
-//! run. These are static resources; no existing test resource is changed.
+//! Ensure the dedicated RefGrant fixtures exist, so a narrow DIU run has the
+//! same prerequisites as a full run. Reuse matching preloaded static resources
+//! rather than creating new generations immediately before the assertions.
 //! Selector-only invalid Internal jumps remain unit-tested: both production
 //! publishers validate before publishing, so their rejection is a plugin 403.
 
@@ -60,7 +60,17 @@ impl TestSuite for DeniedNamedJumpTestSuite {
 
 async fn run(ctx: &TestContext) -> Result<()> {
     for yaml in FIXTURES {
-        ctx.apply_yaml(yaml).await.map_err(anyhow::Error::msg)?;
+        let fixture: Value = serde_yaml::from_str(yaml)?;
+        let kind = fixture["kind"].as_str().context("fixture kind")?;
+        let ns = fixture["metadata"]["namespace"].as_str().context("fixture namespace")?;
+        let name = fixture["metadata"]["name"].as_str().context("fixture name")?;
+        let current = helpers::fetch_resource_status(ctx, kind, ns, name).await;
+        if !current
+            .as_ref()
+            .is_ok_and(|resource| contains_fixture(resource, &fixture))
+        {
+            ctx.apply_yaml(yaml).await.map_err(anyhow::Error::msg)?;
+        }
     }
 
     // Assert the real Controller decision, not a hand-written refDenied field.
@@ -165,6 +175,24 @@ async fn run(ctx: &TestContext) -> Result<()> {
     // sibling remains present with weight zero, so a silent fallback is visible.
     check_case(ctx, "weighted-denied", DENIED, 500, None, None).await?;
     Ok(())
+}
+
+/// Controller processing adds defaults and resolved fields; compare every
+/// declared fixture field without demanding an unprocessed resource payload.
+fn contains_fixture(current: &Value, fixture: &Value) -> bool {
+    match fixture {
+        Value::Object(fields) => fields
+            .iter()
+            .all(|(key, value)| current.get(key).is_some_and(|field| contains_fixture(field, value))),
+        Value::Array(values) => current.as_array().is_some_and(|fields| {
+            fields.len() == values.len()
+                && fields
+                    .iter()
+                    .zip(values)
+                    .all(|(field, value)| contains_fixture(field, value))
+        }),
+        _ => current == fixture,
+    }
 }
 
 async fn wait_gateway_resource(ctx: &TestContext, kind: &str, ns: &str, name: &str, expected: &Value) -> Result<()> {

@@ -10,7 +10,7 @@ AiProxy must appear exactly once in a rule-level EdgionPlugins ExtensionRef.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `backendSelection.type` | Enum | `Weighted` | `Weighted`, `Priority`, `LowestLatency`, `LowestUsage`, or `CostWeighted` |
-| `api` | Enum | required | `openaiChat` or `openaiResponses`; native Messages remains pending |
+| `api` | Enum | required | `openaiChat`, `openaiResponses`, or `anthropicMessages` |
 | `conversion` | Enum | none | `chatToAnthropic` explicitly selects the existing bounded converter; all positive/promoted candidates must be Anthropic |
 | `usageObservation` | Enum | `off` | `provider` installs bounded observation; off creates no response usage observer |
 | `injectUsageTracking` | Boolean | `false` | Explicit Chat SSE usage mutation; requires provider observation or declared conversion |

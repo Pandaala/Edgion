@@ -1984,8 +1984,64 @@ pub struct ValidatedSemanticDocument<'source> {
 }
 
 impl<'source> ValidatedSemanticDocument<'source> {
+    pub(crate) fn selection_target_scratch_bytes(&self) -> usize {
+        self.draft.targets.len()
+    }
+    /// Remove activity only after validating the complete original rule graph.
+    pub(crate) fn apply_selection_mask(
+        &mut self,
+        mask: &[bool],
+        work: &mut super::compiler::CanonicalWork,
+        limits: super::CompilerLimits,
+    ) -> Result<(), super::CompilerError> {
+        if mask.len() != self.units.len() {
+            return Err(super::CompilerError::PrivateInvariant {
+                kind: super::CompilerInvariant::InvalidByteRange,
+            });
+        }
+        let mut seen = Vec::new();
+        seen.try_reserve_exact(self.draft.targets.len())
+            .map_err(|_| super::CompilerError::Allocation {
+                operation: "selected target reachability",
+            })?;
+        seen.resize(self.draft.targets.len(), false);
+        for (unit, keep) in self.units.iter_mut().zip(mask) {
+            work.charge_records(1, limits)?;
+            unit.active &= *keep;
+        }
+        for unit in self.active_rule_units() {
+            for member in unit.members() {
+                let node = member.record();
+                for target in &self.final_targets[node.target_start..node.target_start + node.target_count] {
+                    work.charge_records(1, limits)?;
+                    seen[*target] = true;
+                }
+            }
+        }
+        // Draft requirements remain strict. Only active target-regex reachability changes.
+        for _ in &self.requirements {
+            work.charge_records(1, limits)?;
+        }
+        self.requirements.retain(|requirement| match requirement {
+            ValidatedRequirementReference::Draft(_) => true,
+            ValidatedRequirementReference::TargetSelectorRegex { target } => seen[*target],
+        });
+        // retain preserves the allocation; do not reduce validation_charged_bytes.
+        Ok(())
+    }
+
     pub fn rule_units(&self) -> impl ExactSizeIterator<Item = ValidatedRuleUnitView<'_, 'source>> + FusedIterator {
         (0..self.units.len()).map(|index| ValidatedRuleUnitView { index, owner: self })
+    }
+
+    /// Reuse the validated ID index for bounded inspection pagination without an ID copy.
+    pub fn rule_units_by_id(
+        &self,
+    ) -> impl ExactSizeIterator<Item = ValidatedRuleUnitView<'_, 'source>> + FusedIterator {
+        self.id_index.iter().map(|entry| ValidatedRuleUnitView {
+            index: entry.unit,
+            owner: self,
+        })
     }
 
     pub fn active_rule_units(&self) -> ActiveRuleUnitIter<'_, 'source> {
@@ -2155,6 +2211,9 @@ pub struct ValidatedRuleUnitView<'view, 'source> {
 }
 
 impl<'view, 'source> ValidatedRuleUnitView<'view, 'source> {
+    pub const fn ordinal(self) -> usize {
+        self.index
+    }
     fn record(self) -> &'view ValidatedRuleUnitRecord {
         &self.owner.units[self.index]
     }

@@ -33,7 +33,7 @@ promise a clean Gateway build or any runtime capability, including plain paths,
 HTTPS listeners, TLSRoute proxying, HeaderCertAuth portability, or upstream
 `BackendTLSPolicy` parity. Do not select it for deployments, image builds, or CI.
 Future support is tracked as one product task in
-`tasks/pending/rustls-gateway-tls-support.md`; isolated compatibility fixes are not
+`tasks/block/rustls-gateway-tls-support.md`; isolated compatibility fixes are not
 part of the current product scope.
 
 The `fips` feature is a build-time property, not a runtime toggle. The ordinary

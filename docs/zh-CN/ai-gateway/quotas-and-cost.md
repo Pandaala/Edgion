@@ -166,3 +166,11 @@ Responses 复用累计配额与 Redis worker，只用厂商终态的 output 总�
 本地事件使用 Responses 的 type=error、code、message、param、sequence_number，不发送 Chat chunk 或 [DONE]。
 序号取已验证厂商最大序号的安全后继，无有效序号时为零，溢出时不注入诊断事件。
 该本地终止标记不承诺损坏/半个事件后的厂商重放顺序。上文 Chat 的字符估计和双坏事件容忍不适用于 Responses。
+
+## 原生 Messages 配额
+
+Messages 复用现有 quota worker 和终止所有者；输入缓存创建/读取计数只计一次，
+累计 message_delta output 推进原有水位。off 不支持 tokenQuota、凭据 TPM、LowestUsage。
+要求核算时，不支持的版本和已识别复合推理在上游发送前拒绝。unknown 保持既有保守预留与结算。
+主动 Reject 使用原生 error event 关闭，Throttle/Downgrade 不获得该行为。
+Token 估算只是临时准入输入，配置的价格估算不等于厂商完整账单。

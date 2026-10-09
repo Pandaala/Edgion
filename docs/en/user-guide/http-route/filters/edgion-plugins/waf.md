@@ -81,6 +81,102 @@ metrics, or Rust `Debug`. Gateway admin configuration output replaces it with
 `[redacted]`; controller-to-gateway configuration sync still carries the real
 source.
 
+## Static rule selection
+
+Use YAML conditions in each profile's `ruleSelection` to select rules from trusted
+configuration. Controller validates the policy and Gateway compiles it again when
+publishing a generation. Requests use the compiled result. This example excludes
+only rules matching the tag, phase and ID range while retaining `always-required`:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: application-waf-policy
+  namespace: default
+spec:
+  data:
+    type: WafPolicy
+    config:
+      defaultProfile: application
+      profiles:
+        application:
+          bundleRefs:
+            - name: application-rules-v1
+          ruleSelection:
+            exclude:
+              allOf:
+                - tag: application-specific
+                - phase: 2
+                - ruleIdRange: {start: 100000, end: 100999}
+                - not: {tag: always-required}
+```
+
+Missing `include` means `true`; missing `exclude` means `false`. The result is
+`include && !exclude`: exclusion wins and source-removed rules stay removed.
+Omitting `ruleSelection` or using `{}` retains the original compilation path;
+`null` is invalid.
+
+A condition is a boolean or an object with exactly one key: `tag`, positive
+`ruleId`, inclusive `ruleIdRange: {start, end}`, `phase: 1..5`, a nonempty
+`allOf` / `anyOf` list, or one `not` condition. Tags match exact case-sensitive
+literals, without wildcards, regex, macros or whitespace normalization.
+Selection applies to an entire chain. IDs and phases come from the root; tags
+come from validated members. Structural markers are retained. The current strict
+source language forbids authored tags on chain children.
+
+Both conditions share limits of 256 nodes, 64 metadata conditions and depth 16.
+Tags are limited to 256 UTF-8 bytes. Compact JSON is limited to 16 KiB per profile
+and 64 KiB per policy. Unknown keys, wrong types, empty groups and duplicate keys
+visible to direct decoding are rejected. Resource ingestion normalizes through a
+JSON object first, which can collapse raw duplicate keys; do not rely on them.
+
+Exclusion cannot hide invalid rules. The original rules must pass syntax, semantic,
+regex, phrase-asset and request-body policy validation. Unmatched tags and valid
+empty selections may publish; Accepted messages contain fixed numeric summaries.
+They do not independently trigger `PartiallyInvalid`. Updating only selection
+conditions hot-reloads the rules; in-flight requests retain their previous generation.
+
+Choose language profiles from a trusted inventory of the entire serving stack.
+Do not simply exclude every `language-php` or `language-java` rule: some also
+protect generic paths, SSRF or attacks crossing language boundaries. The repository's
+`config/waf/crs-4.25.1-supported-v1/language-selection-examples/` contains audited,
+version-specific Java/PHP examples and an explicit omission ledger. Confirm their
+backend assumptions before use and repeat the audit after ruleset updates.
+
+## Inspect local tags
+
+`waf tags` accepts one to 16 local WafRuleBundle EdgionConfigData YAML files.
+The `--selection` file contains only a standalone include/exclude object:
+
+```bash
+edgion-cli waf tags --bundle bundle.yaml --format json
+edgion-cli waf tags --bundle setup.yaml --bundle core.yaml \
+  --selection selection.yaml --selected --offset 0 --format json
+edgion-cli waf tags --bundle core.yaml --tag language-php --format json
+```
+
+```yaml
+include: true
+exclude:
+  allOf:
+    - tag: application-specific
+    - not: {ruleId: 100001}
+```
+
+Reports distinguish semantic inventory, planned selection and successfully compiled
+membership. Invalid rules may still have complete tag inventory, while
+`baselineCompilationPassed` / `selectedCompilationPassed` report failure or unknown
+accurately. Local inspection does not resolve cluster references or validate a
+plugin's body mode; `bodyAdmissionChecked` is always `false`. Tag queries use
+`semanticInventory`; successful selection queries use `compiledSelection`.
+
+All input files together are limited to 64 MiB and the selection file to 64 KiB.
+Reports contain at most 128 tag rows and 128 root ID references in 64 KiB of output;
+omission counts do not change actual selection. Use `--offset` on a single tag,
+`--selected` or `--excluded` query to page roots in ascending ID order. Rule source,
+regex operands, phrase contents and internal Include paths stay out of the report.
+
 ## Shared rule bundles
 
 Use a typed `EdgionConfigData` when a ruleset needs `Include` or `@pmFromFile`,

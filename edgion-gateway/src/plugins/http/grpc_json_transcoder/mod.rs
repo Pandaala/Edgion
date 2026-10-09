@@ -1,5 +1,6 @@
 //! Descriptor-backed REST to native gRPC exchange ownership.
 mod budget;
+pub mod log_consts;
 mod plugin;
 mod response;
 pub(crate) mod transport;

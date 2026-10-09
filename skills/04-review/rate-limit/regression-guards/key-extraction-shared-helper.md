@@ -47,7 +47,7 @@ mapping caller-side, where the differing reject signatures live.
 
 **2. `keys` is `&[KeyGet]`, not `&[String]`.**
 
-`config.key` is `Vec<KeyGet>` (a key-source enum consumed by `session.key_get`),
+`RateLimitLocalConfig.key` and `RateLimitQuota.key` are `Vec<KeyGet>` (a key-source enum consumed by `session.key_get`),
 not a list of literal strings. The finding's `&[String]` signature was inaccurate.
 
 **3. `on_missing` is taken by reference.**

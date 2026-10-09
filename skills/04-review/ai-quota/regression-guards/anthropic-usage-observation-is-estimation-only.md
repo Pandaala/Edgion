@@ -74,3 +74,10 @@ the terminating chunk from its fallback counter; preserve the accepted bias in
 ## Resolution references
 
 - `gw-18` — 2026-08-09.
+
+## Native Messages distinction
+
+Native anthropicMessages does not install the Chat translator. Its separate bounded native
+observer is the sole native provider observer when requested, with reported-only consumption
+and no character fallback. This does not authorize installing an observer after conversion.
+See [native Messages ownership](../../ai-routing/regression-guards/native-messages-preservation-and-accounting.md).

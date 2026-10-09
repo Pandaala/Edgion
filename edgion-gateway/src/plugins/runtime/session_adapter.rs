@@ -67,6 +67,9 @@ async fn capture_request_body_core_with_consumer(
     max_bytes: Option<u64>,
     mut consumer: Option<&mut dyn RequestBodyChunkConsumer>,
 ) -> Result<u64, BodyReadError> {
+    if ctx.request_body_handlers_selected() {
+        return Err(BodyReadError::NotBuffered);
+    }
     if let Some(len) = ctx.request_body.cached_len()? {
         return Ok(len);
     }
@@ -418,7 +421,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     }
 
     async fn ensure_bodyless_request_replay_owner(&mut self) -> Result<(), BodyReadError> {
-        if self.ctx.waf_prefix_inspected {
+        if self.ctx.waf_prefix_inspected || self.ctx.request_body_handlers_selected() {
             return Err(BodyReadError::NotBuffered);
         }
         if !self.ctx.request_body_config.enabled {
@@ -908,6 +911,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn get_query(&self) -> Option<String> {
         self.inner.req_header().uri.query().map(|s| s.to_string())
+    }
+
+    fn request_query(&self) -> Option<&str> {
+        self.inner.req_header().uri.query()
     }
 
     fn get_method(&self) -> &str {
@@ -1530,6 +1537,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.record_error(status);
     }
 
+    fn capture_ai_client_api(&mut self, api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
+        self.ctx.capture_ai_client_api(api)
+    }
+
     fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
         self.ctx.try_set_ai_request_context(context)
     }
@@ -1556,7 +1567,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         mut plan: crate::plugins::http::grpc_json_transcoder::GrpcTranscodingPlan,
     ) -> bool {
-        if !self.grpc_transcoding_allowed() {
+        if let Some(existing) = &self.ctx.grpc_transcoding {
+            existing.reject_mutation();
+            return false;
+        }
+        if !self.grpc_transcoding_allowed() || !self.ctx.grpc_response_owner_compatible(plan.streaming()) {
             return false;
         }
         plan.generation = self.ctx.request_body.generation();
@@ -1565,9 +1580,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         }
         self.ctx.request_body.freeze_mutation();
         let plan = Arc::new(plan);
-        self.ctx.push_response_stream_processor(Box::new(
+        if !self.ctx.push_response_stream_processor(Box::new(
             crate::plugins::http::grpc_json_transcoder::GrpcResponseProcessor::new(plan.clone()),
-        ));
+        )) {
+            return false;
+        }
         self.ctx.grpc_transcoding = Some(plan);
         true
     }
@@ -1640,6 +1657,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
     ) -> bool {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return false;
+        }
         if self.ctx.response_processors_frozen()
             || self
                 .ctx
@@ -1680,6 +1701,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         owner: std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>,
         head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
     ) -> bool {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return false;
+        }
         if self.ctx.ai_state().is_some_and(|state| {
             state.attached_guardrail.is_some()
                 || state.semantic_guard_claimed
@@ -1717,11 +1742,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
     ) -> bool {
-        if self.ctx.response_processors_frozen() {
-            return false;
-        }
-        self.ctx.push_response_stream_processor(processor);
-        true
+        self.ctx.push_response_stream_processor(processor)
     }
 
     fn install_upstream_response_trailer(
@@ -1779,6 +1800,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn ensure_request_body(&mut self, max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
+        if self.ctx.request_body_handlers_selected() {
+            return Err(BodyReadError::NotBuffered);
+        }
         // A response-stage consumer may read a body that an earlier request
         // plugin explicitly buffered. The stage boundary forbids starting a
         // new capture; it does not invalidate the request-scoped shared cache.
@@ -1819,7 +1843,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         max_bytes: Option<u64>,
         consumer: &'consumer mut (dyn RequestBodyChunkConsumer + 'consumer),
     ) -> Result<u64, BodyReadError> {
-        if !self.ctx.request_info.in_request_body_stage || self.inner.request_body_prefix_active() {
+        if self.ctx.request_body_handlers_selected()
+            || !self.ctx.request_info.in_request_body_stage
+            || self.inner.request_body_prefix_active()
+        {
             return Err(BodyReadError::NotBuffered);
         }
         let cap = resolve_cap(max_bytes, self.ctx.request_body_config.max_body_size_bytes);
@@ -2166,13 +2193,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn pinned_backend_ext_ref(&mut self, key: &str) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
-        let scope = self.ctx.plugin_scope().cloned();
-        self.ctx.pinned_backend_ext_ref(key, || {
-            scope?
-                .scope
-                .http(key)
-                .map(|compiled| Arc::clone(&compiled.plugin_runtime))
-        })
+        self.ctx.resolve_pinned_backend_ext_ref(key)
     }
 
     fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken {
@@ -2237,6 +2258,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             (KeySet::Ctx { name }, Some(v)) => self.set_ctx_var(name, &v),
             (KeySet::Ctx { name }, None) => self.remove_ctx_var(name),
         }
+    }
+
+    fn set_strict_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
+        self.ctx.try_set_strict_jump(target)
     }
 
     fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
@@ -2355,7 +2380,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             plan.reject_mutation();
             return false;
         }
-        if self.ctx.waf_prefix_inspected {
+        if self.ctx.waf_prefix_inspected || self.ctx.request_body.has_cached_body() || self.inner.body_bytes_read() != 0
+        {
             return false;
         }
         // The transport fact answers `None` for session types that cannot be

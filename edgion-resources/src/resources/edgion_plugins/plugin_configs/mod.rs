@@ -21,6 +21,8 @@ mod form_json_transform;
 mod forward_auth;
 pub mod geo_rule;
 mod geoip_location;
+mod graphql_operation_router;
+mod graphql_rate_limit;
 mod guardrail;
 mod header_cert_auth;
 mod hmac_auth;
@@ -106,6 +108,9 @@ pub use form_json_transform::{FormJsonDirection, FormJsonTransformConfig};
 pub use forward_auth::{ForwardAuthConfig, ForwardAuthDecision};
 pub use geo_rule::{GeoDimFacts, GeoRule, GeoRuleContext, GeoRuleGroup, GeoRuleKey, GeoRuleSource};
 pub use geoip_location::{GeoDecision, GeoIpLocationConfig};
+pub use graphql_rate_limit::{
+    graphql_body_validation_errors, GraphqlCostRule, GraphqlRateLimitConfig, GraphqlRootQuota,
+};
 pub use guardrail::{
     GuardrailConfig, GUARDRAIL_MAX_CONCURRENT, GUARDRAIL_MAX_OVERLAP_BYTES, GUARDRAIL_MAX_REPLACEMENT_BYTES,
     GUARDRAIL_MAX_REQUEST_BYTES, GUARDRAIL_MAX_WINDOW_BYTES,
@@ -135,7 +140,7 @@ pub use proxy_rewrite::{
     MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
 };
 pub use rate_limit_local::{LimitHeaderNames, OnKeyMiss, OnLimitExceeded, RateLimitLocalConfig, RateLimitLocalScope};
-pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitRedisConfig};
+pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitQuota, RateLimitRedisConfig};
 pub use real_ip::RealIpConfig;
 pub use region_route::{
     HashAlgorithm, HashCalcConfig, RegionDef, RegionRouteConfig, RouteByKeyConfMatchMeta, RouteRule,
@@ -157,9 +162,10 @@ pub use tiny_ufo_ttl_cache_config::{
 };
 pub use upstream_fallback::UpstreamFallback;
 pub use waf::{
-    ResolvedWafBundle, WafBundleRef, WafBundleResolutionError, WafBundleResolutionKind, WafConfig, WafJsonConfig,
-    WafJsonLexicalLimits, WafJsonResultLimits, WafJsonStructureLimits, WafMode, WafProfile, WafRequestBodyConfig,
-    WafRequestBodyInspection, WafSupportFailure, WafSupportFinding, WafSupportReport,
+    ResolvedWafBundle, WafBundleRef, WafBundleResolutionError, WafBundleResolutionKind, WafCompilation, WafConfig,
+    WafJsonConfig, WafJsonLexicalLimits, WafJsonResultLimits, WafJsonStructureLimits, WafMode, WafProfile,
+    WafRequestBodyConfig, WafRequestBodyInspection, WafResolvedBundleRef, WafSupportFailure, WafSupportFinding,
+    WafSupportReport,
 };
 pub use wasm::{
     normalize_callout_origin, normalize_callout_origin_quiet, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry,
@@ -189,3 +195,17 @@ pub(super) fn validate_restricted_template(template: &str, field: &str) -> Optio
 }
 
 pub use crate::grpc_transcoding::{GrpcDescriptorSource, GrpcJsonStreamFormat, GrpcJsonTranscoderConfig};
+
+pub use graphql_operation_router::{
+    graphql_router_attachment_error, graphql_router_binding_error, graphql_router_rule_binding_error,
+    graphql_router_rule_error, GraphqlOperationRouteRule, GraphqlOperationRouterConfig,
+};
+
+pub mod graphql_guard;
+pub use graphql_guard::{
+    CompiledGraphqlGuard, GraphqlGuardConfig, GraphqlGuardMode, GraphqlGuardReport, GraphqlRootFieldRuleConfig,
+    GraphqlRootFieldsConfig,
+};
+
+mod graphql_safelist;
+pub use graphql_safelist::{CompiledGraphqlSafelist, GraphqlSafelistConfig, GraphqlTrustedOperation};

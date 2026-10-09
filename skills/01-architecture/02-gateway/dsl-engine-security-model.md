@@ -113,6 +113,24 @@ Adding a new runtime limit requires:
 
 ## 3. Compile-time limits — source map
 
+XML has fixed producer bounds in `edgion-dsl/src/xml.rs`: source/output/decoded
+subtree bytes 1 MiB, depth 32, expanded nodes/attributes 4,096, ordinary
+attributes/declarations 64 each per element, names 256 bytes and URI 1,024 bytes.
+The existing value-work account precharges source lexical work (4 units/byte),
+tokens (16 each), node/frame/attribute/binding producers (512 each), child/Map
+edges (32 each), decoded/name payload growth or copy (4 units/byte), scoped
+comparisons (8 plus both byte lengths), traversal/expanded visits (16 each),
+serialization inspection (1 unit/byte) and output growth (2 units/byte).
+Temporary serialization bindings/prefixes precharge 64 units per attribute plus
+one root slot before bounded reservation; URI comparisons are charged and equal
+URIs reuse prefixes. Generated declarations obey the same 64-per-element bound.
+Final Arc output conversion adds one unit/byte; Body source collection adds two
+units/byte. Capped geometric String/Vec growth, Arc sharing and cached expanded
+summaries prevent retained producers and repeated child references from evading
+the account. This excludes allocator rounding/preexisting BodyStorage and is
+not a process-wide memory-admission guarantee.
+See [XML ownership and failures](dsl-engine.md#bounded-xml-values).
+
 | Constant / field | Default | Where |
 |---|---|---|
 | `MAX_SOURCE_LEN` | 64 KB | `edgion-dsl/src/parser/mod.rs:17` |

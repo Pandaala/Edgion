@@ -294,6 +294,29 @@ when several fields are needed.
 
 `req.header_names()` and `resp.header_names()` return a list of strings. When the actual number of headers exceeds 256, only the first 256 are returned without raising an error. If you need to access all headers, use `req.header()` directly with specific header names rather than iterating over the full list.
 
+## XML limits and request ownership
+
+XML primitives have independent hard limits: 1 MiB source/output/decoded subtree
+bytes, depth 32, 4,096 expanded nodes and attributes, 64 ordinary attributes plus
+64 namespace declarations per element, 256-byte names and 1,024-byte namespace
+URIs. Every occurrence of a shared child counts toward subtree limits. XML
+parsing, construction, traversal and serialization debit the existing cumulative
+16 MiB-equivalent value-work account before producer allocation or work.
+
+Request XML reads share `BodyStorage`, the physical request cap and
+`maxBodyScanPasses`. The bounded transient parser input is released after the
+operation. There is no response XML buffer or network resolver. DTD, custom
+entities and XInclude are unsupported; parse returns nil for malformed or
+unsupported input, which security scripts must explicitly reject.
+
+`xml.set_body` validates complete output before one atomic request-body replace.
+Its output also obeys the physical cap. Body XML resource/storage/work failures
+and serialization/publication failures use the fixed body-failure 500 even with
+`errorPolicy: ignore`. String XML failures use the ordinary typed DSL policy;
+`xml.value` and `xml.stringify` obey `maxStringLen`. Source and precompiled
+bytecode both trigger capture and reject response-stage XML body mutation.
+See the [XML API contract](api-reference.md#bounded-xml-primitives).
+
 ## Related Documentation
 
 - [API Reference](./api-reference.md) — Detailed signatures and usage for all built-in functions

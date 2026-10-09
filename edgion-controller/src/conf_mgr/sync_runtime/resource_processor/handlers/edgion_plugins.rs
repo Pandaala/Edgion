@@ -214,6 +214,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             }
             waf.resolved_policy = None;
             waf.selected_profile = None;
+            waf.controller_selection_summary = None;
             waf.resolved_ref_indices.clear();
             waf.resolved_bundles = None;
             waf.resolution_errors.clear();
@@ -451,6 +452,12 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             if let Some(identity) = candidate_identity.as_deref() {
                 message.push_str(identity);
             }
+            if let Some(summary) = ep.spec.waf.as_ref().and_then(|waf| waf.controller_selection_summary) {
+                message.push_str(&format!(
+                    "; WAF selectedUnits={} excludedUnits={} unmatchedAtoms={} emptySelection={}",
+                    summary.selected_units, summary.excluded_units, summary.unmatched_atoms, summary.empty_selection
+                ));
+            }
             condition_true(
                 condition_types::ACCEPTED,
                 condition_reasons::ACCEPTED,
@@ -623,6 +630,7 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
         reference.ref_denied = None;
     }
     waf.policy_resolved = Some(false);
+    waf.controller_selection_summary = None;
     waf.resolved_policy = None;
     waf.owner_namespace = None;
     waf.selected_profile = None;
@@ -647,7 +655,9 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
         .namespace()
         .expect("namespaced target")
         .to_string();
-    let (policy_target, captured) = ctx.runtime().edgion_config_data_store.get_waf_policy_snapshot(&fields);
+    let snapshot = ctx.runtime().edgion_config_data_store.get_waf_policy_snapshot(&fields);
+    let policy_target = snapshot.policy;
+    let captured = snapshot.children;
     let Some(policy_target) = policy_target else {
         return;
     };
@@ -705,6 +715,9 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
         });
         return;
     }
+    let Ok(Some(selections)) = snapshot.selections else {
+        return;
+    };
     if !policy_target.spec.enable
         || policy_target.spec.active.is_some()
         || policy_target
@@ -750,6 +763,14 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
 
     let mut usable = std::collections::BTreeMap::new();
     let mut failures = std::collections::BTreeMap::new();
+    let mut selected_summaries = std::collections::BTreeMap::new();
+    let mut aggregate_trials = 0_usize;
+    #[derive(Clone)]
+    struct TrialBundle<'a> {
+        identity: String,
+        digest: String,
+        data: &'a edgion_resources::resources::edgion_config_data::WafRuleBundleData,
+    }
     let names: Vec<_> = policy.profiles.keys().cloned().collect();
     for profile_name in names {
         let mut required_indices = Vec::new();
@@ -806,10 +827,10 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
                             {
                                 Some(WafBundleResolutionKind::DigestMismatch)
                             } else {
-                                resolved = Some(ResolvedWafBundle {
+                                resolved = Some(TrialBundle {
                                     identity: key,
                                     digest: data.compute_digest(),
-                                    data: data.clone(),
+                                    data,
                                 });
                                 None
                             }
@@ -847,12 +868,27 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
             }
         }
         if errors.is_empty() {
-            let mut candidate = waf.clone();
-            candidate.resolved_policy = Some(policy.clone());
-            candidate.selected_profile = Some(profile_name.clone());
-            candidate.resolved_ref_indices = required_indices.clone();
-            candidate.resolved_bundles = Some(required_bundles.clone());
-            if candidate.compile_generation().is_err() {
+            let mut compile_trial = |waf: &edgion_resources::resources::edgion_plugins::WafConfig,
+                                     indices: &[usize],
+                                     bundles: &[TrialBundle<'_>]| {
+                aggregate_trials += 1;
+                if aggregate_trials > 64 {
+                    return Err("WAF aggregate trial limit exceeded".to_string());
+                }
+                let views: Vec<_> = bundles
+                    .iter()
+                    .map(
+                        |bundle| edgion_resources::resources::edgion_plugins::WafResolvedBundleRef {
+                            identity: &bundle.identity,
+                            digest: &bundle.digest,
+                            data: bundle.data,
+                        },
+                    )
+                    .collect();
+                waf.compile_resolved_candidate(&policy, &profile_name, &policy_namespace, indices, &views, &selections)
+            };
+            let required_result = compile_trial(waf, &required_indices, &required_bundles);
+            if required_result.is_err() {
                 let reference = &policy.profiles[&profile_name].bundle_refs[0];
                 errors.push(WafBundleResolutionError {
                     profile: profile_name.clone(),
@@ -867,15 +903,15 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
                     kind: WafBundleResolutionKind::Invalid,
                 });
             } else {
+                let mut summary = required_result.ok().and_then(|compiled| compiled.selection_summary);
                 for (index, bundle) in optional {
                     let mut trial_indices = required_indices.clone();
                     let mut trial_bundles = required_bundles.clone();
                     let position = trial_indices.partition_point(|previous| *previous < index);
                     trial_indices.insert(position, index);
                     trial_bundles.insert(position, bundle);
-                    candidate.resolved_ref_indices = trial_indices.clone();
-                    candidate.resolved_bundles = Some(trial_bundles.clone());
-                    if candidate.compile_generation().is_ok() {
+                    if let Ok(result) = compile_trial(waf, &trial_indices, &trial_bundles) {
+                        summary = result.selection_summary;
                         required_indices = trial_indices;
                         required_bundles = trial_bundles;
                     } else if waf.resolution_warnings.len() < 16 {
@@ -886,6 +922,9 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
                 }
                 // Keep only the accepted positions for inactive profiles. Retaining
                 // their owned source copies multiplies memory by profile count.
+                if profile_name == desired_profile || profile_name == policy.default_profile {
+                    selected_summaries.insert(profile_name.clone(), summary);
+                }
                 usable.insert(profile_name.clone(), required_indices);
             }
         }
@@ -930,6 +969,7 @@ fn resolve_waf_bundles(ep: &mut EdgionPlugins, ctx: &HandlerContext) {
             })
             .collect();
         if let Some(bundles) = bundles {
+            waf.controller_selection_summary = selected_summaries.remove(&selected).flatten();
             waf.selected_profile = Some(selected);
             waf.resolved_ref_indices = indices;
             waf.resolved_bundles = Some(bundles);

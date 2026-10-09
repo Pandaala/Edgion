@@ -93,10 +93,10 @@ pub use edgion_plugins::{
     CsrfSecretRotationUpdatedTestSuite, CsrfTestSuite, CtxSetTestSuite, DeniedNamedJumpTestSuite,
     DirectEndpointTestSuite, DslBodyTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite,
     DslGrpcErrorTestSuite, DslTerminateDynamicInitialTestSuite, DslTerminateDynamicRestoredTestSuite,
-    DslTerminateDynamicUpdatedTestSuite, DslTerminateTestSuite, DslTestSuite, DynamicExternalUpstreamTestSuite,
-    DynamicInternalUpstreamTestSuite, EdgionConfigDataFlapInitialTestSuite, EdgionConfigDataFlapInvalidTestSuite,
-    EdgionConfigDataFlapValidTestSuite, EdgionConfigDataManagedTestSuite, EdgionConfigDataStatusTestSuite,
-    ExtProcTestSuite, FaultInjectionTestSuite, FormJsonTransformDynamicFormTestSuite,
+    DslTerminateDynamicUpdatedTestSuite, DslTerminateTestSuite, DslTestSuite, DslXmlDynamicTestSuite,
+    DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite, EdgionConfigDataFlapInitialTestSuite,
+    EdgionConfigDataFlapInvalidTestSuite, EdgionConfigDataFlapValidTestSuite, EdgionConfigDataManagedTestSuite,
+    EdgionConfigDataStatusTestSuite, ExtProcTestSuite, FaultInjectionTestSuite, FormJsonTransformDynamicFormTestSuite,
     FormJsonTransformDynamicJsonTestSuite, ForwardAuthTestSuite, GeoRestrictionTestSuite,
     GlobalConnectionIpRestrictionTestSuite, GlobalPluginsSnapshotTestSuite, GuardrailEncodingTestSuite,
     GuardrailTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite, IpRestrictionPartialGoodPluginTestSuite,
@@ -115,10 +115,10 @@ pub use edgion_plugins::{
     WafDynamicDetectionTestSuite, WafDynamicInitialTestSuite, WafDynamicInjectionTestSuite,
     WafDynamicJsonDetectionTestSuite, WafDynamicJsonV1TestSuite, WafDynamicJsonV2TestSuite,
     WafDynamicJsonZeroSourceTestSuite, WafDynamicOriginalDetectionTestSuite, WafDynamicOriginalOnTestSuite,
-    WafDynamicRecoveredTestSuite, WafDynamicSelectorHighTestSuite, WafDynamicSupportedDetectionTestSuite,
-    WafDynamicSupportedOnTestSuite, WafDynamicSupportedRetainedTestSuite, WafDynamicSupportedStandardTestSuite,
-    WafDynamicUpdatedTestSuite, WafDynamicXmlDetectionTestSuite, WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite,
-    WasmPluginTestSuite, WebhookKeyGetTestSuite,
+    WafDynamicRecoveredTestSuite, WafDynamicSelectorHighTestSuite, WafDynamicStaticSelectionTestSuite,
+    WafDynamicSupportedDetectionTestSuite, WafDynamicSupportedOnTestSuite, WafDynamicSupportedRetainedTestSuite,
+    WafDynamicSupportedStandardTestSuite, WafDynamicUpdatedTestSuite, WafDynamicXmlDetectionTestSuite,
+    WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite, WasmPluginTestSuite, WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests
@@ -148,5 +148,14 @@ pub use status::TlsRouteStatusTestSuite;
 // Services tests (ACME, etc.)
 pub use services::{AcmeGatewayRefOwnershipPhase, AcmeGatewayRefOwnershipTestSuite, AcmeTestSuite};
 
-pub use edgion_backend::{ResponsesContinuationAllowedSuite, ResponsesContinuationRejectedSuite, ResponsesTestSuite};
+pub use edgion_backend::{
+    MessagesBindingAllowedSuite, MessagesBindingRejectedSuite, MessagesCredentialBSuite, MessagesTestSuite,
+    ResponsesContinuationAllowedSuite, ResponsesContinuationRejectedSuite, ResponsesTestSuite,
+};
+pub use edgion_plugins::{GraphqlRateLimitDynamicSuite, GraphqlRateLimitTestSuite};
 pub use edgion_plugins::{GrpcJsonTranscoderDynamicSuite, GrpcJsonTranscoderTestSuite};
+
+pub use edgion_plugins::{GraphqlOperationRouterDynamicSuite, GraphqlOperationRouterTestSuite};
+
+pub use edgion_plugins::{GraphqlGuardDynamicSuite, GraphqlGuardTestSuite};
+pub use edgion_plugins::{GraphqlSafelistDynamicSuite, GraphqlSafelistTestSuite};

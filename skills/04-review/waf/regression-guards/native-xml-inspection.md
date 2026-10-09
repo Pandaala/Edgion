@@ -112,9 +112,8 @@ Source/test owners are the mirrored XML parser/runtime tests, public XML API tes
 Gateway capture tests, resource strict-admission tests and shared WafDynamic XML
 wire/generation/mode scenarios. Legacy XML helpers live only in the body unit-test
 oracle; their historical test cases are not proof of native parser correctness.
-Review and verification were tracked in the historical
-`tasks/pending/waf-xml-checker/waf-xml-checker.md` task, which is no longer present
-in the working tree.
+The completed implementation plans and process artifacts were removed during
+task cleanup. This guard and the canonical code/tests own the current contract.
 Historical results do not establish correctness after a relevant source change.
 
 Heap-capacity measurements exclude allocator overhead, BodyStorage, inline storage
@@ -124,3 +123,27 @@ Independent component peaks cannot be added
 into a simultaneous total. Re-evaluate on selector/projection, budget, source
 ownership, handle lifetime or scheduling changes; measure strict grammar costs
 separately from the frozen old common-valid subset.
+
+Optional capture-hit batching shares the canonical fused collector with JSON.
+Supported XML text/attribute selectors map to domain StaticFact peers; a shadow
+runs only for a complete selected/active/nonterminal peer set at the current
+borrowed profile/stage. Ordinary XPath restrictions and exact original capture
+extraction remain unchanged. Reference mode bypasses shadows. Preserve byte-feed,
+named/numeric alias, negation, source-order chain, inactive peer and budget fallback
+coverage when changing this dispatch. Compiler/request costs and ownership are
+specified in the owning fused-json-inspection regression guard.
+
+Current raw-name selector admission and subscription dispatch reuse successful
+boolean results within one collect_value call using two inline u64 words. The
+name stays immutable for that call; new JSON fields and XML attributes construct
+fresh state. Program IDs >=64 and Reference execution use original searches.
+Work charges and program/slot bounds validation precede reuse. Explicit target
+exclusions remain canonical replay work. No names, overflow allocation or field
+matrix are retained. Re-evaluate on selector ownership/profile or field lifetime
+changes; physical call-count tests do not establish total request latency.
+
+
+XML uses the same stage-cache storage as JSON: inline membership for complete
+matcher namespaces<=64, per-domain admitted Vec otherwise. Ordinary engine and
+optional capture-shadow IDs share the checked namespace. Work/admission/reset
+contracts and regression evidence are owned by fused-json-inspection.md.

@@ -172,6 +172,7 @@ impl AiCredentialOutlierHandle {
     #[cfg(test)]
     pub(crate) fn force_expired_cooldown_for_test(&self) {
         self.state.open_for(Duration::ZERO);
+        self.state.expire_deadlines_for_test();
     }
 }
 

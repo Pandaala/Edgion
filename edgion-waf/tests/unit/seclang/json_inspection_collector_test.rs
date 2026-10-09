@@ -68,6 +68,192 @@ fn feed(collector: &mut JsonCollector<'_, '_>, bytes: &[u8], split: usize) {
 }
 
 #[test]
+fn current_name_selector_cache_reuses_successes_with_original_work_charges() {
+    let g = compile(concat!(
+        "SecRule ARGS:/^json[.]probe$/ \"@contains hit\" \"id:901,phase:2,pass\"\n",
+        "SecRule ARGS_NAMES:/^json[.]probe$/ \"@contains probe\" \"id:902,phase:2,pass\"\n",
+    ));
+    let selector = g.json_inspection.candidate_regexes[0];
+    for name in [b"json.probe".as_slice(), b"json.other", b""] {
+        let mut usages = Vec::new();
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let runtime = RuntimeLimits::default();
+            let mut tx = Transaction::new(&g, request(), runtime).unwrap();
+            let mut sink = collector(&g, &mut tx, runtime, mode, ResultLimits::default());
+            let before = sink.usage().work;
+            let scope = measurements::start();
+            let mut cache = NameSelectorCache::default();
+            let first = match_name(
+                &g,
+                sink.context.boolean_scratch,
+                selector,
+                name,
+                &mut sink.state.store,
+                &mut cache,
+                mode,
+            )
+            .unwrap();
+            let second = match_name(
+                &g,
+                sink.context.boolean_scratch,
+                selector,
+                name,
+                &mut sink.state.store,
+                &mut cache,
+                mode,
+            )
+            .unwrap();
+            assert_eq!(first, second);
+            assert_eq!(
+                scope.counts().get(Event::NameSelectorSearches),
+                if mode == EvaluationMode::Accelerated { 1 } else { 2 }
+            );
+            assert_eq!(first, name == b"json.probe");
+            usages.push(sink.usage().work - before);
+        }
+        assert_eq!(usages[0], usages[1]);
+    }
+}
+
+#[test]
+fn current_name_selector_cache_has_guarded_inline_bounds_and_success_only_publication() {
+    let mut cache = NameSelectorCache::default();
+    assert_eq!(size_of::<NameSelectorCache>(), 16);
+    cache.insert(0, false);
+    cache.insert(63, true);
+    cache.insert(64, true);
+    cache.insert(usize::MAX, true);
+    assert_eq!(cache.get(0), Some(false));
+    assert_eq!(cache.get(63), Some(true));
+    assert_eq!(cache.get(64), None);
+    assert_eq!(cache.get(usize::MAX), None);
+    assert_eq!(cache.get(1), None);
+    let g = compile("SecRule ARGS:/^json[.]probe$/ \"@contains hit\" \"id:903,phase:2,pass\"\n");
+    let runtime = RuntimeLimits::default();
+    let mut tx = Transaction::new(&g, request(), runtime).unwrap();
+    let mut sink = collector(
+        &g,
+        &mut tx,
+        runtime,
+        EvaluationMode::Accelerated,
+        ResultLimits::default(),
+    );
+    let selector = g.json_inspection.candidate_regexes[0];
+    let scope = measurements::start();
+    let mut cache = NameSelectorCache::default();
+    assert!(match_name(
+        &g,
+        &mut [],
+        selector,
+        b"json.probe",
+        &mut sink.state.store,
+        &mut cache,
+        EvaluationMode::Accelerated
+    )
+    .is_err());
+    assert_eq!(cache.seen, 0);
+    assert_eq!(scope.counts().get(Event::NameSelectorSearches), 0);
+    assert!(match_name(
+        &g,
+        sink.context.boolean_scratch,
+        selector,
+        b"json.probe",
+        &mut sink.state.store,
+        &mut cache,
+        EvaluationMode::Accelerated
+    )
+    .unwrap());
+    assert!(match_name(
+        &g,
+        &mut [],
+        selector,
+        b"json.probe",
+        &mut sink.state.store,
+        &mut cache,
+        EvaluationMode::Accelerated
+    )
+    .is_err());
+}
+
+#[test]
+fn current_name_selector_cache_overflow_uses_original_searches() {
+    let source = (0..65)
+        .map(|i| {
+            format!(
+                "SecRule ARGS:/^json[.]key{i}$/ \"@contains hit\" \"id:{},phase:2,pass\"\n",
+                1000 + i
+            )
+        })
+        .collect::<String>();
+    let g = compile(&source);
+    let selector = *g
+        .json_inspection
+        .candidate_regexes
+        .iter()
+        .find(|selector| {
+            matches!(
+                selector,
+                crate::seclang::compiler::CompiledTargetSelector::Regex { program: 64, .. }
+            )
+        })
+        .unwrap();
+    let runtime = RuntimeLimits::default();
+    let mut tx = Transaction::new(&g, request(), runtime).unwrap();
+    let mut sink = collector(
+        &g,
+        &mut tx,
+        runtime,
+        EvaluationMode::Accelerated,
+        ResultLimits::default(),
+    );
+    let scope = measurements::start();
+    let mut cache = NameSelectorCache::default();
+    for _ in 0..2 {
+        assert!(match_name(
+            &g,
+            sink.context.boolean_scratch,
+            selector,
+            b"json.key64",
+            &mut sink.state.store,
+            &mut cache,
+            EvaluationMode::Accelerated
+        )
+        .unwrap());
+    }
+    assert_eq!(scope.counts().get(Event::NameSelectorSearches), 2);
+    assert_eq!(cache.seen, 0);
+}
+
+#[test]
+fn current_name_selector_cache_resets_per_field_and_preserves_exclusion_replay() {
+    let g = compile(concat!(
+        "SecRule ARGS:/^json[.]probe$/ \"@contains hit\" \"id:904,phase:2,pass\"\n",
+        "SecRule ARGS|!ARGS:/^json[.]probe$/ \"@contains hit\" \"id:905,phase:2,pass\"\n",
+        "SecRule ARGS_NAMES:/^json[.]probe$/ \"@contains probe\" \"id:906,phase:2,pass,t:lowercase\"\n",
+    ));
+    let input = br#"{"probe":"hit","other":"hit","nested":{"probe":"hit"},"probe":"safe"}"#;
+    for split in 0..=input.len() {
+        let mut outcomes = Vec::new();
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let runtime = RuntimeLimits::default();
+            let mut tx = Transaction::new_with_evaluation(&g, request(), runtime, mode).unwrap();
+            tx.execute_request_headers().unwrap();
+            tx.publish_request_body(RequestBody::new(
+                bytes::Bytes::copy_from_slice(input),
+                crate::seclang::BodyProcessorSelection::Auto,
+            ))
+            .unwrap();
+            outcomes.push(tx.execute_request_body().unwrap());
+            let mut tx = Transaction::new(&g, request(), runtime).unwrap();
+            let mut sink = collector(&g, &mut tx, runtime, mode, ResultLimits::default());
+            feed(&mut sink, input, split);
+            assert_eq!(sink.usage().live_outcomes, 3);
+        }
+        assert_eq!(outcomes[0], outcomes[1]);
+    }
+}
+
+#[test]
 fn no_hit_payloads_are_absent_and_summary_only_has_no_candidates() {
     for source in [
         r#"SecRule ARGS "@contains blocked" "id:1,phase:2,pass,t:lowercase""#,
@@ -193,7 +379,7 @@ fn thirty_two_subscribers_share_one_scan_per_stage_in_both_modes() {
         let runtime = RuntimeLimits::default();
         let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
         let mut sink = collector(&generation, &mut tx, runtime, mode, ResultLimits::default());
-        assert_eq!(sink.state.dispatch.cache.scanned.capacity(), 1);
+        assert_eq!(sink.state.dispatch.cache.heap_capacity(), 0);
         feed(&mut sink, br#"{"a":"SAFE","b":"safe"}"#, 9);
         assert_eq!(sink.state.dispatch.cache.scans, 3);
         assert_eq!(sink.usage().live_outcomes, 0);
@@ -228,11 +414,11 @@ fn capture_only_and_mixed_profiles_use_compiled_matcher_cache_bound() {
             let runtime = RuntimeLimits::default();
             let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
             let mut sink = collector(&generation, &mut tx, runtime, mode, ResultLimits::default());
-            let capacity = sink.state.dispatch.cache.scanned.capacity();
-            assert_eq!(capacity, expected);
+            let capacity = sink.state.dispatch.cache.heap_capacity();
+            assert_eq!(capacity, 0);
             feed(&mut sink, br#"{"x":"FIRST third a","y":"safe"}"#, 9);
-            assert_eq!(sink.state.dispatch.cache.scanned.capacity(), capacity);
-            assert!(sink.state.dispatch.cache.scanned.len() <= expected);
+            assert_eq!(sink.state.dispatch.cache.heap_capacity(), capacity);
+            assert!(sink.state.dispatch.cache.len() <= expected);
             assert_eq!(sink.state.dispatch.cache.scans == 0, expected == 0);
         }
     }
@@ -310,49 +496,61 @@ fn shared_capture_program_aliases_resolve_identical_ordered_captures_in_both_mod
 
 #[test]
 fn compiled_matcher_cache_constructor_has_exact_physical_admission() {
-    let generation = compile(concat!(
-        "SecRule ARGS \"@pm first\" \"id:1,phase:2,pass,t:none\"\n",
-        "SecRule ARGS \"@pm second\" \"id:2,phase:2,pass,t:none\"\n",
-        "SecRule ARGS \"@rx (a)\" \"id:3,phase:2,pass,capture,t:none\"\n",
-    ));
-    assert_eq!(generation.json_inspection.matcher_scan_capacity, 1);
-    let runtime = RuntimeLimits::default();
-    let required = {
-        let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
-        let sink = collector(
-            &generation,
-            &mut tx,
-            runtime,
-            EvaluationMode::Accelerated,
-            ResultLimits::default(),
-        );
-        assert_eq!(sink.usage().retained_bytes, sink.usage().peak_retained_bytes);
-        sink.usage().peak_retained_bytes
-    };
-    for (bound, succeeds) in [(required, true), (required - 1, false)] {
-        let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
-        let result = JsonCollector::new(
-            GenerationHandle::Borrowed(&generation),
-            SingleInputContext {
-                generation: &generation,
-                request: &tx.request,
-                tx: &tx.tx,
-                group_scratch: &mut tx.group_scratch,
-                boolean_scratch: &mut tx.boolean_scratch,
-                capture_scratch: &mut tx.capture_scratch,
-                scan_cache: None,
-                json_budget: None,
-            },
-            runtime,
-            EvaluationMode::Accelerated,
-            ResultLimits {
-                retained_bytes: bound,
-                ..ResultLimits::default()
-            },
-        );
-        assert_eq!(result.is_ok(), succeeds);
-        if !succeeds {
-            assert!(matches!(result, Err(CollectorError::Store(StoreError::Capacity))));
+    for header_count in [0, 64] {
+        let mut source = (0..header_count)
+            .map(|index| {
+                format!(
+                    "SecRule REQUEST_HEADERS:X-{index} \"@pm needle\" \"id:{},phase:1,pass,t:none\"\n",
+                    100 + index
+                )
+            })
+            .collect::<String>();
+        source.push_str(concat!(
+            "SecRule ARGS \"@pm first\" \"id:1,phase:2,pass,t:none\"\n",
+            "SecRule ARGS \"@pm second\" \"id:2,phase:2,pass,t:none\"\n",
+            "SecRule ARGS \"@rx (a)\" \"id:3,phase:2,pass,capture,t:none\"\n",
+        ));
+        let generation = compile(&source);
+        assert_eq!(generation.matcher_count(), header_count + 1);
+        assert_eq!(generation.json_inspection.matcher_scan_capacity, 1);
+        let runtime = RuntimeLimits::default();
+        let required = {
+            let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+            let sink = collector(
+                &generation,
+                &mut tx,
+                runtime,
+                EvaluationMode::Accelerated,
+                ResultLimits::default(),
+            );
+            assert_eq!(sink.usage().retained_bytes, sink.usage().peak_retained_bytes);
+            sink.usage().peak_retained_bytes
+        };
+        for (bound, succeeds) in [(required, true), (required - 1, false)] {
+            let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+            let result = JsonCollector::new(
+                GenerationHandle::Borrowed(&generation),
+                SingleInputContext {
+                    generation: &generation,
+                    request: &tx.request,
+                    tx: &tx.tx,
+                    group_scratch: &mut tx.group_scratch,
+                    boolean_scratch: &mut tx.boolean_scratch,
+                    capture_scratch: &mut tx.capture_scratch,
+                    scan_cache: None,
+                    json_budget: None,
+                },
+                runtime,
+                EvaluationMode::Accelerated,
+                ResultLimits {
+                    retained_bytes: bound,
+                    ..ResultLimits::default()
+                },
+            );
+            assert_eq!(result.is_ok(), succeeds);
+            if !succeeds {
+                assert!(matches!(result, Err(CollectorError::Store(StoreError::Capacity))));
+            }
         }
     }
 }
@@ -618,7 +816,7 @@ fn invalid_matcher_range_never_publishes_scan_completion() {
     let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
     let measurements = crate::seclang::measurements::start();
     let mut cache = StageScanCache {
-        scanned: Vec::with_capacity(1),
+        storage: ScanCacheStorage::Overflow(Vec::with_capacity(1)),
         scans: 0,
     };
     assert!(evaluate_matcher_operand_cached(
@@ -646,7 +844,7 @@ fn invalid_matcher_range_never_publishes_scan_completion() {
         Some(&mut cache)
     )
     .is_err());
-    assert!(cache.scanned.is_empty());
+    assert!(cache.len() == 0);
     assert_eq!(cache.scans, 0);
     assert_eq!(
         measurements
@@ -665,7 +863,7 @@ fn invalid_matcher_range_never_publishes_scan_completion() {
         Some(&mut cache)
     )
     .is_err());
-    assert!(cache.scanned.is_empty());
+    assert!(cache.len() == 0);
     assert_eq!(cache.scans, 0);
     assert_eq!(
         measurements
@@ -1087,6 +1285,9 @@ fn transform_growth_reads_capture_capacity_created_after_profile_construction() 
         context: &mut sink.context,
         groups: &mut groups,
         cache: &mut sink.state.dispatch.cache,
+        hit_eligible: &mut sink.state.dispatch.hit_eligible,
+        stamps: &mut sink.state.dispatch.stamps,
+        epoch: &mut sink.state.dispatch.epoch,
         captures: &mut sink.state.captures,
         candidate,
         profile: 0,
@@ -1112,4 +1313,211 @@ fn transform_growth_reads_capture_capacity_created_after_profile_construction() 
     drop(transformation);
     sink.abandon();
     assert_eq!(sink.usage().retained_bytes, 0);
+}
+
+#[test]
+fn capture_hit_batches_share_miss_searches_without_capture_caches() {
+    let generation = compile(concat!(
+        "SecRule ARGS \"@rx (evil)\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (attack)\" \"id:2,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (evil)\" \"id:3,phase:2,pass,capture\"\n",
+    ));
+    assert_eq!(generation.capture_hits.matchers.len(), 1);
+    assert_eq!(generation.json_inspection.capture_hits.batches.len(), 1);
+    assert_eq!(generation.json_inspection.capture_hits.peers.len(), 2);
+    assert!(generation.xml_inspection.capture_hits.bindings.is_empty());
+    for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+        let runtime = RuntimeLimits::default();
+        let scope = measurements::start();
+        let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+        assert!(tx.group_scratch.iter().all(Option::is_none));
+        let mut sink = collector(&generation, &mut tx, runtime, mode, ResultLimits::default());
+        feed(&mut sink, br#"{"a":"safe","b":"okay"}"#, 7);
+        let counts = scope.counts();
+        if mode == EvaluationMode::Accelerated {
+            assert_eq!(counts.get(Event::FullScans), 2);
+            assert_eq!(counts.get(Event::CaptureBooleanSearches), 0);
+            assert_eq!(counts.get(Event::CaptureScratchInitializations), 0);
+            assert_eq!(counts.get(Event::GroupScratchInitializations), 1);
+        } else {
+            assert_eq!(counts.get(Event::FullScans), 0);
+            assert_eq!(counts.get(Event::CaptureBooleanSearches), 4);
+            assert_eq!(counts.get(Event::CaptureScratchInitializations), 2);
+        }
+        assert_eq!(sink.usage().capture_bytes + sink.usage().matched_bytes, 0);
+        assert!(sink.into_sealed().is_ok());
+    }
+}
+
+#[test]
+fn capture_hit_stage_eligibility_recomputes_after_terminal_multimatch_peer() {
+    let generation = compile(concat!(
+        "SecRule ARGS \"@rx (HIT)\" \"id:1,phase:2,pass,capture,multiMatch,t:lowercase\"\n",
+        "SecRule ARGS \"@rx (hit)\" \"id:2,phase:2,pass,capture,multiMatch,t:lowercase\"\n",
+    ));
+    let runtime = RuntimeLimits::default();
+    let scope = measurements::start();
+    let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+    let mut sink = collector(
+        &generation,
+        &mut tx,
+        runtime,
+        EvaluationMode::Accelerated,
+        ResultLimits::default(),
+    );
+    sink.collect_scalar(b"json.a", b"HIT", JsonScalarKind::String).unwrap();
+    assert_eq!(scope.counts().get(Event::FullScans), 1);
+    assert_eq!(scope.counts().get(Event::CaptureBooleanSearches), 1);
+    assert_eq!(sink.usage().live_outcomes, 2);
+    assert_eq!(scope.counts().get(Event::CaptureScratchInitializations), 2);
+}
+
+#[test]
+fn capture_hit_epoch_wrap_clears_old_selected_peer_proof() {
+    let generation = compile(concat!(
+        "SecRule ARGS \"@rx (evil)\" \"id:1,phase:2,pass,capture\"\n",
+        "SecRule ARGS \"@rx (attack)\" \"id:2,phase:2,pass,capture\"\n",
+    ));
+    let runtime = RuntimeLimits::default();
+    let scope = measurements::start();
+    let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+    let mut sink = collector(
+        &generation,
+        &mut tx,
+        runtime,
+        EvaluationMode::Accelerated,
+        ResultLimits::default(),
+    );
+    let candidate = sink
+        .state
+        .store
+        .begin_candidate(b"json.a", 4, JsonScalarKind::String, None)
+        .unwrap();
+    sink.state.dispatch.epoch = usize::MAX;
+    sink.state.dispatch.stamps.fill(1);
+    let mut groups = [GroupRun { id: 0, terminal: false }];
+    let mut observer = ProfileObserver {
+        fixed_scratch: sink.state.dispatch.bytes().unwrap(),
+        store: &mut sink.state.store,
+        context: &mut sink.context,
+        groups: &mut groups,
+        cache: &mut sink.state.dispatch.cache,
+        hit_eligible: &mut sink.state.dispatch.hit_eligible,
+        stamps: &mut sink.state.dispatch.stamps,
+        epoch: &mut sink.state.dispatch.epoch,
+        captures: &mut sink.state.captures,
+        candidate,
+        profile: 0,
+        runtime,
+        mode: EvaluationMode::Accelerated,
+        transform_bytes: 0,
+        last: StoredCheckpoint::Initial,
+        step: 0,
+    };
+    observer.stage(0, b"safe").unwrap();
+    assert_eq!(*observer.epoch, 1);
+    assert!(!observer.hit_eligible[0]);
+    assert_eq!(scope.counts().get(Event::FullScans), 0);
+    assert_eq!(scope.counts().get(Event::CaptureBooleanSearches), 1);
+}
+
+#[test]
+#[ignore = "release timing witness; run explicitly with --release and --nocapture"]
+fn capture_hit_release_timing_witness() {
+    use crate::seclang::BodyProcessorSelection;
+    use bytes::Bytes;
+    let rules = (0..11)
+        .map(|id| {
+            format!(
+                "SecRule ARGS \"@rx (?P<word{id}>attack{id}(?:x|y)+)\" \"id:{},phase:2,pass,capture\"\n",
+                id + 1
+            )
+        })
+        .collect::<String>();
+    let generation = compile(&rules);
+    assert_eq!(generation.capture_hits.matchers.len(), 1);
+    let optional_retained = generation
+        .capture_hits
+        .matchers
+        .iter()
+        .map(|m| m.memory_usage())
+        .sum::<usize>();
+    for value_bytes in [32, 1024, 8192] {
+        let value = "s".repeat(value_bytes);
+        let input = format!(
+            "{{{}}}",
+            (0..64)
+                .map(|id| format!("\"k{id}\":\"{value}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let mut samples = Vec::new();
+            let mut scratch_envelope = 0;
+            for sample in 0..24 {
+                let start = std::time::Instant::now();
+                let mut tx = Transaction::new(&generation, request(), RuntimeLimits::default()).unwrap();
+                tx.evaluation_mode = mode;
+                scratch_envelope = tx.scratch_bytes;
+                tx.execute_request_headers().unwrap();
+                tx.publish_request_body(RequestBody::new(
+                    Bytes::copy_from_slice(input.as_bytes()),
+                    BodyProcessorSelection::Json,
+                ))
+                .unwrap();
+                assert!(tx.execute_request_body().unwrap().findings().is_empty());
+                let elapsed = start.elapsed().as_nanos();
+                if sample >= 3 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_unstable();
+            println!("CAPTURE_HIT_TIMING,mode={mode:?},rules=11,fields=64,value_bytes={value_bytes},samples=21,p50_ns={},optional_engine_bytes={optional_retained},scratch_envelope_bytes={scratch_envelope}", samples[samples.len() / 2]);
+        }
+    }
+}
+
+#[test]
+fn stage_scan_cache_selects_inline_or_sparse_overflow_at_namespace_boundary() {
+    let mut admissions = Vec::new();
+    for namespace in [58, 64, 65] {
+        let mut source = (0..namespace - 1)
+            .map(|index| {
+                format!(
+                    "SecRule REQUEST_HEADERS:X-{index} \"@pm needle\" \"id:{},phase:1,pass,t:none\"\n",
+                    100 + index
+                )
+            })
+            .collect::<String>();
+        source.push_str("SecRule ARGS:json.x \"@pm needle\" \"id:1,phase:2,pass,t:none\"\n");
+        let generation = compile(&source);
+        assert_eq!(generation.matcher_count(), namespace);
+        assert_eq!(generation.json_inspection.matcher_scan_capacity, 1);
+        let mut outcomes = Vec::new();
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let runtime = RuntimeLimits::default();
+            let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
+            let mut sink = collector(&generation, &mut tx, runtime, mode, ResultLimits::default());
+            admissions.push((sink.usage().work, sink.usage().retained_bytes));
+            let capacity = sink.state.dispatch.cache.heap_capacity();
+            assert_eq!(capacity, usize::from(namespace > 64));
+            assert_eq!(sink.state.dispatch.cache.len(), 0);
+            feed(&mut sink, br#"{"x":"safe","x":"needle"}"#, 9);
+            assert_eq!(sink.state.dispatch.cache.scans, 2);
+            assert_eq!(sink.state.dispatch.cache.heap_capacity(), capacity);
+            assert_eq!(sink.usage().live_outcomes, 1);
+            assert_eq!(sink.state.dispatch.cache.len(), 1);
+            assert!(sink.state.dispatch.cache.contains(namespace - 1));
+            assert!(!sink.state.dispatch.cache.contains(0));
+            outcomes.push((
+                sink.usage().work,
+                sink.usage().live_candidates,
+                sink.usage().live_changes,
+            ));
+        }
+        assert_eq!(outcomes[0], outcomes[1]);
+    }
+    assert_eq!(admissions[0], admissions[2]);
+    assert_eq!(admissions[4].0, admissions[2].0);
+    assert_eq!(admissions[4].1, admissions[2].1 + std::mem::size_of::<usize>());
 }

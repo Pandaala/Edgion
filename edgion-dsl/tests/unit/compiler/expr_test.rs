@@ -3,6 +3,51 @@ use super::super::super::parser::parse_program;
 use super::super::Compiler;
 
 #[test]
+fn xml_builtin_resolution_and_arity_are_shared_by_source_and_wire_validation() {
+    use crate::bytecode::{BuiltinId, CompiledScript};
+    use crate::validator::{ValidationLimits, Validator};
+    for (method, id, argc) in [
+        ("parse", BuiltinId::XmlParse, 1),
+        ("kind", BuiltinId::XmlKind, 1),
+        ("name", BuiltinId::XmlName, 1),
+        ("namespace", BuiltinId::XmlNamespace, 1),
+        ("value", BuiltinId::XmlValue, 1),
+        ("child_count", BuiltinId::XmlChildCount, 1),
+        ("child", BuiltinId::XmlChild, 2),
+        ("find", BuiltinId::XmlFind, 4),
+        ("attribute_count", BuiltinId::XmlAttributeCount, 1),
+        ("attribute", BuiltinId::XmlAttribute, 2),
+        ("attr_value", BuiltinId::XmlAttrValue, 3),
+        ("text", BuiltinId::XmlText, 1),
+        ("attr", BuiltinId::XmlAttr, 3),
+        ("element", BuiltinId::XmlElement, 4),
+        ("stringify", BuiltinId::XmlStringify, 1),
+        ("set_body", BuiltinId::XmlSetBody, 1),
+    ] {
+        let args = std::iter::repeat_n("nil", argc).collect::<Vec<_>>().join(", ");
+        let source = format!("xml.{method}({args})");
+        let script = Compiler::new().compile(&parse_program(&source).unwrap()).unwrap();
+        assert!(script.references_builtin(id));
+        assert_eq!(script.references_request_body(), id == BuiltinId::XmlSetBody);
+        assert_eq!(script.references_request_body_mutation(), id == BuiltinId::XmlSetBody);
+        let mut decoded = CompiledScript::deserialize_base64(&script.serialize_base64().unwrap()).unwrap();
+        assert!(Validator::new(ValidationLimits::default())
+            .validate(&decoded)
+            .is_empty());
+        for op in &mut decoded.code {
+            if let OpCode::CallBuiltin(_, count) = op {
+                *count += 1;
+            }
+        }
+        assert!(!Validator::new(ValidationLimits::default())
+            .validate(&decoded)
+            .is_empty());
+        let invalid = format!("xml.{method}({args}, nil)");
+        assert!(Compiler::new().compile(&parse_program(&invalid).unwrap()).is_err());
+    }
+}
+
+#[test]
 fn builtin_argument_capacity_is_checked_before_emitting_operands() {
     use crate::bytecode::BuiltinId;
 

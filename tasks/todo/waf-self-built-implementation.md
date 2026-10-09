@@ -1,4 +1,13 @@
-# TODO: Self-Built WAF Implementation
+# Historical Self-Built WAF Proposal
+
+Status: superseded; not an implementation backlog.
+
+The native request WAF is implemented. Current contracts are in the
+[WAF knowledge index](../../skills/04-review/waf/SKILL.md) and the pinned
+[supported CRS package](../../config/waf/crs-4.25.1-supported-v1/README.md).
+The frozen proposal below does not describe current configuration, distribution,
+or acceptance. In particular, embedded CRS and full response-body support are
+not current requirements. Remaining work is tracked in separate short tasks.
 
 > Spec (final, approved 2026-07-12): `docs/superpowers/specs/2026-07-12-waf-design.md`
 > Supersedes the exploratory note `waf-integration-modsec-coraza.md` (repo root; can be deleted).

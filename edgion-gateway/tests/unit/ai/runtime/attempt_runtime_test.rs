@@ -1,6 +1,12 @@
 use super::*;
 
 fn closed_outlier_handle() -> AiCredentialOutlierHandle {
+    outlier_handle_with_config(None)
+}
+
+fn outlier_handle_with_config(
+    config: Option<edgion_resources::resources::outlier_detection::OutlierDetectionResolved>,
+) -> AiCredentialOutlierHandle {
     use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 
     let store = crate::ai::runtime::credential_outlier::AiCredentialOutlierStore::new();
@@ -9,11 +15,133 @@ fn closed_outlier_handle() -> AiCredentialOutlierHandle {
         namespace: "default".to_string(),
         name: "provider".to_string(),
     };
-    store.configure_backend(target.clone(), None, ["primary".to_string()]);
+    store.configure_backend(target.clone(), config, ["primary".to_string()]);
     store
         .current_handle(&target)
         .and_then(|backend| backend.capture("primary"))
         .expect("credential handle")
+}
+
+#[tokio::test]
+async fn native_off_successful_eos_restores_credential_concurrency_without_model_usage() {
+    use edgion_resources::resources::edgion_plugins::AiUsageObservation;
+    use edgion_resources::resources::outlier_detection::OutlierDetectionResolved;
+    for config in [
+        None,
+        Some(OutlierDetectionResolved {
+            consecutive_errors: 1,
+            consecutive_gateway_errors: 1,
+            consecutive_local_origin_failures: 1,
+            ejection_seconds: 1,
+            max_ejection_seconds: 10,
+            max_ejection_percent: 100,
+        }),
+    ] {
+        let handle = outlier_handle_with_config(config);
+        assert_eq!(
+            handle.apply_retry_after("1", SystemTime::UNIX_EPOCH),
+            Some(Duration::from_secs(1))
+        );
+        assert!(matches!(handle.admit(), EjectionAdmission::Rejected));
+        handle.force_expired_cooldown_for_test();
+        let mut input = admission_input(Some(handle.clone()), None, OnRedisFailure::Deny);
+        input.usage = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Off));
+        let shared = input.usage.clone();
+        let eos = input.eos.clone();
+        let mut state = AiAttemptRuntimeState::default();
+        let AiAttemptAdmission::Ready(mut active) = state.admit(input).await else {
+            panic!("expired credential must admit the transport probe");
+        };
+        assert!(matches!(handle.admit(), EjectionAdmission::Rejected));
+        active.mark_dispatched();
+        active.record_response(200, None);
+        mark_eos(&eos);
+        state.install(active);
+        state.finalize(None).await;
+        assert!(matches!(handle.admit(), EjectionAdmission::Closed));
+        assert!(matches!(handle.admit(), EjectionAdmission::Closed));
+        assert!(!shared.permits_provider_success());
+        assert_eq!(
+            shared.response_outcome(),
+            crate::ai::protocols::openai::json_usage::ResponseOutcome::Unknown
+        );
+        assert_eq!(
+            state.attempts()[0].usage_source,
+            crate::ai::GenAiAttemptUsageSource::NotObserved
+        );
+        assert!(state.attempts()[0].input_tokens.is_none());
+    }
+}
+
+#[tokio::test]
+async fn native_off_probe_does_not_recover_without_a_valid_transport_completion() {
+    use edgion_resources::resources::edgion_plugins::AiUsageObservation;
+    for case in ["cancelled", "gateway_cut", "failure", "new_cooldown", "not_dispatched"] {
+        let handle = closed_outlier_handle();
+        handle.force_expired_cooldown_for_test();
+        let mut input = admission_input(Some(handle.clone()), None, OnRedisFailure::Deny);
+        input.usage = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Off));
+        let eos = input.eos.clone();
+        let mut state = AiAttemptRuntimeState::default();
+        let AiAttemptAdmission::Ready(mut active) = state.admit(input).await else {
+            panic!("expired credential must admit the transport probe");
+        };
+        if case != "not_dispatched" {
+            active.mark_dispatched();
+        }
+        active.record_response(200, None);
+        if case != "cancelled" {
+            mark_eos(&eos);
+        }
+        if case == "gateway_cut" {
+            active.usage.mark_gateway_terminated();
+        }
+        if case == "failure" {
+            active.record_failure_once(FailureClass::LocalOrigin);
+        }
+        if case == "new_cooldown" {
+            handle.apply_cooldown(Duration::from_secs(60));
+        }
+        state.install(active);
+        state.finalize(None).await;
+        assert!(!matches!(handle.admit(), EjectionAdmission::Closed), "{case}");
+    }
+}
+
+#[tokio::test]
+async fn native_off_transport_success_resets_consecutive_credential_failures() {
+    use crate::backends::outlier_detection::FailureTransition;
+    use edgion_resources::resources::edgion_plugins::AiUsageObservation;
+    use edgion_resources::resources::outlier_detection::OutlierDetectionResolved;
+    let handle = outlier_handle_with_config(Some(OutlierDetectionResolved {
+        consecutive_errors: 2,
+        consecutive_gateway_errors: 2,
+        consecutive_local_origin_failures: 2,
+        ejection_seconds: 1,
+        max_ejection_seconds: 10,
+        max_ejection_percent: 100,
+    }));
+    assert!(matches!(
+        handle.record_failure(FailureClass::Application),
+        FailureTransition::None
+    ));
+    let mut input = admission_input(Some(handle.clone()), None, OnRedisFailure::Deny);
+    input.usage = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Off));
+    let eos = input.eos.clone();
+    let mut state = AiAttemptRuntimeState::default();
+    let AiAttemptAdmission::Ready(mut active) = state.admit(input).await else {
+        panic!("closed credential admission");
+    };
+    active.mark_dispatched();
+    active.record_response(200, None);
+    mark_eos(&eos);
+    state.install(active);
+    state.finalize(None).await;
+    assert!(matches!(
+        handle.record_failure(FailureClass::Application),
+        FailureTransition::None
+    ));
+    assert!(matches!(handle.admit(), EjectionAdmission::Closed));
 }
 
 fn admission_input(
@@ -658,7 +786,7 @@ fn responses_health_verdict_requires_observed_model_completion_and_actual_eos() 
         ResponseOutcome::Unknown,
     ] {
         let mut active = attempt(3, 0, true);
-        active.usage = Arc::new(AiUsageShared::with_responses(AiUsageObservation::Provider));
+        active.usage = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
         active.usage.observe_response_outcome(outcome);
         active.usage.observe_reported_usage(11, 7, 0, 0);
         active.record_response(200, None);

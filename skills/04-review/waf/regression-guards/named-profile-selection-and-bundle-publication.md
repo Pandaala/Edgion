@@ -122,3 +122,31 @@ default invalidates the candidate. Selector identity failure retains existing de
 Gateway checks actual EP policy identity at its cold cache boundary and selected transport bundle
 identity in the compiler; transported policy/namespace values never become resource capabilities.
 Existing current policy, LKG, scoped source-copy and in-flight pinning rules remain unchanged.
+## Optional retained aggregate checks
+
+`EdgionGatewayConfig.spec.waf.expensiveChecks` defaults to false in the Gateway
+schema and is pinned into each transaction. Direct leaf-engine callers retain
+complete original checks through `RuleCheckPolicy::default()` (true); the two
+defaults serve different callers.
+
+Strict compilation validates all original rules before classifying optional
+families using exact signatures and dependency proofs. The current families
+cover HPP units 921170/921180 and multipart aggregate initialization, writes and
+checks 922140/922150/922110. Disabling the policy suppresses only proven optional
+aggregate effects/checks. Unrecognized signatures or unproven shared observers
+retain ordinary execution; rule IDs alone never authorize skipping.
+
+The policy does not disable JSON/XML grammar, required scoped identity and
+namespace state, cheap total checks such as 920380, ordinary attack matching,
+or necessary capture cleanup. It is not a blanket constant-memory promise.
+Controller/Gateway serialization, omitted/false/true configuration, hot updates
+and in-flight policy ownership have canonical resource/runtime/live tests.
+Re-evaluate the proof in `edgion-waf/src/seclang/expensive_checks.rs` whenever
+operators, TX aliases, control flow, or original rule signatures change.
+
+The supported-v1 source manifest accounts for 627 original core units: 59
+response-body units, 901320 persistent initialization, and 905100/905110
+unsupported control units are excluded. The retained 565 original core units
+plus setup and product tuning yield 567 units; the integration fixture adds one
+explicit test-owned wire guard, yielding 568. Response-body inspection remains
+outside current scope; unsupported original units still fail strict admission.

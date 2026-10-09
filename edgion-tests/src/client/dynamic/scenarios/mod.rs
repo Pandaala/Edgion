@@ -21,6 +21,7 @@ pub mod direct_endpoint_port_resolution;
 pub mod dns_resolution_flap;
 pub mod dsl_dynamic;
 pub mod dsl_terminate_dynamic;
+pub mod dsl_xml_dynamic;
 pub mod duplicate_host_policy_hot_reload;
 pub mod edgion_config_data_ref_flap;
 pub mod edgion_tls_last_known_good;
@@ -60,5 +61,12 @@ pub mod http_route_path_prefix_trailing_slash;
 pub mod plugin_policy;
 pub mod preflight_policy_hot_reload;
 
+pub mod ai_messages_binding;
 pub mod ai_responses_continuation;
+pub mod graphql_rate_limit;
 pub mod grpc_json_transcoder;
+
+pub mod graphql_operation_router;
+
+pub mod graphql_guard;
+pub mod graphql_safelist;

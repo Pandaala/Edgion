@@ -112,9 +112,12 @@ impl RequestFilter for Guardrail {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        if session.ctx().has_responses_plan() {
+        if session.ctx().has_unsupported_native_guard_plan() {
             log.push_err("responses-guard-unsupported");
-            return crate::ai::openai_error_response(session, crate::ai::AiProxyError::UnsupportedParameter);
+            return crate::ai::protocols::error::ai_error_response(
+                session,
+                crate::ai::AiProxyError::UnsupportedParameter,
+            );
         }
         let owner = Arc::new(AttachedGuardrail::new());
         if !session.install_attached_guardrail(self.identity.clone(), owner, self.head_limits) {

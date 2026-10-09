@@ -168,14 +168,14 @@ pub fn collect_grpc_transcoding_errors(entries: &[RequestFilterEntry]) -> Vec<St
 pub fn collect_ai_guard_ordering_errors(entries: &[RequestFilterEntry], errors: &mut Vec<String>) {
     let responses = entries.iter().any(|entry| {
         entry.is_enabled()
-            && matches!(&entry.plugin, EdgionPlugin::AiProxy(config) if config.api == super::AiApi::OpenaiResponses)
+            && matches!(&entry.plugin, EdgionPlugin::AiProxy(config) if matches!(config.api, super::AiApi::OpenaiResponses | super::AiApi::AnthropicMessages))
     });
     if responses
         && entries.iter().any(|entry| {
             entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::AiGuard(_) | EdgionPlugin::Guardrail(_))
         })
     {
-        errors.push("requestPlugins: native Responses does not support AiGuard or Guardrail".to_string());
+        errors.push("requestPlugins: native Responses/Messages does not support AiGuard or Guardrail".to_string());
     }
     let active = |entry: &RequestFilterEntry| entry.is_enabled();
     // The LAST guard against the FIRST proxy: `[AiGuard, AiProxy, AiGuard]`
@@ -326,6 +326,22 @@ impl EdgionPlugins {
             .any(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::GrpcJsonTranscoder(_)))
     }
 
+    pub fn has_active_graphql_operation_router(&self) -> bool {
+        self.spec
+            .request_plugins
+            .iter()
+            .flatten()
+            .any(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::GraphqlOperationRouter(_)))
+    }
+    pub fn http_route_only_plugin(&self) -> Option<&'static str> {
+        self.spec
+            .request_plugins
+            .iter()
+            .flatten()
+            .find(|entry| entry.is_enabled() && entry.plugin.requires_http_route_rule_scope())
+            .map(|entry| entry.plugin.type_name())
+    }
+
     /// Whether this resource contributes RequestId rules at an active attachment.
     pub fn has_active_request_id(&self) -> bool {
         self.spec
@@ -337,8 +353,8 @@ impl EdgionPlugins {
 
     /// Early attachments may only depend on parsed headers, method and W3C ID.
     pub fn validate_request_id_early_attachment(&self) -> Vec<String> {
-        if self.has_active_grpc_transcoder() {
-            return vec!["GrpcJsonTranscoder requires HTTPRoute rule scope".into()];
+        if let Some(plugin) = self.http_route_only_plugin() {
+            return vec![format!("{plugin} requires HTTPRoute rule scope")];
         }
         use super::conditions::Condition;
         use crate::common::KeyGet;
@@ -511,35 +527,39 @@ impl EdgionPlugins {
         // then skips the entry entirely, so Pass 2 must skip them too — otherwise
         // the two layers disagree on which entries reach the alias / dye / stage
         // checks (and on which entries claim an alias for the uniqueness rule).
-        let bounded_structured_invalid: std::collections::HashSet<usize> = self
-            .spec
-            .request_plugins
-            .as_ref()
-            .map(|entries| {
-                entries
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, entry)| {
-                        entry.is_enabled()
-                            && entry.plugin.validation_error().is_none()
-                            && matches!(
-                                entry.plugin,
-                                EdgionPlugin::FormJsonTransform(_)
-                                    | EdgionPlugin::GrpcJsonTranscoder(_)
-                                    | EdgionPlugin::JsonSchemaValidation(_)
-                                    | EdgionPlugin::ProxyRewrite(super::plugin_configs::ProxyRewriteConfig {
-                                        json_body: Some(_),
-                                        ..
-                                    })
-                            )
-                            && entry.body.as_ref().is_some_and(|body| {
-                                !super::plugin_configs::bounded_structured_body_validation_errors(body).is_empty()
-                            })
-                    })
-                    .map(|(i, _)| i)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let bounded_structured_invalid: std::collections::HashSet<usize> =
+            self.spec
+                .request_plugins
+                .as_ref()
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, entry)| {
+                            entry.is_enabled()
+                                && entry.plugin.validation_error().is_none()
+                                && matches!(
+                                    entry.plugin,
+                                    EdgionPlugin::FormJsonTransform(_)
+                                        | EdgionPlugin::GrpcJsonTranscoder(_)
+                                        | EdgionPlugin::JsonSchemaValidation(_)
+                                        | EdgionPlugin::GraphqlGuard(_)
+                                        | EdgionPlugin::GraphqlSafelist(_)
+                                        | EdgionPlugin::GraphqlRateLimit(_)
+                                        | EdgionPlugin::GraphqlOperationRouter(_)
+                                        | EdgionPlugin::ProxyRewrite(super::plugin_configs::ProxyRewriteConfig {
+                                            json_body: Some(_),
+                                            ..
+                                        })
+                                )
+                                && entry.body.as_ref().is_some_and(|body| {
+                                    !entry.plugin.structured_body_validation_errors(body).is_empty()
+                                })
+                        })
+                        .map(|(i, _)| i)
+                        .collect()
+                })
+                .unwrap_or_default();
 
         // Pass 2: per-entry config/alias/stage validation for active entries,
         // in stage order — mirrors the four `add_from_*` paths (minus runtime
@@ -744,9 +764,13 @@ impl EdgionPlugins {
                             EdgionPlugin::FormJsonTransform(_)
                                 | EdgionPlugin::GrpcJsonTranscoder(_)
                                 | EdgionPlugin::JsonSchemaValidation(_)
+                                | EdgionPlugin::GraphqlGuard(_)
+                                | EdgionPlugin::GraphqlSafelist(_)
+                                | EdgionPlugin::GraphqlRateLimit(_)
+                                | EdgionPlugin::GraphqlOperationRouter(_)
                                 | EdgionPlugin::ProxyRewrite(_)
                         ) {
-                            for error in super::plugin_configs::bounded_structured_body_validation_errors(body) {
+                            for error in entry.plugin.structured_body_validation_errors(body) {
                                 errors.push(format!("{}[{}] ({}): {}", $label, i, name, error));
                             }
                         } else if let Some(err) = body.validation_error() {

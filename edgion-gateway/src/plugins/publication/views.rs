@@ -18,6 +18,7 @@ pub(crate) struct GatewayScope {
 pub(crate) struct RuleAdmission {
     pub source: Weak<HTTPRoute>,
     pub allowed: Vec<bool>,
+    pub graphql_allowed: Vec<bool>,
 }
 
 pub(crate) struct PluginScope {
@@ -41,6 +42,14 @@ impl PluginScope {
 
     /// The Weak token prevents allocation reuse without retaining the route.
     /// A route table from another publication must never borrow this decision.
+    pub fn graphql_rule(&self, route: &Arc<HTTPRoute>, index: usize) -> bool {
+        self.available
+            && self.rules.get(&(Arc::as_ptr(route) as usize)).is_some_and(|gate| {
+                std::ptr::eq(gate.source.as_ptr(), Arc::as_ptr(route))
+                    && gate.graphql_allowed.get(index).copied().unwrap_or(false)
+            })
+    }
+
     pub fn ai_rule(&self, route: &Arc<HTTPRoute>, index: usize) -> bool {
         self.available
             && self.rules.get(&(Arc::as_ptr(route) as usize)).is_some_and(|gate| {

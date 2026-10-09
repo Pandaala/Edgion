@@ -23,7 +23,7 @@ mutation caller supply its own cap are **not accepted**.
 
 **1. The storage layer owns the invariant**
 
-ExtProc, ProxyRewrite, and future body mutators all publish through
+Complete-body ExtProc, ProxyRewrite, and complete-body mutators publish through
 `BodyStorageView`. Storing `max_body_size_bytes` in the view's shared inner
 state prevents a new caller from forgetting the check or temporarily widening
 the cap.
@@ -43,6 +43,12 @@ always returns HTTP 413. A rejected mutation preserves the previous complete
 version, so the mutating plugin's established failure policy applies. ExtProc
 therefore honors `failureModeAllow`; ProxyRewrite retains its fixed fail-close
 behavior.
+
+Streamed request handlers do not publish a `BodyStorageView` generation. Their
+canonical boundary is the common body hook's independent cumulative input/final
+output accounts; cap rejection is unconditional 413 rather than a transactional
+complete-body mutation's recoverable failure. See
+[streamed admission](streamed-request-body-admission.md).
 
 ## Fix Suggestions Not Accepted
 

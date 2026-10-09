@@ -8,6 +8,7 @@ mod grpc_error;
 mod response_http_timeout;
 mod terminate;
 mod terminate_dynamic;
+mod xml;
 
 pub use body::DslBodyTestSuite;
 pub use dsl::DslTestSuite;
@@ -17,3 +18,4 @@ pub use terminate::DslTerminateTestSuite;
 pub use terminate_dynamic::{
     DslTerminateDynamicInitialTestSuite, DslTerminateDynamicRestoredTestSuite, DslTerminateDynamicUpdatedTestSuite,
 };
+pub use xml::DslXmlDynamicTestSuite;

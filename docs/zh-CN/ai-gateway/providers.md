@@ -1,6 +1,6 @@
 # 提供商
 
-受管 AiProxy 入口支持 OpenAI Chat Completions 和原生 OpenAI Responses。Edgion 把逻辑模型映射到所选后端的
+受管 AiProxy 入口支持 OpenAI Chat Completions、原生 OpenAI Responses 和原生 Claude Messages。Edgion 把逻辑模型映射到所选后端的
 提供商模型；客户端选择模型，显式的模型改写或 quota 降级策略才会改变该选择。
 
 ## 当前支持范围
@@ -11,12 +11,12 @@
 | `POST /v1/chat/completions` | `Anthropic` | Chat 转 Messages 请求；JSON 或 SSE 转回 Chat，仅支持下述转换子集 |
 | `GET /v1/models` | Chat API Route 可达模型目录 | 本地生成目录；HTTPRoute 必须允许 GET 并匹配该路径 |
 | `POST /v1/responses` | `OpenAI` | 原生 Responses JSON 或 SSE，要求显式 model |
-| 原生 `POST /v1/messages` | 任意受管后端 | 尚不支持 |
+| `POST /v1/messages` | `Anthropic` | 原生 Messages JSON/SSE，要求显式 model 与 max_tokens |
 | Gemini native、Bedrock | 任意受管后端 | 尚不支持；后续范围 |
 
 `api: openaiChat` 是操作识别的依据。入口接受有效路径 POST `/v1/chat/completions` 和本地
 GET `/v1/models`；自定义路径需先经 URLRewrite 改写。其他受管操作返回固定的
-`404 unsupported_endpoint`。`api: openaiResponses` 则只接受 OpenAI 的 POST `/v1/responses`。原生 Messages 仍在配置校验时拒绝。
+`404 unsupported_endpoint`。`api: openaiResponses` 则只接受 OpenAI 的 POST `/v1/responses`。`api: anthropicMessages` 只接受 Anthropic 的 POST `/v1/messages`。
 普通 HTTPRoute 到 Service 可独立代理不透明 HTTP 流量，不提供受管 AI 语义。
 
 ## 支持的提供商
@@ -25,9 +25,9 @@ GET `/v1/models`；自定义路径需先经 URLRewrite 改写。其他受管操�
 |------------|----------|---------------|
 | `OpenAI` | 原生 Chat 或 Responses 请求与响应 | `https://api.openai.com` |
 | `OpenAICompatible` | Chat 请求与响应 | **必填** `endpoint` |
-| `Anthropic` | Chat-to-Messages 转换；JSON 与 SSE 响应转回 Chat | `https://api.anthropic.com` |
+| `Anthropic` | 原生 Messages 或显式 Chat-to-Messages 转换 | `https://api.anthropic.com` |
 
-原生 Messages、Gemini、Bedrock 与 Vertex 尚不属于当前受管支持范围。
+Gemini、Bedrock 与 Vertex 尚不属于当前受管支持范围。
 
 ## OpenAI 与 OpenAI-compatible
 
@@ -43,7 +43,7 @@ Anthropic 转换始终要求目录命中。
 ## Anthropic 转换
 
 使用 `api: openaiChat` 与 `conversion: chatToAnthropic`，且候选全为 Anthropic，显式启用
-现有 Chat-to-Messages 转换。原生入口省略 conversion，仅使用 OpenAI/OpenAICompatible 候选。转换支持文本消息、已声明的 function tools、tool calls/results、
+现有 Chat-to-Messages 转换。原生 Chat 入口省略 conversion，仅使用 OpenAI/OpenAICompatible 候选；原生 Messages 使用 Anthropic 候选。转换支持文本消息、已声明的 function tools、tool calls/results、
 `tool_choice`、`parallel_tool_calls` 和 `stop`。`n`、`temperature`、`top_p` 只接受省略、null 或中性值 1，
 不支持任意采样参数。system 消息必须位于会话开头，最后一条必须是 user 或 tool result；不支持 developer role。
 多模态内容、结构化输出、未知字段及其他不支持的组合会在本地拒绝，不会静默删除。
@@ -85,3 +85,39 @@ AiGuard/Guardrail 目前仅理解 Chat 语义，与 Responses 在同资源启用
 受管凭据安装还会移除 OpenAI-Organization / OpenAI-Project，包括后端 HeaderModifier 设置的值；
 RequestId 不能以这两个保留 header 为目标在稍后恢复它们。它们属于厂商主体选择，不是普通扩展字段。
 请使用 project-scoped key，并由运维保持主体固定；当前受管入口不支持 selector override。普通 HTTP 透传不受影响。
+
+## 原生 Messages 的边界
+
+配置 `api: anthropicMessages`，省略 `conversion` 和 `injectUsageTracking`；
+EdgionBackend 使用 `provider: Anthropic`。只管理 POST `/v1/messages`，不管理
+count_tokens、files、batches 等端点。要求显式 model 和非负整数 max_tokens；
+零值原样保留，可用于缓存预热。原生 JSON/SSE、工具、签名、缓存控制和扩展字段原样传递；
+无状态请求的显式模型映射只修改 model 值。
+
+保留 query 和所有有效 anthropic-beta 值；缺省 anthropic-version 使用
+`2023-06-01`。目前仅对该版本支持厂商用量观测。其他版本在 off 下透传，在可选
+provider 观测下透传并保持 unknown；要求核算的策略会在上游发送前拒绝。
+清除客户端认证和 workspace selector，再安装 Secret 中的 Key。Key 应固定归属一个
+workspace；有效 anthropic-user-profile-id 暂不支持。RequestId/RemoteIp 的晚到改写
+不能覆盖受管身份或已认证的协议 header。
+
+复用 container、thinking/redacted-thinking 历史、container upload 和文件引用
+（包括 tool_result 内嵌内容）要求一个原始 backend slot、一个声明的凭据绑定，
+模型保持不变，并禁止 modelRoutes、降级和重试。未解析凭据和零权重 backend slot 也计入。
+Secret 轮转应维持相关账号/workspace/model，网关不证明对象授权、不建立 affinity 注册表。
+未知 beta 标识原样透传，不承诺可跨凭据迁移。
+
+AiGuard/Guardrail 组合在校验和实际执行时拦截。provider 观测使用有界增量解析，
+不缓存完整响应。输入用量为 input_tokens 加 cache_creation_input_tokens 和
+cache_read_input_tokens，细分字段不重复相加；SSE 迟到的原始计数按累计水位合并。
+只有 start 中的占位值不足以证明最终用量，需要 message_delta output 和有效停止信息、
+message_stop。缺失、畸形、超限、编码不可观测、流不完整及厂商错误均保持 unknown；
+被动观测保留响应字节。主动 quota Reject 发原生 `event: error` 并关闭，
+不发送 Chat 的 DONE；tool_use、pause_turn、max_tokens、refusal 属于正常停止。
+
+已识别的 compaction/advisor/厂商 fallback 推理在 off 下透传，开启观测时保持 unknown；
+要求核算时提前拒绝。响应 iterations 只接受同模型的 message 汇总，不重复相加子项。
+配置价格仅估算 token 成本，不涵盖全部工具费、分层价格、混合缓存 TTL 或完整厂商账单。
+
+参见 [Messages](https://platform.claude.com/docs/en/api/messages/create) 和
+[流式协议](https://platform.claude.com/docs/en/build-with-claude/streaming)。

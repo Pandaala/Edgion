@@ -55,4 +55,4 @@ tokenQuota、凭据 TPM 和 LowestUsage 要求 provider 观测；RPM 与 LowestL
 
 Anthropic 转换需声明 `conversion: chatToAnthropic`，且候选全为 Anthropic。关闭观测时，转换器
 仍解析客户端协议需要的 usage，但不发布数值核算；有界 JSON 转换在提交前完成。
-原生 Responses/Messages 尚未实现，见[提供商](../../../../ai-gateway/providers.md)。
+原生 `openaiResponses` 和 `anthropicMessages` 已支持，省略 conversion 并关闭注入，见[提供商](../../../../ai-gateway/providers.md)。

@@ -16,6 +16,43 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    Pending,
+    Success,
+    RpcStatus,
+    MissingStatus,
+    InvalidFraming,
+    InvalidMedia,
+    Expired,
+    OutputLimit,
+    Interrupted,
+    OwnerConflict,
+}
+impl Outcome {
+    fn failure(self) -> bool {
+        !matches!(self, Self::Pending | Self::Success)
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Pending | Self::Interrupted => "exchange interrupted",
+            Self::Success => "exchange completed",
+            Self::RpcStatus => "upstream status failed",
+            Self::MissingStatus => "terminal status invalid",
+            Self::InvalidFraming => "response framing invalid",
+            Self::InvalidMedia => "response media invalid",
+            Self::Expired => "exchange deadline expired",
+            Self::OutputLimit => "output budget exhausted",
+            Self::OwnerConflict => "conversion owner conflict",
+        }
+    }
+}
+struct TerminalOutcome {
+    kind: Outcome,
+    status: Option<u8>,
+    logged: bool,
+}
+
 /// Request-owned upstream RPC intent. This never changes downstream protocol flags.
 pub struct GrpcTranscodingPlan {
     pub(crate) compiled: Arc<CompiledGrpcTranscoder>,
@@ -29,6 +66,7 @@ pub struct GrpcTranscodingPlan {
     pub(crate) template: Mutex<Option<ResponseHeader>>,
     pub(crate) ready: Mutex<Option<ResponseHeadReplacement>>,
     pub(crate) terminal: Mutex<Option<bytes::Bytes>>,
+    outcome: Mutex<TerminalOutcome>,
 }
 impl GrpcTranscodingPlan {
     pub(super) fn new(
@@ -49,10 +87,74 @@ impl GrpcTranscodingPlan {
             template: Mutex::new(None),
             ready: Mutex::new(None),
             terminal: Mutex::new(None),
+            outcome: Mutex::new(TerminalOutcome {
+                kind: Outcome::Pending,
+                status: None,
+                logged: false,
+            }),
         }
     }
     pub(crate) fn output(&self, bytes: Vec<u8>) -> Result<bytes::Bytes, ()> {
-        self.reservation.lock().as_ref().ok_or(())?.output(bytes)
+        let result = self.reservation.lock().as_ref().ok_or(())?.output(bytes);
+        if result.is_err() {
+            self.record(Outcome::OutputLimit);
+        }
+        result
+    }
+    pub(crate) fn record(&self, kind: Outcome) {
+        let mut outcome = self.outcome.lock();
+        if !outcome.kind.failure() {
+            outcome.kind = kind;
+        }
+    }
+    pub(crate) fn record_status(&self, status: u8) {
+        self.outcome.lock().status.get_or_insert(status);
+    }
+    pub(crate) fn interrupted(&self) {
+        let mut outcome = self.outcome.lock();
+        if outcome.kind == Outcome::Pending {
+            outcome.kind = Outcome::Interrupted;
+        }
+    }
+    pub(crate) fn response_valid(&self) -> bool {
+        if self.conflict.load(Ordering::Acquire) {
+            self.record(Outcome::OwnerConflict);
+            return false;
+        }
+        if self.expired() {
+            self.record(Outcome::Expired);
+            return false;
+        }
+        !self.invalid_response.load(Ordering::Acquire)
+    }
+    pub(crate) fn finalize_log(&self, ctx: &mut EdgionHttpContext) {
+        self.interrupted();
+        let mut outcome = self.outcome.lock();
+        if outcome.logged {
+            return;
+        }
+        outcome.logged = true;
+        if let Some(status) = outcome.status {
+            ctx.request_info.set_grpc_status(status.into());
+        }
+        // Enrich the one request-stage plugin entry after all streaming work.
+        for stage in ctx.stage_logs_mut() {
+            for log in stage.filters.iter_mut().chain(
+                stage
+                    .edgion_plugins
+                    .iter_mut()
+                    .flat_map(|resource| resource.logs.iter_mut()),
+            ) {
+                if log.name == "GrpcJsonTranscoder" {
+                    if outcome.kind.failure() {
+                        log.push_err(outcome.kind.label());
+                    } else {
+                        log.push(outcome.kind.label());
+                    }
+                    return;
+                }
+            }
+        }
     }
     pub(crate) fn release_reservation(&self) {
         self.reservation.lock().take();
@@ -65,18 +167,19 @@ impl GrpcTranscodingPlan {
     }
     pub(crate) fn reject_mutation(&self) {
         self.conflict.store(true, Ordering::Release);
+        self.record(Outcome::OwnerConflict);
     }
     pub(crate) fn head_plan(
         &self,
         source: ResponseHeadSource,
         response: &ResponseHeader,
     ) -> pingora_core::Result<ResponseHeadCommitPlan> {
-        if self.expired()
-            || self.invalid_response.load(Ordering::Acquire)
+        if !self.response_valid()
             || source != ResponseHeadSource::Origin
             || response.status.as_u16() != 200
             || !super::response::json_headers_valid(response, self.streaming(), self.compiled.format)
         {
+            self.record(Outcome::InvalidMedia);
             return Err(failure());
         }
         if self.streaming() {
@@ -103,11 +206,12 @@ impl GrpcTranscodingPlan {
         )))
     }
     pub(crate) fn boundary(&self, boundary: ResponseHeadBoundary) -> ResponseHeadBoundaryAction {
-        if boundary == ResponseHeadBoundary::CleanTerminalWithoutDecision && !self.expired() {
+        if self.response_valid() && boundary == ResponseHeadBoundary::CleanTerminalWithoutDecision {
             if let Some(ready) = self.ready.lock().take() {
                 return ResponseHeadBoundaryAction::Replace(ready);
             }
         }
+        self.record(Outcome::Interrupted);
         self.ready.lock().take();
         ResponseHeadBoundaryAction::Fail(failure())
     }
@@ -127,9 +231,11 @@ pub(crate) fn validate_request(request: &RequestHeader, ctx: &EdgionHttpContext)
     let Some(plan) = &ctx.grpc_transcoding else {
         return Ok(());
     };
-    if plan.conflict.load(Ordering::Acquire)
-        || ctx.has_request_body_stream_handlers()
-        || plan.expired()
+    if ctx.has_request_body_stream_handlers() || ctx.ai_state().is_some() {
+        plan.reject_mutation();
+        return Err(failure());
+    }
+    if !plan.response_valid()
         || request.method != http::Method::POST
         || request.uri.path_and_query().map(|p| p.as_str()) != Some(plan.binding.rpc_path.as_str())
         || ctx.request_body.generation() != plan.generation

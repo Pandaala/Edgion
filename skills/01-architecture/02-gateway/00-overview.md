@@ -47,8 +47,12 @@ body cache or request-path wrapper. Explicit bounded unary conversion is describ
 Logical backend identities, shared backend policy/retry budgets, BodyStorage, the
 SSE decoder/RawWindow, clients/TLS/egress/DNS, Redis limiter, key extraction,
 conditions and observability retain their canonical shared owners. The refactor
-introduces no provider support or new wire behavior. Native Responses, Messages,
-Gemini and Bedrock support remain pending product tasks. Task 02 removed usage-only
+introduces no provider support or new wire behavior. Native POST /v1/responses
+(OpenAI) and POST /v1/messages (Anthropic) are now implemented by their protocol owners.
+Both omit conversion and usage injection and currently reject AiGuard/Guardrail.
+Observation defaults off; enabled observation reuses bounded JSON/SSE parsing and
+canonical settlement with valid provider-reported consumption only. Gemini and
+Bedrock remain pending product tasks. Task 02 removed usage-only
 JSON retention; Task 03 completed bounded unary conversion and final acceptance.
 
 The [HTTP body rules](../../../AGENTS.md#http-body-handling-invariants) allow a
@@ -284,3 +288,31 @@ are admitted. Encoded custom/uninterpreted options, unknown descriptor fields an
 relative extension extendees are rejected; supplied reserved field shapes are checked
 against the trusted schema. HTTP annotation descendants consume the cold depth/node
 budget. The operator guide describes these descriptor restrictions.
+
+## HTTPRoute GraphQL operation routing
+
+GraphqlOperationRouter selects a declared Service backend inside an already
+matched, undelegated HTTPRoute rule. Shared graphql_request frontends own bounded
+GET/POST envelopes, syntax and verified operation selection; cost evaluation stays
+in graphql_cost. Gateway common/graphql_request owns transport checks and four
+nonwaiting evaluation permits shared with GraphqlRateLimit, GraphqlGuard and GraphqlSafelist, released before any
+upstream or Redis await. No second body cache or response aggregation is added.
+
+Resources separates raw source-enabled structural binding from effective chain
+composition. Controller only invalidates structurally illegal attachments through
+existing rule status/requeue paths. PluginPublisher::rule_admission validates
+current raw sources and effective scoped views together and publishes its decision
+with the existing Weak route Arc/index token. Conditions and Bypass cannot repair
+undeclared mappings/defaults; effective masks can remove conflicting publishers.
+
+The request gate checks the captured token after policy Block preflight. The
+plugin reuses the compiled named target matcher and ReferenceGrant check, then
+publishes a strict jump through the canonical context owner. Later conflicting
+publication seals the exchange before upstream I/O. The canonical selected-backend
+compatibility guard checks AI/transcoding owners in the selected runtime and pinned
+backend ExtensionRefs before their execution; unselected candidates remain inert.
+Router generations cannot
+retain stale whole-resource DSL/WAF last-known-good routing policy.
+
+See [operator configuration](../../../docs/en/user-guide/http-route/filters/edgion-plugins/graphql-operation-router.md)
+and [review guard](../../04-review/routing/regression-guards/graphql-operation-router-declared-backends.md).

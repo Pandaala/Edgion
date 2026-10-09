@@ -109,7 +109,7 @@ ordered findings, TX/captures and later phases; its enlarged reference work cap
 is never a production override. Exact compiler/constructor budget boundaries,
 mask lifecycle and typed-control counterexamples are regression gates. Re-evaluate
 the proof when adding TX-writing actions, capture aliases, target controls,
-scheduler edges or consumers. The reviewed implementation record was `tasks/pending/waf-demand-driven/04-verification.md`; that historical task file is absent from the current tree.
+scheduler edges or consumers.
 
 ## Alternatives and limits
 
@@ -136,34 +136,22 @@ independent component peaks are not a simultaneous aggregate peak.
 
 ## Verification and re-evaluation
 
-JSON classification reports must distinguish historical analyst conclusions from
-the replacement implementation. CAND-local-001 corrected retired narrow-lane,
-always-copy, production-serde-number and fixed-depth descriptions in
-`tasks/pending/waf-json-rule-classification/`. Its current contract and inventories
-are bound to a separately hashed source manifest; each member assessment leaves
-original-unit compiler admission and runtime acceptance explicitly untested.
-Original reports and corpus bodies remain unchanged. Verification defaults to
-read-only current scoped hashes or historical `git show` evidence and publishes
-only explicitly requested separate result files. Isolated regeneration must
-preserve the current overlay and original attribution. Re-evaluate the assessment
-and source manifest after any relevant compiler, parser or Gateway entry change;
-never infer current support from a historical category or old pass record.
+Historical rule classification is not compiler admission or runtime acceptance.
+Retired narrow-lane, always-copy, production-serde-number and fixed-depth
+reports were superseded by the current bounded implementation. The old analyst
+reports, source snapshots and execution queues were removed during task cleanup;
+this page retains the reusable contract rather than a task transcript.
+Use `config/waf/crs-4.25.1-supported-v1/` and the canonical test fixtures for
+source inventory and executable acceptance. Re-evaluate support against current
+compiler/parser/Gateway code after relevant changes.
 
-The classification reconciliation remains a frozen `5554f0c` baseline after
-native XML extends shared compiler/collector/transaction and Gateway files.
-Current-worktree hashes can therefore differ intentionally; do not refresh the
-manifest to imply new original-rule validation. XML shares the selected-result
-and replay engine under an explicit domain; see
-[the XML regression guard](native-xml-inspection.md) for its separate projection
-and physical-error contract. JSON-only summary optimizations remain JSON-only.
+XML shares selected results and replay under an explicit domain; see
+[the XML regression guard](native-xml-inspection.md). JSON-only summary
+optimizations remain JSON-only. Structural JSONPath and unsupported broad
+dynamic dependencies do not gain a DOM fallback through historical categories.
 
-The historical `tasks/pending/waf-json-checker/` records are retained in the
-working tree. Capture wiring and closure were tracked in the historical
-`tasks/waf-todo/16-json-capture-wiring-and-closure.md` task, which is no longer
-present in the working tree.
-Prior test and measurement results below are historical evidence, not proof of
-the new entry. Remaining WAF work is tracked in the
-[current execution queue](../../../../tasks/waf-todo/README.md).
+Prior test and measurement results below are historical evidence, not fresh
+verification or a whole-Gateway performance claim.
 
 C1 independent review approved the replacement and legacy assertion mapping;
 508 WAF library tests passed with two existing ignored cases, and API 4/4 passed.
@@ -353,3 +341,160 @@ verdicts remain unchanged. Selective coverage is additive: preserve the existing
 test identities and compare whole, byte and mixed schedules under every budget.
 The fresh supporting full WAF library run for Task 02 passed 642 tests with two
 ignored; this is a dated implementation result, not a substitute for revalidation.
+
+## Optional capture hit batches
+
+`capture_hit_plan` compiles generation-owned boolean shadows after all required
+plans, borrowing the still-live validated source arena. Ordinary matcher inventory
+and original capture programs remain distinct. Source-member target/transform
+identity determines candidate roots; each JSON/XML domain maps them through its
+canonical StaticFact groups. Canonical peer aliases can cross target plans, so a
+later overlapping ownership candidate falls back. Empty domains retain no optional
+metadata. Compiler record work, source/pattern/program counts, capacities, compile
+overlap and lazy request scratch are bounded before publication. All optional
+state publishes atomically; budget/build fallback never suppresses required source
+validation. Only pre-build peak refusal permits bounded source-order halving.
+
+A borrowed field/profile/stage may use a shadow only when every peer is selected,
+active and nonterminal at stage entry. The eligible set is frozen for that stage;
+next stages recompute it, including after multiMatch terminals. Stamp wrap clears
+stale selection evidence. Stage-owned cached bits establish positive existence;
+original negation and LeftmostFirst extraction still own exact capture semantics,
+checkpoint errors and aliases. Reference mode retains individual detection. Never
+run capture extraction for misses or retain per-field predicate matrices. Constructor
+scratch envelopes include optional engines even though their caches initialize
+only on use; report that cost separately from observed heap and actual latency.
+
+Directed owners are the capture-hit compiler, collector, JSON/XML replay tests and
+explicit release witness under the canonical unit-test tree. Re-evaluate on source
+profile, group aliasing, dispatch order, cache namespace, epoch, checkpoint, compiler
+fallback or scratch-envelope changes. Synthetic timings do not establish a complete
+CRS or Gateway speedup.
+
+## Ordinary current-input scan reuse
+
+Ordinary Accelerated boolean Matcher operands may reuse one group's existing
+result bits only for consecutive immutable request-arena ranges with the same
+canonical transformation plan and without multiMatch. The inline signature
+retains no bytes and has zero Vec capacity. Different source ranges, profiles,
+uncacheable operands and common phase entry invalidate it; the direct prefix
+matcher writer also invalidates it before touching scratch. Collector stage
+caches remain separate. Transformations, logical charges, negation and ordered
+rule/TX effects execute normally. A marker publishes only after successful scan
+and range validation. Scratch/generation ownership belongs to the transaction;
+range checks alone do not authenticate arbitrary same-shaped foreign scratch.
+
+Directed transaction tests compare physical scan counts and ordered outcomes
+against Reference, and cover duplicate fields, profile switches, TX/captures,
+multiMatch and prefix/phase invalidation. Re-evaluate on any new direct scratch
+writer, mutable request arena or non-deterministic transformation.
+
+Current raw-name selector admission and subscription dispatch reuse successful
+boolean results within one collect_value call using two inline u64 words. The
+name stays immutable for that call; new JSON fields and XML attributes construct
+fresh state. Program IDs >=64 and Reference execution use original searches.
+Work charges and program/slot bounds validation precede reuse. Explicit target
+exclusions remain canonical replay work. No names, overflow allocation or field
+matrix are retained. Re-evaluate on selector ownership/profile or field lifetime
+changes; physical call-count tests do not establish total request latency.
+
+## Optional necessary-prefix regex guards
+
+Compiler publication attaches guards only after all required plans and optional
+capture shadows. Proof walks each validated NFA start_pattern along mandatory
+singleton byte/epsilon edges. Branches/classes/Dense stop proof; every pattern
+must yield >=3 bytes. Absolute-start anchored programs decline guards. Proof
+has64-pattern/256-byte/8192-operation bounds and charges visits and copies.
+
+Native AC only rejects a negative union on >=64-byte inputs; any candidate is
+confirmed by the original whole-input VM. Grouped Reference bypasses guards.
+Scratch ownership validation and cleared result bits precede misses. Captures
+remain exact. Final global and per-program retained/peak budgets own optional
+attachment, with no subsequent required allocation. Proof frames are pre-admitted
+and their fallback peaks recorded. Actual heap capacities are retained charges;
+admitted failed builds charge peak only. Budget/proof/build fallback keeps original
+matching and never suppresses required validation.
+
+An additional128KiB guard-local projection covers the native prefilter's transient
+64KiB two-gram table, packed buffers, growth overlap and auxiliary state. Recheck
+that bound when its constants/allocation change. This explicitly accounts for
+temporary storage absent from the native post-build diagnostic, without claiming
+the generic AC projection was changed. Before exact lowering, boolean programs gained24 inline bytes;
+capture program layout and request engine scratch are unchanged. Original-package
+coverage is deliberately narrow; synthetic speedups do not establish CRS/Gateway
+latency. Exact/one-less optional build, tight global admission, VM parity,
+fanout and original supported package witnesses are regression gates.
+
+## Exact simple boolean regex execution
+
+The final optional pass proves a singleton validated NFA path with at most16
+literal bytes and64 state/copy operations. Only absolute start/end looks,
+singleton byte transitions and capture/single-union epsilon transitions qualify.
+Bytes after end, branches, classes, other looks and exhausted proof budgets
+retain the VM. Empty predicates preserve boolean existence. Proof uses a
+pre-admitted256-byte envelope and charges successful or declined traversal work.
+
+A32-byte inline execution hint selects exact substring/prefix/suffix/equality
+comparison before necessary guards. Its overhead is eight bytes more than the
+previous guard Vec. The original required NFA stays for strict validation and
+Reference execution; there is no NFA-memory savings claim. Owner validation and
+cleared physical result bits precede comparison. Group fanout, captures, actions
+and replay remain canonical. Re-evaluate on NFA look semantics, supported proof
+shapes, hint layout, compiler pass order, or scratch-owner changes. Directed
+byte/Unicode/empty/anchor/fanout/budget tests and paired release witnesses are
+regression evidence; synthetic timing does not establish Gateway throughput.
+
+## Stage-cache membership storage
+
+The complete generation matcher namespace includes ordinary and optional
+capture-shadow engines. A namespace<=64 uses one u64 for current-stage
+membership, with the separately compiled per-domain logical capacity. A larger
+namespace uses the original bounded Vec, so a sparse high ID never aliases an
+inline bit or causes a global-size bitmap allocation. Constructor validates
+domain capacity against the complete namespace, reserves overflow fallibly and
+retains actual allocator capacity. Checked shifts, full insertion failures and
+post-scan/range publication prevent stale or invalid completion records.
+
+Ordinary current-input reuse owns Single replacement storage. Collector stages
+clear membership and retain the old constructor/reset work charges, including
+reservation work even when inline eliminates its heap. Current production
+cache storage measures24 bytes; collector heap accounting excludes inline
+owners. Do not claim matcher-scratch or body retention savings from this change.
+Re-evaluate on namespace, domain capacity, alias, engine-write or reset changes.
+Canonical cache tests cover58/64/65 namespaces, sparse high IDs, both modes,
+exact/one-less physical admission, failure non-mutation and capacity reuse.
+
+## Completed multi-pattern optimization evidence
+
+The completed A-H series interns selector programs (37 logical occurrences to
+12 programs), shares duplicate boolean patterns (66 to 60), adds 22 optional
+capture-hit engines with 72 patterns, reuses current-input/current-name results,
+and lowers proven simple patterns. Current 36 ordinary plus 22 shadow engines
+fit inline stage membership. Rule ordering, exact captures, Reference fallback,
+work charging and optional aggregate policy remain unchanged.
+
+The historical final comparison used CountingSystem over System in debug builds,
+three warmups and 31 samples per row: 28 rows cover seven fixtures, both profiles
+and both expensive-check settings. With expensive checks off, structured standard
+fixtures reduced cumulative requested bytes by 2.2-2.9% and extra live-heap peaks
+by 3.1-3.8%; strict fixtures reduced them by 9.4-11.7% and 11.7-13.2% respectively.
+Ordered outcomes, selected TX values and multipart counters matched the baseline;
+post-Drop live deltas were unchanged, not proven zero. Source bindings were
+checked against the unchanged WAF implementation at cleanup. Raw process artifacts
+were removed with completed tasks. These results do not measure Gateway latency,
+throughput or RSS. Establish fresh Gateway performance evidence using the
+[testing guide](../../../05-testing/01-integration-testing.md); the historical
+performance task record is absent and its removal does not establish measurement.
+
+Capture-hit acceleration adds generation memory and conservative admission cost:
+its measured engine-plus-metadata delta was 668,878 bytes and incremental scratch
+envelope 2,567,160 bytes, including empty slots; engine caches stay lazy. Final
+reported generation retention was 9,221,804 bytes and conservative compile peak
+1,048,458,311 bytes under the unchanged 1 GiB cap. Compiler forecasts exclude
+allocator fragmentation and are not observed process memory.
+
+Historical combined verification passed 776 library and 19 integration tests
+(with existing ignored cases), workspace all-target check/clippy, both original
+fixture targets, and live WafDynamic/WafExpensiveChecks scenarios. Re-run relevant
+gates after implementation changes; these counts are historical, not certification
+of arbitrary CRS configurations or full response-body support.

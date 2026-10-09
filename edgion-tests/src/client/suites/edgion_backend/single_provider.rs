@@ -267,10 +267,6 @@ fn quota_bucket_key_for_plugin(plugin: &[u8], identity: &str, window_id: u64) ->
         .map_err(|error| format!("failed to derive Redis quota bucket key: {error}"))
 }
 
-fn quota_bucket_key(identity: &str, window_id: u64) -> Result<String, String> {
-    quota_bucket_key_for_plugin(b"edgion-test/ai-proxy-quota/#0", identity, window_id)
-}
-
 async fn quota_bucket_used(ctx: &TestContext, key: &str) -> Result<Option<u64>, String> {
     let encoded_key = utf8_percent_encode(key, NON_ALPHANUMERIC);
     let url = format!(
@@ -307,8 +303,9 @@ async fn quota_bucket_used(ctx: &TestContext, key: &str) -> Result<Option<u64>, 
         .and_then(|value| value.parse::<u64>().ok()))
 }
 
-async fn quota_bucket_used_between(
+async fn quota_bucket_used_between_for_plugin(
     ctx: &TestContext,
+    plugin: &[u8],
     identity: &str,
     before_ms: u128,
     after_ms: u128,
@@ -319,12 +316,21 @@ async fn quota_bucket_used_between(
         window_ids.push(after_window);
     }
     for window_id in window_ids {
-        let key = quota_bucket_key(identity, window_id)?;
+        let key = quota_bucket_key_for_plugin(plugin, identity, window_id)?;
         if let Some(used) = quota_bucket_used(ctx, &key).await? {
             return Ok((key, used));
         }
     }
-    Err("the expected Redis quota bucket was not found".to_string())
+    Err("the expected Redis quota bucket was not found".to_owned())
+}
+
+async fn quota_bucket_used_between(
+    ctx: &TestContext,
+    identity: &str,
+    before_ms: u128,
+    after_ms: u128,
+) -> Result<(String, u64), String> {
+    quota_bucket_used_between_for_plugin(ctx, b"edgion-test/ai-proxy-quota/#0", identity, before_ms, after_ms).await
 }
 
 async fn terminate_quota_bucket_used_between(
@@ -1296,6 +1302,117 @@ fn streaming_client_disconnect_finalizes_once(
                 "client disconnected after three SSE frames; provider cancelled, one incomplete attempt logged, and {used} estimated tokens reconciled"
             ),
         )
+    })
+}
+
+fn priority_retry_business_quota(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        let result = async {
+            let identity = format!("retry-quota-{}", uuid::Uuid::new_v4());
+            let marker = format!("retry-quota-first-{}", uuid::Uuid::new_v4());
+            let request = json!({"model":"fixture-model","messages":[{"role":"user","content":"retry fixture"}]});
+            let before_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let response = post_with_quota_identity_on_host(
+                &ctx,
+                "ai-retry-quota.example.com",
+                &identity,
+                request.clone(),
+                "",
+                Some(&marker),
+            )
+            .await?;
+            if response.status() != 200 {
+                return Err(format!("retry quota expected 200, got {}", response.status()));
+            }
+            let text = response.text().await.map_err(|e| e.to_string())?;
+            if !text.contains("fixed completion") {
+                return Err("retry quota did not reach healthy provider".into());
+            }
+            let client = ctx.access_log_client();
+            let entry = client
+                .get_access_log_with_retry(&marker, 15, 200)
+                .await
+                .map_err(|e| e.to_string())?;
+            client.require_single_write(&marker).await.map_err(|e| e.to_string())?;
+            let genai = &entry.data["genai"];
+            let attempts = genai["attempts"].as_array().ok_or("missing retry attempts")?;
+            if attempts.len() != 2
+                || genai["attempts_truncated"] == true
+                || attempts[0]["status"] != 503
+                || attempts[0]["failure"] != "retryable_status"
+                || attempts[0]["usage_source"] != "estimated"
+                || attempts[0]["output_tokens"] != 0
+                || attempts[1]["status"] != 200
+                || !attempts[1]["failure"].is_null()
+                || attempts[1]["usage_source"] != "reported"
+                || attempts[1]["input_tokens"] != 11
+                || attempts[1]["output_tokens"] != 7
+            {
+                return Err(format!("invalid retry quota ledger: {genai}"));
+            }
+            let failed_input = attempts[0]["input_tokens"]
+                .as_u64()
+                .ok_or("missing estimated failed input")?;
+            if failed_input <= 2 {
+                return Err("retry fixture cannot discriminate successful-only charging".into());
+            }
+            let total = failed_input + 18;
+            if genai["input_tokens"] != 11 || genai["output_tokens"] != 7 || genai["quota_status"] != "over_limit" {
+                return Err(format!("retry winning-response summary changed: {genai}"));
+            }
+            let after_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let (_, used) = quota_bucket_used_between_for_plugin(
+                &ctx,
+                b"edgion-test/ai-proxy-priority-retry-quota/#0",
+                &identity,
+                before_ms,
+                after_ms,
+            )
+            .await?;
+            if used != total {
+                return Err(format!("Redis charged {used}, expected all attempts {total}"));
+            }
+            let followup = format!("retry-quota-reject-{}", uuid::Uuid::new_v4());
+            let response = post_with_quota_identity_on_host(
+                &ctx,
+                "ai-retry-quota.example.com",
+                &identity,
+                request,
+                "",
+                Some(&followup),
+            )
+            .await?;
+            if response.status() != 429 {
+                return Err(format!("retry sum did not close next admission: {}", response.status()));
+            }
+            response.bytes().await.map_err(|e| e.to_string())?;
+            let entry = client
+                .get_access_log_with_retry(&followup, 15, 200)
+                .await
+                .map_err(|e| e.to_string())?;
+            client
+                .require_single_write(&followup)
+                .await
+                .map_err(|e| e.to_string())?;
+            if entry.upstream_count() != 0 {
+                return Err("quota rejection dispatched another attempt".into());
+            }
+            Ok::<(), String>(())
+        }
+        .await;
+        match result {
+            Ok(()) => TestResult::passed(start.elapsed()),
+            Err(e) => TestResult::failed(start.elapsed(), e),
+        }
     })
 }
 
@@ -2968,6 +3085,11 @@ impl TestSuite for SingleProviderTestSuite {
                 "streaming_client_disconnect_finalizes_once",
                 "A downstream disconnect cancels the provider stream and finalizes estimated usage exactly once",
                 streaming_client_disconnect_finalizes_once,
+            ),
+            TestCase::new(
+                "priority_retry_business_quota",
+                "Business Redis quota charges failed and successful dispatched attempts",
+                priority_retry_business_quota,
             ),
             TestCase::new(
                 "priority_retry_attempt_ledger",

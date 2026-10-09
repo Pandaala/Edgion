@@ -19,7 +19,11 @@ SSE terminal type/status must agree; partial EOS tails, oversized events or malf
 invalidate numeric accounting. JSON cancelled is terminal; no response.cancelled SSE is assumed.
 Completed without usage can provide a success fact while billing stays unknown; failed/incomplete/
 cancelled never teach credential health or adaptive TTFT success. Off installs no parser and permits
-transport latency only. Later transport truncation retains reservation regardless of an earlier total.
+transport latency without asserting model completion or numeric usage. Credential transport health
+is separate: a dispatched 2xx exchange with real EOS, no failure verdict and no gateway termination
+resets consecutive transport failures and completes a generation-valid half-open probe, including
+config-free Retry-After cooldowns. Ordinary concurrent success must not clear an explicit cooldown.
+Later transport truncation retains reservation regardless of an earlier total.
 
 Continuation checks raw backend slots and raw credential bindings before eligibility filters.
 Controller preserves declarations; Gateway records declared_credential_count independently of the
@@ -38,3 +42,11 @@ credential installation, after backend modifiers, for all managed AI requests. S
 reserved-target validation also rejects them to prevent later reconcile_request reintroduction.
 A one-binding check alone does not isolate a legacy key with caller-controlled project selectors.
 Use fixed operator-owned principals/project-scoped keys; no selector override config is introduced.
+
+Responses request validation checks the complete byte slice with `from_utf8` before
+selective serde deserialization. Skipping ignored string fields does not establish
+UTF-8 validity in the locked serde_json visitor. Invalid input/extension strings are
+MalformedBody (400) before observation, model rewrite or dispatch, including nested
+ignored values. Parser and canonical-request unit regressions and the Responses
+`malformed_utf8` shared-topology case cover off/provider observation and unchanged/
+aliased models. The new live case awaits fresh parent acceptance for this correction.

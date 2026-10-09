@@ -101,9 +101,13 @@ come from lexer-admitted source; Full non-JSON records submitted bytes once and
 prefix retains its current accounting. No replay/per-rule byte multiplication.
 The phase execution timer still excludes body capture and parser publication.
 
-The former `16-json-capture-wiring-and-closure.md` plan is no longer in the
-active task tree. Current validation work is tracked in the
-[WAF execution queue](../../../../tasks/waf-todo/README.md).
+Completed execution plans were removed during task cleanup. Current structured
+inspection contracts live in the [JSON guard](../../waf/regression-guards/fused-json-inspection.md)
+and [XML guard](../../waf/regression-guards/native-xml-inspection.md).
+Gateway performance and Kubernetes admission/reload require fresh verification
+using the [testing guide](../../../05-testing/01-integration-testing.md). The
+historical task records are absent from the current tree; their removal does
+not establish completed validation.
 Historical prefix evidence below does not prove current JSON timing or wire gates.
 
 Prefix rules execute lazily in the canonical phase schedule. An enforced deny
@@ -139,12 +143,11 @@ switching, a 1 MiB prefix, invalid-generation retention, detection-only, and
 delete/recovery. The wire fixture must use a domain URL with an explicit local
 address mapping so H2 authority and Host agree; its H1 backend version marker
 is `1.1`. Both fixture corrections retain the strict forwarding assertions.
-The prefix implementation and discard correction are consolidated into one
-commit on local `edgion_v5`. Edgion's manifest and lockfile select that branch
-and commit through the canonical Git source, without a path override. Remote
-publication remains pending under the user's no-push instruction.
-The active task stays open until remote publication and clean remote-source
-verification pass. This wire result does not prove trailer preservation.
+The historical prefix/discard work is integrated into the current supported
+Edgion Pingora fork. Cargo.toml selects `edgion_0.9.0_v1`; Cargo.lock pins the
+canonical Git revision. The earlier local `edgion_v5` publication note is
+superseded and is not an outstanding WAF task.
+This historical wire result does not prove trailer preservation.
 Re-evaluate when adding rule shapes, changing the prefix window, enabling prefix
 retry, changing body source ownership, or allowing post-inspection body mutation.
 

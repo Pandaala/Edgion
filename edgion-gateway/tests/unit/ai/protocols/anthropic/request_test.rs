@@ -1,0 +1,82 @@
+use super::*;
+#[test]
+fn native_zero_and_extensions_are_borrowed_and_model_rewrite_is_local() {
+    let body = Bytes::from(format!(
+        r#" {{ "model" : "claude-fixture", "max_tokens":0,"stream":true,"messages":[{{"role":"user","content":[{{"type":"text","text":"{}"}}]}}],"cache_control":{{"type":"ephemeral"}},"native":{{"keep":true}} }} "#,
+        "x".repeat(256 * 1024)
+    ));
+    let m = metadata(&body).unwrap();
+    assert_eq!(m.output_bound, 0);
+    assert!(m.streaming);
+    assert!(!m.binding);
+    assert!(rewrite_model(&body, "claude-fixture").unwrap().is_none());
+    let out = rewrite_model(&body, "other").unwrap().unwrap();
+    let expected = String::from_utf8(body.to_vec())
+        .unwrap()
+        .replacen("\"claude-fixture\"", "\"other\"", 1);
+    assert_eq!(out, Bytes::from(expected));
+}
+#[test]
+fn selected_fields_reject_invalid_types_duplicates_and_missing_output() {
+    for tail in [
+        r#""max_tokens":-1"#,
+        r#""max_tokens":1.0"#,
+        r#""max_tokens":null"#,
+        r#""max_tokens":18446744073709551616"#,
+        r#""max_tokens":1,"stream":"true""#,
+        r#""max_tokens":1,"model":"again""#,
+    ] {
+        assert!(
+            metadata(format!(r#"{{"model":"m",{tail}}}"#).as_bytes()).is_err(),
+            "{tail}"
+        );
+    }
+    assert!(matches!(
+        metadata(br#"{"model":"m"}"#),
+        Err(AiProxyError::MissingRequiredParameter)
+    ));
+}
+#[test]
+fn declared_native_state_paths_require_binding_without_decoding_history() {
+    for body in [
+        r#""container":"container-id""#,
+        r#""container":{"id":"container-id"}"#,
+        r#""messages":[{"content":[{"type":"thinking","thinking":"private","signature":"opaque"}]}]"#,
+        r#""messages":[{"content":[{"type":"redacted_thinking","data":"opaque"}]}]"#,
+        r#""messages":[{"content":[{"type":"document","source":{"type":"file","file_id":"file-id"}}]}]"#,
+        r#""messages":[{"content":[{"type":"container_upload","file_id":"file-id"}]}]"#,
+    ] {
+        assert!(
+            metadata(format!(r#"{{"model":"m","max_tokens":0,{body}}}"#).as_bytes())
+                .unwrap()
+                .binding,
+            "{body}"
+        );
+    }
+    assert!(!metadata(br#"{"model":"m","max_tokens":1,"container":{"skills":[]},"messages":[{"content":[{"type":"tool_use","id":"tool","input":{"file_id":"ordinary"}}]}]}"#).unwrap().binding);
+}
+#[test]
+fn composite_markers_distinguish_enabled_inference_from_replayed_history() {
+    for extra in [
+        r#""fallbacks":"default""#,
+        r#""fallbacks":["m"]"#,
+        r#""tools":[{"type":"advisor_20260301","model":"advisor-model"}]"#,
+        r#""context_management":{"edits":[{"type":"compact_20260112"}]}"#,
+        r#""compaction":{"type":"summarize"}"#,
+        r#""messages":[{"content":[{"type":"tool_addition","tool":{"type":"tool_definition","definition":{"type":"advisor_20260301"}}}]}]"#,
+    ] {
+        assert!(
+            metadata(format!(r#"{{"model":"m","max_tokens":1,{extra}}}"#).as_bytes())
+                .unwrap()
+                .composite,
+            "{extra}"
+        );
+    }
+    assert!(!metadata(br#"{"model":"m","max_tokens":1,"fallbacks":[],"tools":[{"name":"advisor","input_schema":{}}],"context_management":{"edits":[{"type":"clear_tool_uses_20250919"}]},"messages":[{"content":[{"type":"compaction","content":"old"}]}]}"#).unwrap().composite);
+}
+
+#[test]
+fn nested_tool_result_file_reference_requires_one_binding() {
+    let body=br#"{"model":"m","max_tokens":1,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_fixture","content":[{"type":"document","source":{"type":"file","file_id":"f"}}]}]}]}"#;
+    assert!(metadata(body).unwrap().binding);
+}

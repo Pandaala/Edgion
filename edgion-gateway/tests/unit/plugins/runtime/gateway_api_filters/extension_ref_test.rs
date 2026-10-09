@@ -129,6 +129,7 @@ async fn request_extension_suppresses_inner_waf_plugin_log() {
     let inner_for_resolve = Arc::clone(&inner);
 
     let mut session = MockPluginSession::new();
+    session.expect_ctx().return_const(crate::EdgionHttpContext::default());
     session
         .expect_resolved_route_ext_ref()
         .with(eq(0usize))

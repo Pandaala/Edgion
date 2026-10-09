@@ -10,6 +10,17 @@ description: DSL builtin error-handling contract — which functions silently re
 
 ## Common error-handling shapes
 
+XML's frozen contract: malformed/unsupported parse returns nil (including Body
+input); missing getters/indices return nil; incompatible argument types raise
+TypeError; invalid construction raises fixed-detail ApiError; structural/payload
+bounds use XmlLimitExceeded and work exhaustion uses ValueWorkLimitExceeded.
+String result overflow uses StringTooLong with len=limit+1 as a lower bound when
+the bounded producer stops early; do not scan the rejected tail. Body XML scan/storage/physical/XML/work
+failures and every xml.set_body serialization/publication failure map to
+BodyAccess fixed 500, bypassing DslErrorPolicy. Never turn a resource limit into
+malformed nil. Xml handles reject implicit string coercion and cannot escape via
+ctx.set. See [bounded XML](../../04-review/dsl/regression-guards/bounded-xml-primitives.md).
+
 DSL builtins fall into three groups for invalid / boundary input. The group is the **contract**, not an accident — script authors rely on these shapes for null-safe pipelining, and changing a group is a behavior change that breaks deployed scripts.
 
 | Shape | Examples | When invalid / OOB |

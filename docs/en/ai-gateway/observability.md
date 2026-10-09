@@ -93,3 +93,11 @@ are excluded from successful credential-health and adaptive TTFT samples. With o
 transport TTFT remains available while model outcome is unobserved and no body parser is installed.
 Attempt failures may include provider_failed, provider_incomplete or provider_cancelled. A later
 transport truncation takes precedence and conservatively retains credential reservation.
+
+## Native Messages accounting
+
+Messages provider observation is reported-only, with cache-inclusive input and cumulative
+late numeric patches. Off stays notObserved. Unsupported versions/composite inference,
+missing terminal usage and malformed/encoded/incomplete streams stay unknown, with no
+character estimate. Native provider errors retain provider_failed even if a later stop arrives.
+See [the native subset](./providers.md#native-messages-subset).

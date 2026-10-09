@@ -9,7 +9,9 @@ protoc -I edgion-tests/proto/grpc_json_transcoding --include_imports \
 ```
 
 The TestService wire fields match the existing test-server service. CodecTest adds
-pure codec/WKT coverage without a network implementation. google/api annotations
+pure codec/WKT coverage without a network implementation. OverlapTest supplies
+deliberately intersecting HTTP annotations for publication rejection tests.
+google/api annotations
 and HTTP definitions are vendored test inputs from [Google APIs](https://github.com/googleapis/googleapis/tree/master/google/api),
 under their embedded Apache 2.0 notices. Generated integration ConfigMap/inline
 base64 values must be refreshed together when test.pb changes.

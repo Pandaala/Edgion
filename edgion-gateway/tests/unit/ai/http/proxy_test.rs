@@ -476,6 +476,7 @@ fn plan_debug_never_renders_canonical_body() {
         operation: crate::ai::runtime::attempt_plan::AiOperation::ChatCompletions,
         conversion: None,
         usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
+        observation_unavailable: false,
         body_generation: None,
         body_is_current: false,
         continuation: false,
@@ -658,4 +659,17 @@ fn responses_continuation_uses_raw_slots_and_bindings_before_filtering() {
         validate_continuation(&cfg, &[backend], &store.snapshot(), "model"),
         Err(AiProxyError::UnsupportedParameter)
     );
+}
+
+#[test]
+fn canonical_responses_invalid_utf8_is_a_client_error_before_model_or_observation() {
+    for body in [
+        b"{\"model\":\"m\",\"input\":\"\xff\"}".as_slice(),
+        b"{\"model\":\"alias\",\"extension\":{\"nested\":[\"\xff\"]}}",
+    ] {
+        assert!(matches!(
+            canonical_responses_request(Bytes::copy_from_slice(body)),
+            Err(AiProxyError::MalformedBody)
+        ));
+    }
 }

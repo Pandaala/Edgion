@@ -99,6 +99,24 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         // http.*
         ("http", "call") => Some(BuiltinId::HttpCall),
 
+        // xml.*
+        ("xml", "parse") => Some(BuiltinId::XmlParse),
+        ("xml", "kind") => Some(BuiltinId::XmlKind),
+        ("xml", "name") => Some(BuiltinId::XmlName),
+        ("xml", "namespace") => Some(BuiltinId::XmlNamespace),
+        ("xml", "value") => Some(BuiltinId::XmlValue),
+        ("xml", "child_count") => Some(BuiltinId::XmlChildCount),
+        ("xml", "child") => Some(BuiltinId::XmlChild),
+        ("xml", "find") => Some(BuiltinId::XmlFind),
+        ("xml", "attribute_count") => Some(BuiltinId::XmlAttributeCount),
+        ("xml", "attribute") => Some(BuiltinId::XmlAttribute),
+        ("xml", "attr_value") => Some(BuiltinId::XmlAttrValue),
+        ("xml", "text") => Some(BuiltinId::XmlText),
+        ("xml", "attr") => Some(BuiltinId::XmlAttr),
+        ("xml", "element") => Some(BuiltinId::XmlElement),
+        ("xml", "stringify") => Some(BuiltinId::XmlStringify),
+        ("xml", "set_body") => Some(BuiltinId::XmlSetBody),
+
         // redis.*
         ("redis", "get") => Some(BuiltinId::RedisGet),
         ("redis", "set") => Some(BuiltinId::RedisSet),
@@ -124,6 +142,19 @@ pub(crate) fn builtin_arity(id: &BuiltinId) -> BuiltinArity {
     use BuiltinArity::{Exact, RangeInclusive};
 
     match id {
+        BuiltinId::XmlParse
+        | BuiltinId::XmlKind
+        | BuiltinId::XmlName
+        | BuiltinId::XmlNamespace
+        | BuiltinId::XmlValue
+        | BuiltinId::XmlChildCount
+        | BuiltinId::XmlAttributeCount
+        | BuiltinId::XmlText
+        | BuiltinId::XmlStringify
+        | BuiltinId::XmlSetBody => Exact(1),
+        BuiltinId::XmlChild | BuiltinId::XmlAttribute => Exact(2),
+        BuiltinId::XmlAttrValue | BuiltinId::XmlAttr => Exact(3),
+        BuiltinId::XmlFind | BuiltinId::XmlElement => Exact(4),
         // req.* read — 0-arg (field access)
         BuiltinId::ReqMethod
         | BuiltinId::ReqPath

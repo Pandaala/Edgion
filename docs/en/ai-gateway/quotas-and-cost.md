@@ -213,3 +213,13 @@ provider sequence, or zero before one was observed. Overflow suppresses the diag
 local marker does not guarantee provider replay/order lineage after a malformed partial event.
 For Chat's character-estimation and two-malformed-event tolerance described above, keep the Chat
 dialect distinction; those fallback rules do not apply to Responses.
+
+## Native Messages quotas
+
+Messages reuses the same quota worker and terminal owner. Reported input includes cache
+creation/read tokens once; cumulative message_delta output advances the existing watermark.
+Observation off cannot use tokenQuota, credential TPM or LowestUsage. Required accounting
+rejects unsupported versions and recognized composite inference before provider dispatch.
+Unknown observations retain existing conservative reservation/settlement behavior. Active
+Reject closes with a native error event; Throttle/Downgrade do not acquire that behavior.
+Token estimates are provisional admission inputs and configured costs are not a provider invoice.

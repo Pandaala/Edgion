@@ -2,7 +2,9 @@
 
 本文档列出 EdgionDSL 所有内置函数，按功能分类组织。每个函数均给出完整签名、参数说明、返回值、限制条件和使用示例。
 
-**类型说明**：EdgionDSL 有 7 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`Body`（不透明的请求 body 句柄）、`List`（字符串列表，不可由用户直接构造）、`Map`（有序字符串键映射表；由 `http.call()` 返回，也可通过 `{key: expr}` 字面量构造）。
+**类型说明**：EdgionDSL 有 8 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`Body`（不透明的请求 body 句柄）、`List`（字符串列表，不可由用户直接构造）、`Map`（有序字符串键映射表；由 `http.call()` 返回，也可通过 `{"key": expr}` 字面量构造）。
+
+`Xml` 是第八种类型：不可变的不透明 XML 节点，通过 `xml.*` 原语访问。
 
 **阶段说明**：部分函数仅在特定执行阶段有效。`req.*` 写操作影响请求阶段；`resp.*` 读写操作适用于响应阶段。`grpc_error()` 在两个阶段均受支持。
 
@@ -2216,6 +2218,57 @@ if sig == nil {
 
 ---
 
+## 有界 XML 原语
+
+`Xml` 是不可变的元素、属性或文本句柄。元素和属性使用命名空间 URI 与局部名称作为身份，前缀只影响展示。子节点保留混合文本与元素的顺序及重复元素。普通属性保留顺序；命名空间声明属于作用域信息，不计入属性遍历。构造函数的 Map 键用作标签，插入顺序决定节点顺序。
+
+| 函数 | 参数 | 返回值 |
+|------|------|--------|
+| `xml.parse(source)` | `Str` 或 `req.body` | 根元素 `Xml`；格式错误或不支持的输入返回 `nil` |
+| `xml.kind(node)` | `Xml\|Nil` | `"element"`、`"attribute"`、`"text"` 或 `nil` |
+| `xml.name(node)` | `Xml\|Nil` | 局部名称；文本或缺失返回 `nil` |
+| `xml.namespace(node)` | `Xml\|Nil` | 命名空间 URI；无命名空间为 `""`；文本或缺失返回 `nil` |
+| `xml.value(node)` | `Xml\|Nil` | 属性/文本值，或元素后代文本的拼接；缺失返回 `nil` |
+| `xml.child_count(element)` | 元素 `Xml\|Nil` | 包含文本的有序子节点数量；缺失返回 `nil` |
+| `xml.child(element, index)` | 元素、从零开始的 `Int` | 有序子节点；负数或不存在的下标返回 `nil` |
+| `xml.find(element, namespace, name, occurrence)` | 元素、两个 `Str`、从零开始的 `Int` | 匹配的直接子元素；缺失或负数序号返回 `nil` |
+| `xml.attribute_count(element)` | 元素 `Xml\|Nil` | 普通属性数量；缺失返回 `nil` |
+| `xml.attribute(element, index)` | 元素、从零开始的 `Int` | 属性 `Xml`；负数或不存在的下标返回 `nil` |
+| `xml.attr_value(element, namespace, name)` | 元素、两个 `Str` | 属性值 `Str` 或 `nil` |
+| `xml.text(value)` | `Str` | 文本 `Xml` |
+| `xml.attr(namespace, name, value)` | 三个 `Str` | 属性 `Xml` |
+| `xml.element(namespace, name, attributes, children)` | 两个 `Str`、两个有序 `Map` | 元素 `Xml`；属性 Map 只接受属性，子节点 Map 只接受元素/文本 |
+| `xml.stringify(element)` | 元素 `Xml\|Nil` | 完整序列化 `Str`；缺失返回 `nil`；同时遵守 `maxStringLen` |
+| `xml.set_body(element)` | 元素 `Xml` | `nil`；完整序列化并检查上限后原子替换请求体 |
+
+支持 UTF-8 的 XML 1.0。CDATA 转为文本；注释、处理指令和声明经过验证后省略。遵守 XML 换行及属性空白归一化，数字字符引用保留其引用的空白。序列化生成确定的显式前缀并转义标记字符及受归一化影响的字符，保留展开名称与文本语义，不保留原始格式。
+同一元素中相同命名空间 URI 复用前缀，输出声明也遵守每个元素 64 个的上限。单独序列化子树可能需要额外本地绑定，超过上限时返回命名空间上限错误。
+支持的声明子集要求 `<?xml` 后首先出现 ASCII 空格；该位置的制表符、CR 或 LF 暂不支持，解析返回 `nil`。
+
+DTD（含空 DTD）、自定义/外部实体、XInclude、非法 XML 字符以及不支持的编码/版本声明使解析返回 `nil`。仅解码预定义实体和合法数字字符引用。不会访问实体、样式表、Schema 或 include URL；不提供 XML Schema/WSDL 验证及自动 XML 转 JSON 映射。
+
+局部名称必须是 NCName。非法字符/名称、重复展开属性名、错误节点种类、保留的 `xmlns` 或 XInclude 命名空间导致构造函数抛出 `ApiError`。标准 XML 命名空间使用 `xml` 前缀。getter 的非 XML/非 nil 输入及错误参数类型抛出 `TypeError`。`Xml` 不支持隐式字符串转换，包括 `to_str`、拼接、请求头、日志和 `ctx.set`；应使用 `xml.value` 或 `xml.stringify`。相等比较表示同一个不可变句柄，不是结构相等。
+
+硬上限：输入、序列化输出及展开子树解码数据各为 1 MiB；深度 32；4,096 个展开元素/文本节点及 4,096 个属性；每个元素 64 个普通属性及 64 个命名空间声明；前缀/局部名称 256 字节；命名空间 URI 1,024 字节。共享节点的每次逻辑出现均计数。解析、构造、遍历与序列化消耗现有累计 VM Value 工作预算，超过上限不会截断。
+
+`xml.parse(req.body)` 通过共享请求体存储读取当前代，支持落盘，并遵守已解析的物理上限及 `maxBodyScanPasses`。格式错误仍返回 `nil`，鉴权脚本必须明确拒绝。请求体存储/扫描/XML/工作预算失败及 `xml.set_body` 序列化/发布失败始终返回固定 500 `Request body processing failed`，不受 `errorPolicy` 影响。字符串 XML 上限遵守普通 DSL 错误策略，字符串结果超限为 `StringTooLong`。`xml.set_body` 只允许请求阶段，纯字符串构造也会触发请求体捕获；序列化失败时原请求体不变。后续读取、重试和镜像使用最终代；没有响应体 XML API。
+
+```rust
+let envelope = xml.parse(req.body)
+if envelope == nil { return deny(400, "Invalid XML") }
+let body = xml.find(envelope, "urn:soap", "Body", 0)
+let item = xml.find(body, "urn:example", "item", 0)
+if item == nil { return deny(400, "Missing item") }
+req.set_header("X-Item", xml.value(item))
+
+let id = xml.attr("", "id", "7")
+let value = xml.text("hello & goodbye")
+let request = xml.element("urn:legacy", "request", {"id": id}, {"value": value})
+xml.set_body(request)
+req.set_header("Content-Type", "application/xml")
+return next()
+```
+
 ## 附录：函数速查表
 
 | 函数 | 分类 | 返回类型 | 参数数量 |
@@ -2291,6 +2344,22 @@ if sig == nil {
 | `log_fmt(template_literal, value1, ...)` | 工具 | `Nil` | 1–255 |
 | `log_warn(msg)` | 工具 | `Nil` | 1 |
 | `log_error(msg)` | 工具 | `Nil` | 1 |
+| `xml.parse(source)` | 有界 XML | `Xml\|Nil` | 1 |
+| `xml.kind(node)` | 有界 XML | `Str\|Nil` | 1 |
+| `xml.name(node)` | 有界 XML | `Str\|Nil` | 1 |
+| `xml.namespace(node)` | 有界 XML | `Str\|Nil` | 1 |
+| `xml.value(node)` | 有界 XML | `Str\|Nil` | 1 |
+| `xml.child_count(node)` | 有界 XML | `Int\|Nil` | 1 |
+| `xml.child(node, index)` | 有界 XML | `Xml\|Nil` | 2 |
+| `xml.find(node, namespace, name, occurrence)` | 有界 XML | `Xml\|Nil` | 4 |
+| `xml.attribute_count(node)` | 有界 XML | `Int\|Nil` | 1 |
+| `xml.attribute(node, index)` | 有界 XML | `Xml\|Nil` | 2 |
+| `xml.attr_value(node, namespace, name)` | 有界 XML | `Str\|Nil` | 3 |
+| `xml.text(value)` | 有界 XML | `Xml` | 1 |
+| `xml.attr(namespace, name, value)` | 有界 XML | `Xml` | 3 |
+| `xml.element(namespace, name, attributes, children)` | 有界 XML | `Xml` | 4 |
+| `xml.stringify(node)` | 有界 XML | `Str\|Nil` | 1 |
+| `xml.set_body(node)` | 有界 XML | `Nil` | 1 |
 
 ---
 

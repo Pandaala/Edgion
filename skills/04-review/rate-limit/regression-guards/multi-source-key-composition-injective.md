@@ -52,9 +52,11 @@ quota — the precise isolation the multi-source key feature exists to provide.
 
 The old loop pushed a part only on `Some`, so with the same two-header configuration
 `(None, "x")` and `("x", None)` both rendered to `x`. This second collision class was not in the
-original finding; it is fixed by the positional `-` marker. The key-miss fallback still triggers
-only when a configured source failed to resolve — see rationale 5 for the empty-`keys` carve-out
-that the same predicate now expresses.
+original finding; it is fixed by the positional `-` marker. The key-miss fallback triggers
+only when all configured sources fail to resolve. A partially resolved tuple still names a
+bucket, so `onKeyMiss: Deny` does not require every component to be present. This follows
+`parts.iter().any(Option::is_some)` in `resolve_rate_limit_key`; see rationale 5 for the
+empty-`keys` carve-out.
 
 **4. Length prefixing is the cheapest injective encoding**
 
@@ -72,7 +74,7 @@ this request belong to?":
   `Default` impl's `vec![RemoteIp]` never runs on deserialization), so a config that omits `key`
   resolved no key, fell through to `onKeyMiss` and — with its `Allow` default — silently
   disabled the limiter. `key` now uses `#[serde(default = "default_key_sources")]` on both
-  `RateLimitLocalConfig` and `RateLimitRedisConfig` so an omitted list matches the documented
+  `RateLimitLocalConfig` and the Redis `RateLimitQuota` so an omitted list matches the documented
   `[{type: remoteIp}]`, and `resolve_rate_limit_key` treats an explicitly empty list as "one global
   bucket" (`keys.is_empty()` composes to `""`) rather than as a key miss. Nothing configured cannot
   be "missing", so `onKeyMiss` / `defaultKey` no longer apply to it.
@@ -83,7 +85,7 @@ this request belong to?":
   per-IP buckets cluster-wide), and letting a client that controls one plugin's source craft a value
   matching another plugin's composed key when they did not. The Redis key now carries the owning
   entry's identity, `<namespace>/<name>/<alias or #index>`, built by `plugins::common::entry_scope`
-  and folded into `RateLimitRedis`'s `scoped_key_prefix` at build time.
+  and folded into each named quota's prefix at build time.
 
   Identity, not a config digest, is the right discriminator: the compiled runtime is built once per
   EdgionPlugins resource and Arc-shared by every route referencing it, so `ns/name` already *is* the

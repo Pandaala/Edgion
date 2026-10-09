@@ -30,7 +30,11 @@ pub async fn logging(
         if let Some(driver) = ctx.response_processor_driver() {
             driver.finalize_ordinary_incomplete().await;
         }
-        if let Some(plan) = &ctx.grpc_transcoding {
+        if let Some(plan) = ctx.grpc_transcoding.clone() {
+            if _e.is_some() {
+                plan.record(crate::plugins::http::grpc_json_transcoder::transport::Outcome::Interrupted);
+            }
+            plan.finalize_log(ctx);
             plan.clear_output();
         }
     }

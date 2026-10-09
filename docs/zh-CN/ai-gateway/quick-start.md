@@ -189,3 +189,20 @@ requestPlugins:
 
 省略 usageObservation 时默认关闭观察。客户端提交显式 model 和原生 input，stream=true 返回原生 typed SSE。
 不要设置 conversion 或 injectUsageTracking。续接限制见[提供商](./providers.md#原生-responses-的边界)。
+
+## 原生 Messages 入口
+
+将独立 AiProxy 资源挂到使用 Anthropic EdgionBackend 的 HTTPRoute 上。
+Secret、后端和路由的职责保持一致。
+
+```yaml
+requestPlugins:
+  - type: AiProxy
+    config:
+      api: anthropicMessages
+      usageObservation: provider
+```
+
+Anthropic SDK 使用该路由的 base URL 和应用凭据，向 POST /v1/messages 发送显式
+model 与 max_tokens。省略 usageObservation 时原生透传且不做数字核算。
+边界见[提供商](./providers.md#原生-messages-的边界)。

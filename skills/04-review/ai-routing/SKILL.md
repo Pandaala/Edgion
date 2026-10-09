@@ -26,3 +26,5 @@ before applying a decision to current code.
 - [Streaming usage is a monotonic cumulative snapshot](regression-guards/streaming-usage-is-a-monotonic-cumulative-snapshot.md)
 
 - [Native Responses observation and continuation](regression-guards/native-responses-observation-and-continuation.md): native reported-only accounting, semantic outcomes, raw declaration fences and guard capabilities.
+
+- [Native Messages preservation and accounting](regression-guards/native-messages-preservation-and-accounting.md): native version/identity isolation, raw binding fences and bounded reported-only JSON/SSE.

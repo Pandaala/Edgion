@@ -20,6 +20,7 @@ fn make_config(name: &str) -> EdgionGatewayConfig {
             forwarded_headers: Default::default(),
             security_protect: None,
             request_body: Default::default(),
+            waf: Default::default(),
             global_plugins_ref: None,
             plugin_policy: None,
             access_log_extern: None,
@@ -456,6 +457,41 @@ fn runtime_egc_hot_reload_pins_security_and_compiled_http_policy() {
         old_weak.upgrade().is_none(),
         "published store must release superseded generations"
     );
+    handler.full_set(&HashMap::new());
+}
+
+#[test]
+fn waf_expensive_checks_follow_runtime_publication_and_request_pins() {
+    let _guard = TEST_MUTEX.lock();
+    clear_store();
+    let handler = EdgionGatewayConfigHandler;
+    let bound = bind_gateway_config(Some("waf-policy"));
+    assert!(!bound.load().waf_expensive_checks);
+    let mut enabled = make_config("waf-policy");
+    enabled.spec.waf.expensive_checks = true;
+    handler.full_set(&HashMap::from([("waf-policy".into(), Arc::new(enabled.clone()))]));
+    let old_request = crate::EdgionHttpContext::with_gateway_config(bound.load());
+    assert!(old_request.egc.waf_expensive_checks);
+    handler.partial_update(
+        HashMap::new(),
+        HashMap::from([("waf-policy".into(), Arc::new(make_config("waf-policy")))]),
+        HashSet::new(),
+    );
+    let new_request = crate::EdgionHttpContext::with_gateway_config(bound.load());
+    assert!(!new_request.egc.waf_expensive_checks);
+    assert!(old_request.egc.waf_expensive_checks);
+    handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["waf-policy".into()]));
+    assert!(!bound.load().waf_expensive_checks);
+    handler.partial_update(
+        HashMap::from([("waf-policy".into(), Arc::new(enabled))]),
+        HashMap::new(),
+        HashSet::new(),
+    );
+    assert!(bound.load().waf_expensive_checks);
+    assert!(!new_request.egc.waf_expensive_checks);
+    handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["waf-policy".into()]));
+    assert!(!bound.load().waf_expensive_checks);
+    assert!(old_request.egc.waf_expensive_checks);
     handler.full_set(&HashMap::new());
 }
 

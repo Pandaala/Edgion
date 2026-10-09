@@ -88,7 +88,7 @@ references. See [ACME service](skills/01-architecture/01-controller/08-acme-serv
 
 BoringSSL is the only supported Gateway TLS backend. Do not implement rustls support
 until Pingora's required TLS capabilities are complete and the user authorizes the
-[pending task](tasks/pending/rustls-gateway-tls-support.md). Do not report or fix
+[blocked task](tasks/block/rustls-gateway-tls-support.md). Do not report or fix
 rustls-only support gaps in ordinary reviews or cleanup. Backend-independent rustls
 clients are unaffected. Details: [TLS backend policy](skills/01-architecture/02-gateway/04-tls/03-ssl-backends.md).
 
@@ -371,9 +371,8 @@ whether the feature needs incremental bytes or one complete document.
    conversion owner, never in response BodyStorage, a disk spool, or a
    full-response RawWindow. Enforce independent protobuf/ProtoJSON, depth/node,
    metadata, outstanding-output, per-exchange heap and process-wide admission
-   bounds required by the reviewed plan (historical path:
-   `tasks/pending/grpc-json-transcoding/03-implementation-plan.md`;
-   the task file is absent from the current tree).
+   bounds described in the [current architecture](skills/01-architecture/02-gateway/00-overview.md#httproute-grpc-json-transcoding)
+   and [reviewed conversion ledger](skills/04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md#memory-and-time-ledger).
    Validate real terminal gRPC status before final headers/body commit, preserve
    deadlines and cancellation cleanup, and emit fixed REST errors. Server-streaming
    conversion remains message-window streaming and gains no full-response
@@ -440,7 +439,7 @@ Do not add another cache implementation or broaden TinyUFO usage without documen
     not an address field. HTTP access-log fields use the canonical names
     `direct_peer_ip` and `remote_ip`; protocol-specific logs follow the same
     vocabulary.
-13. Condition predicates reuse the shared `Condition` enum; a container field name must state how its elements combine. Do not add a plugin-local predicate enum, Include/Exclude, RestrictionSource, or wildcard values.
+13. Request condition predicates reuse the shared `Condition`/`ConditionSet`; a container field name must state how its elements combine. Do not add a plugin-local request predicate enum, Include/Exclude, RestrictionSource, or wildcard values. Configuration-only WAF rule-metadata selection has one canonical implementation in the external-only `edgion-waf` leaf; it has no request bindings or request-time evaluation. Importing crates must not implement another static WAF selector.
 
 ## Git constraints
 

@@ -664,12 +664,34 @@ fn native_responses_rejects_enabled_guard_capabilities_in_both_orders() {
         assert!(plugins
             .validate_plugins()
             .iter()
-            .any(|error| error.contains("native Responses does not support")));
+            .any(|error| error.contains("native Responses/Messages does not support")));
     }
     let mut disabled = ai_guard_entry();
     disabled.enable = false;
     assert!(!with_request_plugins(vec![disabled, responses()])
         .validate_plugins()
         .iter()
-        .any(|error| error.contains("native Responses does not support")));
+        .any(|error| error.contains("native Responses/Messages does not support")));
+}
+
+#[test]
+fn native_messages_rejects_enabled_guard_capabilities_in_both_orders() {
+    let responses = || {
+        RequestFilterEntry::new(EdgionPlugin::AiProxy(
+            serde_yaml::from_str("api: anthropicMessages").unwrap(),
+        ))
+    };
+    for entries in [vec![ai_guard_entry(), responses()], vec![responses(), ai_guard_entry()]] {
+        let plugins = with_request_plugins(entries);
+        assert!(plugins
+            .validate_plugins()
+            .iter()
+            .any(|error| error.contains("native Responses/Messages does not support")));
+    }
+    let mut disabled = ai_guard_entry();
+    disabled.enable = false;
+    assert!(!with_request_plugins(vec![disabled, responses()])
+        .validate_plugins()
+        .iter()
+        .any(|error| error.contains("native Responses/Messages does not support")));
 }

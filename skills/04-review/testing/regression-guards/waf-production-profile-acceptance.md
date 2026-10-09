@@ -10,7 +10,7 @@ knowledge_type: regression-guards
 
 The selected WAF acceptance profile is the three repository-tracked
 `EdgionPlugins/Waf/DynamicTest` configurations and referenced `WafPolicy` and `WafRuleBundle`
-YAML files listed in `edgion-waf/acceptance/production-v1.json`. This is a
+YAML files listed in `edgion-waf/tests/acceptance/production-v1.json`. This is a
 narrow initial production profile, not full CRS support. The profile uses the
 production `WafConfig::compile_generation` path, verifies plugin, policy, and bundle
 file digests, canonical bundle digests, reference pins, and rule

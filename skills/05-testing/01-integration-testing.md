@@ -189,8 +189,12 @@ The actual responsibilities of `run_integration.sh` are:
 
 A few key facts:
 
-- `--full-test` additionally includes slow tests and requires Docker to be available. For a
-  targeted `EdgionPlugins/ExtProc` run, it builds and starts the pinned independent Go processor,
+- `--full-test` additionally includes slow tests and requires Docker to be available. In a
+  fast run, the consistently longer-than-three-minute `HTTPRoute_Transport` suite and
+  `Dyn_EncryptedActiveHealthChecks` scenario are reported as skipped. A targeted
+  `-r HTTPRoute -i Transport` run also requires `--full-test` and otherwise skips before
+  preparing the topology.
+- A targeted `EdgionPlugins/ExtProc` run with `--full-test` builds and starts the pinned independent Go processor,
   renders its full-only resources into the work directory, and forwards the flag to `test_client`.
   The added cases cover official Envoy v3 protobuf interoperability, header and body mutation,
   `ImmediateResponse`, clean terminal half-close, and a wall-clock long-idle stream. The default
@@ -344,13 +348,16 @@ If you need to repeatedly hit traffic or control phases yourself, after preservi
 
 ## Dynamic (hot reload) testing
 
-Hot-reload tests are orchestrated by the Rust-side scenario framework and **run automatically by default** as the final step of the full integration test.
+Hot-reload tests are orchestrated by the Rust-side scenario framework and **run automatically by default** as the final step of the full integration test. The slow `Dyn_WafDynamic` and `Dyn_EncryptedActiveHealthChecks` scenarios require `--full-test`. This also applies to the targeted `-r Gateway -i WafDynamic` runner path. A fast run reports these scenarios as skipped. Ordinary static WAF tests and `Dyn_WafExpensiveChecks` remain in the default sweep.
 
 ### How to trigger and inspect
 
 ```bash
 # Default run: includes dynamic scenarios (all families + dynamic at the end)
 ./edgion-tests/integration/scripts/integration/run_integration.sh
+
+# Include slow suites and hot-reload matrices (Transport, encrypted health checks, WAF)
+./edgion-tests/integration/scripts/integration/run_integration.sh --full-test
 
 # Running only -r Gateway: still includes dynamic (migrated from the legacy run_dynamic_tests behavior)
 ./edgion-tests/integration/scripts/integration/run_integration.sh -r Gateway

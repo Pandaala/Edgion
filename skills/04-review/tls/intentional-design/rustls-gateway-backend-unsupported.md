@@ -62,7 +62,7 @@ Re-open this decision only when all of the following hold:
 
 - Pingora provides complete rustls support for the required downstream and
   upstream TLS surface, verified against the revision used by Edgion;
-- the user explicitly authorizes `tasks/pending/rustls-gateway-tls-support.md`;
+- the user explicitly authorizes `tasks/block/rustls-gateway-tls-support.md`;
 - the complete downstream and upstream TLS capability boundary, failure policy,
   packaging, CI, and integration strategy has been designed and approved.
 
@@ -72,7 +72,7 @@ Re-open this decision only when all of the following hold:
   decision on 2026-08-30.
 - `AGENTS.md`
 - `skills/01-architecture/02-gateway/04-tls/03-ssl-backends.md`
-- `tasks/pending/rustls-gateway-tls-support.md`
+- `tasks/block/rustls-gateway-tls-support.md`
 
 ## Resolution references
 

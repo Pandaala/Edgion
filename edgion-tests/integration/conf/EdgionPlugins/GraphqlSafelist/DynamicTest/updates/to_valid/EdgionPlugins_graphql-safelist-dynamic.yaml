@@ -1,0 +1,25 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "graphql-safelist-dynamic",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "GraphqlSafelist",
+        "config": {
+          "operations": [
+            {
+              "query": "{ ping }"
+            },
+            {
+              "query": "{ pong }"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

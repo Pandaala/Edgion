@@ -69,6 +69,7 @@ fn ctx_with_selected_ai_target() -> EdgionHttpContext {
         operation: crate::ai::runtime::attempt_plan::AiOperation::ChatCompletions,
         conversion: None,
         usage_observation: edgion_resources::resources::edgion_plugins::AiUsageObservation::Provider,
+        observation_unavailable: false,
         body_generation: None,
         body_is_current: false,
         continuation: false,

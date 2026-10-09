@@ -55,3 +55,9 @@ The XML phases reuse the same H1/H2 transport routes and body storage policy.
 They cover text, attributes with the real 901181 default/opt-in exclusions,
 Phase-1 processor override, split entities, malformed suffixes, safe spill replay,
 and generation/mode pinning while an old capture waits for transport EOF.
+
+The static-selection phase changes only WafPolicy. A YAML `allOf` with a root ID
+and a negated literal tag excludes the V2 header rule while retaining the other
+bundle's body denial. Both control-plane and gateway views retain identical
+original bundle identities, digest pins and resolved bundles. Restoring the policy
+restores the header denial; the scenario uses the existing shared topology.

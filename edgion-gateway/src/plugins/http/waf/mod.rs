@@ -9,8 +9,8 @@ use edgion_resources::resources::edgion_plugins::{BodyRequirement, WafConfig, Wa
 use edgion_waf::seclang::{
     BodyError, BodyProcessorSelection, JsonCheckerError, JsonInspectionLimits, JsonStreamError, JsonStreamLimit,
     PhaseOutcome, RequestBody, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead, ResponseHeader,
-    ResponseWindow, RuleEngineMode, RuntimeError, RuntimeLimits, Transaction, XmlInspectionLimits, XmlStreamError,
-    XmlStreamLimit,
+    ResponseWindow, RuleCheckPolicy, RuleEngineMode, RuntimeError, RuntimeLimits, Transaction, XmlInspectionLimits,
+    XmlStreamError, XmlStreamLimit,
 };
 
 use crate::ctx::{WafErrorCode, WafLogPhase, WafPhase, WafPhaseClaim};
@@ -376,12 +376,15 @@ impl RequestFilter for WafPlugin {
             &headers,
         );
         let runtime_limits = RuntimeLimits::default();
-        let mut transaction = match Transaction::new_shared_with_modes(
+        let mut transaction = match Transaction::new_shared_with_policy(
             Arc::clone(&self.shared.generation),
             request,
             runtime_limits,
             edgion_waf::seclang::EvaluationMode::Accelerated,
             self.shared.engine_mode,
+            RuleCheckPolicy {
+                expensive_checks: session.ctx().egc.waf_expensive_checks,
+            },
         ) {
             Ok(transaction) => transaction,
             Err(error) => return self.runtime_failure(session, WafLogPhase::RequestHeaders, &error),

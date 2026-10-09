@@ -1759,3 +1759,12 @@ open, including annotation/LinkSys/DNS/log consumers and final documentation.
 Both independent reviewers confirmed final SCOPED PASS after independently
 checking all14 root logs and frozen source hashes. Commit29 technical paths plus
 this ledger locally without push; unrelated untracked artifacts remain excluded.
+
+R5e committed5cd67dd91fb5e0d8e52ed30d95f61af1aa21b8ea locally, parent558433cf9.
+All30 staged hashes match HEAD; tracked/index state was clean after commit.
+No push. R6 starts PLAN ONLY with current-HEAD revalidation of the Service DNS
+producer authorization/owner-UID observations and the complete remaining finite
+annotation, LinkSys, global-plugin, template, log-output and instance inventory.
+The first implementation sub-batch requires an exact allowlist and independent
+plan approval. Historical async-boundary observations alone do not authorize
+generic writer fences or broader ownership changes.

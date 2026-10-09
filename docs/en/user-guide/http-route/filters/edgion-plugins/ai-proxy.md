@@ -58,5 +58,4 @@ true requires provider observation or declared conversion.
 
 Anthropic conversion requires `conversion: chatToAnthropic` and exclusively Anthropic candidates.
 The converter still parses client-visible usage when observation is off, but does not publish
-numeric accounting. Its bounded JSON path finishes before commitment. Native Responses/Messages
-remain pending; see [Providers](../../../../ai-gateway/providers.md).
+numeric accounting. Its bounded JSON path finishes before commitment. Native `openaiResponses` and `anthropicMessages` are available without conversion or injection; see [Providers](../../../../ai-gateway/providers.md).

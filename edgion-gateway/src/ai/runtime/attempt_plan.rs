@@ -79,6 +79,7 @@ impl fmt::Debug for AiPlanCandidate {
 pub enum AiOperation {
     ChatCompletions,
     Responses,
+    Messages,
 }
 
 /// Request data captured once across provider and credential retries.
@@ -88,6 +89,8 @@ pub struct ReadyAiAttemptPlan {
     pub operation: AiOperation,
     pub conversion: Option<AiConversion>,
     pub usage_observation: AiUsageObservation,
+    /// Request-known composite inference cannot publish a top-level subtotal.
+    pub observation_unavailable: bool,
     /// Only dispatcher-owned body mutations may advance this proof.
     pub body_generation: Option<u64>,
     pub body_is_current: bool,

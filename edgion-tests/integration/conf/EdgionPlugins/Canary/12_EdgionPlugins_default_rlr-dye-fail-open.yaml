@@ -17,16 +17,18 @@ spec:
             on: [fail-open]
       config:
         redisRef: "default/redis-not-found"
-        policies:
-          - rate: 3
-            interval: "10s"
-            algorithm: SlidingWindow
-        key:
-          - type: header
-            name: "X-Rate-Key"
-        onKeyMiss: Allow
         onRedisFailure: Allow
         rejectStatus: 429
         rejectMessage: "Redis unavailable (dye fail-open)"
         showLimitHeaders: true
         keyPrefix: "edgion:it:rlr:dye-fail-open:"
+        quotas:
+          - name: default
+            policies:
+              - rate: 3
+                interval: "10s"
+                algorithm: SlidingWindow
+            key:
+              - type: header
+                name: "X-Rate-Key"
+            onKeyMiss: Allow

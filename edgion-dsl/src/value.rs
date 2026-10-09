@@ -9,6 +9,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 use crate::error::RuntimeError;
+use crate::xml::XmlValue;
 
 /// Fixed VM value limits, independent of the configurable per-container limits.
 pub const MAX_VALUE_MAP_DEPTH: usize = 64;
@@ -91,6 +92,11 @@ impl Default for ValueWorkBudget {
 }
 
 impl ValueWorkBudget {
+    /// Placeholder while an owned scanner exclusively owns the live account.
+    pub fn exhausted() -> Self {
+        Self { remaining: 0 }
+    }
+
     pub fn charge(&mut self, units: u64) -> Result<(), RuntimeError> {
         self.remaining = self
             .remaining
@@ -157,6 +163,8 @@ pub enum Value {
     Nil,
     /// Opaque request body token. Body bytes remain owned by the host runtime.
     Body(BodyValue),
+    /// Immutable bounded XML node; copies share the node without traversal.
+    Xml(XmlValue),
     /// Internal: list of strings for iteration (not user-constructable directly)
     List(Vec<Arc<str>>),
     /// Structured map — returned by http.call and constructable via map literals.
@@ -224,6 +232,7 @@ impl Value {
             Value::Bool(false) => Ok(5),
             Value::Nil => Ok(3),
             Value::Body(_) => Err(ImplicitStringCoercionError::new("Body")),
+            Value::Xml(_) => Err(ImplicitStringCoercionError::new("Xml")),
             Value::List(_) => Ok(6),
             Value::Map(map) => Ok(6 + map.len().to_string().len()),
         }
@@ -239,7 +248,7 @@ impl Value {
     pub fn try_as_str(&self) -> Result<&str, ImplicitStringCoercionError> {
         match self {
             Value::Str(s) => Ok(s.as_ref()),
-            Value::Body(_) => Err(ImplicitStringCoercionError::new(self.type_name())),
+            Value::Body(_) | Value::Xml(_) => Err(ImplicitStringCoercionError::new(self.type_name())),
             _ => Ok(""),
         }
     }
@@ -261,6 +270,7 @@ impl Value {
             }
             Value::Nil => Ok("nil".to_string()),
             Value::Body(_) => Err(ImplicitStringCoercionError::new("Body")),
+            Value::Xml(_) => Err(ImplicitStringCoercionError::new("Xml")),
             Value::List(_) => Ok("[list]".to_string()),
             Value::Map(m) => Ok(format!("[map:{}]", m.len())),
         }
@@ -288,6 +298,7 @@ impl Value {
             Value::Bool(_) => "Bool",
             Value::Nil => "Nil",
             Value::Body(_) => "Body",
+            Value::Xml(_) => "Xml",
             Value::List(_) => "List",
             Value::Map(_) => "Map",
         }
@@ -302,6 +313,7 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{}", b),
             Value::Nil => write!(f, "nil"),
             Value::Body(BodyValue::Request) => write!(f, "[body:request]"),
+            Value::Xml(_) => write!(f, "[xml]"),
             Value::List(l) => write!(f, "[list:{}]", l.len()),
             Value::Map(m) => write!(f, "[map:{}]", m.len()),
         }
@@ -316,6 +328,7 @@ impl PartialEq for Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Nil, Value::Nil) => true,
             (Value::Body(a), Value::Body(b)) => a == b,
+            (Value::Xml(a), Value::Xml(b)) => a == b,
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Map(a), Value::Map(b)) => a == b,
             _ => false, // different types are never equal

@@ -676,6 +676,11 @@ impl EdgionGatewayCli {
         config::init_backend_requests_config(config.metrics.backend_requests.clone());
         config::init_genai_tokens_config(config.metrics.genai_tokens.clone());
 
+        // Route and plugin compilation can read this OnceLock as soon as the
+        // watches start. Install the configured value before a lazy reader can
+        // publish the fallback default.
+        edgion_resources::path_normalization::init_path_normalization_config(config.path_normalization.clone());
+
         // 12. Start watching resources based on Controller's supported kinds
         let mut otlp_startup_guard = OtlpStartupGuard {
             runtime: &runtime,
@@ -714,9 +719,6 @@ impl EdgionGatewayCli {
                 spawn_client_cert_watcher(sync_client_arc.clone(), paths, shutdown);
             });
         }
-
-        // 15. Initialize path normalization config (global OnceLock for hot-path access)
-        edgion_resources::path_normalization::init_path_normalization_config(config.path_normalization.clone());
 
         // 16. Initialize access log options (global OnceLock for hot-path access)
         config::init_access_log_options(config.access_log_options.clone());

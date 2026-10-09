@@ -29,6 +29,7 @@ mod forward_auth;
 mod geo_restriction;
 mod global_connection_ip_restriction;
 mod global_plugins_snapshot;
+mod graphql_rate_limit;
 mod guardrail;
 mod guardrail_encoding;
 mod header_cert_auth;
@@ -94,7 +95,7 @@ pub use direct_endpoint::DirectEndpointTestSuite;
 pub use dsl::{
     DslBodyTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite,
     DslTerminateDynamicInitialTestSuite, DslTerminateDynamicRestoredTestSuite, DslTerminateDynamicUpdatedTestSuite,
-    DslTerminateTestSuite, DslTestSuite,
+    DslTerminateTestSuite, DslTestSuite, DslXmlDynamicTestSuite,
 };
 pub use dynamic_external_upstream::DynamicExternalUpstreamTestSuite;
 pub use dynamic_internal_upstream::{DeniedNamedJumpTestSuite, DynamicInternalUpstreamTestSuite};
@@ -110,6 +111,7 @@ pub use forward_auth::ForwardAuthTestSuite;
 pub use geo_restriction::GeoRestrictionTestSuite;
 pub use global_connection_ip_restriction::GlobalConnectionIpRestrictionTestSuite;
 pub use global_plugins_snapshot::GlobalPluginsSnapshotTestSuite;
+pub use graphql_rate_limit::{GraphqlRateLimitDynamicSuite, GraphqlRateLimitTestSuite};
 pub use guardrail::GuardrailTestSuite;
 pub use guardrail_encoding::GuardrailEncodingTestSuite;
 pub use header_cert_auth::HeaderCertAuthTestSuite;
@@ -158,12 +160,20 @@ pub use waf::{
     WafDynamicInjectionTestSuite, WafDynamicJsonDetectionTestSuite, WafDynamicJsonV1TestSuite,
     WafDynamicJsonV2TestSuite, WafDynamicJsonZeroSourceTestSuite, WafDynamicOriginalDetectionTestSuite,
     WafDynamicOriginalOnTestSuite, WafDynamicRecoveredTestSuite, WafDynamicSelectorHighTestSuite,
-    WafDynamicSupportedDetectionTestSuite, WafDynamicSupportedOnTestSuite, WafDynamicSupportedRetainedTestSuite,
-    WafDynamicSupportedStandardTestSuite, WafDynamicUpdatedTestSuite, WafDynamicXmlDetectionTestSuite,
-    WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite,
+    WafDynamicStaticSelectionTestSuite, WafDynamicSupportedDetectionTestSuite, WafDynamicSupportedOnTestSuite,
+    WafDynamicSupportedRetainedTestSuite, WafDynamicSupportedStandardTestSuite, WafDynamicUpdatedTestSuite,
+    WafDynamicXmlDetectionTestSuite, WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite,
 };
 pub use wasm::WasmPluginTestSuite;
 pub use webhook_key_get::WebhookKeyGetTestSuite;
 
 mod grpc_json_transcoder;
 pub use grpc_json_transcoder::{GrpcJsonTranscoderDynamicSuite, GrpcJsonTranscoderTestSuite};
+
+mod graphql_operation_router;
+pub use graphql_operation_router::{GraphqlOperationRouterDynamicSuite, GraphqlOperationRouterTestSuite};
+
+mod graphql_guard;
+mod graphql_safelist;
+pub use graphql_guard::{GraphqlGuardDynamicSuite, GraphqlGuardTestSuite};
+pub use graphql_safelist::{GraphqlSafelistDynamicSuite, GraphqlSafelistTestSuite};

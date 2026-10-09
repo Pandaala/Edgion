@@ -8,6 +8,19 @@
 
 [RateLimitLocal 插件](rate-limit-local.md) 使用进程内 Count-Min Sketch 算法，延迟极低（纳秒级），但每个网关实例独立计数，多副本场景下总体放量是配置值的倍数。RateLimitRedis 通过 Redis 实现跨实例的**精确**集群限流：所有实例共享同一个 Redis 计数器，配置的速率就是整个集群的实际速率。
 
+## 独立配额
+
+每个配额使用已有 KeyGet 选择身份，并独立配置成本和窗口策略。
+`key: [tenant, user]` 生成一个组合桶；同时限制租户总量与租户内用户用量，
+需要两个配额。建议在限流前通过身份插件写入可信 ctx；header、cookie、query
+仍保留来自客户端的语义。所有来源都缺失时才使用 defaultKey/onKeyMiss，
+部分缺失仍生成带位置标记的组合桶。Allow 仅跳过对应配额。
+
+多个配额在同一个超时内依次扣减。后续拒绝或 Redis 故障不会撤销已有扣减，
+超时的命令可能已经提交；不提供跨配额事务、退款或自动重试扣减。
+全部配额跳过时不访问 Redis，也不生成配额头。调整配额顺序保留原桶，
+修改名称使用新桶；已有窗口策略的索引语义继续适用。
+
 ### RateLimitLocal 与 RateLimitRedis 对比
 
 | 特性 | RateLimitLocal | RateLimitRedis |
@@ -60,11 +73,13 @@ spec:
     - type: RateLimitRedis
       config:
         redisRef: "default/shared-redis"
-        key:
-          - type: remoteIp
-        policies:
-          - rate: 100
-            interval: "1s"
+        quotas:
+          - name: default
+            key:
+              - type: remoteIp
+            policies:
+              - rate: 100
+                interval: "1s"
 ```
 
 ### 前置条件
@@ -88,10 +103,13 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `redisRef` | String | —（必填） | Redis LinkSys 资源引用，格式 `"namespace/name"`。仅支持字母数字、`-`、`_` |
-| `policies` | Array\<Object\> | —（必填） | 限流策略列表，至少一条，最多 10 条，见下方 Policy 配置 |
-| `key` | Array\<Object\> | `[{type: remoteIp}]` | 限流维度列表。单个 key 原样使用，多个 key 带长度前缀后用 `_` 拼接，见下方 Key 配置 |
-| `onKeyMiss` | Enum | `Allow` | key 缺失时的行为。可选值：`Allow` \| `Deny` |
-| `defaultKey` | String | 无 | key 缺失时的默认值，优先于 `onKeyMiss` |
+| `quotas` | Array<Object> | 必填 | 1–16 个独立命名配额，整个条目最多 64 个策略；所有有效配额都必须通过 |
+| `quotas[].name` | String | 必填 | 唯一名称，1–32 个 ASCII 字母、数字、`.`、`_` 或 `-`；调整顺序不改变桶身份 |
+| `responseQuota` | String | 第一个实际检查的配额 | 成功时选择该配额的响应头；选中配额被跳过时不生成配额头，拒绝头始终来自拒绝配额 |
+| `quotas[].policies` | Array\<Object\> | —（必填） | 限流策略列表，至少一条，最多 10 条，见下方 Policy 配置 |
+| `quotas[].key` | Array\<Object\> | `[{type: remoteIp}]` | 限流维度列表。单个 key 原样使用，多个 key 带长度前缀后用 `_` 拼接，见下方 Key 配置 |
+| `quotas[].onKeyMiss` | Enum | `Allow` | key 缺失时的行为。可选值：`Allow` \| `Deny` |
+| `quotas[].defaultKey` | String | 无 | key 缺失时的默认值，优先于 `onKeyMiss` |
 | `rejectStatus` | Integer | `429` | 拒绝时的最终 HTTP 状态码（200–599） |
 | `rejectMessage` | String | 无 | 拒绝时的 JSON 响应体 |
 | `showLimitHeaders` | Boolean | `true` | 是否返回限流响应头 |
@@ -102,7 +120,7 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `onRedisFailure` | Enum | `Allow` | Redis 不可用**或** `requestTimeout` 超时时执行的策略。涵盖两种情况：(a) Redis 可检测到已宕机——零 I/O 快速弹出；(b) Redis 健康但响应慢或报错——有界等待后放弃。两种情况均通过此单一策略处理。可选值：`Allow`（放行）\| `Deny`（拒绝） |
-| `requestTimeout` | String | 未设置 | 可选的多策略 Redis 检查总体耗时上限（例如 `"500ms"`）。未设置时不设置聚合超时，仍适用 LinkSys Redis CRD 中的单命令超时。设置后若超时，则执行 `onRedisFailure` 策略 |
+| `requestTimeout` | String | 未设置 | 多个配额时必填、单个配额时可选的 Redis 检查总体耗时上限（例如 `"500ms"`）。未设置时不设置聚合超时，仍适用 LinkSys Redis CRD 中的单命令超时。设置后若超时，则执行 `onRedisFailure` 策略 |
 | `keyPrefix` | String | `"edgion:rl:"` | Redis key 前缀，必须以 `:` 结尾，仅 ASCII 可打印字符 |
 | `maxKeyLen` | Integer | `4096` | key 部分的最大字节数（64–65536），防止恶意超长 key 导致 Redis OOM |
 
@@ -110,7 +128,7 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `cost` | Integer | `1` | 每次请求的消耗单位，范围为 1–1,000,000。`cost: 5` 表示每次请求计 5 次 |
+| `quotas[].cost` | Integer | `1` | 每次请求的消耗单位，范围为 1–1,000,000。`cost: 5` 表示每次请求计 5 次 |
 
 ---
 
@@ -231,12 +249,14 @@ spec:
     - type: RateLimitRedis
       config:
         redisRef: "default/shared-redis"
-        key:
-          - type: remoteIp
-        policies:
-          - rate: 100
-            interval: "1s"
-            algorithm: SlidingWindow
+        quotas:
+          - name: default
+            key:
+              - type: remoteIp
+            policies:
+              - rate: 100
+                interval: "1s"
+                algorithm: SlidingWindow
 ```
 
 ### 2. 多策略限流（同时限 QPS 和日配额）
@@ -279,18 +299,20 @@ spec:
     - type: RateLimitRedis
       config:
         redisRef: "default/shared-redis"
-        key:
-          - type: header
-            name: "X-API-Key"
-        onKeyMiss: Deny
-        policies:
-          - rate: 50
-            interval: "1s"
-            algorithm: SlidingWindow
-          - rate: 5000
-            interval: "1h"
-            algorithm: FixedWindow
         rejectMessage: '{"error":"rate limit exceeded","code":"RATE_LIMIT"}'
+        quotas:
+          - name: default
+            key:
+              - type: header
+                name: "X-API-Key"
+            onKeyMiss: Deny
+            policies:
+              - rate: 50
+                interval: "1s"
+                algorithm: SlidingWindow
+              - rate: 5000
+                interval: "1h"
+                algorithm: FixedWindow
 ```
 
 ### 3. 高安全场景——Redis 故障时拒绝
@@ -333,21 +355,23 @@ spec:
     - type: RateLimitRedis
       config:
         redisRef: "default/ha-redis"
-        key:
-          - type: header
-            name: "Authorization"
-        onKeyMiss: Deny
         onRedisFailure: Deny
-        policies:
-          - rate: 1000
-            interval: "1m"
-            algorithm: TokenBucket
         keyPrefix: "premium:rl:"
         showLimitHeaders: true
         headerNames:
           limit: "X-Premium-Limit"
           remaining: "X-Premium-Remaining"
           retryIn: "X-Retry-After"
+        quotas:
+          - name: default
+            key:
+              - type: header
+                name: "Authorization"
+            onKeyMiss: Deny
+            policies:
+              - rate: 1000
+                interval: "1m"
+                algorithm: TokenBucket
 ```
 
 ---
@@ -414,13 +438,15 @@ spec:
               pluginAlias: local-budget
       config:
         redisRef: default/redis
-        key: []
-        policies:
-          - algorithm: TokenBucket
-            rate: 100
-            interval: "1s"
         onRedisFailure: Deny
         requestTimeout: "100ms"
+        quotas:
+          - name: default
+            key: []
+            policies:
+              - algorithm: TokenBucket
+                rate: 100
+                interval: "1s"
 ```
 
 `key: []` 表示聚合额度；按用户或 IP 限流时，在两个条目中显式配置 key。

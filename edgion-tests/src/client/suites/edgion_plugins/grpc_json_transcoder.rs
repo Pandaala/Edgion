@@ -1,6 +1,7 @@
 //! REST/H1/H2 to native-gRPC wire and descriptor lifecycle acceptance.
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites::status::helpers;
+use edgion_gateway::plugins::http::grpc_json_transcoder::log_consts as log_t;
 use std::time::{Duration, Instant};
 
 pub struct GrpcJsonTranscoderTestSuite;
@@ -11,6 +12,18 @@ async fn call(
     path: &str,
     body: Option<&str>,
     fixture: Option<&str>,
+) -> Result<(u16, String, String), String> {
+    call_traced(ctx, h2, host, path, body, fixture, None).await
+}
+#[allow(clippy::too_many_arguments)]
+async fn call_traced(
+    ctx: &TestContext,
+    h2: bool,
+    host: &str,
+    path: &str,
+    body: Option<&str>,
+    fixture: Option<&str>,
+    marker: Option<&str>,
 ) -> Result<(u16, String, String), String> {
     let target: std::net::IpAddr = ctx
         .target_host
@@ -38,6 +51,11 @@ async fn call(
     };
     if let Some(fixture) = fixture {
         request = request.header("x-transcoding-fixture", fixture);
+    }
+    if let Some(marker) = marker {
+        request = request
+            .header("traceparent", crate::access_log_client::traceparent_for_marker(marker))
+            .header("access_log", "test_store");
     }
     let response = request.send().await.map_err(|e| e.to_string())?;
     let expected = if h2 {
@@ -112,6 +130,123 @@ impl TestSuite for GrpcJsonTranscoderTestSuite {
                 "grpc-transcoder-configmap.example.com",
             ),
         ];
+        for name in [
+            "grpc-body-before-open",
+            "grpc-body-before-closed",
+            "grpc-body-after-open",
+            "grpc-body-after-closed",
+            "grpc-backend-guard-open",
+            "grpc-backend-guard-closed",
+            "grpc-rule-bandwidth",
+            "grpc-backend-bandwidth",
+            "grpc-rule-wasm-body",
+            "grpc-backend-wasm-body",
+            "grpc-late-conflict",
+        ] {
+            cases.push(TestCase::new(
+                name,
+                "Incompatible owners fail before origin; late header conflicts cannot publish replacement",
+                move |ctx| {
+                    Box::pin(async move {
+                        let start = Instant::now();
+                        let result = async {
+                            let (status, body, _) = call_traced(
+                                &ctx,
+                                false,
+                                &format!("{name}.example.com"),
+                                "/v1/hello",
+                                Some(r#"{"name":"ownership"}"#),
+                                None,
+                                Some(name),
+                            )
+                            .await?;
+                            if !matches!(status, 500 | 502) || body.contains("Hello,") {
+                                return Err(format!("owner accepted: {status} {body}"));
+                            }
+                            let entry = ctx
+                                .access_log_client()
+                                .get_access_log_with_retry(name, 15, 200)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            let expected = usize::from(name == "grpc-late-conflict");
+                            if entry.upstream_count() != expected {
+                                return Err(format!(
+                                    "expected {expected} origin attempts, got {}: {}",
+                                    entry.upstream_count(),
+                                    entry.data
+                                ));
+                            }
+                            if name == "grpc-late-conflict" && !entry.data.to_string().contains(log_t::OWNER_CONFLICT) {
+                                return Err("late conflict missing from access log".into());
+                            }
+                            Ok(())
+                        }
+                        .await;
+                        match result {
+                            Ok(()) => TestResult::passed(start.elapsed()),
+                            Err(e) => TestResult::failed(start.elapsed(), e),
+                        }
+                    })
+                },
+            ));
+        }
+        for (name, host) in [
+            ("transcoder_header_only_backend", "grpc-backend-header-only.example.com"),
+            ("transcoder_extproc_headers_before", "grpc-headers-before.example.com"),
+            ("transcoder_extproc_headers_after", "grpc-headers-after.example.com"),
+        ] {
+            cases.push(unary_case(name, false, host));
+        }
+        for (mode, kind, code) in [
+            ("missing-status", log_t::INVALID_STATUS, None),
+            ("bad-status", log_t::INVALID_STATUS, None),
+            ("error-status", log_t::RPC_FAILURE, Some(7)),
+            ("success", log_t::COMPLETED, Some(0)),
+        ] {
+            cases.push(TestCase::new(
+                format!("transcoder_stream_log_{mode}"),
+                "One bounded final outcome survives stream cleanup",
+                move |ctx| {
+                    Box::pin(async move {
+                        let start = Instant::now();
+                        let marker = format!("transcoder-stream-log-{mode}");
+                        let result = async {
+                            let (status, body, _) = call_traced(
+                                &ctx,
+                                false,
+                                "grpc-transcoder-raw.example.com",
+                                "/v1/numbers",
+                                None,
+                                Some(mode),
+                                Some(&marker),
+                            )
+                            .await?;
+                            if status != 200 || body.contains("private fixture") {
+                                return Err(format!("unexpected stream: {status} {body}"));
+                            }
+                            let entry = ctx
+                                .access_log_client()
+                                .get_access_log_with_retry(&marker, 15, 200)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            if entry.data["request_info"]["grpc_status"].as_u64() != code {
+                                return Err(format!("wrong status evidence: {}", entry.data));
+                            }
+                            let log = entry.data.to_string();
+                            if log.matches(kind).count() != 1 || log.contains("private fixture") {
+                                return Err(format!("wrong terminal log: {log}"));
+                            }
+                            Ok(())
+                        }
+                        .await;
+                        match result {
+                            Ok(()) => TestResult::passed(start.elapsed()),
+                            Err(e) => TestResult::failed(start.elapsed(), e),
+                        }
+                    })
+                },
+            ));
+        }
         for (name, host, status) in [
             (
                 "transcoder_streamed_handler_before",

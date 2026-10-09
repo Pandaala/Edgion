@@ -35,6 +35,89 @@ fn test_bundle(name: &str, id: u64) -> (WafBundleRef, ResolvedWafBundle) {
     )
 }
 
+fn selection_config(source: &str, expression: &str) -> WafConfig {
+    let (mut reference, mut bundle) = test_bundle("selected", 100);
+    bundle.data.rules[0].content = source.into();
+    bundle.data.digest = Some(bundle.data.compute_digest());
+    bundle.digest = bundle.data.compute_digest();
+    reference.expected_digest = Some(bundle.digest.clone());
+    WafConfig {
+        policy_ref: EdgionConfigDataRef {
+            name: "policy".into(),
+            ..Default::default()
+        },
+        resolved_policy: Some(WafPolicyData {
+            default_profile: "default".into(),
+            profiles: BTreeMap::from([(
+                "default".into(),
+                WafProfile {
+                    bundle_refs: vec![reference],
+                    rule_selection: serde_yaml::from_str(expression).unwrap(),
+                },
+            )]),
+        }),
+        selected_profile: Some("default".into()),
+        owner_namespace: Some("default".into()),
+        resolved_ref_indices: vec![0],
+        resolved_bundles: Some(vec![bundle]),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn static_selection_recompiles_from_identical_original_sources_and_transport() {
+    let before = selection_config(
+        concat!(
+            "SecRule REQUEST_URI \"@contains /probe\" \"id:100,phase:1,deny,status:403,tag:company/a\"\n",
+            "SecRule REQUEST_URI \"@contains /probe\" \"id:101,phase:1,deny,status:409,tag:company/b\"\n"
+        ),
+        "include: {tag: company/a}",
+    );
+    let mut after = before.clone();
+    after
+        .resolved_policy
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("default")
+        .unwrap()
+        .rule_selection = serde_yaml::from_str("include: {tag: company/b}").unwrap();
+    let ids = |config: &WafConfig| {
+        config
+            .compile_generation()
+            .unwrap()
+            .rule_units()
+            .map(|unit| unit.id())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&before), [100]);
+    assert_eq!(ids(&after), [101]);
+    assert_eq!(ids(&before), [100]);
+    assert_eq!(
+        before.resolved_bundles.as_ref().unwrap()[0].digest,
+        after.resolved_bundles.as_ref().unwrap()[0].digest
+    );
+    let wire = serde_json::to_string(&after).unwrap();
+    assert_eq!(ids(&serde_json::from_str(&wire).unwrap()), [101]);
+    assert!(!wire.contains("controllerSelectionSummary"));
+    assert!(wire.contains("ruleSelection"));
+}
+
+#[test]
+fn selected_profile_admits_the_full_baseline_before_body_and_regex_filtering() {
+    let invalid = selection_config(
+        "SecRule REQUEST_URI \"@rx (\" \"id:100,phase:1,pass,tag:php\"\n",
+        "exclude: true",
+    );
+    assert!(invalid.compile_generation().is_err());
+    let mut invalid_body = selection_config(
+        "SecRule REQUEST_BODY_LENGTH \"@gt 0\" \"id:100,phase:2,pass,tag:php\"\n",
+        "exclude: true",
+    );
+    invalid_body.request_body.inspection = WafRequestBodyInspection::Prefix;
+    assert!(invalid_body.compile_generation().is_err());
+}
+
 #[test]
 fn bundle_refs_require_complete_pinned_sources_and_redact_content() {
     let (first_ref, first) = test_bundle("first", 10);
@@ -48,6 +131,7 @@ fn bundle_refs_require_complete_pinned_sources_and_redact_content() {
             profiles: BTreeMap::from([(
                 "default".into(),
                 WafProfile {
+                    rule_selection: Default::default(),
                     bundle_refs: vec![first_ref, second_ref],
                 },
             )]),
@@ -697,6 +781,7 @@ fn json_full_only_validation_agrees_for_shape_inline_resolved_and_support() {
             profiles: BTreeMap::from([(
                 "default".into(),
                 WafProfile {
+                    rule_selection: Default::default(),
                     bundle_refs: vec![bundle_ref],
                 },
             )]),
@@ -754,6 +839,7 @@ fn full_json_admission_rejects_dynamic_broad_values_with_default_or_explicit_lim
             profiles: BTreeMap::from([(
                 "default".into(),
                 WafProfile {
+                    rule_selection: Default::default(),
                     bundle_refs: vec![reference],
                 },
             )]),
@@ -833,6 +919,7 @@ fn full_xml_admission_is_identical_for_inline_and_resolved_sources() {
             profiles: BTreeMap::from([(
                 "default".into(),
                 WafProfile {
+                    rule_selection: Default::default(),
                     bundle_refs: vec![reference],
                 },
             )]),
@@ -923,6 +1010,7 @@ fn selected_bundle_transport_identity_is_lexical_and_optional_slots_stay_optiona
                 "base".into(),
                 WafProfile {
                     bundle_refs: vec![reference, optional],
+                    ..Default::default()
                 },
             )]),
             default_profile: "base".into(),

@@ -1,0 +1,13 @@
+# Standalone selection document. Embed under a named WafPolicy profile's ruleSelection.
+# Requires an operator-attested absence of Java classloading/deserialization exposure.
+exclude:
+  allOf:
+    - tag: language-java
+    - ruleIdRange: {start: 944100, end: 944399}
+    - not: {tag: language-php}
+    - not:
+        anyOf:
+          - ruleId: 944140
+          - ruleId: 944150
+          - ruleId: 944151
+          - ruleId: 944152

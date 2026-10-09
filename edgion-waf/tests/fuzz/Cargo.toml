@@ -1,0 +1,37 @@
+[package]
+name = "edgion-waf-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+bytes = "1"
+edgion-waf = { path = "../.." }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "aho_corasick_equivalence"
+path = "fuzz_targets/aho_corasick_equivalence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transaction_body"
+path = "fuzz_targets/transaction_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "seclang_pipeline"
+path = "fuzz_targets/seclang_pipeline.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

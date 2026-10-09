@@ -17,6 +17,7 @@
 // - 31273 (tcp_fail_close): TCPRoute references missing ESP (fail-close contract)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::edgion_backend::gateway_admin;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -24,6 +25,50 @@ use tokio::net::TcpStream;
 pub struct TcpStreamPluginsTestSuite;
 
 impl TcpStreamPluginsTestSuite {
+    /// Validate the Gateway's pool before testing healthy-Redis admission.
+    /// Container port forwarding can retire idle connections during earlier
+    /// suites. Probe every fixed member without consuming the connection-rate
+    /// budget or replaying traffic.
+    async fn wait_for_redis_fixture(ctx: &TestContext) -> Result<(), String> {
+        let fixture: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/LinkSys/Redis/01_LinkSys_default_redis-test.yaml"
+        )))
+        .map_err(|_| "Invalid Redis fixture YAML".to_string())?;
+        let pool_size = fixture["spec"]["config"]["pool"]["size"]
+            .as_u64()
+            .filter(|size| (1..=64).contains(size))
+            .ok_or_else(|| "Redis fixture must declare a valid pool size".to_string())?;
+        let url = format!(
+            "{}/api/v1/testing/link-sys/redis/default%2Fredis-test/ping?all_members=true",
+            gateway_admin::admin_base(ctx)
+        );
+        let ready = async {
+            loop {
+                let response = gateway_admin::authed(ctx.http_client.get(&url).timeout(Duration::from_secs(1)))
+                    .send()
+                    .await;
+                let healthy = match response {
+                    Ok(response) if response.status().is_success() => {
+                        response.json::<serde_json::Value>().await.is_ok_and(|body| {
+                            body["success"] == true
+                                && body["data"]["healthy"] == true
+                                && body["data"]["checked_members"] == pool_size
+                        })
+                    }
+                    _ => false,
+                };
+                if healthy {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), ready)
+            .await
+            .map_err(|_| "Gateway Redis fixture did not become ready within 10s".to_string())
+    }
+
     /// Tests allow-localhost plugin: verifies the real client IP (127.0.0.1) is
     /// extracted and correctly matched against the allowList.
     ///
@@ -321,6 +366,9 @@ impl TcpStreamPluginsTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    if let Err(error) = Self::wait_for_redis_fixture(&ctx).await {
+                        return TestResult::failed(start.elapsed(), error);
+                    }
                     let addr = format!("{}:{}", ctx.target_host, 31278);
                     let total = 6;
                     let mut admitted = 0usize;

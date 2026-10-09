@@ -122,6 +122,98 @@ pub struct RateLimitPolicy {
     pub interval_duration: Option<Duration>,
 }
 
+/// Maximum independently checked quotas and aggregate policy work per entry.
+pub const MAX_REDIS_QUOTAS: usize = 16;
+pub const MAX_REDIS_POLICIES: usize = 64;
+
+/// One identity and weighted charge, checked against every configured window.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RateLimitQuota {
+    #[schemars(length(min = 1, max = 32))]
+    pub name: String,
+    #[serde(default = "default_key_sources")]
+    pub key: Vec<KeyGet>,
+    #[serde(default)]
+    pub on_key_miss: OnKeyMiss,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_key: Option<String>,
+    #[serde(default = "default_cost")]
+    #[schemars(range(min = 1, max = 1000000))]
+    pub cost: u32,
+    #[schemars(length(min = 1, max = 10))]
+    pub policies: Vec<RateLimitPolicy>,
+}
+
+impl Default for RateLimitQuota {
+    fn default() -> Self {
+        Self {
+            name: "default".into(),
+            key: default_key_sources(),
+            on_key_miss: OnKeyMiss::default(),
+            default_key: None,
+            cost: default_cost(),
+            policies: Vec::new(),
+        }
+    }
+}
+
+/// Canonical cold named-quota validation, also used by computed-cost consumers.
+pub fn validate_quotas(quotas: &[RateLimitQuota], response: Option<&str>) -> Option<String> {
+    if quotas.is_empty() || quotas.len() > MAX_REDIS_QUOTAS {
+        return Some("Expected 1..=16 quotas".into());
+    }
+    let mut names = std::collections::HashSet::new();
+    let mut policy_count = 0;
+    for quota in quotas {
+        if quota.name.is_empty()
+            || quota.name.len() > 32
+            || !quota
+                .name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+            || !names.insert(quota.name.as_str())
+        {
+            return Some("Quota names must be unique ASCII names of 1..=32 bytes".into());
+        }
+        if quota.policies.is_empty() {
+            return Some("At least one rate limit policy is required".into());
+        }
+        if quota.policies.len() > 10 {
+            return Some("Too many policies: max 10 allowed per quota".into());
+        }
+        policy_count += quota.policies.len();
+        for (i, policy) in quota.policies.iter().enumerate() {
+            if let Err(error) = validate_rate_limit_units(policy.rate) {
+                return Some(format!("policies[{i}].rate {error}"));
+            }
+            match parse_duration(&policy.interval) {
+                Err(e) => return Some(format!("policies[{i}].interval: {e}")),
+                Ok(duration) => {
+                    if let Err(error) = validate_rate_limit_window(duration) {
+                        return Some(format!("policies[{i}].interval {error}"));
+                    }
+                }
+            }
+        }
+        for (i, key) in quota.key.iter().enumerate() {
+            if key.name().is_some_and(str::is_empty) {
+                return Some(format!("key[{i}].name cannot be empty"));
+            }
+        }
+        if let Err(error) = validate_rate_limit_units(u64::from(quota.cost)) {
+            return Some(format!("cost {error}"));
+        }
+    }
+    if policy_count > MAX_REDIS_POLICIES {
+        return Some("Too many policies: max 64 allowed per entry".into());
+    }
+    if response.is_some_and(|name| !names.contains(name)) {
+        return Some("responseQuota must name a configured quota".into());
+    }
+    None
+}
+
 // ========== RateLimitRedis Configuration ==========
 
 /// Redis-based precise rate limiting plugin configuration.
@@ -134,14 +226,16 @@ pub struct RateLimitPolicy {
 /// type: RateLimitRedis
 /// config:
 ///   redisRef: "default/shared-redis"
-///   key:
-///     - type: remoteIp
-///   policies:
-///     - rate: 100
-///       interval: "1s"
+///   quotas:
+///     - name: client
+///       key:
+///         - type: remoteIp
+///       policies:
+///         - rate: 100
+///           interval: "1s"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RateLimitRedisConfig {
     /// Reference to Redis LinkSys resource ("namespace/name").
     ///
@@ -149,39 +243,13 @@ pub struct RateLimitRedisConfig {
     /// The plugin resolves the client at runtime via get_redis_client().
     pub redis_ref: String,
 
-    /// Rate limiting policies (at least one required).
-    ///
-    /// Multiple policies are evaluated independently — ALL must pass.
-    /// The most restrictive policy determines the rejection.
-    ///
-    /// ## Example
-    /// ```yaml
-    /// policies:
-    ///   - rate: 10
-    ///     interval: "1s"
-    ///   - rate: 1000
-    ///     interval: "1h"
-    /// ```
-    pub policies: Vec<RateLimitPolicy>,
+    /// Independently named quotas; every active quota must allow the request.
+    #[schemars(length(min = 1, max = 16))]
+    pub quotas: Vec<RateLimitQuota>,
 
-    /// Key extraction sources (same KeyGet as RateLimitLocal).
-    ///
-    /// A single key is used verbatim; multiple keys are combined into an
-    /// unambiguous composite key (`<byte-len>:<value>` per configured key,
-    /// "-" when it does not resolve, joined with "_").
-    /// Default: [{ type: remoteIp }]. An explicitly empty list is a valid
-    /// configuration meaning "one global bucket": it is not a key miss, so it
-    /// still rate-limits rather than falling through to `onKeyMiss`.
-    #[serde(default = "default_key_sources")]
-    pub key: Vec<KeyGet>,
-
-    /// Behavior when key cannot be extracted (default: Allow)
-    #[serde(default)]
-    pub on_key_miss: OnKeyMiss,
-
-    /// Default key fallback when extraction fails
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_key: Option<String>,
+    /// Success-header quota. Omitted selects the first checked quota.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_quota: Option<String>,
 
     /// HTTP status code for rejected requests (default: 429)
     #[serde(default = "default_reject_status")]
@@ -208,14 +276,6 @@ pub struct RateLimitRedisConfig {
     /// Behavior when Redis is unavailable (default: Allow)
     #[serde(default)]
     pub on_redis_failure: OnRedisFailure,
-
-    /// Cost per request for weighted rate limiting (default: 1).
-    ///
-    /// Useful for APIs where different endpoints have different costs.
-    /// For example, a search endpoint might cost 5, while a simple GET costs 1.
-    #[serde(default = "default_cost")]
-    #[schemars(range(min = 1, max = 1000000))]
-    pub cost: u32,
 
     /// Maximum length of the limit key portion in Redis keys (default: 4096 bytes).
     ///
@@ -277,17 +337,14 @@ impl Default for RateLimitRedisConfig {
     fn default() -> Self {
         Self {
             redis_ref: String::new(),
-            policies: vec![],
-            key: vec![KeyGet::default()],
-            on_key_miss: OnKeyMiss::default(),
-            default_key: None,
+            quotas: vec![RateLimitQuota::default()],
+            response_quota: None,
             reject_status: default_reject_status(),
             reject_message: None,
             show_limit_headers: true,
             header_names: None,
             key_prefix: default_key_prefix(),
             on_redis_failure: OnRedisFailure::default(),
-            cost: default_cost(),
             max_key_len: default_max_key_len(),
             request_timeout: None,
             request_timeout_duration: None,
@@ -330,26 +387,11 @@ impl RateLimitRedisConfig {
             ));
         }
 
-        if self.policies.is_empty() {
-            return Some("At least one rate limit policy is required".to_string());
+        if let Some(error) = validate_quotas(&self.quotas, self.response_quota.as_deref()) {
+            return Some(error);
         }
-
-        if self.policies.len() > 10 {
-            return Some(format!("Too many policies ({}): max 10 allowed", self.policies.len()));
-        }
-
-        for (i, policy) in self.policies.iter().enumerate() {
-            if let Err(error) = validate_rate_limit_units(policy.rate) {
-                return Some(format!("policies[{i}].rate {error}"));
-            }
-            match parse_duration(&policy.interval) {
-                Err(e) => return Some(format!("policies[{i}].interval: {e}")),
-                Ok(duration) => {
-                    if let Err(error) = validate_rate_limit_window(duration) {
-                        return Some(format!("policies[{i}].interval {error}"));
-                    }
-                }
-            }
+        if self.quotas.len() > 1 && self.request_timeout.is_none() {
+            return Some("Multi-quota entries require requestTimeout".to_string());
         }
 
         if !crate::http_status::is_valid_final_http_status(self.reject_status) {
@@ -368,22 +410,6 @@ impl RateLimitRedisConfig {
         }
         if !self.key_prefix.chars().all(|c| c.is_ascii() && !c.is_ascii_control()) {
             return Some("key_prefix must contain only printable ASCII".to_string());
-        }
-
-        for (i, key) in self.key.iter().enumerate() {
-            if let Some(name) = key.name() {
-                if name.is_empty() {
-                    return Some(format!(
-                        "key[{}].name cannot be empty for type {:?}",
-                        i,
-                        key.source_type()
-                    ));
-                }
-            }
-        }
-
-        if let Err(error) = validate_rate_limit_units(u64::from(self.cost)) {
-            return Some(format!("cost {error}"));
         }
 
         if self.max_key_len < 64 {
@@ -413,7 +439,7 @@ impl RateLimitRedisConfig {
         }
 
         // All field checks passed; do the compile-only side effects.
-        for policy in self.policies.iter_mut() {
+        for policy in self.quotas.iter_mut().flat_map(|quota| quota.policies.iter_mut()) {
             let dur = parse_duration(&policy.interval).expect("interval pre-validated by check_fields");
             policy.interval_duration = Some(dur);
         }

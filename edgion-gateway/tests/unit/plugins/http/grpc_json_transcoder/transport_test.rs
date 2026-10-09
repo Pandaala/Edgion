@@ -116,3 +116,162 @@ fn streamed_request_mutation_and_rpc_ownership_are_mutually_exclusive() {
     // Ignoring the refusal (for example ExtProc fail-open) cannot clear the RPC conflict.
     assert!(validate_request(&req, &later).is_err());
 }
+
+#[tokio::test]
+async fn correction_extproc_body_ownership_and_registration_are_sticky() {
+    use crate::plugins::http::ext_proc::test_body_owner;
+    use crate::plugins::http::grpc_json_transcoder::GrpcResponseProcessor;
+    use crate::plugins::runtime::{PingoraSessionAdapter, PluginSession};
+    for body in [false, true] {
+        let mut earlier = context();
+        earlier.grpc_transcoding.take();
+        assert!(earlier.install_attached_ext_proc("earlier".into(), Arc::new(test_body_owner(body)), body));
+        assert_eq!(earlier.grpc_response_owner_compatible(false), !body);
+        assert!(earlier.grpc_response_owner_compatible(true));
+        let mut later = context();
+        assert_eq!(
+            later.install_attached_ext_proc("later".into(), Arc::new(test_body_owner(body)), body),
+            !body
+        );
+        assert_eq!(
+            later
+                .grpc_transcoding
+                .as_ref()
+                .unwrap()
+                .conflict
+                .load(Ordering::Acquire),
+            body
+        );
+    }
+    let mut ctx = context();
+    let plan = ctx.grpc_transcoding.clone().unwrap();
+    let (_, stream) = tokio::io::duplex(4096);
+    let mut session = pingora_proxy::Session::new_h1(Box::new(stream));
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert!(!adapter.install_attached_response_processor(Box::new(GrpcResponseProcessor::new(plan.clone()))));
+    assert!(plan.conflict.load(Ordering::Acquire));
+    assert!(!ctx.has_response_stream_processors());
+    let mut before = context();
+    let plan = before.grpc_transcoding.take().unwrap();
+    assert!(before.push_response_stream_processor(Box::new(GrpcResponseProcessor::new(plan))));
+    assert!(!before.grpc_response_owner_compatible(false));
+}
+
+#[test]
+fn correction_scoped_body_consumers_preserve_header_only_targets() {
+    use crate::plugins::runtime::PluginRuntime;
+    use edgion_resources::resources::edgion_plugins::EdgionPlugins;
+    fn runtime(consumer: u8) -> Arc<PluginRuntime> {
+        let spec = if consumer == 2 {
+            serde_json::json!({"upstreamResponseBodyFilterPlugins":[{"type":"Wasm","config":{"source":{"file":concat!(env!("CARGO_MANIFEST_DIR"),"/../edgion-tests/wasm/artifacts/header_demo.wasm")},"pluginConfig":{"string":"response-body-probe"}}}]})
+        } else if consumer == 1 {
+            serde_json::json!({"upstreamResponseBodyFilterPlugins":[{"type":"BandwidthLimit","config":{"rate":"100kb"}}]})
+        } else {
+            serde_json::json!({"upstreamResponseFilterPlugins":[{"type":"Dsl","config":{"name":"header-companion","source":"resp.set_header(\"x-test\", \"ok\")"}}]})
+        };
+        let plugins: EdgionPlugins=serde_json::from_value(serde_json::json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{"name":"companion","namespace":"default"},"spec":spec})).unwrap();
+        crate::plugins::http::plugin_generation::PluginGeneration::new(plugins)
+            .compile(None)
+            .plugin_runtime
+            .clone()
+    }
+    for scope in 0..3 {
+        for consumer in 0..3 {
+            let mut ctx = context();
+            ctx.grpc_transcoding.take();
+            let r = runtime(consumer);
+            assert!(!r.rejects_invalid_config());
+            match scope {
+                0 => ctx.install_resolved_global_plugins(vec![r]),
+                1 => ctx.install_resolved_gateway_plugins(vec![r]),
+                _ => ctx.install_resolved_route_ext_refs(vec![Some(r)]),
+            }
+            assert_eq!(ctx.grpc_response_owner_compatible(false), consumer == 0);
+        }
+    }
+}
+
+#[test]
+fn correction_backend_checks_actual_pinned_target_not_wrapper_shape() {
+    use crate::plugins::runtime::PluginRuntime;
+    use edgion_resources::resources::edgion_plugins::EdgionPlugins;
+    let filters = serde_json::from_value::<Vec<edgion_resources::HTTPRouteFilter>>(serde_json::json!([
+        {"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"companion"}}
+    ]))
+    .unwrap();
+    let owner: edgion_resources::HTTPRoute = serde_json::from_value(serde_json::json!({"apiVersion":"gateway.networking.k8s.io/v1", "kind":"HTTPRoute", "metadata":{"namespace":"default","name":"test-route"}, "spec":{"rules":[{"backendRefs":[{"name":"backend","port":80,"filters":filters}]}]}})).unwrap();
+    let outer = PluginRuntime::from_httproute_filters_for_backend(&owner, 0, 0, &Default::default());
+    assert!(!outer.has_ai_conversion_owner());
+    assert_eq!(outer.upstream_response_body_plugins_count(), 1);
+    for (spec, compatible) in [
+        (
+            serde_json::json!({"requestPlugins":[{"type":"AiProxy","config":{"api":"openaiChat"}}]}),
+            false,
+        ),
+        (
+            serde_json::json!({"upstreamResponseBodyFilterPlugins":[{"type":"BandwidthLimit","config":{"rate":"100kb"}}]}),
+            false,
+        ),
+        (
+            serde_json::json!({"upstreamResponseFilterPlugins":[{"type":"Dsl","config":{"name":"header-companion","source":"resp.set_header(\"x-test\", \"ok\")"}}]}),
+            true,
+        ),
+    ] {
+        let plugins:EdgionPlugins=serde_json::from_value(serde_json::json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{"name":"companion","namespace":"default"},"spec":spec})).unwrap();
+        let target = crate::plugins::http::plugin_generation::PluginGeneration::new(plugins)
+            .compile(None)
+            .plugin_runtime
+            .clone();
+        assert!(!target.rejects_invalid_config());
+        let mut ctx = context();
+        ctx.pinned_backend_ext_ref("default/companion", || Some(target));
+        assert_eq!(outer.backend_compatible(&mut ctx), compatible);
+        assert_eq!(
+            ctx.grpc_transcoding.as_ref().unwrap().conflict.load(Ordering::Acquire),
+            !compatible
+        );
+    }
+}
+
+#[test]
+fn correction_ai_installation_and_outgoing_attempt_defenses_are_sticky() {
+    use crate::ai::{AiAttemptPlan, AiPlanError, AiProviderLabel, AiRequestContext, AiUsageShared};
+    for request_context in [false, true] {
+        let mut ctx = context();
+        let accepted = if request_context {
+            ctx.try_set_ai_request_context(AiRequestContext {
+                provider: AiProviderLabel::OpenAi,
+                model: "model".into(),
+                pricing: None,
+                requested_streaming: false,
+                usage: Arc::new(AiUsageShared::default()),
+                quota: None,
+                quota_status: None,
+            })
+        } else {
+            ctx.try_set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend))
+        };
+        assert!(!accepted);
+        assert!(ctx.ai_state().is_none());
+        assert_eq!(
+            ctx.grpc_transcoding.as_ref().unwrap().outcome.lock().kind,
+            Outcome::OwnerConflict
+        );
+    }
+    let req = RequestHeader::build("POST", b"/test.TestService/SayHello", None).unwrap();
+    let mut ctx = context();
+    ctx.ensure_ai_state();
+    assert!(validate_request(&req, &ctx).is_err());
+    assert_eq!(
+        ctx.grpc_transcoding.as_ref().unwrap().outcome.lock().kind,
+        Outcome::OwnerConflict
+    );
+    let mut ctx = context();
+    let plan = Arc::get_mut(ctx.grpc_transcoding.as_mut().unwrap()).unwrap();
+    plan.deadline = Instant::now() - Duration::from_secs(1);
+    assert!(validate_request(&req, &ctx).is_err());
+    assert_eq!(
+        ctx.grpc_transcoding.as_ref().unwrap().outcome.lock().kind,
+        Outcome::Expired
+    );
+}

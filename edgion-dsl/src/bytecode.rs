@@ -283,9 +283,47 @@ pub enum BuiltinId {
     RedisHExists,
     /// `redis.rate_limit(link, policy, key, cost)` -> Map { ok, value, error }
     RedisRateLimit,
+    // Bounded XML request/document primitives.
+    XmlParse,
+    XmlKind,
+    XmlName,
+    XmlNamespace,
+    XmlValue,
+    XmlChildCount,
+    XmlChild,
+    XmlFind,
+    XmlAttributeCount,
+    XmlAttribute,
+    XmlAttrValue,
+    XmlText,
+    XmlAttr,
+    XmlElement,
+    XmlStringify,
+    XmlSetBody,
 }
 
 impl BuiltinId {
+    pub fn is_xml_builtin(self) -> bool {
+        matches!(
+            self,
+            Self::XmlParse
+                | Self::XmlKind
+                | Self::XmlName
+                | Self::XmlNamespace
+                | Self::XmlValue
+                | Self::XmlChildCount
+                | Self::XmlChild
+                | Self::XmlFind
+                | Self::XmlAttributeCount
+                | Self::XmlAttribute
+                | Self::XmlAttrValue
+                | Self::XmlText
+                | Self::XmlAttr
+                | Self::XmlElement
+                | Self::XmlStringify
+                | Self::XmlSetBody
+        )
+    }
     /// Returns true for all `redis.*` builtin IDs that require async dispatch
     /// through the LinkSys Redis connection pool.
     ///
@@ -328,7 +366,12 @@ impl OpCode {
     pub fn is_request_body_mutation(self) -> bool {
         matches!(
             self,
-            OpCode::BodyClear | OpCode::BodyAppend | OpCode::BodyPrepend | OpCode::BodyRemove | OpCode::BodyReplace
+            OpCode::BodyClear
+                | OpCode::BodyAppend
+                | OpCode::BodyPrepend
+                | OpCode::BodyRemove
+                | OpCode::BodyReplace
+                | OpCode::CallBuiltin(BuiltinId::XmlSetBody, _)
         )
     }
 }
@@ -452,7 +495,7 @@ impl CompiledScript {
 
     /// True when the script evaluates the opaque request-body value.
     pub fn references_request_body(&self) -> bool {
-        self.references_builtin(BuiltinId::ReqBody)
+        self.references_builtin(BuiltinId::ReqBody) || self.references_builtin(BuiltinId::XmlSetBody)
     }
 
     /// True when the script contains an opcode that can mutate the request body.

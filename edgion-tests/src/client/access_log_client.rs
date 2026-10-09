@@ -280,6 +280,16 @@ pub struct AccessLogClient {
 }
 
 impl AccessLogClient {
+    /// Require one canonical logging-boundary write for this request marker.
+    pub async fn require_single_write(&self, marker: &str) -> Result<()> {
+        let trace = trace_id_for_marker(marker);
+        let list = self.list_access_logs().await?;
+        let matching: Vec<_> = list.data.iter().filter(|item| item.trace_id == trace).collect();
+        if matching.len() != 1 || matching[0].store_count != 1 {
+            return Err(anyhow!("expected exactly one access-log write for {trace}"));
+        }
+        Ok(())
+    }
     /// Create a new AccessLogClient
     pub fn new(base_url: String) -> Self {
         let client = Client::builder()

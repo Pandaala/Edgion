@@ -646,6 +646,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         // Native Anthropic Messages fixture. Its observation endpoint exposes
         // only a monotonically increasing count, never headers or bodies.
         .route("/anthropic/{*path}", axum::routing::post(anthropic_provider_handler))
+        .route("/messages/{*path}", axum::routing::post(messages_provider_handler))
         .route("/anthropic-fixture/count", get(anthropic_request_count_handler))
         // --- Mirror endpoints (for RequestMirror plugin integration tests) ---
         // POST/GET to /mirror/capture: gateway mirrors requests here; stored by x-trace-id
@@ -1890,6 +1891,64 @@ fn incremental_json_usage_fixture(mode: Option<&str>, fixture_id: Option<&str>) 
 }
 
 /// Native Responses fixture uses the same bounded channel and observation owner as Chat.
+fn chat_sdk_response(
+    request: &serde_json::Value,
+    mode: &str,
+    observation: &AiProviderObservation,
+) -> axum::response::Response {
+    use serde_json::json;
+    let tool = mode == "sdk_chat_tool";
+    let text = if mode == "sdk_chat_structured" {
+        json!({"ok":true}).to_string()
+    } else {
+        "fixed completion".to_owned()
+    };
+    let call =
+        json!({"id":"call_fixture","type":"function","function":{"name":"weather","arguments":"{\"city\":\"Paris\"}"}});
+    let message = if tool {
+        json!({"role":"assistant","content":null,"tool_calls":[call]})
+    } else {
+        json!({"role":"assistant","content":text})
+    };
+    let usage = json!({"prompt_tokens":11,"completion_tokens":7,"total_tokens":18});
+    let complete = json!({"id":"chat_fixture","object":"chat.completion","created":1,"model":"fixture-model","choices":[{"index":0,"message":message,"finish_reason":if tool { "tool_calls" } else { "stop" }}],"usage":usage,"mock":observation,"native_extension":{"request":request}});
+    if request["stream"] != true {
+        return axum::Json(complete).into_response();
+    }
+    let chunk = |delta: serde_json::Value, finish: serde_json::Value| json!({"id":"chat_fixture","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":delta,"finish_reason":finish}]});
+    let mut frames = vec![chunk(json!({"role":"assistant","content":""}), json!(null))];
+    if tool {
+        frames.push(chunk(json!({"tool_calls":[{"index":0,"id":"call_fixture","type":"function","function":{"name":"weather","arguments":"{\"city\":"}}]}), json!(null)));
+        frames.push(chunk(
+            json!({"tool_calls":[{"index":0,"function":{"arguments":"\"Paris\"}"}}]}),
+            json!(null),
+        ));
+    } else {
+        frames.push(chunk(json!({"content":text}), json!(null)));
+    }
+    frames.push(chunk(json!({}), json!(if tool { "tool_calls" } else { "stop" })));
+    if request.pointer("/stream_options/include_usage") == Some(&json!(true)) {
+        frames.push(json!({"id":"chat_fixture","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[],"usage":usage}));
+    }
+    let wire = frames
+        .into_iter()
+        .map(|value| format!("data: {value}\n\n"))
+        .collect::<String>()
+        + "data: [DONE]\n\n";
+    let chunks = wire
+        .as_bytes()
+        .chunks(7)
+        .map(Bytes::copy_from_slice)
+        .collect::<Vec<_>>();
+    axum::response::Response::builder()
+        .status(200)
+        .header("content-type", "text/event-stream")
+        .body(Body::from_stream(futures::stream::iter(
+            chunks.into_iter().map(Ok::<_, std::io::Error>),
+        )))
+        .unwrap()
+}
+
 fn responses_provider_response(
     body: &[u8],
     mode: &str,
@@ -1905,7 +1964,9 @@ fn responses_provider_response(
         "cancelled" => "cancelled",
         _ => "completed",
     };
-    let text = if mode == "large" {
+    let mut text = if mode == "sdk_structured" {
+        json!({"ok":true}).to_string()
+    } else if mode == "large" {
         "x".repeat(256 * 1024)
     } else {
         let mut native_observation = serde_json::to_value(observation).unwrap();
@@ -1913,11 +1974,17 @@ fn responses_provider_response(
             json!(!headers.contains_key("openai-organization") && !headers.contains_key("openai-project"));
         native_observation.to_string()
     };
+    if mode == "long" {
+        text.push_str(&"fixed streamed text".repeat(997));
+    }
     let mut response = json!({"id":"resp_fixture", "object":"response", "created_at":1, "status":status,
         "error":null,"incomplete_details":null,"model":"fixture-model","output":[{"id":"msg_fixture","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":text,"annotations":[]}]}],
         "parallel_tool_calls":true,"tool_choice":"auto","tools":[],"temperature":1.0,"top_p":1.0,
         "usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":4}},
         "native_extension":{"preserved":true,"request":request}});
+    if mode == "sdk_tool" {
+        response["output"] = json!([{"id":"fc_fixture","type":"function_call","call_id":"call_fixture","name":"weather","arguments":"{\"city\":\"Paris\"}","status":"completed"}]);
+    }
     if mode == "missing_usage" {
         response.as_object_mut().unwrap().remove("usage");
     }
@@ -1939,28 +2006,65 @@ fn responses_provider_response(
             value
         ))
     };
-    let mut frames = vec![
-        event(
-            json!({"type":"response.created","sequence_number":0,"response":{"id":"resp_fixture","status":"in_progress"}}),
-        ),
-        event(
-            json!({"type":"response.output_text.delta","sequence_number":1,"item_id":"msg_fixture","output_index":0,"content_index":0,"delta":"hello"}),
-        ),
-        event(
-            json!({"type":"response.output_text.done","sequence_number":2,"item_id":"msg_fixture","output_index":0,"content_index":0,"text":"hello"}),
-        ),
-    ];
-    if mode == "long" {
-        frames.extend((3..1000).map(|seq| event(json!({"type":"response.output_text.delta","sequence_number":seq,"item_id":"msg_fixture","output_index":0,"content_index":0,"delta":"fixed streamed text"}))));
+    let mut frames = Vec::new();
+    let mut push = |mut value: serde_json::Value| {
+        value["sequence_number"] = json!(frames.len());
+        frames.push(event(value));
+    };
+    let mut initial = response.clone();
+    initial["output"] = json!([]);
+    initial["status"] = json!("in_progress");
+    initial["usage"] = serde_json::Value::Null;
+    push(json!({"type":"response.created","response":initial}));
+    let item = response["output"][0].clone();
+    let mut added = item.clone();
+    added["status"] = json!("in_progress");
+    if mode == "sdk_tool" {
+        added["arguments"] = json!("");
+        push(json!({"type":"response.output_item.added","output_index":0,"item":added}));
+        for delta in ["{\"city\":", "\"Paris\"}"] {
+            push(
+                json!({"type":"response.function_call_arguments.delta","item_id":"fc_fixture","output_index":0,"delta":delta}),
+            );
+        }
+        push(
+            json!({"type":"response.function_call_arguments.done","item_id":"fc_fixture","output_index":0,"arguments":item["arguments"]}),
+        );
+    } else {
+        added["content"] = json!([]);
+        push(json!({"type":"response.output_item.added","output_index":0,"item":added}));
+        push(
+            json!({"type":"response.content_part.added","item_id":"msg_fixture","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}),
+        );
+        let first_text = if mode == "long" {
+            text.strip_suffix(&"fixed streamed text".repeat(997)).unwrap()
+        } else {
+            &text
+        };
+        push(
+            json!({"type":"response.output_text.delta","item_id":"msg_fixture","output_index":0,"content_index":0,"delta":first_text}),
+        );
+        if mode == "long" {
+            for _ in 0..997 {
+                push(
+                    json!({"type":"response.output_text.delta","item_id":"msg_fixture","output_index":0,"content_index":0,"delta":"fixed streamed text"}),
+                );
+            }
+        }
+        push(
+            json!({"type":"response.output_text.done","item_id":"msg_fixture","output_index":0,"content_index":0,"text":text}),
+        );
+        push(
+            json!({"type":"response.content_part.done","item_id":"msg_fixture","output_index":0,"content_index":0,"part":item["content"][0]}),
+        );
     }
+    push(json!({"type":"response.output_item.done","output_index":0,"item":item}));
     let terminal = match status {
         "failed" => "response.failed",
         "incomplete" => "response.incomplete",
         _ => "response.completed",
     };
-    frames.push(event(
-        json!({"type":terminal,"sequence_number":1001,"response":response}),
-    ));
+    push(json!({"type":terminal,"response":response}));
     if mode == "malformed" {
         frames.push(Bytes::from_static(b"data: {"));
     }
@@ -1973,7 +2077,7 @@ fn responses_provider_response(
     if mode == "abort" {
         frames.truncate(2);
     }
-    let chunks = if mode == "split" {
+    let chunks = if mode == "split" || mode.starts_with("sdk_") {
         frames
             .into_iter()
             .flat_map(|frame| frame.chunks(7).map(Bytes::copy_from_slice).collect::<Vec<_>>())
@@ -2062,6 +2166,13 @@ async fn ai_provider_handler(
         );
     }
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    if query
+        .mock_mode
+        .as_deref()
+        .is_some_and(|mode| mode.starts_with("sdk_chat_"))
+    {
+        return chat_sdk_response(&json, query.mock_mode.as_deref().unwrap(), &observation);
+    }
     let trace_id = parts
         .headers
         .get("x-trace-id")
@@ -2415,6 +2526,275 @@ async fn ai_credential_exhaustion_observations_handler(Path(trace_id): Path<Stri
         .remove(&trace_id)
         .unwrap_or_default();
     axum::Json(serde_json::json!({ "observations": observations }))
+}
+
+/// Separate native Messages fixture; the existing Chat converter fixture is unchanged.
+async fn messages_provider_handler(Path(path): Path<String>, request: AxumRequest<Body>) -> axum::response::Response {
+    use serde_json::json;
+    let (parts, body) = request.into_parts();
+    let Ok(body) = axum::body::to_bytes(body, 1024 * 1024).await else {
+        return (axum::http::StatusCode::PAYLOAD_TOO_LARGE, "fixture body limit").into_response();
+    };
+    let request: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return (axum::http::StatusCode::BAD_REQUEST, "fixture invalid JSON").into_response(),
+    };
+    let query: std::collections::BTreeMap<String, String> =
+        reqwest::Url::parse(&format!("http://fixture{}", parts.uri))
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+    let mode = query.get("mock_mode").map(String::as_str).unwrap_or("normal");
+    let key = parts
+        .headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let credential_label = match key {
+        "messages-key-A" => "A",
+        "messages-key-B" => "B",
+        _ => "invalid",
+    };
+    let observed = json!({
+        "fixture":"messages-native","path":path,"query":query,
+        "request":request,
+        "credential_label":credential_label,
+        "auth_absent":!parts.headers.contains_key("authorization")&&!parts.headers.contains_key("api-key"),
+        "workspace_absent":!parts.headers.contains_key("anthropic-workspace-id"),
+        "profile_absent":!parts.headers.contains_key("anthropic-user-profile-id"),
+        "version":parts.headers.get("anthropic-version").and_then(|v|v.to_str().ok()),
+        "beta":parts.headers.get_all("anthropic-beta").iter().filter_map(|v|v.to_str().ok()).collect::<Vec<_>>(),
+    });
+    let tool = mode == "tool";
+    let thinking = mode == "thinking";
+    let reason = if tool {
+        "tool_use"
+    } else if mode == "pause" {
+        "pause_turn"
+    } else if request["max_tokens"] == 0 {
+        "max_tokens"
+    } else {
+        "end_turn"
+    };
+    let zero = request["max_tokens"] == 0;
+    let content = if zero {
+        json!([])
+    } else if tool {
+        json!([{"type":"tool_use","id":"tool_fixture","name":"weather","input":{"city":"Paris"}}])
+    } else if thinking {
+        json!([{"type":"thinking","thinking":"fixture thought","signature":"opaque-fixture-signature"},{"type":"text","text":"hello"}])
+    } else {
+        json!([{"type":"text","text":observed.to_string()}])
+    };
+    let output_tokens = if zero {
+        0
+    } else if mode == "quota" {
+        32
+    } else {
+        7
+    };
+    let mut usage = json!({"input_tokens":8,"output_tokens":output_tokens,"cache_creation_input_tokens":3,"cache_read_input_tokens":2});
+    if mode == "composite" {
+        usage["iterations"] =
+            json!([{"type":"advisor_message","model":"advisor-model","usage":{"input_tokens":3,"output_tokens":4}}]);
+    }
+    if mode == "iterations" {
+        usage["iterations"] =
+            json!([{"type":"message","model":"fixture-model","usage":{"input_tokens":13,"output_tokens":7}}]);
+    }
+    let mut message = json!({"id":"msg_fixture","type":"message","role":"assistant","model":"fixture-model","content":content,"stop_reason":reason,"stop_sequence":null,"usage":usage});
+    if mode == "missing_usage" {
+        message.as_object_mut().unwrap().remove("usage");
+    }
+    if request["stream"] != true {
+        let mut wire = message.to_string();
+        if mode == "malformed" {
+            wire.push_str("invalid-tail");
+        }
+        return axum::response::Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(Body::from(wire))
+            .unwrap();
+    }
+    let event = |name: &str, value: serde_json::Value| Bytes::from(format!("event: {name}\ndata: {value}\n\n"));
+    let mut frames = vec![
+        Bytes::from_static(b": heartbeat\n\n"),
+        event(
+            "message_start",
+            json!({"type":"message_start","message":{"id":"msg_fixture","type":"message","role":"assistant","model":"fixture-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":0,"cache_creation_input_tokens":3,"cache_read_input_tokens":0}}}),
+        ),
+    ];
+    for (index, block) in content.as_array().unwrap().iter().enumerate() {
+        let mut start = block.clone();
+        let ty = block["type"].as_str().unwrap();
+        let delta = match ty {
+            "tool_use" => {
+                start["input"] = json!({});
+                json!({"type":"input_json_delta","partial_json":block["input"].to_string()})
+            }
+            "thinking" => {
+                start["thinking"] = json!("");
+                start["signature"] = json!("");
+                json!({"type":"thinking_delta","thinking":block["thinking"]})
+            }
+            _ => {
+                start["text"] = json!("");
+                json!({"type":"text_delta","text":block["text"]})
+            }
+        };
+        frames.push(event(
+            "content_block_start",
+            json!({"type":"content_block_start","index":index,"content_block":start}),
+        ));
+        if ty == "tool_use" {
+            for fragment in ["{\"city\":", "\"Paris\"}"] {
+                frames.push(event("content_block_delta", json!({"type":"content_block_delta","index":index,"delta":{"type":"input_json_delta","partial_json":fragment}})));
+            }
+        } else {
+            frames.push(event(
+                "content_block_delta",
+                json!({"type":"content_block_delta","index":index,"delta":delta}),
+            ));
+        }
+        if ty == "thinking" {
+            frames.push(event("content_block_delta",json!({"type":"content_block_delta","index":index,"delta":{"type":"signature_delta","signature":block["signature"]}})));
+        }
+        if index == 0 && mode == "long" {
+            frames.extend((0..1000).map(|_| {
+                event(
+                    "content_block_delta",
+                    json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}),
+                )
+            }));
+        }
+        frames.push(event(
+            "content_block_stop",
+            json!({"type":"content_block_stop","index":index}),
+        ));
+    }
+    if mode == "oversized" {
+        frames.push(event(
+            "future_event",
+            json!({"type":"future_event","content":"x".repeat(1024*1024)}),
+        ));
+    }
+    frames.push(event(
+        "message_delta",
+        json!({"type":"message_delta","delta":{},"usage":usage}),
+    ));
+    if mode == "quota" {
+        // Keep a bounded nonterminal tail after usage publication so the
+        // asynchronous Redis charge can complete before stream termination.
+        // Twenty heartbeats at 150 ms exceed the fixture's 2 s Redis timeout;
+        // this is functional enforcement coverage, not a latency guarantee.
+        frames.extend((0..20).map(|_| Bytes::from_static(b": quota heartbeat\n\n")));
+    }
+    frames.push(event(
+        "message_delta",
+        json!({"type":"message_delta","delta":{"stop_reason":reason,"stop_sequence":null},"usage":{"output_tokens":output_tokens}}),
+    ));
+    frames.push(event("message_stop", json!({"type":"message_stop"})));
+    if mode == "missing_usage" {
+        frames = frames
+            .into_iter()
+            .map(|frame| {
+                let wire = String::from_utf8_lossy(&frame);
+                let Some(data) = wire.lines().find_map(|line| line.strip_prefix("data: ")) else {
+                    return frame;
+                };
+                let mut value: serde_json::Value = serde_json::from_str(data).unwrap();
+                if let Some(message) = value.get_mut("message").and_then(serde_json::Value::as_object_mut) {
+                    message.remove("usage");
+                }
+                value.as_object_mut().unwrap().remove("usage");
+                event(value["type"].as_str().unwrap(), value.clone())
+            })
+            .collect();
+    }
+    if mode == "error" {
+        frames.truncate(1);
+        frames.push(event(
+            "error",
+            json!({"type":"error","error":{"type":"overloaded_error","message":"fixture unavailable"}}),
+        ));
+    }
+    if mode == "malformed" {
+        frames.push(Bytes::from_static(b"data: {"));
+    }
+    if mode == "abort" {
+        frames.truncate(3);
+    }
+    let chunks = if mode == "split" {
+        frames
+            .into_iter()
+            .flat_map(|v| v.chunks(7).map(Bytes::copy_from_slice).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    } else {
+        frames
+    };
+    let trace = if mode == "long" {
+        parts
+            .headers
+            .get("x-trace-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    } else {
+        None
+    };
+    if let Some(trace) = &trace {
+        AI_LONG_STREAM_OBSERVATIONS
+            .lock()
+            .insert(trace.clone(), AiLongStreamObservation::default());
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    let abort = mode == "abort";
+    let interval = Duration::from_millis(match mode {
+        "split" => 1,
+        "quota" => 150,
+        _ => 20,
+    });
+    tokio::spawn(async move {
+        for chunk in chunks {
+            if tx.send(Ok(chunk)).await.is_err() {
+                if let Some(trace) = &trace {
+                    if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace) {
+                        state.upstream_cancelled = true;
+                    }
+                }
+                return;
+            }
+            if let Some(trace) = &trace {
+                if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace) {
+                    state.chunks_queued += 1;
+                }
+            }
+            tokio::time::sleep(interval).await;
+        }
+        if abort {
+            let _ = tx
+                .send(Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "intentional Messages fixture abort",
+                )))
+                .await;
+        }
+        if let Some(trace) = &trace {
+            if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace) {
+                state.provider_completed = true;
+            }
+        }
+    });
+    let mut response = axum::response::Response::builder()
+        .status(200)
+        .header("content-type", "text/event-stream");
+    if mode == "encoded" {
+        response = response.header("content-encoding", "gzip");
+    }
+    response
+        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        .unwrap()
 }
 
 const ANTHROPIC_PROVIDER_KEY: &str = "anthropic-provider-test-key";
@@ -3453,7 +3833,7 @@ mod ext_proc_server {
         }
     }
 
-    fn request_body_verdict_with(body: &'static [u8]) -> ProcessingResponse {
+    fn request_body_verdict_with(body: &[u8]) -> ProcessingResponse {
         ProcessingResponse {
             response: Some(processing_response::Response::RequestBody(BodyResponse {
                 response: Some(CommonResponse {
@@ -3533,6 +3913,28 @@ mod ext_proc_server {
                     .headers
                     .as_ref()
                     .and_then(|headers| header_value(headers, TEST_MODE_HEADER));
+                if mode.as_deref() == Some("chain") {
+                    let second = h
+                        .headers
+                        .as_ref()
+                        .and_then(|headers| header_value(headers, "x-ext-proc-chain"))
+                        .as_deref()
+                        == Some("first");
+                    *mode = Some(if second { "chain-second" } else { "chain-first" }.to_string());
+                    let mut verdict = headers_verdict(true, "x-ext-proc-req");
+                    if let Some(processing_response::Response::RequestHeaders(ref mut response)) = verdict.response {
+                        response
+                            .response
+                            .as_mut()
+                            .unwrap()
+                            .header_mutation
+                            .as_mut()
+                            .unwrap()
+                            .set_headers
+                            .push(set_opt("x-ext-proc-chain", if second { "second" } else { "first" }));
+                    }
+                    return (Some(verdict), false);
+                }
                 let has = |name: &str| {
                     h.headers
                         .as_ref()
@@ -3574,8 +3976,23 @@ mod ext_proc_server {
                 Some("close-on-response-headers") => (None, true),
                 _ => (Some(headers_verdict(false, "x-ext-proc-resp")), false),
             },
-            processing_request::Request::RequestBody(_) => {
+            processing_request::Request::RequestBody(body) => {
                 let response = match mode.as_deref() {
+                    Some("chain-first") | Some("chain-second") => {
+                        // Noncommutative byte mapping proves processor order independently
+                        // of transport chunk boundaries; an empty EOS emits no extra bytes.
+                        let (from, to) = if mode.as_deref() == Some("chain-first") {
+                            (b'a', b'b')
+                        } else {
+                            (b'b', b'c')
+                        };
+                        let transformed: Vec<u8> = body
+                            .body
+                            .into_iter()
+                            .map(|byte| if byte == from { to } else { byte })
+                            .collect();
+                        request_body_verdict_with(&transformed)
+                    }
                     Some("duplicate-header") | Some("wrong-order") => headers_verdict(true, "x-duplicate-phase"),
                     Some("bodyless-create") => request_body_verdict_with(b"created-by-ext-proc"),
                     // Streamed mid-body rejection: the first body chunk draws an

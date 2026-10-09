@@ -8,6 +8,21 @@
 
 The [RateLimitLocal plugin](rate-limit-local.md) uses an in-process Count-Min Sketch algorithm with nanosecond latency, but each gateway instance counts independently — in multi-replica deployments, the effective total throughput is the configured rate multiplied by the number of instances. RateLimitRedis uses Redis to enforce **precise** cluster-wide rate limits: all instances share the same Redis counter, so the configured rate is the actual rate for the entire cluster.
 
+## Independent quotas
+
+Each quota selects its own existing KeyGet sources, cost and policies. A composite
+`key: [tenant, user]` creates one bucket; tenant-wide and per-user limits require
+two quotas. Resolve trusted identity into ctx before limiting. Header, cookie
+and query identities retain their client-controlled semantics. Missing all key
+sources uses defaultKey/onKeyMiss; partial composites retain positional missing
+markers. Allow skips only that quota.
+
+Checks run sequentially under one deadline. A later rejection or Redis failure
+retains earlier debits; timeout may leave an uncertain committed debit. There is
+no cross-quota transaction, refund or automatic debit retry. All-skipped requests
+proceed without Redis or quota headers. Stable quota names preserve counters when
+reordered; renamed quotas use new counters. Existing policy indexes still matter.
+
 ### RateLimitLocal vs. RateLimitRedis
 
 | Feature | RateLimitLocal | RateLimitRedis |
@@ -60,11 +75,13 @@ spec:
     - type: RateLimitRedis
       config:
         redisRef: "default/shared-redis"
-        key:
-          - type: remoteIp
-        policies:
-          - rate: 100
-            interval: "1s"
+        quotas:
+          - name: default
+            key:
+              - type: remoteIp
+            policies:
+              - rate: 100
+                interval: "1s"
 ```
 
 ### Prerequisites
@@ -88,10 +105,13 @@ spec:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `redisRef` | String | — (required) | Redis LinkSys resource reference in `"namespace/name"` format. Only alphanumeric characters, `-`, and `_` are allowed |
-| `policies` | Array\<Object\> | — (required) | Rate limiting policy list. At least 1, maximum 10. See Policy Configuration below |
-| `key` | Array\<Object\> | `[{type: remoteIp}]` | Rate limiting dimension list. A single key is used verbatim; multiple keys are length-prefixed and joined with `_`. See Key Configuration below |
-| `onKeyMiss` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
-| `defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onKeyMiss` |
+| `quotas` | Array<Object> | required | 1–16 independently named quotas; at most 64 policies in the entry. Every active quota must pass |
+| `quotas[].name` | String | required | Unique ASCII name of 1–32 letters, digits, `.`, `_`, or `-`; stable across reordering |
+| `responseQuota` | String | first checked quota | Select success headers from this named quota; skipped selection emits no quota headers. Denial headers always use the denying quota |
+| `quotas[].policies` | Array\<Object\> | — (required) | Rate limiting policy list. At least 1, maximum 10. See Policy Configuration below |
+| `quotas[].key` | Array\<Object\> | `[{type: remoteIp}]` | Rate limiting dimension list. A single key is used verbatim; multiple keys are length-prefixed and joined with `_`. See Key Configuration below |
+| `quotas[].onKeyMiss` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
+| `quotas[].defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onKeyMiss` |
 | `rejectStatus` | Integer | `429` | Final HTTP status code on rejection (200–599) |
 | `rejectMessage` | String | none | JSON response body on rejection |
 | `showLimitHeaders` | Boolean | `true` | Whether to return rate limit response headers |
@@ -102,7 +122,7 @@ spec:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `onRedisFailure` | Enum | `Allow` | Policy applied when Redis is unavailable **or** when `requestTimeout` elapses. Covers both (a) Redis detectably down — fast-eject with zero I/O, and (b) Redis healthy but slow/erroring — bounded wait then give up. Both cases route through this single policy. Values: `Allow` (fail-open) \| `Deny` (fail-close) |
-| `requestTimeout` | String | unset | Optional wall-clock deadline for the complete multi-policy Redis check (e.g. `"500ms"`). When unset, no aggregate timeout is applied; the per-command timeout from the LinkSys Redis CRD still applies. When set and the deadline elapses, `onRedisFailure` applies |
+| `requestTimeout` | String | unset | Required for multiple quotas; optional for one quota. Wall-clock deadline for all Redis checks (e.g. `"500ms"`). When unset, no aggregate timeout is applied; the per-command timeout from the LinkSys Redis CRD still applies. When set and the deadline elapses, `onRedisFailure` applies |
 | `keyPrefix` | String | `"edgion:rl:"` | Redis key prefix. Must end with `:` and contain only printable ASCII characters |
 | `maxKeyLen` | Integer | `4096` | Maximum byte length of the key portion in Redis keys (64–65536). Prevents Redis OOM from maliciously long key values |
 
@@ -110,7 +130,7 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `cost` | Integer | `1` | Request cost units for weighted rate limiting, from 1 through 1,000,000. `cost: 5` means each request consumes 5 units of the quota |
+| `quotas[].cost` | Integer | `1` | Request cost units for weighted rate limiting, from 1 through 1,000,000. `cost: 5` means each request consumes 5 units of the quota |
 
 ---
 
@@ -257,12 +277,14 @@ spec:
     - type: RateLimitRedis
       config:
         redisRef: "default/shared-redis"
-        key:
-          - type: remoteIp
-        policies:
-          - rate: 100
-            interval: "1s"
-            algorithm: SlidingWindow
+        quotas:
+          - name: default
+            key:
+              - type: remoteIp
+            policies:
+              - rate: 100
+                interval: "1s"
+                algorithm: SlidingWindow
 ```
 
 ### 2. Multi-Policy Rate Limiting (Burst + Hourly Quota)
@@ -305,18 +327,20 @@ spec:
     - type: RateLimitRedis
       config:
         redisRef: "default/shared-redis"
-        key:
-          - type: header
-            name: "X-API-Key"
-        onKeyMiss: Deny
-        policies:
-          - rate: 50
-            interval: "1s"
-            algorithm: SlidingWindow
-          - rate: 5000
-            interval: "1h"
-            algorithm: FixedWindow
         rejectMessage: '{"error":"rate limit exceeded","code":"RATE_LIMIT"}'
+        quotas:
+          - name: default
+            key:
+              - type: header
+                name: "X-API-Key"
+            onKeyMiss: Deny
+            policies:
+              - rate: 50
+                interval: "1s"
+                algorithm: SlidingWindow
+              - rate: 5000
+                interval: "1h"
+                algorithm: FixedWindow
 ```
 
 ### 3. High-Security — Deny on Redis Failure
@@ -359,21 +383,23 @@ spec:
     - type: RateLimitRedis
       config:
         redisRef: "default/ha-redis"
-        key:
-          - type: header
-            name: "Authorization"
-        onKeyMiss: Deny
         onRedisFailure: Deny
-        policies:
-          - rate: 1000
-            interval: "1m"
-            algorithm: TokenBucket
         keyPrefix: "premium:rl:"
         showLimitHeaders: true
         headerNames:
           limit: "X-Premium-Limit"
           remaining: "X-Premium-Remaining"
           retryIn: "X-Retry-After"
+        quotas:
+          - name: default
+            key:
+              - type: header
+                name: "Authorization"
+            onKeyMiss: Deny
+            policies:
+              - rate: 1000
+                interval: "1m"
+                algorithm: TokenBucket
 ```
 
 ### 4. Conditional Global Policy with a Composite Bucket
@@ -406,17 +432,19 @@ spec:
               regex: ["^/v1/expensive(?:/|$)"]
       config:
         redisRef: "production/shared-redis"
-        key:
-          - type: directPeerIp
-          - type: host
-          - type: header
-            name: X-Tenant-ID
-        onKeyMiss: Deny
         onRedisFailure: Deny
-        policies:
-          - rate: 30
-            interval: 1m
-            algorithm: SlidingWindow
+        quotas:
+          - name: default
+            key:
+              - type: directPeerIp
+              - type: host
+              - type: header
+                name: X-Tenant-ID
+            onKeyMiss: Deny
+            policies:
+              - rate: 30
+                interval: 1m
+                algorithm: SlidingWindow
 ---
 apiVersion: edgion.io/v1
 kind: EdgionGatewayConfig
@@ -511,13 +539,15 @@ spec:
               pluginAlias: local-budget
       config:
         redisRef: default/redis
-        key: []
-        policies:
-          - algorithm: TokenBucket
-            rate: 100
-            interval: "1s"
         onRedisFailure: Deny
         requestTimeout: "100ms"
+        quotas:
+          - name: default
+            key: []
+            policies:
+              - algorithm: TokenBucket
+                rate: 100
+                interval: "1s"
 ```
 
 Local passes skip Redis entirely. Local excess continues to Redis, which admits

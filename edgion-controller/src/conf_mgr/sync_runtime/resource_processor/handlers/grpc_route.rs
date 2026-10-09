@@ -913,11 +913,11 @@ fn backend_plugin_scope_invalid_reason(
     }
     // Rule-level transcoder rejection precedes backend-scope WAF/RequestId,
     // matching the existing gRPC status priority.
-    if fields()
+    if let Some(plugin) = fields()
         .filter(|field| field.slot().backend().is_none())
-        .any(|field| super::route_utils::contains_grpc_transcoder(runtime, &root, field))
+        .find_map(|field| super::route_utils::http_route_only_plugin(runtime, &root, field))
     {
-        return Some("GrpcJsonTranscoder requires HTTPRoute rule scope".into());
+        return Some(format!("{plugin} requires HTTPRoute rule scope"));
     }
     fields()
         .filter(|field| field.slot().backend().is_some())
