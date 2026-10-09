@@ -1,6 +1,7 @@
 //! Serialized cold-path inputs and atomic policy/executable publication.
 
 use edgion_resources::resources::refs::gateway_class_fields::GatewayClassParametersRef;
+use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
@@ -355,14 +356,9 @@ impl Inputs {
         let globals: Vec<String> = config
             .as_ref()
             .into_iter()
-            .flat_map(|config| config.spec.global_plugins_ref.iter().flatten())
-            .map(|reference| {
-                format!(
-                    "{}/{}",
-                    reference.namespace.as_deref().unwrap_or("default"),
-                    reference.name
-                )
-            })
+            .flat_map(|config| HttpPluginAttachments::EgcGlobals(config).entries())
+            .flatten()
+            .map(|reference| reference.into_key())
             .collect();
         let mut http: HashSet<String> = globals.iter().cloned().collect();
         let mut stream: HashMap<String, StreamStages> = HashMap::new();

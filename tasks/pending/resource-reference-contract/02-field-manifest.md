@@ -414,3 +414,7 @@ The raw-key winner is selected before validation and retains independent TTL; an
 invalid configured ref yields System without selecting another EGC or inline
 servers. Inline-only configuration is not an object-reference authorization.
 Live provider lookup and all remaining reference-family work are unchanged.
+
+### Actual HTTP attachment field binding (C1)
+
+EGC globalPluginsRef and Gateway HTTP annotation consumers now use `refs::plugin_attachment_fields::HttpPluginAttachments` before registration/classification and cold publication. EGC targets default to `default`; Gateway bare tokens default to the effective owner namespace. Raw owner namespace omission is preserved in dependency identity. Invalid slots have no usable key or external lookup; valid missing/ambiguous slots retain recovery edges. Publisher, GatewayInput, and listener metadata share the adapter and retain existing Missing/drop versus Ambiguous/denial behavior. No ReferenceGrant policy is introduced for these attachment fields.

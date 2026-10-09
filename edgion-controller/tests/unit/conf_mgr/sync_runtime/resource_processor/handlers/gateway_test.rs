@@ -2160,6 +2160,7 @@ async fn attachment_dependency_barrier_covers_publish_unpublish_and_same_key_rec
 
 fn make_gateway_with_plugin_annotation(ns: &str, annotation_value: &str) -> Gateway {
     let mut gw = make_test_gateway(ns);
+    gw.metadata.name = Some("plugin-gateway".into());
     let mut annotations = BTreeMap::new();
     annotations.insert("edgion.io/edgion-plugins".to_string(), annotation_value.to_string());
     gw.metadata.annotations = Some(annotations);
@@ -2301,4 +2302,101 @@ async fn dns_gateway_actual_source_grant_transitions_and_invalid_owner_register_
     };
     assert!(validate_gateway_dns_resolver_ref(&parsed, &runtime).is_some());
     assert!(runtime.cross_ns_ref_mgr.get_refs("dns").is_empty());
+}
+
+#[tokio::test]
+async fn actual_http_attachment_replaces_raw_dependencies_and_rejects_invalid_owner() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+    let handler = GatewayHandler::new(None, None);
+    let mut source = make_gateway_with_plugin_annotation("default", "missing, /bad, default/good, bad/a/b");
+    source.metadata.namespace = None;
+    let _ = handler.parse(source.clone(), &ctx).await;
+    let owner = ResourceRef::new(ResourceKind::Gateway, None, "plugin-gateway".into());
+    assert_eq!(runtime.plugin_ref_mgr.get_refs("default/missing"), vec![owner.clone()]);
+    assert_eq!(runtime.plugin_ref_mgr.get_refs("default/good"), vec![owner.clone()]);
+    assert!(runtime.plugin_ref_mgr.get_refs("/bad").is_empty());
+    assert!(runtime.plugin_ref_mgr.get_refs("bad/a/b").is_empty());
+    assert!(
+        validate_gateway_plugin_ref(&source, &runtime)
+            .unwrap()
+            .contains("not found"),
+        "unwatched EP remains Missing error"
+    );
+    source
+        .metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert("edgion.io/edgion-plugins".into(), "replacement".into());
+    let _ = handler.parse(source.clone(), &ctx).await;
+    assert!(runtime.plugin_ref_mgr.get_refs("default/missing").is_empty());
+    assert!(runtime.plugin_ref_mgr.get_refs("default/good").is_empty());
+    assert_eq!(runtime.plugin_ref_mgr.get_refs("default/replacement"), vec![owner]);
+    handler.on_delete(&source, &ctx).await;
+    assert!(runtime.plugin_ref_mgr.get_refs("default/replacement").is_empty());
+    source.metadata.name = None;
+    let _ = handler.parse(source.clone(), &ctx).await;
+    assert!(runtime.plugin_ref_mgr.get_refs("default/replacement").is_empty());
+    assert!(validate_gateway_plugin_ref(&source, &runtime)
+        .unwrap()
+        .contains("invalid reference name"));
+    source
+        .metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert("edgion.io/edgion-plugins".into(), " , \t\n".into());
+    assert!(validate_gateway_plugin_ref(&source, &runtime).is_none());
+}
+
+#[tokio::test]
+async fn actual_invalid_gateway_owner_is_rejected_before_watched_plugin_selection() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use edgion_resources::EdgionPlugins;
+
+    use crate::conf_mgr::sync_runtime::resource_processor::RawStore;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Default)]
+    struct CountingPlugins {
+        raw: LocalRawStore<EdgionPlugins>,
+        reads: AtomicUsize,
+    }
+    impl RawStore<EdgionPlugins> for CountingPlugins {
+        fn get(&self, key: &str) -> Option<Arc<EdgionPlugins>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            self.raw.get(key)
+        }
+        fn snapshot(&self) -> Vec<Arc<EdgionPlugins>> {
+            self.raw.snapshot()
+        }
+    }
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        16,
+        Arc::new(EdgionPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(CountingPlugins::default());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor);
+    let mut source = EdgionPlugins::new("plugins", Default::default());
+    raw.raw.upsert("plugins".into(), Arc::new(source.clone()));
+    let mut owner = make_gateway_with_plugin_annotation("default", "plugins");
+    assert!(validate_gateway_plugin_ref(&owner, &runtime).is_none());
+    assert_eq!(raw.reads.swap(0, Ordering::SeqCst), 2);
+    owner.metadata.name = None;
+    let error = validate_gateway_plugin_ref(&owner, &runtime).unwrap();
+    assert!(error.contains("invalid reference name"), "{error}");
+    source.metadata.namespace = Some("default".into());
+    raw.raw.upsert("default/plugins".into(), Arc::new(source));
+    assert_eq!(validate_gateway_plugin_ref(&owner, &runtime), Some(error));
+    assert_eq!(raw.reads.load(Ordering::SeqCst), 0);
+    owner.metadata.name = Some("plugin-gateway".into());
+    assert!(validate_gateway_plugin_ref(&owner, &runtime)
+        .unwrap()
+        .contains("ambiguous"));
+    assert_eq!(raw.reads.load(Ordering::SeqCst), 2);
 }

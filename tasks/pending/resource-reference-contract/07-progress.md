@@ -1891,3 +1891,51 @@ subject to current-HEAD revalidation and independent plan approval.
 Both independent final reviewers, including Astra, confirmed all R6b gates and
 frozen technical hashes: SCOPED PASS with no blocker. The approved 19 technical
 paths plus this progress record are ready for the local-only commit.
+
+R6b committed locally as `6bb5fa43907f7b2cebb148aacda6cc1384d44717`; all 20
+committed blobs match the final reviewed snapshot. The tracked worktree and index
+were clean after commit; unrelated untracked paths remain untouched. No push.
+R6c C1 now enters PLAN ONLY against this HEAD for EGC global plugin fields and
+Gateway HTTP plugin annotations. Stream annotations and ProxyProtocol remain
+separate batches; all later R6-R8/F1/F2 residuals remain open.
+
+R6c C1 received independent Astra SCOPED PLAN PASS at `6bb5fa439`; the exact
+20-path plan is under `tmp/resource-reference-contract/r6c-plan-6bb5fa4-20261009/`.
+Implementation is authorized for actual Gateway HTTP annotation and EGC global
+plugin fields. Preserve Missing/invalid-target runtime drop and distinct sealed
+ambiguity denial; identity validity precedes reads/edges without adding Grants.
+The reviewed watch matrix validates an acquired EGC independently of plugin
+watch visibility, while unavailable EGC remains Skip. Empty lexical slots create
+no attachment error on their own. Stream and ProxyProtocol remain excluded.
+
+R6c production, test quality and knowledge have two independent SCOPED PASS
+reviews, including Astra. The only old fixture amendment adds a valid Gateway
+name in the HTTP-annotation-specific helper; existing assertions remain intact.
+New watched-store counters verify zero reads for invalid source/target identity
+and exercise valid two-read controls; the EGC watch matrix includes actual
+malformed owners. The first Controller run recorded 717 passes and one new
+error-text assertion failure; the assertion is corrected and the raw failure
+retained. Final frozen r2 verification and root gates remain pending under
+`tmp/resource-reference-contract/r6c-verification-20261009/`.
+
+R6c final targeted verification passes 790 distinct unit tests and one actual-owner
+compile-fail doctest. All 9526 old compiled identities and ignored inventories
+survive (9537 current). A second narrow test amendment, independently approved,
+updates only the explicit-empty Gateway namespace's nonempty HTTP attachment
+expectation to no keys; every original case and raw namespace assertion remains.
+The earlier listener expectation failure remains recorded. Final Resources and
+Controller evidence is r2, with unchanged relevant source; Gateway r3 covers the
+final test amendment. Both independent reviewers verified raw logs, preservation
+and the frozen 20 technical paths.
+
+All 14 R6c root gates pass with unchanged source and zero warnings/errors;
+workspace check took 82.283 seconds and Clippy 94.833 seconds. Evidence is under
+`tmp/resource-reference-contract/r6c-root-verification-20261009/`. Final independent
+gate confirmation precedes local-only commit. Real Kubernetes/conformance and
+remaining R6-R8/F1/F2 work remain open. Next is C2 stream annotation ownership,
+revalidated after commit; its differing Gateway/L4 grammar and configured failure
+signals must remain intact.
+
+Both independent final reviewers, including Astra, confirmed R6c commit readiness
+with SCOPED PASS and no blocker. The approved technical paths and this record
+are the complete local commit scope. No push is authorized.

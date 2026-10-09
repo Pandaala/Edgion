@@ -120,7 +120,14 @@ fn annotation_projection_preserves_plugin_namespace_fallback() {
         (Some("team"), "team/local"),
     ] {
         for (plugins, expected_keys) in [
-            ("local, shared/plugin local", vec![expected, "shared/plugin"]),
+            (
+                "local, shared/plugin local",
+                if namespace == Some("") {
+                    vec![]
+                } else {
+                    vec![expected, "shared/plugin"]
+                },
+            ),
             ("", vec![]),
         ] {
             let store = ListenerGatewayInfoStore::new();
@@ -436,4 +443,28 @@ fn dns_gateway_owner_and_inline_are_independent_and_old_info_stays_pinned() {
         old[0].dns_resolver_candidate,
         Some(ResolverCandidate::HttpDnsRef(_))
     ));
+}
+
+#[test]
+fn actual_http_attachment_keys_match_publication_and_pin_old_listener_info() {
+    let store = ListenerGatewayInfoStore::new();
+    let mut owner = make_gateway("https", vec![]);
+    owner.metadata.namespace = None;
+    owner.metadata.annotations = Some(BTreeMap::from([(
+        annotations::EDGION_PLUGINS.into(),
+        "local, default/local /bad other/good bad/a/b missing".into(),
+    )]));
+    let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+    store.rebuild(&[owner.clone()]);
+    let old = store.get(&key);
+    let expected = crate::plugins::publication::inputs::GatewayInput::from_gateway(&owner).http_keys;
+    assert_eq!(expected, ["default/local", "other/good", "default/missing"]);
+    assert_eq!(old[0].plugin_store_keys, expected);
+    owner.metadata.name = None;
+    store.rebuild(&[owner.clone()]);
+    assert!(store.get(&key)[0].plugin_store_keys.is_empty());
+    assert!(crate::plugins::publication::inputs::GatewayInput::from_gateway(&owner)
+        .http_keys
+        .is_empty());
+    assert_eq!(old[0].plugin_store_keys, expected);
 }

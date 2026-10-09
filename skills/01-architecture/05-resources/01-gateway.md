@@ -101,3 +101,7 @@ After the Gateway resource is synced to the Gateway side, it is used to configur
 | Gateway ← EdgionTls | EdgionTls | parentRef | EdgionTls binds to a Gateway via parentRef |
 | Gateway ← GatewayClass | GatewayClass | gatewayClassName | Gateway references a GatewayClass |
 | Gateway ← EdgionGatewayConfig | EdgionGatewayConfig | global | Global configuration affects all Gateways |
+
+### Actual HTTP attachment field binding (C1)
+
+HTTP plugin annotations use the shared `HttpPluginAttachments::Gateway` actual-field adapter at Controller registration/status and Gateway cold projection. Omitted Gateway namespace means `default` for reference identity, without rewriting the raw dependency owner namespace. Existing comma/whitespace tokenization and ordered deduplication remain. A configured invalid source or target yields no plugin key, dependency, or lookup; an absent/empty token list does not itself require an owner identity. Gateway-level InvalidPluginsRef diagnostics do not change native listener eligibility. Valid missing targets retain recovery edges and the existing diagnostic.

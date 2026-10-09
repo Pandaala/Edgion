@@ -1,6 +1,7 @@
 //! Pure attachment facts for policy publication. No runtime store reads occur
 //! while extracting or comparing these owned inputs.
 
+use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -44,10 +45,12 @@ impl GatewayInput {
     pub(crate) fn from_gateway(gateway: &Gateway) -> Self {
         let namespace = gateway.metadata.namespace.as_deref().unwrap_or("default");
         let annotations = gateway.metadata.annotations.as_ref();
-        let http_keys = annotations
-            .and_then(|map| map.get(annotations::EDGION_PLUGINS))
-            .map(|value| annotations::parse_plugin_ref_list(value, namespace))
-            .unwrap_or_default();
+        let http_keys = HttpPluginAttachments::Gateway(gateway)
+            .entries()
+            .into_iter()
+            .flatten()
+            .map(|reference| reference.into_key())
+            .collect();
         let connection_key = annotations
             .and_then(|map| map.get(annotations::EDGION_STREAM_PLUGINS))
             .and_then(|value| {

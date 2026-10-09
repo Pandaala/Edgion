@@ -17,6 +17,7 @@ pub mod link_sys_fields;
 pub mod outbound_tls;
 mod owned;
 mod parent_identity;
+pub mod plugin_attachment_fields;
 pub mod plugin_fields;
 pub mod plugin_target;
 pub mod policy_fields;

@@ -819,3 +819,41 @@ async fn global_client_identity_requires_explicit_namespace_and_core_secret_kind
     assert!(parsed.spec.outbound_tls.unwrap().resolved_client_certificate.is_none());
     assert!(ctx.secret_ref_manager().get_refs("default/client").is_empty());
 }
+
+#[tokio::test]
+async fn global_attachment_invalid_targets_register_nothing_and_status_is_intrinsic() {
+    let ctx = make_ctx_with_secrets(HashMap::new());
+    let handler = EdgionGatewayConfigHandler::new();
+    let mut owner = EdgionGatewayConfig::new("global", Default::default());
+    owner.spec.global_plugins_ref = Some(
+        serde_json::from_value(
+            serde_json::json!([{"name":"missing"},{"name":"bad","namespace":""},{"name":"bad/name"}]),
+        )
+        .unwrap(),
+    );
+    let errors = handler.preparse(&mut owner, &ctx);
+    assert_eq!(errors.len(), 2);
+    assert!(errors.iter().all(|error| error.starts_with("globalPluginsRef[")));
+    let _ = handler.parse(owner.clone(), &ctx).await;
+    assert_eq!(
+        ctx.runtime().plugin_ref_mgr.get_refs("default/missing"),
+        vec![ResourceRef::new(
+            ResourceKind::EdgionGatewayConfig,
+            None,
+            "global".into()
+        )]
+    );
+    assert!(ctx.runtime().plugin_ref_mgr.get_refs("/bad").is_empty());
+    assert!(ctx.runtime().plugin_ref_mgr.get_refs("default/bad/name").is_empty());
+    owner.metadata.namespace = Some("".into());
+    let _ = handler.parse(owner.clone(), &ctx).await;
+    assert!(
+        ctx.runtime().plugin_ref_mgr.get_refs("default/missing").is_empty(),
+        "clear old cluster owner before rejecting invalid update"
+    );
+    handler.on_delete(&owner, &ctx).await;
+    assert!(
+        ctx.runtime().cross_ns_ref_mgr.get_refs("default").is_empty(),
+        "no invented Grant dependency"
+    );
+}

@@ -28,6 +28,7 @@ use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::gateway::{gateway_attachment_proof, gateway_listener_is_explicitly_ineligible};
 use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
+use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
 use edgion_resources::Gateway;
 use kube::ResourceExt;
 use std::collections::HashMap;
@@ -287,10 +288,12 @@ impl ListenerGatewayInfoStore {
                 .and_then(|map| map.get(annotations::REQUIRE_SNI_HOST_MATCH))
                 .map(|v| v == "true");
 
-            let plugin_store_keys = gateway_annotations
-                .and_then(|map| map.get(annotations::EDGION_PLUGINS))
-                .map(|v| annotations::parse_plugin_ref_list(v, gateway_namespace.as_deref().unwrap_or("default")))
-                .unwrap_or_default();
+            let plugin_store_keys: Vec<String> = HttpPluginAttachments::Gateway(gateway)
+                .entries()
+                .into_iter()
+                .flatten()
+                .map(|reference| reference.into_key())
+                .collect();
 
             // Precompute the gateway-layer DNS resolver candidate from the two
             // `edgion.io/dns-resolver{,-ref}` annotations, so the hot ExternalName

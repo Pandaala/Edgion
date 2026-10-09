@@ -220,3 +220,97 @@ fn invalid_parameters_do_not_resolve_decoys_or_skip_unwatched_validation() {
         }
     }
 }
+
+#[tokio::test]
+async fn actual_global_attachment_identity_precedes_plugin_watch_visibility() {
+    use edgion_resources::EdgionPlugins;
+
+    use crate::conf_mgr::sync_runtime::resource_processor::RawStore;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Default)]
+    struct CountingPlugins {
+        raw: LocalRawStore<EdgionPlugins>,
+        reads: AtomicUsize,
+    }
+    impl RawStore<EdgionPlugins> for CountingPlugins {
+        fn get(&self, key: &str) -> Option<Arc<EdgionPlugins>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            self.raw.get(key)
+        }
+        fn snapshot(&self) -> Vec<Arc<EdgionPlugins>> {
+            self.raw.snapshot()
+        }
+    }
+    struct NoopPlugins;
+    impl ProcessorHandler<EdgionPlugins> for NoopPlugins {}
+    let gc = make_gateway_class(Some(egc_ref("global")));
+    assert!(matches!(resolve_params_ref(&gc, &make_ctx(None)), ParamsRefState::Skip));
+    for watched in [false, true] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let store = Arc::new(LocalRawStore::<EdgionGatewayConfig>::new());
+        let processor = Arc::new(ResourceProcessor::<EdgionGatewayConfig>::new(
+            "EdgionGatewayConfig",
+            100,
+            Arc::new(NoopEgcHandler),
+            runtime.clone(),
+        ));
+        processor.set_raw_store(store.clone());
+        runtime.processor_registry.register(processor);
+        let plugins = Arc::new(CountingPlugins::default());
+        if watched {
+            let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+                "EdgionPlugins",
+                100,
+                Arc::new(NoopPlugins),
+                runtime.clone(),
+            ));
+            processor.set_raw_store(plugins.clone());
+            runtime.processor_registry.register(processor);
+        }
+        let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime);
+        for (namespace, name) in [(Some(""), Some("global")), (Some("app"), Some("global")), (None, None)] {
+            let mut invalid_owner = EdgionGatewayConfig::new("global", Default::default());
+            invalid_owner.metadata.namespace = namespace.map(str::to_owned);
+            invalid_owner.metadata.name = name.map(str::to_owned);
+            invalid_owner.spec.global_plugins_ref = Some(vec![
+                edgion_resources::resources::edgion_gateway_config::PluginReference {
+                    namespace: None,
+                    name: "missing".into(),
+                },
+            ]);
+            store.upsert("global".into(), Arc::new(invalid_owner));
+            assert!(
+                matches!(resolve_params_ref(&gc, &ctx), ParamsRefState::ResolvedInvalid(error) if error.contains("globalPluginsRef[0]"))
+            );
+            assert_eq!(plugins.reads.load(Ordering::SeqCst), 0);
+        }
+
+        for (namespace, name, invalid) in [
+            (None, "missing", false),
+            (Some(""), "valid", true),
+            (None, "bad/name", true),
+        ] {
+            let mut egc = EdgionGatewayConfig::new("global", Default::default());
+            egc.spec.global_plugins_ref = Some(vec![
+                edgion_resources::resources::edgion_gateway_config::PluginReference {
+                    namespace: namespace.map(str::to_owned),
+                    name: name.into(),
+                },
+            ]);
+            store.upsert("global".into(), Arc::new(egc));
+            plugins.reads.store(0, Ordering::SeqCst);
+            match resolve_params_ref(&gc, &ctx) {
+                ParamsRefState::Resolved => assert!(!invalid),
+                ParamsRefState::ResolvedInvalid(error) => {
+                    assert!(invalid);
+                    assert!(error.contains("globalPluginsRef[0]"));
+                }
+                _ => panic!("unexpected field outcome"),
+            }
+            assert_eq!(
+                plugins.reads.load(Ordering::SeqCst),
+                if watched && !invalid { 2 } else { 0 }
+            );
+        }
+    }
+}

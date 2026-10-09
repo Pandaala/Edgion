@@ -139,3 +139,7 @@ later EGC or same-field inline servers. Inline-only servers and independently
 parsed TTL preserve their existing behavior, including zero TTL and invalid-TTL
 defaulting. Loaded DNS Arcs retain candidate and TTL across update/removal; live
 HTTPDNS provider lookup remains separate and follows the current typed store.
+
+### Actual HTTP attachment field binding (C1)
+
+`globalPluginsRef` uses the shared `HttpPluginAttachments::EgcGlobals` actual-field adapter before dependency registration or plugin classification. The actual EGC must have a valid cluster identity (no metadata namespace); an omitted target namespace means `default`, while an explicit empty namespace is invalid. Ordered valid entries, including duplicates, remain intact. Invalid entries have no dependency or lookup. Intrinsic errors do not depend on EdgionPlugins watch visibility. GatewayClass skips when no EGC processor exists; once the EGC is acquired it checks intrinsic identity even when plugins are unwatched. Valid missing/unwatched globals retain their existing unknown/not-rejected class behavior.

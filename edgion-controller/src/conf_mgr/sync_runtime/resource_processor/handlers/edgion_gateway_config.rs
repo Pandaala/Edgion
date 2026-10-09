@@ -10,6 +10,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigStatus;
 use edgion_resources::resources::refs::egc_tls_fields::PreparedEgcTlsReferences;
+use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
 use edgion_resources::ResourceKind;
 
 use super::san_guard;
@@ -59,6 +60,17 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         errors.extend(egc.spec.validate_preflight_policy());
         errors.extend(egc.spec.validate_plugin_policy());
         errors.extend(egc_tls::identity_errors(egc));
+        errors.extend(
+            HttpPluginAttachments::EgcGlobals(egc)
+                .entries()
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, reference)| {
+                    reference
+                        .err()
+                        .map(|error| format!("globalPluginsRef[{index}]: {error}"))
+                }),
+        );
         // Cluster-scoped status must not depend on a deployment's namespace
         // visibility. Validate referenced early plugins on the consuming class.
         errors
@@ -81,11 +93,10 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         if prepared.bind(&egc).is_err() {
             return ProcessResult::Continue(egc);
         }
-        for reference in egc.spec.global_plugins_ref.as_deref().unwrap_or_default() {
-            let namespace = reference.namespace.as_deref().unwrap_or("default");
+        for reference in HttpPluginAttachments::EgcGlobals(&egc).entries().into_iter().flatten() {
             ctx.runtime()
                 .plugin_ref_mgr
-                .add_ref(format!("{namespace}/{}", reference.name), resource_ref.clone());
+                .add_ref(reference.into_key(), resource_ref.clone());
         }
 
         if let Ok(mut binding) = prepared.bind_mut(&mut egc) {

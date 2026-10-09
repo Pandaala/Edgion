@@ -1493,3 +1493,65 @@ fn merged_graphql_bare_source_admission_collision_and_pins() {
     assert!(!scope(&publisher, "apps/a").graphql_rule(&route, 0));
     assert!(pinned.graphql_rule(&route, 0));
 }
+
+#[test]
+fn actual_global_fields_preserve_siblings_missing_drop_and_pinned_scope() {
+    let publisher = publisher();
+    publisher.replace_http_plugins(HashMap::from([
+        ("apps/plugins".into(), plugin("dsl", true)),
+        ("/decoy".into(), plugin("dsl", true)),
+        ("apps/bad/name".into(), plugin("dsl", true)),
+    ]));
+    let mut cfg = (*config("policy-a", json!({}))).clone();
+    cfg.spec.global_plugins_ref = Some(
+        serde_json::from_value(json!([
+            {"namespace":"apps","name":"plugins"},
+            {"namespace":"","name":"decoy"},
+            {"namespace":"apps","name":"bad/name"},
+            {"name":"missing"},
+            {"namespace":"apps","name":"plugins"}
+        ]))
+        .unwrap(),
+    );
+    publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(cfg.clone()))]));
+    let pinned = scope(&publisher, "apps/a");
+    assert_eq!(pinned.global_keys, ["apps/plugins", "default/missing", "apps/plugins"]);
+    assert!(pinned.http("apps/plugins").unwrap().is_activatable);
+    assert!(pinned.http("default/missing").is_none());
+    assert!(pinned.http("/decoy").is_none());
+    assert!(pinned.http("apps/bad/name").is_none());
+    cfg.metadata.namespace = Some("".into());
+    publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(cfg.clone()))]));
+    let invalid = scope(&publisher, "apps/a");
+    assert!(invalid.global_keys.is_empty());
+    assert!(invalid.http("apps/plugins").is_none());
+    assert!(pinned.http("apps/plugins").unwrap().is_activatable);
+    cfg.metadata.namespace = None;
+    publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(cfg))]));
+    assert!(scope(&publisher, "apps/a").http("apps/plugins").unwrap().is_activatable);
+}
+
+#[test]
+fn actual_gateway_owner_cannot_borrow_same_name_plugin_from_live_inventory() {
+    let publisher = publisher();
+    let mut cfg = (*config("policy-a", json!({}))).clone();
+    cfg.spec.global_plugins_ref = None;
+    publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(cfg))]));
+    publisher.replace_http_plugins(HashMap::from([("apps/plugins".into(), plugin("dsl", true))]));
+    let mut owner: Gateway = crate::test_current_status::from_value(json!({
+        "apiVersion":"gateway.networking.k8s.io/v1", "kind":"Gateway",
+        "metadata":{"name":"a", "namespace":"apps", "annotations":{
+            "edgion.io/edgion-plugins":"plugins missing /bad"}},
+        "spec":{"gatewayClassName":"a", "listeners":[{"name":"web","port":18080,"protocol":"HTTP"}]}
+    }))
+    .unwrap();
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), GatewayInput::from_gateway(&owner))]));
+    let pinned = scope(&publisher, "apps/a");
+    assert!(pinned.http("apps/plugins").unwrap().is_activatable);
+    assert!(pinned.http("apps/missing").is_none());
+    owner.metadata.name = None;
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), GatewayInput::from_gateway(&owner))]));
+    assert!(scope(&publisher, "apps/a").http("apps/plugins").is_none());
+    assert!(pinned.http("apps/plugins").unwrap().is_activatable);
+    assert_eq!(publisher.snapshot().http_sources().len(), 1);
+}

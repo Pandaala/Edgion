@@ -32,6 +32,7 @@ use edgion_resources::resources::proxy_protocol::{
     ProxyProtocolPolicySourceKind, ResolvedInboundProxyProtocol,
 };
 use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
+use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
 use edgion_resources::resources::refs::plugin_target::PluginTarget;
 use edgion_resources::{ResourceKind, ResourceMeta};
 use k8s_openapi::api::core::v1::Service;
@@ -661,16 +662,10 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         // Clear and re-register HTTP plugin annotation refs (edgion.io/edgion-plugins).
         ctx.runtime().plugin_ref_mgr.clear_value_refs(&resource_ref);
-        if let Some(v) = g
-            .metadata
-            .annotations
-            .as_ref()
-            .and_then(|a| a.get(annotations::edgion::EDGION_PLUGINS))
-        {
-            let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("default");
-            for key in annotations::edgion::parse_plugin_ref_list(v, gateway_ns) {
-                ctx.runtime().plugin_ref_mgr.add_ref(key, resource_ref.clone());
-            }
+        for reference in HttpPluginAttachments::Gateway(&g).entries().into_iter().flatten() {
+            ctx.runtime()
+                .plugin_ref_mgr
+                .add_ref(reference.into_key(), resource_ref.clone());
         }
 
         // Track cross-namespace Secret references so ReferenceGrant changes requeue this Gateway
@@ -2800,15 +2795,14 @@ fn validate_gateway_stream_plugin_ref(gateway: &Gateway, runtime: &ControllerRun
 /// references one or more EdgionPlugins resources that do not exist. `None` when the
 /// annotation is absent/empty or all referenced resources are found.
 fn validate_gateway_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -> Option<String> {
-    let value = gateway
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|a| a.get(annotations::edgion::EDGION_PLUGINS))?;
-    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
-    let errors: Vec<String> = annotations::edgion::parse_plugin_ref_list(value, gateway_ns)
+    let errors: Vec<String> = HttpPluginAttachments::Gateway(gateway)
+        .entries()
         .into_iter()
-        .flat_map(|key| {
+        .flat_map(|reference| {
+            let key = match reference {
+                Ok(reference) => reference.into_key(),
+                Err(error) => return vec![format!("EdgionPlugins reference: {error}")],
+            };
             let plugins = super::route_utils::plugin_target(runtime, &key);
             match plugins {
                 PluginTarget::Unique { source: plugins, .. } => plugins

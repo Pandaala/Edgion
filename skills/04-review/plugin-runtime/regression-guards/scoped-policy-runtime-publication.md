@@ -158,3 +158,7 @@ Bypass, without borrowing either candidate's declarations. Selections retain
 the raw owner; collision clears retention and recovery uses only the current
 survivor. See the [LKG contract](../intentional-design/edgionplugins-key-scoped-last-known-good.md).
 Adaptive delta notifications use semantic target keys; inventories remain raw.
+
+### Actual HTTP attachment field binding (C1)
+
+HTTP attachment cold consumers now share actual EGC/Gateway field validation. Invalid slots are removed before canonical PluginTarget classification, and invalid owners cannot borrow a same-name live plugin. Valid sibling order and existing captured scope ownership remain. Missing (including previously invalid-target drop) still contributes no executable runtime; this is not universal request denial. Valid default/bare ambiguity remains a distinct sealed denial, independent of Bypass and without LKG resurrection. A broader fail-closed attachment policy is separate work, not part of this identity migration.
