@@ -285,3 +285,51 @@ mod tests {
         }
     }
 }
+
+/// Probe the Controller Admin admission boundary, not native Kubernetes conformance.
+/// Authentication, transport failures and unexpected success must never pass.
+pub async fn expect_admin_admission_rejected(ctx: &TestContext, resource: &Value) -> Result<(), String> {
+    let kind = resource["kind"].as_str().ok_or("fixture kind missing")?;
+    let namespace = resource["metadata"]["namespace"]
+        .as_str()
+        .ok_or("fixture namespace missing")?;
+    let name = resource["metadata"]["name"].as_str().ok_or("fixture name missing")?;
+    let collection = format!("{}/api/v1/namespaced/{kind}/{namespace}", ctx.admin_api_url());
+    let object = format!("{collection}/{name}");
+    let authenticated = |request: reqwest::RequestBuilder| match &ctx.admin_token {
+        Some(token) => request.bearer_auth(token),
+        None => request,
+    };
+    let before = authenticated(ctx.http_client.get(&object))
+        .send()
+        .await
+        .map_err(|e| format!("Admission precondition GET failed: {e}"))?;
+    if before.status() != reqwest::StatusCode::NOT_FOUND {
+        return Err(format!(
+            "Admission fixture must initially be absent; GET returned {}",
+            before.status()
+        ));
+    }
+    let response = authenticated(ctx.http_client.post(&collection).json(resource))
+        .send()
+        .await
+        .map_err(|e| format!("Admission POST failed: {e}"))?;
+    if response.status() != reqwest::StatusCode::BAD_REQUEST {
+        let status = response.status();
+        return Err(format!(
+            "Expected Admin 400, got {status}: {}",
+            response.text().await.unwrap_or_default()
+        ));
+    }
+    let after = authenticated(ctx.http_client.get(&object))
+        .send()
+        .await
+        .map_err(|e| format!("Admission nonpersistence GET failed: {e}"))?;
+    if after.status() != reqwest::StatusCode::NOT_FOUND {
+        return Err(format!(
+            "Rejected resource must remain absent; GET returned {}",
+            after.status()
+        ));
+    }
+    Ok(())
+}

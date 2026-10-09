@@ -21,8 +21,8 @@
 //!
 //! BackendTLSPolicy resources under test:
 //! - BackendTLSPolicy_edgion-test_system-ca.yaml
-//! - BackendTLSPolicy_edgion-test_both-invalid.yaml
-//! - BackendTLSPolicy_edgion-test_neither-invalid.yaml
+//! - Admission-only fixtures/status-admission/BackendTLSPolicy_edgion-test_both-invalid.yaml
+//! - Admission-only fixtures/status-admission/BackendTLSPolicy_edgion-test_neither-invalid.yaml
 //! - BackendTLSPolicy_edgion-test_configmap-ca.yaml
 //! - BackendTLSPolicy_edgion-test_configmap-ca-missing.yaml
 //!

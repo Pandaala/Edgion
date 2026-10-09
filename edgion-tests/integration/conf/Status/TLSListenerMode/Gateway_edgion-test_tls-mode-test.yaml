@@ -21,14 +21,20 @@ spec:
       port: 31327
       tls:
         mode: Terminate
+        certificateRefs:
+          - name: edge-tls
     # Mixed TLS conflict: two TLS listeners on the same port with different modes
     - name: mixed-passthrough
+      hostname: passthrough.example.com
       protocol: TLS
       port: 31328
       tls:
         mode: Passthrough
     - name: mixed-terminate
+      hostname: terminate.example.com
       protocol: TLS
       port: 31328
       tls:
         mode: Terminate
+        certificateRefs:
+          - name: edge-tls

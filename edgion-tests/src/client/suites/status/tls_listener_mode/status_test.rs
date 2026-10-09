@@ -2,9 +2,10 @@
 //!
 //! Tests that Gateway listener status correctly reflects TLS mode support:
 //! 1. TLS/Passthrough → Accepted=True
-//! 2. HTTPS/Passthrough → Accepted=False, reason=UnsupportedValue (HTTPS only supports Terminate)
+//! 2. HTTPS/Passthrough reports local UnsupportedValue; Kubernetes rejects admission.
 //! 3. TLS/Terminate → Accepted=False, reason=UnsupportedValue until enabled
 //! 4. Two TLS listeners on the same port with different modes → Accepted=False, reason=ProtocolConflict
+//! 5. Certless termination is rejected by Admin admission.
 
 use super::super::helpers;
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -16,16 +17,6 @@ pub struct TlsListenerModeStatusTestSuite;
 
 const GATEWAY_NAMESPACE: &str = "edgion-test";
 const GATEWAY_NAME: &str = "tls-mode-test";
-
-fn is_k8s_mode() -> bool {
-    matches!(
-        std::env::var("EDGION_TEST_K8S_MODE")
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes"
-    )
-}
 
 impl TlsListenerModeStatusTestSuite {
     fn find_listener_condition<'a>(gateway: &'a Value, listener_name: &str, cond_type: &str) -> Option<&'a Value> {
@@ -48,12 +39,6 @@ impl TlsListenerModeStatusTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if is_k8s_mode() {
-                        return TestResult::passed_with_message(
-                            start.elapsed(),
-                            "K8s API server rejects HTTPS Passthrough listeners before controller status".to_string(),
-                        );
-                    }
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
                     match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
@@ -95,12 +80,17 @@ impl TlsListenerModeStatusTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if is_k8s_mode() {
-                        return TestResult::passed_with_message(
-                            start.elapsed(),
-                            "K8s API server rejects duplicate TLS listener port/mode conflicts before controller status"
-                                .to_string(),
-                        );
+                    if std::env::var("EDGION_TEST_K8S_MODE")
+                        .is_ok_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+                    {
+                        let resource = serde_json::json!({"apiVersion":"gateway.networking.k8s.io/v1","kind":"Gateway","metadata":{"name":"tls-mode-invalid-https","namespace":GATEWAY_NAMESPACE},"spec":{"gatewayClassName":"public-gateway","listeners":[{"name":"invalid","port":31326,"protocol":"HTTPS","tls":{"mode":"Passthrough"}}]}});
+                        return match helpers::expect_admin_admission_rejected(&ctx, &resource).await {
+                            Ok(()) => TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Controller Admin rejected HTTPS Passthrough with 400; resource remains absent".into(),
+                            ),
+                            Err(error) => TestResult::failed(start.elapsed(), error),
+                        };
                     }
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -141,6 +131,26 @@ impl TlsListenerModeStatusTestSuite {
         )
     }
 
+    fn test_certless_terminate_rejected() -> TestCase {
+        TestCase::new(
+            "certless_terminate_rejected",
+            "Certless TLS termination is rejected without persistence",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let resource = serde_json::json!({"apiVersion":"gateway.networking.k8s.io/v1","kind":"Gateway","metadata":{"name":"tls-mode-certless","namespace":GATEWAY_NAMESPACE},"spec":{"gatewayClassName":"public-gateway","listeners":[{"name":"invalid","port":31326,"protocol":"TLS","tls":{"mode":"Terminate"}}]}});
+                    match helpers::expect_admin_admission_rejected(&ctx, &resource).await {
+                        Ok(()) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Admin rejected certless Terminate with 400; resource remains absent".into(),
+                        ),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )
+    }
+
     fn test_mixed_tls_conflict() -> TestCase {
         TestCase::new(
             "mixed_tls_conflict",
@@ -148,13 +158,6 @@ impl TlsListenerModeStatusTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if is_k8s_mode() {
-                        return TestResult::passed_with_message(
-                            start.elapsed(),
-                            "K8s API server rejects duplicate TLS listener port/mode conflicts before controller status"
-                                .to_string(),
-                        );
-                    }
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
                     match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
@@ -257,6 +260,7 @@ impl TestSuite for TlsListenerModeStatusTestSuite {
             Self::test_https_passthrough_unsupported(),
             Self::test_terminate_unsupported(),
             Self::test_mixed_tls_conflict(),
+            Self::test_certless_terminate_rejected(),
         ]
     }
 }

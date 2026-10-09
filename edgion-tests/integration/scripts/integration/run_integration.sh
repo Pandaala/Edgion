@@ -33,6 +33,8 @@ REQUIRED_NOFILE=65535
 
 # Report file path (will be set after WORK_DIR is determined)
 REPORT_FILE=""
+STARTUP_WORK_DIR_HANDOFF=""
+WORK_DIR=""
 REPORT_STARTED_AT="$(date '+%Y-%m-%d %H:%M:%S')"
 REPORT_ENTRIES=()
 REPORT_FINALIZED=false
@@ -821,9 +823,29 @@ run_isolated_scenarios() {
 # =============================================================================
 # Cleanup function
 # =============================================================================
+# Consume only the current invocation's startup handoff, including failed starts.
+adopt_startup_work_dir() {
+    [ -n "$STARTUP_WORK_DIR_HANDOFF" ] && [ -f "$STARTUP_WORK_DIR_HANDOFF" ] && [ ! -L "$STARTUP_WORK_DIR_HANDOFF" ] || return 1
+    local candidate suffix
+    candidate=$(cat "$STARTUP_WORK_DIR_HANDOFF")
+    case "$candidate" in
+        "${PROJECT_ROOT}/tmp/integration_testing/testing_"*) ;;
+        *) return 1 ;;
+    esac
+    suffix=${candidate#"${PROJECT_ROOT}/tmp/integration_testing/testing_"}
+    case "$suffix" in ''|*[!0-9_]*) return 1 ;; esac
+    [ -d "$candidate" ] && [ ! -L "$candidate" ] || return 1
+    WORK_DIR="$candidate"
+}
+
 cleanup() {
     local exit_code=$?
     set +e
+
+    # An interrupted startup may have published its scene before returning.
+    if [ -z "$WORK_DIR" ]; then
+        adopt_startup_work_dir || true
+    fi
 
     if [ "$REPORT_FINALIZED" != "true" ] && [ -n "$REPORT_FILE" ]; then
         if [ "$exit_code" -ne 0 ]; then
@@ -831,6 +853,10 @@ cleanup() {
         fi
         write_report "INCOMPLETE"
         log_info "Incomplete report saved to: ${REPORT_FILE}"
+    fi
+
+    if [ -n "$STARTUP_WORK_DIR_HANDOFF" ]; then
+        rm -f "$STARTUP_WORK_DIR_HANDOFF"
     fi
 
     local isolated_pid
@@ -857,7 +883,9 @@ cleanup() {
             docker compose -f "${REDIS_COMPOSE_FILE}" rm -f -s \
                 "${REDIS_STARTED_SERVICES[@]}" >/dev/null 2>&1 || true
         fi
-        "${UTILS_DIR}/kill_all.sh" 2>&1 || true
+        if [ -n "$WORK_DIR" ]; then
+            "${UTILS_DIR}/kill_all.sh" --work-dir "$WORK_DIR" 2>&1 || true
+        fi
     else
         if $LDAP_SERVICE_STARTED; then
             log_info "OpenLDAP test service still running (keep-alive mode): ${LDAP_COMPOSE_FILE}"
@@ -2575,7 +2603,7 @@ main() {
             if [ -n "$G_ITEM" ]; then
                 suites="${base_suites},Status/${G_ITEM}"
             else
-                suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy,Status/EdgionBackendTrafficPolicy,Status/GatewayFrontendValidation,Status/TLSListenerMode,Status/TLSRoute"
+                suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy,Status/EdgionBackendTrafficPolicy,Status/GatewayFrontendValidation,Status/TLSListenerMode,Status/TLSRoute,Status/GRPCRoute,Status/HostnameIntersection"
             fi
         elif [ "$G_RESOURCE" = "EdgionBackendTrafficPolicy" ]; then
             if [ -n "$G_ITEM" ]; then
@@ -3078,7 +3106,8 @@ main() {
 
         # Build start command without shell re-parsing, preserving every path
         # and suite list as one argument.
-        local start_args=("${UTILS_DIR}/start_all_with_conf.sh")
+        STARTUP_WORK_DIR_HANDOFF=$(mktemp "${PROJECT_ROOT}/tmp/integration_testing/startup-workdir.XXXXXX")
+        local start_args=("${UTILS_DIR}/start_all_with_conf.sh" "--work-dir-handoff" "$STARTUP_WORK_DIR_HANDOFF")
         if [ -n "$suites" ]; then
             start_args+=("--suites" "$suites")
         fi
@@ -3107,6 +3136,11 @@ main() {
             output=$("${start_args[@]}" 2>&1) && exit_code=0 || exit_code=$?
         fi
         
+        # Recover the actual attempted scene before recording a failure.
+        if ! adopt_startup_work_dir; then
+            log_error "Startup did not hand off a valid invocation work directory"
+            [ "$exit_code" -ne 0 ] || exit_code=1
+        fi
         # Show output
         echo "$output"
         
@@ -3116,18 +3150,8 @@ main() {
             exit 1
         fi
         
-        # Get work directory from .current file (written by start_all_with_conf.sh)
-        # This is more robust than 'tail -1' which can be polluted by background
-        # process output leaking into the captured stdout.
-        local current_file="${PROJECT_ROOT}/tmp/integration_testing/.current"
-        if [ -f "$current_file" ]; then
-            WORK_DIR=$(cat "$current_file")
-        else
-            log_error "Work directory file not found: $current_file"
-            report_test "Preflight_SharedStack" "FAIL" "0" "work directory missing"
-            exit 1
-        fi
-        
+        # WORK_DIR came from this invocation, never a stale successful marker.
+
         # Set environment variables
         export EDGION_TEST_ACCESS_LOG_PATH="${WORK_DIR}/logs/edgion_access.log"
         export EDGION_WORK_DIR="${WORK_DIR}"

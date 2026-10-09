@@ -39,6 +39,7 @@ GATEWAY_BIN="${EDGION_GATEWAY_BIN:-${BIN_DIR}/edgion-gateway}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/testing_${TIMESTAMP}"
 GENERATED_SECRET_DIR="${WORK_DIR}/generated-secrets"
+WORK_DIR_HANDOFF=""
 
 #  WORK_DIR scriptuse
 export EDGION_WORK_DIR="$WORK_DIR"
@@ -1218,6 +1219,10 @@ main() {
             EXT_PROC_EXTERNAL_BIN="$2"
             shift 2
             ;;
+        --work-dir-handoff)
+            WORK_DIR_HANDOFF="$2"
+            shift 2
+            ;;
         --ext-proc-external-grpc-port)
             EXT_PROC_EXTERNAL_GRPC_PORT="$2"
             shift 2
@@ -1325,6 +1330,17 @@ main() {
     # : Workdirectory
     log_section "Workdirectory"
     mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR" "$GENERATED_SECRET_DIR"
+    if [ -n "$WORK_DIR_HANDOFF" ]; then
+        case "$WORK_DIR_HANDOFF" in
+            "${PROJECT_ROOT}/tmp/integration_testing/startup-workdir."*) ;;
+            *) log_error "Invalid startup handoff path"; return 1 ;;
+        esac
+        if [ ! -f "$WORK_DIR_HANDOFF" ] || [ -L "$WORK_DIR_HANDOFF" ] || [ -s "$WORK_DIR_HANDOFF" ]; then
+            log_error "Startup handoff must be an empty invocation-owned regular file"
+            return 1
+        fi
+        printf '%s\n' "$WORK_DIR" > "$WORK_DIR_HANDOFF"
+    fi
     log_success "Workdirectorycompleted: $WORK_DIR"
 
     start_external_ext_proc

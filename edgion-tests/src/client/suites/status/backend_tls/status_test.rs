@@ -11,16 +11,6 @@ const POLICY_NAMESPACE: &str = "edgion-test";
 /// instead of sampling once after a fixed delay.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 
-fn is_k8s_mode() -> bool {
-    matches!(
-        std::env::var("EDGION_TEST_K8S_MODE")
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes"
-    )
-}
-
 impl BackendTlsStatusTestSuite {
     fn test_system_ca_accepted() -> TestCase {
         TestCase::new(
@@ -82,36 +72,21 @@ impl BackendTlsStatusTestSuite {
     fn test_both_rejected() -> TestCase {
         TestCase::new(
             "both_rejected",
-            "BackendTLSPolicy with both caCertificateRefs and wellKnownCACertificates should be Accepted=False",
+            "Invalid BackendTLSPolicy CA selection is rejected without persistence",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if is_k8s_mode() {
-                        return TestResult::passed_with_message(
+                    let resource = serde_yaml::from_str::<serde_json::Value>(include_str!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/integration/fixtures/status-admission/BackendTLSPolicy_edgion-test_both-invalid.yaml"
+                    )))
+                    .expect("valid YAML fixture");
+                    match helpers::expect_admin_admission_rejected(&ctx, &resource).await {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "K8s API server rejects mutually exclusive BackendTLSPolicy validation before controller status"
-                                .to_string(),
-                        );
-                    }
-
-                    match helpers::wait_resource_status(
-                        &ctx,
-                        "BackendTLSPolicy",
-                        POLICY_NAMESPACE,
-                        "both-invalid",
-                        STATUS_TIMEOUT,
-                        |policy| helpers::has_condition_with_message(policy, "Accepted", "False", "mutually exclusive"),
-                    )
-                    .await
-                    {
-                        Ok(_) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            "Accepted=False with mutually exclusive message as expected".to_string(),
+                            "Admin rejected invalid CA selection with 400; resource remains absent".into(),
                         ),
-                        Err(error) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Expected Accepted=False with 'mutually exclusive', {error}"),
-                        ),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },
@@ -121,38 +96,21 @@ impl BackendTlsStatusTestSuite {
     fn test_neither_rejected() -> TestCase {
         TestCase::new(
             "neither_rejected",
-            "BackendTLSPolicy with neither caCertificateRefs nor wellKnownCACertificates should be Accepted=False",
+            "Invalid BackendTLSPolicy CA selection is rejected without persistence",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if is_k8s_mode() {
-                        return TestResult::passed_with_message(
+                    let resource = serde_yaml::from_str::<serde_json::Value>(include_str!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/integration/fixtures/status-admission/BackendTLSPolicy_edgion-test_neither-invalid.yaml"
+                    )))
+                    .expect("valid YAML fixture");
+                    match helpers::expect_admin_admission_rejected(&ctx, &resource).await {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "K8s API server rejects missing BackendTLSPolicy validation source before controller status"
-                                .to_string(),
-                        );
-                    }
-
-                    match helpers::wait_resource_status(
-                        &ctx,
-                        "BackendTLSPolicy",
-                        POLICY_NAMESPACE,
-                        "neither-invalid",
-                        STATUS_TIMEOUT,
-                        |policy| {
-                            helpers::has_condition_with_message(policy, "Accepted", "False", "must specify either")
-                        },
-                    )
-                    .await
-                    {
-                        Ok(_) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            "Accepted=False with 'must specify either' message as expected".to_string(),
+                            "Admin rejected invalid CA selection with 400; resource remains absent".into(),
                         ),
-                        Err(error) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Expected Accepted=False with 'must specify either', {error}"),
-                        ),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },

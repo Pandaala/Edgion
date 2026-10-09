@@ -557,3 +557,26 @@ After startup, `run_integration.sh` does a self-check `pgrep -c edgion-gateway`;
 - To preserve the scene for manual investigation: [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md)
 - To run the K8s version: [02-k8s-integration-testing.md](02-k8s-integration-testing.md)
 - To run LinkSys: [03-link-sys-testing.md](03-link-sys-testing.md)
+
+### Admission-negative status fixtures and startup failures
+
+Schema-invalid Gateway API documents belong outside `integration/conf/`, because
+shared startup requires every preloaded resource to pass Admin admission. The
+BackendTLSPolicy CA-selection negative fixtures live in
+`integration/fixtures/status-admission/`; their named tests send authenticated
+Admin requests and assert rejection and nonpersistence. TLS mode status fixtures include certificate references and distinct listener
+hostnames. Local finite admission currently accepts HTTPS/Passthrough, whose
+Controller status is UnsupportedValue; the native CRD CEL rejects that combination.
+The HTTPS test therefore asserts local status or an actual rejected Admin request
+forwarded to Kubernetes, rather than reporting an unconditional pass. This does
+not claim full local/native CEL parity. Other unsupported implementation features
+still assert Controller status.
+These probes test Controller Admin behavior, not native Kubernetes conformance.
+
+Each shared startup writes its attempted work directory to an invocation-owned
+handoff file before starting services. The runner uses that directory in failure
+reports and recorded-PID cleanup even when startup fails; `.current` continues to
+identify the last successfully started stack. Runner cleanup uses
+`kill_all.sh --work-dir <directory>` and verifies recorded executable identities;
+it never falls back to the old `.current` on a failed new startup. The no-argument
+manual cleanup command retains its existing behavior.

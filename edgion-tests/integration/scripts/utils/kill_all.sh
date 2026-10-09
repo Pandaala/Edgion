@@ -124,6 +124,7 @@ stop_recorded_external_ext_proc() {
         return 0
     fi
 
+    process_matches_work_dir "$pid" "${work_dir}/logs/ext_proc_external_processor.log" || return 0
     kill -TERM "$pid" 2>/dev/null || true
     log_info "Stop external ExtProc fixture PID ${pid} (SIGTERM)"
     local waited=0
@@ -131,9 +132,72 @@ stop_recorded_external_ext_proc() {
         sleep 1
         waited=$((waited + 1))
     done
-    if kill -0 "$pid" 2>/dev/null; then
+    if kill -0 "$pid" 2>/dev/null && process_matches_binary "$pid" "$expected" \
+        && process_matches_work_dir "$pid" "${work_dir}/logs/ext_proc_external_processor.log"; then
         kill -KILL "$pid" 2>/dev/null || true
         log_info "Escalated external ExtProc fixture PID ${pid} (SIGKILL)"
+    fi
+}
+
+# The startup scripts redirect stdout to an invocation-owned log before exec.
+# Unlike a PID plus executable, this also distinguishes another live instance.
+process_matches_work_dir() {
+    local pid="$1" expected_log="$2" actual_log=""
+    if [ -e "/proc/${pid}/fd/1" ]; then
+        actual_log=$(readlink "/proc/${pid}/fd/1" 2>/dev/null || true)
+    elif command -v lsof >/dev/null 2>&1; then
+        actual_log=$(lsof -a -p "$pid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+    fi
+    [ "$actual_log" = "$expected_log" ]
+}
+
+# Explicit runner cleanup never scans or signals another topology.
+stop_recorded_service() {
+    local work_dir="$1" pid_name="$2" binary_name="$3"
+    local pid_file="${work_dir}/pids/${pid_name}.pid"
+    [ -f "$pid_file" ] && [ ! -L "$pid_file" ] || return 0
+    local pid expected waited
+    pid=$(cat "$pid_file")
+    case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$pid" -gt 1 ] || return 0
+    expected="${PROJECT_ROOT}/target/debug/${binary_name}"
+    if ! process_matches_binary "$pid" "$expected"; then
+        expected="${PROJECT_ROOT}/target/llvm-cov-target/debug/${binary_name}"
+        process_matches_binary "$pid" "$expected" || return 0
+    fi
+    process_matches_work_dir "$pid" "${work_dir}/logs/${pid_name}.log" || return 0
+    kill -TERM "$pid" 2>/dev/null || true
+    waited=0
+    local limit
+    limit=$(shutdown_wait_seconds "$binary_name")
+    while [ "$waited" -lt "$limit" ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null && process_matches_binary "$pid" "$expected" \
+        && process_matches_work_dir "$pid" "${work_dir}/logs/${pid_name}.log"; then
+        kill -KILL "$pid" 2>/dev/null || true
+    fi
+}
+
+cleanup_work_dir() {
+    local work_dir="$1" suffix
+    case "$work_dir" in "${PROJECT_ROOT}/tmp/integration_testing/testing_"*) ;; *) return 2 ;; esac
+    suffix=${work_dir#"${PROJECT_ROOT}/tmp/integration_testing/testing_"}
+    case "$suffix" in ''|*[!0-9_]*) return 2 ;; esac
+    [ -d "$work_dir" ] && [ ! -L "$work_dir" ] || return 2
+    log_info "Workdirectory: ${work_dir}"
+    stop_recorded_service "$work_dir" gateway edgion-gateway
+    stop_recorded_service "$work_dir" controller edgion-controller
+    stop_recorded_service "$work_dir" test_server test_server
+    local external_pid_file="${work_dir}/pids/ext_proc_external_processor.pid"
+    if [ -f "$external_pid_file" ] && [ ! -L "$external_pid_file" ]; then
+        local external_pid
+        external_pid=$(cat "$external_pid_file")
+        case "$external_pid" in ''|*[!0-9]*) return 0 ;; esac
+        if process_matches_work_dir "$external_pid" "${work_dir}/logs/ext_proc_external_processor.log"; then
+            stop_recorded_external_ext_proc "$work_dir"
+        fi
     fi
 }
 
@@ -141,6 +205,14 @@ stop_recorded_external_ext_proc() {
 # 
 # =============================================================================
 main() {
+    if [ "${1:-}" = "--work-dir" ] && [ "$#" -eq 2 ]; then
+        cleanup_work_dir "$2"
+        return $?
+    fi
+    if [ "$#" -ne 0 ]; then
+        log_warning "Usage: kill_all.sh [--work-dir <integration work directory>]"
+        return 2
+    fi
     echo ""
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}Stop Edgion Testservice${NC}"
