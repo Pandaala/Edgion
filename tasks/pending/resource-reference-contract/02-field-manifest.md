@@ -422,3 +422,7 @@ EGC globalPluginsRef and Gateway HTTP annotation consumers now use `refs::plugin
 ## Actual stream attachment owner boundary (C2)
 
 C2 coverage: Controller Gateway registration/status, GatewayInput, TCP/TLS/UDP RouteInput and all three route-unit constructors use StreamPluginAttachment. The thin Gateway projection preserves invalid as configured; publisher guards sentinel demand/reads. Raw dependency owner namespace omission remains intact; route units still independently reject invalid backend owners. See the [canonical stream attachment contract](../../../skills/04-review/plugin-runtime/intentional-design/stream-plugin-store-key-normalization.md).
+
+### Actual inbound PROXY reference field (C3)
+
+Gateway.metadata.annotations[edgion.io/inbound-proxy-protocol].resourceRef is consumed through `GatewayProxyProtocolField`: actual bounded parse once, listener selection/inline first, then checked Gateway-to-EdgionConfigData query, diagnostic identity, dependency registration, target acquisition and canonical visibility/Grant decision. Effective default namespace never rewrites raw dependency owner identity. Invalid source has zero edges/reads; valid missing/denied targets preserve requeue recovery. Gateway continues to consume only the resolved trust snapshot.

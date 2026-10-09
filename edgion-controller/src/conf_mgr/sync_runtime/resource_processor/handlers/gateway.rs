@@ -7,7 +7,7 @@
 //! - ListenerPortManager registration for port conflict detection
 //! - Gateway API standard status management
 
-use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::is_edgion_config_data_ref_allowed_from;
+use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::decide_edgion_config_data_ref;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
     frontend_ca_ref::{FrontendCaSourceKey, FrontendCaSourceKind},
@@ -19,7 +19,7 @@ use crate::config::is_reference_grant_validation_enabled;
 use edgion_resources::constants::annotations;
 use edgion_resources::constants::app::GATEWAY_NAME;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
-use edgion_resources::prelude_resources::Gateway;
+use edgion_resources::prelude_resources::{EdgionConfigData, Gateway};
 use edgion_resources::resources::gateway::{
     FrontendCACertificateRef, FrontendCAResolutionError, FrontendCASourceIdentity, FrontendCASourceKind,
     FrontendMatcherEligibility, FrontendValidationMode, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig,
@@ -28,12 +28,13 @@ use edgion_resources::resources::gateway::{
     ServingCertificateSourceIdentity,
 };
 use edgion_resources::resources::proxy_protocol::{
-    BoundedProxyProtocolReferenceIdentity, InboundProxyProtocolAnnotation, ProxyProtocolConfigErrorCode,
-    ProxyProtocolPolicySourceKind, ResolvedInboundProxyProtocol,
+    BoundedProxyProtocolReferenceIdentity, ProxyProtocolConfigErrorCode, ProxyProtocolPolicySourceKind,
+    ResolvedInboundProxyProtocol,
 };
 use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
 use edgion_resources::resources::refs::plugin_attachment_fields::{HttpPluginAttachments, StreamPluginAttachment};
 use edgion_resources::resources::refs::plugin_target::PluginTarget;
+use edgion_resources::resources::refs::proxy_protocol_fields::GatewayProxyProtocolField;
 use edgion_resources::{ResourceKind, ResourceMeta};
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::ByteString;
@@ -288,17 +289,20 @@ fn resolve_inbound_proxy_protocol(
     ctx: &HandlerContext,
     resource_ref: &ResourceRef,
 ) -> ResolvedInboundProxyProtocol {
-    let Some(raw) = gateway
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|annotations| annotations.get(annotations::edgion::INBOUND_PROXY_PROTOCOL))
-    else {
-        return ResolvedInboundProxyProtocol::Disabled;
-    };
+    resolve_inbound_proxy_protocol_with_lookup(gateway, ctx, resource_ref, |namespace, name| {
+        ctx.runtime().edgion_config_data_store.get(Some(namespace), name)
+    })
+}
 
-    let annotation = match InboundProxyProtocolAnnotation::parse(raw) {
-        Ok(annotation) => annotation,
+fn resolve_inbound_proxy_protocol_with_lookup(
+    gateway: &Gateway,
+    ctx: &HandlerContext,
+    resource_ref: &ResourceRef,
+    lookup: impl FnOnce(&str, &str) -> Option<EdgionConfigData>,
+) -> ResolvedInboundProxyProtocol {
+    let annotation = match GatewayProxyProtocolField::parse(gateway) {
+        Ok(Some(annotation)) => annotation,
+        Ok(None) => return ResolvedInboundProxyProtocol::Disabled,
         Err(code) => return invalid_proxy_protocol_state(code, tcp_listener_names(gateway), None),
     };
     let listener_names = match resolve_proxy_protocol_listener_selection(gateway, annotation.listeners()) {
@@ -317,14 +321,25 @@ fn resolve_inbound_proxy_protocol(
         };
     }
 
-    let Some(reference) = annotation.resource_ref() else {
+    let query = match annotation.query() {
+        Ok(Some(query)) => query,
+        Ok(None) => {
+            return invalid_proxy_protocol_state(ProxyProtocolConfigErrorCode::InternalInvariant, listener_names, None)
+        }
+        Err(code) => return invalid_proxy_protocol_state(code, listener_names, None),
+    };
+    let (Some(gateway_namespace), Some(target_namespace)) =
+        (query.source().scope().namespace(), query.target().scope().namespace())
+    else {
         return invalid_proxy_protocol_state(ProxyProtocolConfigErrorCode::InternalInvariant, listener_names, None);
     };
-    let gateway_namespace = gateway.metadata.namespace.as_deref().unwrap_or("default");
-    let target_namespace = reference.namespace.as_deref().unwrap_or(gateway_namespace);
+    let target_name = query.target().name();
     let reference_identity =
-        BoundedProxyProtocolReferenceIdentity::new(target_namespace.to_string(), reference.name.clone()).ok();
-    let target_key = format!("{}/{}", target_namespace, reference.name);
+        match BoundedProxyProtocolReferenceIdentity::new(target_namespace.to_owned(), target_name.to_owned()) {
+            Ok(identity) => Some(identity),
+            Err(code) => return invalid_proxy_protocol_state(code, listener_names, None),
+        };
+    let target_key = format!("{target_namespace}/{target_name}");
     ctx.runtime()
         .edgion_config_data_refs
         .add_ref(target_key, format!("Gateway:{}", resource_ref.resource_key()));
@@ -334,25 +349,19 @@ fn resolve_inbound_proxy_protocol(
             .add_ref(target_namespace.to_string(), resource_ref.clone());
     }
 
-    let Some(target) = ctx
-        .runtime()
-        .edgion_config_data_store
-        .get(Some(target_namespace), &reference.name)
-    else {
+    let Some(target) = lookup(target_namespace, target_name) else {
         return invalid_proxy_protocol_state(
             ProxyProtocolConfigErrorCode::ReferenceNotFound,
             listener_names,
             reference_identity,
         );
     };
-    if !is_edgion_config_data_ref_allowed_from(
-        ctx.runtime(),
-        gateway_namespace,
-        GATEWAY_API_GROUP,
-        "Gateway",
-        target_namespace,
-        &reference.name,
+    let grant_allows = ctx.runtime().ref_grant_store.check_query(query);
+    if !decide_edgion_config_data_ref(
+        is_reference_grant_validation_enabled(),
+        gateway_namespace == target_namespace,
         target.spec.visibility,
+        grant_allows,
     ) {
         return invalid_proxy_protocol_state(
             ProxyProtocolConfigErrorCode::ReferenceNotPermitted,

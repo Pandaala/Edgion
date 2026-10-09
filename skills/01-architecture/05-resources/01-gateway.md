@@ -105,3 +105,7 @@ After the Gateway resource is synced to the Gateway side, it is used to configur
 ### Actual HTTP attachment field binding (C1)
 
 HTTP plugin annotations use the shared `HttpPluginAttachments::Gateway` actual-field adapter at Controller registration/status and Gateway cold projection. Omitted Gateway namespace means `default` for reference identity, without rewriting the raw dependency owner namespace. Existing comma/whitespace tokenization and ordered deduplication remain. A configured invalid source or target yields no plugin key, dependency, or lookup; an absent/empty token list does not itself require an owner identity. Gateway-level InvalidPluginsRef diagnostics do not change native listener eligibility. Valid missing targets retain recovery edges and the existing diagnostic.
+
+### Actual inbound PROXY reference field (C3)
+
+Inbound PROXY resourceRef resolution uses `refs::proxy_protocol_fields::GatewayProxyProtocolField`, which privately owns one canonical parse of the actual Gateway annotation. Listener selection and inline policy retain their existing precedence. Only resourceRef queries validate the actual Gateway identity before registering recovery edges or acquiring EdgionConfigData. Invalid identity produces the existing InvalidReference configuration error and cannot retain prior Ready trust. Raw dependency owner namespace omission is preserved.

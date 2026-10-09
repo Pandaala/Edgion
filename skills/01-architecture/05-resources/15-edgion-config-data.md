@@ -561,3 +561,7 @@ entries require their actual owner. Consumer fallback and denial retain their
 existing policy/condition placement. GCIR still reads its Selector and selected
 profile IpLists from one immutable snapshot; RegionRoute retains its paired raw
 value and validation-proof lookup. No request-path identity parsing is added.
+
+### Actual inbound PROXY reference field (C3)
+
+Gateway inbound PROXY references now derive a typed GrantQuery from the actual Gateway field before dependency registration/acquisition. The consumer uses `ReferenceGrantStore::check_query` with the canonical `decide_edgion_config_data_ref`; validation flag, same-namespace and Cluster visibility exemptions retain their existing semantics. Identity errors precede every exemption. The bounded diagnostic identity is output metadata, not permission evidence; its failure stops resolution rather than permitting a lookup.

@@ -2494,3 +2494,273 @@ async fn stream_actual_owner_checks_precede_watched_reads_and_dependency_registr
         assert!(runtime.stream_plugin_ref_mgr.get_refs("default/missing").is_empty());
     }
 }
+
+fn actual_proxy_target(namespace: &str, visibility: &str) -> EdgionConfigData {
+    serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"policy","namespace":namespace},
+        "spec":{"visibility":visibility,"enable":true,"data":{"type":"ProxyProtocolTrust","config":{"mode":"required"}}}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn actual_proxy_owner_gate_prevents_decoy_reads_edges_and_stale_ready() {
+    use std::cell::Cell;
+    for (namespace, name, valid, target_namespace) in [
+        (None, Some("gateway"), true, Some("default")),
+        (Some(""), Some("gateway"), false, Some("default")),
+        (Some(""), Some("gateway"), false, None),
+        (Some("UPPER"), Some("gateway"), false, Some("default")),
+        (None, None, false, Some("default")),
+        (None, Some("bad/name"), false, Some("default")),
+    ] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        runtime.edgion_config_data_store.update(
+            HashMap::from([
+                ("default/policy".into(), actual_proxy_target("default", "Cluster")),
+                ("/policy".into(), actual_proxy_target("", "Cluster")),
+            ]),
+            &HashSet::new(),
+        );
+        let ctx = proxy_protocol_test_context(runtime.clone());
+        let annotation =
+            serde_json::json!({"source":"resourceRef","resourceRef":{"name":"policy","namespace":target_namespace}})
+                .to_string();
+        let mut gateway = make_proxy_protocol_gateway(&annotation);
+        gateway.metadata.namespace = namespace.map(str::to_owned);
+        gateway.metadata.name = name.map(str::to_owned);
+        gateway.spec.resolved_inbound_proxy_protocol = ResolvedInboundProxyProtocol::Ready {
+            listener_names: vec!["http".into()],
+            policy: CanonicalProxyProtocolTrustPolicy::Required {},
+            source: ProxyProtocolPolicySourceKind::ResourceRef,
+        };
+        let owner = ResourceRef::new(
+            ResourceKind::Gateway,
+            gateway.metadata.namespace.clone(),
+            gateway.metadata.name.clone().unwrap_or_default(),
+        );
+        let reads = Cell::new(0);
+        gateway.spec.resolved_inbound_proxy_protocol =
+            super::resolve_inbound_proxy_protocol_with_lookup(&gateway, &ctx, &owner, |ns, name| {
+                reads.set(reads.get() + 1);
+                runtime.edgion_config_data_store.get(Some(ns), name)
+            });
+        assert_eq!(reads.get(), usize::from(valid));
+        if valid {
+            assert!(matches!(
+                gateway.spec.resolved_inbound_proxy_protocol,
+                ResolvedInboundProxyProtocol::Ready { .. }
+            ));
+            assert_eq!(
+                runtime.edgion_config_data_refs.get_refs("default/policy"),
+                ["Gateway:gateway"]
+            );
+        } else {
+            assert!(matches!(
+                gateway.spec.resolved_inbound_proxy_protocol,
+                ResolvedInboundProxyProtocol::Invalid {
+                    code: ProxyProtocolConfigErrorCode::InvalidReference,
+                    reference: None,
+                    ..
+                }
+            ));
+            assert!(runtime.edgion_config_data_refs.get_refs("default/policy").is_empty());
+            assert!(runtime.edgion_config_data_refs.get_refs("/policy").is_empty());
+            assert!(runtime.cross_ns_ref_mgr.get_refs("default").is_empty());
+            GatewayHandler::new(None, None).update_status(&mut gateway, &ctx, &[]);
+            assert!(gateway
+                .status
+                .as_ref()
+                .unwrap()
+                .conditions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|condition| condition.reason == "InvalidProxyProtocolConfig"));
+            let http = gateway
+                .status
+                .as_ref()
+                .unwrap()
+                .listeners
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|listener| listener.name == "http")
+                .unwrap();
+            assert!(http
+                .conditions
+                .iter()
+                .any(|condition| condition.type_ == "Programmed" && condition.status == "False"));
+        }
+    }
+}
+
+#[test]
+fn actual_proxy_parser_listener_and_inline_precedence_never_acquires_a_target() {
+    for (raw, expected) in [
+        (None, None),
+        (Some(""), Some(ProxyProtocolConfigErrorCode::MalformedJson)),
+        (
+            Some(r#"{"source":"resourceRef","listeners":["udp"],"resourceRef":{"name":"policy"}}"#),
+            Some(ProxyProtocolConfigErrorCode::InvalidListenerSelection),
+        ),
+        (
+            Some(r#"{"source":"resourceRef","resourceRef":{"name":"bad/name"}}"#),
+            Some(ProxyProtocolConfigErrorCode::InvalidReference),
+        ),
+        (Some(r#"{"source":"inline","config":{"mode":"required"}}"#), None),
+    ] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = proxy_protocol_test_context(runtime);
+        let mut gateway = make_proxy_protocol_gateway(raw.unwrap_or(""));
+        gateway.metadata.name = None;
+        if raw.is_none() {
+            gateway.metadata.annotations = None;
+        }
+        let owner = ResourceRef::new(ResourceKind::Gateway, None, "".into());
+        let result = super::resolve_inbound_proxy_protocol_with_lookup(&gateway, &ctx, &owner, |_, _| {
+            panic!("early branch must not read target")
+        });
+        match expected {
+            Some(expected) => {
+                assert!(matches!(result,ResolvedInboundProxyProtocol::Invalid{code,..} if code==expected))
+            }
+            None if raw.is_none() => assert_eq!(result, ResolvedInboundProxyProtocol::Disabled),
+            None => assert!(matches!(
+                result,
+                ResolvedInboundProxyProtocol::Ready {
+                    source: ProxyProtocolPolicySourceKind::Inline,
+                    ..
+                }
+            )),
+        }
+    }
+}
+
+#[test]
+fn actual_proxy_typed_grant_visibility_and_target_failure_order_are_preserved() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = proxy_protocol_test_context(runtime.clone());
+    let mut gateway =
+        make_proxy_protocol_gateway(r#"{"source":"resourceRef","resourceRef":{"name":"policy","namespace":"policy"}}"#);
+    gateway.metadata.namespace = None;
+    let owner = ResourceRef::new(ResourceKind::Gateway, None, "gateway".into());
+    let resolve = |target: Option<EdgionConfigData>| {
+        let reads = std::cell::Cell::new(0);
+        let result = super::resolve_inbound_proxy_protocol_with_lookup(&gateway, &ctx, &owner, |ns, name| {
+            assert_eq!((ns, name), ("policy", "policy"));
+            reads.set(reads.get() + 1);
+            target
+        });
+        assert_eq!(reads.get(), 1);
+        result
+    };
+    let missing = resolve(None);
+    assert!(matches!(
+        missing,
+        ResolvedInboundProxyProtocol::Invalid {
+            code: ProxyProtocolConfigErrorCode::ReferenceNotFound,
+            ..
+        }
+    ));
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("policy/policy"),
+        ["Gateway:gateway"]
+    );
+    assert_eq!(
+        runtime.cross_ns_ref_mgr.get_refs("policy").as_slice(),
+        std::slice::from_ref(&owner)
+    );
+    assert!(matches!(
+        resolve(Some(actual_proxy_target("policy", "Cluster"))),
+        ResolvedInboundProxyProtocol::Ready { .. }
+    ));
+    for from_kind in ["Service", "Gateway", "Service", "Gateway"] {
+        runtime.ref_grant_store.upsert("policy/allow".into(),Arc::new(serde_json::from_value(serde_json::json!({
+            "metadata":{"namespace":"policy","name":"allow"},"spec":{"from":[{"group":"gateway.networking.k8s.io","kind":from_kind,"namespace":"default"}],"to":[{"group":"edgion.io","kind":"EdgionConfigData","name":"policy"}]}
+        })).unwrap()));
+        let result = resolve(Some(actual_proxy_target("policy", "Namespace")));
+        if from_kind == "Gateway" {
+            assert!(matches!(result, ResolvedInboundProxyProtocol::Ready { .. }));
+        } else {
+            assert!(matches!(
+                result,
+                ResolvedInboundProxyProtocol::Invalid {
+                    code: ProxyProtocolConfigErrorCode::ReferenceNotPermitted,
+                    ..
+                }
+            ));
+        }
+    }
+    runtime.ref_grant_store.remove("policy/allow");
+    let mut disabled = actual_proxy_target("policy", "Namespace");
+    disabled.spec.enable = false;
+    assert!(matches!(
+        resolve(Some(disabled)),
+        ResolvedInboundProxyProtocol::Invalid {
+            code: ProxyProtocolConfigErrorCode::ReferenceNotPermitted,
+            ..
+        }
+    ));
+    for (field, value, expected) in [
+        (
+            "enable",
+            serde_json::json!(false),
+            ProxyProtocolConfigErrorCode::ReferenceDisabled,
+        ),
+        (
+            "active",
+            serde_json::json!("future"),
+            ProxyProtocolConfigErrorCode::ReferenceActiveUnsupported,
+        ),
+        (
+            "data",
+            serde_json::json!({"type":"FutureTrust","config":{"mode":"required"}}),
+            ProxyProtocolConfigErrorCode::ReferenceWrongType,
+        ),
+        (
+            "data",
+            serde_json::json!({"type":"ProxyProtocolTrust","config":{"mode":"trustedSources","trustedCidrs":[]}}),
+            ProxyProtocolConfigErrorCode::ReferenceInvalidPolicy,
+        ),
+    ] {
+        let mut target = serde_json::to_value(actual_proxy_target("policy", "Cluster")).unwrap();
+        target["spec"][field] = value;
+        assert!(
+            matches!(resolve(Some(serde_json::from_value(target).unwrap())),ResolvedInboundProxyProtocol::Invalid{code,..} if code==expected)
+        );
+    }
+}
+
+#[tokio::test]
+async fn actual_proxy_raw_none_owner_retargets_clears_and_recovers_without_stale_edges() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = proxy_protocol_test_context(runtime.clone());
+    let handler = GatewayHandler::new(None, None);
+    let mut gateway =
+        make_proxy_protocol_gateway(r#"{"source":"resourceRef","resourceRef":{"name":"policy","namespace":"policy"}}"#);
+    gateway.metadata.namespace = None;
+    let owner = ResourceRef::new(ResourceKind::Gateway, None, "gateway".into());
+    let _ = handler.parse(gateway.clone(), &ctx).await;
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("policy/policy"),
+        ["Gateway:gateway"]
+    );
+    assert_eq!(runtime.cross_ns_ref_mgr.get_refs("policy"), [owner]);
+    gateway.metadata.annotations.as_mut().unwrap().insert(
+        "edgion.io/inbound-proxy-protocol".into(),
+        r#"{"source":"resourceRef","resourceRef":{"name":"replacement"}}"#.into(),
+    );
+    let _ = handler.parse(gateway.clone(), &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("policy/policy").is_empty());
+    assert!(runtime.cross_ns_ref_mgr.get_refs("policy").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("default/replacement"),
+        ["Gateway:gateway"]
+    );
+    handler.on_delete(&gateway, &ctx).await;
+    assert!(runtime
+        .edgion_config_data_refs
+        .get_refs("default/replacement")
+        .is_empty());
+}

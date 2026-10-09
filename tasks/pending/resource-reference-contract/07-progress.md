@@ -1993,3 +1993,49 @@ including real Kubernetes/Gateway API conformance, remains open.
 Both independent final reviewers, including Astra, confirmed R6d SCOPED COMMIT
 PASS with no blocker after checking all gates and current frozen technical hashes.
 The approved 25 technical paths plus this progress record form the commit scope.
+
+R6d committed locally as `2944878c2fa4e372123a1e19ff406a9860c48fca`; all 26
+committed blobs match the reviewed snapshot. Tracked/index state was clean,
+protected unrelated untracked paths remain untouched, and nothing was pushed.
+R6e C3 enters PLAN ONLY at this HEAD for Gateway ProxyProtocol resourceRef actual
+field ownership. Preserve existing bounded parsing, eager Grant computation and
+canonical permission decisions, recovery edges, failure/status policy and resolved
+listener trust snapshots.
+
+R6e C3's exact nine-path plan received independent Astra SCOPED PLAN PASS at
+`2944878c2`; execution is authorized. The plan is under
+`tmp/resource-reference-contract/r6e-plan-2944878-20261009/`. A finite Gateway
+field facade owns the one canonical parse and borrows the actual owner; typed
+query validity precedes diagnostic construction, dependencies and acquisition.
+Parser/listener/inline precedence and eager Grant computation plus the canonical
+permission decision remain unchanged. Review approved one private FnOnce lookup
+seam around the existing resolver body to verify real zero/one acquisition without
+a new store abstraction. Implementation and final verification remain open.
+
+R6e received independent Astra and result-reviewer SCOPED STATIC PASS for the
+complete nine-path code/test/document checkpoint. Existing Controller tests remain
+an exact prefix; new tests include a real malformed-key policy decoy proving that
+an explicitly empty owner namespace cannot reach acquisition. Focused verification
+is now authorized with source freezing and preserved test identities/ignored cases.
+Execution, workspace gates and final evidence review remain open.
+
+R6e focused verification passes 791 distinct unit tests and two compile-fail
+doctests. Independent compiler witnesses confirm both owner and parsed-field
+lifetime violations are E0597, with a successful valid control. All 9546 old test
+identities and ignored inventories survive (9553 current); the old Controller
+test file remains an exact prefix without amendments. Both independent reviewers
+confirmed execution evidence under the R6e verification directory.
+
+The first root Clippy run found one unnecessary clone in a newly added test.
+Only that assertion changed to a borrowed singleton slice; its 71 Gateway handler
+tests passed again. The original failure evidence remains, and r2 preservation
+proves the other eight technical paths unchanged. Fresh format, workspace check,
+Clippy and diff gates now pass with zero warnings/errors and unchanged source;
+the remaining nine successful r1 gates retain their unchanged inputs. Evidence is
+under tmp/resource-reference-contract/r6e-root-verification-20261009/.
+Final independent commit confirmation follows. R6 residual LinkSys consumers,
+R7/R8 and F1/F2, including live conformance, remain open.
+
+Both independent reviewers, including Astra, confirmed R6e SCOPED COMMIT PASS
+with no remaining blocker. The nine technical paths and this progress record are
+the complete local commit scope; unrelated untracked files remain excluded.

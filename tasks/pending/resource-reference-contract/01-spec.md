@@ -1218,3 +1218,7 @@ C1 binds EGC globalPluginsRef and Gateway HTTP annotations to actual authoring f
 ## Actual stream attachment owner boundary (C2)
 
 C2 consumes actual Gateway/TCPRoute/TLSRoute/UDPRoute stream annotation fields. Preserve the finite target lexical contract, configured-invalid failure signal, current stages and dependency/permission policy. Publisher excludes invalid sentinels before source demand/lookup. This does not add L4 grants or relax the earlier route-unit backend identity gate. See the [canonical stream attachment contract](../../../skills/04-review/plugin-runtime/intentional-design/stream-plugin-store-key-normalization.md).
+
+### Actual inbound PROXY reference field (C3)
+
+C3 binds inbound PROXY protocol resourceRef to the actual Gateway and one private parsed annotation. The typed query borrows both lifetimes, validates source before exemptions/edges/read, and preserves owner-local target namespace default versus raw owner namespace. Absent annotation, parser errors, listener selection and inline policy remain their existing independent paths. Missing/denied references keep recovery edges; InvalidReference keeps the existing configuration-error status mapping. No trust-policy or Gateway runtime behavior is broadened.
