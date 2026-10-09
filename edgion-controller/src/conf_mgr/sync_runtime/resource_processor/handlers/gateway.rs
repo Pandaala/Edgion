@@ -7,12 +7,14 @@
 //! - ListenerPortManager registration for port conflict detection
 //! - Gateway API standard status management
 
+use super::super::credential::pipeline::{
+    authorize_bound_gateway_frontend_ca, fetch_bound_configmap, fetch_bound_secret, BoundFetchOutcome, PendingReason,
+};
 use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::decide_edgion_config_data_ref;
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
-    frontend_ca_ref::{FrontendCaSourceKey, FrontendCaSourceKind},
-    make_conflict_key, ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ProxyProtocolListenerContribution,
-    ProxyProtocolPolicyDeclaration, ResourceRef,
+    condition_false, condition_reasons, condition_true, condition_types, make_conflict_key, ConflictKey,
+    HandlerContext, ProcessResult, ProcessorHandler, ProxyProtocolListenerContribution, ProxyProtocolPolicyDeclaration,
+    ResourceRef,
 };
 use crate::conf_mgr::ControllerRuntime;
 use crate::config::is_reference_grant_validation_enabled;
@@ -32,6 +34,7 @@ use edgion_resources::resources::proxy_protocol::{
     ResolvedInboundProxyProtocol,
 };
 use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
+use edgion_resources::resources::refs::gateway_tls_fields::GatewayTlsRefs;
 use edgion_resources::resources::refs::plugin_attachment_fields::{HttpPluginAttachments, StreamPluginAttachment};
 use edgion_resources::resources::refs::plugin_target::PluginTarget;
 use edgion_resources::resources::refs::proxy_protocol_fields::GatewayProxyProtocolField;
@@ -48,7 +51,6 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::{
 };
 
 const GATEWAY_SYSTEM_NAMESPACE: &str = "edgion-system";
-const GATEWAY_API_GROUP: &str = "gateway.networking.k8s.io";
 const INVALID_PROXY_PROTOCOL_CONFIG: &str = "InvalidProxyProtocolConfig";
 const INVALID_PROXY_PROTOCOL_LISTENER: &str = "InvalidProxyProtocolListener";
 const INVALID_PROXY_PROTOCOL_REF: &str = "InvalidProxyProtocolRef";
@@ -511,46 +513,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 errors.push(format!("spec.{name} is unsupported"));
             }
         }
-        if let Some(frontend) = g.spec.tls.as_ref().and_then(|tls| tls.frontend.as_ref()) {
-            if let Some(per_port) = frontend.per_port.as_ref() {
-                if per_port.len() > edgion_resources::resources::gateway::MAX_GATEWAY_FRONTEND_PER_PORT {
-                    errors.push(format!(
-                        "spec.tls.frontend.perPort must contain at most {} entries",
-                        edgion_resources::resources::gateway::MAX_GATEWAY_FRONTEND_PER_PORT
-                    ));
-                }
-                let mut ports = BTreeSet::new();
-                for entry in per_port {
-                    if !(1..=65535).contains(&entry.port) {
-                        errors.push(format!(
-                            "spec.tls.frontend.perPort port {} is outside 1..=65535",
-                            entry.port
-                        ));
-                    }
-                    if !ports.insert(entry.port) {
-                        errors.push(format!(
-                            "spec.tls.frontend.perPort contains duplicate port {}",
-                            entry.port
-                        ));
-                    }
-                }
-            }
-            for validation in std::iter::once(frontend.default.validation.as_ref())
-                .chain(
-                    frontend
-                        .per_port
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|entry| entry.tls.validation.as_ref()),
-                )
-                .flatten()
-            {
-                for reference in &validation.ca_certificate_refs {
-                    validate_frontend_ca_reference(reference, &mut errors);
-                }
-            }
-        }
+        errors.extend(validate_standard_frontend_tls(g));
         for listener in g.spec.listeners.as_deref().unwrap_or_default() {
             if listener
                 .tls
@@ -598,6 +561,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
     async fn parse(&self, mut g: Gateway, ctx: &HandlerContext) -> ProcessResult<Gateway> {
         g.spec.resolved_attachment_proof = None;
+        if let Some(backend) = g.spec.tls.as_mut().and_then(|tls| tls.backend.as_mut()) {
+            backend.resolved_client_certificate = None;
+        }
         // Reject the whole Gateway projection for unrepresented upstream fields.
         // Keep the object in the processor so Accepted=False is persisted and
         // other Gateways in the same watch continue to initialize.
@@ -743,176 +709,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .listener_port_manager
             .register_gateway(&gateway_key_for_port_mgr, &listener_ports);
 
-        // Resolve the Gateway-level default client identity used for upstream
-        // mTLS when a BackendTLSPolicy does not provide its own certificate.
-        if let Some(backend_tls) = g.spec.tls.as_mut().and_then(|tls| tls.backend.as_mut()) {
-            backend_tls.resolved_client_certificate = None;
-
-            if let Some(client_ref) = &backend_tls.client_certificate_ref {
-                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
-                let client_ns = client_ref.namespace.as_deref().unwrap_or(gateway_ns);
-                let secret_key = format!("{client_ns}/{}", client_ref.name);
-
-                ctx.secret_ref_manager()
-                    .add_ref(secret_key.clone(), resource_ref.clone());
-
-                if client_ns != gateway_ns {
-                    cross_ns_manager.add_ref(client_ns.to_string(), cross_ns_ref.clone());
-                }
-
-                let valid_secret_ref = client_ref.kind.as_deref().unwrap_or("Secret") == "Secret"
-                    && client_ref.group.as_deref().unwrap_or("").is_empty();
-                let permitted = client_ns == gateway_ns
-                    || !is_reference_grant_validation_enabled()
-                    || ctx.runtime().ref_grant_store.check_reference_allowed(
-                        gateway_ns,
-                        "gateway.networking.k8s.io",
-                        "Gateway",
-                        client_ns,
-                        "",
-                        "Secret",
-                        Some(&client_ref.name),
-                    );
-
-                if valid_secret_ref && permitted {
-                    if let Some(secret) = ctx.runtime().secret_store.get(Some(client_ns), &client_ref.name) {
-                        backend_tls.resolved_client_certificate =
-                            Some(super::super::credential::ca_refs::ordinary_secret_material(secret));
-                    } else {
-                        tracing::info!(
-                            gateway = %resource_ref.key(),
-                            secret_key = %secret_key,
-                            "Gateway backend client certificate Secret not found yet; it will be reprocessed when the Secret arrives"
-                        );
-                    }
-                }
-            }
-        }
-
-        // Process all Listeners and resolve TLS certificates from global secret store
-        if let Some(ref mut listeners) = g.spec.listeners {
-            for listener in listeners.iter_mut() {
-                let Some(tls_config) = &mut listener.tls else {
-                    continue;
-                };
-
-                // Only Terminate mode needs certificate resolution; Passthrough proxies raw TLS.
-                if tls_config.mode.unwrap_or_default() != GatewayTlsMode::Terminate {
-                    continue;
-                }
-
-                if let Some(cert_refs) = &tls_config.certificate_refs {
-                    if cert_refs.len() > edgion_common::tls_validation::MAX_SERVING_CERTIFICATE_REFS {
-                        tls_config.frontend_matcher_eligibility = Some(FrontendMatcherEligibility::StrictReject);
-                        continue;
-                    }
-                    let mut outcomes = Vec::with_capacity(cert_refs.len());
-                    let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
-
-                    for (index, cert_ref) in cert_refs.iter().enumerate() {
-                        let secret_ns = cert_ref.namespace.as_ref().or(g.metadata.namespace.as_ref());
-                        let secret_key = format_secret_key(secret_ns, &cert_ref.name);
-                        let cert_ns_str = secret_ns.map(String::as_str).unwrap_or("");
-                        let group = cert_ref.group.as_deref().unwrap_or("");
-                        let kind = cert_ref.kind.as_deref().unwrap_or("Secret");
-                        let mut outcome = ResolvedServingCertificateReference {
-                            index: index as u16,
-                            source: ServingCertificateSourceIdentity {
-                                group: group.to_string(),
-                                kind: kind.to_string(),
-                                namespace: cert_ns_str.to_string(),
-                                name: cert_ref.name.clone(),
-                            },
-                            secret: None,
-                            error: None,
-                        };
-
-                        // Register to SecretRefManager (critical for cascading updates)
-                        // When this Secret arrives or updates, SecretHandler will trigger requeue for this Gateway
-                        ctx.secret_ref_manager()
-                            .add_ref(secret_key.clone(), resource_ref.clone());
-
-                        // Register cross-namespace cert refs so ReferenceGrant changes requeue this Gateway
-                        if cert_ns_str != gateway_ns {
-                            cross_ns_manager.add_ref(cert_ns_str.to_string(), cross_ns_ref.clone());
-                        }
-
-                        let valid_ref = kind == "Secret" && group.is_empty();
-                        let permitted = cert_ns_str == gateway_ns
-                            || !is_reference_grant_validation_enabled()
-                            || ctx.runtime().ref_grant_store.check_reference_allowed(
-                                gateway_ns,
-                                GATEWAY_API_GROUP,
-                                "Gateway",
-                                cert_ns_str,
-                                "",
-                                "Secret",
-                                Some(&cert_ref.name),
-                            );
-                        if !valid_ref || !permitted {
-                            outcome.error = Some(if valid_ref {
-                                ServingCertificateResolutionError::RefNotPermitted
-                            } else {
-                                ServingCertificateResolutionError::InvalidReference
-                            });
-                            outcomes.push(outcome);
-                            continue;
-                        }
-
-                        // Try to resolve Secret from runtime store
-                        if let Some(mut secret) = ctx
-                            .runtime()
-                            .secret_store
-                            .get(secret_ns.map(|s| s.as_str()), &cert_ref.name)
-                        {
-                            secret.metadata.namespace = Some(cert_ns_str.to_string());
-                            secret.metadata.name = Some(cert_ref.name.clone());
-                            outcome.secret = Some(super::super::credential::ca_refs::ordinary_secret_material(secret));
-                            tracing::debug!(
-                                gateway = %resource_ref.key(),
-                                listener = %listener.name,
-                                secret_key = %secret_key,
-                                "Secret resolved and filled into Gateway TLS config"
-                            );
-                        } else {
-                            outcome.error = Some(ServingCertificateResolutionError::NotFound);
-                            // Secret not found yet - this is normal if Secret arrives after Gateway
-                            // The SecretRefManager reference ensures we'll be requeued when Secret arrives
-                            tracing::info!(
-                                gateway = %resource_ref.key(),
-                                listener = %listener.name,
-                                secret_key = %secret_key,
-                                "Secret not found yet, Gateway TLS will be updated when Secret arrives"
-                            );
-                        }
-                        outcomes.push(outcome);
-                    }
-                    tls_config.resolved_certificate_refs = Some(outcomes);
-                }
-
-                // Resolve the controller-projected standard frontend validation.
-                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
-                if let Some(ref fv) = tls_config.frontend_validation {
-                    if fv.ca_certificate_refs.len() > edgion_common::tls_validation::MAX_CA_REFERENCE_COUNT {
-                        tls_config.frontend_matcher_eligibility = Some(FrontendMatcherEligibility::StrictReject);
-                        tls_config.resolved_frontend_ca_refs = None;
-                        continue;
-                    }
-                    let resolved_ca_refs = resolve_frontend_ca_refs(
-                        &fv.ca_certificate_refs,
-                        gateway_ns,
-                        &resource_ref,
-                        &listener.name,
-                        ctx,
-                        &cross_ns_ref,
-                        cross_ns_manager,
-                        fv.mode != Some(FrontendValidationMode::AllowInsecureFallback),
-                    );
-
-                    tls_config.resolved_frontend_ca_refs = Some(resolved_ca_refs);
-                }
-            }
-        }
+        resolve_gateway_tls(&mut g, &resource_ref, ctx);
 
         ProcessResult::Continue(g)
     }
@@ -1578,38 +1375,52 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 /// absent at the wire level; serde rejects that malformed standard shape, and
 /// this selection deliberately never falls back to `default` after a port match.
 fn project_standard_frontend_validation(gateway: &mut Gateway, malformed: bool) {
-    let frontend = gateway.spec.tls.as_ref().and_then(|tls| tls.frontend.as_ref()).cloned();
-    let Some(frontend) = frontend else {
+    if gateway
+        .spec
+        .tls
+        .as_ref()
+        .and_then(|tls| tls.frontend.as_ref())
+        .is_none()
+    {
         return;
-    };
-    let Some(listeners) = gateway.spec.listeners.as_mut() else {
-        return;
-    };
-
-    for listener in listeners {
-        if !listener.protocol.eq_ignore_ascii_case("HTTPS") {
-            continue;
-        }
-        if malformed {
-            let tls = listener.tls.get_or_insert_with(empty_gateway_tls_config);
-            tls.frontend_matcher_eligibility = Some(FrontendMatcherEligibility::StrictReject);
-            continue;
-        }
-        let validation = match frontend
-            .per_port
+    }
+    let projections = {
+        let references = GatewayTlsRefs::from_gateway(gateway);
+        gateway
+            .spec
+            .listeners
             .as_deref()
             .unwrap_or_default()
             .iter()
-            .find(|entry| entry.port == listener.port)
-        {
-            Some(entry) => entry.tls.validation.clone(),
-            None => frontend.default.validation.clone(),
-        };
-        let Some(validation) = validation else {
-            continue;
-        };
-        let tls = listener.tls.get_or_insert_with(empty_gateway_tls_config);
-        tls.frontend_validation = Some(validation);
+            .enumerate()
+            .map(|(index, listener)| {
+                if !listener.protocol.eq_ignore_ascii_case("HTTPS") {
+                    return None;
+                }
+                // Do not traverse or clone a malformed/oversized frontend policy.
+                Some(if malformed {
+                    None
+                } else {
+                    references.frontend_validation(index).cloned()
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    if let Some(listeners) = gateway.spec.listeners.as_mut() {
+        for (listener, projection) in listeners.iter_mut().zip(projections) {
+            let Some(validation) = projection else { continue };
+            if malformed {
+                listener
+                    .tls
+                    .get_or_insert_with(empty_gateway_tls_config)
+                    .frontend_matcher_eligibility = Some(FrontendMatcherEligibility::StrictReject);
+            } else if let Some(validation) = validation {
+                listener
+                    .tls
+                    .get_or_insert_with(empty_gateway_tls_config)
+                    .frontend_validation = Some(validation);
+            }
+        }
     }
 }
 
@@ -1636,6 +1447,7 @@ fn validate_standard_frontend_tls(gateway: &Gateway) -> Vec<String> {
                 "spec.tls.frontend.perPort must contain at most {} entries",
                 edgion_resources::resources::gateway::MAX_GATEWAY_FRONTEND_PER_PORT
             ));
+            return errors;
         }
         let mut ports = BTreeSet::new();
         for entry in per_port {
@@ -1664,6 +1476,13 @@ fn validate_standard_frontend_tls(gateway: &Gateway) -> Vec<String> {
         )
         .flatten()
     {
+        if validation.ca_certificate_refs.len() > edgion_common::tls_validation::MAX_CA_REFERENCE_COUNT {
+            errors.push(format!(
+                "frontend caCertificateRefs must contain at most {} entries",
+                edgion_common::tls_validation::MAX_CA_REFERENCE_COUNT
+            ));
+            continue;
+        }
         for reference in &validation.ca_certificate_refs {
             validate_frontend_ca_reference(reference, &mut errors);
         }
@@ -1705,7 +1524,7 @@ fn validate_frontend_ca_reference(reference: &FrontendCACertificateRef, errors: 
             reference.kind
         ));
     }
-    if reference.name.is_empty() || reference.name.len() > 253 {
+    if reference.name.is_empty() || reference.name.chars().count() > 253 {
         errors.push(format!(
             "frontend caCertificateRefs name '{}' is invalid",
             reference.name
@@ -1721,97 +1540,178 @@ fn validate_frontend_ca_reference(reference: &FrontendCACertificateRef, errors: 
     }
 }
 
-/// Resolve frontend CA certificate refs into a complete, ordered outcome set.
-#[allow(clippy::too_many_arguments)]
+struct GatewayListenerTlsResolution {
+    listener: usize,
+    serving: Option<Vec<ResolvedServingCertificateReference>>,
+    frontend: Option<Vec<ResolvedFrontendCAReference>>,
+    strict_reject: bool,
+}
+
+/// Acquire through immutable actual fields, then publish after all loans end.
+fn resolve_gateway_tls(gateway: &mut Gateway, owner: &ResourceRef, ctx: &HandlerContext) {
+    let (backend, updates) = {
+        let references = GatewayTlsRefs::from_gateway(gateway);
+        let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+        let backend =
+            references
+                .backend_client()
+                .and_then(|field| match fetch_bound_secret(ctx, owner, field.token()) {
+                    BoundFetchOutcome::Ok(authorized) => Some(authorized.secret),
+                    BoundFetchOutcome::Invalid(_) | BoundFetchOutcome::Pending(_) => None,
+                });
+        let mut updates = Vec::new();
+        for (listener_index, listener) in gateway.spec.listeners.as_deref().unwrap_or_default().iter().enumerate() {
+            let Some(tls) = listener.tls.as_ref() else { continue };
+            if tls.mode.unwrap_or_default() != GatewayTlsMode::Terminate {
+                continue;
+            }
+            let mut update = GatewayListenerTlsResolution {
+                listener: listener_index,
+                serving: None,
+                frontend: None,
+                strict_reject: false,
+            };
+            if let Some(cert_refs) = tls.certificate_refs.as_ref() {
+                if cert_refs.len() > edgion_common::tls_validation::MAX_SERVING_CERTIFICATE_REFS {
+                    update.strict_reject = true;
+                    updates.push(update);
+                    continue;
+                }
+                let mut outcomes = Vec::with_capacity(cert_refs.len());
+                for (index, cert_ref) in cert_refs.iter().enumerate() {
+                    let mut outcome = ResolvedServingCertificateReference {
+                        index: index as u16,
+                        source: ServingCertificateSourceIdentity {
+                            group: cert_ref.group.as_deref().unwrap_or("").to_string(),
+                            kind: cert_ref.kind.as_deref().unwrap_or("Secret").to_string(),
+                            namespace: cert_ref.namespace.as_deref().unwrap_or(gateway_ns).to_string(),
+                            name: cert_ref.name.clone(),
+                        },
+                        secret: None,
+                        error: None,
+                    };
+                    let field = references
+                        .serving(listener_index, index)
+                        .expect("actual serving reference exists");
+                    match fetch_bound_secret(ctx, owner, field.token()) {
+                        BoundFetchOutcome::Ok(authorized) => outcome.secret = Some(authorized.secret),
+                        BoundFetchOutcome::Invalid(_) => {
+                            outcome.error = Some(ServingCertificateResolutionError::InvalidReference)
+                        }
+                        BoundFetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+                            outcome.error = Some(ServingCertificateResolutionError::NotFound)
+                        }
+                        BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing { .. }) => {
+                            outcome.error = Some(ServingCertificateResolutionError::RefNotPermitted)
+                        }
+                    }
+                    outcomes.push(outcome);
+                }
+                update.serving = Some(outcomes);
+            }
+            if tls.frontend_validation.is_some() {
+                if let Some(validation) = references.frontend_validation(listener_index) {
+                    if validation.ca_certificate_refs.len() > edgion_common::tls_validation::MAX_CA_REFERENCE_COUNT {
+                        update.strict_reject = true;
+                    } else {
+                        update.frontend = Some(resolve_frontend_ca_refs(
+                            &references,
+                            listener_index,
+                            owner,
+                            ctx,
+                            validation.mode != Some(FrontendValidationMode::AllowInsecureFallback),
+                        ));
+                    }
+                }
+            }
+            updates.push(update);
+        }
+        (backend, updates)
+    };
+    if let Some(tls) = gateway.spec.tls.as_mut().and_then(|tls| tls.backend.as_mut()) {
+        tls.resolved_client_certificate = backend;
+    }
+    if let Some(listeners) = gateway.spec.listeners.as_mut() {
+        for update in updates {
+            let tls = listeners[update.listener]
+                .tls
+                .as_mut()
+                .expect("actual TLS listener exists");
+            tls.resolved_certificate_refs = update.serving;
+            tls.resolved_frontend_ca_refs = update.frontend;
+            if update.strict_reject {
+                tls.frontend_matcher_eligibility = Some(FrontendMatcherEligibility::StrictReject);
+            }
+        }
+    }
+}
+
+/// Resolve actual frontend CA declarations into a complete ordered outcome set.
 fn resolve_frontend_ca_refs(
-    ca_refs: &[FrontendCACertificateRef],
-    gateway_ns: &str,
+    references: &GatewayTlsRefs<'_>,
+    listener: usize,
     resource_ref: &ResourceRef,
-    listener_name: &str,
     ctx: &HandlerContext,
-    cross_ns_ref: &ResourceRef,
-    cross_ns_manager: &crate::conf_mgr::sync_runtime::resource_processor::ref_grant::CrossNamespaceRefManager,
     read_payload: bool,
 ) -> Vec<ResolvedFrontendCAReference> {
+    let Some(validation) = references.frontend_validation(listener) else {
+        return Vec::new();
+    };
+    let ca_refs = &validation.ca_certificate_refs;
+    let gateway_ns = resource_ref.namespace.as_deref().unwrap_or("default");
     let mut outcomes = Vec::with_capacity(ca_refs.len());
     let mut aggregate_bytes = 0usize;
     let mut unique_certificates = HashSet::new();
-
     for (index, ca_ref) in ca_refs.iter().enumerate() {
-        let ca_kind = ca_ref.kind.as_str();
-        let ca_ns_str = ca_ref.namespace.as_deref().unwrap_or(gateway_ns);
-        let source_kind = match ca_kind {
-            "Secret" => Some((FrontendCaSourceKind::Secret, FrontendCASourceKind::Secret)),
-            "ConfigMap" => Some((FrontendCaSourceKind::ConfigMap, FrontendCASourceKind::ConfigMap)),
-            _ => None,
-        };
         let mut outcome = ResolvedFrontendCAReference {
             index: index as u8,
             source: FrontendCASourceIdentity {
-                kind: source_kind
-                    .map(|(_, transport)| transport)
-                    .unwrap_or(FrontendCASourceKind::Secret),
-                namespace: ca_ns_str.to_string(),
+                kind: if ca_ref.kind == "ConfigMap" {
+                    FrontendCASourceKind::ConfigMap
+                } else {
+                    FrontendCASourceKind::Secret
+                },
+                namespace: ca_ref.namespace.as_deref().unwrap_or(gateway_ns).to_string(),
                 name: ca_ref.name.clone(),
             },
             ca_certificate: None,
             error: None,
         };
-
-        if ca_ref.group.is_empty() {
-            if let Some((manager_kind, _)) = source_kind {
-                ctx.runtime().frontend_ca_ref_manager.add_ref(
-                    FrontendCaSourceKey::new(manager_kind, ca_ns_str, &ca_ref.name).index_key(),
-                    resource_ref.clone(),
-                );
+        let field = references
+            .frontend_ca(listener, index)
+            .expect("actual frontend CA reference exists");
+        let acquired = if !read_payload {
+            authorize_bound_gateway_frontend_ca(ctx, resource_ref, field.token())
+        } else {
+            match ca_ref.kind.as_str() {
+                "Secret" => match fetch_bound_secret(ctx, resource_ref, field.token()) {
+                    BoundFetchOutcome::Ok(authorized) => {
+                        outcome = resolve_frontend_ca_secret(outcome, Some(authorized.secret));
+                        BoundFetchOutcome::Ok(())
+                    }
+                    BoundFetchOutcome::Pending(reason) => BoundFetchOutcome::Pending(reason),
+                    BoundFetchOutcome::Invalid(error) => BoundFetchOutcome::Invalid(error),
+                },
+                "ConfigMap" => match fetch_bound_configmap(ctx, resource_ref, field.token()) {
+                    BoundFetchOutcome::Ok(configmap) => {
+                        outcome = resolve_frontend_ca_configmap(outcome, Some(configmap));
+                        BoundFetchOutcome::Ok(())
+                    }
+                    BoundFetchOutcome::Pending(reason) => BoundFetchOutcome::Pending(reason),
+                    BoundFetchOutcome::Invalid(error) => BoundFetchOutcome::Invalid(error),
+                },
+                _ => BoundFetchOutcome::Invalid(edgion_resources::resources::refs::ReferenceError::UnsupportedTarget),
             }
-        }
-
-        // Register cross-namespace refs
-        if ca_ns_str != gateway_ns {
-            cross_ns_manager.add_ref(ca_ns_str.to_string(), cross_ns_ref.clone());
-        }
-
-        if !ca_ref.group.is_empty() || source_kind.is_none() {
-            outcome.error = Some(FrontendCAResolutionError::InvalidReference);
-            outcomes.push(outcome);
-            continue;
-        }
-
-        let permitted = ca_ns_str == gateway_ns
-            || !is_reference_grant_validation_enabled()
-            || ctx.runtime().ref_grant_store.check_reference_allowed(
-                gateway_ns,
-                GATEWAY_API_GROUP,
-                "Gateway",
-                ca_ns_str,
-                "",
-                ca_kind,
-                Some(&ca_ref.name),
-            );
-        if !permitted {
-            outcome.error = Some(FrontendCAResolutionError::RefNotPermitted);
-            outcomes.push(outcome);
-            continue;
-        }
-
-        if !read_payload {
-            outcomes.push(outcome);
-            continue;
-        }
-
-        match ca_kind {
-            "Secret" => {
-                outcome =
-                    resolve_frontend_ca_secret(outcome, ctx.runtime().secret_store.get(Some(ca_ns_str), &ca_ref.name));
+        };
+        match acquired {
+            BoundFetchOutcome::Invalid(_) => outcome.error = Some(FrontendCAResolutionError::InvalidReference),
+            BoundFetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+                outcome.error = Some(FrontendCAResolutionError::NotFound)
             }
-            "ConfigMap" => {
-                outcome = resolve_frontend_ca_configmap(
-                    outcome,
-                    ctx.runtime().configmap_store.get(Some(ca_ns_str), &ca_ref.name),
-                );
+            BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing { .. }) => {
+                outcome.error = Some(FrontendCAResolutionError::RefNotPermitted)
             }
-            _ => unreachable!("kind was validated above"),
+            BoundFetchOutcome::Ok(()) => {}
         }
         if let Some(pem) = outcome.ca_certificate.as_ref() {
             let within_byte_limit = aggregate_bytes
@@ -1841,7 +1741,6 @@ fn resolve_frontend_ca_refs(
                 outcome.error = Some(FrontendCAResolutionError::InvalidCertificate);
             }
         }
-        tracing::debug!(gateway = %resource_ref.key(), listener = %listener_name, index, "Frontend CA reference evaluated");
         outcomes.push(outcome);
     }
 

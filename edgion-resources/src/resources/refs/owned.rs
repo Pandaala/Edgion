@@ -37,6 +37,7 @@ pub(super) enum TopologyLoan<'a> {
     IpList(&'a super::ip_list_fields::IpListSnapshot),
     Egc(&'a super::egc_tls_fields::EgcTlsSnapshot),
     RouteAuth(&'a super::route_auth_fields::RouteAuthSnapshot),
+    GatewayTls(&'a OwnerSnapshot),
 }
 impl<'a> TopologyLoan<'a> {
     fn owner(self) -> &'a OwnerSnapshot {
@@ -47,6 +48,7 @@ impl<'a> TopologyLoan<'a> {
             Self::IpList(snapshot) => &snapshot.owner,
             Self::Egc(snapshot) => &snapshot.owner,
             Self::RouteAuth(snapshot) => &snapshot.owner,
+            Self::GatewayTls(owner) => owner,
         }
     }
     fn freeze(self) -> Result<FrozenTopology, ReferenceError> {
@@ -55,7 +57,7 @@ impl<'a> TopologyLoan<'a> {
             Self::LinkSys(snapshot) => Ok(FrozenTopology::LinkSys(Arc::clone(snapshot))),
             // Effective ConfigData-expanded conditions are synchronous loans.
             // They cannot be revalidated against an unexpanded raw-owner store.
-            Self::Conditions(_) | Self::IpList(_) | Self::Egc(_) | Self::RouteAuth(_) => {
+            Self::Conditions(_) | Self::IpList(_) | Self::Egc(_) | Self::RouteAuth(_) | Self::GatewayTls(_) => {
                 Err(ReferenceError::UnsupportedTarget)
             }
         }
@@ -207,6 +209,8 @@ impl OwnerSnapshot {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FieldContract {
+    NativeSecret,
+    NativeCa,
     CustomSecret,
     CustomCa,
     CustomCredential,
@@ -219,6 +223,7 @@ pub(super) enum FieldContract {
 pub(super) enum FieldWire {
     Secret(SecretObjectReference),
     Ca(CustomCACertificateRef),
+    NativeCa(crate::resources::gateway::FrontendCACertificateRef),
     Template(super::template_fields::TemplateWire),
     Descriptor { name: String, key: String },
     ConfigData { name: String, namespace: Option<String> },
@@ -227,6 +232,7 @@ pub(super) enum FieldWire {
 #[derive(Clone, PartialEq, Eq)]
 enum TargetGrammar {
     Strict,
+    NativeObject,
     Template,
 }
 
@@ -295,6 +301,12 @@ impl OwnedTarget {
                 reference.namespace.as_deref(),
                 reference.name.as_str(),
             ),
+            FieldWire::NativeCa(reference) => (
+                reference.group.as_str(),
+                reference.kind.as_str(),
+                reference.namespace.as_deref(),
+                reference.name.as_str(),
+            ),
             FieldWire::Template(_) | FieldWire::Descriptor { .. } => return Err(ReferenceError::UnsupportedTarget),
         };
         let namespace = namespace
@@ -302,13 +314,20 @@ impl OwnedTarget {
             .ok_or(ReferenceError::MissingNamespace)?;
         // Only these private contracts are selected by the finite owning visitors.
         // CredentialInjector's LinkSys branch remains an exact non-core target.
-        let group = if group == "core" && matches!(kind, "Secret" | "ConfigMap") {
+        let native = matches!(contract, FieldContract::NativeSecret | FieldContract::NativeCa);
+        let group = if !native && group == "core" && matches!(kind, "Secret" | "ConfigMap") {
             ""
         } else {
             group
         };
-        ObjectIdentity::checked(group, kind, ResourceScope::Namespaced(namespace), name)?;
+        if native {
+            ObjectIdentity::native_object_reference(group, kind, ResourceScope::Namespaced(namespace), name)?;
+        } else {
+            ObjectIdentity::checked(group, kind, ResourceScope::Namespaced(namespace), name)?;
+        }
         let supported = match contract {
+            FieldContract::NativeSecret => group.is_empty() && kind == "Secret",
+            FieldContract::NativeCa => group.is_empty() && matches!(kind, "Secret" | "ConfigMap"),
             FieldContract::FixedConfigData => group == "edgion.io" && kind == "EdgionConfigData",
             FieldContract::CustomSecret => group.is_empty() && kind == "Secret",
             FieldContract::CustomCa => group.is_empty() && matches!(kind, "Secret" | "ConfigMap"),
@@ -321,7 +340,11 @@ impl OwnedTarget {
             return Err(ReferenceError::UnsupportedTarget);
         }
         Ok(Self {
-            grammar: TargetGrammar::Strict,
+            grammar: if native {
+                TargetGrammar::NativeObject
+            } else {
+                TargetGrammar::Strict
+            },
             group: group.to_string(),
             kind: kind.to_string(),
             namespace: namespace.to_string(),
@@ -331,6 +354,14 @@ impl OwnedTarget {
     fn borrowed(&self) -> Result<ObjectIdentity<'_>, ReferenceError> {
         if self.grammar == TargetGrammar::Template {
             return ObjectIdentity::parsed_template_secret(&self.namespace, &self.name);
+        }
+        if self.grammar == TargetGrammar::NativeObject {
+            return ObjectIdentity::native_object_reference(
+                &self.group,
+                &self.kind,
+                ResourceScope::Namespaced(&self.namespace),
+                &self.name,
+            );
         }
         ObjectIdentity::checked(
             &self.group,
@@ -371,6 +402,15 @@ impl PreparedTlsTarget {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) enum FieldSlot {
+    GatewayBackendTls,
+    GatewayServing {
+        listener: usize,
+        reference: usize,
+    },
+    GatewayFrontendCa {
+        per_port: Option<usize>,
+        reference: usize,
+    },
     RouteAuthTls {
         rule: usize,
         backend: Option<usize>,
@@ -454,7 +494,10 @@ impl FieldSlot {
                     && *current_group == group
                     && *current_reference == reference
             }
-            Self::RouteAuthTls { .. }
+            Self::GatewayBackendTls
+            | Self::GatewayServing { .. }
+            | Self::GatewayFrontendCa { .. }
+            | Self::RouteAuthTls { .. }
             | Self::RouteAuthTemplate { .. }
             | Self::BackendCredential { .. }
             | Self::LinkSys { .. }
@@ -570,6 +613,7 @@ impl ReferenceToken<'_> {
         match &self.slot.wire {
             FieldWire::Secret(reference) => &reference.name,
             FieldWire::Ca(reference) => &reference.name,
+            FieldWire::NativeCa(reference) => &reference.name,
             FieldWire::Template(reference) => reference.target().map_or("", |(_, name)| name),
             FieldWire::Descriptor { name, .. } | FieldWire::ConfigData { name, .. } => name,
         }
@@ -628,6 +672,16 @@ impl<'a> BoundFieldReference<'a> {
         })
     }
 
+    /// Finite native Gateway TLS fields; no arbitrary caller can mint this position.
+    pub fn is_gateway_tls(self) -> bool {
+        matches!(
+            self._position,
+            FieldSlot::GatewayBackendTls | FieldSlot::GatewayServing { .. } | FieldSlot::GatewayFrontendCa { .. }
+        )
+    }
+    pub fn is_gateway_frontend_ca(self) -> bool {
+        matches!(self._position, FieldSlot::GatewayFrontendCa { .. })
+    }
     pub fn source(self) -> ReferenceSource<'a> {
         self.source
     }

@@ -144,6 +144,29 @@ impl<'a> ObjectIdentity<'a> {
             name,
         })
     }
+    /// Native Gateway API ObjectName uses a character-count bound, not DNS syntax.
+    pub(super) fn native_object_reference(
+        group: &'a str,
+        kind: &'a str,
+        scope: ResourceScope<'a>,
+        name: &'a str,
+    ) -> Result<Self, ReferenceError> {
+        let group_kind = GroupKind::checked(group, kind)?;
+        if let ResourceScope::Namespaced(namespace) = scope {
+            if !is_dns_label(namespace, 63) {
+                return Err(ReferenceError::InvalidNamespace);
+            }
+        }
+        if name.is_empty() || name.chars().count() > 253 {
+            return Err(ReferenceError::InvalidName);
+        }
+        Ok(Self {
+            group_kind,
+            scope,
+            name,
+        })
+    }
+
     pub(super) fn checked(
         group: &'a str,
         kind: &'a str,

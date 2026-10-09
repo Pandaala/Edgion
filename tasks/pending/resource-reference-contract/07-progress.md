@@ -2,22 +2,25 @@
 
 ## Current resume snapshot (2026-10-09)
 
-- Latest accepted local batches include R7a managed HTTP plugins 418e353dd,
-  R7b internal HTTPRoute auth 78d0f168c and shared template readiness e954a9881.
-  All passed focused verification, workspace gates and independent final reviews.
-  No agent push; the user separately pushed during R7a verification.
-- R6k committed all ten reviewed blobs exactly. Its final evidence is under
-  tmp/resource-reference-contract/r6k-verification-20261009 and
-  tmp/resource-reference-contract/r6k-root-verification-20261009.
-- R7a three-plugin managed HTTP migration has passed focused execution and all
-  fourteen root gates on exactly twenty technical paths. Both independent
-  Astra commit reviews passed. R7b internal Route Edgion-auth now has two
-  independent execution and commit approvals on thirty-one technical paths. All
-  fourteen root gates pass without warnings; committed as 78d0f168c.
-- R7/R8, full consumer audit and simplification, knowledge/user-document cleanup,
-  fresh real-environment admission/dynamic/conformance verification, and original
-  issue closure remain open. Historical scoped passes are not whole-task passes.
-- Protected unrelated untracked paths: review-results/ and
+- Latest accepted local batches: R7a managed HTTP plugins 418e353dd,
+  R7b internal HTTPRoute auth 78d0f168c, shared template readiness e954a9881,
+  and R7c OAuth2 actual-owner transport df08e402b. Focused verification,
+  workspace gates and two independent final reviews passed for each batch.
+- The user added unrelated WAF commit a85aed2fb. R8a's reviewed baseline includes
+  its seven new Gateway tests: 9637 total identities in the four tracked crates.
+- R8a native Gateway TLS has passed both final execution reviews and all fourteen
+  workspace gates. Its final scope is twenty technical/documentation paths plus
+  this ledger. Verification passed 300 unit tests and 55 doctests, retaining ten
+  existing ignored doctests and all 9637 baseline identities (9656 after nineteen
+  additions). The local commit gate remains the final recording step.
+- Native Gateway material selection preserves omitted raw namespaces without
+  relaxing native group/kind or Grant semantics. Default's candidate reads are not
+  atomic; registered dependencies and subsequent source events reconcile changes.
+- Remaining R8 consumers, full coverage/simplification review, knowledge and user
+  documentation cleanup, fresh real-environment admission/dynamic/conformance
+  verification, and original issue closure are open. Scoped passes do not prove
+  whole-task completion.
+- No agent push. Protected unrelated untracked paths: review-results/ and
   tasks/todo/resource-reference-abstraction-simplification.md. Exclude them from
   batch commits unless separately assigned.
 
@@ -2597,3 +2600,96 @@ without visibility or dependency-version errors. Invalid earlier attempts remain
 recorded and excluded. Eleven technical source hashes remain at r4. All 102 tests,
 identity preservation and fourteen root gates stand. Final commit scope is those
 eleven files plus this ledger; R8/F1/F2 and original issue closure remain open.
+
+R7c committed locally as df08e402b6c43e0b2f10e7e6cbdadf4bef0c64e7 after two
+independent Astra SCOPED COMMIT PASS verdicts. All twelve committed blobs match
+the final manifest; no push. R8a Gateway TLS enters plan-only: validate actual
+native declaring fields before dependency creation, preserve valid denied/missing
+recovery registration before Grant reads, and reuse canonical material acquisition.
+Serving-certificate partial-good outcomes and frontend StrictReject are invariant.
+
+R8a first plan review requires amendments before execution: native ObjectName
+length must count Unicode characters consistently with its schema; Gateway TLS
+matching must use the same omitted-namespace default as Controller outcomes.
+Controller preserves ordered successful and failed certificate outcomes, but the
+Gateway continues to require a complete valid serving-certificate set. Both
+reviewers verified that distinction; subset serving is not authorized. The user
+added unrelated commit a85aed2fb during planning. Rebase the plan evidence on that
+HEAD and capture its new test identities before mutation; 9630 remains the prior
+batch count. No technical edit or Cargo execution has started for R8a.
+
+R8a revised fifteen-path plan r2 received two independent Astra PLAN PASS
+verdicts at a85aed2fb. The amendments explicitly align native character-count
+validation and the existing matcher default namespace, without changing schemas,
+explicit-empty semantics, attachment proofs or physical listener keys. First
+capture the current-HEAD test baseline, then implement within the frozen scope.
+Production checkpoint reviews precede compile preflight; focused execution and
+final workspace/commit gates remain required. This is plan approval only.
+
+R8a current-HEAD baseline is 9637 identities across the four tracked production
+crates, including seven user-added Gateway tests. Gateway compilation/listing
+exited zero in 176.937 seconds and listed 5363 tests; this was inventory, not test
+execution. Exact binary/source hashes and original files are preserved under
+tmp/resource-reference-contract/r8a-baseline-20261009. Approved production work
+has started; no implementation acceptance is claimed.
+
+R8a production r3 received two independent Astra PASS verdicts. Review rejected
+r1's frontend cloning before CA limits and r2's separate pre-parse validation
+loop. Both validate and parse now use one bounded frontend validator; malformed
+projection remains StrictReject without oversized CA traversal or cloning. Seven
+production hashes are frozen. Affected-library compiler preflight is authorized,
+followed by approved tests/docs and full static review; no test pass is claimed.
+
+R8a affected-library compiler preflight passes in 19.26 seconds with zero
+warnings and unchanged HEAD/seven production hashes. Approved new tests and
+four documentation updates are in progress; no focused execution yet. Evidence:
+tmp/resource-reference-contract/r8a-verification-20261009/compiler-preflight-r3.
+
+R8a full-static r1 is blocked before test execution. Two new invalid matrices
+need typed-field mutation after valid deserialization; the DER dedup control
+must cross the aggregate certificate threshold; owner/target namespace wording
+needs correction. Root and implementer additionally confirmed a serving regression:
+FS/etcd retain omitted Secret namespace as a bare store key, while the new native
+lookup reads only default/name. Frontend recovery also ignores bare source events.
+Prepare and independently review a bounded nineteen-path amendment covering
+authorization-preserving lookup, ambiguity rejection, unchanged raw material
+metadata and typed event recovery. No expanded production edit is authorized yet;
+all current technical sources remain frozen. This blocker cannot be deferred to
+closure while claiming R8a complete.
+
+## R8a final verification and local commit gate (2026-10-09)
+
+Actual Gateway backend, serving and frontend CA fields now use the finite borrowed
+reference facade and bound acquisition. Validation precedes dependency/Grant/store
+effects; valid missing or denied references retain recovery. Native defaults and
+required frontend fields remain exact, with no native `core` alias. Frontend bounds,
+complete serving sets, strict rejection and controller Grant-disable policy are
+preserved. Gateway-only default material selection distinguishes missing, unique
+and ambiguous bare/qualified candidates, retains actual metadata, and uses actual
+source events for typed CA and ordinary Secret recovery. Non-Gateway bound/frozen
+consumers retain exact reads. No new handler IO, worker or data-plane tracing.
+
+Both Astra reviewers approved the plan amendments, production checkpoint and final
+static/execution results. Discriminating tests separately cover ordinary-only
+Gateway recovery, typed Secret/ConfigMap isolation and aggregate CA DER deduplication.
+Final evidence: `tmp/resource-reference-contract/r8a-verification-20261009/verification-final-r7.json`.
+There are 300 distinct unit and 55 doc passes, ten existing doc ignored cases, and
+9637 preserved baseline identities with nineteen additions. Two approved old-test
+adaptations add a valid Gateway fixture name and align raw-None/default material
+acceptance while retaining explicit-empty/nondefault rejection controls. All other
+old test bodies and ignored states are preserved. Lifetime positive and E0505,
+E0506 and E0502 negative controls use a verified actual Resources artifact.
+
+Raw failed runs are retained: new observer-path compilation, the superseded old
+namespace assertion, and root formatting/lint/doc gates. Formatting-only source
+equivalence is proven explicitly; changed test scopes were rerun as required.
+Four new-test Clippy warnings were fixed without suppression. A separately reviewed
+WAF index broken link was changed to a truthful historical-path statement only.
+All fourteen final root gates passed without warnings; workspace check took
+15.226 seconds and Clippy 18.281 seconds. Root evidence is under
+`tmp/resource-reference-contract/r8a-root-verification-20261009/`.
+
+No live TLS handshake or Gateway API conformance is claimed. R8b BTP material
+pairing, later R8 consumers, F1 whole-task audit/cleanup and F2 fresh live validation
+remain open. Only the frozen twenty paths and this ledger may enter this batch's
+local commit. Protected unrelated untracked paths remain excluded. Never push.

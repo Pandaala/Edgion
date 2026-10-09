@@ -473,7 +473,16 @@ fn serving_certificate_outcome_requires_exact_ordered_source_identity() {
         secret: Some(missing_namespace),
         ..exact[0].clone()
     }];
-    assert!(compile_serving_certificates(&references, Some(&missing_namespace), "default").is_none());
+    // An actual omitted material namespace denotes the canonical default namespace.
+    assert!(compile_serving_certificates(&references, Some(&missing_namespace), "default").is_some());
+    let mut empty_namespace = missing_namespace.clone();
+    empty_namespace[0].secret.as_mut().unwrap().metadata.namespace = Some(String::new());
+    assert!(compile_serving_certificates(&references, Some(&empty_namespace), "default").is_none());
+    let mut nondefault_target = references.clone();
+    nondefault_target[0].namespace = Some("apps".to_string());
+    let mut nondefault_source = missing_namespace;
+    nondefault_source[0].source.namespace = "apps".to_string();
+    assert!(compile_serving_certificates(&nondefault_target, Some(&nondefault_source), "apps").is_none());
 }
 
 #[test]
@@ -1310,4 +1319,76 @@ fn test_programmed_false_does_not_shadow_valid_listener() {
             reason: "controller rejected gateway tls transport"
         }
     ));
+}
+
+#[test]
+fn native_gateway_tls_omitted_namespace_compiles_complete_material_and_exact_attachment() {
+    let proof = GatewayAttachmentProof {
+        instance: "native-owner".into(),
+        generation: 8,
+        epoch: "epoch-8".into(),
+        attachment_digest: "c".repeat(64),
+    };
+    for (owner_namespace, material_namespace, raw_namespace, valid) in [
+        (None, "default", Some("default"), true),
+        (None, "default", None, true),
+        (Some("default"), "default", None, true),
+        (Some("default"), "default", Some("default"), true),
+        (Some("apps"), "apps", Some("apps"), true),
+        (Some("apps"), "apps", None, false),
+        (Some(""), "default", None, false),
+        (None, "default", Some(""), false),
+        (None, "other", Some("other"), false),
+    ] {
+        let mut secret = valid_server_secret();
+        secret.metadata.namespace = raw_namespace.map(str::to_string);
+        let mut tls = make_tls_config("expected", None);
+        tls.resolved_certificate_refs = Some(vec![ResolvedServingCertificateReference {
+            index: 0,
+            source: ServingCertificateSourceIdentity {
+                group: "".into(),
+                kind: "Secret".into(),
+                namespace: material_namespace.into(),
+                name: "expected".into(),
+            },
+            secret: Some(secret),
+            error: None,
+        }]);
+        tls.frontend_validation = Some(FrontendTLSValidation {
+            ca_certificate_refs: vec![frontend_ref("ca")],
+            mode: None,
+        });
+        tls.resolved_frontend_ca_refs = Some(vec![ResolvedFrontendCAReference {
+            index: 0,
+            source: FrontendCASourceIdentity {
+                kind: FrontendCASourceKind::ConfigMap,
+                namespace: material_namespace.into(),
+                name: "ca".into(),
+            },
+            ca_certificate: Some(ByteString(valid_ca_pem())),
+            error: None,
+        }]);
+        let mut gateway = create_test_gateway(
+            "edge",
+            "default",
+            vec![create_test_listener("https", Some("server.example.com"), Some(tls))],
+        );
+        gateway.metadata.namespace = owner_namespace.map(str::to_string);
+        gateway.spec.resolved_attachment_proof = Some(proof.clone());
+        let matcher = GatewayTlsMatcher::new();
+        matcher.rebuild_from_gateways(&[gateway]);
+        let entry = matcher
+            .match_sni(&test_listener_key(443), "server.example.com")
+            .unwrap();
+        assert_eq!(entry.attachment.gateway_namespace, owner_namespace.unwrap_or("default"));
+        assert_eq!(entry.attachment.listener_key, test_listener_key(443));
+        assert_eq!(entry.attachment.gateway_proof, proof);
+        assert_eq!(entry.compiled_serving_certificates.is_some(), valid);
+        assert_eq!(entry.compiled_frontend_ca_store.is_some(), valid);
+        if valid {
+            assert_eq!(entry.frontend_mtls, FrontendMtlsOutcome::StrictEffective);
+        } else {
+            assert!(matches!(entry.frontend_mtls, FrontendMtlsOutcome::StrictReject { .. }));
+        }
+    }
 }

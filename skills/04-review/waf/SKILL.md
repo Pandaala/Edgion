@@ -25,8 +25,9 @@ Check the current compiler, transaction, and detector code before applying a pas
 
 ## Reviewed optimization design
 
-The [optimization specification](../../../tasks/pending/waf-optimization-design/01-spec.md)
-and its serial plan describe candidate work. The regression guards above record
+The historical optimization specification
+(`tasks/pending/waf-optimization-design/01-spec.md`) and its serial plan described
+candidate work; those task records are absent from the current tree. The regression guards above record
 current implementation boundaries; design approval alone does not establish
 implementation or measured adoption. The fused JSON guard records the narrower
 contiguous-input implementation and its verification limits.

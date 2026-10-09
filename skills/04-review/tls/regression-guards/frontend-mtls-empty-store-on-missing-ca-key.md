@@ -71,9 +71,9 @@ cover 9 and 16 references in strict and fallback modes, plus rejection of 17 at 
 
 ## Fix suggestions not accepted
 
-- "Reject the misconfiguration at the controller validator instead" — out of scope here; the
-  controller's `has_all_ca_refs_invalid` only fences zero-refs, not Secrets that contain
-  unexpected keys. The runtime guard is the right defense for "config slipped through".
+- "Remove the runtime guard because Controller validation already rejected the source" —
+  rejected. Controller resolution now records missing/empty/invalid CA material, but the
+  matcher independently validates the complete transport set before compiling a store.
 - "Downgrade to `warn!` + `Ok(false)` to keep mTLS optional" — would mask a real
   misconfiguration as a working no-mTLS listener; the operator declared `frontendValidation`,
   so a missing trust anchor is an error, not a "skip silently" signal.
@@ -101,3 +101,34 @@ cover 9 and 16 references in strict and fallback modes, plus rejection of 17 at 
 ## Resolution references
 
 - `tls-FB01` — 2026-05-27.
+
+## Native Gateway field acquisition
+
+`GatewayTlsRefs` selects frontend references from the declaring Gateway default
+or authoritative per-port entry. Listener projections cannot supply authority.
+The canonical bound credential pipeline rejects invalid source/target identities
+before Grant/store calls or dependency writes, including the native-invalid
+`core` alias. Valid missing or denied sources retain typed Secret/ConfigMap CA
+recovery edges without also registering ordinary Secret dependencies.
+
+`GatewayHandler::validate` and parse share the same bounded frontend validator:
+oversized per-port lists are rejected before traversal, and oversized CA vectors
+before reference iteration or projection cloning. This fence is specific to
+frontend fields; independent valid serving references retain their own behavior.
+Fallback authorization remains payload-read-free. Parse clears injected/stale
+material; retarget/delete replace recovery edges, and Grant revocation removes
+previously acquired material on the next reconcile. These unit-level acquisition
+and matcher checks do not establish live handshake or Gateway API conformance.
+
+Native Gateway TLS material selection preserves FS/etcd raw omitted namespaces:
+a canonical default target checks both qualified and bare candidates after
+validation and authorization, rejects ambiguity or mismatched actual metadata,
+and retains the selected object's metadata. Nondefault targets never read bare
+keys. Other bound credential consumers retain their existing exact reads.
+Secret/ConfigMap source events preserve raw dependency notifications and add
+Gateway-only semantic ordinary notifications for bare objects, plus correctly
+typed frontend CA notifications. The two candidate reads are not an atomic
+snapshot; dependencies are registered first and subsequent events reconcile
+creation, deletion, revocation and ambiguity changes. Matcher identity comparison
+interprets only an omitted actual Secret namespace as default, without rewriting
+material metadata or accepting an explicit empty namespace.

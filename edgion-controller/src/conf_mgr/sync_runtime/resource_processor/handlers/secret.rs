@@ -38,9 +38,19 @@ impl SecretHandler {
     }
 
     /// Trigger cascading requeue for all resources that depend on this secret
-    async fn trigger_cascading_requeue(&self, secret_key: &str, event: &str, ctx: &HandlerContext) {
+    async fn trigger_cascading_requeue(&self, secret_key: &str, source: &Secret, event: &str, ctx: &HandlerContext) {
         let mut refs = ctx.secret_ref_manager().get_refs(secret_key);
-        if let Some((namespace, name)) = secret_key.split_once('/') {
+        if let Some(name) = source.metadata.name.as_deref() {
+            let namespace = source.metadata.namespace.as_deref().unwrap_or("default");
+            if source.metadata.namespace.is_none() {
+                // Preserve all raw-key consumers; the new semantic alias is Gateway-only.
+                refs.extend(
+                    ctx.secret_ref_manager()
+                        .get_refs(&format!("default/{name}"))
+                        .into_iter()
+                        .filter(|resource| resource.kind == edgion_resources::ResourceKind::Gateway),
+                );
+            }
             refs.extend(
                 ctx.runtime()
                     .frontend_ca_ref_manager
@@ -199,7 +209,8 @@ impl ProcessorHandler<Secret> for SecretHandler {
         self.validate_oidc_secret_shape(secret, &secret_key, ctx);
 
         // SecretStore is already updated in parse(); only trigger cascading requeue here.
-        self.trigger_cascading_requeue(&secret_key, "updated", ctx).await;
+        self.trigger_cascading_requeue(&secret_key, secret, "updated", ctx)
+            .await;
     }
 
     async fn on_delete(&self, secret: &Secret, ctx: &HandlerContext) {
@@ -214,7 +225,8 @@ impl ProcessorHandler<Secret> for SecretHandler {
         ctx.runtime().secret_store.update(HashMap::new(), &remove);
 
         // 2. Trigger cascading requeue (so dependent resources know Secret is deleted)
-        self.trigger_cascading_requeue(&secret_key, "deleted", ctx).await;
+        self.trigger_cascading_requeue(&secret_key, secret, "deleted", ctx)
+            .await;
 
         // Do not clear source-side dependency edges. A delete followed by a
         // recreate may coalesce before the owner reconciles; both events must

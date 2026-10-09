@@ -30,7 +30,8 @@ that per-config scoping is actually wanted.
 
 `ref_grant/validator.rs`, `ref_grant/edgion_config_data_grant.rs`,
 `handlers/dns_resolver_guard.rs`, `handlers/edgion_tls.rs` and
-`handlers/gateway.rs` all call `is_reference_grant_validation_enabled()`, which
+`handlers/gateway.rs` use `is_reference_grant_validation_enabled()` directly or,
+for native Gateway TLS fields, through `credential/pipeline.rs`, which
 reads the process-global `CONTROLLER_CONFIG` and falls back to `true` when the
 config is uninitialized. None of them has an `EdgionGatewayConfig` in scope, so
 a per-config toggle would require threading the resource through five unrelated
@@ -74,3 +75,19 @@ Re-open this decision only if:
 ## Resolution references
 
 - `crd-03` — 2026-07-17.
+
+## Native Gateway TLS pipeline boundary
+
+Gateway backend/serving Secret and frontend CA fields now enter the canonical
+bound credential pipeline through actual-owner `GatewayTlsRefs` loans. Its finite
+private field positions preserve the existing disabled controller policy only
+for these Gateway TLS fields. Source/target validity and exact dependency-owner
+matching precede this decision; valid recovery edges are retained even when
+Grant enforcement is disabled. A disabled-policy revision marker is synchronous:
+these Gateway field tokens cannot freeze or establish asynchronous authority.
+
+This migration does not make every bound credential consumer honor that bypass.
+In particular, existing plugin and CredentialSource authorization/freshness
+contracts remain unchanged. A separate-process test initializes the real disabled
+controller configuration, verifies Gateway recovery and invalid zero effects,
+and verifies that an unrelated plugin contract still requires its Grant.

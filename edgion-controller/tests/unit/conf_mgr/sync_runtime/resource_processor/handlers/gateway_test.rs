@@ -1673,6 +1673,7 @@ async fn frontend_projects_sixteen_ca_references_in_fallback_mode() {
     let runtime = Arc::new(ControllerRuntime::default());
     let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime);
     let mut gateway = make_test_gateway("gw-ns");
+    gateway.metadata.name = Some("gateway".to_string());
     let mut validation = frontend_validation("ConfigMap", "ca-0", Some(FrontendValidationMode::AllowInsecureFallback));
     validation.ca_certificate_refs = (0..16)
         .map(|index| FrontendCACertificateRef {
@@ -2763,4 +2764,596 @@ async fn actual_proxy_raw_none_owner_retargets_clears_and_recovers_without_stale
         .edgion_config_data_refs
         .get_refs("default/replacement")
         .is_empty());
+}
+
+fn native_tls_gateway() -> Gateway {
+    serde_json::from_value(serde_json::json!({"metadata":{"name":"edge","namespace":"default"},"spec":{"gatewayClassName":"edge",
+        "listeners":[{"name":"https","protocol":"HTTPS","port":443,"tls":{"mode":"Terminate"}}],
+        "tls":{"frontend":{"default":{"validation":{"caCertificateRefs":[{"group":"","kind":"Secret","name":"ca"}]}}}}}})).unwrap()
+}
+
+// These isolated fixtures have no peer requeues; parsing must complete from cached stores.
+fn native_tls_parse_observed(gateway: Gateway, ctx: &HandlerContext) -> (Gateway, Vec<&'static str>) {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+    crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::observe_bound_reads(|| {
+        let handler = GatewayHandler::new(None, None);
+        let mut parse = std::pin::pin!(handler.parse(gateway, ctx));
+        let Poll::Ready(ProcessResult::Continue(parsed)) = parse.as_mut().poll(&mut Context::from_waker(Waker::noop()))
+        else {
+            panic!("Gateway parse must finish without IO or suspension");
+        };
+        parsed
+    })
+}
+
+fn native_tls_ca_pem() -> Vec<u8> {
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut params = rcgen::CertificateParams::new(vec!["client.example.com".into()]).unwrap();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    params.self_signed(&key).unwrap().pem().into_bytes()
+}
+
+#[test]
+fn native_frontend_validate_and_parse_bound_oversized_vectors_before_traversal() {
+    for per_port in [false, true] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+        let mut gateway = native_tls_gateway();
+        let frontend = gateway.spec.tls.as_mut().unwrap().frontend.as_mut().unwrap();
+        let malformed = FrontendTLSValidation {
+            ca_certificate_refs: vec![
+                FrontendCACertificateRef {
+                    group: "core".into(),
+                    kind: "Invalid".into(),
+                    name: "".into(),
+                    namespace: Some("target".into())
+                };
+                edgion_common::tls_validation::MAX_CA_REFERENCE_COUNT + 1
+            ],
+            mode: None,
+        };
+        if per_port {
+            frontend.per_port = Some(vec![
+                GatewayFrontendTLSPerPort {
+                    port: -1,
+                    tls: GatewayFrontendTLSDefault {
+                        validation: Some(malformed)
+                    }
+                };
+                edgion_resources::resources::gateway::MAX_GATEWAY_FRONTEND_PER_PORT
+                    + 1
+            ]);
+        } else {
+            frontend.default.validation = Some(malformed);
+        }
+        let errors = GatewayHandler::new(None, None).validate(&gateway, &ctx);
+        assert_eq!(errors.len(), 1, "must not emit per-entry errors: {errors:?}");
+        assert!(errors[0].contains(if per_port { "perPort" } else { "caCertificateRefs" }));
+        assert!(errors[0].contains("at most"));
+        let (parsed, reads) = native_tls_parse_observed(gateway, &ctx);
+        assert!(reads.is_empty(), "{reads:?}");
+        let tls = parsed.spec.listeners.as_ref().unwrap()[0].tls.as_ref().unwrap();
+        assert!(tls.frontend_validation.is_none());
+        assert!(tls.resolved_frontend_ca_refs.is_none());
+        assert_eq!(
+            tls.frontend_matcher_eligibility,
+            Some(FrontendMatcherEligibility::StrictReject)
+        );
+        let owner = ResourceRef::new(ResourceKind::Gateway, Some("default".into()), "edge".into());
+        assert!(runtime
+            .frontend_ca_ref_manager
+            .get_dependencies(&owner.key())
+            .is_empty());
+        assert!(runtime.cross_ns_ref_mgr.get_refs("target").is_empty());
+    }
+}
+
+#[test]
+fn native_gateway_character_names_and_omitted_owner_namespace_reach_exact_store() {
+    for length in [253, 254] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+        let name = "é".repeat(length);
+        let mut gateway = native_tls_gateway();
+        gateway.metadata.namespace = None;
+        gateway
+            .spec
+            .tls
+            .as_mut()
+            .unwrap()
+            .frontend
+            .as_mut()
+            .unwrap()
+            .default
+            .validation
+            .as_mut()
+            .unwrap()
+            .ca_certificate_refs[0]
+            .name = name.clone();
+        runtime.secret_store.update(
+            HashMap::from([(
+                format!("default/{name}"),
+                Secret {
+                    metadata: kube::api::ObjectMeta {
+                        name: Some(name.clone()),
+                        namespace: Some("default".into()),
+                        ..Default::default()
+                    },
+                    data: Some(BTreeMap::from([("ca.crt".into(), ByteString(native_tls_ca_pem()))])),
+                    ..Default::default()
+                },
+            )]),
+            &HashSet::new(),
+        );
+        let errors = GatewayHandler::new(None, None).validate(&gateway, &ctx);
+        assert_eq!(errors.is_empty(), length == 253);
+        let (mut parsed, reads) = native_tls_parse_observed(gateway, &ctx);
+        let owner = ResourceRef::new(ResourceKind::Gateway, None, "edge".into());
+        if length == 253 {
+            assert_eq!(reads, ["authorization", "secret", "secret"]);
+            let outcome = &parsed.spec.listeners.as_ref().unwrap()[0]
+                .tls
+                .as_ref()
+                .unwrap()
+                .resolved_frontend_ca_refs
+                .as_ref()
+                .unwrap()[0];
+            assert_eq!(outcome.source.namespace, "default");
+            assert_eq!(outcome.source.name, name);
+            assert!(outcome.ca_certificate.is_some());
+            assert!(outcome.error.is_none());
+            assert_eq!(runtime.frontend_ca_ref_manager.get_dependencies(&owner.key()).len(), 1);
+            let (_, status_reads) =
+                crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::observe_bound_reads(|| {
+                    GatewayHandler::new(None, None).update_status(&mut parsed, &ctx, &errors);
+                });
+            assert!(status_reads.is_empty());
+        } else {
+            assert!(reads.is_empty());
+            assert!(runtime
+                .frontend_ca_ref_manager
+                .get_dependencies(&owner.key())
+                .is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_gateway_ca_repair_grant_revocation_retarget_and_delete_clear_edges() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+    let handler = GatewayHandler::new(None, None);
+    let mut gateway = native_tls_gateway();
+    gateway
+        .spec
+        .tls
+        .as_mut()
+        .unwrap()
+        .frontend
+        .as_mut()
+        .unwrap()
+        .default
+        .validation
+        .as_mut()
+        .unwrap()
+        .ca_certificate_refs[0]
+        .namespace = Some("target".into());
+    let outcome = |gateway: &Gateway| {
+        gateway.spec.listeners.as_ref().unwrap()[0]
+            .tls
+            .as_ref()
+            .unwrap()
+            .resolved_frontend_ca_refs
+            .as_ref()
+            .unwrap()[0]
+            .error
+    };
+    let (denied, reads) = native_tls_parse_observed(gateway.clone(), &ctx);
+    assert_eq!(reads, ["authorization"]);
+    assert_eq!(outcome(&denied), Some(FrontendCAResolutionError::RefNotPermitted));
+    let owner = ResourceRef::new(ResourceKind::Gateway, Some("default".into()), "edge".into());
+    assert!(runtime.cross_ns_ref_mgr.get_refs("target").contains(&owner));
+    let typed_key = FrontendCaSourceKey::new(FrontendCaSourceKind::Secret, "target", "ca").index_key();
+    assert!(runtime.frontend_ca_ref_manager.get_refs(&typed_key).contains(&owner));
+    runtime.ref_grant_store.upsert("target/allow".into(), Arc::new(serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"allow","namespace":"target"},"spec":{"from":[{"group":"gateway.networking.k8s.io","kind":"Gateway","namespace":"default"}],"to":[{"group":"","kind":"Secret","name":"ca"}]}
+    })).unwrap()));
+    let (missing, reads) = native_tls_parse_observed(denied, &ctx);
+    assert_eq!(reads, ["authorization", "secret"]);
+    assert_eq!(outcome(&missing), Some(FrontendCAResolutionError::NotFound));
+    runtime.secret_store.update(
+        HashMap::from([(
+            "target/ca".into(),
+            Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("ca".into()),
+                    namespace: Some("target".into()),
+                    ..Default::default()
+                },
+                data: Some(BTreeMap::from([("ca.crt".into(), ByteString(native_tls_ca_pem()))])),
+                ..Default::default()
+            },
+        )]),
+        &HashSet::new(),
+    );
+    let (repaired, _) = native_tls_parse_observed(missing, &ctx);
+    assert_eq!(outcome(&repaired), None);
+    runtime.ref_grant_store.remove("target/allow");
+    let (revoked, _) = native_tls_parse_observed(repaired, &ctx);
+    assert_eq!(outcome(&revoked), Some(FrontendCAResolutionError::RefNotPermitted));
+    assert!(revoked.spec.listeners.as_ref().unwrap()[0]
+        .tls
+        .as_ref()
+        .unwrap()
+        .resolved_frontend_ca_refs
+        .as_ref()
+        .unwrap()[0]
+        .ca_certificate
+        .is_none());
+    gateway
+        .spec
+        .tls
+        .as_mut()
+        .unwrap()
+        .frontend
+        .as_mut()
+        .unwrap()
+        .default
+        .validation
+        .as_mut()
+        .unwrap()
+        .ca_certificate_refs[0]
+        .namespace = None;
+    let (retargeted, _) = native_tls_parse_observed(gateway, &ctx);
+    assert!(runtime.frontend_ca_ref_manager.get_refs(&typed_key).is_empty());
+    assert!(runtime.cross_ns_ref_mgr.get_refs("target").is_empty());
+    assert_eq!(runtime.frontend_ca_ref_manager.get_dependencies(&owner.key()).len(), 1);
+    handler.on_delete(&retargeted, &ctx).await;
+    assert!(runtime
+        .frontend_ca_ref_manager
+        .get_dependencies(&owner.key())
+        .is_empty());
+}
+
+#[test]
+fn native_gateway_serving_ordinals_backend_and_invalid_alias_are_independent() {
+    use edgion_resources::resources::gateway::ServingCertificateResolutionError as Error;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+    runtime.secret_store.update(
+        HashMap::from([(
+            "default/good".into(),
+            Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("good".into()),
+                    namespace: Some("default".into()),
+                    ..Default::default()
+                },
+                data: Some(BTreeMap::from([("tls.crt".into(), ByteString(b"material".to_vec()))])),
+                ..Default::default()
+            },
+        )]),
+        &HashSet::new(),
+    );
+    let gateway: Gateway = serde_json::from_value(
+        serde_json::json!({"metadata":{"name":"edge"},"spec":{"gatewayClassName":"edge",
+        "listeners":[{"name":"https","protocol":"HTTPS","port":443,"tls":{"certificateRefs":[
+            {"name":"good"}, {"name":"denied","namespace":"target"}, {"name":"missing"}, {"name":"good","group":"core"}
+        ]}}],"tls":{"backend":{"clientCertificateRef":{"name":"good"}}}}}),
+    )
+    .unwrap();
+    let (parsed, reads) = native_tls_parse_observed(gateway, &ctx);
+    assert_eq!(
+        reads,
+        [
+            "authorization",
+            "secret",
+            "secret",
+            "authorization",
+            "secret",
+            "secret",
+            "authorization",
+            "authorization",
+            "secret",
+            "secret"
+        ]
+    );
+    let outcomes = parsed.spec.listeners.as_ref().unwrap()[0]
+        .tls
+        .as_ref()
+        .unwrap()
+        .resolved_certificate_refs
+        .as_ref()
+        .unwrap();
+    assert_eq!(outcomes.len(), 4);
+    for (index, expected) in [
+        None,
+        Some(Error::RefNotPermitted),
+        Some(Error::NotFound),
+        Some(Error::InvalidReference),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(outcomes[index].index, index as u16);
+        assert_eq!(outcomes[index].error, expected);
+        assert_eq!(outcomes[index].secret.is_some(), index == 0);
+    }
+    assert!(parsed
+        .spec
+        .tls
+        .as_ref()
+        .unwrap()
+        .backend
+        .as_ref()
+        .unwrap()
+        .resolved_client_certificate
+        .is_some());
+    let owner = ResourceRef::new(ResourceKind::Gateway, None, "edge".into());
+    assert_eq!(runtime.secret_ref_manager.get_dependencies(&owner.key()).len(), 3);
+    assert!(runtime
+        .frontend_ca_ref_manager
+        .get_dependencies(&owner.key())
+        .is_empty());
+}
+
+#[test]
+fn native_gateway_scrubs_forged_material_in_inactive_passthrough_and_overcap_fields() {
+    let forged_ca = ResolvedFrontendCAReference {
+        index: 0,
+        source: FrontendCASourceIdentity {
+            kind: FrontendCASourceKind::Secret,
+            namespace: "target".into(),
+            name: "forged".into(),
+        },
+        ca_certificate: Some(ByteString(b"forged-private".to_vec())),
+        error: None,
+    };
+    for mode in ["inactive", "passthrough", "overcap", "unsupported"] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+        let mut gateway = native_tls_gateway();
+        gateway.spec.tls = Some(GatewaySpecTLS {
+            backend: Some(GatewayBackendTLS {
+                client_certificate_ref: None,
+                resolved_client_certificate: Some(Secret::default()),
+            }),
+            frontend: None,
+        });
+        let tls = gateway.spec.listeners.as_mut().unwrap()[0].tls.as_mut().unwrap();
+        tls.frontend_validation = Some(frontend_validation("Secret", "forged", None));
+        tls.resolved_frontend_ca_refs = Some(vec![forged_ca.clone()]);
+        tls.resolved_certificate_refs = Some(vec![ResolvedServingCertificateReference {
+            index: 0,
+            source: ServingCertificateSourceIdentity {
+                group: "".into(),
+                kind: "Secret".into(),
+                namespace: "target".into(),
+                name: "forged".into(),
+            },
+            secret: Some(Secret::default()),
+            error: None,
+        }]);
+        if mode == "passthrough" {
+            tls.mode = Some(GatewayTlsMode::Passthrough);
+        }
+        if mode == "overcap" {
+            tls.certificate_refs = Some(vec![
+                SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "forged".into(),
+                    namespace: Some("target".into())
+                };
+                edgion_common::tls_validation::MAX_SERVING_CERTIFICATE_REFS + 1
+            ]);
+        }
+        if mode == "unsupported" {
+            gateway.spec.infrastructure = Some(serde_json::json!({}));
+        }
+        let (parsed, reads) = native_tls_parse_observed(gateway, &ctx);
+        assert!(reads.is_empty(), "{mode}: {reads:?}");
+        assert!(parsed
+            .spec
+            .tls
+            .as_ref()
+            .unwrap()
+            .backend
+            .as_ref()
+            .unwrap()
+            .resolved_client_certificate
+            .is_none());
+        if let Some(listeners) = parsed.spec.listeners.as_ref() {
+            let tls = listeners[0].tls.as_ref().unwrap();
+            assert!(tls.resolved_frontend_ca_refs.is_none());
+            assert!(tls.resolved_certificate_refs.is_none());
+        } else {
+            assert_eq!(mode, "unsupported");
+        }
+        let owner = ResourceRef::new(ResourceKind::Gateway, Some("default".into()), "edge".into());
+        assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+        assert!(runtime
+            .frontend_ca_ref_manager
+            .get_dependencies(&owner.key())
+            .is_empty());
+        assert!(runtime.cross_ns_ref_mgr.get_refs("target").is_empty());
+    }
+}
+
+#[test]
+fn native_frontend_ca_acquisition_keeps_independent_aggregate_bounds_and_der_dedup() {
+    let pem = native_tls_ca_pem();
+    for case in ["dedup", "single-too-large", "aggregate-too-large"] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+        let mut gateway = native_tls_gateway();
+        let count = if case == "single-too-large" { 1 } else { 16 };
+        let mut material = pem.clone();
+        if case == "single-too-large" {
+            material.resize(edgion_common::tls_validation::MAX_CA_BUNDLE_BYTES_PER_REF + 1, b' ');
+        }
+        if case == "aggregate-too-large" {
+            material.resize(70_000, b' ');
+        }
+        let refs = &mut gateway
+            .spec
+            .tls
+            .as_mut()
+            .unwrap()
+            .frontend
+            .as_mut()
+            .unwrap()
+            .default
+            .validation
+            .as_mut()
+            .unwrap()
+            .ca_certificate_refs;
+        refs.clear();
+        for index in 0..count {
+            let name = format!("ca-{index}");
+            let kind = if index % 2 == 0 { "Secret" } else { "ConfigMap" };
+            refs.push(FrontendCACertificateRef {
+                group: "".into(),
+                kind: kind.into(),
+                name: name.clone(),
+                namespace: None,
+            });
+            let metadata = kube::api::ObjectMeta {
+                name: Some(name.clone()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            };
+            if kind == "Secret" {
+                runtime.secret_store.update(
+                    HashMap::from([(
+                        format!("default/{name}"),
+                        Secret {
+                            metadata,
+                            data: Some(BTreeMap::from([("ca.crt".into(), ByteString(material.clone()))])),
+                            ..Default::default()
+                        },
+                    )]),
+                    &HashSet::new(),
+                );
+            } else {
+                runtime.configmap_store.update(
+                    HashMap::from([(
+                        format!("default/{name}"),
+                        ConfigMap {
+                            metadata,
+                            data: Some(BTreeMap::from([(
+                                "ca.crt".into(),
+                                String::from_utf8(material.clone()).unwrap(),
+                            )])),
+                            ..Default::default()
+                        },
+                    )]),
+                    &HashSet::new(),
+                );
+            }
+        }
+        let (parsed, reads) = native_tls_parse_observed(gateway, &ctx);
+        assert_eq!(reads.len(), count * 3);
+        let outcomes = parsed.spec.listeners.as_ref().unwrap()[0]
+            .tls
+            .as_ref()
+            .unwrap()
+            .resolved_frontend_ca_refs
+            .as_ref()
+            .unwrap();
+        assert_eq!(outcomes.len(), count);
+        match case {
+            "dedup" => assert!(outcomes
+                .iter()
+                .all(|outcome| outcome.error.is_none() && outcome.ca_certificate.is_some())),
+            "single-too-large" => assert_eq!(outcomes[0].error, Some(FrontendCAResolutionError::InvalidCertificate)),
+            _ => {
+                assert!(outcomes[..14].iter().all(|outcome| outcome.error.is_none()));
+                assert!(outcomes[14..].iter().all(|outcome| outcome.error
+                    == Some(FrontendCAResolutionError::InvalidCertificate)
+                    && outcome.ca_certificate.is_none()));
+            }
+        }
+    }
+}
+
+#[test]
+fn native_frontend_aggregate_certificate_count_distinguishes_shared_from_unique_der() {
+    let certificates = (0..1032).map(|_| native_tls_ca_pem()).collect::<Vec<_>>();
+    assert!(
+        certificates.iter().map(Vec::len).sum::<usize>() < edgion_common::tls_validation::MAX_CA_BUNDLE_BYTES_AGGREGATE
+    );
+    for shared in [true, false] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+        let mut gateway = native_tls_gateway();
+        let refs = &mut gateway
+            .spec
+            .tls
+            .as_mut()
+            .unwrap()
+            .frontend
+            .as_mut()
+            .unwrap()
+            .default
+            .validation
+            .as_mut()
+            .unwrap()
+            .ca_certificate_refs;
+        refs.clear();
+        for index in 0..8 {
+            let start = if shared { 0 } else { index * 129 };
+            let material = certificates[start..start + 129].concat();
+            assert!(material.len() < edgion_common::tls_validation::MAX_CA_BUNDLE_BYTES_PER_REF);
+            assert_eq!(
+                edgion_common::tls_validation::parse_canonical_ca_bundle(&material)
+                    .unwrap()
+                    .certificates_der
+                    .len(),
+                129
+            );
+            let name = format!("bundle-{index}");
+            refs.push(FrontendCACertificateRef {
+                group: "".into(),
+                kind: "Secret".into(),
+                name: name.clone(),
+                namespace: None,
+            });
+            runtime.secret_store.update(
+                HashMap::from([(
+                    format!("default/{name}"),
+                    Secret {
+                        metadata: kube::api::ObjectMeta {
+                            name: Some(name),
+                            namespace: Some("default".into()),
+                            ..Default::default()
+                        },
+                        data: Some(BTreeMap::from([("ca.crt".into(), ByteString(material))])),
+                        ..Default::default()
+                    },
+                )]),
+                &HashSet::new(),
+            );
+        }
+        let (parsed, reads) = native_tls_parse_observed(gateway, &ctx);
+        assert_eq!(reads.len(), 24);
+        let outcomes = parsed.spec.listeners.as_ref().unwrap()[0]
+            .tls
+            .as_ref()
+            .unwrap()
+            .resolved_frontend_ca_refs
+            .as_ref()
+            .unwrap();
+        assert_eq!(outcomes.len(), 8);
+        assert!(outcomes[..7]
+            .iter()
+            .all(|outcome| outcome.error.is_none() && outcome.ca_certificate.is_some()));
+        if shared {
+            assert!(outcomes[7].error.is_none() && outcomes[7].ca_certificate.is_some());
+        } else {
+            assert_eq!(outcomes[7].error, Some(FrontendCAResolutionError::InvalidCertificate));
+            assert!(outcomes[7].ca_certificate.is_none());
+        }
+    }
 }

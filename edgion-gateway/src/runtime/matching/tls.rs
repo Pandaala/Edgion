@@ -296,7 +296,7 @@ fn compile_serving_certificates(
         }
         let secret = outcome.secret.as_ref()?;
         if secret.metadata.name.as_deref() != Some(reference.name.as_str())
-            || secret.metadata.namespace.as_deref() != Some(namespace)
+            || secret.metadata.namespace.as_deref().unwrap_or("default") != namespace
         {
             return None;
         }
@@ -487,7 +487,7 @@ impl GatewayTlsMatcher {
         let mut listener_count = 0usize;
 
         for gateway in gateways {
-            let gateway_namespace = gateway.namespace().unwrap_or_default();
+            let gateway_namespace = gateway.namespace().unwrap_or_else(|| "default".to_string());
             let gateway_name = gateway.name_any();
 
             // Get listeners from Gateway spec

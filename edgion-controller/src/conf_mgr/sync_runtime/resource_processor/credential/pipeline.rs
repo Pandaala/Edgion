@@ -332,20 +332,41 @@ fn authorize_bound_object<'a>(
         return BoundFetchOutcome::Invalid(ReferenceError::MissingNamespace);
     };
     if register {
-        let key = match expected {
-            CoreMaterialKind::Secret => format!("{namespace}/{}", target.name()),
-            CoreMaterialKind::ConfigMap => format!(
-                "{}{namespace}/{}",
-                super::super::CONFIG_MAP_REF_KEY_PREFIX,
-                target.name()
-            ),
-        };
-        ctx.secret_ref_manager().add_ref(key, dependency_owner.clone());
+        if reference.is_gateway_frontend_ca() {
+            use super::super::frontend_ca_ref::{FrontendCaSourceKey, FrontendCaSourceKind};
+            let kind = match expected {
+                CoreMaterialKind::Secret => FrontendCaSourceKind::Secret,
+                CoreMaterialKind::ConfigMap => FrontendCaSourceKind::ConfigMap,
+            };
+            ctx.runtime().frontend_ca_ref_manager.add_ref(
+                FrontendCaSourceKey::new(kind, namespace, target.name()).index_key(),
+                dependency_owner.clone(),
+            );
+        } else {
+            let key = match expected {
+                CoreMaterialKind::Secret => format!("{namespace}/{}", target.name()),
+                CoreMaterialKind::ConfigMap => format!(
+                    "{}{namespace}/{}",
+                    super::super::CONFIG_MAP_REF_KEY_PREFIX,
+                    target.name()
+                ),
+            };
+            ctx.secret_ref_manager().add_ref(key, dependency_owner.clone());
+        }
         if !reference.is_same_namespace() {
             ctx.runtime()
                 .cross_ns_ref_mgr
                 .add_ref(namespace.to_string(), dependency_owner.clone());
         }
+    }
+    // Preserve the existing controller policy only for these finite native
+    // Gateway fields. Their synchronous loans cannot mint frozen authority.
+    if reference.is_gateway_tls() && !crate::config::is_reference_grant_validation_enabled() {
+        return BoundFetchOutcome::Ok(AuthorizedObject {
+            namespace,
+            name: target.name(),
+            revision: "gateway-validation-disabled".to_string(),
+        });
     }
     let Some(revision) = bound_read!(
         "authorization",
@@ -366,6 +387,67 @@ fn authorize_bound_object<'a>(
     })
 }
 
+/// Authorize an actual frontend CA slot without reading its payload (fallback mode).
+pub(crate) fn authorize_bound_gateway_frontend_ca(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+) -> BoundFetchOutcome<()> {
+    let reference = match token.validated() {
+        Ok(reference) => reference,
+        Err(error) => return BoundFetchOutcome::Invalid(error),
+    };
+    if !reference.is_gateway_frontend_ca() {
+        return BoundFetchOutcome::Invalid(ReferenceError::UnsupportedTarget);
+    }
+    let kind = match reference.target().group_kind().kind() {
+        "Secret" => CoreMaterialKind::Secret,
+        "ConfigMap" => CoreMaterialKind::ConfigMap,
+        _ => return BoundFetchOutcome::Invalid(ReferenceError::UnsupportedTarget),
+    };
+    authorize_bound_object(ctx, owner, reference, true, kind).and_then(|_| BoundFetchOutcome::Ok(()))
+}
+
+// Default's two cached reads are not an atomic store snapshot. Dependencies are
+// registered before acquisition so later source events reconcile either candidate.
+fn read_bound_material<T: kube::Resource>(
+    reference: BoundFieldReference<'_>,
+    object: &AuthorizedObject<'_>,
+    mut read: impl FnMut(Option<&str>, &str) -> Option<T>,
+) -> BoundFetchOutcome<T> {
+    let qualified = read(Some(object.namespace), object.name);
+    let selected = if reference.is_gateway_tls() {
+        let bare = if object.namespace == "default" {
+            read(None, object.name)
+        } else {
+            None
+        };
+        let (material, raw_namespace) = match (qualified, bare) {
+            (Some(_), Some(_)) => return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding),
+            (Some(material), None) => (Some(material), Some(object.namespace)),
+            (None, Some(material)) => (Some(material), None),
+            (None, None) => (None, None),
+        };
+        if let Some(material) = material.as_ref() {
+            let metadata = material.meta();
+            if metadata.name.as_deref() != Some(object.name) || metadata.namespace.as_deref() != raw_namespace {
+                return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding);
+            }
+        }
+        material
+    } else {
+        // Other consumers retain exact-store and frozen-authority semantics.
+        qualified
+    };
+    match selected {
+        Some(material) => BoundFetchOutcome::Ok(material),
+        None => BoundFetchOutcome::Pending(PendingReason::SecretNotFound {
+            namespace: object.namespace.to_string(),
+            name: object.name.to_string(),
+        }),
+    }
+}
+
 fn fetch_bound_reference(
     ctx: &HandlerContext,
     owner: &ResourceRef,
@@ -373,19 +455,15 @@ fn fetch_bound_reference(
     register: bool,
 ) -> BoundFetchOutcome<AuthorizedSecret> {
     authorize_bound_object(ctx, owner, reference, register, CoreMaterialKind::Secret).and_then(|object| {
-        match bound_read!(
-            "secret",
-            ctx.runtime().secret_store.get(Some(object.namespace), object.name)
-        ) {
-            Some(secret) => BoundFetchOutcome::Ok(AuthorizedSecret {
+        read_bound_material(reference, &object, |namespace, name| {
+            bound_read!("secret", ctx.runtime().secret_store.get(namespace, name))
+        })
+        .and_then(|secret| {
+            BoundFetchOutcome::Ok(AuthorizedSecret {
                 secret: super::ca_refs::ordinary_secret_material(secret),
                 authorization_revision: object.revision,
-            }),
-            None => BoundFetchOutcome::Pending(PendingReason::SecretNotFound {
-                namespace: object.namespace.to_string(),
-                name: object.name.to_string(),
-            }),
-        }
+            })
+        })
     })
 }
 
@@ -441,16 +519,9 @@ fn fetch_bound_configmap_inner(
         Err(error) => return BoundFetchOutcome::Invalid(error),
     };
     authorize_bound_object(ctx, owner, reference, register, CoreMaterialKind::ConfigMap).and_then(|object| {
-        match bound_read!(
-            "configmap",
-            ctx.runtime().configmap_store.get(Some(object.namespace), object.name)
-        ) {
-            Some(configmap) => BoundFetchOutcome::Ok(configmap),
-            None => BoundFetchOutcome::Pending(PendingReason::SecretNotFound {
-                namespace: object.namespace.to_string(),
-                name: object.name.to_string(),
-            }),
-        }
+        read_bound_material(reference, &object, |namespace, name| {
+            bound_read!("configmap", ctx.runtime().configmap_store.get(namespace, name))
+        })
     })
 }
 

@@ -109,3 +109,49 @@ HTTP plugin annotations use the shared `HttpPluginAttachments::Gateway` actual-f
 ### Actual inbound PROXY reference field (C3)
 
 Inbound PROXY resourceRef resolution uses `refs::proxy_protocol_fields::GatewayProxyProtocolField`, which privately owns one canonical parse of the actual Gateway annotation. Listener selection and inline policy retain their existing precedence. Only resourceRef queries validate the actual Gateway identity before registering recovery edges or acquiring EdgionConfigData. Invalid identity produces the existing InvalidReference configuration error and cannot retain prior Ready trust. Raw dependency owner namespace omission is preserved.
+
+## Native TLS reference ownership
+
+`refs::gateway_tls_fields::GatewayTlsRefs` borrows the actual Gateway and prepares
+only the selected backend client-certificate, listener serving-certificate or
+frontend CA field. Frontend authority comes from `spec.tls.frontend.default` or
+the matching `perPort` entry, never the listener's private transport projection.
+A matched port with no validation suppresses the default. The synchronous field
+loan cannot freeze, outlive its owner, or survive mutation of the borrowed owner.
+
+Native Secret references default omitted group to empty and kind to Secret;
+frontend group and kind remain required. Literal `core` is rejected on these
+native fields. Native ObjectName retains the schema's 1–253 Unicode-character
+length constraint without an extra DNS-name restriction. Omitted owner namespace means `default`; an omitted target namespace uses the
+effective owner namespace. Explicit empty namespace is invalid. Matcher rebuild
+uses the same omitted-owner default for material identity and listener attachment.
+
+Controller resolution validates the actual source and target before dependency
+registration, Grant checks or cached reads. Valid missing/denied refs retain
+recovery edges; frontend Secret/ConfigMap edges use only the typed frontend CA
+manager, while backend/serving Secrets use the ordinary Secret manager. The
+existing controller-global disabled Grant policy applies only after valid native
+Gateway TLS binding; it does not widen other bound credential contracts.
+
+Parse erases injected material before processing inactive or rejected fields.
+Validation and parse share frontend bounds before traversing per-port/CA vectors
+or cloning the projection. Explicit insecure fallback registers/authorizes refs
+without reading CA payloads. Strict resolution retains the shared per-source and
+aggregate CA bounds and DER deduplication. Controller serving outcomes preserve
+ordinal successes alongside failures, but Gateway compilation requires the
+complete matching set: it never serves a successful subset. Frontend failures
+remain StrictReject without a lower-priority/default fallback. Status derivation
+adds no new material reads or dependency writes.
+
+Native Gateway TLS material selection preserves FS/etcd raw omitted namespaces:
+a canonical default target checks both qualified and bare candidates after
+validation and authorization, rejects ambiguity or mismatched actual metadata,
+and retains the selected object's metadata. Nondefault targets never read bare
+keys. Other bound credential consumers retain their existing exact reads.
+Secret/ConfigMap source events preserve raw dependency notifications and add
+Gateway-only semantic ordinary notifications for bare objects, plus correctly
+typed frontend CA notifications. The two candidate reads are not an atomic
+snapshot; dependencies are registered first and subsequent events reconcile
+creation, deletion, revocation and ambiguity changes. Matcher identity comparison
+interprets only an omitted actual Secret namespace as default, without rewriting
+material metadata or accepting an explicit empty namespace.

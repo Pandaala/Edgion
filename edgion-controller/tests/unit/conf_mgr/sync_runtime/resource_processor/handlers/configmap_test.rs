@@ -349,3 +349,161 @@ async fn descriptor_configmap_events_recover_exact_raw_owner_and_notify_route_ga
         assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
     }
 }
+
+#[tokio::test]
+async fn native_gateway_configmap_events_recover_missing_ambiguous_and_deleted_material() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, RawStore};
+    use edgion_resources::resources::gateway::FrontendCAResolutionError;
+    use edgion_resources::{EdgionPlugins, Gateway};
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    struct RawDependent;
+    #[async_trait::async_trait]
+    impl ProcessorHandler<EdgionPlugins> for RawDependent {}
+    macro_rules! work {
+        ($processor:expr, $raw:expr, $key:expr) => {{
+            let queue = $processor.workqueue();
+            let item = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(item.key, $key);
+            let source = $raw.get(&item.key).map(|value| (*value).clone());
+            $processor
+                .process_work_item(&item.key, source, None, item.trigger_chain)
+                .await;
+            queue.done(&item.key);
+        }};
+    }
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut params = rcgen::CertificateParams::new(vec!["server.example.com".to_string()]).unwrap();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let pem = params.self_signed(&key).unwrap().pem();
+    for owner_namespace in [None, Some("default")] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let sources = Arc::new(ResourceProcessor::<ConfigMap>::new(
+            "ConfigMap",
+            32,
+            Arc::new(ConfigMapHandler::new()),
+            runtime.clone(),
+        ));
+        let source_raw = Arc::new(LocalRawStore::new());
+        sources.set_raw_store(source_raw.clone());
+        runtime.processor_registry.register(sources.clone());
+        let gateways = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            32,
+            Arc::new(GatewayHandler::new(None, None)),
+            runtime.clone(),
+        ));
+        let gateway_raw = Arc::new(LocalRawStore::new());
+        gateways.set_raw_store(gateway_raw.clone());
+        runtime.processor_registry.register(gateways.clone());
+        let plugins = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            32,
+            Arc::new(RawDependent),
+            runtime.clone(),
+        ));
+        runtime.processor_registry.register(plugins.clone());
+        let owner_key = if owner_namespace.is_some() {
+            "default/edge"
+        } else {
+            "edge"
+        };
+        let value = serde_json::json!({"metadata":{"name":"edge","namespace":owner_namespace},"spec":{"gatewayClassName":"edge",
+            "listeners":[{"name":"https","protocol":"HTTPS","port":443,"tls":{"mode":"Terminate"}}],
+            "tls":{"frontend":{"default":{"validation":{"caCertificateRefs":[{"group":"","kind":"ConfigMap","name":"ca"}]}}}}}});
+
+        let gateway: Gateway = serde_json::from_value(value).unwrap();
+        gateway_raw.upsert(owner_key.into(), Arc::new(gateway));
+        gateways.on_event_key(owner_key.into()).await;
+        work!(gateways, gateway_raw, owner_key);
+        let first = gateways.get(owner_key).unwrap();
+        assert_eq!(
+            first.spec.listeners.as_ref().unwrap()[0]
+                .tls
+                .as_ref()
+                .unwrap()
+                .resolved_frontend_ca_refs
+                .as_ref()
+                .unwrap()[0]
+                .error,
+            Some(FrontendCAResolutionError::NotFound)
+        );
+        let dependent = ResourceRef::new(ResourceKind::Gateway, owner_namespace.map(str::to_owned), "edge".into());
+        let typed = FrontendCaSourceKey::new(FrontendCaSourceKind::ConfigMap, "default", "ca").index_key();
+        assert_eq!(
+            runtime.frontend_ca_ref_manager.get_refs(&typed),
+            std::slice::from_ref(&dependent)
+        );
+        let wrong = FrontendCaSourceKey::new(FrontendCaSourceKind::Secret, "default", "ca").index_key();
+        assert!(runtime.frontend_ca_ref_manager.get_refs(&wrong).is_empty());
+        // A different material kind with the same namespace/name is not a candidate.
+        runtime.secret_store.update(
+            HashMap::from([("default/ca".into(), k8s_openapi::api::core::v1::Secret::default())]),
+            &HashSet::new(),
+        );
+        for (step, raw_key, present, error) in [
+            (1, "ca", true, None),
+            (2, "default/ca", true, Some(FrontendCAResolutionError::InvalidReference)),
+            (3, "ca", false, None),
+            (4, "default/ca", false, Some(FrontendCAResolutionError::NotFound)),
+            (5, "ca", true, None),
+        ] {
+            if present {
+                let material = ConfigMap {
+                    metadata: ObjectMeta {
+                        name: Some("ca".into()),
+                        namespace: raw_key.contains('/').then(|| "default".into()),
+                        uid: Some(format!("material-{step}")),
+                        resource_version: Some(step.to_string()),
+                        ..Default::default()
+                    },
+                    data: Some(BTreeMap::from([("ca.crt".into(), pem.clone())])),
+                    ..Default::default()
+                };
+                source_raw.upsert(raw_key.into(), Arc::new(material));
+            } else {
+                source_raw.remove(raw_key);
+            }
+            // Original raw-key observers remain notified; semantic-only non-Gateway observers do not gain a bare alias.
+            let raw_dependent = ResourceRef::new(ResourceKind::EdgionPlugins, Some("default".into()), "raw".into());
+            let semantic_dependent =
+                ResourceRef::new(ResourceKind::EdgionPlugins, Some("default".into()), "semantic".into());
+            runtime
+                .secret_ref_manager
+                .add_ref(format!("ConfigMap/{raw_key}"), raw_dependent.clone());
+            if raw_key == "ca" {
+                runtime
+                    .secret_ref_manager
+                    .add_ref("ConfigMap/default/ca".into(), semantic_dependent.clone());
+            }
+            sources.on_event_key(raw_key.into()).await;
+            work!(sources, source_raw, raw_key);
+            work!(gateways, gateway_raw, owner_key);
+            let published = gateways.get(owner_key).unwrap();
+            assert_eq!(published.metadata.namespace.as_deref(), owner_namespace);
+            let tls = published.spec.listeners.as_ref().unwrap()[0].tls.as_ref().unwrap();
+            let outcome = &tls.resolved_frontend_ca_refs.as_ref().unwrap()[0];
+            assert_eq!(outcome.error, error, "step {step}");
+            assert_eq!(outcome.ca_certificate.is_some(), error.is_none());
+            assert_eq!(outcome.source.namespace, "default");
+            assert!(runtime.secret_ref_manager.get_dependencies(&dependent.key()).is_empty());
+            let item = tokio::time::timeout(std::time::Duration::from_secs(3), plugins.workqueue().dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(item.key, "default/raw");
+            plugins.workqueue().done(&item.key);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(100), plugins.workqueue().dequeue())
+                    .await
+                    .is_err()
+            );
+            runtime.secret_ref_manager.clear_value_refs(&raw_dependent);
+            runtime.secret_ref_manager.clear_value_refs(&semantic_dependent);
+        }
+        assert!(runtime.frontend_ca_ref_manager.get_refs(&typed).contains(&dependent));
+    }
+}

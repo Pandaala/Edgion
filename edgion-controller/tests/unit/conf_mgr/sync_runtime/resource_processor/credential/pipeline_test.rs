@@ -486,3 +486,370 @@ macro_rules! bound_read {
     }};
 }
 pub(super) use bound_read;
+
+fn gateway_tls_owner(reference: serde_json::Value, frontend: bool) -> edgion_resources::Gateway {
+    let mut value = serde_json::json!({"metadata":{"name":"edge","namespace":"source"},"spec":{"gatewayClassName":"edge",
+        "listeners":[{"name":"https","protocol":"HTTPS","port":443,"tls":{"certificateRefs":[]}}]}});
+    if frontend {
+        value["spec"]["tls"] =
+            serde_json::json!({"frontend":{"default":{"validation":{"caCertificateRefs":[reference]}}}});
+    } else {
+        value["spec"]["listeners"][0]["tls"]["certificateRefs"] = serde_json::json!([reference]);
+    }
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn native_gateway_invalid_fields_never_authorize_read_or_register_decoys() {
+    use edgion_resources::resources::refs::gateway_tls_fields::GatewayTlsRefs;
+    let owner = ResourceRef::new(ResourceKind::Gateway, Some("source".into()), "edge".into());
+    for frontend in [false, true] {
+        for (key, invalid) in [
+            ("group", serde_json::json!("core")),
+            ("group", serde_json::json!("other.example")),
+            ("kind", serde_json::json!("Service")),
+            ("kind", serde_json::json!("")),
+            ("name", serde_json::json!("")),
+            ("name", serde_json::json!("é".repeat(254))),
+            ("namespace", serde_json::json!("")),
+            ("namespace", serde_json::json!("Invalid")),
+            ("ownerName", serde_json::json!("bad/name")),
+            ("ownerNamespace", serde_json::json!("")),
+            ("dependency", serde_json::json!("unrelated")),
+        ] {
+            let (secret_key, secret) = make_secret_with_type("target", "key", None, &[("ca.crt", b"decoy")]);
+            let (ctx, runtime) = make_ctx(HashMap::from([(secret_key, secret)]));
+            let mut reference = serde_json::json!({"group":"","kind":"Secret","name":"key","namespace":"target"});
+            if !frontend && !key.starts_with("owner") && key != "dependency" {
+                reference[key] = invalid.clone();
+            }
+            let mut gateway = gateway_tls_owner(reference, frontend);
+            if frontend && !key.starts_with("owner") && key != "dependency" {
+                let field = &mut gateway
+                    .spec
+                    .tls
+                    .as_mut()
+                    .unwrap()
+                    .frontend
+                    .as_mut()
+                    .unwrap()
+                    .default
+                    .validation
+                    .as_mut()
+                    .unwrap()
+                    .ca_certificate_refs[0];
+                let invalid = invalid.as_str().unwrap().to_owned();
+                match key {
+                    "group" => field.group = invalid,
+                    "kind" => field.kind = invalid,
+                    "name" => field.name = invalid,
+                    "namespace" => field.namespace = Some(invalid),
+                    _ => unreachable!(),
+                }
+            }
+
+            if key == "ownerName" {
+                gateway.metadata.name = Some("bad/name".into());
+            }
+            if key == "ownerNamespace" {
+                gateway.metadata.namespace = Some("".into());
+            }
+            let dependency = if key == "dependency" {
+                ResourceRef::new(ResourceKind::Gateway, Some("source".into()), "unrelated".into())
+            } else {
+                owner.clone()
+            };
+            let refs = GatewayTlsRefs::from_gateway(&gateway);
+            let field = if frontend {
+                refs.frontend_ca(0, 0).unwrap()
+            } else {
+                refs.serving(0, 0).unwrap()
+            };
+            let (result, reads) = observe_bound_reads(|| fetch_bound_secret(&ctx, &dependency, field.token()));
+            assert!(matches!(result, BoundFetchOutcome::Invalid(_)), "{key}");
+            assert!(reads.is_empty(), "{key}: {reads:?}");
+            assert!(runtime
+                .secret_ref_manager
+                .get_dependencies(&dependency.key())
+                .is_empty());
+            assert!(runtime
+                .frontend_ca_ref_manager
+                .get_dependencies(&dependency.key())
+                .is_empty());
+            assert!(runtime.cross_ns_ref_mgr.get_refs("target").is_empty());
+        }
+    }
+}
+
+#[test]
+fn native_gateway_ca_kind_routing_pending_edges_and_readonly_fallback_are_exact() {
+    use crate::conf_mgr::sync_runtime::resource_processor::frontend_ca_ref::{
+        FrontendCaSourceKey, FrontendCaSourceKind,
+    };
+    use edgion_resources::resources::refs::gateway_tls_fields::GatewayTlsRefs;
+    let owner = ResourceRef::new(ResourceKind::Gateway, Some("source".into()), "edge".into());
+    for kind in ["Secret", "ConfigMap"] {
+        for namespace in ["source", "target"] {
+            let (key, secret) = make_secret_with_type("source", "same", None, &[("ca.crt", b"secret-ca")]);
+            let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+            runtime.configmap_store.replace_all(HashMap::from([(
+                "source/same".into(),
+                ConfigMap {
+                    metadata: ObjectMeta {
+                        name: Some("same".into()),
+                        namespace: Some("source".into()),
+                        ..Default::default()
+                    },
+                    data: Some(BTreeMap::from([("ca.crt".into(), "configmap-ca".into())])),
+                    ..Default::default()
+                },
+            )]));
+            let gateway = gateway_tls_owner(
+                serde_json::json!({"group":"","kind":kind,"name":"same","namespace":namespace}),
+                true,
+            );
+            let refs = GatewayTlsRefs::from_gateway(&gateway);
+            let field = refs.frontend_ca(0, 0).unwrap();
+            let (fallback, reads) =
+                observe_bound_reads(|| authorize_bound_gateway_frontend_ca(&ctx, &owner, field.token()));
+            assert_eq!(reads, ["authorization"]);
+            assert_eq!(matches!(fallback, BoundFetchOutcome::Ok(())), namespace == "source");
+            let typed = if kind == "Secret" {
+                FrontendCaSourceKind::Secret
+            } else {
+                FrontendCaSourceKind::ConfigMap
+            };
+            assert_eq!(
+                runtime.frontend_ca_ref_manager.get_dependencies(&owner.key()),
+                [FrontendCaSourceKey::new(typed, namespace, "same").index_key()]
+            );
+            assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+            assert_eq!(
+                runtime.cross_ns_ref_mgr.get_refs("target").contains(&owner),
+                namespace == "target"
+            );
+            let (material, reads) = observe_bound_reads(|| {
+                if kind == "Secret" {
+                    match fetch_bound_secret(&ctx, &owner, field.token()) {
+                        BoundFetchOutcome::Ok(value) => {
+                            Some(String::from_utf8(value.secret.data.unwrap()["ca.crt"].0.clone()).unwrap())
+                        }
+                        BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing { .. }) => None,
+                        _ => panic!("unexpected Secret outcome"),
+                    }
+                } else {
+                    match fetch_bound_configmap(&ctx, &owner, field.token()) {
+                        BoundFetchOutcome::Ok(value) => Some(value.data.unwrap()["ca.crt"].clone()),
+                        BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing { .. }) => None,
+                        _ => panic!("unexpected ConfigMap outcome"),
+                    }
+                }
+            });
+            if namespace == "source" {
+                assert_eq!(
+                    material.as_deref(),
+                    Some(if kind == "Secret" { "secret-ca" } else { "configmap-ca" })
+                );
+                assert_eq!(
+                    reads,
+                    ["authorization", if kind == "Secret" { "secret" } else { "configmap" }]
+                );
+            } else {
+                assert!(material.is_none());
+                assert_eq!(reads, ["authorization"]);
+            }
+        }
+    }
+    let (ctx, runtime) = make_ctx(HashMap::new());
+    let gateway = gateway_tls_owner(serde_json::json!({"name":"missing"}), false);
+    let refs = GatewayTlsRefs::from_gateway(&gateway);
+    let field = refs.serving(0, 0).unwrap();
+    assert!(matches!(
+        fetch_bound_secret(&ctx, &owner, field.token()),
+        BoundFetchOutcome::Pending(PendingReason::SecretNotFound { .. })
+    ));
+    assert_eq!(
+        runtime.secret_ref_manager.get_dependencies(&owner.key()),
+        ["source/missing"]
+    );
+    assert!(runtime
+        .frontend_ca_ref_manager
+        .get_dependencies(&owner.key())
+        .is_empty());
+}
+
+#[test]
+fn native_gateway_disabled_grant_policy_is_finite_and_keeps_recovery() {
+    const CHILD: &str = "EDGION_R8A_NATIVE_TLS_DISABLED_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "conf_mgr::sync_runtime::resource_processor::credential::pipeline::tests::native_gateway_disabled_grant_policy_is_finite_and_keeps_recovery", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(
+            output.status.success(),
+            "{} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        return;
+    }
+    let mut config = crate::config::EdgionControllerConfig::default();
+    config.validation.enable_reference_grant_validation = false;
+    crate::config::init_controller_config(config);
+    use edgion_resources::resources::refs::gateway_tls_fields::GatewayTlsRefs;
+    let (key, secret) = make_secret_with_type("target", "key", None, &[("ca.crt", b"material")]);
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    let dependency = ResourceRef::new(ResourceKind::Gateway, Some("source".into()), "edge".into());
+    let gateway = gateway_tls_owner(serde_json::json!({"name":"key","namespace":"target"}), false);
+    let refs = GatewayTlsRefs::from_gateway(&gateway);
+    let field = refs.serving(0, 0).unwrap();
+    let (result, reads) = observe_bound_reads(|| fetch_bound_secret(&ctx, &dependency, field.token()));
+    assert!(matches!(result, BoundFetchOutcome::Ok(_)));
+    assert_eq!(reads, ["secret"]);
+    assert!(runtime.cross_ns_ref_mgr.get_refs("target").contains(&dependency));
+    assert_eq!(
+        runtime.secret_ref_manager.get_dependencies(&dependency.key()),
+        ["target/key"]
+    );
+    native_gateway_invalid_fields_never_authorize_read_or_register_decoys();
+    let plugins = bound_plugins(serde_json::json!({"name":"key","namespace":"target"}));
+    let prepared = PreparedPluginReferences::from_plugins(&plugins);
+    let binding = prepared.bind(&plugins).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let references = entry.references().unwrap();
+    let plugin_dependency = ResourceRef::new(ResourceKind::EdgionPlugins, Some("source".into()), "auth".into());
+    assert!(matches!(
+        fetch_bound_secret(&ctx, &plugin_dependency, references.csrf_secret().unwrap()),
+        BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing { .. })
+    ));
+}
+
+#[test]
+fn native_gateway_material_candidates_preserve_metadata_and_reject_ambiguity() {
+    use edgion_resources::resources::refs::gateway_tls_fields::GatewayTlsRefs;
+    for kind in ["Secret", "ConfigMap"] {
+        for case in [
+            "bare",
+            "qualified",
+            "both",
+            "wrong-name",
+            "wrong-namespace",
+            "empty-namespace",
+            "bare-nondefault",
+            "qualified-nondefault",
+        ] {
+            let (ctx, runtime) = make_ctx(HashMap::new());
+            let namespace = if case.ends_with("nondefault") {
+                "apps"
+            } else {
+                "default"
+            };
+            let bare = case == "bare" || case == "both" || case == "bare-nondefault";
+            let qualified = case != "bare" && case != "bare-nondefault";
+            for is_bare in [true, false] {
+                if (is_bare && !bare) || (!is_bare && !qualified) {
+                    continue;
+                }
+                let raw_namespace = if is_bare { None } else { Some(namespace.to_owned()) };
+                let metadata = ObjectMeta {
+                    name: Some(if case == "wrong-name" { "decoy" } else { "key" }.into()),
+                    namespace: if case == "wrong-namespace" {
+                        Some("other".into())
+                    } else if case == "empty-namespace" {
+                        Some("".into())
+                    } else {
+                        raw_namespace
+                    },
+                    uid: Some("actual-uid".into()),
+                    resource_version: Some("actual-rv".into()),
+                    ..Default::default()
+                };
+                let key = if is_bare {
+                    "key".into()
+                } else {
+                    format!("{namespace}/key")
+                };
+                if kind == "Secret" {
+                    runtime.secret_store.update(
+                        HashMap::from([(
+                            key,
+                            Secret {
+                                metadata,
+                                ..Default::default()
+                            },
+                        )]),
+                        &Default::default(),
+                    );
+                } else {
+                    runtime.configmap_store.update(
+                        HashMap::from([(
+                            key,
+                            ConfigMap {
+                                metadata,
+                                ..Default::default()
+                            },
+                        )]),
+                        &Default::default(),
+                    );
+                }
+            }
+            let mut gateway = gateway_tls_owner(serde_json::json!({"group":"","kind":kind,"name":"key"}), true);
+            gateway.metadata.namespace = Some(namespace.into());
+            let dependency = ResourceRef::new(ResourceKind::Gateway, Some(namespace.into()), "edge".into());
+            let refs = GatewayTlsRefs::from_gateway(&gateway);
+            let field = refs.frontend_ca(0, 0).unwrap();
+            let (outcome, reads) = observe_bound_reads(|| {
+                if kind == "Secret" {
+                    fetch_bound_secret(&ctx, &dependency, field.token())
+                        .and_then(|value| BoundFetchOutcome::Ok(value.secret.metadata))
+                } else {
+                    fetch_bound_configmap(&ctx, &dependency, field.token())
+                        .and_then(|value| BoundFetchOutcome::Ok(value.metadata))
+                }
+            });
+            assert_eq!(
+                reads,
+                if namespace == "default" {
+                    vec![
+                        "authorization",
+                        if kind == "Secret" { "secret" } else { "configmap" },
+                        if kind == "Secret" { "secret" } else { "configmap" },
+                    ]
+                } else {
+                    vec!["authorization", if kind == "Secret" { "secret" } else { "configmap" }]
+                }
+            );
+            match case {
+                "bare" | "qualified" | "qualified-nondefault" => {
+                    let BoundFetchOutcome::Ok(metadata) = outcome else {
+                        panic!("{kind} {case}");
+                    };
+                    assert_eq!(metadata.name.as_deref(), Some("key"));
+                    assert_eq!(
+                        metadata.namespace.as_deref(),
+                        if case == "bare" { None } else { Some(namespace) }
+                    );
+                    assert_eq!(metadata.uid.as_deref(), Some("actual-uid"));
+                    assert_eq!(metadata.resource_version.as_deref(), Some("actual-rv"));
+                }
+                "bare-nondefault" => assert!(matches!(
+                    outcome,
+                    BoundFetchOutcome::Pending(PendingReason::SecretNotFound { .. })
+                )),
+                _ => assert!(matches!(outcome, BoundFetchOutcome::Invalid(_)), "{kind} {case}"),
+            }
+            assert_eq!(
+                runtime
+                    .frontend_ca_ref_manager
+                    .get_dependencies(&dependency.key())
+                    .len(),
+                1
+            );
+            assert!(runtime
+                .secret_ref_manager
+                .get_dependencies(&dependency.key())
+                .is_empty());
+        }
+    }
+}

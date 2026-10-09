@@ -561,3 +561,39 @@ remains inert while explicit HTTPS stays secure. Existing raw-owner/frozen-input
 Grant/Secret revision, issuer/fallback, leadership and publication fences are
 unchanged. This completes OAuth2 transport capture, not generated-secret operation
 authority, a live issuer handshake, or Gateway API conformance validation.
+
+### R8a native Gateway TLS acquisition
+
+Gateway.spec.tls.backend.clientCertificateRef, listener certificateRefs and
+spec.tls.frontend.default/perPort validation.caCertificateRefs use actual borrowed
+Gateway field loans and the existing bound credential pipeline. Native omitted
+Secret defaults remain empty-group/Secret; frontend group/kind stay required;
+`core` is not a native alias. Native names preserve the schema's character-count
+bound. Omitted owner namespace means default; an omitted target namespace uses the
+effective owner namespace. Controller acquisition and Gateway matcher compilation
+share those defaults without manufacturing owner metadata.
+
+Invalid identities create no authorization/read/dependency effects. Valid missing
+or denied references retain the correct ordinary Secret or typed frontend CA
+recovery edge. The disabled controller Grant policy remains limited to finite
+Gateway positions. Frontend fallback authorizes without payload reads; strict
+CA bounds and complete-set matcher semantics remain unchanged. Controller keeps
+ordered serving outcomes, not permission to serve a partial set. Status is
+read-only, and input material is scrubbed before inactive/rejected processing.
+
+BTP, EBTP, EdgionTls, ACME and generated-output authority are not closed by R8a.
+Focused tests and matcher rebuild evidence do not replace the remaining real
+environment and Gateway API conformance validation.
+
+Native Gateway TLS material selection preserves FS/etcd raw omitted namespaces:
+a canonical default target checks both qualified and bare candidates after
+validation and authorization, rejects ambiguity or mismatched actual metadata,
+and retains the selected object's metadata. Nondefault targets never read bare
+keys. Other bound credential consumers retain their existing exact reads.
+Secret/ConfigMap source events preserve raw dependency notifications and add
+Gateway-only semantic ordinary notifications for bare objects, plus correctly
+typed frontend CA notifications. The two candidate reads are not an atomic
+snapshot; dependencies are registered first and subsequent events reconcile
+creation, deletion, revocation and ambiguity changes. Matcher identity comparison
+interprets only an omitted actual Secret namespace as default, without rewriting
+material metadata or accepting an explicit empty namespace.

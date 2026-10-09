@@ -21,11 +21,21 @@ impl ConfigMapHandler {
         Self
     }
 
-    async fn trigger_cascading_requeue(&self, cm_key: &str, event: &str, ctx: &HandlerContext) {
+    async fn trigger_cascading_requeue(&self, cm_key: &str, source: &ConfigMap, event: &str, ctx: &HandlerContext) {
         let mut refs = ctx
             .secret_ref_manager()
             .get_refs(&format!("{CONFIG_MAP_REF_KEY_PREFIX}{cm_key}"));
-        if let Some((namespace, name)) = cm_key.split_once('/') {
+        if let Some(name) = source.metadata.name.as_deref() {
+            let namespace = source.metadata.namespace.as_deref().unwrap_or("default");
+            if source.metadata.namespace.is_none() {
+                // Preserve all raw-key consumers; the new semantic alias is Gateway-only.
+                refs.extend(
+                    ctx.secret_ref_manager()
+                        .get_refs(&format!("{CONFIG_MAP_REF_KEY_PREFIX}default/{name}"))
+                        .into_iter()
+                        .filter(|resource| resource.kind == edgion_resources::ResourceKind::Gateway),
+                );
+            }
             refs.extend(
                 ctx.runtime()
                     .frontend_ca_ref_manager
@@ -79,7 +89,7 @@ impl ProcessorHandler<ConfigMap> for ConfigMapHandler {
             cm.metadata.namespace.as_ref(),
             cm.metadata.name.as_deref().unwrap_or(""),
         );
-        self.trigger_cascading_requeue(&cm_key, "updated", ctx).await;
+        self.trigger_cascading_requeue(&cm_key, cm, "updated", ctx).await;
     }
 
     async fn on_delete(&self, cm: &ConfigMap, ctx: &HandlerContext) {
@@ -92,7 +102,7 @@ impl ProcessorHandler<ConfigMap> for ConfigMapHandler {
         remove.insert(cm_key.clone());
         ctx.runtime().configmap_store.update(HashMap::new(), &remove);
 
-        self.trigger_cascading_requeue(&cm_key, "deleted", ctx).await;
+        self.trigger_cascading_requeue(&cm_key, cm, "deleted", ctx).await;
     }
 }
 
