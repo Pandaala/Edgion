@@ -1617,3 +1617,186 @@ fn mirror_child_owner_is_borrowed_before_dropped_rule_and_uid_replacement() {
         assert_eq!(seen[0].2, "billing");
     }
 }
+
+#[test]
+fn internal_auth_inheritance_uses_root_intermediate_leaf_and_backend_declaring_fields() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
+    use crate::conf_mgr::ControllerRuntime;
+    use edgion_resources::resources::refs::route_auth_fields::{AuthoredRouteAuthField, HttpRouteAuthRefs};
+    use k8s_openapi::api::core::v1::Secret;
+    use serde_json::json;
+    struct AuthLookup<'a> {
+        base: FakeLookup,
+        root: &'a HTTPRoute,
+        ctx: &'a HandlerContext,
+    }
+    impl DelegationLookup for AuthLookup<'_> {
+        fn get_route(&self, key: &str) -> Option<Arc<HTTPRoute>> {
+            self.base.get_route(key)
+        }
+        fn list_route_keys_in_namespace(&self, namespace: &str) -> Vec<String> {
+            self.base.list_route_keys_in_namespace(namespace)
+        }
+        fn mirror_ref_denied(&self, terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
+            self.base.mirror_ref_denied(terminal)
+        }
+        fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
+            self.base.terminal_ref_denied(terminal)
+        }
+        fn extension_ref_error(&self, field: RouteExtensionField<'_>, inspect: bool) -> Option<String> {
+            self.base.extension_ref_error(field, inspect)
+        }
+        fn auth_decision(&self, field: &AuthoredRouteAuthField<'_>) -> super::super::route_auth::AuthDecision {
+            super::super::route_auth::resolve(self.root, field, self.ctx, true)
+        }
+    }
+    for (declaring, backend_scope) in [("root", false), ("middle", false), ("leaf", false), ("leaf", true)] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
+        let auth = json!({"type":"ExternalAuth","resolvedExternalAuth":{"namespace":"forged"},"externalAuth":{
+            "target":{"name":"auth","port":8080},"decision":{},"request":{"path":{"template":format!("/check/${{secretRef:{declaring}/token:key}}")}},
+            "tls":{"enabled":true,"clientCertificateRef":{"name":"client"},"resolvedClientCertificate":{"metadata":{"name":"decoy","namespace":"forged"}}},
+            "resolvedSecrets":{"forged/token:key":"forged-value"}
+        }});
+        let mut values = HashMap::new();
+        for (namespace, child) in [("root", Some("middle")), ("middle", Some("leaf")), ("leaf", None)] {
+            let backend = match child {
+                Some(child) => {
+                    json!({"group":"gateway.networking.k8s.io","kind":"HTTPRoute","namespace":child,"name":"route"})
+                }
+                None => json!({"name":"backend","port":80}),
+            };
+            let mut route = json!({"metadata":{"name":"route","namespace":namespace},"spec":{"rules":[{"matches":[{"path":{"type":"PathPrefix","value":"/"}}],"backendRefs":[backend]}]}});
+            if namespace == declaring {
+                if backend_scope {
+                    route["spec"]["rules"][0]["backendRefs"][0]["filters"] = json!([auth.clone()]);
+                } else {
+                    route["spec"]["rules"][0]["filters"] = json!([auth.clone()]);
+                }
+            }
+            values.insert(namespace, serde_json::from_value::<HTTPRoute>(route).unwrap());
+        }
+        let token: Secret = serde_json::from_value(
+            json!({"metadata":{"name":"token","namespace":declaring},"stringData":{"key":"fresh-value"}}),
+        )
+        .unwrap();
+        let client: Secret = serde_json::from_value(
+            json!({"metadata":{"name":"client","namespace":declaring},"type":"kubernetes.io/tls"}),
+        )
+        .unwrap();
+        runtime.secret_store.replace_all(HashMap::from([
+            (format!("{declaring}/token"), token),
+            (format!("{declaring}/client"), client),
+        ]));
+        let root = values.remove("root").unwrap();
+        let lookup = AuthLookup {
+            base: FakeLookup::new(vec![values.remove("middle").unwrap(), values.remove("leaf").unwrap()])
+                .allow_cross_ns("root", "middle")
+                .allow_cross_ns("middle", "leaf"),
+            root: &root,
+            ctx: &ctx,
+        };
+        let outcome = flatten_route(&root, &lookup);
+        assert!(outcome.auth_errors.is_empty());
+        assert!(outcome.issues.is_empty(), "{:?}", outcome.issues);
+        let mut effective = root.clone();
+        effective.spec.resolved_rules = outcome.resolved_rules;
+        let references = HttpRouteAuthRefs::from_route(&effective).unwrap();
+        let field = references.effective_at(0, backend_scope.then_some(0), 0).unwrap();
+        assert_eq!(field.namespace(), declaring);
+        assert_eq!(
+            field
+                .config()
+                .resolved_secrets
+                .as_ref()
+                .unwrap()
+                .0
+                .get(&format!("{declaring}/token:key"))
+                .unwrap(),
+            "fresh-value"
+        );
+        assert_eq!(
+            field
+                .config()
+                .conn
+                .tls
+                .as_ref()
+                .unwrap()
+                .resolved_client_certificate
+                .as_ref()
+                .unwrap()
+                .metadata
+                .namespace
+                .as_deref(),
+            Some(declaring)
+        );
+        let root_owner = ResourceRef::new(
+            edgion_resources::ResourceKind::HTTPRoute,
+            Some("root".into()),
+            "route".into(),
+        );
+        assert_eq!(
+            runtime.secret_ref_manager.get_refs(&format!("{declaring}/token")),
+            vec![root_owner.clone()]
+        );
+        assert_eq!(
+            runtime.secret_ref_manager.get_refs(&format!("{declaring}/client")),
+            vec![root_owner]
+        );
+    }
+}
+
+#[test]
+fn independently_dropped_auth_rule_keeps_root_recovery_dependencies() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
+    use crate::conf_mgr::ControllerRuntime;
+    use edgion_resources::resources::refs::route_auth_fields::AuthoredRouteAuthField;
+    struct Lookup<'a> {
+        root: &'a HTTPRoute,
+        ctx: &'a HandlerContext,
+    }
+    impl DelegationLookup for Lookup<'_> {
+        fn get_route(&self, _: &str) -> Option<Arc<HTTPRoute>> {
+            None
+        }
+        fn list_route_keys_in_namespace(&self, _: &str) -> Vec<String> {
+            vec![]
+        }
+        fn terminal_ref_denied(&self, _: TerminalBackendReference<'_>) -> Option<RefDenied> {
+            None
+        }
+        fn mirror_ref_denied(&self, _: TerminalMirrorReference<'_>) -> Option<RefDenied> {
+            None
+        }
+        fn extension_ref_error(&self, _: RouteExtensionField<'_>, _: bool) -> Option<String> {
+            None
+        }
+        fn auth_decision(&self, field: &AuthoredRouteAuthField<'_>) -> super::super::route_auth::AuthDecision {
+            super::super::route_auth::resolve(self.root, field, self.ctx, true)
+        }
+    }
+    let root = route(
+        "apps",
+        "root",
+        serde_json::json!({"rules":[
+            {"retry":{"attempts":0},"filters":[{"type":"ExternalAuth","externalAuth":{"target":{"name":"auth","port":80},"decision":{},"request":{"path":{"template":"/${secretRef:apps/missing:key}"}}}}],"backendRefs":[{"name":"backend","port":80}]},
+            {"backendRefs":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","name":"missing-child"}]}
+        ]}),
+    );
+    assert!(super::super::http_route::find_invalid_rule_details(&root, "apps")
+        .iter()
+        .any(|(index, reason)| *index == 0 && reason.contains("at least 1")));
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
+    let outcome = flatten_route(&root, &Lookup { root: &root, ctx: &ctx });
+    assert!(outcome.resolved_rules.unwrap().is_empty());
+    assert!(!outcome.auth_errors.is_empty());
+    assert_eq!(
+        runtime.secret_ref_manager.get_refs("apps/missing"),
+        vec![ResourceRef::new(
+            edgion_resources::ResourceKind::HTTPRoute,
+            Some("apps".into()),
+            "root".into()
+        )]
+    );
+}

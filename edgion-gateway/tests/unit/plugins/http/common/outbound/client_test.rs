@@ -930,3 +930,154 @@ fn owning_managed_url_tls_and_invalid_targets_fail_before_health_tasks() {
         ));
     }
 }
+
+fn owned_route_auth_client(
+    mut connection: serde_json::Value,
+    namespace: Option<&str>,
+    declaring: Option<&str>,
+) -> Result<ManagedOutboundClient, String> {
+    use edgion_resources::resources::refs::route_auth_fields::HttpRouteAuthRefs;
+    connection["decision"] = serde_json::json!({});
+    let mut wire = serde_json::json!({"metadata":{"name":"route"},"spec":{"rules":[{"filters":[{"type":"ExternalAuth","externalAuth":connection}]}]}});
+    if let Some(namespace) = namespace {
+        wire["metadata"]["namespace"] = namespace.into();
+    }
+    if let Some(declaring) = declaring {
+        wire["spec"]["resolvedRules"] = wire["spec"]["rules"].clone();
+        wire["spec"]["resolvedRules"][0]["filters"][0]["resolvedExternalAuth"] =
+            serde_json::json!({"namespace":declaring});
+    }
+    let route: edgion_resources::HTTPRoute = serde_json::from_value(wire).unwrap();
+    let refs = HttpRouteAuthRefs::from_route(&route).map_err(|error| error.to_string())?;
+    let field = refs.effective_at(0, None, 0).map_err(|error| error.to_string())?;
+    let defaults = GlobalOutboundTlsSnapshot::from_configs([]);
+    PreparedRouteAuth::new(&field, &defaults)?.build_client()
+}
+
+#[test]
+fn internal_route_auth_service_transport_uses_declaring_locality_and_enabled_tls() {
+    for namespace in [None, Some("root")] {
+        for declaring in [None, Some("child")] {
+            for enabled in [None, Some(false), Some(true)] {
+                for kind in ["Service", "ServiceEndpointSlice", "ServiceClusterIp"] {
+                    let mut wire = serde_json::json!({"target":{"group":"core","kind":kind,"name":"auth","port":8080}});
+                    if let Some(enabled) = enabled {
+                        wire["tls"] = serde_json::json!({"enabled":enabled});
+                    }
+                    let client = owned_route_auth_client(wire, namespace, declaring).unwrap();
+                    let expected_ns = declaring.or(namespace).unwrap_or("default");
+                    let expected_scheme = if enabled == Some(true) { "https" } else { "http" };
+                    match (kind, &client.resolved_target) {
+                        (
+                            "Service" | "ServiceEndpointSlice",
+                            ResolvedTarget::Service {
+                                service_key,
+                                scheme,
+                                port,
+                                ..
+                            },
+                        ) => {
+                            assert_eq!(*port, Some(8080));
+                            assert_eq!(service_key, &format!("{expected_ns}/auth"));
+                            assert_eq!(*scheme, expected_scheme);
+                        }
+                        ("ServiceClusterIp", ResolvedTarget::Static(url)) => assert_eq!(
+                            url,
+                            &format!("{expected_scheme}://auth.{expected_ns}.svc.cluster.local:8080")
+                        ),
+                        _ => panic!("incorrect target transport for {kind}: {:?}", client.resolved_target),
+                    }
+                    assert!(client.health_task.is_none());
+                    assert!(client.egress_policy.is_none());
+                }
+            }
+        }
+    }
+    let secure = owned_route_auth_client(
+        serde_json::json!({"target":{"url":"https://auth.example"},"tls":{"enabled":false}}),
+        Some("root"),
+        Some("child"),
+    )
+    .unwrap();
+    assert!(matches!(&secure.resolved_target, ResolvedTarget::Static(url) if url == "https://auth.example"));
+    assert!(secure.egress_policy.is_some());
+}
+
+#[test]
+fn internal_route_auth_wrong_material_fails_before_health_preparation_without_tokio() {
+    let mut wire = serde_json::json!({"target":{"name":"auth","port":8443},"healthCheck":{"active":{"path":"/health","intervalSec":30}},
+    "tls":{"enabled":true,"clientCertificateRef":{"name":"client"},"resolvedClientCertificate":{
+        "metadata":{"name":"decoy","namespace":"child"},"type":"kubernetes.io/tls","data":{"tls.crt":"ZGVjb3k=","tls.key":"ZGVjb3k="}}
+    }});
+    let error = owned_route_auth_client(wire.clone(), Some("root"), Some("child")).unwrap_err();
+    assert_eq!(error, "outbound TLS reference/material identity mismatch");
+    wire["tls"]["resolvedClientCertificate"]["metadata"]["name"] = "client".into();
+    wire["tls"]["resolvedClientCertificate"]["metadata"]["namespace"] = "root".into();
+    assert_eq!(
+        owned_route_auth_client(wire, Some("root"), Some("child")).unwrap_err(),
+        "outbound TLS reference/material identity mismatch"
+    );
+}
+
+#[test]
+fn internal_route_auth_captures_nonempty_global_tls_and_inherits_the_same_generation() {
+    use edgion_common::link_sys_core::outbound_tls::resolve_validated_outbound_tls;
+    use edgion_resources::resources::refs::route_auth_fields::HttpRouteAuthRefs;
+    use serde_json::json;
+    let route: edgion_resources::HTTPRoute = serde_json::from_value(json!({"metadata":{"name":"route","namespace":"apps"},"spec":{"rules":[{"filters":[{"type":"ExternalAuth","externalAuth":{
+        "target":{"name":"auth","port":443},"decision":{},"tls":{"enabled":true}
+    }}]}]}})).unwrap();
+    let refs = HttpRouteAuthRefs::from_route(&route).unwrap();
+    let field = refs.effective_at(0, None, 0).unwrap();
+    let global: edgion_resources::EdgionGatewayConfig =
+        serde_json::from_value(json!({"metadata":{"name":"global"},"spec":{"outboundTls":{
+            "verify":false
+        }}}))
+        .unwrap();
+    let captured = GlobalOutboundTlsSnapshot::from_configs([Arc::new(global)]);
+    let prepared = PreparedRouteAuth::new(&field, &captured).unwrap();
+    assert!(std::ptr::eq(prepared.defaults, &captured));
+    let resolved = resolve_validated_outbound_tls(&prepared.proof, true, prepared.defaults).unwrap();
+    assert!(!resolved.verify);
+    let invalid: edgion_resources::EdgionGatewayConfig =
+        serde_json::from_value(json!({"metadata":{"name":"next"},"spec":{"outboundTls":{
+            "clientCertificateRef":{"name":"missing","namespace":"apps"}
+        }}}))
+        .unwrap();
+    let next = GlobalOutboundTlsSnapshot::from_configs([Arc::new(invalid)]);
+    assert!(PreparedRouteAuth::new(&field, &next).is_err());
+    let client = prepared.build_client().unwrap();
+    assert!(matches!(
+        client.resolved_target,
+        ResolvedTarget::Service { scheme: "https", .. }
+    ));
+    let retained = resolve_validated_outbound_tls(&prepared.proof, true, prepared.defaults).unwrap();
+    assert!(!retained.verify);
+}
+
+#[test]
+fn internal_route_auth_requires_exact_template_keys_before_health_preparation() {
+    use serde_json::json;
+    let wire = json!({"target":{"name":"auth","port":8080},"request":{"path":{"template":"/check/${secretRef:child/token:key}"}}});
+    for resolved in [
+        serde_json::Value::Null,
+        json!({}),
+        json!({"root/token:key":"decoy"}),
+        json!({"child/token:other":"decoy"}),
+    ] {
+        let mut missing = wire.clone();
+        missing["resolvedSecrets"] = resolved;
+        missing["healthCheck"] = json!({"active":{"path":"/health","intervalSec":30}});
+        // No Tokio runtime: the missing-key gate precedes any health task spawn.
+        assert_eq!(
+            owned_route_auth_client(missing, Some("root"), Some("child")).unwrap_err(),
+            "HTTPRoute authentication template references are unresolved"
+        );
+    }
+    for value in ["fresh-value", ""] {
+        let mut complete = wire.clone();
+        complete["resolvedSecrets"] = json!({"child/token:key":value});
+        let client = owned_route_auth_client(complete, Some("root"), Some("child")).unwrap();
+        assert_eq!(client.resolved_secrets.as_ref().unwrap().0["child/token:key"], value);
+    }
+}

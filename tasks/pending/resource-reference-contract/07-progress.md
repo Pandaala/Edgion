@@ -2,15 +2,18 @@
 
 ## Current resume snapshot (2026-10-09)
 
-- Latest accepted local batches: R6j process locator ddd8ad659 and R6k Backend
-  credential Secret acquisition d50005e55. Both passed focused verification,
-  workspace gates and independent final reviews. No push.
+- Latest accepted local batches: R6j process locator ddd8ad659, R6k Backend
+  credential Secret acquisition d50005e55, and R7a managed HTTP plugins 418e353dd.
+  All passed focused verification, workspace gates and independent final reviews.
+  No agent push; the user separately pushed during R7a verification.
 - R6k committed all ten reviewed blobs exactly. Its final evidence is under
   tmp/resource-reference-contract/r6k-verification-20261009 and
   tmp/resource-reference-contract/r6k-root-verification-20261009.
 - R7a three-plugin managed HTTP migration has passed focused execution and all
   fourteen root gates on exactly twenty technical paths. Both independent
-  Astra commit reviews passed; next is R7b internal Route Edgion-auth planning.
+  Astra commit reviews passed. R7b internal Route Edgion-auth now has two
+  independent execution approvals on thirty-one technical paths. All fourteen
+  root gates pass without warnings; final commit review is pending.
 - R7/R8, full consumer audit and simplification, knowledge/user-document cleanup,
   fresh real-environment admission/dynamic/conformance verification, and original
   issue closure remain open. Historical scoped passes are not whole-task passes.
@@ -2344,3 +2347,158 @@ directories. Final commit review follows; R7b/R7c/R8/F1/F2 remain open.
 
 Both independent Astra reviewers confirmed R7a SCOPED COMMIT PASS. The twenty
 technical paths plus this record form the exact local commit scope.
+
+R7a committed locally as 418e353ddd2e7a54ddf621c1fbaa4da5a4e7e7a8; all twenty-one
+committed blobs match the final reviewed snapshot. No agent push. R7b starts
+PLAN ONLY for the internal HTTPRoute Edgion-auth field, with declaring Route,
+delegation, backend-filter provenance and separate root wakeup preserved. Native
+ExternalAuth support is not authorized by this migration. Baseline is 9600 IDs.
+
+R7b exact thirty-path plan at 418e353dd received two independent Astra SCOPED
+PLAN PASS verdicts; execution authorized with a 9600-ID baseline. Use actual
+declaring Route tokens for readonly material acquisition and independently
+validated root receipts for recovery, preserving pipeline owner equality. Raw
+root/child sidecars and material are sanitized before early exits/inheritance;
+valid pending references register recovery before reads or unrelated rule drops.
+Effective Gateway locality grants no child authorization capability. The shared
+TLS identity projection retains actual loans and all pairing/inheritance checks.
+A default delegation callback must yield sanitized fail-closed auth decisions,
+never preserve raw material through an empty result. Four old filter literals in
+two approved fixture files may gain None; other fixture changes require review.
+Production checkpoints and full-static reviews precede focused execution.
+
+F2 read-only preflight during R7b confirms Docker linux/aarch64 and local kind,
+kubectl and Go tools. kind lists edgion-standard-162, but the current kubectl
+context is orbstack (other named context eruie2e-655cd051). Future conformance must
+select its owned test cluster/config explicitly and use newly built binaries;
+no current-context mutation or acceptance test ran in this preflight. System Go
+is 1.24.0; verify the conformance module/toolchain before running it.
+
+R7b early Resources review blocked an effective-field hybrid OwnerSnapshot built
+from cloned root metadata and child locality. Downstream work paused. Independent
+Astra approved the in-scope correction: extract the existing namespace-only target
+classifier, retain authored owner validation, and use a private target-only TLS
+projection borrowing the actual Route/config without token/Grant/freeze authority.
+Authored preparation and bind both validate the actual managed target before
+material tokens; direct-root sidecars must match actual semantic namespace, child
+locality must be valid, and unrelated-filter sidecars are rejected. Preserve prior
+error precedence rather than weakening old assertions. Correction implementation
+resumes; this is not a completed production or execution verdict.
+
+R7b complete fifteen-production-path checkpoint received two independent Astra
+production PASS verdicts. Review confirmed duplicate root auth acquisition and
+a second child-rule clone. A scoped consolidation was independently approved:
+validate source first, prepare root decisions once before delegation selection,
+return private decisions with existing no-delegation behavior, apply them to
+authored output in the handler, and let readonly status consume diagnostics only.
+Child mirrors reuse the sanitized rule clone. Default callbacks stay fail-closed.
+An affected-library compiler preflight is authorized after this consolidation;
+it is not final test acceptance. Full tests/docs, frozen execution and final
+reviews remain required.
+
+R7b affected-library compiler preflight passed in 76.55 seconds, with all fifteen
+production hashes unchanged from checkpoint 2. The complete thirty-path static
+snapshot preserved old test bodies except the four approved None additions.
+Both independent Astra reviewers accepted the production call chain but blocked
+full-static acceptance on missing planned Controller tests: ConfigMap CA material
+and recovery, disabling TLS cleanup, child authorization for root-local targets,
+and recovery dependencies retained after independent rule drops. The fresh
+reviewer additionally requires exact Gateway target variant/mode assertions,
+nonempty global TLS snapshot capture/inheritance, and real unresolved-template
+sealing. Only allowed test files are authorized for these additions; production
+remains frozen. Focused execution, lifetime proofs, workspace gates and final
+commit reviews are still pending. The original static snapshot is retained.
+
+Read-only R7c inventory confirms the remaining OAuth2 transport seam: Controller
+resolution clones CredentialSourceConfig into runtime state, then OAuth2Provider
+constructs a client from detached TLS config. Existing source_is_current already
+checks registry/raw LinkSys identity, frozen references, exact Grant revision and
+Secret UID/resourceVersion around issuer, fallback and publication, with existing
+Lease/generation fences. Reuse these protections; do not redesign the protocol.
+A candidate should retain the actual resolved LinkSys owner through the canonical
+Common TLS/client builder. Webhook already retains its owner/binding and validates
+Service kind canonically; detached target reconstruction alone is not evidence
+for another migration batch. Exact R7c scope remains subject to plan review.
+
+F1 read-only inventory retains concrete closure items: common/mod.rs still
+incorrectly attributes the literal core alias to Gateway API; correct the claim
+without blindly deleting the helper or changing native/custom profiles. Update
+EN/ZH CredentialInjector group defaults/extension wording, retain already strict
+ServiceRef/RequestMirror documentation, reconcile old manifest pending rows, and
+correct the recorded Backend status-owner and first-error knowledge drifts.
+Original issue deletion and inbound-link cleanup remain gated on F2 and repeated
+whole-task review. No F1 production or user-document edits have started.
+
+R7b r2 closes six static coverage gaps with unchanged production and preserved
+old tests. The real unresolved-template test exposed a production gap: outbound
+request rendering uses an empty-value policy for missing Secret map entries.
+Both Astra reviewers approved a minimal correction in PreparedRouteAuth::new:
+use the existing collect_secret_ref_names walker and require every exact key in
+the same actual config's resolved map before TLS/client/health work. Existing
+empty values remain valid; intrinsic template syntax validation remains intact.
+Use a fixed redacted error, no new parser or authorization capability, and cover
+missing map/key, decoy keys, populated/empty values and no-Tokio health failure.
+The r2 snapshot is retained; corrected r3 review and execution remain pending.
+
+R7b corrected r3 changes only the approved client preparation and two new-test
+files relative to r2, adding exact missing-key rejection and valid empty-value
+controls. Full-static re-review is pending. Adjacent read-only audit confirms the
+same missing-map cold-check gap in PreparedManagedHttp for ForwardAuth, Guardrail
+and external AiGuard: intrinsic validation and request compilation do not inspect
+resolved map keys. Follow up with one private canonical outbound presence helper
+shared by Route and managed preparation before EntryCache/client construction;
+cover populated-cache/PluginStore replacement without LKG masking, empty values,
+and disabled/inline behavior. Do not claim observed unauthorized traffic. This
+follow-up is required before whole-task closure, outside the frozen R7b batch.
+
+Both Astra reviewers returned R7b r3 FULL SCOPED STATIC PASS. Root independently
+verified all thirty hashes and diff whitespace. Serial focused/lifetime and
+preservation execution is authorized with per-stage HEAD/source freeze checks;
+no test pass or final gate is inferred from static review.
+
+The first Resources test build exposed a missed test-only source() consumer in
+refs/outbound_tls_test.rs (E0599); its failed log is retained. Both independent
+Astra reviewers approved a thirty-first technical path with one exact helper
+adaptation: observe the same original token through the private Authored origin,
+retain its source-kind assertion, and reject Effective in this authored helper.
+All target/material/count assertions and test IDs remain; no production API or
+visibility is widened. Preservation evidence must name this additional exception.
+Re-freeze and rerun Resources before continuing serial focused verification.
+
+R7b execution: Resources refs 123, Resources doctests 54 and Common TLS 49 pass.
+A missing RawStore import in a new Controller test was mechanically corrected;
+its failed compile log is retained. Controller auth five tests pass. The HTTP
+suite then reported 67 passes and one new queue-test failure: the fixture's
+is_empty() drain ignores scheduled 100ms requeues. Independent diagnosis approved
+ordinary Tokio plus bounded real dequeue-await until each generation is quiet,
+retaining original root-wakeup/material/cleanup assertions. A proposed paused
+clock was withdrawn after checking the queue's std::time::Instant deadlines.
+No production queue changes, manual root enqueues or fixed sleeps are permitted.
+Freeze and rerun the affected suite before acceptance.
+
+R7b Controller execution now passes auth 5, HTTPRoute 68, delegation 47 and
+request templates 9. Gateway's new global snapshot fixture initially used a SAN
+policy unsupported by the existing HTTP transport; independent review approved
+using observable supported verify:false with the real provider capability while
+retaining capture, next-generation rejection and old-generation construction
+assertions. No production transport policy changed. Gateway client 36, pinned
+resolver 4, target 1, ForwardAuth 10, runtime 445, request filter 29, and CRD 28
+now pass. Failed compile/fixture runs remain recorded. Independent lifetime and
+9600 prior test-ID/ignored preservation checks are next, before root gates.
+
+Both independent Astra execution reviews pass: 826 distinct units, 28 CRD tests
+and 54 doctests (908 total), with 9600 old IDs preserved and 21 added. Root gates
+pass except the warning-free Clippy requirement: a new six-element target tuple
+triggers type_complexity (one diagnostic plus duplicate summaries). Independent
+review approved a private same-module type alias preserving element order, Eq,
+construction and visibility. Re-run Resources refs/doctests/lifetime, retain
+honest semantic-equivalence reuse evidence for other suites, then rerun root
+gates on the final source. No commit is authorized by a warning-bearing gate.
+
+R7b r8 received two independent corrected EXECUTION PASS verdicts. Both verified
+the exact alias equivalence and fresh Resources/lifetime evidence. Final root r2
+passes all fourteen gates with unchanged source and zero warnings/errors:
+workspace check 21.291 seconds, Clippy 31.533 seconds. The final scope is thirty-one
+technical files plus this ledger; protected unrelated untracked paths remain
+excluded. Final commit review is next. R7a template-presence follow-up, R7c, R8,
+F1/F2 and original issue closure remain open; no agent push.

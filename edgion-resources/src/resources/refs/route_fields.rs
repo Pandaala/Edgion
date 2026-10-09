@@ -366,6 +366,9 @@ pub struct RouteFilterSlot {
     filter: usize,
 }
 impl RouteFilterSlot {
+    pub(super) fn new(rule: usize, backend: Option<usize>, filter: usize) -> Self {
+        Self { rule, backend, filter }
+    }
     pub fn rule(self) -> usize {
         self.rule
     }

@@ -511,7 +511,33 @@ TLS uses HTTP. An explicit HTTPS URL stays HTTPS with disabled local material,
 and an HTTP URL with enabled TLS remains invalid. Client construction reuses the
 existing egress, timeout, retry, bounded-response and health-task implementation.
 Guard request POST construction and request/response companion ownership remain
-unchanged. The internal HTTPRoute Edgion-auth constructor and OAuth2 credential
-acquisition are separate migration boundaries; native ExternalAuth is unsupported.
+unchanged. Internal HTTPRoute Edgion-auth uses the route-owned path below.
+OAuth2 credential acquisition remains a separate migration boundary; native
+ExternalAuth is unsupported.
 No new global-default cache invalidation or immediate in-flight revocation fence
 is implied by this cold owning-input validation.
+
+### Internal HTTPRoute auth ownership
+
+The filesystem/etcd Edgion `ExternalAuth` payload (`target` plus `decision`) uses
+actual rule/backend/filter loans from `refs::route_auth_fields`. This is distinct
+from unsupported native Gateway API `backendRef`/`protocol` ExternalAuth; mixed
+payloads keep the native classification and fail closed. No vendored CRD is relaxed.
+
+The Controller resolves each original declaring HTTPRoute's TLS/template fields
+before delegation inheritance. Secret/ConfigMap and ReferenceGrant recovery keys
+belong to the published root, while authorization uses the actual declaring route.
+Incoming root and raw-child resolved material/locality is cleared. Effective
+filters carry schema-hidden declaring namespace and failure state; that locality
+cannot mint a child Grant query or claim a child UID/generation.
+
+Gateway `PreparedRouteAuth` retains the actual effective config loan through TLS
+proof and ForwardAuth construction, using the same captured global TLS defaults.
+Target identity and any unresolved/material diagnostic precede client or health
+task preparation. Service namespace defaults to the declaration, including
+intermediate inherited and selected-backend filters; TLS enabled/scheme rules are
+the same as the owned plugin path. Failures seal a generic 500 and do not silently
+remove authentication. Existing route generation/captured-request behavior,
+egress policy, body forwarding, retry and deadlines are unchanged. No route entry
+cache, Service grant policy, new Service recovery edge or live conformance claim
+is added.

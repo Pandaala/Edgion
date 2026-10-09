@@ -743,9 +743,14 @@ pub struct HTTPRouteFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cors: Option<HTTPCORSFilter>,
 
-    /// ExternalAuth defines a Gateway API native external authentication filter (GEP-1494)
+    /// ExternalAuth preserves native GEP-1494 input separately from internal Edgion auth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_auth: Option<HTTPRouteExternalAuth>,
+
+    /// Controller-derived locality and failure state for the internal Edgion auth filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_external_auth: Option<crate::resources::refs::route_auth_fields::ResolvedExternalAuth>,
 
     /// ExtensionRef is an optional, implementation-specific extension to the "filter" behavior
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -822,8 +827,8 @@ pub enum HTTPRouteFilterType {
     ExtensionRef,
     /// CORS defines a Gateway API native CORS filter (GEP-1767)
     CORS,
-    /// ExternalAuth defines a Gateway API native external authentication filter (GEP-1494)
-    /// Maps internally to ForwardAuth plugin
+    /// ExternalAuth preserves native GEP-1494 input separately from internal Edgion auth.
+    /// Only the internal Edgion payload maps to ForwardAuth; native input is unsupported.
     ExternalAuth,
 }
 

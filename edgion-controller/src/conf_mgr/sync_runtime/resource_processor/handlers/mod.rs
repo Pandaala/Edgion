@@ -33,6 +33,7 @@ mod link_sys;
 mod plugins;
 mod reference_grant;
 mod request_mirror;
+mod route_auth;
 mod route_backend_refs;
 pub(crate) mod route_delegation;
 pub(crate) mod route_utils;

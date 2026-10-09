@@ -209,6 +209,51 @@ impl<'a> PreparedManagedHttp<'a> {
     }
 }
 
+/// Internal Route auth retains its exact effective field through construction.
+pub(crate) struct PreparedRouteAuth<'a> {
+    field: &'a edgion_resources::resources::refs::route_auth_fields::EffectiveRouteAuthField<'a>,
+    proof: ValidatedLocalTlsSelection<'a>,
+    defaults: &'a GlobalOutboundTlsSnapshot,
+}
+impl<'a> PreparedRouteAuth<'a> {
+    pub(crate) fn new(
+        field: &'a edgion_resources::resources::refs::route_auth_fields::EffectiveRouteAuthField<'a>,
+        defaults: &'a GlobalOutboundTlsSnapshot,
+    ) -> Result<Self, String> {
+        if let Some(error) = field.resolution_error() {
+            return Err(error.to_string());
+        }
+        let config = field.config();
+        if config.request.collect_secret_ref_names().iter().any(|key| {
+            !config
+                .resolved_secrets
+                .as_ref()
+                .is_some_and(|resolved| resolved.0.contains_key(key))
+        }) {
+            return Err("HTTPRoute authentication template references are unresolved".into());
+        }
+        let selection = field.outbound_tls_selection().map_err(|error| error.to_string())?;
+        let proof = validate_local_tls_selection(selection).map_err(|error| error.to_string())?;
+        validate_active_tls_inheritance(&proof, defaults).map_err(|error| error.to_string())?;
+        Ok(Self { field, proof, defaults })
+    }
+    pub(crate) fn config(&self) -> &edgion_resources::resources::edgion_plugins::ForwardAuthConfig {
+        self.field.config()
+    }
+    pub(crate) fn build_client(&self) -> Result<ManagedOutboundClient, String> {
+        let config = self.config();
+        ManagedOutboundClient::build(
+            &config.conn,
+            &config.request,
+            config.resolved_secrets.as_ref(),
+            "ForwardAuth",
+            true,
+            Some(self.field.namespace()),
+            ClientTls::Owned(&self.proof, self.defaults),
+        )
+    }
+}
+
 impl std::fmt::Debug for ManagedOutboundClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManagedOutboundClient")

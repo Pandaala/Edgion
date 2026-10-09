@@ -67,6 +67,14 @@ fn set_terminal_rule_identity(rule: &mut HTTPRouteRule, route_identity: &str, in
 
 /// Store abstraction so flattening is unit-testable without a ControllerRuntime.
 pub trait DelegationLookup {
+    /// Actual declaring auth fields only; absent runtime resolution fails closed.
+    fn auth_decision(
+        &self,
+        field: &edgion_resources::resources::refs::route_auth_fields::AuthoredRouteAuthField<'_>,
+    ) -> super::route_auth::AuthDecision {
+        super::route_auth::AuthDecision::unavailable(field)
+    }
+
     /// Look up an HTTPRoute by `"ns/name"` key.
     fn get_route(&self, key: &str) -> Option<Arc<HTTPRoute>>;
     /// All HTTPRoute keys in a namespace, sorted (for deterministic wildcard
@@ -87,6 +95,8 @@ pub struct FlattenOutcome {
     /// Invalid sources return an empty effective rule set.
     pub resolved_rules: Option<Vec<HTTPRouteRule>>,
     pub issues: Vec<DelegationIssue>,
+    pub auth_errors: Vec<super::super::ResolvedRefsError>,
+    pub root_auth_decisions: Vec<super::route_auth::AuthDecision>,
     /// Every named child key referenced anywhere in the delegation tree
     /// (including missing ones, so their later creation requeues this route).
     pub named_children: HashSet<String>,
@@ -112,6 +122,8 @@ impl FlattenOutcome {
         Self {
             resolved_rules: None,
             issues: Vec::new(),
+            auth_errors: Vec::new(),
+            root_auth_decisions: Vec::new(),
             named_children: HashSet::new(),
             wildcard_namespaces: HashSet::new(),
             backend_dependencies: Vec::new(),
@@ -158,6 +170,7 @@ impl InheritedFilters {
 struct FlattenCtx<'a> {
     lookup: &'a dyn DelegationLookup,
     issues: Vec<DelegationIssue>,
+    auth_errors: Vec<super::super::ResolvedRefsError>,
     named_children: HashSet<String>,
     wildcard_namespaces: HashSet<String>,
     backend_dependencies: Vec<BackendDependencyReceipt>,
@@ -197,13 +210,22 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
             .as_ref()
             .is_some_and(|brs| brs.iter().any(HTTPBackendRef::is_route_delegation_ref))
     });
+    let root_auth_decisions = super::route_auth::decisions(parent, |field| lookup.auth_decision(field));
+    let auth_errors = root_auth_decisions
+        .iter()
+        .flat_map(|decision| decision.errors.iter().cloned())
+        .collect();
     if !has_delegation {
-        return FlattenOutcome::no_delegation();
+        let mut outcome = FlattenOutcome::no_delegation();
+        outcome.auth_errors = auth_errors;
+        outcome.root_auth_decisions = root_auth_decisions;
+        return outcome;
     }
 
     let mut ctx = FlattenCtx {
         lookup,
         issues: Vec::new(),
+        auth_errors,
         named_children: HashSet::new(),
         wildcard_namespaces: HashSet::new(),
         backend_dependencies: route_backend_refs::collect_dependencies(parent_refs.authored()),
@@ -233,6 +255,15 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
 
     let mut out_rules: Vec<HTTPRouteRule> = Vec::new();
     for (idx, rule) in rules.iter().enumerate() {
+        let mut resolved_rule = rule.clone();
+        super::route_auth::scrub_rule(&mut resolved_rule);
+        for decision in root_auth_decisions
+            .iter()
+            .filter(|decision| decision.slot().rule() == idx)
+        {
+            decision.clone().apply(&mut resolved_rule);
+        }
+        let rule = &resolved_rule;
         if invalid_indices.contains(&idx) {
             continue;
         }
@@ -292,6 +323,8 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
     FlattenOutcome {
         resolved_rules: Some(out_rules),
         issues: ctx.issues,
+        auth_errors: ctx.auth_errors,
+        root_auth_decisions,
         named_children: ctx.named_children,
         wildcard_namespaces: ctx.wildcard_namespaces,
         backend_dependencies: ctx.backend_dependencies,
@@ -511,7 +544,15 @@ fn flatten_child_rules(
         .into_iter()
         .collect();
 
+    let mut auth_decisions = super::route_auth::by_rule(child, |field| ctx.lookup.auth_decision(field));
     for (idx, rule) in rules.iter().enumerate() {
+        let mut auth_rule = rule.clone();
+        super::route_auth::scrub_rule(&mut auth_rule);
+        for mut decision in auth_decisions.remove(&idx).unwrap_or_default() {
+            ctx.auth_errors.append(&mut decision.errors);
+            decision.apply(&mut auth_rule);
+        }
+        let rule = &auth_rule;
         let mirror_decisions = HttpRouteMirrorRefs::from_route(child)
             .map(|refs| {
                 refs.authored()
@@ -565,11 +606,10 @@ fn flatten_child_rules(
         // Raw child rules have not necessarily passed their own handler yet.
         // Resolve mirrors before inheritance, using this declaring child even
         // when a terminal rule belongs to a deeper descendant.
-        let mut resolved_rule = rule.clone();
         for decision in mirror_decisions {
-            decision.apply_rule(&mut resolved_rule);
+            decision.apply_rule(&mut auth_rule);
         }
-        let rule = &resolved_rule;
+        let rule = &auth_rule;
 
         let is_delegating = rule
             .backend_refs

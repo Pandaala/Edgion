@@ -512,6 +512,26 @@ construction. Disabled/policy-masked entries and inline-only AiGuard acquire no
 new outbound reference. Service TLS follows enabled rather than block presence;
 explicit HTTPS URL transport remains secure when custom local TLS is disabled.
 No Service Grant, dependency or forwarding-policy relationship is introduced.
-The separate internal HTTPRoute Edgion-auth actual-owner migration, CredentialSource
-transport capture and generated-output operation authority remain open. Focused
-handler/store tests do not establish live queue delivery or conformance.
+R7a excluded internal HTTPRoute Edgion-auth (covered by the R7b boundary below),
+CredentialSource transport capture and generated-output operation authority. The
+latter two remain open. R7a focused handler/store tests did not establish live
+queue delivery or conformance.
+
+### R7b internal HTTPRoute Edgion-auth boundary
+
+Internal FS/etcd auth filters now have actual authored rule/backend/filter loans
+and separate effective locality. Controller root/child declarations resolve local
+TLS CA/client and request-template material through canonical bound acquisition;
+private valid-root receipts own Secret/ConfigMap/Grant recovery. The declaration,
+not the published root, supplies authorization and default Service namespace.
+Incoming resolved material and namespace stamps are scrubbed before publication.
+Readonly status has no new dependency writes. Gateway construction retains the
+actual effective field through canonical TLS identity proof and uses Service TLS
+`enabled` semantics while preserving explicit HTTPS URLs and existing client
+behavior. Effective locality has no authored token/Grant/freeze API.
+
+This migration does not implement upstream ExternalAuth, change native field
+admission, add Service grants/dependencies, migrate OAuth2, or complete R8 and
+live/conformance verification. Tests include root event-queue recovery and
+multi-level/backend locality; final pass evidence remains in the active batch
+verification record rather than inferred from this inventory.

@@ -66,7 +66,7 @@ use std::sync::Arc;
 use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::plugins::http::common::connection_listed_hop_by_hop;
 use crate::plugins::http::common::outbound::call::{outbound_call_with_body, OutboundResponse};
-use crate::plugins::http::common::outbound::client::{ManagedOutboundClient, PreparedManagedHttp};
+use crate::plugins::http::common::outbound::client::{ManagedOutboundClient, PreparedManagedHttp, PreparedRouteAuth};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
@@ -95,27 +95,13 @@ pub struct ForwardAuth {
 }
 
 impl ForwardAuth {
-    /// Build a [`ForwardAuth`] plugin from the given configuration.
-    ///
-    /// Returns `Err` if the target, TLS configuration, or request-spec compilation
-    /// fails. In normal operation this should not occur because the admission
-    /// controller runs `ForwardAuthConfig::validation_error()` before the config
-    /// reaches the gateway. Callers may treat an `Err` return as fail-closed (do
-    /// not install the plugin).
-    pub fn new(config: &ForwardAuthConfig) -> Result<Self, String> {
+    /// Construct only from the same actual Route field that prepared the client.
+    pub(crate) fn from_route(input: &PreparedRouteAuth<'_>) -> Result<Self, String> {
+        let config = input.config();
         if let Some(error) = config.validation_error() {
             return Err(error);
         }
-        let client = ManagedOutboundClient::from_parts(
-            &config.conn,
-            &config.request,
-            config.resolved_secrets.as_ref(),
-            "ForwardAuth",
-            // Auth checks are idempotent GET/HEAD-style calls: retry a timed-out
-            // request by default.
-            true,
-        )?;
-        Ok(Self::from_client(config, client))
+        Ok(Self::from_client(config, input.build_client()?))
     }
 
     pub(crate) fn from_owned(input: &PreparedManagedHttp<'_>) -> Result<Self, String> {

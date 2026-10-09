@@ -38,7 +38,12 @@ fn assert_pairs(field: BoundOutboundTls<'_>, kind: &str) {
     field.visit_ca(|pair| {
         count += 1;
         let reference = pair.reference().validated().unwrap();
-        assert_eq!(reference.source().group_kind().kind(), kind);
+        match &pair.reference().origin {
+            TlsIdentityOrigin::Authored(token) => {
+                assert_eq!(token.validated().unwrap().source().group_kind().kind(), kind);
+            }
+            TlsIdentityOrigin::Effective(_) => panic!("authored TLS field required"),
+        }
         assert_eq!(reference.target().name(), "ca");
         assert_eq!(pair.material().unwrap().metadata.name.as_deref(), Some("ca"));
     });

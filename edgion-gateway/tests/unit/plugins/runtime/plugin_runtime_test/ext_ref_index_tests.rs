@@ -38,6 +38,7 @@ fn make_ext_ref_filter_with_kind(kind: &str, name: &str) -> HTTPRouteFilter {
         request_mirror: None,
         cors: None,
         external_auth: None,
+        resolved_external_auth: None,
         extension_ref: Some(LocalObjectReference {
             group: "edgion.io".into(),
             kind: kind.into(),
@@ -57,6 +58,7 @@ fn make_external_auth_filter(config: ForwardAuthConfig) -> HTTPRouteFilter {
         request_mirror: None,
         cors: None,
         external_auth: Some(edgion_resources::HTTPRouteExternalAuth::Edgion(Box::new(config))),
+        resolved_external_auth: None,
         extension_ref: None,
     }
 }

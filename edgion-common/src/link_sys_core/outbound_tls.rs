@@ -275,8 +275,7 @@ fn validate_client_pair(field: &MaterialField<'_, '_>) -> Result<(), TlsMaterial
 
 fn validate_material_pair(pair: BoundTlsMaterial<'_>) -> Result<(), TlsMaterialProofError> {
     use edgion_resources::constants::annotations::edgion::{CONTROLLER_CA_SOURCE, CONTROLLER_CA_SOURCE_CONFIG_MAP};
-    let reference = pair.reference().validated().map_err(TlsMaterialProofError::Reference)?;
-    let target = reference.target();
+    let target = pair.target().map_err(TlsMaterialProofError::Reference)?;
     let material = pair.material().ok_or(TlsMaterialProofError::MaterialIdentity)?;
     if material.metadata.name.as_deref() != Some(target.name())
         || material.metadata.namespace.as_deref() != target.scope().namespace()

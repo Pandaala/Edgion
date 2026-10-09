@@ -56,9 +56,20 @@ fn is_delegation_parent_ref(pr: &ParentReference) -> bool {
 struct RuntimeDelegationLookup<'a> {
     runtime: &'a ControllerRuntime,
     grant_owner: Option<ResourceRef>,
+    auth: Option<(&'a HTTPRoute, &'a HandlerContext, bool)>,
 }
 
 impl DelegationLookup for RuntimeDelegationLookup<'_> {
+    fn auth_decision(
+        &self,
+        field: &edgion_resources::resources::refs::route_auth_fields::AuthoredRouteAuthField<'_>,
+    ) -> super::route_auth::AuthDecision {
+        match self.auth {
+            Some((root, ctx, register)) => super::route_auth::resolve(root, field, ctx, register),
+            None => super::route_auth::AuthDecision::unavailable(field),
+        }
+    }
+
     fn get_route(&self, key: &str) -> Option<Arc<HTTPRoute>> {
         let processor = self.runtime.processor_registry.get("HTTPRoute")?;
         // Visibility must match the wildcard listing (ServerCache): the raw
@@ -250,8 +261,10 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     }
 
     async fn parse(&self, mut route: HTTPRoute, _ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
+        super::route_auth::scrub_route(&mut route);
         let source_valid = HttpRouteBackendRefs::from_route(&route).is_ok();
         let grant_owner = Self::create_resource_ref(&route);
+        _ctx.secret_ref_manager().clear_value_refs(&grant_owner);
         _ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&grant_owner);
         _ctx.runtime().plugin_ref_mgr.clear_value_refs(&grant_owner);
         let old_services = super::route_utils::begin_service_refs(&grant_owner, _ctx.runtime());
@@ -346,9 +359,21 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             let adapter = RuntimeDelegationLookup {
                 runtime: _ctx.runtime(),
                 grant_owner: Some(grant_owner.clone()),
+                auth: Some((&route, _ctx, true)),
             };
             flatten_route(&route, &adapter)
         };
+        for decision in delegation_outcome.root_auth_decisions.drain(..) {
+            if let Some(rule) = route
+                .spec
+                .rules
+                .as_mut()
+                .and_then(|rules| rules.get_mut(decision.slot().rule()))
+            {
+                decision.apply(rule);
+            }
+        }
+
         // Dependency registration below must inspect the rules that the
         // Gateway will actually compile, including delegated child filters.
         route.spec.resolved_rules = delegation_outcome.resolved_rules.clone();
@@ -427,6 +452,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 let adapter = RuntimeDelegationLookup {
                     runtime: _ctx.runtime(),
                     grant_owner: None,
+                    auth: None,
                 };
                 for ns in &delta.changed_namespaces {
                     for key in adapter.list_route_keys_in_namespace(ns) {
@@ -447,6 +473,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 let adapter = RuntimeDelegationLookup {
                     runtime: _ctx.runtime(),
                     grant_owner: None,
+                    auth: None,
                 };
                 let vanished = delegation_outcome
                     .expanded_children
@@ -550,6 +577,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
     async fn on_delete(&self, route: &HTTPRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
+        ctx.secret_ref_manager().clear_value_refs(&resource_ref);
         ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
         ctx.runtime().plugin_ref_mgr.clear_value_refs(&resource_ref);
 
@@ -582,6 +610,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             let adapter = RuntimeDelegationLookup {
                 runtime: ctx.runtime(),
                 grant_owner: None,
+                auth: None,
             };
             for ns in &removed.changed_namespaces {
                 for key in adapter.list_route_keys_in_namespace(ns) {
@@ -605,6 +634,9 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     fn update_status(&self, route: &mut HTTPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
         let source_error = HttpRouteBackendRefs::from_route(route).err();
         if source_error.is_some() {
+            _ctx.secret_ref_manager()
+                .clear_value_refs(&Self::create_resource_ref(route));
+            super::route_auth::scrub_route(route);
             _ctx.runtime()
                 .plugin_ref_mgr
                 .clear_value_refs(&Self::create_resource_ref(route));
@@ -632,6 +664,13 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // by Gateway API's PartiallyInvalid condition.
 
         let mut resolved_refs_errors = validate_http_backend_refs(route, _ctx.runtime());
+
+        let auth_status_lookup = RuntimeDelegationLookup {
+            runtime: _ctx.runtime(),
+            grant_owner: None,
+            auth: Some((route, _ctx, false)),
+        };
+        resolved_refs_errors.extend(flatten_route(route, &auth_status_lookup).auth_errors);
         if let Ok(refs) = HttpRouteMirrorRefs::from_route(route) {
             resolved_refs_errors.extend(super::request_mirror::errors(refs.effective(), _ctx.runtime()));
         }

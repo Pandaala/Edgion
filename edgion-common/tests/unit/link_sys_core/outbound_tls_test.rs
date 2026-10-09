@@ -798,3 +798,73 @@ fn trusted_etcd_pem_inherits_verify_and_never_constructs_partial_identity() {
         .client_identity
         .is_none());
 }
+
+#[test]
+fn internal_route_tls_projection_keeps_exact_order_source_kind_and_client_identity() {
+    use edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE;
+    use edgion_resources::resources::refs::route_auth_fields::HttpRouteAuthRefs;
+    let wire = serde_json::json!({"metadata":{"name":"root","namespace":"root"},"spec":{"resolvedRules":[{
+        "filters":[{"type":"ExternalAuth","resolvedExternalAuth":{"namespace":"child"},"externalAuth":{
+            "target":{"name":"auth","port":8443},"decision":{},"tls":{"enabled":true,"verify":false,
+                "validation":{"caCertificateRefs":[{"kind":"Secret","name":"bundle"},{"kind":"ConfigMap","name":"bundle"}]},
+                "clientCertificateRef":{"name":"client"},
+                "resolvedCaCertificates":[{"metadata":{"name":"bundle","namespace":"child"}},
+                    {"metadata":{"name":"bundle","namespace":"child","annotations":{CONTROLLER_CA_SOURCE:"ConfigMap"}}}],
+                "resolvedClientCertificate":{"metadata":{"name":"client","namespace":"child"}}
+            }
+        }}]
+    }]}});
+    let prove = |value| {
+        let route: edgion_resources::HTTPRoute = serde_json::from_value(value).unwrap();
+        let refs = HttpRouteAuthRefs::from_route(&route).unwrap();
+        let field = refs.effective_at(0, None, 0).unwrap();
+        validate_local_tls_selection(field.outbound_tls_selection().unwrap()).map(|_| ())
+    };
+    assert_eq!(prove(wire.clone()), Ok(()));
+    let base = "/spec/resolvedRules/0/filters/0/externalAuth/tls";
+    for (tail, value, expected) in [
+        (
+            "/resolvedCaCertificates/0/metadata/namespace",
+            serde_json::json!("root"),
+            TlsMaterialProofError::MaterialIdentity,
+        ),
+        (
+            "/resolvedClientCertificate/metadata/name",
+            serde_json::json!("decoy"),
+            TlsMaterialProofError::MaterialIdentity,
+        ),
+        (
+            "/resolvedClientCertificate/metadata/namespace",
+            serde_json::json!("root"),
+            TlsMaterialProofError::MaterialIdentity,
+        ),
+        (
+            "/resolvedCaCertificates",
+            serde_json::json!([]),
+            TlsMaterialProofError::CaCardinality,
+        ),
+        (
+            "/resolvedClientCertificate",
+            serde_json::json!(null),
+            TlsMaterialProofError::ClientPresence,
+        ),
+    ] {
+        let mut value_wire = wire.clone();
+        *value_wire.pointer_mut(&format!("{base}{tail}")).unwrap() = value;
+        assert_eq!(prove(value_wire), Err(expected), "{tail}");
+    }
+    let mut reordered = wire.clone();
+    reordered
+        .pointer_mut(&format!("{base}/resolvedCaCertificates"))
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .swap(0, 1);
+    assert_eq!(prove(reordered), Err(TlsMaterialProofError::MaterialProvenance));
+    let mut disabled = wire;
+    *disabled.pointer_mut(&format!("{base}/enabled")).unwrap() = serde_json::json!(false);
+    *disabled
+        .pointer_mut(&format!("{base}/resolvedClientCertificate/metadata/name"))
+        .unwrap() = serde_json::json!("decoy");
+    assert_eq!(prove(disabled), Ok(()));
+}

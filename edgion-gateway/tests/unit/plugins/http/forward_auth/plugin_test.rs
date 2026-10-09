@@ -466,3 +466,30 @@ fn owned_forward_auth_constructor_keeps_owner_namespace_and_decision_contract() 
         matches!(&plugin.client.resolved_target, crate::plugins::http::common::outbound::target::ResolvedTarget::Service { service_key, scheme:"http", .. } if service_key == "tenant/auth-service")
     );
 }
+
+#[test]
+fn route_forward_auth_constructor_preserves_intrinsic_validation_and_body_retry_contract() {
+    use edgion_resources::resources::refs::route_auth_fields::HttpRouteAuthRefs;
+    let wire = serde_json::json!({"metadata":{"name":"route","namespace":"tenant"},"spec":{"rules":[{"filters":[{"type":"ExternalAuth","externalAuth":{
+        "target":{"name":"auth","port":8080},"decision":{},"forwardBody":true,"statusOnError":502,"retry":{"maxRetries":1},"request":{"path":{"template":"/auth"}}
+    }}]}]}});
+    for invalid in [false, true] {
+        let mut value = wire.clone();
+        if invalid {
+            value["spec"]["rules"][0]["filters"][0]["externalAuth"]["decision"]["clientHeaders"] =
+                serde_json::json!(["Connection"]);
+        }
+        let route: edgion_resources::HTTPRoute = serde_json::from_value(value).unwrap();
+        let references = HttpRouteAuthRefs::from_route(&route).unwrap();
+        let field = references.effective_at(0, None, 0).unwrap();
+        let defaults = edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot::from_configs([]);
+        let input = PreparedRouteAuth::new(&field, &defaults).unwrap();
+        let result = ForwardAuth::from_route(&input);
+        assert_eq!(result.is_err(), invalid);
+        if let Ok(plugin) = result {
+            assert!(plugin.forward_body);
+            assert_eq!(plugin.status_on_error, 502);
+            assert_eq!(plugin.client.retry.as_ref().unwrap().retry_on_timeout, Some(true));
+        }
+    }
+}

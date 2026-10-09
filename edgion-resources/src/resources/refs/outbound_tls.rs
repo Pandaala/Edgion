@@ -3,20 +3,24 @@
 //! This is an in-process capability, not a transport schema or a global TLS
 //! inheritance proof. Constructors belong to the owning field modules.
 use super::link_sys_fields::{LinkSysReferences, LinkSysTlsField};
+use super::owned::PreparedTlsTarget;
 use super::plugin_fields::{EntryReferences, PluginTlsField};
-use super::{ReferenceError, ReferenceToken};
+use super::route_auth_fields::{EffectiveRouteAuthField, RouteAuthTlsField};
+use super::{ObjectIdentity, ReferenceError, ReferenceToken};
 use crate::resources::common::{OutboundTlsConfig, OutboundTlsLocal};
 use k8s_openapi::api::core::v1::Secret;
 
 enum Origin<'a> {
     Plugin(PluginTlsField<'a>),
     LinkSys(LinkSysTlsField<'a>),
+    RouteAuth(RouteAuthTlsField<'a>),
 }
 
 enum Selection<'a> {
     Active(BoundOutboundTls<'a>),
     InactivePlugin(EntryReferences<'a>),
     InactiveLinkSys(LinkSysReferences<'a>),
+    InactiveRouteAuth(&'a EffectiveRouteAuthField<'a>),
 }
 
 /// The actual local TLS selection, including an absent or inactive field.
@@ -69,10 +73,15 @@ impl<'a> BoundLocalTlsSelection<'a> {
             selection: Selection::InactiveLinkSys(references),
         }
     }
+    pub(super) fn from_route_auth(field: &'a EffectiveRouteAuthField<'a>) -> Self {
+        Self {
+            selection: Selection::InactiveRouteAuth(field),
+        }
+    }
     pub fn active_field(&self) -> Option<&BoundOutboundTls<'a>> {
         match &self.selection {
             Selection::Active(field) => Some(field),
-            Selection::InactivePlugin(_) | Selection::InactiveLinkSys(_) => None,
+            Selection::InactivePlugin(_) | Selection::InactiveLinkSys(_) | Selection::InactiveRouteAuth(_) => None,
         }
     }
     pub fn validate_source(&self) -> Result<(), ReferenceError> {
@@ -80,6 +89,7 @@ impl<'a> BoundLocalTlsSelection<'a> {
             Selection::Active(field) => field.validate_source(),
             Selection::InactivePlugin(references) => references.validate_source(),
             Selection::InactiveLinkSys(references) => references.validate_source(),
+            Selection::InactiveRouteAuth(field) => field.validate_source(),
         }
     }
 }
@@ -97,15 +107,59 @@ pub struct BoundOutboundTls<'a> {
 
 /// A declared reference and the material at the same author-ordered position.
 pub struct BoundTlsMaterial<'a> {
-    reference: ReferenceToken<'a>,
+    reference: TlsReferenceIdentity<'a>,
     material: Option<&'a Secret>,
 }
 impl BoundTlsMaterial<'_> {
-    pub fn reference(&self) -> &ReferenceToken<'_> {
+    pub fn reference(&self) -> &TlsReferenceIdentity<'_> {
         &self.reference
     }
     pub fn material(&self) -> Option<&Secret> {
         self.material
+    }
+}
+
+/// A TLS target projection. It grants no acquisition or ReferenceGrant authority.
+/// ```compile_fail
+/// use edgion_resources::resources::refs::outbound_tls::TlsReferenceIdentity;
+/// fn no_grant(field: &TlsReferenceIdentity<'_>) {
+///     field.validated().unwrap().grant_query();
+/// }
+/// ```
+pub struct TlsReferenceIdentity<'a> {
+    origin: TlsIdentityOrigin<'a>,
+}
+enum TlsIdentityOrigin<'a> {
+    Authored(ReferenceToken<'a>),
+    Effective(&'a PreparedTlsTarget),
+}
+pub struct ValidatedTlsIdentity<'a> {
+    target: ObjectIdentity<'a>,
+}
+impl<'a> ValidatedTlsIdentity<'a> {
+    pub fn target(&self) -> ObjectIdentity<'a> {
+        self.target
+    }
+}
+impl TlsReferenceIdentity<'_> {
+    pub fn validated(&self) -> Result<ValidatedTlsIdentity<'_>, ReferenceError> {
+        let target = match &self.origin {
+            TlsIdentityOrigin::Authored(token) => token.validated()?.target(),
+            TlsIdentityOrigin::Effective(slot) => slot.target()?,
+        };
+        Ok(ValidatedTlsIdentity { target })
+    }
+}
+impl<'a> TlsReferenceIdentity<'a> {
+    fn authored(token: ReferenceToken<'a>) -> Self {
+        Self {
+            origin: TlsIdentityOrigin::Authored(token),
+        }
+    }
+}
+impl BoundTlsMaterial<'_> {
+    pub fn target(&self) -> Result<ObjectIdentity<'_>, ReferenceError> {
+        Ok(self.reference.validated()?.target())
     }
 }
 
@@ -152,7 +206,7 @@ impl BoundGlobalOutboundTls<'_> {
         let mut ordinal = 0;
         self.field.visit_ca(|reference| {
             visit(BoundTlsMaterial {
-                reference,
+                reference: TlsReferenceIdentity::authored(reference),
                 material: material.get(ordinal),
             });
             ordinal += 1;
@@ -160,13 +214,18 @@ impl BoundGlobalOutboundTls<'_> {
     }
     pub fn client_certificate(&self) -> Option<BoundTlsMaterial<'_>> {
         self.field.client_reference().map(|reference| BoundTlsMaterial {
-            reference,
+            reference: TlsReferenceIdentity::authored(reference),
             material: self.client_material(),
         })
     }
 }
 
 impl<'a> BoundOutboundTls<'a> {
+    pub(super) fn from_route_auth(field: RouteAuthTlsField<'a>) -> Self {
+        Self {
+            origin: Origin::RouteAuth(field),
+        }
+    }
     pub(super) fn from_plugin(field: PluginTlsField<'a>) -> Self {
         Self {
             origin: Origin::Plugin(field),
@@ -181,24 +240,28 @@ impl<'a> BoundOutboundTls<'a> {
         match &self.origin {
             Origin::Plugin(field) => field.validate_source(),
             Origin::LinkSys(field) => field.validate_source(),
+            Origin::RouteAuth(field) => field.validate_source(),
         }
     }
     pub fn policy(&self) -> &OutboundTlsLocal {
         match &self.origin {
             Origin::Plugin(field) => field.policy(),
             Origin::LinkSys(field) => field.policy(),
+            Origin::RouteAuth(field) => field.policy(),
         }
     }
     pub fn ca_material(&self) -> Option<&[Secret]> {
         match &self.origin {
             Origin::Plugin(field) => field.ca_material(),
             Origin::LinkSys(field) => field.ca_material(),
+            Origin::RouteAuth(field) => field.ca_material(),
         }
     }
     pub fn client_material(&self) -> Option<&Secret> {
         match &self.origin {
             Origin::Plugin(field) => field.client_material(),
             Origin::LinkSys(field) => field.client_material(),
+            Origin::RouteAuth(field) => field.client_material(),
         }
     }
     pub fn ca_reference_count(&self) -> usize {
@@ -213,7 +276,7 @@ impl<'a> BoundOutboundTls<'a> {
     pub fn visit_ca<'loan>(&'loan self, mut visit: impl FnMut(BoundTlsMaterial<'loan>)) {
         let material = self.ca_material().unwrap_or_default();
         let mut ordinal = 0;
-        let mut pair = |reference| {
+        let mut pair = |reference: TlsReferenceIdentity<'loan>| {
             visit(BoundTlsMaterial {
                 reference,
                 material: material.get(ordinal),
@@ -221,14 +284,22 @@ impl<'a> BoundOutboundTls<'a> {
             ordinal += 1;
         };
         match &self.origin {
-            Origin::Plugin(field) => field.visit_ca(&mut pair),
-            Origin::LinkSys(field) => field.visit_ca(&mut pair),
+            Origin::Plugin(field) => field.visit_ca(|reference| pair(TlsReferenceIdentity::authored(reference))),
+            Origin::LinkSys(field) => field.visit_ca(|reference| pair(TlsReferenceIdentity::authored(reference))),
+            Origin::RouteAuth(field) => field.visit_ca(|slot| {
+                pair(TlsReferenceIdentity {
+                    origin: TlsIdentityOrigin::Effective(slot),
+                })
+            }),
         }
     }
     pub fn client_certificate(&self) -> Option<BoundTlsMaterial<'_>> {
         let reference = match &self.origin {
-            Origin::Plugin(field) => field.client_reference(),
-            Origin::LinkSys(field) => field.client_reference(),
+            Origin::Plugin(field) => field.client_reference().map(TlsReferenceIdentity::authored),
+            Origin::LinkSys(field) => field.client_reference().map(TlsReferenceIdentity::authored),
+            Origin::RouteAuth(field) => field.client_reference().map(|slot| TlsReferenceIdentity {
+                origin: TlsIdentityOrigin::Effective(slot),
+            }),
         }?;
         Some(BoundTlsMaterial {
             reference,

@@ -674,6 +674,10 @@ impl PluginRuntime {
                         .ok()?
                         .effective_at(rule, backend, filter)
                 },
+                |filter| {
+                    edgion_resources::resources::refs::route_auth_fields::HttpRouteAuthRefs::from_route(route)?
+                        .effective_at(rule, backend, filter)
+                },
             );
         } else {
             runtime.invalid_plugins.record_non_retainable("ExtensionRef");
@@ -689,6 +693,12 @@ impl PluginRuntime {
         mirror_tuning: &MirrorTuning,
         field: impl Fn(usize) -> Option<RouteExtensionField<'a>>,
         mirror_field: impl Fn(usize) -> Option<EffectiveMirrorField<'a>>,
+        auth_field: impl Fn(
+            usize,
+        ) -> Result<
+            edgion_resources::resources::refs::route_auth_fields::EffectiveRouteAuthField<'a>,
+            edgion_resources::resources::refs::ReferenceError,
+        >,
     ) {
         if filters.iter().enumerate().any(|(index, _)| {
             matches!(
@@ -698,6 +708,13 @@ impl PluginRuntime {
             )
         }) {
             self.invalid_plugins.record_non_retainable("ExtensionRef");
+            return;
+        }
+        if filters.iter().any(|filter| {
+            filter.filter_type != HTTPRouteFilterType::ExternalAuth
+                && (filter.external_auth.is_some() || filter.resolved_external_auth.is_some())
+        }) {
+            self.invalid_plugins.record_non_retainable("ForwardAuth");
             return;
         }
         if validate_http_filter_list(filters).is_err() {
@@ -773,13 +790,18 @@ impl PluginRuntime {
                     }
                 }
                 HTTPRouteFilterType::ExternalAuth => {
-                    if let Some(config) = filter.external_auth.as_ref().and_then(|source| source.edgion_config()) {
-                        match ForwardAuth::new(config) {
-                            Ok(fa) => self.add_request_filter(Box::new(fa)),
-                            Err(_) => self.invalid_plugins.record_non_retainable("ForwardAuth"),
-                        }
-                    } else {
-                        self.invalid_plugins.record_non_retainable("ForwardAuth");
+                    let result = auth_field(filter_index)
+                        .map_err(|error| error.to_string())
+                        .and_then(|field| {
+                            let defaults = edgion_common::link_sys_core::outbound_tls::outbound_global_default();
+                            let input = crate::plugins::http::common::outbound::client::PreparedRouteAuth::new(
+                                &field, &defaults,
+                            )?;
+                            ForwardAuth::from_route(&input)
+                        });
+                    match result {
+                        Ok(auth) => self.add_request_filter(Box::new(auth)),
+                        Err(_) => self.invalid_plugins.record_non_retainable("ForwardAuth"),
                     }
                 }
                 HTTPRouteFilterType::ExtensionRef => {

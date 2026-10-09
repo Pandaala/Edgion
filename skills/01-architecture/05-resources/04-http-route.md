@@ -217,7 +217,7 @@ Live failures of a valid Service section/endpoints retain their existing 503 map
 | HTTPRoute → Service | Service | backendRef | Route's backend target service |
 | HTTPRoute → EdgionPlugins | EdgionPlugins | ExtensionRef filter | Plugin configuration referenced via ExtensionRef |
 | HTTPRoute → EdgionBackend | EdgionBackend | shared `backend_ref_mgr` | AI capability drives rule validation; apply/delete requeues the route |
-| HTTPRoute → Secret | Secret | indirect, via plugins | Plugins such as JWT/BasicAuth reference Secrets |
+| HTTPRoute → Secret/ConfigMap | Secret/ConfigMap | internal Edgion-auth and indirect plugins | Auth material uses the actual declaring route for permission and the published root for recovery |
 | HTTPRoute ← ReferenceGrant | ReferenceGrant | cross-namespace backendRef | Authorizes cross-namespace backend references |
 
 ### RequestMirror owner-bound references (R3b)
@@ -236,3 +236,34 @@ wake key. `default` applies to target semantics and GatewayRouteIndex lookup onl
 Current/dropped forwarding policy notifications and mirror-role exclusion remain
 separate from mirror recovery. Status retains the narrow post-authorization cached
 presence check that gives a missing Service BackendNotFound precedence over denial.
+
+### Internal Edgion ExternalAuth material
+
+`refs::route_auth_fields` separates authored authorization loans from effective
+Gateway locality. The supported internal FS/etcd ForwardAuth shape remains
+separate from unsupported native Gateway API ExternalAuth; native and mixed
+objects are not converted into Edgion authentication configurations.
+
+Parse clears root Secret dependencies once and scrubs incoming auth locality,
+request-secret maps and TLS material before early returns. `flatten_route`
+resolves the root exactly once even without delegation, returns authored root
+decisions for parse to apply, and prepares every raw child declaration before
+rule drops or inheritance. Parent, intermediate, terminal and backend filter
+positions retain their own namespace. New material is acquired only through the
+canonical bound credential pipeline; its owner-equality check remains intact.
+A private receipt registers valid target recovery under the actual root before
+Grant/store reads. Invalid source/target/root yields no new edge or material read;
+valid missing/denied references keep recovery edges even when a rule is dropped.
+
+Readonly status uses the same flatten/auth decisions without registering edges;
+failures use existing ResolvedRefs diagnostics and remain attached to auth filters
+for Gateway fail-closed sealing, rather than becoming an unguarded rule fallback.
+Apply replaces all prior material/dependencies and delete clears the root's
+Secret edges. Secret and Grant events use existing queues to reprocess the root.
+Disabled local TLS stays inert; unrelated request templates are still resolved.
+Service targets retain their separate no-new-grant/no-new-dependency contract.
+
+The optional `resolvedExternalAuth` filter sidecar is serialized for conf_sync and
+hidden from schema. It proves only Controller-derived locality under the existing
+trusted transport boundary. It does not represent a borrowed child object,
+ReferenceGrant authority or ongoing request-time revocation.

@@ -2434,3 +2434,109 @@ async fn managed_http_publication_replaces_invalid_authority_recovers_and_keeps_
         assert_eq!(captured.request_plugins_iter().next().unwrap().name(), kind);
     }
 }
+
+#[tokio::test]
+async fn internal_route_auth_rule_and_backend_generations_seal_failures_and_recover() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use serde_json::json;
+    for backend in [false, true] {
+        let filter = json!({"type":"ExternalAuth","externalAuth":{"target":{"name":"auth","port":8080},"decision":{}}});
+        let rule = if backend {
+            json!({"backendRefs":[{"name":"backend","port":80,"filters":[filter]}]})
+        } else {
+            json!({"filters":[filter]})
+        };
+        let source = json!({"metadata":{"name":"route","namespace":"tenant"},"spec":{"rules":[rule]}});
+        let construct = |value| {
+            let route: HTTPRoute = serde_json::from_value(value).unwrap();
+            if backend {
+                PluginRuntime::from_httproute_filters_for_backend(&route, 0, 0, &MirrorTuning::default())
+            } else {
+                PluginRuntime::from_httproute_filters_for_rule(&route, 0, &MirrorTuning::default())
+            }
+        };
+        let captured = Arc::new(construct(source.clone()));
+        assert_eq!(captured.request_plugins_iter().next().unwrap().name(), "ForwardAuth");
+        let pointer = if backend {
+            "/spec/rules/0/backendRefs/0/filters/0"
+        } else {
+            "/spec/rules/0/filters/0"
+        };
+        for case in [
+            "group",
+            "url",
+            "missing",
+            "native",
+            "mixed",
+            "sidecar",
+            "unrelated",
+            "pending",
+            "template",
+            "tls",
+            "tls_wrong",
+        ] {
+            let mut invalid = source.clone();
+            let filter = invalid.pointer_mut(pointer).unwrap();
+            match case {
+                "group" => filter["externalAuth"]["target"]["group"] = "other.io".into(),
+                "url" => filter["externalAuth"]["target"] = json!({"url":"https://auth.example/path"}),
+                "missing" => {
+                    filter.as_object_mut().unwrap().remove("externalAuth");
+                }
+                "native" => filter["externalAuth"] = json!({"backendRef":{"name":"auth","port":80},"protocol":"HTTP"}),
+                "mixed" => filter["externalAuth"]["backendRef"] = json!({"name":"native","port":80}),
+                "sidecar" => filter["resolvedExternalAuth"] = json!({"namespace":"other"}),
+                "unrelated" => {
+                    filter["type"] = "RequestHeaderModifier".into();
+                    filter["requestHeaderModifier"] = json!({});
+                    filter["resolvedExternalAuth"] = json!({"namespace":"tenant"});
+                    filter.as_object_mut().unwrap().remove("externalAuth");
+                }
+                "template" => {
+                    filter["externalAuth"]["request"] = json!({"path":{"template":"/${secretRef:tenant/token:key}"}})
+                }
+                "pending" => filter["resolvedExternalAuth"] = json!({"namespace":"tenant","error":"unresolved"}),
+                "tls" => {
+                    filter["externalAuth"]["tls"] = json!({"enabled":true,"clientCertificateRef":{"name":"client"}})
+                }
+                "tls_wrong" => {
+                    filter["externalAuth"]["tls"] = json!({"enabled":true,"clientCertificateRef":{"name":"client"},"resolvedClientCertificate":{"metadata":{"name":"decoy","namespace":"tenant"}}})
+                }
+                _ => unreachable!(),
+            }
+            let runtime = construct(invalid);
+            let reject = runtime.request_plugins_iter().next().unwrap();
+            assert_eq!(reject.name(), "RejectInvalidConfig", "{backend}/{case}");
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new(reject.name());
+            assert!(matches!(
+                reject.run_request(&mut session, &mut log).await,
+                PluginRunningResult::ErrResponse { status: 500, .. }
+            ));
+            assert_eq!(captured.request_plugins_iter().next().unwrap().name(), "ForwardAuth");
+            assert_eq!(
+                construct(source.clone()).request_plugins_iter().next().unwrap().name(),
+                "ForwardAuth"
+            );
+        }
+        for value in ["fresh-value", ""] {
+            let mut complete = source.clone();
+            let filter = complete.pointer_mut(pointer).unwrap();
+            filter["externalAuth"]["request"] = json!({"path":{"template":"/${secretRef:tenant/token:key}"}});
+            filter["externalAuth"]["resolvedSecrets"] = json!({"tenant/token:key":value});
+            assert_eq!(
+                construct(complete).request_plugins_iter().next().unwrap().name(),
+                "ForwardAuth"
+            );
+        }
+        let mut removed = source;
+        let filter_list = if backend {
+            "/spec/rules/0/backendRefs/0/filters"
+        } else {
+            "/spec/rules/0/filters"
+        };
+        *removed.pointer_mut(filter_list).unwrap() = json!([]);
+        assert_eq!(construct(removed).request_plugins_count(), 0);
+        assert_eq!(captured.request_plugins_iter().next().unwrap().name(), "ForwardAuth");
+    }
+}

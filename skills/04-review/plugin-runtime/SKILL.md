@@ -45,7 +45,7 @@ before applying a decision to current code.
 
 - [Invalid stream GeoIP generation denial and recovery](regression-guards/invalid-stream-geoip-generation-fail-closed.md)
 - [EdgionConfigData partial publication is incremental and atomic](regression-guards/edgion-config-data-incremental-atomic-publication.md)
-- [HTTPRoute Native ExternalAuth Construction Failures Must Seal Fail-Closed — FIXED](regression-guards/gw-plugin-runtime-01-httproute-external-auth-invalid-plugins-never-sealed.md)
+- [Internal HTTPRoute Edgion-auth Construction Failures Must Seal Fail-Closed](regression-guards/gw-plugin-runtime-01-httproute-external-auth-invalid-plugins-never-sealed.md)
 - [Stream plugin key normalization](regression-guards/stream-plugin-key-normalization.md)
 
 - [Scoped response-body filter dispatch](regression-guards/scoped-response-body-filter-dispatch.md)

@@ -39,6 +39,16 @@ pub fn resolve_request_secrets<'a>(
     resolve_request_secrets_core(ctx, owner, references, true)
 }
 
+/// Canonical acquisition for a declaring field whose root recovery receipts were
+/// installed separately. This performs no dependency registration.
+pub(crate) fn resolve_request_secrets_readonly<'a>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    references: impl IntoIterator<Item = TemplateSecretReference<'a>>,
+) -> (BTreeMap<String, String>, Vec<ResolvedRefsError>) {
+    resolve_request_secrets_core(ctx, owner, references, false)
+}
+
 /// Re-evaluate request-template Secret refs for status without registering
 /// dependencies again. Parse owns dependency registration; status derivation
 /// must be a read-only, deterministic projection of current stores and grants.

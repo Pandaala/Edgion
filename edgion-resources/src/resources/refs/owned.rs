@@ -36,6 +36,7 @@ pub(super) enum TopologyLoan<'a> {
     Conditions(&'a super::condition_fields::ConditionSnapshot),
     IpList(&'a super::ip_list_fields::IpListSnapshot),
     Egc(&'a super::egc_tls_fields::EgcTlsSnapshot),
+    RouteAuth(&'a super::route_auth_fields::RouteAuthSnapshot),
 }
 impl<'a> TopologyLoan<'a> {
     fn owner(self) -> &'a OwnerSnapshot {
@@ -45,6 +46,7 @@ impl<'a> TopologyLoan<'a> {
             Self::Conditions(snapshot) => &snapshot.owner,
             Self::IpList(snapshot) => &snapshot.owner,
             Self::Egc(snapshot) => &snapshot.owner,
+            Self::RouteAuth(snapshot) => &snapshot.owner,
         }
     }
     fn freeze(self) -> Result<FrozenTopology, ReferenceError> {
@@ -53,7 +55,9 @@ impl<'a> TopologyLoan<'a> {
             Self::LinkSys(snapshot) => Ok(FrozenTopology::LinkSys(Arc::clone(snapshot))),
             // Effective ConfigData-expanded conditions are synchronous loans.
             // They cannot be revalidated against an unexpanded raw-owner store.
-            Self::Conditions(_) | Self::IpList(_) | Self::Egc(_) => Err(ReferenceError::UnsupportedTarget),
+            Self::Conditions(_) | Self::IpList(_) | Self::Egc(_) | Self::RouteAuth(_) => {
+                Err(ReferenceError::UnsupportedTarget)
+            }
         }
     }
 }
@@ -237,13 +241,22 @@ struct OwnedTarget {
 
 impl OwnedTarget {
     fn prepare(owner: &OwnerSnapshot, wire: &FieldWire, contract: FieldContract) -> Result<Self, ReferenceError> {
+        // Preserve target-before-source error precedence for existing fields.
+        let target = Self::prepare_in_namespace(owner.namespace(), wire, contract)?;
+        owner.source()?;
+        Ok(target)
+    }
+    fn prepare_in_namespace(
+        default_namespace: Option<&str>,
+        wire: &FieldWire,
+        contract: FieldContract,
+    ) -> Result<Self, ReferenceError> {
         if let FieldWire::Descriptor { name, .. } = wire {
             if contract != FieldContract::FixedConfigMap {
                 return Err(ReferenceError::UnsupportedTarget);
             }
-            let namespace = owner.namespace().ok_or(ReferenceError::MissingNamespace)?;
+            let namespace = default_namespace.ok_or(ReferenceError::MissingNamespace)?;
             ObjectIdentity::checked("", "ConfigMap", ResourceScope::Namespaced(namespace), name)?;
-            owner.source()?;
             return Ok(Self {
                 grammar: TargetGrammar::Strict,
                 group: String::new(),
@@ -258,7 +271,6 @@ impl OwnedTarget {
             }
             let (namespace, name) = wire.target().ok_or(ReferenceError::InvalidName)?;
             ObjectIdentity::parsed_template_secret(namespace, name)?;
-            owner.source()?;
             return Ok(Self {
                 grammar: TargetGrammar::Template,
                 group: String::new(),
@@ -286,7 +298,7 @@ impl OwnedTarget {
             FieldWire::Template(_) | FieldWire::Descriptor { .. } => return Err(ReferenceError::UnsupportedTarget),
         };
         let namespace = namespace
-            .or(owner.namespace())
+            .or(default_namespace)
             .ok_or(ReferenceError::MissingNamespace)?;
         // Only these private contracts are selected by the finite owning visitors.
         // CredentialInjector's LinkSys branch remains an exact non-core target.
@@ -308,7 +320,6 @@ impl OwnedTarget {
         if !supported {
             return Err(ReferenceError::UnsupportedTarget);
         }
-        owner.source()?;
         Ok(Self {
             grammar: TargetGrammar::Strict,
             group: group.to_string(),
@@ -330,8 +341,49 @@ impl OwnedTarget {
     }
 }
 
+/// Effective TLS target identity without an authored owner, position or token.
+pub(super) struct PreparedTlsTarget {
+    target: Result<OwnedTarget, ReferenceError>,
+}
+impl PreparedTlsTarget {
+    pub(super) fn ca(namespace: &str, wire: &CustomCACertificateRef) -> Self {
+        Self {
+            target: OwnedTarget::prepare_in_namespace(
+                Some(namespace),
+                &FieldWire::Ca(wire.clone()),
+                FieldContract::CustomCa,
+            ),
+        }
+    }
+    pub(super) fn client(namespace: &str, wire: &SecretObjectReference) -> Self {
+        Self {
+            target: OwnedTarget::prepare_in_namespace(
+                Some(namespace),
+                &FieldWire::Secret(wire.clone()),
+                FieldContract::CustomSecret,
+            ),
+        }
+    }
+    pub(super) fn target(&self) -> Result<ObjectIdentity<'_>, ReferenceError> {
+        self.target.as_ref().map_err(|error| *error)?.borrowed()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) enum FieldSlot {
+    RouteAuthTls {
+        rule: usize,
+        backend: Option<usize>,
+        filter: usize,
+        ca: Option<usize>,
+    },
+    RouteAuthTemplate {
+        rule: usize,
+        backend: Option<usize>,
+        filter: usize,
+        position: crate::resources::common::outbound_request::RequestTemplatePosition,
+        segment: usize,
+    },
     BackendCredential {
         index: usize,
     },
@@ -402,7 +454,9 @@ impl FieldSlot {
                     && *current_group == group
                     && *current_reference == reference
             }
-            Self::BackendCredential { .. }
+            Self::RouteAuthTls { .. }
+            | Self::RouteAuthTemplate { .. }
+            | Self::BackendCredential { .. }
             | Self::LinkSys { .. }
             | Self::IpList { .. }
             | Self::ConditionIp { .. }

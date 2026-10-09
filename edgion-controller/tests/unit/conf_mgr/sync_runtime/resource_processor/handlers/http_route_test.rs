@@ -2718,3 +2718,223 @@ async fn merged_graphql_bare_target_collision_and_survivor_keep_canonical_diagno
         .1
         .contains("not declared"));
 }
+
+#[tokio::test]
+async fn delegated_internal_auth_recovers_via_secret_and_grant_queues_and_clears_removed_refs() {
+    use super::super::{ReferenceGrantHandler, SecretHandler};
+    use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::CrossNsRevalidationListener;
+    use crate::conf_mgr::sync_runtime::resource_processor::RawStore;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use edgion_resources::ReferenceGrant;
+    use k8s_openapi::api::core::v1::Secret;
+    use serde_json::json;
+    let runtime = Arc::new(ControllerRuntime::default());
+    runtime
+        .ref_grant_dispatcher
+        .register_listener(Arc::new(CrossNsRevalidationListener::new(runtime.clone())));
+    let routes = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+        "HTTPRoute",
+        32,
+        Arc::new(HttpRouteHandler::default()),
+        runtime.clone(),
+    ));
+    let route_raw = Arc::new(LocalRawStore::new());
+    routes.set_raw_store(route_raw.clone());
+    runtime.processor_registry.register(routes.clone());
+    let secrets = Arc::new(ResourceProcessor::<Secret>::new(
+        "Secret",
+        32,
+        Arc::new(SecretHandler::new()),
+        runtime.clone(),
+    ));
+    let secret_raw = Arc::new(LocalRawStore::new());
+    secrets.set_raw_store(secret_raw.clone());
+    runtime.processor_registry.register(secrets.clone());
+    let grants = Arc::new(ResourceProcessor::<ReferenceGrant>::new(
+        "ReferenceGrant",
+        32,
+        Arc::new(ReferenceGrantHandler::new()),
+        runtime.clone(),
+    ));
+    let grant_raw = Arc::new(LocalRawStore::new());
+    grants.set_raw_store(grant_raw.clone());
+    runtime.processor_registry.register(grants.clone());
+    macro_rules! step {
+        ($processor:expr, $raw:expr, $key:expr) => {{
+            let queue = $processor.workqueue();
+            let item = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(item.key, $key);
+            let source = $raw.get(&item.key).map(|value| (*value).clone());
+            $processor
+                .process_work_item(&item.key, source, None, item.trigger_chain)
+                .await;
+            queue.done(&item.key);
+        }};
+    }
+    macro_rules! drain_routes {
+        () => {{
+            let mut seen = Vec::new();
+            let queue = routes.workqueue();
+            // Include delayed cross-resource wakeups before the next generation.
+            while let Ok(Some(item)) = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue()).await {
+                assert!(seen.len() < 32, "route requeue cycle");
+                let source = route_raw.get(&item.key).map(|value| (*value).clone());
+                routes
+                    .process_work_item(&item.key, source, None, item.trigger_chain)
+                    .await;
+                queue.done(&item.key);
+                seen.push(item.key);
+            }
+            seen
+        }};
+    }
+    let delegation: ReferenceGrant = serde_json::from_value(json!({"metadata":{"name":"delegation","namespace":"child"},"spec":{
+        "from":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","namespace":"root"}],"to":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute"}]
+    }})).unwrap();
+    runtime
+        .ref_grant_store
+        .upsert("child/delegation".into(), Arc::new(delegation));
+    let grant: ReferenceGrant = serde_json::from_value(json!({"metadata":{"name":"material","namespace":"material"},"spec":{
+        "from":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","namespace":"child"}],"to":[{"group":"","kind":"Secret","name":"token"}]
+    }})).unwrap();
+    grant_raw.upsert("material/material".into(), Arc::new(grant));
+    grants.on_event_key("material/material".into()).await;
+    step!(grants, grant_raw, "material/material");
+    let child: HTTPRoute = serde_json::from_value(json!({"metadata":{"name":"leaf","namespace":"child"},"spec":{"rules":[{
+        "matches":[{"path":{"type":"PathPrefix","value":"/"}}],"filters":[{"type":"ExternalAuth","resolvedExternalAuth":{"namespace":"forged"},"externalAuth":{
+            "target":{"name":"auth","port":8080},"decision":{},"request":{"path":{"template":"/check/${secretRef:material/token:key}"}},"resolvedSecrets":{"material/token:key":"forged-value"}
+        }}],"backendRefs":[{"name":"backend","port":80}]
+    }]}})).unwrap();
+    let root: HTTPRoute = serde_json::from_value(json!({"metadata":{"name":"root","namespace":"root"},"spec":{"rules":[{
+        "matches":[{"path":{"type":"PathPrefix","value":"/"}}],"backendRefs":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","namespace":"child","name":"leaf"}]
+    }]}})).unwrap();
+    route_raw.upsert("child/leaf".into(), Arc::new(child.clone()));
+    routes.on_event_key("child/leaf".into()).await;
+    drain_routes!();
+    route_raw.upsert("root/root".into(), Arc::new(root));
+    routes.on_event_key("root/root".into()).await;
+    drain_routes!();
+    let root_owner = ResourceRef::new(ResourceKind::HTTPRoute, Some("root".into()), "root".into());
+    assert!(runtime
+        .secret_ref_manager
+        .get_refs("material/token")
+        .contains(&root_owner));
+    let assert_material = |expected: Option<&str>| {
+        let current = routes.get("root/root").unwrap();
+        let filter = &current.spec.resolved_rules.as_ref().unwrap()[0]
+            .filters
+            .as_ref()
+            .unwrap()[0];
+        let config = filter.external_auth.as_ref().unwrap().edgion_config().unwrap();
+        assert_eq!(
+            config
+                .resolved_secrets
+                .as_ref()
+                .and_then(|values| values.0.get("material/token:key"))
+                .map(String::as_str),
+            expected
+        );
+        assert_eq!(
+            filter.resolved_external_auth.as_ref().unwrap().error().is_none(),
+            expected.is_some()
+        );
+        let refs =
+            edgion_resources::resources::refs::route_auth_fields::HttpRouteAuthRefs::from_route(&current).unwrap();
+        assert_eq!(refs.effective_at(0, None, 0).unwrap().namespace(), "child");
+    };
+    assert_material(None);
+    let secret: Secret = serde_json::from_value(
+        json!({"metadata":{"name":"token","namespace":"material"},"stringData":{"key":"fresh-value"}}),
+    )
+    .unwrap();
+    secret_raw.upsert("material/token".into(), Arc::new(secret));
+    secrets.on_event_key("material/token".into()).await;
+    step!(secrets, secret_raw, "material/token");
+    assert!(drain_routes!().contains(&"root/root".to_string()));
+    assert_material(Some("fresh-value"));
+    grant_raw.remove("material/material");
+    grants.on_event_key("material/material".into()).await;
+    step!(grants, grant_raw, "material/material");
+    assert!(drain_routes!().contains(&"root/root".to_string()));
+    assert_material(None);
+    let mut removed = child;
+    removed.spec.rules.as_mut().unwrap()[0].filters = None;
+    route_raw.upsert("child/leaf".into(), Arc::new(removed));
+    routes.on_event_key("child/leaf".into()).await;
+    drain_routes!();
+    assert!(runtime
+        .secret_ref_manager
+        .get_dependencies(&root_owner.key())
+        .is_empty());
+    assert!(!runtime
+        .cross_ns_ref_mgr
+        .get_dependencies(&root_owner.key())
+        .contains(&"material".to_string()));
+    route_raw.remove("root/root");
+    routes.on_event_key("root/root".into()).await;
+    drain_routes!();
+    assert!(runtime
+        .secret_ref_manager
+        .get_dependencies(&root_owner.key())
+        .is_empty());
+}
+
+#[tokio::test]
+async fn disabling_internal_auth_tls_clears_material_and_tls_edges_but_keeps_template() {
+    use edgion_resources::resources::http_route::HTTPRouteExternalAuth;
+    use k8s_openapi::api::core::v1::{ConfigMap, Secret};
+    use serde_json::json;
+    use std::collections::HashMap;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
+    let route: HTTPRoute = serde_json::from_value(json!({"metadata":{"name":"route","namespace":"apps"},"spec":{"rules":[{"filters":[{"type":"ExternalAuth","externalAuth":{
+        "target":{"name":"auth","port":443},"decision":{},"request":{"path":{"template":"/${secretRef:apps/token:key}"}},
+        "tls":{"enabled":true,"validation":{"caCertificateRefs":[{"kind":"ConfigMap","name":"ca"}]},"clientCertificateRef":{"name":"client"}}
+    }}]}]}})).unwrap();
+    let cm: ConfigMap =
+        serde_json::from_value(json!({"metadata":{"name":"ca","namespace":"apps"},"data":{"ca.crt":"ca-material"}}))
+            .unwrap();
+    runtime
+        .configmap_store
+        .replace_all(HashMap::from([("apps/ca".into(), cm)]));
+    let token: Secret =
+        serde_json::from_value(json!({"metadata":{"name":"token","namespace":"apps"},"stringData":{"key":"fresh"}}))
+            .unwrap();
+    let client: Secret =
+        serde_json::from_value(json!({"metadata":{"name":"client","namespace":"apps"},"type":"kubernetes.io/tls"}))
+            .unwrap();
+    runtime.secret_store.replace_all(HashMap::from([
+        ("apps/token".into(), token),
+        ("apps/client".into(), client),
+    ]));
+    let handler = HttpRouteHandler::default();
+    let ProcessResult::Continue(mut enabled) = handler.parse(route, &ctx).await else {
+        panic!("route must parse")
+    };
+    let filter = &mut enabled.spec.rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0];
+    let HTTPRouteExternalAuth::Edgion(config) = filter.external_auth.as_mut().unwrap() else {
+        panic!()
+    };
+    let tls = config.conn.tls.as_mut().unwrap();
+    assert_eq!(tls.resolved_ca_certificates.as_ref().unwrap().len(), 1);
+    assert!(tls.resolved_client_certificate.is_some());
+    assert_eq!(runtime.secret_ref_manager.get_refs("ConfigMap/apps/ca").len(), 1);
+    assert_eq!(runtime.secret_ref_manager.get_refs("apps/client").len(), 1);
+    tls.enabled = false;
+    let ProcessResult::Continue(disabled) = handler.parse(enabled, &ctx).await else {
+        panic!("route must parse")
+    };
+    let filter = &disabled.spec.rules.as_ref().unwrap()[0].filters.as_ref().unwrap()[0];
+    let config = filter.external_auth.as_ref().unwrap().edgion_config().unwrap();
+    let tls = config.conn.tls.as_ref().unwrap();
+    assert!(tls.resolved_ca_certificates.is_none());
+    assert!(tls.resolved_client_certificate.is_none());
+    assert!(runtime.secret_ref_manager.get_refs("ConfigMap/apps/ca").is_empty());
+    assert!(runtime.secret_ref_manager.get_refs("apps/client").is_empty());
+    assert_eq!(runtime.secret_ref_manager.get_refs("apps/token").len(), 1);
+    assert_eq!(config.resolved_secrets.as_ref().unwrap().0["apps/token:key"], "fresh");
+    assert!(filter.resolved_external_auth.as_ref().unwrap().error().is_none());
+}

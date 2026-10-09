@@ -24,6 +24,7 @@ pub mod plugin_fields;
 pub mod plugin_target;
 pub mod policy_fields;
 pub mod proxy_protocol_fields;
+pub mod route_auth_fields;
 pub mod route_fields;
 pub mod source_contract;
 pub mod stream_plugin_fields;

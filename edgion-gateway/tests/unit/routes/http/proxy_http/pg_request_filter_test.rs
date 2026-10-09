@@ -75,6 +75,7 @@ fn cors_extension_ref_scan_skips_missing_ref_and_finds_later_config() {
             request_mirror: None,
             cors: None,
             external_auth: None,
+            resolved_external_auth: None,
             extension_ref: None,
         },
         HTTPRouteFilter {
@@ -86,6 +87,7 @@ fn cors_extension_ref_scan_skips_missing_ref_and_finds_later_config() {
             request_mirror: None,
             cors: None,
             external_auth: None,
+            resolved_external_auth: None,
             extension_ref: Some(LocalObjectReference {
                 group: "edgion.io".to_string(),
                 kind: "EdgionPlugins".to_string(),
