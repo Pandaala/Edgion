@@ -1177,6 +1177,25 @@ impl PluginRuntime {
                         continue;
                     }
                 }
+                let wasm_defaults = matches!(entry.plugin, EdgionPlugin::Wasm(_))
+                    .then(edgion_common::link_sys_core::outbound_tls::outbound_global_default);
+                if let Some(defaults) = wasm_defaults.as_deref() {
+                    if descriptor_entries
+                        .get(index)
+                        .ok_or_else(|| "wasm TLS configuration is invalid".to_string())
+                        .and_then(|entry| WasmPlugin::validate_tls_entry(entry, defaults))
+                        .is_err()
+                    {
+                        self.invalid_plugins.record_non_retainable("Wasm");
+                        errors.push(format!(
+                            "requestPlugins[{index}] (Wasm): {}",
+                            config_validation_errors[index]
+                                .as_deref()
+                                .unwrap_or("plugin construction failed")
+                        ));
+                        continue;
+                    }
+                }
                 let ext_proc_defaults = matches!(entry.plugin, EdgionPlugin::ExtProc(_))
                     .then(edgion_common::link_sys_core::outbound_tls::outbound_global_default);
                 if let Some(defaults) = ext_proc_defaults.as_deref() {
@@ -1541,6 +1560,12 @@ impl PluginRuntime {
                     }
 
                     let created = match &entry.plugin {
+                        EdgionPlugin::Wasm(_) => CreateResult::Ok(
+                            descriptor_entries
+                                .get(index)
+                                .zip(wasm_defaults.as_deref())
+                                .and_then(|(entry, defaults)| WasmPlugin::create_request(entry, defaults)),
+                        ),
                         EdgionPlugin::OpenidConnect(_) => CreateResult::Ok(
                             descriptor_entries
                                 .get(index)
@@ -1736,6 +1761,25 @@ impl PluginRuntime {
                 } else {
                     None
                 };
+                let wasm_defaults = matches!(entry.plugin, EdgionPlugin::Wasm(_))
+                    .then(edgion_common::link_sys_core::outbound_tls::outbound_global_default);
+                if let Some(defaults) = wasm_defaults.as_deref() {
+                    if bound_entries
+                        .get(index)
+                        .ok_or_else(|| "wasm TLS configuration is invalid".to_string())
+                        .and_then(|entry| WasmPlugin::validate_tls_entry(entry, defaults))
+                        .is_err()
+                    {
+                        self.invalid_plugins.record_non_retainable("Wasm");
+                        errors.push(format!(
+                            "upstreamResponseFilterPlugins[{index}] (Wasm): {}",
+                            Self::response_plugin_validation_error(&entry.plugin)
+                                .as_deref()
+                                .unwrap_or("plugin construction failed")
+                        ));
+                        continue;
+                    }
+                }
                 let slot = EntrySlot {
                     stage: EntryStage::ResponseFilter,
                     index,
@@ -1823,9 +1867,18 @@ impl PluginRuntime {
                         None
                     };
 
-                    let created = match link_sys_config {
-                        Some(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
-                        None => Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace),
+                    let created = if matches!(entry.plugin, EdgionPlugin::Wasm(_)) {
+                        CreateResult::Ok(
+                            bound_entries
+                                .get(index)
+                                .zip(wasm_defaults.as_deref())
+                                .and_then(|(entry, defaults)| WasmPlugin::create_response_filter(entry, defaults)),
+                        )
+                    } else {
+                        match link_sys_config {
+                            Some(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
+                            None => Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace),
+                        }
                     };
                     match created {
                         CreateResult::Ok(Some(filter)) => {
@@ -2059,7 +2112,7 @@ impl PluginRuntime {
         entries: &[UpstreamResponseBodyFilterEntry],
         namespace: &str,
     ) -> Vec<String> {
-        self.add_from_upstream_response_body_filters_with_cache(entries, namespace, &mut EntryCache::default())
+        self.add_from_upstream_response_body_filters_with_cache(entries, namespace, &mut EntryCache::default(), None)
     }
 
     pub(crate) fn add_from_upstream_response_body_filters_with_cache(
@@ -2067,13 +2120,37 @@ impl PluginRuntime {
         entries: &[UpstreamResponseBodyFilterEntry],
         namespace: &str,
         cache: &mut EntryCache,
+        bindings: Option<&PluginBindings<'_>>,
     ) -> Vec<String> {
         let mut errors = Vec::new();
+        let bound_entries: Vec<_> = bindings
+            .into_iter()
+            .flat_map(|binding| binding.response_body_filter_entries())
+            .collect();
 
         // Per-stage-array alias accumulator; see `duplicate_alias_error`.
         let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                let wasm_defaults = matches!(entry.plugin, EdgionPlugin::Wasm(_))
+                    .then(edgion_common::link_sys_core::outbound_tls::outbound_global_default);
+                if let Some(defaults) = wasm_defaults.as_deref() {
+                    if bound_entries
+                        .get(index)
+                        .ok_or_else(|| "wasm TLS configuration is invalid".to_string())
+                        .and_then(|entry| WasmPlugin::validate_tls_entry(entry, defaults))
+                        .is_err()
+                    {
+                        self.invalid_plugins.record_non_retainable("Wasm");
+                        errors.push(format!(
+                            "upstreamResponseBodyFilterPlugins[{index}] (Wasm): {}",
+                            Self::response_plugin_validation_error(&entry.plugin)
+                                .as_deref()
+                                .unwrap_or("plugin construction failed")
+                        ));
+                        continue;
+                    }
+                }
                 let slot = EntrySlot {
                     stage: EntryStage::ResponseBody,
                     index,
@@ -2161,7 +2238,17 @@ impl PluginRuntime {
                         None
                     };
 
-                    match Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace) {
+                    let created = if matches!(entry.plugin, EdgionPlugin::Wasm(_)) {
+                        CreateResult::Ok(
+                            bound_entries
+                                .get(index)
+                                .zip(wasm_defaults.as_deref())
+                                .and_then(|(entry, defaults)| WasmPlugin::create_body_filter(entry, defaults)),
+                        )
+                    } else {
+                        Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace)
+                    };
+                    match created {
                         CreateResult::Ok(Some(filter)) => {
                             // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
                             let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias_and_dye(
@@ -2401,7 +2488,7 @@ impl PluginRuntime {
             EdgionPlugin::OpenidConnect(_) => CreateResult::WrongStage,
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
             EdgionPlugin::RegionRoute(config) => CreateResult::Ok(RegionRoute::create_inline(config)),
-            EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_request(config)),
+            EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
             // Response-stage only — not applicable to request filters
             EdgionPlugin::ResponseHeaderModifier(_)
             | EdgionPlugin::DebugAccessLogToHeader(_)
@@ -2430,7 +2517,7 @@ impl PluginRuntime {
             }
             EdgionPlugin::ResponseRewrite(config) => CreateResult::Ok(Some(Box::new(ResponseRewrite::new(config)))),
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
-            EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_response_filter(config)),
+            EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
             // Request-stage or other-stage plugins — not applicable to upstream response filters
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::RequestRedirect(_)
@@ -2560,7 +2647,7 @@ impl PluginRuntime {
         match plugin {
             EdgionPlugin::Unsupported => CreateResult::WrongStage,
             EdgionPlugin::BandwidthLimit(config) => CreateResult::Ok(Some(BandwidthLimit::create(config))),
-            EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_body_filter(config)),
+            EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
             // Not body-filter plugins
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::ResponseHeaderModifier(_)

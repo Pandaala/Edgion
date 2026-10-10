@@ -1,6 +1,7 @@
 use super::*;
 use crate::plugins::http::wasm::host_abi::WasmPhase;
 use edgion_resources::plugin_configs::WasmRawConfig;
+use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
 use std::collections::HashMap;
 
 fn write_temp_wasm(wat: &str) -> tempfile::NamedTempFile {
@@ -240,7 +241,7 @@ async fn load(
     mgr: &WasmVmManager,
     config: &edgion_resources::plugin_configs::WasmConfig,
 ) -> Result<Arc<ModuleEntry>, String> {
-    mgr.new_runtime(config, CalloutGrant::none()).get_or_load().await
+    actual_runtime(mgr, config, CalloutGrant::none()).get_or_load().await
 }
 
 fn call_panic_site(lease: &mut VmLease, site: PanicSite) -> Result<(), String> {
@@ -307,7 +308,7 @@ async fn host_panics_during_initialization_are_redacted_and_never_published() {
         let file = write_temp_wasm(&panic_guest(site));
         let config = file_config(file.path());
         let manager = WasmVmManager::new_for_test();
-        let runtime = manager.new_runtime(&config, CalloutGrant::none());
+        let runtime = actual_runtime(&manager, &config, CalloutGrant::none());
         let should_panic = Arc::new(AtomicBool::new(true));
         let calls = Arc::new(AtomicUsize::new(0));
 
@@ -346,7 +347,7 @@ async fn runtime_host_panics_record_phase_traps_discard_and_recover() {
         let file = write_temp_wasm(&panic_guest(site));
         let config = file_config(file.path());
         let manager = WasmVmManager::new_for_test();
-        let runtime = manager.new_runtime(&config, CalloutGrant::none());
+        let runtime = actual_runtime(&manager, &config, CalloutGrant::none());
         let should_panic = Arc::new(AtomicBool::new(false));
         let calls = Arc::new(AtomicUsize::new(0));
         let entry = load_with_panicking_linker(&runtime, should_panic.clone(), calls, None)
@@ -413,7 +414,7 @@ async fn plugin_config_only_reload_lands_new_entry() {
     let mut cfg = file_config(f.path());
     cfg.plugin_config = Some(WasmRawConfig::string("v1"));
     let mgr = WasmVmManager::new_for_test();
-    let runtime = mgr.new_runtime(&cfg, CalloutGrant::none());
+    let runtime = actual_runtime(&mgr, &cfg, CalloutGrant::none());
     let e1 = runtime.get_or_load().await.expect("loads v1");
     let e1b = runtime.get_or_load().await.expect("cached v1");
     assert!(Arc::ptr_eq(&e1, &e1b), "unchanged config shares the entry");
@@ -431,7 +432,7 @@ async fn plugin_config_only_reload_lands_new_entry() {
 async fn plugin_drop_releases_publication_but_preserves_in_flight_lease() {
     let file = write_temp_wasm(MINI_GUEST);
     let manager = WasmVmManager::new_for_test();
-    let runtime = manager.new_runtime(&file_config(file.path()), CalloutGrant::none());
+    let runtime = actual_runtime(&manager, &file_config(file.path()), CalloutGrant::none());
     let state = runtime.state.clone();
     let entry = runtime.get_or_load().await.unwrap();
     let weak = Arc::downgrade(&entry);
@@ -451,7 +452,7 @@ async fn plugin_drop_releases_publication_but_preserves_in_flight_lease() {
 async fn shared_data_metric_handle_follows_plugin_and_lease_lifetime() {
     let file = write_temp_wasm(MINI_GUEST);
     let manager = WasmVmManager::new_for_test();
-    let runtime = manager.new_runtime(&file_config(file.path()), CalloutGrant::none());
+    let runtime = actual_runtime(&manager, &file_config(file.path()), CalloutGrant::none());
     let entry = runtime.get_or_load().await.unwrap();
     let label = entry.metrics_label.clone();
     let lease = entry.acquire(100).unwrap();
@@ -470,7 +471,7 @@ async fn shared_data_metric_handle_follows_plugin_and_lease_lifetime() {
 async fn dropped_plugin_rejects_late_load_publication_and_tick_start() {
     let file = write_temp_wasm(TICK_GUEST);
     let manager = WasmVmManager::new_for_test();
-    let runtime = manager.new_runtime(&file_config(file.path()), CalloutGrant::none());
+    let runtime = actual_runtime(&manager, &file_config(file.path()), CalloutGrant::none());
     let state = runtime.state.clone();
     let guard = state.slot.state.lock().await;
     let late = state.clone();
@@ -494,8 +495,8 @@ async fn identical_sources_keep_plugin_grants_pools_and_shared_data_independent(
     let manager = WasmVmManager::new_for_test();
     let grant_a = grant(vec!["https://a.example".to_string()], 100);
     let grant_b = grant(vec!["https://b.example".to_string()], 200);
-    let a = manager.new_runtime(&config, grant_a.clone());
-    let b = manager.new_runtime(&config, grant_b.clone());
+    let a = actual_runtime(&manager, &config, grant_a.clone());
+    let b = actual_runtime(&manager, &config, grant_b.clone());
     let entry_a = a.get_or_load().await.unwrap();
     let entry_b = b.get_or_load().await.unwrap();
     assert!(!Arc::ptr_eq(&entry_a, &entry_b));
@@ -516,10 +517,10 @@ async fn recreated_plugin_reads_replaced_file_and_owns_new_policy() {
     let file = write_temp_wasm(MINI_GUEST);
     let config = file_config(file.path());
     let manager = WasmVmManager::new_for_test();
-    let old = manager.new_runtime(&config, CalloutGrant::none());
+    let old = actual_runtime(&manager, &config, CalloutGrant::none());
     let old_entry = old.get_or_load().await.unwrap();
     std::fs::write(file.path(), wat::parse_str(TRAP_GUEST).unwrap()).unwrap();
-    let new = manager.new_runtime(&config, CalloutGrant::none());
+    let new = actual_runtime(&manager, &config, CalloutGrant::none());
     let new_entry = new.get_or_load().await.unwrap();
     let mut lease = new_entry.acquire(100).unwrap();
     lease
@@ -804,7 +805,7 @@ async fn sha256_pin_enforced_on_warm_cache_hit() {
 
     let mgr = WasmVmManager::new_for_test();
     // Warm the cache with the correct pin.
-    let runtime = mgr.new_runtime(&good, CalloutGrant::none());
+    let runtime = actual_runtime(&mgr, &good, CalloutGrant::none());
     let verified = runtime.get_or_load().await.expect("correct pin loads");
 
     // The mismatching config must still fail even though the bytes are warm.
@@ -992,7 +993,9 @@ async fn url_fetch_transport_error_does_not_expose_configured_url() {
     let configured_url =
         format!("http://alice:password@127.0.0.1:{port}/private/module.wasm?token=repo-secret#fragment");
 
-    let error = fetch_url_bytes(&configured_url, None).await.unwrap_err();
+    let error = fetch_url_bytes(&configured_url, None, Some(&actual_url_client(&configured_url, None)))
+        .await
+        .unwrap_err();
     assert!(error.starts_with("fetch wasm url: "), "got: {error}");
     for secret in [
         configured_url.as_str(),
@@ -1101,10 +1104,20 @@ async fn url_retry_backoff_releases_permit_for_another_fetch() {
     let url_a = format!("{}/a.wasm", server.uri());
     let url_b = format!("{}/b.wasm", server.uri());
     let permits_a = permits.clone();
-    let a = tokio::spawn(async move { fetch_url_bytes_with_permits(&permits_a, &url_a, Some(&retry)).await });
+    let a = tokio::spawn(async move {
+        fetch_url_bytes_with_permits(
+            &permits_a,
+            &url_a,
+            Some(&retry),
+            Some(&actual_url_client(&url_a, Some(&retry))),
+        )
+        .await
+    });
     first_a_seen.notified().await;
     let permits_b = permits.clone();
-    let b = tokio::spawn(async move { fetch_url_bytes_with_permits(&permits_b, &url_b, None).await });
+    let b = tokio::spawn(async move {
+        fetch_url_bytes_with_permits(&permits_b, &url_b, None, Some(&actual_url_client(&url_b, None))).await
+    });
 
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(2), b)
@@ -1165,7 +1178,7 @@ async fn url_fetch_does_not_retry_4xx() {
 #[tokio::test]
 async fn preload_claim_is_single_flight_and_respects_retry_deadline() {
     let manager = WasmVmManager::new_for_test();
-    let runtime = manager.new_runtime(&WasmConfig::default(), CalloutGrant::none());
+    let runtime = actual_runtime(&manager, &WasmConfig::default(), CalloutGrant::none());
     let state = &runtime.state;
     let claim = state.prepare_preload().expect("cold runtime admits preload");
     let mut callers = tokio::task::JoinSet::new();
@@ -1203,7 +1216,7 @@ async fn preload_is_single_flight_and_respects_negative_cache_deadline() {
 
     let mut ok = WasmConfig::default();
     ok.source.url = Some(format!("{}/ok.wasm", server.uri()));
-    let ok_runtime = manager.new_runtime(&ok, CalloutGrant::none());
+    let ok_runtime = actual_runtime(&manager, &ok, CalloutGrant::none());
     for _ in 0..64 {
         ok_runtime.spawn_preload();
     }
@@ -1222,7 +1235,7 @@ async fn preload_is_single_flight_and_respects_negative_cache_deadline() {
         .await;
     let mut bad = WasmConfig::default();
     bad.source.url = Some(format!("{}/bad.wasm", server.uri()));
-    let bad_runtime = manager.new_runtime(&bad, CalloutGrant::none());
+    let bad_runtime = actual_runtime(&manager, &bad, CalloutGrant::none());
 
     for _ in 0..64 {
         bad_runtime.spawn_preload();
@@ -1278,7 +1291,7 @@ async fn engine_unavailable_preload_creates_no_task() {
     )));
     let mut config = WasmConfig::default();
     config.source.inline = Some("AAAA".to_string());
-    let runtime = manager.new_runtime(&config, CalloutGrant::none());
+    let runtime = actual_runtime(&manager, &config, CalloutGrant::none());
     runtime.spawn_preload();
     assert!(runtime.try_get().is_none());
     assert!(!runtime.state.slot.preload_in_flight.load(Ordering::Acquire));
@@ -1572,7 +1585,7 @@ async fn tick_host_panic_discards_vm_without_adopting_failed_state() {
     let file = write_temp_wasm(&panic_guest(PanicSite::Tick));
     let config = file_config(file.path());
     let manager = WasmVmManager::new_for_test();
-    let runtime = manager.new_runtime(&config, CalloutGrant::none());
+    let runtime = actual_runtime(&manager, &config, CalloutGrant::none());
     let should_panic = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
     let entry = load_with_panicking_linker(&runtime, should_panic.clone(), calls.clone(), Some(0))
@@ -1601,7 +1614,7 @@ async fn tick_callout_callback_panic_discards_vm_without_adopting_failed_state()
     let should_panic = Arc::new(AtomicBool::new(false));
     let callback_calls = Arc::new(AtomicUsize::new(0));
     let dispatch_calls = Arc::new(AtomicUsize::new(0));
-    let runtime = manager.new_runtime(&config, grant(vec!["http://example.invalid".to_string()], 10));
+    let runtime = actual_runtime(&manager, &config, grant(vec!["http://example.invalid".to_string()], 10));
     let entry = runtime
         .get_or_load_with_linker(panicking_tick_callout_linker(
             should_panic.clone(),
@@ -1651,7 +1664,7 @@ async fn plugin_drop_stops_a_tick_round_blocked_in_a_callout() {
     let mgr = WasmVmManager::new_for_test();
 
     let callout_grant = grant(vec![origin.clone()], u64::from(BLOCKED_CALLOUT_TIMEOUT_MS));
-    let runtime = mgr.new_runtime(&config, callout_grant);
+    let runtime = actual_runtime(&mgr, &config, callout_grant);
     let dispatch_calls = Arc::new(AtomicUsize::new(0));
     let entry = runtime
         .get_or_load_with_linker(blocking_tick_callout_linker(origin, dispatch_calls.clone()))
@@ -1687,7 +1700,7 @@ async fn plugin_drop_stops_a_tick_round_blocked_in_a_callout() {
 async fn tick_task_drives_guest_on_tick() {
     let f = write_temp_wasm(TICK_GUEST);
     let mgr = WasmVmManager::new_for_test();
-    let runtime = mgr.new_runtime(&file_config(f.path()), CalloutGrant::none());
+    let runtime = actual_runtime(&mgr, &file_config(f.path()), CalloutGrant::none());
     let entry = runtime.get_or_load().await.expect("loads");
     // The eager warm instance created at load time already ran
     // on_configure, so the tick task is armed. Wait a few periods.
@@ -1803,7 +1816,7 @@ async fn tick_callout_dispatches_and_delivers_response() {
     let mut config = file_config(f.path());
     config.plugin_config = Some(WasmRawConfig::string(server.uri()));
     let mgr = WasmVmManager::new_for_test();
-    let runtime = mgr.new_runtime(&config, grant(vec![server.uri()], 1000));
+    let runtime = actual_runtime(&mgr, &config, grant(vec![server.uri()], 1000));
 
     let entry = runtime.get_or_load().await.expect("loads");
     assert!(
@@ -1825,7 +1838,7 @@ async fn tick_callout_unreachable_delivers_failure_callback() {
     // Port 1 is unreachable; still allowlisted so dispatch succeeds.
     config.plugin_config = Some(WasmRawConfig::string("http://127.0.0.1:1"));
     let mgr = WasmVmManager::new_for_test();
-    let runtime = mgr.new_runtime(&config, grant(vec!["http://127.0.0.1:1".to_string()], 300));
+    let runtime = actual_runtime(&mgr, &config, grant(vec!["http://127.0.0.1:1".to_string()], 300));
 
     let entry = runtime.get_or_load().await.expect("loads");
     assert!(
@@ -1851,7 +1864,11 @@ async fn tick_callout_denied_by_allowlist() {
     config.plugin_config = Some(WasmRawConfig::string(server.uri()));
     let mgr = WasmVmManager::new_for_test();
     // Dispatch IS armed, but for a different origin than the guest targets.
-    let runtime = mgr.new_runtime(&config, grant(vec!["http://allowed.example.com".to_string()], 1000));
+    let runtime = actual_runtime(
+        &mgr,
+        &config,
+        grant(vec!["http://allowed.example.com".to_string()], 1000),
+    );
 
     let entry = runtime.get_or_load().await.expect("loads");
     assert!(wait_shared_key(&entry, "df").await, "guest must observe the denial");
@@ -1877,7 +1894,7 @@ async fn engine_init_failure_fails_closed_not_panic() {
 
     // The module never gets far enough to populate the cache, so a
     // sync-path caller sees a plain miss rather than a panic too.
-    assert!(mgr.new_runtime(&config, CalloutGrant::none()).try_get().is_none());
+    assert!(actual_runtime(&mgr, &config, CalloutGrant::none()).try_get().is_none());
 }
 
 #[tokio::test]
@@ -1891,7 +1908,7 @@ async fn epoch_ticker_spawn_failure_uses_engine_unavailable_path() {
 
     let file = write_temp_wasm(MINI_GUEST);
     let config = file_config(file.path());
-    let runtime = manager.new_runtime(&config, CalloutGrant::none());
+    let runtime = actual_runtime(&manager, &config, CalloutGrant::none());
     assert!(runtime.get_or_load().await.unwrap_err().contains("epoch ticker"));
     runtime.spawn_preload();
     assert!(runtime.try_get().is_none());
@@ -1947,7 +1964,7 @@ async fn oci_source_loads_and_always_recheck_swaps_on_digest_change() {
     .unwrap();
 
     let mgr = WasmVmManager::new_for_test();
-    let runtime = mgr.new_runtime(&config, CalloutGrant::none());
+    let runtime = actual_runtime(&mgr, &config, CalloutGrant::none());
     let entry1 = runtime.get_or_load().await.unwrap();
     // Within the re-check interval: cached entry, no new resolution.
     let entry1b = runtime.get_or_load().await.unwrap();
@@ -2012,7 +2029,7 @@ async fn oci_source_loads_and_always_recheck_swaps_on_digest_change() {
     let mut if_not_present = config.clone();
     if_not_present.source.oci.as_mut().unwrap().pull_policy =
         Some(edgion_resources::plugin_configs::OciPullPolicy::IfNotPresent);
-    let new_runtime = mgr.new_runtime(&if_not_present, CalloutGrant::none());
+    let new_runtime = actual_runtime(&mgr, &if_not_present, CalloutGrant::none());
     let if_not_present_entry = new_runtime
         .get_or_load()
         .await
@@ -2065,7 +2082,7 @@ async fn oci_always_refresh_is_non_blocking_single_flight_and_keeps_lkg_on_failu
     }))
     .unwrap();
     let mgr = WasmVmManager::new_for_test();
-    let runtime = mgr.new_runtime(&config, CalloutGrant::none());
+    let runtime = actual_runtime(&mgr, &config, CalloutGrant::none());
     let lkg = runtime.get_or_load().await.unwrap();
 
     server.reset().await;
@@ -2172,7 +2189,7 @@ async fn oci_refresh_stops_old_tick_and_starts_new_tick() {
     }))
     .unwrap();
     let mgr = WasmVmManager::new_for_test();
-    let runtime = mgr.new_runtime(&config, CalloutGrant::none());
+    let runtime = actual_runtime(&mgr, &config, CalloutGrant::none());
     let old_entry = runtime.get_or_load().await.unwrap();
     let tick_state = old_entry.tick_callouts.clone();
     wait_for_active_tick_tasks(&tick_state, 1, "the published entry owns the tick task").await;
@@ -2238,10 +2255,363 @@ async fn oci_source_verifies_top_level_sha256_against_final_bytes() {
     }))
     .unwrap();
     let mgr = WasmVmManager::new_for_test();
-    let err = mgr
-        .new_runtime(&config, CalloutGrant::none())
+    let err = actual_runtime(&mgr, &config, CalloutGrant::none())
         .get_or_load()
         .await
         .unwrap_err();
     assert!(err.contains("sha256 mismatch"), "got: {err}");
+}
+
+fn wasm_owner(config: &WasmConfig) -> edgion_resources::EdgionPlugins {
+    serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "wasm-test", "namespace": "default"},
+        "spec": {"requestPlugins": [{"type": "Wasm", "config": config}]}
+    }))
+    .unwrap()
+}
+
+pub(in crate::plugins::http::wasm) fn actual_runtime(
+    manager: &WasmVmManager,
+    config: &WasmConfig,
+    grant: CalloutGrant,
+) -> WasmRuntime {
+    let owner = wasm_owner(config);
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    manager
+        .new_runtime(
+            &entry,
+            &edgion_common::link_sys_core::outbound_tls::outbound_global_default(),
+            grant,
+        )
+        .unwrap()
+}
+fn actual_url_client(
+    url: &str,
+    fetch: Option<&edgion_resources::plugin_configs::WasmFetchSpec>,
+) -> Result<reqwest::Client, String> {
+    let mut config = WasmConfig::default();
+    config.source.url = Some(url.to_string());
+    config.source.fetch = fetch.cloned();
+    let owner = wasm_owner(&config);
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let defaults = edgion_common::link_sys_core::outbound_tls::outbound_global_default();
+    let proof = super::super::plugin::WasmPlugin::validate_tls_entry(&entry, &defaults)
+        .unwrap()
+        .unwrap();
+    prepare_url_client(fetch, &proof, &defaults)
+}
+
+pub(crate) fn wasm_tls_owner() -> (edgion_resources::EdgionPlugins, Vec<u8>, Vec<u8>) {
+    let generated = rcgen::generate_simple_self_signed(vec!["artifact.example.com".into()]).unwrap();
+    let pem = generated.cert.pem().into_bytes();
+    let key = generated.signing_key.serialize_pem().into_bytes();
+    let secret = |name: &str, values: &[(&str, &[u8])]| k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some(name.into()),
+            namespace: Some("default".into()),
+            resource_version: Some("7".into()),
+            ..Default::default()
+        },
+        data: Some(
+            values
+                .iter()
+                .map(|(name, bytes)| ((*name).into(), k8s_openapi::ByteString(bytes.to_vec())))
+                .collect(),
+        ),
+        ..Default::default()
+    };
+    let owner = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"wasm-test","uid":"owner"},
+        "spec":{"requestPlugins":[{"type":"Wasm","config":{"sha256":"0".repeat(64),"source":{
+            "url":"https://artifact.example.com/module.wasm","fetch":{"tls":{
+                "enabled":true,"verify":true,
+                "validation":{"caCertificateRefs":[{"kind":"Secret","group":"core","name":"ca"}]},
+                "clientCertificateRef":{"group":"core","name":"client"},
+                "resolvedCaCertificates":[secret("ca", &[("ca.crt", &pem)])],
+                "resolvedClientCertificate":secret("client", &[("tls.crt", &pem),("tls.key", &key)])
+            }}}
+        }}]}
+    }))
+    .unwrap();
+    (owner, pem, key)
+}
+
+#[test]
+fn wasm_url_material_is_bound_before_private_runtime_creation() {
+    use edgion_common::link_sys_core::outbound_tls::{
+        resolve_validated_outbound_tls, test_util::snapshot, EffectiveCa,
+    };
+    use edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE;
+    let defaults = snapshot(Default::default());
+    let manager = WasmVmManager::new_for_test();
+    let (owner, pem, key) = wasm_tls_owner();
+    for fail_open in [false, true] {
+        for case in [
+            "matching",
+            "configmap",
+            "name",
+            "missing-name",
+            "ns",
+            "missing-ns",
+            "empty-ns",
+            "client-name",
+            "client-missing-name",
+            "client-ns",
+            "client-missing-ns",
+            "client-empty-ns",
+            "provenance",
+            "client-provenance",
+            "retarget",
+            "no-ref",
+            "no-material",
+            "no-client",
+            "owner-name",
+            "owner-ns",
+        ] {
+            let mut candidate = serde_json::to_value(&owner).unwrap();
+            let config = &mut candidate["spec"]["requestPlugins"][0]["config"];
+            config["failOpen"] = serde_json::json!(fail_open);
+            let tls = &mut config["source"]["fetch"]["tls"];
+            match case {
+                "configmap" => {
+                    tls["validation"]["caCertificateRefs"][0]["kind"] = serde_json::json!("ConfigMap");
+                    tls["resolvedCaCertificates"][0]["metadata"]["annotations"] =
+                        serde_json::json!({(CONTROLLER_CA_SOURCE):"ConfigMap"});
+                }
+                "name" => tls["resolvedCaCertificates"][0]["metadata"]["name"] = serde_json::json!("wrong"),
+                "missing-name" => tls["resolvedCaCertificates"][0]["metadata"]["name"] = serde_json::Value::Null,
+                "ns" => tls["resolvedCaCertificates"][0]["metadata"]["namespace"] = serde_json::json!("other"),
+                "missing-ns" => tls["resolvedCaCertificates"][0]["metadata"]["namespace"] = serde_json::Value::Null,
+                "empty-ns" => tls["resolvedCaCertificates"][0]["metadata"]["namespace"] = serde_json::json!(""),
+                "client-name" => tls["resolvedClientCertificate"]["metadata"]["name"] = serde_json::json!("wrong"),
+                "client-missing-name" => tls["resolvedClientCertificate"]["metadata"]["name"] = serde_json::Value::Null,
+                "client-ns" => tls["resolvedClientCertificate"]["metadata"]["namespace"] = serde_json::json!("other"),
+                "client-missing-ns" => {
+                    tls["resolvedClientCertificate"]["metadata"]["namespace"] = serde_json::Value::Null
+                }
+                "client-empty-ns" => tls["resolvedClientCertificate"]["metadata"]["namespace"] = serde_json::json!(""),
+                "provenance" => {
+                    tls["resolvedCaCertificates"][0]["metadata"]["annotations"] =
+                        serde_json::json!({(CONTROLLER_CA_SOURCE):"ConfigMap"})
+                }
+                "client-provenance" => {
+                    tls["resolvedClientCertificate"]["metadata"]["annotations"] =
+                        serde_json::json!({(CONTROLLER_CA_SOURCE):"ConfigMap"})
+                }
+                "retarget" => tls["validation"]["caCertificateRefs"][0]["name"] = serde_json::json!("next"),
+                "no-ref" => tls["validation"]["caCertificateRefs"] = serde_json::Value::Null,
+                "no-material" => tls["resolvedCaCertificates"] = serde_json::Value::Null,
+                "no-client" => tls["resolvedClientCertificate"] = serde_json::Value::Null,
+                "owner-name" => candidate["metadata"]["name"] = serde_json::Value::Null,
+                "owner-ns" => candidate["metadata"]["namespace"] = serde_json::json!(""),
+                _ => {}
+            }
+            let candidate: edgion_resources::EdgionPlugins = serde_json::from_value(candidate).unwrap();
+            let prepared = PreparedPluginReferences::from_plugins(&candidate);
+            let binding = prepared.bind(&candidate).unwrap();
+            let entry = binding.request_entries().next().unwrap();
+            if matches!(case, "matching" | "configmap") {
+                let proof = super::super::plugin::WasmPlugin::validate_tls_entry(&entry, &defaults)
+                    .unwrap()
+                    .unwrap();
+                let resolved = resolve_validated_outbound_tls(&proof, true, &defaults).unwrap();
+                let EffectiveCa::Custom(bundles) = resolved.ca else {
+                    panic!("expected bound CA")
+                };
+                assert_eq!(bundles, vec![pem.clone()]);
+                let (cert, actual_key) = resolved.client_identity.unwrap();
+                assert_eq!(cert, pem);
+                assert_eq!(actual_key.as_slice(), key.as_slice());
+                let runtime = manager.new_runtime(&entry, &defaults, CalloutGrant::none()).unwrap();
+                assert!(runtime.state.url_client.as_ref().unwrap().is_ok());
+                assert!(runtime.config().source.fetch.as_ref().unwrap().tls.is_none());
+                let EdgionPlugin::Wasm(authored) = entry.config() else {
+                    panic!()
+                };
+                assert!(authored.source.fetch.as_ref().unwrap().tls.is_some());
+            } else {
+                assert_eq!(
+                    manager
+                        .new_runtime(&entry, &defaults, CalloutGrant::none())
+                        .err()
+                        .as_deref(),
+                    Some("wasm TLS configuration is invalid"),
+                    "{case}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn wasm_valid_identity_crypto_failure_remains_negative_cached_load_error() {
+    let (mut owner, _, _) = wasm_tls_owner();
+    let EdgionPlugin::Wasm(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        panic!()
+    };
+    config
+        .source
+        .fetch
+        .as_mut()
+        .unwrap()
+        .tls
+        .as_mut()
+        .unwrap()
+        .resolved_ca_certificates
+        .as_mut()
+        .unwrap()[0]
+        .data
+        .as_mut()
+        .unwrap()
+        .insert("ca.crt".into(), k8s_openapi::ByteString(b"invalid PEM".to_vec()));
+    let defaults = edgion_common::link_sys_core::outbound_tls::test_util::snapshot(Default::default());
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let manager = WasmVmManager::new_for_test();
+    let runtime = manager.new_runtime(&entry, &defaults, CalloutGrant::none()).unwrap();
+    assert!(runtime.state.url_client.as_ref().unwrap().is_err());
+    let first = runtime.get_or_load().await.unwrap_err();
+    assert!(first.starts_with("wasm fetch client:"), "{first}");
+    assert_eq!(runtime.get_or_load().await.unwrap_err(), first);
+    assert!(runtime.try_get().is_none());
+    assert!(runtime.state.prepare_preload().is_none());
+}
+
+#[test]
+fn wasm_captured_globals_and_disabled_https_are_process_isolated() {
+    crate::test_subprocess::assert_in_subprocess(
+        "plugins::http::wasm::vm_manager::tests",
+        "wasm_captured_globals_and_disabled_https_are_process_isolated",
+        "EDGION_WASM_CAPTURED_GLOBAL_CHILD",
+        "captured",
+        || {
+            use edgion_common::link_sys_core::outbound_tls::{
+                outbound_global_default, resolve_validated_outbound_tls, set_outbound_global_default,
+                test_util::snapshot, EffectiveCa,
+            };
+            use edgion_resources::resources::common::OutboundTlsConfig;
+            let previous = outbound_global_default();
+            let (mut owner, pem, key) = wasm_tls_owner();
+            let EdgionPlugin::Wasm(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+                panic!()
+            };
+            let tls = config.source.fetch.as_mut().unwrap().tls.as_mut().unwrap();
+            let mut global = OutboundTlsConfig {
+                verify: true,
+                validation: tls.outbound.validation.take(),
+                client_certificate_ref: tls.outbound.client_certificate_ref.take(),
+                resolved_ca_certificates: tls.resolved_ca_certificates.take(),
+                resolved_client_certificate: tls.resolved_client_certificate.take(),
+            };
+            global.client_certificate_ref.as_mut().unwrap().namespace = Some("default".into());
+            global
+                .validation
+                .as_mut()
+                .unwrap()
+                .ca_certificate_refs
+                .as_mut()
+                .unwrap()[0]
+                .namespace = Some("default".into());
+            let captured = snapshot(global.clone());
+            global.resolved_client_certificate.as_mut().unwrap().metadata.name = Some("wrong".into());
+            let invalid = snapshot(global);
+            set_outbound_global_default(invalid.clone());
+            let manager = WasmVmManager::new_for_test();
+            let runtime = {
+                let prepared = PreparedPluginReferences::from_plugins(&owner);
+                let binding = prepared.bind(&owner).unwrap();
+                let entry = binding.request_entries().next().unwrap();
+                let proof = super::super::plugin::WasmPlugin::validate_tls_entry(&entry, &captured)
+                    .unwrap()
+                    .unwrap();
+                let resolved = resolve_validated_outbound_tls(&proof, true, &captured).unwrap();
+                let EffectiveCa::Custom(bundles) = resolved.ca else {
+                    panic!("captured CA")
+                };
+                assert_eq!(bundles, vec![pem.clone()]);
+                let (cert, actual_key) = resolved.client_identity.unwrap();
+                assert_eq!(cert, pem);
+                assert_eq!(actual_key.as_slice(), key.as_slice());
+                let runtime = manager.new_runtime(&entry, &captured, CalloutGrant::none()).unwrap();
+                set_outbound_global_default(captured.clone());
+                assert!(manager.new_runtime(&entry, &invalid, CalloutGrant::none()).is_err());
+                runtime
+            };
+            drop(owner);
+            drop(captured);
+            assert!(runtime.state.url_client.as_ref().unwrap().is_ok());
+            assert_eq!(
+                runtime.config().source.url.as_deref(),
+                Some("https://artifact.example.com/module.wasm")
+            );
+            let (mut local, _, _) = wasm_tls_owner();
+            {
+                let prepared = PreparedPluginReferences::from_plugins(&local);
+                let binding = prepared.bind(&local).unwrap();
+                assert!(manager
+                    .new_runtime(
+                        &binding.request_entries().next().unwrap(),
+                        &invalid,
+                        CalloutGrant::none()
+                    )
+                    .is_ok());
+            }
+            let EdgionPlugin::Wasm(config) = &mut local.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+                panic!()
+            };
+            let tls = config.source.fetch.as_mut().unwrap().tls.as_mut().unwrap();
+            tls.enabled = false;
+            tls.outbound.verify = Some(false);
+            tls.resolved_ca_certificates.as_mut().unwrap()[0].metadata.name = Some("wrong".into());
+            tls.resolved_client_certificate.as_mut().unwrap().metadata.name = Some("wrong".into());
+            {
+                let prepared = PreparedPluginReferences::from_plugins(&local);
+                let binding = prepared.bind(&local).unwrap();
+                let entry = binding.request_entries().next().unwrap();
+                let proof = super::super::plugin::WasmPlugin::validate_tls_entry(&entry, &invalid)
+                    .unwrap()
+                    .unwrap();
+                assert!(proof.active_field().is_none());
+                // The canonical HTTP factory skips TLS resolution for inactive
+                // selection; a direct low-level resolver call would inherit globals.
+                let runtime = manager.new_runtime(&entry, &invalid, CalloutGrant::none()).unwrap();
+                assert!(runtime.state.url_client.as_ref().unwrap().is_ok());
+                assert!(runtime.config().source.url.as_ref().unwrap().starts_with("https://"));
+            }
+            let mut absent = local.clone();
+            let EdgionPlugin::Wasm(config) = &mut absent.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+                panic!()
+            };
+            config.source.fetch.as_mut().unwrap().tls = None;
+            {
+                let prepared = PreparedPluginReferences::from_plugins(&absent);
+                let binding = prepared.bind(&absent).unwrap();
+                let entry = binding.request_entries().next().unwrap();
+                let runtime = manager.new_runtime(&entry, &invalid, CalloutGrant::none()).unwrap();
+                assert!(runtime.state.url_client.as_ref().unwrap().is_ok());
+                assert!(runtime.config().source.url.as_ref().unwrap().starts_with("https://"));
+            }
+            let EdgionPlugin::Wasm(config) = &mut local.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+                panic!()
+            };
+            config.source.url = None;
+            config.source.file = Some("inactive.wasm".into());
+            config.source.fetch.as_mut().unwrap().tls.as_mut().unwrap().enabled = true;
+            let prepared = PreparedPluginReferences::from_plugins(&local);
+            let binding = prepared.bind(&local).unwrap();
+            let entry = binding.request_entries().next().unwrap();
+            assert!(super::super::plugin::WasmPlugin::validate_tls_entry(&entry, &invalid)
+                .unwrap()
+                .is_none());
+            let inactive = manager.new_runtime(&entry, &invalid, CalloutGrant::none()).unwrap();
+            assert!(inactive.state.url_client.is_none());
+            assert!(inactive.config().source.fetch.as_ref().unwrap().tls.is_some());
+            set_outbound_global_default(previous);
+        },
+    );
 }

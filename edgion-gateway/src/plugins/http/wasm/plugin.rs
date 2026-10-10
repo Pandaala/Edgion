@@ -21,8 +21,13 @@ use crate::plugins::runtime::{
     DyeOutcome, PluginLog, PluginSession, RequestFilter, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::plugin_configs::WasmConfig;
-use edgion_resources::EdgionErrorCode;
+
+use edgion_common::link_sys_core::outbound_tls::{
+    validate_active_tls_inheritance, validate_local_tls_selection, GlobalOutboundTlsSnapshot,
+    ValidatedLocalTlsSelection,
+};
+use edgion_resources::resources::refs::plugin_fields::BoundPluginEntry;
+use edgion_resources::{EdgionErrorCode, EdgionPlugin};
 
 const PLUGIN_NAME: &str = "Wasm";
 
@@ -39,7 +44,29 @@ pub struct WasmPlugin {
 }
 
 impl WasmPlugin {
-    fn build(config: &WasmConfig) -> Self {
+    pub(crate) fn validate_tls_entry<'a>(
+        entry: &'a BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+    ) -> Result<Option<ValidatedLocalTlsSelection<'a>>, String> {
+        let error = || "wasm TLS configuration is invalid".to_string();
+        let EdgionPlugin::Wasm(config) = entry.config() else {
+            return Err(error());
+        };
+        entry.owner_namespace().map_err(|_| error())?;
+        if config.source.url.is_none() {
+            return Ok(None);
+        }
+        let selection = entry.outbound_tls_selection().map_err(|_| error())?;
+        let proof = validate_local_tls_selection(selection).map_err(|_| error())?;
+        validate_active_tls_inheritance(&proof, defaults).map_err(|_| error())?;
+        Ok(Some(proof))
+    }
+
+    fn build(entry: &BoundPluginEntry<'_>, defaults: &GlobalOutboundTlsSnapshot) -> Result<Self, String> {
+        Self::validate_tls_entry(entry, defaults)?;
+        let EdgionPlugin::Wasm(config) = entry.config() else {
+            return Err("wasm TLS configuration is invalid".to_string());
+        };
         // Admission validation already rejects malformed entries; a residual
         // bad entry here (e.g. a file-mode gateway without the controller
         // validation) is dropped with a WARN rather than failing the plugin.
@@ -61,12 +88,13 @@ impl WasmPlugin {
         callout_allowlist.dedup();
         let callout_allowlist: Arc<[String]> = Arc::from(callout_allowlist);
         let runtime = global_vm_manager().new_runtime(
-            config,
+            entry,
+            defaults,
             CalloutGrant {
                 allowlist: callout_allowlist.clone(),
                 timeout_ms: config.callout_timeout_ms,
             },
-        );
+        )?;
         let plugin = WasmPlugin {
             name: PLUGIN_NAME.to_string(),
             runtime,
@@ -76,19 +104,34 @@ impl WasmPlugin {
         // Warm this runtime so the first request does not pay compile
         // latency (best-effort; lazy load covers the miss).
         plugin.runtime.spawn_preload();
-        plugin
+        Ok(plugin)
     }
 
-    pub fn create_request(config: &WasmConfig) -> Option<Box<dyn RequestFilter>> {
-        Some(Box::new(Self::build(config)))
+    pub fn create_request(
+        entry: &BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+    ) -> Option<Box<dyn RequestFilter>> {
+        Self::build(entry, defaults)
+            .ok()
+            .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>)
     }
 
-    pub fn create_response_filter(config: &WasmConfig) -> Option<Box<dyn UpstreamResponseFilter>> {
-        Some(Box::new(Self::build(config)))
+    pub fn create_response_filter(
+        entry: &BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+    ) -> Option<Box<dyn UpstreamResponseFilter>> {
+        Self::build(entry, defaults)
+            .ok()
+            .map(|plugin| Box::new(plugin) as Box<dyn UpstreamResponseFilter>)
     }
 
-    pub fn create_body_filter(config: &WasmConfig) -> Option<Box<dyn UpstreamResponseBodyFilter>> {
-        Some(Box::new(Self::build(config)))
+    pub fn create_body_filter(
+        entry: &BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+    ) -> Option<Box<dyn UpstreamResponseBodyFilter>> {
+        Self::build(entry, defaults)
+            .ok()
+            .map(|plugin| Box::new(plugin) as Box<dyn UpstreamResponseBodyFilter>)
     }
 
     /// Single choke point for every Wasm fail-open/fail-close decision

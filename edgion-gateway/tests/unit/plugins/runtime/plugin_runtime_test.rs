@@ -1298,7 +1298,10 @@ async fn add_from_request_filters_wraps_wasm_with_operator_body() {
     entry.body = Some(BodyRequirement::fail_close());
 
     let mut runtime = PluginRuntime::new();
-    let errors = runtime.add_from_request_filters(&[entry], "default", "test-plugins");
+    let mut owner = edgion_resources::EdgionPlugins::new("test-plugins", Default::default());
+    owner.metadata.namespace = Some("default".to_string());
+    owner.spec.request_plugins = Some(vec![entry]);
+    let errors = runtime.add_resource_filters_with_cache(&owner, &mut EntryCache::default());
     assert!(
         errors.is_empty(),
         "operator body: on a Wasm entry must be accepted at admission, got: {errors:?}"
@@ -3260,4 +3263,114 @@ async fn ext_proc_actual_tls_preflight_precedes_cache_and_fresh_generations_reco
         assert!(!compiled.preparse_errors.is_empty(), "{stage}");
     }
     assert_eq!(first_filter.name(), "ExtProc");
+}
+
+#[test]
+fn wasm_actual_tls_precedes_all_three_stage_caches() {
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+    for stage in [
+        "requestPlugins",
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+    ] {
+        let (owner, _, _) = crate::plugins::http::wasm::vm_manager::tests::wasm_tls_owner();
+        let mut value = serde_json::to_value(owner).unwrap();
+        let entries = value["spec"]["requestPlugins"].take();
+        value["spec"][stage] = entries;
+        let owner: edgion_resources::EdgionPlugins = serde_json::from_value(value.clone()).unwrap();
+        let compile = |owner: &edgion_resources::EdgionPlugins, cache: &mut EntryCache| {
+            let mut runtime = PluginRuntime::new();
+            let mut errors = runtime.add_resource_filters_with_cache(owner, cache);
+            if let Some(entries) = owner.spec.upstream_response_body_filter_plugins.as_ref() {
+                let prepared = PreparedPluginReferences::from_plugins(owner);
+                let binding = prepared.bind(owner).unwrap();
+                errors.extend(runtime.add_from_upstream_response_body_filters_with_cache(
+                    entries,
+                    "default",
+                    cache,
+                    Some(&binding),
+                ));
+            }
+            (runtime, errors)
+        };
+        let count = |runtime: &PluginRuntime| match stage {
+            "requestPlugins" => runtime.request_plugins.len(),
+            "upstreamResponseFilterPlugins" => runtime.upstream_response_plugins.len(),
+            _ => runtime.upstream_response_body_plugins.len(),
+        };
+        let mut cache = EntryCache::default();
+        let (first, errors) = compile(&owner, &mut cache);
+        assert!(errors.is_empty(), "{stage}: {errors:?}");
+        assert_eq!(count(&first), 1);
+        let (same, errors) = compile(&owner, &mut cache);
+        assert!(errors.is_empty());
+        match stage {
+            "requestPlugins" => assert!(Arc::ptr_eq(&first.request_plugins[0], &same.request_plugins[0])),
+            "upstreamResponseFilterPlugins" => assert!(Arc::ptr_eq(
+                &first.upstream_response_plugins[0],
+                &same.upstream_response_plugins[0]
+            )),
+            _ => assert!(Arc::ptr_eq(
+                &first.upstream_response_body_plugins[0],
+                &same.upstream_response_body_plugins[0]
+            )),
+        }
+        for case in ["material", "owner", "retarget", "schema"] {
+            let mut bad = value.clone();
+            match case {
+                "material" => {
+                    bad["spec"][stage][0]["config"]["source"]["fetch"]["tls"]["resolvedCaCertificates"][0]["metadata"]
+                        ["name"] = serde_json::json!("wrong")
+                }
+                "owner" => bad["metadata"]["name"] = serde_json::Value::Null,
+                "retarget" => {
+                    bad["spec"][stage][0]["config"]["source"]["fetch"]["tls"]["validation"]["caCertificateRefs"][0]
+                        ["name"] = serde_json::json!("next")
+                }
+                "schema" => {
+                    bad["metadata"]["name"] = serde_json::Value::Null;
+                    bad["spec"][stage][0]["config"]["timeoutMs"] = serde_json::json!(0);
+                }
+                _ => unreachable!(),
+            }
+            let bad: edgion_resources::EdgionPlugins = serde_json::from_value(bad).unwrap();
+            let (rejected, errors) = compile(&bad, &mut cache);
+            assert_eq!(count(&rejected), 0, "{stage}/{case}");
+            assert!(!errors.is_empty());
+            if case == "schema" {
+                assert!(errors.iter().any(|error| error.contains("timeoutMs")), "{errors:?}");
+            }
+        }
+        // A new valid generation owns a fresh entry cache and private runtime.
+        let (restored, errors) = compile(&owner, &mut EntryCache::default());
+        assert!(errors.is_empty());
+        assert_eq!(count(&restored), 1);
+        match stage {
+            "requestPlugins" => assert!(!Arc::ptr_eq(&first.request_plugins[0], &restored.request_plugins[0])),
+            "upstreamResponseFilterPlugins" => assert!(!Arc::ptr_eq(
+                &first.upstream_response_plugins[0],
+                &restored.upstream_response_plugins[0]
+            )),
+            _ => assert!(!Arc::ptr_eq(
+                &first.upstream_response_body_plugins[0],
+                &restored.upstream_response_body_plugins[0]
+            )),
+        }
+        assert_eq!(count(&first), 1, "captured generation remains owned");
+        let mut disabled = value.clone();
+        disabled["metadata"]["name"] = serde_json::Value::Null;
+        disabled["spec"][stage][0]["enable"] = serde_json::json!(false);
+        let disabled: edgion_resources::EdgionPlugins = serde_json::from_value(disabled).unwrap();
+        let (inert, errors) = compile(&disabled, &mut EntryCache::default());
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(count(&inert), 0);
+    }
+    let (owner, _, _) = crate::plugins::http::wasm::vm_manager::tests::wasm_tls_owner();
+    let entry: edgion_resources::resources::edgion_plugins::UpstreamResponseEntry =
+        serde_json::from_value(serde_json::to_value(&owner.spec.request_plugins.as_ref().unwrap()[0]).unwrap())
+            .unwrap();
+    let mut unsupported = PluginRuntime::new();
+    let errors = unsupported.add_from_upstream_responses(&[entry], "default");
+    assert!(!errors.is_empty());
+    assert_eq!(unsupported.upstream_response_async_plugins.len(), 0);
 }

@@ -74,8 +74,10 @@ use crate::observe::metrics::registry::{
     wasm_module_metrics, WasmModuleMetrics,
 };
 use crate::plugins::runtime::task_scope::{PluginTaskHandle, PluginTaskOwner};
+use edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot;
 use edgion_common::startup::catch_redacted_panic;
 use edgion_resources::plugin_configs::{WasmConfig, WasmSourceSpec};
+use edgion_resources::{resources::refs::plugin_fields::BoundPluginEntry, EdgionPlugin};
 
 /// How often the background thread bumps the engine epoch. Guest deadlines
 /// are expressed in multiples of this tick.
@@ -390,19 +392,40 @@ impl WasmVmManager {
         self.engine.as_ref().map_err(|e| e.clone())
     }
 
-    pub fn new_runtime(&self, config: &WasmConfig, grant: CalloutGrant) -> WasmRuntime {
+    pub fn new_runtime(
+        &self,
+        entry: &BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+        grant: CalloutGrant,
+    ) -> Result<WasmRuntime, String> {
+        let proof = super::plugin::WasmPlugin::validate_tls_entry(entry, defaults)?;
+        let EdgionPlugin::Wasm(config) = entry.config() else {
+            return Err("wasm TLS configuration is invalid".to_string());
+        };
+        // Identity failures reject publication. Crypto/client failures remain load
+        // failures so the existing negative cache and failOpen policy still own them.
+        let url_client = proof
+            .as_ref()
+            .map(|proof| prepare_url_client(config.source.fetch.as_ref(), proof, defaults));
+        let mut owned_config = config.clone();
+        if url_client.is_some() {
+            if let Some(fetch) = owned_config.source.fetch.as_mut() {
+                fetch.tls = None;
+            }
+        }
         let tasks = PluginTaskOwner::new();
         super::oci::cache::register_owner();
-        WasmRuntime {
+        Ok(WasmRuntime {
             state: Arc::new(RuntimeState {
                 engine: self.engine.clone(),
-                config: config.clone(),
+                config: owned_config,
+                url_client,
                 slot: Arc::new(LoadSlot::new(effective_oci_always(config))),
                 tick_callouts: Arc::new(TickCalloutState::new(grant)),
                 tasks: tasks.handle(),
             }),
             tasks,
-        }
+        })
     }
 }
 
@@ -415,6 +438,7 @@ pub struct WasmRuntime {
 struct RuntimeState {
     engine: Result<Engine, String>,
     config: WasmConfig,
+    url_client: Option<Result<reqwest::Client, String>>,
     slot: SharedLoadSlot,
     tick_callouts: Arc<TickCalloutState>,
     tasks: PluginTaskHandle<2>,
@@ -510,7 +534,15 @@ impl RuntimeState {
             }
         }
         let label = self.config.source.metrics_label();
-        match Self::load_inner_with_linker(engine, &self.config, self.tick_callouts.clone(), add_host_abi).await {
+        match Self::load_inner_with_linker(
+            engine,
+            &self.config,
+            self.url_client.as_ref(),
+            self.tick_callouts.clone(),
+            add_host_abi,
+        )
+        .await
+        {
             Ok(prepared) => self
                 .tasks
                 .with_active(|| {
@@ -541,14 +573,16 @@ impl RuntimeState {
     async fn load_inner(
         engine: Engine,
         config: &WasmConfig,
+        url_client: Option<&Result<reqwest::Client, String>>,
         tick_callouts: Arc<TickCalloutState>,
     ) -> Result<PreparedModule, String> {
-        Self::load_inner_with_linker(engine, config, tick_callouts, add_production_host_abi).await
+        Self::load_inner_with_linker(engine, config, url_client, tick_callouts, add_production_host_abi).await
     }
 
     async fn load_inner_with_linker<F>(
         engine: Engine,
         config: &WasmConfig,
+        url_client: Option<&Result<reqwest::Client, String>>,
         tick_callouts: Arc<TickCalloutState>,
         add_host_abi: F,
     ) -> Result<PreparedModule, String>
@@ -569,7 +603,7 @@ impl RuntimeState {
                 )
             }
             None => (
-                super::oci::cache::ArtifactBytes::from(fetch_bytes(&config.source).await?),
+                super::oci::cache::ArtifactBytes::from(fetch_bytes(&config.source, url_client).await?),
                 None,
                 None,
             ),
@@ -715,7 +749,14 @@ impl RuntimeState {
             return;
         };
         let label = self.config.source.metrics_label();
-        let prepared = match Self::load_inner(engine.clone(), &self.config, self.tick_callouts.clone()).await {
+        let prepared = match Self::load_inner(
+            engine.clone(),
+            &self.config,
+            self.url_client.as_ref(),
+            self.tick_callouts.clone(),
+        )
+        .await
+        {
             Ok(prepared) => prepared,
             Err(error) => {
                 record_wasm_module_load(&label, "error");
@@ -788,7 +829,10 @@ fn finish_oci_refresh(slot: &LoadSlot) {
         .store(next_oci_refresh_deadline(slot, true), Ordering::Release);
 }
 
-async fn fetch_bytes(source: &WasmSourceSpec) -> Result<Vec<u8>, String> {
+async fn fetch_bytes(
+    source: &WasmSourceSpec,
+    url_client: Option<&Result<reqwest::Client, String>>,
+) -> Result<Vec<u8>, String> {
     if let Some(path) = &source.file {
         // Relative paths resolve against the gateway work dir, same as other
         // file-backed configs (access log LocalFile fallback, etc.).
@@ -809,7 +853,7 @@ async fn fetch_bytes(source: &WasmSourceSpec) -> Result<Vec<u8>, String> {
         return Ok(decoded);
     }
     if let Some(url) = &source.url {
-        return fetch_url_bytes(url, source.fetch.as_ref()).await;
+        return fetch_url_bytes(url, source.fetch.as_ref(), url_client).await;
     }
     Err("wasm source has no file/inline/url".to_string())
 }
@@ -886,26 +930,20 @@ pub(super) fn url_fetch_permits() -> &'static tokio::sync::Semaphore {
 /// 4xx never does (an auth failure will not heal, and retrying it only
 /// floods the artifact repository's logs). Total failure surfaces one error
 /// to `get_or_load`, which negative-caches it for `LOAD_RETRY_SECS`.
-async fn fetch_url_bytes(
-    url: &str,
+fn prepare_url_client(
     fetch: Option<&edgion_resources::plugin_configs::WasmFetchSpec>,
-) -> Result<Vec<u8>, String> {
-    fetch_url_bytes_with_permits(url_fetch_permits(), url, fetch).await
-}
-
-async fn fetch_url_bytes_with_permits(
-    permits: &tokio::sync::Semaphore,
-    url: &str,
-    fetch: Option<&edgion_resources::plugin_configs::WasmFetchSpec>,
-) -> Result<Vec<u8>, String> {
-    use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
+    proof: &edgion_common::link_sys_core::outbound_tls::ValidatedLocalTlsSelection<'_>,
+    defaults: &GlobalOutboundTlsSnapshot,
+) -> Result<reqwest::Client, String> {
+    use crate::link_sys::http_client::{
+        build_outbound_client_with_tls_selection, OutboundClientConfig, OutboundRedirect,
+    };
     use crate::plugins::http::common::outbound::egress::{
         default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
     };
     use edgion_common::dns::ResolverSpec;
 
     let timeout = Duration::from_millis(fetch.map(|f| f.timeout_ms).unwrap_or(URL_FETCH_TIMEOUT_SECS * 1000));
-    let tls = fetch.and_then(|f| f.tls.clone());
     // Build the fetch client through the shared outbound policy: redirect-Deny
     // (a followed redirect is an SSRF surface — and would forward the resolved
     // Authorization header on a same-host https->http downgrade) plus an
@@ -919,18 +957,42 @@ async fn fetch_url_bytes_with_permits(
         },
         egress_dns_cache_ttl(),
     ));
-    let client = build_outbound_client(OutboundClientConfig {
-        pool_max_idle_per_host: Some(4),
-        connect_timeout: Some(Duration::from_secs(5)),
-        total_timeout: Some(timeout),
-        redirect: OutboundRedirect::Deny,
-        disable_proxy: true,
-        tls,
-        tls_context: Some("WasmFetch"),
-        dns_resolver: Some(egress),
-        ..Default::default()
-    })
-    .map_err(|e| format!("wasm fetch client: {e}"))?;
+    build_outbound_client_with_tls_selection(
+        OutboundClientConfig {
+            pool_max_idle_per_host: Some(4),
+            connect_timeout: Some(Duration::from_secs(5)),
+            total_timeout: Some(timeout),
+            redirect: OutboundRedirect::Deny,
+            disable_proxy: true,
+            tls_context: Some("WasmFetch"),
+            dns_resolver: Some(egress),
+            ..Default::default()
+        },
+        proof,
+        defaults,
+    )
+    .map_err(|e| format!("wasm fetch client: {e}"))
+}
+
+async fn fetch_url_bytes(
+    url: &str,
+    fetch: Option<&edgion_resources::plugin_configs::WasmFetchSpec>,
+    url_client: Option<&Result<reqwest::Client, String>>,
+) -> Result<Vec<u8>, String> {
+    fetch_url_bytes_with_permits(url_fetch_permits(), url, fetch, url_client).await
+}
+
+async fn fetch_url_bytes_with_permits(
+    permits: &tokio::sync::Semaphore,
+    url: &str,
+    fetch: Option<&edgion_resources::plugin_configs::WasmFetchSpec>,
+    url_client: Option<&Result<reqwest::Client, String>>,
+) -> Result<Vec<u8>, String> {
+    let timeout = Duration::from_millis(fetch.map(|f| f.timeout_ms).unwrap_or(URL_FETCH_TIMEOUT_SECS * 1000));
+    let client = url_client
+        .ok_or_else(|| "wasm fetch client was not prepared".to_string())?
+        .as_ref()
+        .map_err(Clone::clone)?;
 
     let auth_header = match fetch {
         Some(f) if f.auth_header_secret_ref.is_some() => match &f.resolved_auth_header {
@@ -1673,4 +1735,4 @@ impl Drop for VmLease {
 
 #[cfg(test)]
 #[path = "../../../../tests/unit/plugins/http/wasm/vm_manager_test.rs"]
-mod tests;
+pub(crate) mod tests;

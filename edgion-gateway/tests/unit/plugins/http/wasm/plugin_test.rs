@@ -1,7 +1,9 @@
 use super::*;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::PluginLog;
+use edgion_resources::plugin_configs::WasmConfig;
 use edgion_resources::plugin_configs::WasmRawConfig;
+use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
 
 /// Guest whose request-headers hook sets `x-wat-added: yes`, and whose
 /// response-headers hook sends a 403 local response with body "denied"
@@ -221,7 +223,7 @@ fn base_mock() -> MockPluginSession {
 #[tokio::test]
 async fn request_phase_applies_header_set() {
     let f = write_temp_wasm(GUEST_SET_HEADER);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let mut session = base_mock();
     session
         .expect_set_request_header()
@@ -237,8 +239,8 @@ async fn request_phase_applies_header_set() {
 async fn separate_plugin_instances_isolate_state_and_drop_independently() {
     let f = write_temp_wasm(GUEST_SET_HEADER);
     let config = config_for(f.path(), false);
-    let first = WasmPlugin::build(&config);
-    let second = WasmPlugin::build(&config);
+    let first = actual_plugin(&config);
+    let second = actual_plugin(&config);
     let first_entry = first.runtime.get_or_load().await.expect("first runtime loads");
     let second_entry = second.runtime.get_or_load().await.expect("second runtime loads");
     assert!(!Arc::ptr_eq(&first_entry, &second_entry));
@@ -267,7 +269,7 @@ async fn separate_plugin_instances_isolate_state_and_drop_independently() {
 #[tokio::test]
 async fn trap_fail_closed_returns_500() {
     let f = write_temp_wasm(GUEST_TRAP);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).unwrap();
+    let plugin = actual_request(&config_for(f.path(), false)).unwrap();
     let mut session = base_mock();
     // Task 9: the VM-trap fail-close arm records `FailClose` with the
     // kebab-cased reason ("trap") as cause.
@@ -284,7 +286,7 @@ async fn trap_fail_closed_returns_500() {
 #[tokio::test]
 async fn trap_fail_open_continues() {
     let f = write_temp_wasm(GUEST_TRAP);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).unwrap();
+    let plugin = actual_request(&config_for(f.path(), true)).unwrap();
     let mut session = base_mock();
     // Task 9: the VM-trap fail-open arm records `FailOpen` with the same cause.
     session
@@ -300,7 +302,7 @@ async fn trap_fail_open_continues() {
 #[tokio::test]
 async fn known_unsupported_sdk_import_traps_through_failure_policy() {
     let f = write_temp_wasm(GUEST_KNOWN_UNSUPPORTED_TRAP);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).unwrap();
+    let plugin = actual_request(&config_for(f.path(), false)).unwrap();
     let mut session = base_mock();
     session
         .expect_record_outcome()
@@ -315,7 +317,7 @@ async fn known_unsupported_sdk_import_traps_through_failure_policy() {
 #[tokio::test]
 async fn gateway_survives_trap_then_serves_next_request() {
     let f = write_temp_wasm(GUEST_TRAP);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).unwrap();
+    let plugin = actual_request(&config_for(f.path(), true)).unwrap();
     for _ in 0..3 {
         let mut session = base_mock();
         session.expect_record_outcome().return_const(());
@@ -329,7 +331,7 @@ async fn gateway_survives_trap_then_serves_next_request() {
 async fn load_failure_fail_closed() {
     let mut c = WasmConfig::default();
     c.source.file = Some("/nonexistent/missing.wasm".to_string());
-    let plugin = WasmPlugin::create_request(&c).unwrap();
+    let plugin = actual_request(&c).unwrap();
     let mut session = base_mock();
     // Task 9: the module-load-failure fail-close arm records `FailClose`
     // with cause "load".
@@ -496,7 +498,7 @@ async fn callout_success_resumes_request() {
 
     let f = write_temp_wasm(GUEST_CALLOUT);
     let config = callout_config(f.path(), vec![server.uri()], false);
-    let plugin = WasmPlugin::create_request(&config).unwrap();
+    let plugin = actual_request(&config).unwrap();
     let mut session = callout_mock(&server.uri());
     let mut log = PluginLog::new("Wasm");
     let res = plugin.run_request(&mut session, &mut log).await;
@@ -513,7 +515,7 @@ async fn callout_failure_guest_denies() {
     // succeeds and the failure surfaces via the callback.
     let target = "http://127.0.0.1:1";
     let config = callout_config(f.path(), vec![target.to_string()], false);
-    let plugin = WasmPlugin::create_request(&config).unwrap();
+    let plugin = actual_request(&config).unwrap();
     let mut session = callout_mock(target);
     let mut log = PluginLog::new("Wasm");
     let res = plugin.run_request(&mut session, &mut log).await;
@@ -529,7 +531,7 @@ async fn callout_failure_guest_denies() {
 async fn callout_denied_by_allowlist() {
     let f = write_temp_wasm(GUEST_CALLOUT);
     let config = callout_config(f.path(), vec!["https://allowed.example.com".to_string()], false);
-    let plugin = WasmPlugin::create_request(&config).unwrap();
+    let plugin = actual_request(&config).unwrap();
     let mut session = callout_mock("http://127.0.0.1:9999");
     let mut log = PluginLog::new("Wasm");
     let res = plugin.run_request(&mut session, &mut log).await;
@@ -556,7 +558,7 @@ async fn callout_no_resume_falls_back_to_fail_mode() {
     let f = write_temp_wasm(GUEST_CALLOUT_NO_RESUME);
     for (fail_open, expect_500) in [(false, true), (true, false)] {
         let config = callout_config(f.path(), vec![server.uri()], fail_open);
-        let plugin = WasmPlugin::create_request(&config).unwrap();
+        let plugin = actual_request(&config).unwrap();
         let mut session = callout_mock(&server.uri());
         // Task 9: the no-resume fail-mode fallback records the matching
         // outcome with cause "no-resume".
@@ -622,7 +624,7 @@ async fn body_observation_guest_sees_chunk_window() {
     let f = write_temp_wasm(GUEST_BODY_OBSERVER);
     let c = config_for(f.path(), false);
     let mgr = WasmVmManager::new_for_test();
-    let runtime = mgr.new_runtime(&c, CalloutGrant::none());
+    let runtime = super::super::vm_manager::tests::actual_runtime(&mgr, &c, CalloutGrant::none());
     let entry = runtime.get_or_load().await.expect("loads");
     let mut lease = entry.acquire(100).expect("lease");
     lease.state_mut().begin_phase(
@@ -676,7 +678,7 @@ async fn body_pause_is_metered_and_never_breaks_the_stream() {
 
     // The Pausing guest exports a body hook, so the body-filter stage will
     // lease and run it (rather than skipping header-only guests).
-    let plugin = WasmPlugin::build(&c);
+    let plugin = actual_plugin(&c);
     let entry = plugin.runtime.get_or_load().await.expect("loads");
     assert!(entry.has_body_hook(), "guest exports proxy_on_response_body");
 
@@ -697,7 +699,7 @@ async fn body_pause_is_metered_and_never_breaks_the_stream() {
 async fn body_filter_releases_chunk_before_returning_lease_to_pool() {
     let f = write_temp_wasm(GUEST_BODY_OBSERVER);
     let c = config_for(f.path(), false);
-    let plugin = WasmPlugin::build(&c);
+    let plugin = actual_plugin(&c);
     let entry = plugin.runtime.get_or_load().await.expect("module loads");
     let mut session = MockPluginSession::new();
     let chunk = Bytes::from(vec![1, 2, 3, 4]);
@@ -740,7 +742,7 @@ async fn body_filter_is_nonintrusive() {
         let f = write_temp_wasm(wat);
         let c = config_for(f.path(), false);
         // Warm this plugin's runtime so the sync lookup hits.
-        let plugin = WasmPlugin::build(&c);
+        let plugin = actual_plugin(&c);
         plugin.runtime.get_or_load().await.expect("loads");
         let mut session = MockPluginSession::new();
         let chunk = Some(bytes::Bytes::from_static(b"data"));
@@ -772,7 +774,7 @@ async fn reference_guest_module_loads_and_runs() {
     // `Unimplemented` stub now runs through `fail_mode` (Task 7), so
     // `fail_open` must be set to keep that phase a no-op here.
     c.fail_open = true;
-    let plugin = WasmPlugin::create_request(&c).unwrap();
+    let plugin = actual_request(&c).unwrap();
     let mut session = base_mock();
     session
         .expect_set_request_header()
@@ -809,7 +811,7 @@ async fn reference_guest_response_phase_sets_header() {
     let mut c = WasmConfig::default();
     c.source.file = Some(f.path().to_string_lossy().into_owned());
 
-    let plugin = WasmPlugin::build(&c);
+    let plugin = actual_plugin(&c);
     plugin.runtime.get_or_load().await.expect("module loads");
     let mut session = base_mock();
     session.expect_response_headers().returning(Vec::new);
@@ -900,7 +902,7 @@ async fn reference_guest_callout_authorized_resumes() {
     // `fail_mode` (Task 7), so `fail_open` keeps that phase a no-op.
     c.fail_open = true;
 
-    let plugin = WasmPlugin::create_request(&c).unwrap();
+    let plugin = actual_request(&c).unwrap();
     let mut session = ref_mock(vec![
         ("host", "t.example.com"),
         ("x-wasm-callout-url", &server.uri()),
@@ -939,7 +941,7 @@ async fn reference_guest_callout_unauthorized_denies() {
     c.source.file = Some(f.path().to_string_lossy().into_owned());
     c.callout_allowlist = vec![server.uri()];
 
-    let plugin = WasmPlugin::create_request(&c).unwrap();
+    let plugin = actual_request(&c).unwrap();
     let mut session = ref_mock(vec![
         ("host", "t.example.com"),
         ("x-wasm-callout-url", &server.uri()),
@@ -968,7 +970,7 @@ async fn reference_guest_tick_increments_shared_counter() {
 
     // Load warms one instance, which runs on_configure (sets the 1s tick)
     // and arms the module tick task.
-    let plugin = WasmPlugin::build(&c);
+    let plugin = actual_plugin(&c);
     plugin.runtime.get_or_load().await.expect("module loads");
     // Wait for at least two ticks.
     tokio::time::sleep(std::time::Duration::from_millis(2300)).await;
@@ -1027,7 +1029,7 @@ async fn reference_guest_tick_callout_polls_and_publishes() {
 
     // Building the plugin binds its callout grant and preloads its
     // runtime; the eager warm instance runs on_configure (1s tick).
-    let plugin = WasmPlugin::create_request(&c).unwrap();
+    let plugin = actual_request(&c).unwrap();
 
     // Poll until a tick's callout has been published, rather than sleeping a fixed 2.5s
     // and asserting once. The tick is 1s and each one does an HTTP callout round-trip, so
@@ -1085,7 +1087,7 @@ async fn reference_guest_body_observation_accumulates_bytes() {
     // no-op for the request below (this test's own body path goes through
     // the response body filter, not `read_request_body`).
     c.fail_open = true;
-    let plugin = WasmPlugin::build(&c);
+    let plugin = actual_plugin(&c);
     plugin.runtime.get_or_load().await.expect("module loads");
 
     // Drive two response-body chunks through the body filter.
@@ -1214,7 +1216,7 @@ fn body_mock(read: crate::plugins::runtime::traits::session::BodyReadResult) -> 
 #[tokio::test]
 async fn request_body_guest_receives_full_body_and_can_deny() {
     let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let mut session = body_mock(Ok(bytes::Bytes::from_static(b"scan-me")));
     let mut log = PluginLog::new("Wasm");
     let res = plugin.run_request(&mut session, &mut log).await;
@@ -1230,7 +1232,7 @@ async fn request_body_guest_receives_full_body_and_can_deny() {
 #[tokio::test]
 async fn request_body_guest_commits_rewrite_to_shared_body() {
     let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let mut session = body_mock(Ok(bytes::Bytes::from_static(b"abcdef")));
     session
         .expect_overwrite_request_body()
@@ -1253,7 +1255,7 @@ async fn request_body_guest_commits_rewrite_to_shared_body() {
 #[tokio::test]
 async fn request_body_local_response_skips_irrelevant_rewrite_publication() {
     let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE_THEN_DENY);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let mut session = body_mock(Ok(bytes::Bytes::from_static(b"abcdef")));
     let mut log = PluginLog::new("Wasm");
 
@@ -1270,7 +1272,7 @@ async fn request_body_local_response_skips_irrelevant_rewrite_publication() {
 #[tokio::test]
 async fn request_body_trap_discards_staged_rewrite() {
     let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE_THEN_TRAP);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let mut session = body_mock(Ok(bytes::Bytes::from_static(b"abcdef")));
     session.expect_overwrite_request_body().times(0);
     session
@@ -1289,7 +1291,7 @@ async fn request_body_trap_discards_staged_rewrite() {
 #[tokio::test]
 async fn request_body_publication_failure_is_fail_closed_and_observable() {
     let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let mut session = body_mock(Ok(bytes::Bytes::from_static(b"abcdef")));
     session
         .expect_overwrite_request_body()
@@ -1318,7 +1320,7 @@ async fn request_body_publication_failure_is_fail_closed_and_observable() {
 #[tokio::test]
 async fn request_body_publication_fail_open_leaks_no_partial_header_commit() {
     let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), true)).expect("plugin");
     let mut session = body_mock(Ok(bytes::Bytes::from_static(b"abcdef")));
     session
         .expect_overwrite_request_body()
@@ -1354,7 +1356,7 @@ async fn request_body_publication_fail_open_leaks_no_partial_header_commit() {
 async fn request_body_read_failure_fails_closed_by_default() {
     use crate::plugins::runtime::traits::session::BodyReadError;
     let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let mut session = body_mock(Err(BodyReadError::Unimplemented));
     session
         .expect_record_error()
@@ -1377,7 +1379,7 @@ async fn request_body_read_failure_fails_closed_by_default() {
 #[tokio::test]
 async fn ungated_body_read_unimplemented_records_error_diagnostic() {
     let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let mut session = body_mock(Err(BodyReadError::Unimplemented));
     session
         .expect_record_error()
@@ -1400,7 +1402,7 @@ async fn ungated_body_read_unimplemented_records_error_diagnostic() {
 async fn wasm_refusal_is_fail_close_even_with_fail_open_configured() {
     use crate::plugins::runtime::traits::session::BodyReadError;
     let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), true)).expect("plugin");
     let mut session = body_mock(Err(BodyReadError::NotBuffered));
     let mut log = PluginLog::new("Wasm");
 
@@ -1419,7 +1421,7 @@ async fn wasm_refusal_is_fail_close_even_with_fail_open_configured() {
 async fn wasm_read_failure_honors_fail_open() {
     use crate::plugins::runtime::traits::session::BodyReadError;
     let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), true)).expect("plugin");
     let mut session = body_mock(Err(BodyReadError::Unimplemented));
     session
         .expect_record_error()
@@ -1483,7 +1485,7 @@ const GUEST_REQUEST_BODY_READS_HEADER: &str = r#"
 #[tokio::test]
 async fn request_body_guest_can_read_request_header_and_body() {
     let f = write_temp_wasm(GUEST_REQUEST_BODY_READS_HEADER);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let mut session = body_mock(Ok(bytes::Bytes::from_static(b"scan-me")));
     let mut log = PluginLog::new("Wasm");
     let res = plugin.run_request(&mut session, &mut log).await;
@@ -1508,7 +1510,7 @@ async fn request_body_guest_can_read_request_header_and_body() {
 #[tokio::test]
 async fn body_gate_and_wasm_body_phase_both_read_request_body() {
     let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
-    let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+    let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let gate = crate::plugins::runtime::BodyGatedRequestFilter::new(
         plugin,
         edgion_resources::resources::edgion_plugins::BodyRequirement::fail_close(),
@@ -1671,4 +1673,77 @@ async fn response_policy_replace_all_and_individual_ops_preserve_transport_field
             .collect::<Vec<_>>(),
         ["a=1", "b=2"]
     );
+}
+
+fn wasm_owner(config: &WasmConfig) -> edgion_resources::EdgionPlugins {
+    serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "wasm-test", "namespace": "default"},
+        "spec": {"requestPlugins": [{"type": "Wasm", "config": config}]}
+    }))
+    .unwrap()
+}
+
+fn actual_plugin(config: &WasmConfig) -> WasmPlugin {
+    let owner = wasm_owner(config);
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    WasmPlugin::build(
+        &entry,
+        &edgion_common::link_sys_core::outbound_tls::outbound_global_default(),
+    )
+    .unwrap()
+}
+fn actual_request(config: &WasmConfig) -> Option<Box<dyn RequestFilter>> {
+    Some(Box::new(actual_plugin(config)))
+}
+
+#[tokio::test]
+async fn wasm_bound_crypto_load_failure_preserves_both_failure_modes() {
+    for fail_open in [false, true] {
+        let (mut owner, _, _) = super::super::vm_manager::tests::wasm_tls_owner();
+        let EdgionPlugin::Wasm(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+            panic!()
+        };
+        config.fail_open = fail_open;
+        config
+            .source
+            .fetch
+            .as_mut()
+            .unwrap()
+            .tls
+            .as_mut()
+            .unwrap()
+            .resolved_ca_certificates
+            .as_mut()
+            .unwrap()[0]
+            .data
+            .as_mut()
+            .unwrap()
+            .insert("ca.crt".into(), k8s_openapi::ByteString(b"invalid PEM".to_vec()));
+        let defaults = edgion_common::link_sys_core::outbound_tls::test_util::snapshot(Default::default());
+        let prepared = PreparedPluginReferences::from_plugins(&owner);
+        let binding = prepared.bind(&owner).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        let plugin = WasmPlugin::build(&entry, &defaults).unwrap();
+        let mut session = base_mock();
+        session
+            .expect_record_outcome()
+            .withf(move |outcome, _| {
+                if fail_open {
+                    matches!(outcome, DyeOutcome::FailOpen)
+                } else {
+                    matches!(outcome, DyeOutcome::FailClose)
+                }
+            })
+            .times(1)
+            .return_const(());
+        let mut log = PluginLog::new("Wasm");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        if fail_open {
+            assert_eq!(result, PluginRunningResult::GoodNext);
+        } else {
+            assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+        }
+    }
 }

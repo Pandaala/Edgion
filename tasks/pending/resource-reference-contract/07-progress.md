@@ -198,8 +198,29 @@
   unchanged Resources/Common reuse are under
   `tmp/resource-reference-contract/r11c3-verification-20261010/`.
   All fourteen root gates pass without warnings (check 57.583 seconds, Clippy
-  60.761 seconds); exact ten-file commit verification is pending. No push or
-  fresh live/conformance acceptance is claimed. Wasm is the remaining C2 family.
+  60.761 seconds). Committed locally as
+  fed9aa66ec92b4babae292b7b0c2dcc504089db9 after both final commit reviews;
+  all ten committed blobs match the manifest. No push or fresh live/conformance
+  acceptance is claimed. Wasm is the remaining C2 family.
+- R11c.4 Wasm at fed9aa66 passes two fresh independent Astra final static and
+  execution reviews. Eight technical paths plus this ledger bind all three
+  supported stages before cache/private runtime/preload and carry one prepared
+  URL client result. Identity errors reject construction; ordinary crypto errors
+  retain module-load negative-cache/failOpen semantics. Absent/disabled custom
+  TLS remains inert while native HTTPS, OCI, hostcallout and task ownership stay
+  intact. Focused verification passes 798 distinct cases (700 unit, 98 doctests),
+  with ten ignored docs, all 9744 prior identities among 9749, 168 old scoped tests
+  and 205 old function bodies preserved through approved constructor plumbing.
+  Initial new-test failures, runner setup error and one Clippy needless-borrow
+  warning remain recorded. R4 removes only that redundant test-helper borrow;
+  Wasm 227/227 passes again, with explicit unaffected-r3 reuse and old binary
+  provenance retained in verification-final.json under
+  `tmp/resource-reference-contract/r11c4-verification-20261010/`.
+  All fourteen refreshed root gates pass with zero warnings (check 15.645 seconds,
+  Clippy 22.535 seconds), with unchanged frozen source. Root evidence is under
+  `tmp/resource-reference-contract/r11c4-root-verification-20261010/`.
+  Local commit review is pending. Whole-contract review, documentation/task
+  cleanup and fresh live/admission/conformance acceptance remain open; no push.
 - F1's Gateway EdgionBackend and Common LinkSys non-TLS auth material-pairing
   candidates are closed by R9a/R9b. Existing Controller guards remain; these are
   consumer proof boundaries, not demonstrated ingress exploits. Generated CredentialSource operation identity is closed by R8f.1/R8f.2

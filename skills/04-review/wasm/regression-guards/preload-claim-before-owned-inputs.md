@@ -14,6 +14,20 @@ and the atomic preload claim are checked before copying task inputs or spawning
 work. Warm access reads the private atomic publication directly; no global map
 lookup or runtime key is needed.
 
+URL artifact fetch now validates the actual bound Wasm entry before all three
+supported stage caches, private runtime creation, and preload. The canonical
+local TLS proof and one captured global snapshot prepare an immutable HTTP
+client result owned by RuntimeState. Async module loading borrows that result;
+it does not reload defaults or reinterpret detached TLS material. The runtime's
+config clone drops consumed TLS carriers while the original resource stays intact.
+
+Identity or inheritance failures reject construction before runtime ownership.
+Crypto/client construction failures remain module-load errors, retaining the
+existing negative cache and failOpen decision. Absent or disabled custom TLS is
+inert: HTTPS still uses native system TLS, ignores disabled verify/CA/client
+settings, and does not inherit custom global TLS. Non-URL sources skip fetch TLS
+preparation. OCI and guest callout behavior remain outside this change.
+
 ## Rationale and evidence
 
 Finding `avoid-wasm-response-inflight-cache-key-allocation` (campaign source
