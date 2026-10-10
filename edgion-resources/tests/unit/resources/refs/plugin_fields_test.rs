@@ -769,3 +769,57 @@ fn managed_http_disabled_and_inline_guard_do_not_acquire_an_outbound_loan() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn frozen_managed_output_preserves_actual_projection_and_checks_raw_material() {
+    for namespace in [None, Some("default".to_string()), Some("plugins".to_string())] {
+        let mut owner = plugins();
+        owner.metadata.namespace = namespace;
+        owner.spec.request_plugins=serde_json::from_value(json!([{"type":"CredentialInjector","config":{"credentialRef":{"group":"edgion.io","kind":"LinkSys","namespace":"sources","name":"issuer"}}}])).unwrap();
+        let prepared = PreparedPluginReferences::from_plugins(&owner);
+        let binding = prepared.bind(&owner).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        let references = entry.references().unwrap();
+        let token = references.credential().unwrap();
+        let frozen = token.freeze().unwrap();
+        assert_eq!(
+            token.managed_credential_output().unwrap().target(),
+            frozen.managed_credential_output().unwrap().target()
+        );
+        let target = frozen.managed_credential_output().unwrap().target();
+        assert_eq!(target.name(), "auth");
+        assert_eq!(
+            target.scope().namespace(),
+            Some(owner.metadata.namespace.as_deref().unwrap_or("default"))
+        );
+        for case in 0..5 {
+            let mut secret = k8s_openapi::api::core::v1::Secret::default();
+            secret.metadata.name = Some("auth".into());
+            secret.metadata.namespace = target.scope().namespace().map(str::to_string);
+            match case {
+                1 => secret.metadata.name = Some("decoy".into()),
+                2 => secret.metadata.namespace = Some("sources".into()),
+                3 => secret.metadata.name = None,
+                4 => secret.metadata.namespace = None,
+                _ => {}
+            }
+            assert_eq!(token.validate_managed_credential_secret(&secret).is_ok(), case == 0);
+            assert_eq!(frozen.validate_managed_credential_secret(&secret).is_ok(), case == 0);
+        }
+        let mut retargeted = owner.clone();
+        retargeted.metadata.name = Some("changed".into());
+        assert!(!frozen.matches_plugins(&retargeted));
+    }
+    let owner = plugins();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let references = entry.references().unwrap();
+    assert!(references
+        .csrf_secret()
+        .unwrap()
+        .freeze()
+        .unwrap()
+        .managed_credential_output()
+        .is_err());
+}

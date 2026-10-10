@@ -172,7 +172,7 @@ fn consumer_binding(
     source: &DesiredCredentialSource,
     authorization_revision: String,
 ) -> Result<DesiredCredentialConsumer, ResolvedRefsError> {
-    Ok(DesiredCredentialConsumer {
+    let consumer = DesiredCredentialConsumer {
         reference: token
             .freeze()
             .map_err(|error| ResolvedRefsError::InvalidReference { error })?,
@@ -182,10 +182,14 @@ fn consumer_binding(
         source_key: source.logical_key(),
         source_uid: source.uid.clone(),
         source_generation: source.generation,
-        target_secret_namespace: owner.namespace.clone().unwrap_or_else(|| "default".to_string()),
-        target_secret_name: owner.name.clone(),
         authorization_revision,
-    })
+    };
+    if !consumer.matches_source(source) {
+        return Err(ResolvedRefsError::InvalidReference {
+            error: ReferenceError::StaleBinding,
+        });
+    }
+    Ok(consumer)
 }
 
 fn link_sys_material(

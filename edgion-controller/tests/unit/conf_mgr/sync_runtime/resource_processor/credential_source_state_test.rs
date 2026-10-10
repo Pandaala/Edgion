@@ -20,8 +20,6 @@ fn consumer(source_key: &str) -> DesiredCredentialConsumer {
         source_key: source_key.to_string(),
         source_uid: "source-uid".to_string(),
         source_generation: 7,
-        target_secret_namespace: "apps".to_string(),
-        target_secret_name: "provider".to_string(),
         authorization_revision: "same-namespace".to_string(),
     }
 }
@@ -97,4 +95,37 @@ fn replaced_consumer_rejects_notifications_from_the_previous_identity() {
     assert_eq!(registry.stats().reconcile_pending_count, 0);
     assert!(registry.request_consumer_reconcile_if_current(&current, "current".to_string()));
     assert_eq!(registry.stats().reconcile_pending_count, 1);
+}
+
+#[test]
+fn generated_target_is_derived_and_valid_binding_hash_encoding_is_preserved() {
+    let original = consumer("ops/source");
+    let target = original.output_target().unwrap();
+    assert_eq!(target.scope().namespace(), Some("apps"));
+    assert_eq!(target.name(), "provider");
+    let mut old_encoding = Sha256::new();
+    for part in [
+        "consumer-uid",
+        "3",
+        "source-uid",
+        "7",
+        "apps",
+        "provider",
+        "same-namespace",
+        original.reference.owner_revision(),
+        &original.reference.slot_revision(),
+    ] {
+        old_encoding.update(part.as_bytes());
+        old_encoding.update([0]);
+    }
+    assert_eq!(original.binding_revision(), hex::encode(old_encoding.finalize()));
+    for case in 0..3 {
+        let mut changed = original.clone();
+        match case {
+            0 => changed.resource.name = "other".into(),
+            1 => changed.resource.namespace = Some("other".into()),
+            _ => changed.resource.kind = ResourceKind::LinkSys,
+        }
+        assert!(changed.output_target().is_err());
+    }
 }

@@ -103,8 +103,6 @@ fn memory_consumer(name: &str) -> DesiredCredentialConsumer {
         source_key: "ops/source".to_string(),
         source_uid: "source-uid".to_string(),
         source_generation: 2,
-        target_secret_namespace: "apps".to_string(),
-        target_secret_name: name.to_string(),
         authorization_revision: "grant-rv".to_string(),
     }
 }
@@ -128,8 +126,14 @@ fn recoverable_secret(
 ) -> Secret {
     let identity = ManagedSecretIdentity {
         consumer: ConsumerIdentity {
-            namespace: consumer.target_secret_namespace.clone(),
-            name: consumer.target_secret_name.clone(),
+            namespace: consumer
+                .output_target()
+                .unwrap()
+                .scope()
+                .namespace()
+                .unwrap()
+                .to_string(),
+            name: consumer.output_target().unwrap().name().to_string(),
             uid: consumer.uid.clone(),
             generation: consumer.generation,
         },
@@ -143,8 +147,16 @@ fn recoverable_secret(
     let valid_until = issued_at + Duration::from_secs(3_600);
     Secret {
         metadata: ObjectMeta {
-            name: Some(consumer.target_secret_name.clone()),
-            namespace: Some(consumer.target_secret_namespace.clone()),
+            name: Some(consumer.output_target().unwrap().name().to_string()),
+            namespace: Some(
+                consumer
+                    .output_target()
+                    .unwrap()
+                    .scope()
+                    .namespace()
+                    .unwrap()
+                    .to_string(),
+            ),
             labels: Some(BTreeMap::from([(
                 secret_io::LABEL_MANAGED_BY.to_string(),
                 secret_io::MANAGED_BY_VALUE.to_string(),
@@ -152,7 +164,7 @@ fn recoverable_secret(
             annotations: Some(BTreeMap::from([
                 (
                     secret_io::ANNOTATION_CONSUMER_NAME.to_string(),
-                    consumer.target_secret_name.clone(),
+                    consumer.output_target().unwrap().name().to_string(),
                 ),
                 (secret_io::ANNOTATION_CONSUMER_UID.to_string(), consumer.uid.clone()),
                 (
@@ -330,7 +342,11 @@ async fn recover_source_state_does_not_retain_when_persist_is_off() {
     runtime.secret_store.replace_all(HashMap::from([
         ("ops/oauth-client".to_string(), bootstrap_secret()),
         (
-            format!("{}/{}", consumer.target_secret_namespace, consumer.target_secret_name),
+            format!(
+                "{}/{}",
+                consumer.output_target().unwrap().scope().namespace().unwrap(),
+                consumer.output_target().unwrap().name()
+            ),
             secret,
         ),
     ]));
@@ -701,7 +717,6 @@ fn completed_memory_publication_survives_its_own_notification_epoch() {
             .upsert("ops/plugin".to_string(), Arc::new(owner.clone()));
         let mut consumer = memory_consumer("plugin");
         consumer.resource.namespace = Some("ops".to_string());
-        consumer.target_secret_namespace = "ops".to_string();
         consumer.reference = crate::reference_test_support::injector_reference(&owner);
         consumer.authorization_revision = "same-namespace".to_string();
         runtime.credential_source_registry.replace_consumer(consumer.clone());
@@ -934,4 +949,150 @@ fn private_credential_snapshot_shares_actual_owner_and_rejects_other_variants() 
     let mut other = source_owner(false);
     other.spec.config = edgion_resources::resources::link_sys::SystemConfig::Unsupported;
     assert!(ControllerCredentialSourceConfig::new(other).is_none());
+}
+
+fn generated_pair_fixture() -> (
+    Arc<ControllerRuntime>,
+    DesiredCredentialSource,
+    DesiredCredentialConsumer,
+) {
+    let runtime = Arc::new(ControllerRuntime::new());
+    let stores = crate::reference_test_support::install_owner_stores(&runtime);
+    let source = persist_source(true);
+    stores.sources.upsert("ops/source".into(), Arc::new(source_owner(true)));
+    stores.consumers.upsert(
+        "apps/plugin".into(),
+        Arc::new(crate::reference_test_support::injector_owner(
+            "apps",
+            "plugin",
+            "uid-plugin",
+            1,
+            "ops/source",
+        )),
+    );
+    let grant=serde_json::from_value(serde_json::json!({"metadata":{"name":"allow","namespace":"ops","uid":"grant-uid","resourceVersion":"1"},"spec":{"from":[{"group":"edgion.io","kind":"EdgionPlugins","namespace":"apps"}],"to":[{"group":"edgion.io","kind":"LinkSys","name":"source"}]}})).unwrap();
+    runtime.ref_grant_store.upsert("ops/allow".into(), Arc::new(grant));
+    let mut consumer = memory_consumer("plugin");
+    consumer.authorization_revision = runtime
+        .ref_grant_store
+        .query_authorization_revision(consumer.reference.grant_query().unwrap())
+        .unwrap();
+    runtime
+        .secret_store
+        .replace_all(HashMap::from([("ops/oauth-client".into(), bootstrap_secret())]));
+    runtime.credential_source_registry.replace_source(source.clone());
+    runtime.credential_source_registry.replace_consumer(consumer.clone());
+    (runtime, source, consumer)
+}
+
+#[tokio::test]
+async fn actual_pair_gates_recovery_completion_counts_and_memory_clear() {
+    let (runtime, source, consumer) = generated_pair_fixture();
+    assert!(source_is_current(&runtime, &source));
+    assert!(consumer_is_current(&runtime, &consumer));
+    assert!(consumer.matches_source(&source));
+    let revision = source_input_revision(&source);
+    let valid = recoverable_secret(&source, &consumer, &revision);
+    for case in 0..5 {
+        let mut secret = valid.clone();
+        match case {
+            1 => secret.metadata.name = Some("decoy".into()),
+            2 => secret.metadata.namespace = Some("other".into()),
+            3 => secret.metadata.name = None,
+            4 => secret.metadata.namespace = None,
+            _ => {}
+        }
+        runtime.secret_store.replace_all(HashMap::from([
+            ("ops/oauth-client".into(), bootstrap_secret()),
+            ("apps/plugin".into(), secret),
+        ]));
+        let state = recover_source_state(&runtime, &source, std::slice::from_ref(&consumer), &revision);
+        assert_eq!(state.retained.is_some(), case == 0, "case {case}");
+    }
+    runtime.secret_store.replace_all(HashMap::from([
+        ("ops/oauth-client".into(), bootstrap_secret()),
+        ("apps/plugin".into(), valid.clone()),
+    ]));
+    let mut generation_mismatch = consumer.clone();
+    generation_mismatch.source_generation += 1;
+    runtime
+        .credential_source_registry
+        .replace_consumer(generation_mismatch.clone());
+    assert!(source_is_current(&runtime, &source));
+    assert!(consumer_is_current(&runtime, &generation_mismatch));
+    assert!(!generation_mismatch.matches_source(&source));
+    assert!(
+        recover_source_state(&runtime, &source, std::slice::from_ref(&generation_mismatch), &revision)
+            .retained
+            .is_none()
+    );
+    assert!(!reconciled_consumers_current(
+        &runtime,
+        &source.logical_key(),
+        &consumer_revision(std::slice::from_ref(&generation_mismatch), 0)
+    ));
+    runtime.credential_source_registry.replace_consumer(consumer.clone());
+    let expectation = delete_expectation_from_secret(&valid).unwrap();
+    assert!(publication_is_desired(&runtime, &expectation));
+    assert!(reconciled_consumers_current(
+        &runtime,
+        &source.logical_key(),
+        &consumer_revision(std::slice::from_ref(&consumer), 0)
+    ));
+    for case in 0..4 {
+        let mut altered = source.clone();
+        match case {
+            0 => altered.uid = "other-uid".into(),
+            1 => altered.generation += 1,
+            2 => altered.resource.name = "other".into(),
+            _ => {
+                let mut owner = source_owner(true);
+                owner.metadata.uid = Some("other-uid".into());
+                altered.config = ControllerCredentialSourceConfig::new(owner).unwrap();
+            }
+        }
+        assert!(!consumer.matches_source(&altered), "case {case}");
+    }
+    let mut mismatch = consumer.clone();
+    mismatch.source_uid = "other-uid".into();
+    runtime.credential_source_registry.replace_consumer(mismatch.clone());
+    // Individual currentness cannot substitute for correspondence of the chosen pair.
+    assert!(source_is_current(&runtime, &source));
+    assert!(consumer_is_current(&runtime, &mismatch));
+    assert!(!mismatch.matches_source(&source));
+    assert!(!publication_is_desired(&runtime, &expectation));
+    assert!(!reconciled_consumers_current(
+        &runtime,
+        &source.logical_key(),
+        &consumer_revision(std::slice::from_ref(&mismatch), 0)
+    ));
+    let state = recover_source_state(&runtime, &source, std::slice::from_ref(&mismatch), &revision);
+    assert!(state.retained.is_none());
+    assert_eq!(
+        state.publications.len(),
+        1,
+        "historical cleanup does not require current pair acceptance"
+    );
+    let mut state = state;
+    state.retained = Some(retained_publication());
+    runtime.credential_memory.insert_oauth_publication(
+        &source.identity_key(),
+        crate::services::credential_manager::memory::GeneratedSecretEntry {
+            key: "publication".into(),
+            value: zeroize::Zeroizing::new(b"memory-token".to_vec()),
+            issued_at: "issued".into(),
+            valid_until: "deadline".into(),
+            valid_until_mono: Instant::now() + Duration::from_secs(60),
+        },
+    );
+    publish_manager_result(&runtime, &source, &state).await;
+    assert_eq!(
+        runtime
+            .credential_source_registry
+            .result(&source.logical_key())
+            .unwrap()
+            .published_consumer_count,
+        0
+    );
+    assert!(runtime.credential_memory.active(&source.identity_key()).is_some());
 }

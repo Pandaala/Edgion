@@ -56,12 +56,24 @@
   all active output identities are checked before output IO, and existing attempt
   fences, adoption, forced SSA and nontransactional publication remain unchanged.
   Verification passes 259 unit, 74 doc and 36 schema cases, preserving ten ignored
-  docs and all 9702 prior identities among 9704. Final local commit is pending.
+  docs and all 9702 prior identities among 9704. Committed locally as
+  b896e5c661a52f60d7af1a81f4b8718df3c938b4 after both final commit reviews;
+  all thirteen committed blobs match the manifest. No push occurred.
+- R8f.1 managed credential projection at b896e5c66 passes both independent
+  Astra static/execution reviews and all fourteen root gates, zero warnings.
+  Fifteen technical paths plus this ledger remove duplicate output coordinates,
+  bind consumer/source pairs and check qualified material identity before decode.
+  Historical cleanup remains independent of adoption. Verification passes 323
+  unit, 74 doc and 36 schema cases (433 distinct), retaining ten ignored docs
+  and all 9704 old identities among 9709. The added generation-only negative
+  control passes; the initial count regression and its correction remain in the
+  evidence. Local commit is pending the final manifest review. R8f.2 private IO
+  identity, API responses and orphan cleanup require a separate reviewed batch.
 - F1 read-only inventory identified two further bounded material-pairing candidates:
   Gateway EdgionBackend credentials and Common LinkSys non-TLS auth. Existing
   Controller guards remain; these are missing consumer proof boundaries, not
   demonstrated ingress exploits. Generated CredentialSource operation identity
-  remains explicit backlog alongside ACME output identity. Plan each separately.
+  remains explicit backlog; ACME output identity is closed by R8e.2. Plan each separately.
 - Native Gateway material selection preserves omitted raw namespaces without
   relaxing native group/kind or Grant semantics. Default's candidate reads are not
   atomic; registered dependencies and subsequent source events reconcile changes.

@@ -98,3 +98,21 @@ issuer-validity semantics explicitly rather than restoring unused retention.
   authorized single-active storage and removal of the capacity field on 2026-10-06.
   The user authorized closure and deletion of the task after verification.
 - [Credential lifecycle](../../../../docs/en/user-guide/http-route/filters/edgion-plugins/credential-injector.md#credential-lifecycle).
+
+
+## Actual consumer/source and local material boundary
+
+Desired consumer output coordinates now derive from its frozen actual Injector
+field rather than independent strings. Pair validation binds that consumer to the
+selected captured LinkSys source, including UID/generation, while retaining input,
+Grant, live owner and publication checks. Admission, recovery adoption, fan-out,
+completion, desired-publication checks, counts and memory clearing use the pair.
+A pair mismatch must not mark another source's token as successfully published.
+
+Qualified local generated Secret reads validate raw name/namespace before bearer
+bytes are parsed; no TLS bare-default selection is added. Existing expiry, active
+entry replacement and independent retained publication owners stay unchanged.
+Cleanup expectations remain recoverable independently of token adoption and do
+not require a live old source/consumer. API-returned output identity and orphan
+cleanup IO are explicitly deferred to the next bounded output-IO batch; this
+change does not strengthen their existing POST/409/CAS/delete protocol by itself.

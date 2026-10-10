@@ -130,6 +130,17 @@ impl PartialEq for FrozenFieldReference {
 }
 impl Eq for FrozenFieldReference {}
 impl FrozenFieldReference {
+    pub fn managed_credential_output(&self) -> Result<BoundFieldReference<'_>, ReferenceError> {
+        let slot = self.topology.slot(&self.position).ok_or(ReferenceError::StaleBinding)?;
+        managed_credential_output(self.topology.owner(), slot)
+    }
+    pub fn validate_managed_credential_secret(
+        &self,
+        secret: &k8s_openapi::api::core::v1::Secret,
+    ) -> Result<(), ReferenceError> {
+        validate_managed_output_metadata(self.managed_credential_output()?, secret)
+    }
+
     pub fn grant_query(&self) -> Result<GrantQuery<'_>, ReferenceError> {
         let slot = self.topology.slot(&self.position).ok_or(ReferenceError::StaleBinding)?;
         let target = slot.target.as_ref().map_err(|error| *error)?.borrowed()?;
@@ -602,6 +613,43 @@ impl PreparedSlot {
     }
 }
 
+fn managed_credential_output<'a>(
+    owner: &'a OwnerSnapshot,
+    slot: &'a PreparedSlot,
+) -> Result<BoundFieldReference<'a>, ReferenceError> {
+    let target = slot.target.as_ref().map_err(|error| *error)?.borrowed()?;
+    if !matches!(
+        slot.position,
+        FieldSlot::Plugin {
+            role: Role::Credential,
+            ..
+        }
+    ) || target.group_kind().group() != "edgion.io"
+        || target.group_kind().kind() != "LinkSys"
+    {
+        return Err(ReferenceError::UnsupportedTarget);
+    }
+    let identity = owner.identity()?;
+    Ok(BoundFieldReference {
+        source: owner.source()?,
+        owner: identity,
+        target: ObjectIdentity::checked("", "Secret", identity.scope(), identity.name())?,
+        _position: &slot.position,
+    })
+}
+fn validate_managed_output_metadata(
+    reference: BoundFieldReference<'_>,
+    secret: &k8s_openapi::api::core::v1::Secret,
+) -> Result<(), ReferenceError> {
+    let target = reference.target();
+    if secret.metadata.name.as_deref() != Some(target.name())
+        || secret.metadata.namespace.as_deref() != target.scope().namespace()
+    {
+        return Err(ReferenceError::StaleBinding);
+    }
+    Ok(())
+}
+
 /// An opaque capability loan from an actual bound resource field.
 /// Constructors are private; a caller cannot supply its own source/profile/slot.
 #[derive(Clone, Copy)]
@@ -615,25 +663,15 @@ impl ReferenceToken<'_> {
     /// A managed CredentialInjector output is local to its actual plugin owner.
     /// It is derived only from the LinkSys branch of that specific field.
     pub fn managed_credential_output(&self) -> Result<BoundFieldReference<'_>, ReferenceError> {
-        let reference = self.validated()?;
-        if !matches!(
-            self.slot.position,
-            FieldSlot::Plugin {
-                role: Role::Credential,
-                ..
-            }
-        ) || reference.target().group_kind().group() != "edgion.io"
-            || reference.target().group_kind().kind() != "LinkSys"
-        {
-            return Err(ReferenceError::UnsupportedTarget);
-        }
-        Ok(BoundFieldReference {
-            source: reference.source(),
-            owner: reference.owner(),
-            target: ObjectIdentity::checked("", "Secret", reference.owner().scope(), reference.owner().name())?,
-            _position: &self.slot.position,
-        })
+        managed_credential_output(self.owner, self.slot)
     }
+    pub fn validate_managed_credential_secret(
+        &self,
+        secret: &k8s_openapi::api::core::v1::Secret,
+    ) -> Result<(), ReferenceError> {
+        validate_managed_output_metadata(self.managed_credential_output()?, secret)
+    }
+
     /// Freeze only a validated descriptor for async work. Runtime consumers
     /// must recheck its real owner, registry and current Grant before use.
     pub fn freeze(&self) -> Result<FrozenFieldReference, ReferenceError> {

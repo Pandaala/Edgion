@@ -20,8 +20,6 @@ fn consumer(name: &str, generation: i64) -> DesiredCredentialConsumer {
         source_key: "ops/source".to_string(),
         source_uid: "source-uid".to_string(),
         source_generation: 2,
-        target_secret_namespace: "apps".to_string(),
-        target_secret_name: name.to_string(),
         authorization_revision: "grant-rv".to_string(),
     }
 }

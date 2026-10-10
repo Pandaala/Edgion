@@ -271,3 +271,22 @@ kind) in the structural CRD subtree so Kubernetes cannot prune unsupported group
 or kind before typed validation. The focused CRD guard compares this subtree to
 SecretObjectReference. Handler apply/delete clear both Secret and cross-namespace
 reference managers; failed references still rebuild their current wakeup edges.
+
+
+## Managed credential output correspondence
+
+A LinkSys-backed CredentialInjector derives its generated Secret from the actual
+consumer field: the Secret uses the EdgionPlugins namespace/name. Desired consumer
+state retains the frozen field and no independent target strings. Frozen and
+borrowed views share the same finite projection. Consumer/source correspondence
+includes the captured LinkSys identity, source UID/generation and actual target;
+it complements live owner, input, Grant and publication revision checks.
+
+Injector and recovery qualified-store reads require explicit matching Secret
+name/namespace before bearer parsing. This consumer does not acquire TLS's
+bare-default fallback. Managed markers, expiry and single-active memory remain
+independent. Pair validation also gates fan-out, completion acceptance, publication
+desirability, published counts and memory clearing. Historical cleanup expectation
+recovery remains independent of current token adoptability or live owner existence.
+The subsequent generated-output IO batch still owns API/409/write-response and
+old-orphan cleanup correspondence; this local-read migration does not close it.

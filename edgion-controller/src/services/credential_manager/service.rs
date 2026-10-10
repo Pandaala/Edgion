@@ -620,7 +620,11 @@ async fn acquire_and_publish(
         ),
         None => None,
     };
-    if !generation_and_fence_hold(generation, kube_leader, fence.as_ref()).await || !source_is_current(runtime, source)
+    if !generation_and_fence_hold(generation, kube_leader, fence.as_ref()).await
+        || !source_is_current(runtime, source)
+        || !consumers
+            .iter()
+            .all(|consumer| consumer.matches_source(source) && consumer_is_current(runtime, consumer))
     {
         return Err(ReconcileFailure::transient(None));
     }
@@ -719,6 +723,12 @@ async fn acquire_and_publish(
                 return Err(ReconcileFailure::transient(None));
             }
         }
+        if !consumers
+            .iter()
+            .all(|consumer| consumer.matches_source(source) && consumer_is_current(runtime, consumer))
+        {
+            return Err(ReconcileFailure::transient(None));
+        }
         try_publish_persist_off(runtime, source, &retained, generation)?;
         notify_consumers(runtime, consumers, retained.publication_generation.clone()).await;
     } else {
@@ -727,6 +737,7 @@ async fn acquire_and_publish(
         let fence = fence.as_ref().ok_or_else(ReconcileFailure::rotation)?;
         for consumer in consumers {
             if !consumer_is_current(runtime, consumer)
+                || !consumer.matches_source(source)
                 || !source_is_current(runtime, source)
                 || !is_current_generation(generation)
             {
@@ -992,17 +1003,20 @@ fn recover_source_state(
     // whether the current owner can still adopt its credential material.
     let mut publications = HashMap::new();
     for consumer in consumers {
-        let Some(secret) = runtime
-            .secret_store
-            .get(Some(&consumer.target_secret_namespace), &consumer.target_secret_name)
-        else {
+        let Ok(target) = consumer.output_target() else {
+            continue;
+        };
+        let Some(target_namespace) = target.scope().namespace() else {
+            continue;
+        };
+        let Some(secret) = runtime.secret_store.get(Some(target_namespace), target.name()) else {
             continue;
         };
         let Some(expected) = delete_expectation_from_secret(&secret) else {
             continue;
         };
-        if expected.identity.consumer.namespace == consumer.target_secret_namespace
-            && expected.identity.consumer.name == consumer.target_secret_name
+        if expected.identity.consumer.namespace == target_namespace
+            && expected.identity.consumer.name == target.name()
             && expected.identity.consumer.uid == consumer.uid
             && expected.identity.source.name == source.logical_key()
             && expected.identity.source.uid == source.uid
@@ -1013,7 +1027,9 @@ fn recover_source_state(
     if !source.persist
         || !source_is_current(runtime, source)
         || source_input_revision(source) != input_revision
-        || !consumers.iter().all(|consumer| consumer_is_current(runtime, consumer))
+        || !consumers
+            .iter()
+            .all(|consumer| consumer_is_current(runtime, consumer) && consumer.matches_source(source))
     {
         return SourceState {
             publications,
@@ -1024,16 +1040,22 @@ fn recover_source_state(
     let mut recovered: Option<RetainedPublication> = None;
 
     for consumer in consumers {
-        let Some(secret) = runtime
-            .secret_store
-            .get(Some(&consumer.target_secret_namespace), &consumer.target_secret_name)
-        else {
+        let Ok(target) = consumer.output_target() else {
             continue;
         };
+        let Some(target_namespace) = target.scope().namespace() else {
+            continue;
+        };
+        let Some(secret) = runtime.secret_store.get(Some(target_namespace), target.name()) else {
+            continue;
+        };
+        if consumer.reference.validate_managed_credential_secret(&secret).is_err() {
+            continue;
+        }
         let identity = ManagedSecretIdentity {
             consumer: ConsumerIdentity {
-                namespace: consumer.target_secret_namespace.clone(),
-                name: consumer.target_secret_name.clone(),
+                namespace: target_namespace.to_string(),
+                name: target.name().to_string(),
                 uid: consumer.uid.clone(),
                 generation: consumer.generation,
             },
@@ -1319,6 +1341,7 @@ fn publication_is_desired(runtime: &ControllerRuntime, expected: &DeleteExpectat
     source.persist
         && source_is_current(runtime, &source)
         && consumer_is_current(runtime, &consumer)
+        && consumer.matches_source(&source)
         && consumer.uid == expected.identity.consumer.uid
         && consumer.generation == expected.identity.consumer.generation
         && consumer.source_key == expected.identity.source.name
@@ -1385,10 +1408,20 @@ async fn publish_consumer(
     leader: &LeaderHandle,
     generation: u64,
 ) -> Result<DeleteExpectation, ReconcileFailure> {
+    if !consumer.matches_source(source) {
+        return Err(ReconcileFailure::transient(None));
+    }
+    let target = consumer
+        .output_target()
+        .map_err(|_| ReconcileFailure::transient(None))?;
+    let namespace = target
+        .scope()
+        .namespace()
+        .ok_or_else(|| ReconcileFailure::transient(None))?;
     let identity = ManagedSecretIdentity {
         consumer: ConsumerIdentity {
-            namespace: consumer.target_secret_namespace.clone(),
-            name: consumer.target_secret_name.clone(),
+            namespace: namespace.to_string(),
+            name: target.name().to_string(),
             uid: consumer.uid.clone(),
             generation: consumer.generation,
         },
@@ -1412,9 +1445,9 @@ async fn publish_consumer(
         metadata: &metadata,
         bearer_token: access_token.as_bytes(),
     };
-    let api = Api::<Secret>::namespaced(client.clone(), &consumer.target_secret_namespace);
+    let api = Api::<Secret>::namespaced(client.clone(), namespace);
     let current = api
-        .get_opt(&consumer.target_secret_name)
+        .get_opt(target.name())
         .await
         .map_err(secret_io::SecretIoError::from)
         .map_err(secret_io_failure)?;
@@ -1422,6 +1455,7 @@ async fn publish_consumer(
         is_current_generation(generation)
             && source_is_current(runtime, source)
             && consumer_is_current(runtime, consumer)
+            && consumer.matches_source(source)
     };
     let published = match current {
         None => {
@@ -1432,7 +1466,7 @@ async fn publish_consumer(
                 Ok(secret) => secret,
                 Err(secret_io::SecretIoError::Kubernetes(kube::Error::Api(response))) if response.code == 409 => {
                     let winner = api
-                        .get(&consumer.target_secret_name)
+                        .get(target.name())
                         .await
                         .map_err(secret_io::SecretIoError::from)
                         .map_err(secret_io_failure)?;
@@ -1535,7 +1569,10 @@ async fn publish_manager_result(runtime: &ControllerRuntime, source: &DesiredCre
         .credential_source_registry
         .consumers_for_source(&source.logical_key());
     let published_consumer_count = if !source.persist && state.retained.is_some() {
-        consumers.len() as u32
+        consumers
+            .iter()
+            .filter(|consumer| consumer.matches_source(source))
+            .count() as u32
     } else {
         consumers
             .iter()
@@ -1544,7 +1581,8 @@ async fn publish_manager_result(runtime: &ControllerRuntime, source: &DesiredCre
                     .publications
                     .get(&consumer.logical_key())
                     .is_some_and(|expectation| {
-                        expectation.identity.consumer.uid == consumer.uid
+                        consumer.matches_source(source)
+                            && expectation.identity.consumer.uid == consumer.uid
                             && expectation.identity.source.uid == source.uid
                             && expectation.binding_revision == consumer.binding_revision()
                     })
@@ -1581,7 +1619,11 @@ async fn publish_manager_result(runtime: &ControllerRuntime, source: &DesiredCre
         conflicted_consumer_count: state.conflicted_consumer_count,
     };
     let key = source.logical_key();
-    if source_is_current(runtime, source) && consumers.iter().all(|consumer| consumer_is_current(runtime, consumer)) {
+    if source_is_current(runtime, source)
+        && consumers
+            .iter()
+            .all(|consumer| consumer_is_current(runtime, consumer) && consumer.matches_source(source))
+    {
         maybe_clear_memory_after_fan_out(runtime, source, published_consumer_count, consumers.len() as u32);
     }
     if runtime.credential_source_registry.replace_result(key.clone(), result) {
@@ -1656,6 +1698,9 @@ fn source_is_current(runtime: &ControllerRuntime, expected: &DesiredCredentialSo
 }
 
 fn consumer_is_current(runtime: &ControllerRuntime, expected: &DesiredCredentialConsumer) -> bool {
+    if expected.output_target().is_err() {
+        return false;
+    }
     if runtime
         .credential_source_registry
         .consumer(&expected.logical_key())
@@ -1695,8 +1740,14 @@ fn consumer_is_current(runtime: &ControllerRuntime, expected: &DesiredCredential
 
 fn reconciled_consumers_current(runtime: &ControllerRuntime, source_key: &str, expected_revision: &str) -> bool {
     let consumers = runtime.credential_source_registry.consumers_for_source(source_key);
+    let Some(source) = runtime.credential_source_registry.source(source_key) else {
+        return false;
+    };
     consumer_revision(&consumers, 0) == expected_revision
-        && consumers.iter().all(|consumer| consumer_is_current(runtime, consumer))
+        && source_is_current(runtime, &source)
+        && consumers
+            .iter()
+            .all(|consumer| consumer_is_current(runtime, consumer) && consumer.matches_source(&source))
 }
 
 fn source_input_revision(source: &DesiredCredentialSource) -> String {

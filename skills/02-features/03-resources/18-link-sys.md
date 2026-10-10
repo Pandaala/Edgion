@@ -465,6 +465,12 @@ spec:
 |-------|------|---------|-------------|
 | `persist` | boolean | `true` | `true` writes a generated Secret named after the consuming `EdgionPlugins` (Kubernetes-only); outside Kubernetes it is `Accepted=False` / `UnsupportedConfigurationCenter`. `false` keeps one active token per LinkSys identity (`namespace/name/uid`) in Controller-local memory: no generated Secret, allowed on leader-only Kubernetes and FS/etcd. Kubernetes `ha_mode: all-serve` + `persist: false` is `Accepted=False` / `UnsupportedHaMode`. |
 
+Generated Secrets use the consuming EdgionPlugins namespace and name, independently
+of the LinkSys source namespace. The current consumer/source binding and acquired
+Secret metadata must match before a generated token is embedded. Local generated
+Secret lookup remains qualified by namespace; it does not add a bare `default`
+lookup alias. Publication ownership and token validity remain separate checks.
+
 The active-entry map is **Controller-only**. It is never a LinkSys spec field, never on
 LinkSys conf_sync, never on LinkSys status, and never on Admin LinkSys
 `/configclient`. The active token is still copied onto the consuming

@@ -562,8 +562,6 @@ async fn persist_on_link_sys_still_requires_managed_secret() {
         source_key: "default/source".to_string(),
         source_uid: "source-uid".to_string(),
         source_generation: 7,
-        target_secret_namespace: "default".to_string(),
-        target_secret_name: "injector".to_string(),
         authorization_revision: "same-namespace".to_string(),
     };
     let mut secret = managed_secret("injector", b"secret-token");
@@ -580,4 +578,41 @@ async fn persist_on_link_sys_still_requires_managed_secret() {
     resolve(&mut ep, &owner, &context).await;
     assert_eq!(resolved_value(&ep), Some("secret-token"));
     assert_eq!(resolved_until(&ep), Some("2099-08-27T12:00:00Z"));
+}
+
+#[tokio::test]
+async fn actual_managed_output_identity_precedes_injector_material_and_status() {
+    for case in 0..5 {
+        let source = link_sys_desired_source(true);
+        let (context, runtime) = make_context(HashMap::new());
+        runtime.credential_source_registry.replace_source(source);
+        let owner = ResourceRef::new(ResourceKind::EdgionPlugins, Some("default".into()), "injector".into());
+        let mut initial = link_sys_plugin();
+        resolve(&mut initial, &owner, &context).await;
+        let consumer = runtime.credential_source_registry.consumer("default/injector").unwrap();
+        let mut secret = managed_secret("injector", if case == 0 { b"valid-token" } else { &[255] });
+        secret
+            .metadata
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(BINDING_REVISION_ANNOTATION.into(), consumer.binding_revision());
+        match case {
+            1 => secret.metadata.name = Some("decoy".into()),
+            2 => secret.metadata.namespace = Some("other".into()),
+            3 => secret.metadata.name = None,
+            4 => secret.metadata.namespace = None,
+            _ => {}
+        }
+        runtime
+            .secret_store
+            .replace_all(HashMap::from([("default/injector".into(), secret)]));
+        let mut actual = link_sys_plugin();
+        resolve(&mut actual, &owner, &context).await;
+        assert_eq!(
+            resolved_value(&actual),
+            if case == 0 { Some("valid-token") } else { None }
+        );
+        assert_eq!(status_errors(&actual, &owner, &context).is_empty(), case == 0);
+    }
 }

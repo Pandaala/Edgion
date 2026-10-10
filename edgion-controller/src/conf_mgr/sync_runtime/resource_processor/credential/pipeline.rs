@@ -255,6 +255,12 @@ pub(crate) fn resolve_managed_credential_output(
         Ok(reference) => fetch_bound_reference(ctx, owner, reference, register),
         Err(error) => BoundFetchOutcome::Invalid(error),
     };
+    let outcome = outcome.and_then(
+        |authorized| match token.validate_managed_credential_secret(&authorized.secret) {
+            Ok(()) => BoundFetchOutcome::Ok(authorized),
+            Err(error) => BoundFetchOutcome::Invalid(error),
+        },
+    );
     resolve_bound_outcome(outcome, owner, &super::BearerResolver)
 }
 

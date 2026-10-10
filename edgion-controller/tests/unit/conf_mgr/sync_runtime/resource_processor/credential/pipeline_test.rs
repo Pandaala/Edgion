@@ -1246,3 +1246,59 @@ fn actual_acme_account_does_not_inherit_disabled_grant_exception() {
         Ok(ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing { .. }))
     ));
 }
+
+#[test]
+fn generated_output_rejects_mismatched_raw_material_before_bearer_decode() {
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+    for case in 0..7 {
+        let owner = crate::reference_test_support::injector_owner("default", "consumer", "uid", 1, "default/source");
+        let prepared = PreparedPluginReferences::from_plugins(&owner);
+        let binding = prepared.bind(&owner).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        let refs = entry.references().unwrap();
+        let token = refs.credential().unwrap();
+        let mut secret = Secret {
+            metadata: ObjectMeta {
+                name: Some("consumer".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            data: Some(std::collections::BTreeMap::from([(
+                "bearerToken".into(),
+                k8s_openapi::ByteString(if case == 0 { b"valid".to_vec() } else { vec![255] }),
+            )])),
+            ..Default::default()
+        };
+        match case {
+            1 => secret.metadata.name = Some("decoy".into()),
+            2 => secret.metadata.namespace = Some("other".into()),
+            3 => secret.metadata.name = None,
+            4 => secret.metadata.namespace = None,
+            _ => {}
+        }
+        let key = if case == 5 { "consumer" } else { "default/consumer" };
+        let (ctx, runtime) = make_ctx(HashMap::from([(key.to_string(), secret)]));
+        let dependent = ResourceRef::new(ResourceKind::EdgionPlugins, Some("default".into()), "consumer".into());
+        let (result, reads) = observe_bound_reads(|| resolve_managed_credential_output(&ctx, &dependent, token, true));
+        assert_eq!(reads, vec!["authorization", "secret"]);
+        match case {
+            0 => assert!(result.is_ok()),
+            1..=4 => assert!(matches!(
+                result,
+                Err(crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError::InvalidReference { .. })
+            )),
+            5 => assert!(matches!(
+                result,
+                Err(crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError::SecretNotFound { .. })
+            )),
+            _ => assert!(matches!(
+                result,
+                Err(crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError::DecodeError { .. })
+            )),
+        }
+        assert_eq!(
+            runtime.secret_ref_manager.get_dependencies(&dependent.key()),
+            ["default/consumer"]
+        );
+    }
+}

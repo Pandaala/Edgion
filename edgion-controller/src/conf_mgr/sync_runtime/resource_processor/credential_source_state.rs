@@ -94,8 +94,6 @@ pub struct DesiredCredentialConsumer {
     pub source_key: String,
     pub source_uid: String,
     pub source_generation: i64,
-    pub target_secret_namespace: String,
-    pub target_secret_name: String,
     pub authorization_revision: String,
 }
 
@@ -124,6 +122,44 @@ pub struct CredentialSourceRegistryStats {
 }
 
 impl DesiredCredentialConsumer {
+    pub fn output_target(
+        &self,
+    ) -> Result<edgion_resources::resources::refs::ObjectIdentity<'_>, edgion_resources::resources::refs::ReferenceError>
+    {
+        use edgion_resources::resources::refs::ReferenceError;
+        let target = self.reference.managed_credential_output()?.target();
+        if self.resource.kind_str() != "EdgionPlugins"
+            || target.name() != self.resource.name
+            || target.scope().namespace() != Some(self.resource.namespace.as_deref().unwrap_or("default"))
+        {
+            return Err(ReferenceError::StaleBinding);
+        }
+        Ok(target)
+    }
+    pub fn matches_source(&self, source: &DesiredCredentialSource) -> bool {
+        if self.output_target().is_err() {
+            return false;
+        }
+        let Ok(query) = self.reference.grant_query() else {
+            return false;
+        };
+        let target = query.target();
+        let owner = source.config.owner();
+        let namespace = owner.metadata.namespace.as_deref().unwrap_or("default");
+        target.group_kind().group() == "edgion.io"
+            && target.group_kind().kind() == "LinkSys"
+            && source.resource.kind_str() == "LinkSys"
+            && target.scope().namespace() == Some(namespace)
+            && owner.metadata.name.as_deref() == Some(target.name())
+            && source.resource.namespace.as_deref().unwrap_or("default") == namespace
+            && source.resource.name == target.name()
+            && self.source_key == source.logical_key()
+            && self.source_uid == source.uid
+            && self.source_generation == source.generation
+            && owner.metadata.uid.as_deref() == Some(source.uid.as_str())
+            && owner.metadata.generation.unwrap_or_default() == source.generation
+    }
+
     pub fn logical_key(&self) -> String {
         self.resource.resource_key()
     }
@@ -139,8 +175,8 @@ impl DesiredCredentialConsumer {
             &self.generation.to_string(),
             self.source_uid.as_str(),
             &self.source_generation.to_string(),
-            self.target_secret_namespace.as_str(),
-            self.target_secret_name.as_str(),
+            self.resource.namespace.as_deref().unwrap_or("default"),
+            self.resource.name.as_str(),
             self.authorization_revision.as_str(),
             self.reference.owner_revision(),
             &self.reference.slot_revision(),

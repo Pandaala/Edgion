@@ -654,3 +654,19 @@ storage namespaces remain distinct, and auto parentRefs do not replace the HTTP-
 attachment. Existing adoption, forced SSA, LeaderFence and between-write checks
 remain authoritative. This migration does not establish live CA/API-server or
 Gateway API conformance verification.
+
+
+## R8f.1 managed credential projection and local material
+
+Frozen and borrowed actual CredentialInjector fields share the generated local
+Secret projection. Desired consumer state no longer duplicates namespace/name.
+Selected consumer/source pairs are validated through captured source identity and
+existing live/input/Grant revisions at adoption, publication and completion gates.
+Injector/recovery require qualified raw Secret metadata correspondence before
+bearer parsing; no generic default/bare selector is added. Historical cleanup
+expectation harvesting remains independent of current pair/token eligibility.
+
+R8f.2 remains open: private ManagedSecretIdentity construction, derived IO APIs,
+GET/409/create/patch/repair response identity, and old-source/orphan cleanup
+correspondence with post-GET authorization and UID/RV deletion preconditions.
+No live API/issuer or Gateway API conformance verification is claimed here.
