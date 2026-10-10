@@ -18,9 +18,13 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use edgion_common::dns::ResolverSpec;
-use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa};
+use edgion_common::link_sys_core::outbound_tls::{
+    resolve_validated_outbound_tls, validate_active_tls_inheritance, validate_local_tls_selection, EffectiveCa,
+    GlobalOutboundTlsSnapshot, ValidatedLocalTlsSelection,
+};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::LdapAuthConfig;
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::resources::refs::plugin_fields::BoundPluginEntry;
 use ldap3::{LdapConnAsync, LdapConnSettings, StdStream};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, RootCertStore};
@@ -269,8 +273,11 @@ fn build_ldap_rustls_config(
 
 impl LdapAuth {
     /// Create a new LdapAuth plugin from configuration
-    pub fn create(config: &LdapAuthConfig) -> Option<Box<dyn RequestFilter>> {
-        match Self::new(config) {
+    pub fn create(
+        entry: &BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+    ) -> Option<Box<dyn RequestFilter>> {
+        match Self::new(entry, defaults) {
             Ok(plugin) => Some(Box::new(plugin)),
             Err(e) => {
                 tracing::error!(
@@ -283,20 +290,40 @@ impl LdapAuth {
         }
     }
 
-    pub fn new(config: &LdapAuthConfig) -> Result<Self, String> {
+    pub(crate) fn validate_tls_entry<'a>(
+        entry: &'a BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+    ) -> Result<Option<ValidatedLocalTlsSelection<'a>>, String> {
+        let error = || "LdapAuth TLS configuration error: invalid owning TLS reference".to_string();
+        let EdgionPlugin::LdapAuth(config) = entry.config() else {
+            return Err(error());
+        };
+        entry.owner_namespace().map_err(|_| error())?;
+        // Plain LDAP does not consume local TLS material or inherited policy.
+        if !config.ldaps && !config.start_tls {
+            return Ok(None);
+        }
+        let selection = entry.outbound_tls_selection().map_err(|_| error())?;
+        let proof = validate_local_tls_selection(selection).map_err(|_| error())?;
+        if proof.active_field().is_none() {
+            return Err(error());
+        }
+        validate_active_tls_inheritance(&proof, defaults).map_err(|_| error())?;
+        Ok(Some(proof))
+    }
+
+    pub fn new(entry: &BoundPluginEntry<'_>, defaults: &GlobalOutboundTlsSnapshot) -> Result<Self, String> {
+        let proof = Self::validate_tls_entry(entry, defaults)?;
+        let EdgionPlugin::LdapAuth(config) = entry.config() else {
+            return Err("LdapAuth TLS configuration error: invalid owning TLS reference".into());
+        };
         let scheme = if config.ldaps { "ldaps" } else { "ldap" };
         let ldap_url = format!("{}://{}:{}", scheme, config.ldap_host, config.ldap_port);
         let timeout = Duration::from_millis(config.timeout);
 
-        let tls_config = if config.ldaps || config.start_tls {
-            let resolved = resolve_outbound_tls(
-                &config.tls,
-                config.resolved_ca_certificates.as_deref(),
-                config.resolved_client_certificate.as_ref(),
-                true,
-                "LdapAuth",
-            )
-            .map_err(|e| format!("LdapAuth TLS configuration error: {e:?}"))?;
+        let tls_config = if let Some(proof) = proof {
+            let resolved = resolve_validated_outbound_tls(&proof, true, defaults)
+                .map_err(|e| format!("LdapAuth TLS configuration error: {e:?}"))?;
 
             // M4: when verify=false the resolver drops client_identity. Warn the
             // operator that their clientCertificateRef is not being used.

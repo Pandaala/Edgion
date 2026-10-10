@@ -160,10 +160,27 @@
   Clippy 37.195 seconds). Source/log/binary evidence is under
   `tmp/resource-reference-contract/r11c1-verification-20261010/` and root gates
   under `tmp/resource-reference-contract/r11c1-root-verification-20261010/`.
-  Local commit gate is next; no push or live/conformance acceptance is claimed.
+  Committed locally as 4d3cd897f0bf1f32638fe5be8b8a5e65d2a9fcec after both
+  final commit reviews; all eight blobs match the manifest. No push or live/
+  conformance acceptance is claimed.
   LDAP, ExtProc and Wasm remain separate serial batches; Wasm must explicitly
   fix disabled-custom-TLS behavior while preserving HTTPS. Whole-contract review,
   documentation/task cleanup and fresh live/conformance verification remain open.
+- R11c.2 LDAP actual-entry TLS binding at 4d3cd897 passed dual plan/static/
+  execution review; both reviewers also approved the final test-only correction.
+  All transports validate their actual owner; only LDAPS/StartTLS consume local
+  TLS proof and captured inheritance before cache/construction. Plain LDAP ignores
+  inactive TLS material/defaults; egress, SAN/M4 and authentication remain intact.
+  Focused evidence passes 587 distinct cases (489 unit, 98 doctests), retaining
+  ten ignored docs, all 9738 prior IDs among 9741, and 93 scoped old identities/
+  attributes. Sixteen constructor expressions and two malformed-material fixtures
+  migrate without weakening old assertions. Initial two test compile errors and
+  three Clippy warnings are preserved. The final three-line test-only correction
+  passes LDAP 28/28; unchanged-phase reuse is explicit in verification-final.json
+  under `tmp/resource-reference-contract/r11c2-verification-20261010/`.
+  All fourteen refreshed root gates pass without warnings (check 14.468 seconds,
+  Clippy 21.788 seconds); exact six-file commit verification is pending. No push
+  or fresh live/conformance acceptance is claimed. ExtProc and Wasm remain.
 - F1's Gateway EdgionBackend and Common LinkSys non-TLS auth material-pairing
   candidates are closed by R9a/R9b. Existing Controller guards remain; these are
   consumer proof boundaries, not demonstrated ingress exploits. Generated CredentialSource operation identity is closed by R8f.1/R8f.2

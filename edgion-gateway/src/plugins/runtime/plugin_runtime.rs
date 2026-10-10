@@ -1161,6 +1161,22 @@ impl PluginRuntime {
                         continue;
                     }
                 }
+                let ldap_defaults = matches!(entry.plugin, EdgionPlugin::LdapAuth(_))
+                    .then(edgion_common::link_sys_core::outbound_tls::outbound_global_default);
+                if let Some(defaults) = ldap_defaults.as_deref() {
+                    let result = descriptor_entries
+                        .get(index)
+                        .ok_or_else(|| "LdapAuth TLS configuration error: invalid owning TLS reference".to_string())
+                        .and_then(|entry| LdapAuth::validate_tls_entry(entry, defaults));
+                    if let Err(error) = result {
+                        self.invalid_plugins.record_non_retainable("LdapAuth");
+                        errors.push(format!(
+                            "requestPlugins[{index}] (LdapAuth): {}",
+                            config_validation_errors[index].as_deref().unwrap_or(&error)
+                        ));
+                        continue;
+                    }
+                }
                 let header_ca_field = if matches!(entry.plugin, EdgionPlugin::HeaderCertAuth(_)) {
                     match descriptor_entries
                         .get(index)
@@ -1509,6 +1525,12 @@ impl PluginRuntime {
                                 .zip(oidc_defaults.as_deref())
                                 .and_then(|(entry, defaults)| OpenidConnect::try_new(entry, defaults).ok())
                                 .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
+                        ),
+                        EdgionPlugin::LdapAuth(_) => CreateResult::Ok(
+                            descriptor_entries
+                                .get(index)
+                                .zip(ldap_defaults.as_deref())
+                                .and_then(|(entry, defaults)| LdapAuth::create(entry, defaults)),
                         ),
                         EdgionPlugin::HeaderCertAuth(_) => CreateResult::Ok(
                             header_ca_field
@@ -2327,7 +2349,7 @@ impl PluginRuntime {
             EdgionPlugin::HmacAuth(config) => CreateResult::Ok(Some(HmacAuth::create(config, body_requirement))),
             EdgionPlugin::HeaderCertAuth(_) => CreateResult::WrongStage,
             EdgionPlugin::KeyAuth(config) => CreateResult::Ok(Some(KeyAuth::create(config))),
-            EdgionPlugin::LdapAuth(config) => CreateResult::Ok(LdapAuth::create(config)),
+            EdgionPlugin::LdapAuth(_) => CreateResult::WrongStage,
             EdgionPlugin::FaultInjection(config) => CreateResult::Ok(Some(Box::new(FaultInjection::new(config)))),
             EdgionPlugin::Mock(config) => CreateResult::Ok(Some(Box::new(Mock::new(config)))),
             EdgionPlugin::ProxyRewrite(config) => {

@@ -1,4 +1,22 @@
 use super::*;
+use edgion_resources::resources::edgion_plugins::LdapAuthConfig;
+use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+
+fn actual_ldap(config: &LdapAuthConfig) -> Result<LdapAuth, String> {
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"ldap-test","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"LdapAuth","config":config}]}
+    }))
+    .unwrap();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    LdapAuth::new(
+        &entry,
+        &edgion_common::link_sys_core::outbound_tls::outbound_global_default(),
+    )
+}
+
 use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::common::OutboundTlsLocal;
@@ -22,7 +40,7 @@ fn install_test_crypto_provider() {
 }
 
 fn ldap_auth_default() -> LdapAuth {
-    LdapAuth::new(&test_config()).expect("default plain LDAP must build")
+    actual_ldap(&test_config()).expect("default plain LDAP must build")
 }
 
 #[test]
@@ -168,7 +186,7 @@ fn test_build_bind_dn_template_escapes_username() {
         bind_dn_template: Some("uid={username},ou=people,dc=example,dc=com".to_string()),
         ..Default::default()
     };
-    let auth = LdapAuth::new(&config).expect("must build");
+    let auth = actual_ldap(&config).expect("must build");
     let dn = auth.build_bind_dn("alice,admin").unwrap();
     assert_eq!(dn, r"uid=alice\2cadmin,ou=people,dc=example,dc=com");
 }
@@ -200,7 +218,7 @@ fn plain_ldap_preserves_caller_secrets_without_retaining_config() {
     let original_ca = config.resolved_ca_certificates.clone();
     let original_client = config.resolved_client_certificate.clone();
 
-    let auth = LdapAuth::new(&config).expect("plain LDAP must build");
+    let auth = actual_ldap(&config).expect("plain LDAP must build");
     assert_eq!(auth.ldap_url, "ldap://ldap.example.com:389");
     assert!(!auth.conn_settings.starttls());
     assert_eq!(config.resolved_ca_certificates, original_ca);
@@ -222,7 +240,7 @@ fn prepared_plain_generations_remain_independent() {
         timeout: 111,
         ..Default::default()
     };
-    let k1 = LdapAuth::new(&k1_config).expect("K1 must build");
+    let k1 = actual_ldap(&k1_config).expect("K1 must build");
 
     let k2_config = LdapAuthConfig {
         ldap_host: "ldap-two.example.com".to_string(),
@@ -237,7 +255,7 @@ fn prepared_plain_generations_remain_independent() {
         timeout: 222,
         ..Default::default()
     };
-    let k2 = LdapAuth::new(&k2_config).expect("K2 must build");
+    let k2 = actual_ldap(&k2_config).expect("K2 must build");
 
     assert_eq!(k1.ldap_url, "ldap://ldap-one.example.com:1389");
     assert_eq!(k1.ldap_host, "ldap-one.example.com");
@@ -279,7 +297,7 @@ async fn anonymous_applies_only_when_both_credential_headers_are_missing() {
         anonymous: Some("guest".to_string()),
         ..test_config()
     };
-    let auth = LdapAuth::new(&config).expect("anonymous plugin must build");
+    let auth = actual_ldap(&config).expect("anonymous plugin must build");
     let mut missing = MockPluginSession::new();
     setup_header_mocks(&mut missing, &[]);
     missing
@@ -355,7 +373,7 @@ fn run_ldap_new_tls_case_table() {
         OutboundTlsConfig::default(),
     ));
 
-    let ldaps = LdapAuth::new(&LdapAuthConfig {
+    let ldaps = actual_ldap(&LdapAuthConfig {
         ldaps: true,
         ldap_port: 636,
         ..test_config()
@@ -365,7 +383,7 @@ fn run_ldap_new_tls_case_table() {
     assert!(!ldaps.conn_settings.starttls());
     assert!(!ldaps.conn_settings.clone().starttls());
 
-    let starttls = LdapAuth::new(&LdapAuthConfig {
+    let starttls = actual_ldap(&LdapAuthConfig {
         start_tls: true,
         ..test_config()
     })
@@ -374,7 +392,7 @@ fn run_ldap_new_tls_case_table() {
     assert!(starttls.conn_settings.starttls());
     assert!(starttls.conn_settings.clone().starttls());
 
-    let skip_verify = LdapAuth::new(&LdapAuthConfig {
+    let skip_verify = actual_ldap(&LdapAuthConfig {
         ldaps: true,
         tls: OutboundTlsLocal {
             verify: Some(false),
@@ -385,7 +403,7 @@ fn run_ldap_new_tls_case_table() {
     .expect("effective verify=false must build the explicit skip-verifier path");
     assert_eq!(skip_verify.ldap_url, "ldaps://ldap.example.com:389");
 
-    let san_override = LdapAuth::new(&LdapAuthConfig {
+    let san_override = actual_ldap(&LdapAuthConfig {
         ldaps: true,
         tls: OutboundTlsLocal {
             verify: Some(false),
@@ -404,7 +422,7 @@ fn run_ldap_new_tls_case_table() {
     .expect("SAN policy must override verify=false and retain secure TLS");
     assert_eq!(san_override.ldap_url, "ldaps://ldap.example.com:389");
 
-    let missing_ca = LdapAuth::new(&LdapAuthConfig {
+    let missing_ca = actual_ldap(&LdapAuthConfig {
         ldaps: true,
         tls: OutboundTlsLocal {
             validation: Some(OutboundTlsValidation {
@@ -422,7 +440,7 @@ fn run_ldap_new_tls_case_table() {
     });
     assert!(missing_ca.is_err(), "unresolved declared CA must fail closed");
 
-    let invalid_ca = LdapAuth::new(&LdapAuthConfig {
+    let invalid_ca = actual_ldap(&LdapAuthConfig {
         ldaps: true,
         tls: OutboundTlsLocal {
             validation: Some(OutboundTlsValidation {
@@ -436,7 +454,14 @@ fn run_ldap_new_tls_case_table() {
             }),
             ..Default::default()
         },
-        resolved_ca_certificates: Some(vec![secret_with(&[("ca.crt", b"not a PEM certificate")])]),
+        resolved_ca_certificates: Some(vec![Secret {
+            metadata: kube::core::ObjectMeta {
+                name: Some("invalid-ca".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            ..secret_with(&[("ca.crt", b"not a PEM certificate")])
+        }]),
         ..test_config()
     });
     assert!(invalid_ca.is_err(), "invalid declared CA must fail construction");
@@ -447,7 +472,7 @@ fn run_ldap_new_tls_case_table() {
         name: "ldap-client".to_string(),
         namespace: Some("default".into()),
     };
-    let missing_client = LdapAuth::new(&LdapAuthConfig {
+    let missing_client = actual_ldap(&LdapAuthConfig {
         ldaps: true,
         tls: OutboundTlsLocal {
             client_certificate_ref: Some(client_ref.clone()),
@@ -460,16 +485,20 @@ fn run_ldap_new_tls_case_table() {
         "unresolved declared client identity must fail closed"
     );
 
-    let invalid_client = LdapAuth::new(&LdapAuthConfig {
+    let invalid_client = actual_ldap(&LdapAuthConfig {
         ldaps: true,
         tls: OutboundTlsLocal {
             client_certificate_ref: Some(client_ref.clone()),
             ..Default::default()
         },
-        resolved_client_certificate: Some(secret_with(&[
-            ("tls.crt", b"invalid certificate"),
-            ("tls.key", b"invalid private key"),
-        ])),
+        resolved_client_certificate: Some(Secret {
+            metadata: kube::core::ObjectMeta {
+                name: Some("ldap-client".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            ..secret_with(&[("tls.crt", b"invalid certificate"), ("tls.key", b"invalid private key")])
+        }),
         ..test_config()
     });
     assert!(
@@ -491,7 +520,7 @@ fn run_ldap_new_tls_case_table() {
             ..Default::default()
         },
     ));
-    let inherited_client = LdapAuth::new(&LdapAuthConfig {
+    let inherited_client = actual_ldap(&LdapAuthConfig {
         ldaps: true,
         ..test_config()
     });
@@ -506,7 +535,7 @@ fn run_ldap_new_tls_case_table() {
             ..Default::default()
         },
     ));
-    let inherited_skip_verify = LdapAuth::new(&LdapAuthConfig {
+    let inherited_skip_verify = actual_ldap(&LdapAuthConfig {
         ldaps: true,
         ..test_config()
     });
@@ -772,4 +801,251 @@ async fn all_refused_candidates_fail_closed() {
         .await
         .expect_err("no admitted TCP candidate must fail closed");
     assert!(matches!(err, LdapAuthError::ConnectionFailed));
+}
+
+fn ldap_tls_owner(start_tls: bool) -> (edgion_resources::EdgionPlugins, Vec<u8>, Vec<u8>) {
+    let generated = rcgen::generate_simple_self_signed(vec!["ldap.example.com".into()]).unwrap();
+    let pem = generated.cert.pem().into_bytes();
+    let key = generated.signing_key.serialize_pem().into_bytes();
+    let mut ca = secret_with(&[("ca.crt", &pem)]);
+    ca.metadata = kube::core::ObjectMeta {
+        name: Some("ca".into()),
+        namespace: Some("default".into()),
+        resource_version: Some("7".into()),
+        ..Default::default()
+    };
+    let mut client = secret_with(&[("tls.crt", &pem), ("tls.key", &key)]);
+    client.metadata = kube::core::ObjectMeta {
+        name: Some("client".into()),
+        namespace: Some("default".into()),
+        resource_version: Some("7".into()),
+        ..Default::default()
+    };
+    let owner = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"ldap","uid":"owner"},
+        "spec":{"requestPlugins":[{"type":"LdapAuth","config":{
+            "ldapHost":"ldap.example.com","baseDn":"dc=example","attribute":"uid",
+            "ldaps":!start_tls,"startTls":start_tls,
+            "tls":{"verify":true,"validation":{"caCertificateRefs":[{"kind":"Secret","group":"core","name":"ca"}]},"clientCertificateRef":{"group":"core","name":"client"}},
+            "resolvedCaCertificates":[ca],"resolvedClientCertificate":client
+        }}]}
+    })).unwrap();
+    (owner, pem, key)
+}
+
+#[test]
+fn ldap_actual_tls_identity_controls_both_encrypted_transports() {
+    use edgion_common::link_sys_core::outbound_tls::test_util::snapshot;
+    use edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE;
+    let defaults = snapshot(Default::default());
+    for start_tls in [false, true] {
+        let (owner, pem, key) = ldap_tls_owner(start_tls);
+        let base = serde_json::to_value(&owner).unwrap();
+        for case in [
+            "matching",
+            "configmap",
+            "owner-name",
+            "owner-missing",
+            "owner-ns",
+            "ca-name",
+            "ca-missing-name",
+            "ca-ns",
+            "ca-missing-ns",
+            "ca-empty-ns",
+            "client-name",
+            "client-missing-name",
+            "client-ns",
+            "client-missing-ns",
+            "client-empty-ns",
+            "source",
+            "client-source",
+            "retarget",
+            "no-ref",
+            "no-ca",
+            "no-client",
+            "kind",
+        ] {
+            let mut candidate = base.clone();
+            match case {
+                "owner-name" => candidate["metadata"]["name"] = serde_json::json!("bad/name"),
+                "owner-missing" => candidate["metadata"]["name"] = serde_json::Value::Null,
+                "owner-ns" => candidate["metadata"]["namespace"] = serde_json::json!(""),
+                _ => {}
+            }
+            let config = &mut candidate["spec"]["requestPlugins"][0]["config"];
+            match case {
+                "configmap" => {
+                    config["tls"]["validation"]["caCertificateRefs"][0]["kind"] = serde_json::json!("ConfigMap");
+                    config["resolvedCaCertificates"][0]["metadata"]["annotations"] =
+                        serde_json::json!({(CONTROLLER_CA_SOURCE):"ConfigMap"});
+                }
+                "ca-name" => config["resolvedCaCertificates"][0]["metadata"]["name"] = serde_json::json!("other"),
+                "ca-missing-name" => config["resolvedCaCertificates"][0]["metadata"]["name"] = serde_json::Value::Null,
+                "ca-ns" => config["resolvedCaCertificates"][0]["metadata"]["namespace"] = serde_json::json!("other"),
+                "ca-missing-ns" => {
+                    config["resolvedCaCertificates"][0]["metadata"]["namespace"] = serde_json::Value::Null
+                }
+                "ca-empty-ns" => config["resolvedCaCertificates"][0]["metadata"]["namespace"] = serde_json::json!(""),
+                "client-name" => config["resolvedClientCertificate"]["metadata"]["name"] = serde_json::json!("other"),
+                "client-missing-name" => {
+                    config["resolvedClientCertificate"]["metadata"]["name"] = serde_json::Value::Null
+                }
+                "client-ns" => {
+                    config["resolvedClientCertificate"]["metadata"]["namespace"] = serde_json::json!("other")
+                }
+                "client-missing-ns" => {
+                    config["resolvedClientCertificate"]["metadata"]["namespace"] = serde_json::Value::Null
+                }
+                "client-empty-ns" => {
+                    config["resolvedClientCertificate"]["metadata"]["namespace"] = serde_json::json!("")
+                }
+                "source" => {
+                    config["resolvedCaCertificates"][0]["metadata"]["annotations"] =
+                        serde_json::json!({(CONTROLLER_CA_SOURCE):"ConfigMap"})
+                }
+                "client-source" => {
+                    config["resolvedClientCertificate"]["metadata"]["annotations"] =
+                        serde_json::json!({(CONTROLLER_CA_SOURCE):"ConfigMap"})
+                }
+                "retarget" => config["tls"]["validation"]["caCertificateRefs"][0]["name"] = serde_json::json!("next"),
+                "no-ref" => config["tls"]["validation"]["caCertificateRefs"] = serde_json::Value::Null,
+                "no-ca" => config["resolvedCaCertificates"] = serde_json::Value::Null,
+                "no-client" => config["resolvedClientCertificate"] = serde_json::Value::Null,
+                "kind" => config["tls"]["validation"]["caCertificateRefs"][0]["kind"] = serde_json::json!("Service"),
+                _ => {}
+            }
+            let candidate: edgion_resources::EdgionPlugins = serde_json::from_value(candidate).unwrap();
+            let prepared = PreparedPluginReferences::from_plugins(&candidate);
+            let binding = prepared.bind(&candidate).unwrap();
+            let entry = binding.request_entries().next().unwrap();
+            if matches!(case, "matching" | "configmap") {
+                let proof = LdapAuth::validate_tls_entry(&entry, &defaults).unwrap().unwrap();
+                let resolved = resolve_validated_outbound_tls(&proof, true, &defaults).unwrap();
+                let EffectiveCa::Custom(bundles) = resolved.ca else {
+                    panic!("expected actual CA")
+                };
+                assert_eq!(bundles, vec![pem.clone()]);
+                let (actual_cert, actual_key) = resolved.client_identity.unwrap();
+                assert_eq!(actual_cert, pem);
+                assert_eq!(actual_key.as_slice(), key.as_slice());
+                let auth = LdapAuth::new(&entry, &defaults).unwrap();
+                assert_eq!(auth.ldap_host, "ldap.example.com");
+                assert_eq!(
+                    auth.ldap_url,
+                    if start_tls {
+                        "ldap://ldap.example.com:389"
+                    } else {
+                        "ldaps://ldap.example.com:389"
+                    }
+                );
+                assert_eq!(auth.conn_settings.starttls(), start_tls);
+            } else {
+                assert_eq!(
+                    LdapAuth::validate_tls_entry(&entry, &defaults).err().as_deref(),
+                    Some("LdapAuth TLS configuration error: invalid owning TLS reference"),
+                    "{case}"
+                );
+                assert_eq!(
+                    LdapAuth::new(&entry, &defaults).err().as_deref(),
+                    Some("LdapAuth TLS configuration error: invalid owning TLS reference"),
+                    "{case}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ldap_captured_globals_and_plaintext_activation_are_process_isolated() {
+    crate::test_subprocess::assert_in_subprocess(
+        "plugins::http::ldap_auth::plugin::tests",
+        "ldap_captured_globals_and_plaintext_activation_are_process_isolated",
+        "EDGION_LDAP_CAPTURED_GLOBAL_CHILD",
+        "captured",
+        || {
+            use edgion_common::link_sys_core::outbound_tls::{
+                outbound_global_default, set_outbound_global_default, test_util::snapshot,
+            };
+            use edgion_resources::resources::common::OutboundTlsConfig;
+            let previous = outbound_global_default();
+            for start_tls in [false, true] {
+                let (mut owner, pem, key) = ldap_tls_owner(start_tls);
+                let EdgionPlugin::LdapAuth(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+                    panic!()
+                };
+                let mut global = OutboundTlsConfig {
+                    verify: true,
+                    validation: config.tls.validation.take(),
+                    client_certificate_ref: config.tls.client_certificate_ref.take(),
+                    resolved_ca_certificates: config.resolved_ca_certificates.take(),
+                    resolved_client_certificate: config.resolved_client_certificate.take(),
+                };
+                global.client_certificate_ref.as_mut().unwrap().namespace = Some("default".into());
+                for ca in global
+                    .validation
+                    .as_mut()
+                    .unwrap()
+                    .ca_certificate_refs
+                    .as_mut()
+                    .unwrap()
+                {
+                    ca.namespace = Some("default".into());
+                }
+                let captured = snapshot(global.clone());
+                global.resolved_client_certificate.as_mut().unwrap().metadata.name = Some("wrong".into());
+                let invalid = snapshot(global);
+                set_outbound_global_default(invalid.clone());
+                let prepared = PreparedPluginReferences::from_plugins(&owner);
+                let binding = prepared.bind(&owner).unwrap();
+                let entry = binding.request_entries().next().unwrap();
+                let proof = LdapAuth::validate_tls_entry(&entry, &captured).unwrap().unwrap();
+                let resolved = resolve_validated_outbound_tls(&proof, true, &captured).unwrap();
+                let EffectiveCa::Custom(bundles) = resolved.ca else {
+                    panic!("captured CA")
+                };
+                assert_eq!(bundles, vec![pem]);
+                let (actual_cert, actual_key) = resolved.client_identity.unwrap();
+                assert_eq!(actual_cert, bundles[0]);
+                assert_eq!(actual_key.as_slice(), key.as_slice());
+                assert!(LdapAuth::new(&entry, &captured).is_ok());
+                set_outbound_global_default(captured);
+                assert!(LdapAuth::new(&entry, &invalid).is_err());
+                let (mut local, _, _) = ldap_tls_owner(start_tls);
+                let prepared = PreparedPluginReferences::from_plugins(&local);
+                let binding = prepared.bind(&local).unwrap();
+                assert!(
+                    LdapAuth::new(&binding.request_entries().next().unwrap(), &invalid).is_ok(),
+                    "local axes override bad global"
+                );
+                let EdgionPlugin::LdapAuth(config) = &mut local.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+                    panic!()
+                };
+                config.ldaps = false;
+                config.start_tls = false;
+                config
+                    .tls
+                    .validation
+                    .as_mut()
+                    .unwrap()
+                    .ca_certificate_refs
+                    .as_mut()
+                    .unwrap()[0]
+                    .name = "bad/name".into();
+                config.resolved_client_certificate.as_mut().unwrap().metadata.name = None;
+                config.resolved_ca_certificates = Some(vec![secret_with(&[("ca.crt", b"invalid")])]);
+                let prepared = PreparedPluginReferences::from_plugins(&local);
+                let binding = prepared.bind(&local).unwrap();
+                let entry = binding.request_entries().next().unwrap();
+                assert!(LdapAuth::validate_tls_entry(&entry, &invalid).unwrap().is_none());
+                let plain = LdapAuth::new(&entry, &invalid).unwrap();
+                assert_eq!(plain.ldap_url, "ldap://ldap.example.com:389");
+                assert!(!plain.conn_settings.starttls());
+                local.metadata.name = None;
+                let prepared = PreparedPluginReferences::from_plugins(&local);
+                let binding = prepared.bind(&local).unwrap();
+                assert!(LdapAuth::new(&binding.request_entries().next().unwrap(), &invalid).is_err());
+            }
+            set_outbound_global_default(previous);
+        },
+    );
 }

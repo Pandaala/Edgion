@@ -51,6 +51,29 @@ address consumes the plugin timeout, so later addresses may not run. Per-attempt
 connect timeouts are not accepted here; they would diverge from
 `ext_proc::connect_admitted` without a shared dial helper.
 
+## Cold TLS ownership and activation
+
+For LDAPS and StartTLS, Gateway compilation checks the actual LDAP plugin entry,
+its declared local TLS references and carried Secret/ConfigMap provenance before
+entry-cache reuse or certificate parsing. Common owns the canonical material and
+inheritance checks. One captured global-default snapshot is used throughout
+preflight and TLS construction; construction never reloads ambient defaults.
+
+The actual source owner is checked for every transport. Plain LDAP consumes no
+local TLS material or global TLS policy, so inactive invalid TLS references,
+carriers or defaults cannot change plaintext construction. Disabled entries stay
+inert. Omitted local owner/reference namespaces retain canonical default behavior;
+carried plugin material must have explicit matching namespace metadata.
+
+EntryCache belongs to one immutable plugin generation. Same-generation reuse is
+valid; reference/material replacement builds a fresh generation/cache. Negative
+candidates tested against an occupied cache must fail preflight, not reuse success.
+The existing dial-time hostname, stream injection, SAN/M4, timeout and authentication
+contracts remain unchanged. Focused construction/effective-material tests do not
+claim a new live LDAP handshake or Gateway API conformance run. Tests mutating global
+defaults use the existing exact-child helper with normal restoration and process
+teardown on panic; Common's test-only RAII guard is not widened across crates.
+
 ## Fix Suggestions Not Accepted
 
 - Rewriting the LDAP URL to an IP — breaks LDAPS/StartTLS hostname verification
